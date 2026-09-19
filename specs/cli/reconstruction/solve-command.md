@@ -163,5 +163,5 @@ sfm solve --incremental --flow-match --flow-preset high_quality --seed 42
 sfm solve --global --seq-overlap 100,20
 
 # Solve a subset of images
-sfm solve --incremental --range 1:200 --max-features 8192
+sfm solve --incremental --range 1-200 --max-features 8192
 ```

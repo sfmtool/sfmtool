@@ -30,7 +30,7 @@ Exactly one of these is required:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--filter-sfm` | path | | Only draw features used in a `.sfmr` reconstruction (with `--draw`) |
-| `--range / -r` | string | | Range expression for file numbers (e.g., `1:100`, `5,10,15`) |
+| `--range / -r` | string | | Range expression for file numbers (e.g., `1-100`, `1-100:2`, `5,10,15`) |
 | `--num-threads / -t` | int | -1 (all) | Thread count for extraction |
 | `--tool` | `colmap` \| `opencv` \| `sfmtool` | workspace | Override workspace feature tool |
 | `--dsp / --no-dsp` | bool | workspace | Override domain size pooling (COLMAP only; requires `--tool`) |

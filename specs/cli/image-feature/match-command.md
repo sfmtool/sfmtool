@@ -225,7 +225,7 @@ sfm match --cluster images/ -o matches/my-clusters.matches
 sfm match --derive-pairs matches/my-clusters.matches
 
 # Match a subset of images
-sfm match --exhaustive --range 1:100 --max-features 4096
+sfm match --exhaustive --range 1-100 --max-features 4096
 
 # Merge matches from different strategies
 sfm match --merge seq.matches exhaustive.matches -o combined.matches

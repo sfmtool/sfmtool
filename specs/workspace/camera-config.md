@@ -261,7 +261,7 @@ sfm ws init my_project
 sfm sift --extract my_project/photos
 
 # 2. Solve a small, well-conditioned subset (good baseline, lots of overlap)
-sfm solve -i my_project/photos --range 100:130 \
+sfm solve -i my_project/photos --range 100-130 \
     --output my_project/sfmr/calibration_subset.sfmr
 
 # 3. Open it in SfM Explorer and visually compare the reconstruction to the
