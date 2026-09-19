@@ -9,6 +9,7 @@ import click
 import cv2
 import numpy as np
 
+from ..motion.ratio_band import classify_ratio, out_of_band
 from ._flow_display import _draw_flow_legend, _flow_to_color
 
 
@@ -206,19 +207,6 @@ def _print_sample_point(result: dict):
     )
 
 
-def _classify_ratio(normalized: float) -> str:
-    """Classify a ratio/stride value into a human-readable description."""
-    if normalized < 0.5:
-        return "strong deceleration"
-    elif normalized < 0.75:
-        return "deceleration"
-    elif normalized > 2.0:
-        return "strong acceleration"
-    elif normalized > 1.33:
-        return "acceleration"
-    return ""
-
-
 def _print_summary(results: list[dict]):
     """Print a summary of likely discontinuities from analysis results."""
     # Collect frames with notable ratio deviations, skipping results
@@ -232,7 +220,7 @@ def _print_summary(results: list[dict]):
         if ratio is None or stride < 2:
             continue
         normalized = ratio / stride
-        if normalized < 0.75 or normalized > 1.0 / 0.75:
+        if out_of_band(normalized):
             flagged.append(
                 {
                     "frame_number": r["frame_number"],
@@ -256,7 +244,7 @@ def _print_summary(results: list[dict]):
     click.echo(f"Summary: {len(flagged)} discontinuity/discontinuities detected:")
     click.echo("")
     for f in flagged:
-        desc = _classify_ratio(f["normalized"])
+        desc = classify_ratio(f["normalized"]) or ""
         click.echo(
             f"  Frame {f['frame_number']} ({f['frame_name']}): "
             f"ratio/stride={f['normalized']:.2f} "

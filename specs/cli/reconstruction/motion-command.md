@@ -133,12 +133,16 @@ log-symmetric bands:
 
 | Band | Condition | Action |
 |------|-----------|--------|
-| Shrink | `ratio/stride < 0.75` or `ratio/stride > 1.33` | Halve stride |
+| Shrink | `ratio/stride < 0.75` or `ratio/stride > 1/0.75` | Halve stride |
 | Keep | Between shrink and grow thresholds | Hold stride |
-| Grow | `0.85 < ratio/stride < 1.18` | Double stride |
+| Grow | `0.85 < ratio/stride < 1/0.85` | Double stride |
 
 The thresholds are multiplicatively invariant — `0.75` and `1/0.75 ≈ 1.33` for the
-outer band, `0.85` and `1/0.85 ≈ 1.18` for the inner band.
+outer band, `0.85` and `1/0.85 ≈ 1.18` for the inner band. The outer band's edges,
+and the classifier below that reads them, live in one place:
+[`motion/ratio_band.py`](../../../src/sfmtool/motion/ratio_band.py). The
+displayed `1.33` is `1/0.75` formatted to two decimals, not an independent
+threshold.
 
 **In-bounds coverage overrides**:
 
@@ -212,7 +216,7 @@ number, filename, normalized ratio, stride, local magnitude, and a classificatio
 |-----------------|----------------|
 | < 0.5 | strong deceleration |
 | 0.5–0.75 | deceleration |
-| 1.33–2.0 | acceleration |
+| `1/0.75`–2.0 | acceleration |
 | > 2.0 | strong acceleration |
 
 Superseded results (from retried frames) are excluded from the summary.
