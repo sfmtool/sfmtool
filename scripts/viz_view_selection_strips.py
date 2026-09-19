@@ -28,26 +28,22 @@ Example::
 
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
+from sfmtool._sfmtool.patches import OrientedPatch
 from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
 from _viz_common import (
     chip,
+    common_parser,
     draw_text,
     gauss_window,
     infinity_first_sample,
-    label_for,
-    load_images,
     new_canvas,
     rotation_matrices,
+    run_over_recons,
     track_views,
     znorm,
 )
@@ -306,30 +302,8 @@ def _compose(rendered, rows_info, args) -> np.ndarray:
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("sfmr", nargs="+", type=Path, help="one or more solved .sfmr files")
-    p.add_argument(
-        "--out-dir",
-        type=Path,
-        default=Path("."),
-        help="directory for the montage JPEGs",
-    )
-    p.add_argument(
-        "--rows", type=int, default=9, help="points (rows) to show per montage"
-    )
-    p.add_argument(
-        "--prioritize-infinity",
-        action="store_true",
-        help="order rows so points at infinity (w=0) lead the montage",
-    )
-    p.add_argument(
-        "--sample", type=int, default=400, help="random points to evaluate per recon"
-    )
+    p = common_parser(__doc__.splitlines()[0], rows=9, sample=400, tile=56)
     p.add_argument("--min-relative-zncc", type=float, default=0.7)
-    p.add_argument(
-        "--resolution", type=int, default=24, help="patch render/score grid (R x R)"
-    )
-    p.add_argument("--tile", type=int, default=56, help="display tile size in px")
     p.add_argument(
         "--max-track", type=int, default=4, help="max track tiles shown per row"
     )
@@ -339,24 +313,9 @@ def main(argv=None):
     p.add_argument(
         "--max-rej", type=int, default=3, help="max rejected tiles shown per row"
     )
-    p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    for path in args.sfmr:
-        recon = SfmrReconstruction.load(str(path))
-        args.label = label_for(path, recon)
-        images = load_images(recon)
-        cloud = PatchCloud.from_reconstruction(
-            recon, normal="mean_viewing", extent_value=5.0
-        )
-        canvas, stats = render_strips(recon, cloud, images, args)
-        if canvas is None:
-            print(f"{args.label}: nothing to render ({stats})", flush=True)
-            continue
-        out = args.out_dir / f"view_selection_strips_{args.label}.jpg"
-        cv2.imwrite(str(out), canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        print(f"{args.label}: wrote {out}  {stats}", flush=True)
+    run_over_recons(args, render_strips, "view_selection_strips")
 
 
 if __name__ == "__main__":

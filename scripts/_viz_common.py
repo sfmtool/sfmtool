@@ -4,7 +4,8 @@
 
 ``viz_keypoint_localization.py``, ``viz_keypoint_localization_strips.py`` and
 ``viz_view_selection_strips.py`` each render a montage of patch tiles for a
-reconstruction, and all three need the same reconstruction accessors (images,
+reconstruction, and all three need the same command line, the same
+render-every-input driver loop, the same reconstruction accessors (images,
 rotations, tracks), the same windowed-ZNCC primitives, the same patch-plane
 unprojection and the same montage drawing idioms.
 
@@ -15,11 +16,85 @@ which resolves because Python puts a script's own directory at the head of
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+
+
+# ===== Command line and driver =====
+
+
+def common_parser(
+    description: str,
+    *,
+    rows: int,
+    sample: int,
+    tile: int,
+    resolution: int = 24,
+) -> argparse.ArgumentParser:
+    """The parser every ``viz_*`` montage script starts from.
+
+    Declares the eight arguments all three share. The four defaults that differ
+    between the scripts are required keywords so each keeps its own; the caller
+    then adds whatever extra options it has of its own.
+    """
+    p = argparse.ArgumentParser(description=description)
+    p.add_argument("sfmr", nargs="+", type=Path, help="one or more solved .sfmr files")
+    p.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("."),
+        help="directory for the montage JPEGs",
+    )
+    p.add_argument("--rows", type=int, default=rows, help="points (rows) per montage")
+    p.add_argument(
+        "--prioritize-infinity",
+        action="store_true",
+        help="order the sample so points at infinity (w=0) lead the montage",
+    )
+    p.add_argument(
+        "--sample", type=int, default=sample, help="random points per recon"
+    )
+    p.add_argument(
+        "--resolution", type=int, default=resolution, help="patch grid (R x R)"
+    )
+    p.add_argument(
+        "--tile", type=int, default=tile, help="display tile size in px"
+    )
+    p.add_argument("--seed", type=int, default=0)
+    return p
+
+
+def run_over_recons(args, render_fn, stem: str) -> None:
+    """Render each input ``.sfmr`` to ``<out-dir>/<stem>_<label>.jpg``.
+
+    ``render_fn(recon, cloud, images, args)`` returns ``(canvas, stats)``; a
+    ``None`` canvas means that reconstruction had nothing to show. ``stats`` is
+    echoed after the written path (and, when truthy, in the nothing-to-render
+    line), so a script can report whatever it counted.
+    """
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    for path in args.sfmr:
+        recon = SfmrReconstruction.load(str(path))
+        args.label = label_for(path, recon)
+        images = load_images(recon)
+        cloud = PatchCloud.from_reconstruction(
+            recon, normal="mean_viewing", extent_value=5.0
+        )
+        canvas, stats = render_fn(recon, cloud, images, args)
+        if canvas is None:
+            suffix = f" ({stats})" if stats else ""
+            print(f"{args.label}: nothing to render{suffix}", flush=True)
+            continue
+        out = args.out_dir / f"{stem}_{args.label}.jpg"
+        cv2.imwrite(str(out), canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        print(f"{args.label}: wrote {out}  {stats}", flush=True)
 
 
 # ===== Reconstruction accessors =====

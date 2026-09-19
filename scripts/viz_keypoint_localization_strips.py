@@ -37,27 +37,24 @@ Example::
 
 from __future__ import annotations
 
-import argparse
 import math
-from pathlib import Path
 
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
+from sfmtool._sfmtool.patches import OrientedPatch
 from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
 from _viz_common import (
     chip,
+    common_parser,
     draw_text,
     infinity_first_sample,
-    label_for,
-    load_images,
     new_canvas,
     plane_hit,
     rotation_matrices,
+    run_over_recons,
     sharpness,
     track_views,
 )
@@ -310,59 +307,38 @@ def _compose(rows, args):
     return canvas
 
 
+def render_montage(recon, cloud, images, args):
+    """Render the montage for one reconstruction, for `run_over_recons`."""
+    metas, tracks = gather(recon, cloud, images, args)
+    metas.sort(key=lambda m: m["shift"], reverse=True)
+    chosen = metas[: args.rows]
+    if not chosen:
+        return None, ""
+    geom = (
+        rotation_matrices(recon),
+        np.asarray(recon.translations, dtype=np.float64),
+        np.asarray(recon.quaternions_wxyz, dtype=np.float64),
+        recon.cameras,
+        np.asarray(recon.camera_indexes),
+        {int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))},
+    )
+    rows = [
+        render_row(m, tracks.get(m["pid"], set()), recon, cloud, images, geom, args)
+        for m in chosen
+    ]
+    return _compose(rows, args), f"(rows={len(rows)})"
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("sfmr", nargs="+", type=Path, help="one or more solved .sfmr files")
-    p.add_argument("--out-dir", type=Path, default=Path("."))
-    p.add_argument("--rows", type=int, default=10, help="points (rows) per montage")
-    p.add_argument("--sample", type=int, default=300, help="random points per recon")
-    p.add_argument(
-        "--prioritize-infinity",
-        action="store_true",
-        help="order the sample so points at infinity (w=0) lead the montage",
-    )
+    p = common_parser(__doc__.splitlines()[0], rows=10, sample=300, tile=96)
     p.add_argument("--max-views", type=int, default=9, help="max view tiles per point")
-    p.add_argument(
-        "--resolution", type=int, default=24, help="scored core grid (R x R)"
-    )
     p.add_argument(
         "--search", type=float, default=6.0, help="search margin (patch-grid px)"
     )
     p.add_argument("--max-shift-px", type=float, default=3.0)
-    p.add_argument("--tile", type=int, default=96, help="display tile size in px")
-    p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    for path in args.sfmr:
-        recon = SfmrReconstruction.load(str(path))
-        args.label = label_for(path, recon)
-        images = load_images(recon)
-        cloud = PatchCloud.from_reconstruction(
-            recon, normal="mean_viewing", extent_value=5.0
-        )
-        metas, tracks = gather(recon, cloud, images, args)
-        metas.sort(key=lambda m: m["shift"], reverse=True)
-        chosen = metas[: args.rows]
-        if not chosen:
-            print(f"{args.label}: nothing to render", flush=True)
-            continue
-        geom = (
-            rotation_matrices(recon),
-            np.asarray(recon.translations, dtype=np.float64),
-            np.asarray(recon.quaternions_wxyz, dtype=np.float64),
-            recon.cameras,
-            np.asarray(recon.camera_indexes),
-            {int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))},
-        )
-        rows = [
-            render_row(m, tracks.get(m["pid"], set()), recon, cloud, images, geom, args)
-            for m in chosen
-        ]
-        canvas = _compose(rows, args)
-        out = args.out_dir / f"keypoint_localization_strips_{args.label}.jpg"
-        cv2.imwrite(str(out), canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        print(f"{args.label}: wrote {out}  (rows={len(rows)})", flush=True)
+    run_over_recons(args, render_montage, "keypoint_localization_strips")
 
 
 if __name__ == "__main__":
