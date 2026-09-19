@@ -24,7 +24,8 @@ use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::super::gpu_types::{
-    BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS, THUMBNAIL_SIZE,
+    EdgeInstance, BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS,
+    THUMBNAIL_SIZE,
 };
 use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TAG_POINT};
 use super::super::recon::{NodeDisplay, ReconResources};
@@ -1427,6 +1428,93 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     }
 }
 
+/// The endpoints of one build, in a shape that compares.
+///
+/// `EdgeInstance` is a GPU record and carries no `PartialEq`; what the tests
+/// below are asking about is the two points each ray runs between.
+fn endpoints(edges: &[EdgeInstance]) -> Vec<[[f32; 3]; 2]> {
+    edges.iter().map(|e| [e.endpoint_a, e.endpoint_b]).collect()
+}
+
+/// The rays are geometry and not just a gate: a version that moves the selected
+/// point puts every endpoint somewhere else, and an undo puts them back.
+///
+/// Driven through a real edit rather than by editing a value in place, because
+/// the question is about the two things the frame holds together -- the point
+/// and the version it is read out of.
+#[test]
+fn track_ray_edges_follow_the_version_under_the_selection() {
+    let (mut state, id) = crate::state::edits::tests::adjustable_state();
+    let selected = PointRef::new(id, 0);
+    let built = |state: &crate::state::AppState| {
+        let node = state.node(id).expect("the node is loaded");
+        endpoints(&track_ray_edges(
+            node.edited(),
+            selected,
+            &state.sift_cache,
+            &identity(),
+        ))
+    };
+
+    let before = built(&state);
+    assert!(!before.is_empty(), "the fixture draws rays at all");
+
+    state
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("the fixture is well posed");
+    state.finish_background_task();
+    let after = built(&state);
+    assert_ne!(
+        before, after,
+        "the adjustment moved the point and the rays stayed where they were",
+    );
+
+    state.undo(id).expect("there is an adjustment to undo");
+    assert_eq!(
+        built(&state),
+        before,
+        "the undo left the rays on the version it stepped off",
+    );
+}
+
+/// The same question across a commit, which renumbers the point as well as
+/// moving it: the rays are built for the index the commit wrote, and the value
+/// they come out of is the one it pushed.
+#[test]
+fn track_ray_edges_follow_a_committed_track_to_its_new_index() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    let origin = PointRef::new(id, 2);
+    state.select_point(origin);
+    let built = |state: &crate::state::AppState, point: PointRef| {
+        let node = state.node(id).expect("the node is loaded");
+        endpoints(&track_ray_edges(
+            node.edited(),
+            point,
+            &state.sift_cache,
+            &identity(),
+        ))
+    };
+    let before = built(&state, origin);
+    assert!(!before.is_empty(), "the fixture draws rays at all");
+
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    let point = state.selected_point.expect("the commit selected its point");
+    assert_eq!(point.point, written.point, "the selection is the commit's");
+    assert!(
+        built(&state, point)
+            .iter()
+            .all(|ray| ray[0][0].is_finite() && ray[1][0].is_finite()),
+        "the written point draws rays of its own",
+    );
+    assert!(
+        built(&state, origin).is_empty(),
+        "the replaced index still draws rays, and they are what would be left \
+         on screen",
+    );
+}
+
 #[test]
 fn clear_track_rays_drops_the_buffer() {
     let (device, _queue) = device();
@@ -1736,6 +1824,73 @@ fn an_addition_that_carries_a_bitmap_gets_a_slot_in_its_own_atlas() {
     );
 }
 
+/// The frame writes a uniform block per atlas the pass draws, and the
+/// additions' atlas is one of them.
+///
+/// This is the bug it is here for. Each `PatchResources` carries its own grid
+/// in its own uniform block, and the frame's write covered only the base's, so
+/// the additions' block stayed as `wgpu` left it: zeros. A zero `view_proj`
+/// takes every corner of every surfel in that atlas to `vec4(0, 0, 0, 0)`, so a
+/// point committed from the bench drew its dot and no patch at all -- an atlas
+/// built, filled, bound and drawn, one buffer write short of being visible.
+///
+/// Both sides now read `ReconResources::patch_atlases`, so what is asserted
+/// here is that list: the two atlases are two entries with two uniform buffers,
+/// and neither can be covered by writing the other's.
+#[test]
+fn the_additions_atlas_is_one_of_the_atlases_the_frame_writes_uniforms_for() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    assert_eq!(
+        bundle(&renderer).patch_atlases().count(),
+        1,
+        "a node with no additions draws its base's atlas alone"
+    );
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    // Read through the draw loop's own filter, so the list asserted on is the
+    // one the patch pass walks rather than a second reading of the bundle.
+    let atlases: Vec<_> = renderer
+        .drawn(|b| b.display.show_patches)
+        .flat_map(|bundle| bundle.patch_atlases())
+        .collect();
+    assert_eq!(atlases.len(), 2, "the additions' atlas is not in the list");
+    assert_eq!(atlases[1].count, 1, "the addition's own surfel");
+    assert!(
+        atlases[0].uniform_buffer != atlases[1].uniform_buffer,
+        "the two atlases share a uniform block, and one write would serve both",
+    );
+
+    // The write itself, over the list, as the frame makes it: a block whose
+    // grid disagrees with the atlas it describes samples the wrong cell, and
+    // one never written at all draws nothing.
+    renderer.update_uniforms(
+        &queue,
+        &crate::viewer_3d::ViewportCamera::default(),
+        0.0,
+        2.0,
+        true,
+        1.0,
+        [0.0; 3],
+        0.0,
+        1.0,
+        0.0,
+        None,
+        None,
+        None,
+        0.0,
+        1.0,
+        0.1,
+    );
+}
+
 #[test]
 fn the_pick_range_covers_the_additions() {
     let (device, queue) = device();
@@ -1759,6 +1914,201 @@ fn the_pick_range_covers_the_additions() {
     assert_eq!(
         renderer.resolve_pick_for_test(global),
         Some(point(moved as usize)),
+    );
+}
+
+/// An addition's dot and its surfel write the **same** pick id, and it decodes
+/// to the addition.
+///
+/// The two pipelines reach that id by different routes, and nothing in either
+/// one mentions the other:
+///
+/// - the dot takes its number from the uniform block, whose pick base the frame
+///   shifts past the base's instances, plus the `instance_index` of a draw that
+///   starts at zero;
+/// - the surfel takes the node's **unshifted** block -- the atlas's bind group
+///   binds that one -- plus a number baked into the instance at upload, which
+///   `build_patch_resources` offsets by the base's point count.
+///
+/// So they agree only while `index_offset` equals the base instance count, and
+/// a drift would leave the dot pickable and the patch naming a different point
+/// or nothing at all. `slot_of_point` is keyed on exactly the number baked into
+/// each instance, which is what makes the baked half readable from the CPU.
+#[test]
+fn an_additions_dot_and_its_surfel_write_the_same_pick_id() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    // Two, because the user's case is two commits and the second addition is
+    // the one whose row is not zero.
+    let mut edited = loaded.clone();
+    let first = edited
+        .replace_point(3, moved_record(&edited, 3))
+        .expect("a live point");
+    let second = edited
+        .replace_point(7, moved_record(&edited, 7))
+        .expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    let bundle = bundle(&renderer);
+    let additions = bundle.additions.as_ref().expect("the additions uploaded");
+    let patch = additions.patch.as_ref().expect("they carry bitmaps");
+    assert_eq!(patch.count, 2, "one surfel per addition");
+
+    for (row, added) in [first, second].into_iter().enumerate() {
+        // The dot: the additions' own block, shifted, plus the draw's row.
+        let dot = bundle.point_pick_base + bundle.point_count + row as u32;
+        // The surfel: the node's own block, unshifted, plus the baked index.
+        let baked = patch
+            .slot_of_point
+            .iter()
+            .find(|(_, &slot)| slot == row as u32)
+            .map(|(&index, _)| index)
+            .expect("a slot per addition");
+        let surfel = bundle.point_pick_base + baked;
+        assert_eq!(dot, surfel, "the dot and the surfel name different points");
+
+        // And that one id is the addition, both ways round.
+        assert_eq!(
+            renderer.global_point_index_for_test(point(added as usize)),
+            Some(surfel),
+        );
+        assert_eq!(
+            renderer.resolve_pick_for_test(surfel),
+            Some(point(added as usize)),
+        );
+    }
+}
+
+/// A rebuilt atlas starts from the version's deleted set, because the frame's
+/// mask write is a difference and has nothing to say on the frame that rebuilds
+/// it.
+///
+/// This is the bug it is here for. The additions' buffers are rebuilt whenever
+/// the addition *set* moves, and an edit that creates a point moves it without
+/// moving the deleted set: the mask write then finds no changed index, and an
+/// atlas built all-alive goes on drawing the surfel of an addition an earlier
+/// edit replaced. It is visible, it sits at the position that point used to
+/// have, and clicking it does nothing -- the click path drops a ref the version
+/// has deleted.
+#[test]
+fn a_rebuilt_addition_atlas_starts_from_the_deleted_set() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    // An addition, then an edit that replaces *it*: the first keeps its row so
+    // the indexes after it do not move, and the version deletes it.
+    let mut edited = loaded.clone();
+    let first = edited
+        .replace_point(3, moved_record(&edited, 3))
+        .expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    let second = edited
+        .replace_point(first, moved_record(&edited, first))
+        .expect("a live addition");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    assert!(
+        edited.is_deleted(first),
+        "the replacement deleted the first"
+    );
+
+    // Now an edit that grows the addition set without touching the deleted
+    // set, which is what a commit that creates a point does. The buffers are
+    // rebuilt, and the mask write that follows has nothing to correct them
+    // with.
+    let created = edited
+        .add_point(moved_record(&edited, 0))
+        .expect("a valid record");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    let written = renderer.update_point_mask(
+        &queue,
+        RECON,
+        &edited.deleted_points,
+        &std::collections::HashSet::new(),
+    );
+    assert_eq!(
+        written, 0,
+        "the deleted set moved, so the mask write could have papered over it",
+    );
+
+    let patch = additions(&renderer)
+        .expect("the additions uploaded")
+        .patch
+        .as_ref()
+        .expect("they carry bitmaps");
+    assert_eq!(
+        patch.count, 3,
+        "one slot per addition, deleted ones included"
+    );
+
+    // What reached the GPU: the replaced addition's slot is dead, the other two
+    // alive. Before the fix the whole buffer was born alive and the mask write
+    // above had nothing to correct it with, so the first addition's surfel came
+    // back on screen -- visible, at the position that point used to have, and
+    // answering no pick.
+    let slot = |index: u32| *patch.slot_of_point.get(&index).expect("a slot");
+    assert_eq!(
+        patch.built_liveness[slot(first) as usize],
+        super::overlay::MASK_DELETED,
+        "the replaced addition's surfel was born alive",
+    );
+    assert_eq!(
+        patch.built_liveness[slot(second) as usize],
+        super::overlay::MASK_ALIVE,
+    );
+    assert_eq!(
+        patch.built_liveness[slot(created) as usize],
+        super::overlay::MASK_ALIVE,
+    );
+}
+
+/// The rule that buffer is built from, over the two indexes that matter: a slot
+/// whose point the version deleted is born dead, and every other slot alive.
+#[test]
+fn patch_liveness_marks_the_slots_of_deleted_points() {
+    let instance = |point_index: u32| super::super::gpu_types::PatchInstance {
+        center: [0.0; 3],
+        w: 1.0,
+        u_halfvec: [0.1, 0.0, 0.0],
+        _pad0: 0.0,
+        v_halfvec: [0.0, 0.1, 0.0],
+        atlas_layer: 0,
+        point_index,
+    };
+    let instances = [instance(40), instance(41), instance(42)];
+    let deleted: std::collections::HashSet<u32> = [3, 40].into_iter().collect();
+    let none = std::collections::HashSet::new();
+
+    assert_eq!(
+        super::patches::patch_liveness(&instances, &deleted, &none),
+        vec![
+            super::overlay::MASK_DELETED,
+            super::overlay::MASK_ALIVE,
+            super::overlay::MASK_ALIVE,
+        ],
+    );
+    // The highlight survives a rebuild too: it is a viewport statement the
+    // frame's write would likewise have nothing to say about.
+    let lit: std::collections::HashSet<u32> = [40, 41].into_iter().collect();
+    assert_eq!(
+        super::patches::patch_liveness(&instances, &deleted, &lit),
+        vec![
+            super::overlay::MASK_DELETED,
+            super::overlay::MASK_HIGHLIGHTED,
+            super::overlay::MASK_ALIVE,
+        ],
+        "deleted wins over highlighted, as it does in the mask write",
+    );
+    // An empty atlas still needs a bindable buffer.
+    assert_eq!(
+        super::patches::patch_liveness(&[], &deleted, &none),
+        vec![super::overlay::MASK_ALIVE],
     );
 }
 

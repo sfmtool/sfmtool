@@ -548,7 +548,14 @@ impl App {
             || transform_changed
             || self.state.length_scale != self.prev_frustum_length_scale
             || self.state.frustum_size_multiplier != self.prev_frustum_size_multiplier;
-        let point_selection_changed = self.state.selected_point != self.prev_selected_point;
+        // The selected point lights the frustums of the images that observe it,
+        // and that track is the *version's* rather than the index's -- so this
+        // asks what the track rays ask: the point, and the identity of the value
+        // it is read out of. A retriangulation of every point renumbers nothing
+        // and can leave a track observed from a different set of images, which a
+        // comparison of the selection alone reads as no change at all.
+        let point_source = selected_point_source(&self.state);
+        let point_selection_changed = point_source != self.prev_selected_point;
         let colors_changed = self.state.selected_image != self.prev_selected_image
             || self.state.selected_camera != self.prev_selected_camera
             || point_selection_changed
@@ -595,7 +602,7 @@ impl App {
             self.prev_frustum_size_multiplier = self.state.frustum_size_multiplier;
             self.prev_selected_image = self.state.selected_image;
             self.prev_selected_camera = self.state.selected_camera;
-            self.prev_selected_point = self.state.selected_point;
+            self.prev_selected_point = point_source;
             self.prev_hidden_image = hidden_image;
         }
 
@@ -895,6 +902,14 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
+                // The viewport's point menu is the one tab response that ends
+                // in a layout operation (Edit on Bench raises Track Edit), so it
+                // is applied here, with the dock back in the state. Applied
+                // inside the tab body the raise would land on the placeholder
+                // dock and be overwritten by the line above.
+                if let Some(request) = viewer_3d.point_menu.take() {
+                    app_state.apply_point_menu(request);
+                }
             });
         });
 
@@ -1066,34 +1081,48 @@ fn point_is_live(state: &crate::state::AppState, point: crate::scene::PointRef) 
         .is_some_and(|node| !node.is_point_deleted(point.point))
 }
 
-/// What the track rays are built from: the selected point, and the identity of
-/// the value its positions and keypoints were read out of.
+/// What everything drawn for the selection is built from: the selected point,
+/// and the identity of the value it is read out of.
 ///
 /// The point alone is not enough, and that was the bug. A bundle adjustment
 /// that renumbers nothing leaves the selection exactly where it was and
-/// replaces every position under it; an undo of one does the same in reverse.
-/// Same point, different geometry, rays still drawn from the version before.
-/// A `VersionSerial` is minted once and never reused, so holding it against the
-/// last frame's asks the question this needs asked: are these rays built from
-/// the value on screen?
+/// replaces every position under it; a retriangulation of every point can leave
+/// its track observed from a different set of images; an undo of either does the
+/// same in reverse. Same point, different value, and a comparison of the
+/// selection reads as no change at all. A `VersionSerial` is minted once and
+/// never reused, so holding it against the last frame's asks the question this
+/// needs asked: is what is on screen built from the value on screen?
 ///
-/// `None` where there is nothing to draw: no selection, a node that has gone,
-/// a point this version does not have, or a node that is not on screen. The
-/// gate treats that as a change like any other, so the rays are cleared rather
-/// than left where they do not belong.
+/// `None` where there is no selection or the node it names has gone, which the
+/// gates treat as a change like any other.
+fn selected_point_source(
+    state: &crate::state::AppState,
+) -> Option<(crate::scene::PointRef, crate::document::VersionSerial)> {
+    let point = state.selected_point?;
+    let node = crate::scene::node_by_id(&state.scene, point.recon)?;
+    Some((point, node.history.current_version().serial))
+}
+
+/// What the **track rays** are built from: [`selected_point_source`], refused
+/// where there are no rays to draw.
+///
+/// `None` in two cases beyond that one's: a point this version does not have,
+/// and a node that is not on screen. The gate treats either as a change like
+/// any other, so the rays are cleared rather than left where they do not belong.
 ///
 /// Visibility is in here because the rays are a singleton with no node of their
 /// own in the draw loop: `render_track_rays` draws whatever the buffer holds,
 /// so nothing else would stop a hidden node's rays from hanging in the air over
-/// the node that is still shown.
+/// the node that is still shown. The frustum colours need no such rule: they
+/// are the node's own, and a hidden node draws none of them.
 fn track_ray_source(
     state: &crate::state::AppState,
 ) -> Option<(crate::scene::PointRef, crate::document::VersionSerial)> {
-    let point = state.selected_point?;
+    let (point, serial) = selected_point_source(state)?;
     let node = crate::scene::node_by_id(&state.scene, point.recon)?;
     if !crate::scene::is_visible(node, state.solo) {
         return None;
     }
     node.edited().point(point.point)?;
-    Some((point, node.history.current_version().serial))
+    Some((point, serial))
 }

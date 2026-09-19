@@ -1291,6 +1291,12 @@ stage** a fit *is* the refinement, which is what a reading is too -- a cluster
 has no geometry behind it to move -- so the two steps run the one kernel and
 report the same thing.
 
+A fit writes the placement it finds whether or not the observations can be
+measured against it, so observations that disagree with the camera poses come
+back unmeasured at a moved point. A fit that refuses and reports instead is
+proposed in
+[`bench-inconsistent-fit-amendment.md`](../../drafts/bench-inconsistent-fit-amendment.md).
+
 ### Moving between the stages
 
 `set_stage` is one operation in both directions. Setting the stage a track is
@@ -1326,7 +1332,23 @@ derives by projecting the frame at that observation's anchor
 § "Deriving keypoint shape, scale, and orientation", the inverse of the framing
 the upgrade does, so the two directions state one relationship), divided by the
 new cluster's radius because that rule's columns are pixel half-axes and a
-cluster seed is per keypoint-frame unit. The reference
+cluster seed is per keypoint-frame unit, and **read in the other chirality**.
+
+That last is a convention, and it is the whole of the difference between the two
+stages' shapes. A patch-frame shape has the projections of `u` and `v` as its
+columns, and `v` points image-*up* while pixel rows count *down*, so a patch
+facing the camera projects to a **negative** determinant. A keypoint-frame shape
+is the `.sift` convention, a scaled rotation of **positive** determinant, which
+is what a descriptor search seeds and what the cluster stage rasters its
+template with. The two are one negation of the `v` column, applied on the way
+down here and on the way up by `OrientedPatch::from_affine_shape_at_depth`,
+which negates the second column of a positive-determinant shape so the patch it
+builds faces the camera. A seed taken straight from the projection is the surfel
+*mirrored*, and no size tells the two apart: `det.abs().sqrt()`, which is how
+both stages measure how big a patch is in a view, is the same number either way
+round.
+
+The reference
 becomes the `in` observation with the largest projected patch scale, which is
 the one showing the most of the patch -- and, where the track has no `in`
 observation left, the largest of whatever it does carry, because a reference is

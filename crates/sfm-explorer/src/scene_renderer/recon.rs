@@ -67,6 +67,14 @@ pub(super) struct PatchResources {
     pub atlas_cols: u32,
     pub atlas_rows: u32,
     pub patches_per_page: u32,
+    /// The liveness vector `alive_buffer` was created from, in slot order.
+    ///
+    /// What reached the GPU before any mask write, which is the half a headless
+    /// test cannot read back: the buffer is `VERTEX | COPY_DST` and never a
+    /// copy source. Kept only under `cfg(test)`, so the shipped bundle carries
+    /// nothing it does not draw from.
+    #[cfg(test)]
+    pub built_liveness: Vec<u32>,
 }
 
 /// The overlay's **additions** as GPU state: a second set of instance buffers
@@ -328,6 +336,24 @@ impl ReconResources {
     /// How many addition instances this bundle draws.
     pub(super) fn addition_count(&self) -> u32 {
         self.additions.as_ref().map_or(0, |a| a.point_count)
+    }
+
+    /// Every surfel atlas this bundle holds, in draw order: the base's, then
+    /// the overlay's additions' own.
+    ///
+    /// One list with two readers -- the frame's uniform write and the patch
+    /// pass -- because each `PatchResources` carries its own grid dimensions in
+    /// its own uniform block, and the two have to cover the same atlases. A
+    /// block left unwritten is a zero one, and a zero `view_proj` collapses
+    /// every corner of every surfel in that atlas to one clipped vertex: an
+    /// atlas the write misses and the draw does not is an atlas that draws
+    /// nothing at all.
+    pub(super) fn patch_atlases(&self) -> impl Iterator<Item = &PatchResources> {
+        self.patch.iter().chain(
+            self.additions
+                .as_ref()
+                .and_then(|additions| additions.patch.as_ref()),
+        )
     }
 
     /// The seed this node contributes to the global `length_scale`: the point

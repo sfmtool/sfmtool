@@ -346,7 +346,11 @@ pub(crate) struct App {
     /// highlight is a per-image frustum color, so a camera selection moves it
     /// exactly as an image or point selection moves the other two.
     pub(crate) prev_selected_camera: Option<CameraRef>,
-    pub(crate) prev_selected_point: Option<PointRef>,
+    /// What the frustum colours on screen were built from: the selected point
+    /// and the identity of the value its track was read out of, so a version
+    /// that leaves the selection where it is still re-lights the images that
+    /// observe it. See `app::selected_point_source`.
+    pub(crate) prev_selected_point: Option<(PointRef, crate::document::VersionSerial)>,
     /// What the track rays on screen were built from, so a frame can tell
     /// whether they still describe the value under them. See
     /// `app::track_ray_source`.

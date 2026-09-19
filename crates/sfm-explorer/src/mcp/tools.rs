@@ -1304,7 +1304,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           track still at the cluster stage, for one with fewer than two in \
                           observations, and on a reconstruction whose observations are .sift \
                           feature indexes rather than inline keypoints — each in the bench's own \
-                          words. The track stays on the bench, seated on the point it wrote.",
+                          words. The track stays on the bench, seated on the point it wrote, and \
+                          that point becomes the viewer's selection; the reply names it by index \
+                          and by id.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],

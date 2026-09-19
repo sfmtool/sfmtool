@@ -2090,7 +2090,10 @@ need no bench variant: the history they walk already holds the bench steps, and
 step that sets something else off -- putting the first item on a bench opens the
 node's default descriptor index, which writes a row after the step's -- writes
 that row as the viewer rather than as the caller, and the reply skips the
-viewer's rows ([bench.md](bench.md) § "The wire").
+viewer's rows ([bench.md](bench.md) § "The wire"). It skips `Selection` rows for
+the same reason: a commit selects the point it wrote
+([edits/commit-track.md](edits/commit-track.md)), which is where the call left
+the viewer looking rather than what the call did.
 
 **A step that had no effect answers successfully, with `changed: false`.**
 Setting the verdict an observation already has, dragging the patch to the pixel

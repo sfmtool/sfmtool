@@ -356,9 +356,9 @@ impl SceneRenderer {
                     for bundle in bundles(|b| b.display.show_patches) {
                         // The base's atlas, then the additions' own: two draws
                         // in one pass, and nothing in the shader tells them
-                        // apart.
-                        let additions = bundle.additions.as_ref().and_then(|a| a.patch.as_ref());
-                        for patch in bundle.patch.iter().chain(additions) {
+                        // apart. The same list the frame's uniform write covers,
+                        // because each atlas draws from its own uniform block.
+                        for patch in bundle.patch_atlases() {
                             if patch.count > 0 {
                                 pass.set_bind_group(0, &patch.bind_group, &[]);
                                 pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));

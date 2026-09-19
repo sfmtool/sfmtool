@@ -6762,8 +6762,16 @@ fn commit_answers_with_a_version_an_undo_takes_back() {
     assert!(report.starts_with("Committed track:"), "{report}");
     assert_eq!(version_count(&state), 3);
     assert_eq!(state.scene[0].point_count(), points, "{report}");
-    // It is an `Edit` row and the agent's, as every other commit's is.
-    let last = rows(&state).pop().expect("one row per step");
+    // It is an `Edit` row and the agent's, as every other commit's is, and the
+    // selection the commit moved onto the written point is the row after it.
+    let mut rows = rows(&state);
+    let selection = rows.pop().expect("the commit selected what it wrote");
+    assert!(
+        selection.2.starts_with("Selected point "),
+        "{}",
+        selection.2
+    );
+    let last = rows.pop().expect("one row per step");
     assert_eq!(last, (Actor::Mcp, false, report.to_string()));
 
     call(

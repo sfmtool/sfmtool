@@ -86,11 +86,21 @@ impl SceneRenderer {
         });
 
         // An addition that has itself been deleted or replaced keeps its row so
-        // the indexes after it do not move, so the mask starts from the set
-        // rather than all-alive as the base's does.
+        // the indexes after it do not move, so the mask starts from the sets
+        // rather than all-alive as the base's does. The highlight comes from
+        // the bundle, which is where the last frame's write left it: it is a
+        // viewport statement rather than a document one, and the rebuild must
+        // not drop it any more than it drops the deleted set.
         let base_count = edited.base_point_count() as u32;
+        let highlighted = self
+            .recons
+            .get(&id)
+            .map(|bundle| bundle.masked_highlighted.clone())
+            .unwrap_or_default();
         let alive: Vec<u32> = (0..instances.len() as u32)
-            .map(|k| u32::from(!edited.is_deleted(base_count + k)))
+            .map(|k| {
+                super::overlay::mask_word(base_count + k, &edited.deleted_points, &highlighted)
+            })
             .collect();
         let point_alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("addition point liveness"),
@@ -101,12 +111,19 @@ impl SceneRenderer {
         // The additions' surfels index the base's point set nowhere, so their
         // atlas is their own; `index_offset` makes each instance carry its
         // *edited* index, which is what the pick id and the mask are keyed on.
+        //
+        // The deleted set goes in for the same reason the point liveness above
+        // reads it: these buffers are rebuilt *under* a standing overlay, and
+        // the set may already hold an addition -- one an edit replaced, which
+        // keeps its row so the indexes after it do not move.
         let patch = self.build_patch_resources(
             device,
             queue,
             id,
             added,
             base_count,
+            &edited.deleted_points,
+            &highlighted,
             &sfmtool_core::progress::Progress::none(),
         );
 

@@ -229,6 +229,34 @@ code over a shorter list. Two draws in one pass; nothing in the shader tells the
 apart, because each `PatchResources` already carries its own grid dimensions in
 its own uniform block.
 
+**The frame writes a block per atlas it draws**, and the two read one list:
+`ReconResources::patch_atlases` yields the base's atlas and then the additions',
+and both the per-frame uniform write (`scene_renderer/uniforms.rs`) and the patch
+pass (`scene_renderer/render.rs`) walk it. They have to agree, because a block
+carries the view-projection as well as the grid: an atlas whose block is never
+written reads it as zeros, and a zero `view_proj` takes every corner of every
+surfel in that atlas to `vec4(0, 0, 0, 0)`. Such an atlas draws nothing at all
+rather than drawing wrongly, so the failure looks like a point that has no patch
+-- which is what a point committed from the bench is. That list is what
+[scene_renderer/upload/tests.rs](../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
+asserts on, through the draw loop's own filter: a version that added a
+patch-bearing point is two atlases with two uniform blocks, and neither is
+covered by writing the other's.
+
+**A rebuilt atlas is born with the version's deleted set already in it.** The
+frame's mask write is a *difference* -- it walks the indexes that entered or
+left the set since the last frame -- so it has nothing to say on a frame that
+rebuilt the buffer it would have corrected. The additions' buffers are rebuilt
+whenever the addition set moves, and an edit that **creates** a point moves that
+set without moving the deleted set: an atlas built all-alive then goes on
+drawing the surfel of an addition an earlier edit replaced, at the position that
+point used to have, and clicking it does nothing, because the click path drops a
+ref the version has deleted. So the liveness buffer is a function of the deleted
+set where it is built. The base's atlas passes an empty set, which is not an
+exception: a new base arrives with an empty overlay, and the point upload before
+it clears the mask the frame compares against, so the version's own set is
+written over the top on that same frame.
+
 A second atlas rather than slots appended to the base's: the base's atlas is
 exactly what a run of point edits shares, so appending to it would mean building
 a new texture per edit and re-uploading every tile. An addition's instance

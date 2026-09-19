@@ -62,7 +62,20 @@ impl SceneRenderer {
         }
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
-        let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0, progress);
+        // A new base carries no overlay, so every patch of it starts alive; the
+        // point upload that preceded this cleared the mask the frame compares
+        // against, so the version's own deleted set is written over the top on
+        // this very frame.
+        let patch = self.build_patch_resources(
+            device,
+            queue,
+            id,
+            &recon.point_set,
+            0,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            progress,
+        );
         let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
         Uploaded::Built(packed)
@@ -156,6 +169,15 @@ impl SceneRenderer {
     /// The additions pass [`Progress::none`]: their atlas holds the handful of
     /// points one edit added, and a breakdown of a fraction of a millisecond is
     /// noise under an entry whose subject is the edit.
+    ///
+    /// `deleted` and `highlighted` are the sets the liveness buffer is built
+    /// from, in the index space the instances carry -- base indexes for the
+    /// base, edited indexes for the additions. They are parameters rather than
+    /// an assumption because the two callers answer them differently: a new
+    /// base arrives with an empty overlay and every patch of it starts alive,
+    /// while the additions are rebuilt *under* a standing overlay that may
+    /// already have deleted one of them.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_patch_resources(
         &mut self,
         device: &wgpu::Device,
@@ -163,6 +185,8 @@ impl SceneRenderer {
         id: ReconId,
         point_set: &sfmtool_core::PointSet,
         index_offset: u32,
+        deleted: &std::collections::HashSet<u32>,
+        highlighted: &std::collections::HashSet<u32>,
         progress: &Progress<'_>,
     ) -> Option<PatchResources> {
         let (Some(u_halfvecs), Some(v_halfvecs)) = (
@@ -326,7 +350,7 @@ impl SceneRenderer {
             .enumerate()
             .map(|(slot, instance)| (instance.point_index, slot as u32))
             .collect();
-        let alive = vec![1u32; instances.len().max(1)];
+        let alive = patch_liveness(&instances, deleted, highlighted);
         let alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("patch liveness"),
             contents: bytemuck::cast_slice(&alive),
@@ -397,6 +421,8 @@ impl SceneRenderer {
             atlas_cols: cols,
             atlas_rows: actual_rows_per_page,
             patches_per_page,
+            #[cfg(test)]
+            built_liveness: alive,
         };
 
         let atlas_bytes = atlas_width as u64 * atlas_height as u64 * 4 * num_pages as u64;
@@ -412,6 +438,38 @@ impl SceneRenderer {
         );
         Some(resources)
     }
+}
+
+/// The liveness buffer one atlas starts from: `MASK_DELETED` for a slot whose
+/// point the version has deleted, `MASK_ALIVE` for the rest.
+///
+/// **A rebuilt atlas cannot rely on the frame's mask write to put the deleted
+/// set back over the top of it.** That write is a *difference*: it walks the
+/// indexes that entered or left the set since the last frame, and a rebuild
+/// triggered by something else -- an addition set that grew because an edit
+/// created a point, which moves no index into the set -- leaves it with nothing
+/// to say. A buffer built all-alive then keeps a deleted point's surfel on
+/// screen until something unrelated moves the set, and that surfel answers no
+/// pick, because the click path drops a ref the version has deleted. So the
+/// liveness is a function of the set here rather than a correction applied
+/// afterwards.
+///
+/// The base's caller passes an empty set, which is not an exception to that: a
+/// new base arrives with an empty overlay, and the point upload that precedes
+/// it clears the mask the frame compares against.
+pub(super) fn patch_liveness(
+    instances: &[PatchInstance],
+    deleted: &std::collections::HashSet<u32>,
+    highlighted: &std::collections::HashSet<u32>,
+) -> Vec<u32> {
+    if instances.is_empty() {
+        // At least one entry, so an empty atlas still has a bindable buffer.
+        return vec![super::overlay::MASK_ALIVE];
+    }
+    instances
+        .iter()
+        .map(|instance| super::overlay::mask_word(instance.point_index, deleted, highlighted))
+        .collect()
 }
 
 /// The points that carry a patch, ascending: a point with no patch is an

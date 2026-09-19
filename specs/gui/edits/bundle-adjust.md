@@ -184,6 +184,9 @@ button exists, and that is what the menu test already does.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.
 - Choosing the schedule, the iteration budget or the trim floors from the dialog.
+- Reading the bench: the solve takes the reconstruction's tracks alone. Feeding
+  it hand-verified bench tracks, exempt from trimming, is proposed in
+  [`bench-inconsistent-fit-amendment.md`](../../drafts/bench-inconsistent-fit-amendment.md).
   They are the core function's defaults, and a value that needs different ones
   needs a different tool.
 - Reporting progress, or a per-round trace. One entry, after it has run; live

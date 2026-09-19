@@ -29,6 +29,21 @@ pub(crate) const MASK_ALIVE: u32 = 1;
 /// hover tint for as long as whatever is calling it out lasts.
 pub(crate) const MASK_HIGHLIGHTED: u32 = 2;
 
+/// The mask word one point index takes under a deleted set and a highlight set.
+///
+/// The one place the three words are chosen, so a buffer *built* from the two
+/// sets and a buffer *corrected* entry by entry cannot come to disagree about
+/// what a given index means.
+pub(crate) fn mask_word(index: u32, deleted: &HashSet<u32>, highlighted: &HashSet<u32>) -> u32 {
+    if deleted.contains(&index) {
+        MASK_DELETED
+    } else if highlighted.contains(&index) {
+        MASK_HIGHLIGHTED
+    } else {
+        MASK_ALIVE
+    }
+}
+
 impl SceneRenderer {
     /// Whether `id`'s buffers were built from a base other than `base`.
     ///
@@ -114,13 +129,7 @@ impl SceneRenderer {
         changed.dedup();
         let written = changed.len();
         for index in changed {
-            let alive: u32 = if deleted.contains(&index) {
-                MASK_DELETED
-            } else if highlighted.contains(&index) {
-                MASK_HIGHLIGHTED
-            } else {
-                MASK_ALIVE
-            };
+            let alive = mask_word(index, deleted, highlighted);
             if index < bundle.point_count {
                 if let Some(buffer) = &bundle.point_alive_buffer {
                     queue.write_buffer(buffer, u64::from(index) * 4, bytemuck::bytes_of(&alive));

@@ -4,7 +4,7 @@
 //! What a frame decides before it draws. Headless: these are questions about
 //! the state, asked the way the frame asks them.
 
-use super::track_ray_source;
+use super::{selected_point_source, track_ray_source};
 use crate::scene::PointRef;
 use crate::state::edits::tests as edits;
 use crate::state::AppState;
@@ -70,6 +70,64 @@ fn undoing_back_to_a_version_is_a_new_ray_source_again() {
     assert_eq!(
         adjusted, redone,
         "the same version is the same source, so nothing is rebuilt twice",
+    );
+}
+
+/// The frustums of the images that observe the selected point are lit from that
+/// point's **track**, which is the version's rather than the index's, so they
+/// are gated on the same source the rays are.
+///
+/// The adjustment is the case that makes the difference visible: it renumbers
+/// nothing, so a comparison of the selection alone reads as no change at all and
+/// the colours would be left describing the version before.
+#[test]
+fn a_new_version_under_the_selection_is_a_new_point_source() {
+    let (mut state, point) = selected(0);
+    let before = selected_point_source(&state).expect("a selection in a loaded node");
+
+    adjust(&mut state, point.recon);
+
+    assert_eq!(
+        state.selected_point,
+        Some(point),
+        "this case is the one where the selection does not move",
+    );
+    let after = selected_point_source(&state).expect("the node is still loaded");
+    assert_ne!(before, after, "the colours would have been left behind");
+}
+
+/// A commit puts the rays on the point it wrote, wherever they were.
+///
+/// Two changes at once, and each on its own would leave them wrong: the
+/// selection moves to the written point, and the version under it is the one the
+/// commit pushed.
+#[test]
+fn a_commit_puts_the_ray_source_on_the_point_it_wrote() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    // Somewhere other than the track's origin, which is where the map would
+    // have left it.
+    state.select_point(PointRef::new(id, 0));
+    let before = track_ray_source(&state).expect("a live point");
+
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    let after = track_ray_source(&state).expect("the written point is live");
+    assert_ne!(before, after, "the rays were left on the point before");
+    assert_eq!(
+        after.0,
+        PointRef::new(id, written.point as usize),
+        "the rays are not on what the commit wrote",
+    );
+
+    // Undo takes the written point away again, and the rays with it: the
+    // selection lands back on the point the commit replaced.
+    state.undo(id).expect("the commit");
+    let undone = track_ray_source(&state).expect("the replaced point is back");
+    assert_ne!(undone, after);
+    assert_eq!(
+        undone.0,
+        PointRef::new(id, written.replaced.expect("this one replaces") as usize),
     );
 }
 

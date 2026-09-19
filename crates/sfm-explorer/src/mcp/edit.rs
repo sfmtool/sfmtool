@@ -41,7 +41,7 @@ use super::{
     resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
     CameraImageSel, Deferred, JsonReply, ToolError, REPLY_DIRECTLY_WITHIN,
 };
-use crate::action_log::Actor;
+use crate::action_log::{Actor, Kind};
 use crate::document::VersionSerial;
 use crate::goto_point::PointQuery;
 use crate::scene::{ReconId, SceneNode};
@@ -503,11 +503,17 @@ pub(super) fn unchanged_reply(state: &AppState, id: ReconId, since: u64) -> Json
 /// and the reply would then carry that row's sentence under the step's own
 /// label. Those rows are [`Actor::Viewer`]'s, because nobody asked for them,
 /// and skipping them here is what keeps a reply saying what the call did.
+///
+/// **Nor is where the edit left the selection.** A commit of a bench track
+/// selects the point it wrote, which is a row of its own after the step's and
+/// in the caller's name; what the call *did* is the sentence before it.
 fn recorded_text(state: &AppState, since: u64) -> Option<String> {
     state
         .action_log
         .since(since)
-        .filter(|entry| !entry.failed && entry.actor != Actor::Viewer)
+        .filter(|entry| {
+            !entry.failed && entry.actor != Actor::Viewer && entry.kind != Kind::Selection
+        })
         .last()
         .map(|entry| entry.text.clone())
 }
