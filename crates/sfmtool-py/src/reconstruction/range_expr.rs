@@ -36,9 +36,9 @@ impl PyRangeExpr {
         if values.is_empty() {
             return Err(PyValueError::new_err("range expression cannot be empty"));
         }
-        Ok(Self {
-            inner: RangeExpr::from_values(values),
-        })
+        RangeExpr::from_values(values)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Total number of integers across all sub-ranges.
