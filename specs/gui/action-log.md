@@ -383,7 +383,7 @@ because a human at the window reads it.
 This is the crate's first date/time dependency (`jiff`, default features).
 Chosen over `chrono` for a smaller dependency graph and over `time` because
 `time`'s local-offset lookup is unsound on Unix without an opt-in flag. The
-workspace MSRV is 1.95; `jiff` needs 1.70. On Windows and macOS the zone comes
+workspace MSRV is 1.97; `jiff` needs 1.70. On Windows and macOS the zone comes
 from the OS; on Linux from `/etc/localtime` or `TZ`, falling back to UTC with a
 one-time `log::warn!` if neither resolves, which is `jiff`'s own behaviour.
 
