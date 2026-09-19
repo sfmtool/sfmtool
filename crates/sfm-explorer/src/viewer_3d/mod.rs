@@ -25,6 +25,7 @@ use sfmtool_core::{Camera, Se3Transform};
 use crate::action_log::{ActionLog, Kind};
 use crate::platform::GestureEvent;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
+use crate::state::edits::PointGesture;
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -223,7 +224,7 @@ pub struct Viewer3D {
     /// A single slot, because the two things it carries happen on different
     /// frames: a menu opens on the frame of the click and an entry is chosen on
     /// a later one.
-    pub point_menu: Option<PointMenuRequest>,
+    pub point_menu: Option<PointGesture>,
     /// Where each of the point menu's entries was drawn on the frame just
     /// past, empty on a frame with no menu up.
     ///
@@ -234,26 +235,11 @@ pub struct Viewer3D {
     pub(crate) menu_entry_rects: Vec<(&'static str, Rect)>,
 }
 
-/// What the viewport's point context menu asked of the app.
+/// What the entry that stages a point's track on the bench is called, in both
+/// menus that offer it and in the tests that aim at them.
 ///
-/// Reported rather than done, for the reason every other panel reports its
-/// gestures: [`Viewer3D::show`] holds the node borrowed out of `AppState` while
-/// it draws, and each of these needs that state mutably.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointMenuRequest {
-    /// The menu opened on this point. Select it, so that what the entries will
-    /// act on is also what the rest of the viewer is looking at.
-    Opened(PointRef),
-    /// [`EDIT_ON_BENCH_LABEL`] was chosen: put this point's track on the bench
-    /// and show the Track Edit panel.
-    EditOnBench(PointRef),
-    /// [`RETRIANGULATE_POINT_LABEL`] was chosen: re-solve this point from its
-    /// own observations.
-    Retriangulate(PointRef),
-}
-
-/// What the entry that stages a point's track on the bench is called, in the
-/// menu and in the tests that aim at it.
+/// The Image Detail panel's feature menu offers the same entry under the same
+/// name ([`crate::image_detail`]), so the two cannot drift.
 pub const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
 
 /// What the entry that re-solves one point is called, in the menu and in the
@@ -333,7 +319,7 @@ impl Viewer3D {
             // point, and the panels beside the viewport should be saying so
             // while it stands open.
             if let Some(point) = self.menu_point {
-                self.point_menu = Some(PointMenuRequest::Opened(point));
+                self.point_menu = Some(PointGesture::Opened(point));
             }
         }
         self.menu_entry_rects.clear();
@@ -363,7 +349,7 @@ impl Viewer3D {
                 EDIT_ON_BENCH_LABEL,
                 "Put this point's track on the bench and open the Track Edit panel on it.",
             ) {
-                self.point_menu = Some(PointMenuRequest::EditOnBench(point));
+                self.point_menu = Some(PointGesture::EditOnBench(point));
                 ui.close();
             }
             if entry(
@@ -372,7 +358,7 @@ impl Viewer3D {
                 "Re-solve this point from its own observations at these poses and this lens, \
                  as one version.",
             ) {
-                self.point_menu = Some(PointMenuRequest::Retriangulate(point));
+                self.point_menu = Some(PointGesture::Retriangulate(point));
                 ui.close();
             }
         });

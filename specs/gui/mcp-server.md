@@ -889,7 +889,7 @@ otherwise.
 // set_image_detail_view { "reconstruction_label": "bull", "track": "bull-nose",
 //                         "bench_observation": 3, "zoom": 8.0 }
 //
-// The whole photograph, which is what Z and a double-click do.
+// The whole photograph, which is what Z does in the panel.
 // set_image_detail_view { "fit": true }
 ```
 

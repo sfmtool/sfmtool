@@ -135,11 +135,16 @@ selected -- and one line naming the other, which is the Image Detail context
 menu's *Start cluster on the bench here*, quoted from that entry's own constant
 so the two cannot drift.
 
-A third way in is outside this panel: *Edit on Bench* on a point's context menu
+A third way in is outside this panel: *Edit on Bench*, on a point's context menu
 in the 3D viewport ([viewport-navigation.md](viewport-navigation.md) § "The
-point context menu"). It is the same call *Put selected point on bench* makes,
-and it raises this panel afterwards, because that gesture is made somewhere this
-panel is not.
+point context menu") and at the top of a feature's context menu in Image Detail
+([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Image Detail:
+the context menu"), and in either panel by double-clicking the point or the
+feature. It is the same call *Put selected point on bench* makes, whichever of
+the four gestures made it, and it raises this panel afterwards, because those
+gestures are made somewhere this panel is not. A point a track already came
+from activates that track rather than putting a second one on, so a gesture
+repeated on one point raises the panel on the item that is already there.
 
 **The header**: the active track's label, its stage as a word, its origin as a
 point index or `new`, and `N in · M candidates · K out`. Below it, the stage's

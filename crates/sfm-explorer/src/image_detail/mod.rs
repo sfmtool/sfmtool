@@ -30,7 +30,8 @@ pub(crate) use view::{look_at, Look, ViewGeometry};
 
 use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};
-use crate::scene::{CameraRef, ImageRef, ReconId};
+use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
+use crate::state::edits::PointGesture;
 use crate::state::{
     CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
 };
@@ -110,6 +111,14 @@ pub struct ImageDetail {
     /// decided when the button went down, and the pointer wanders off the
     /// handle the moment it starts moving.
     bench_drag: Option<bench_track::Drag>,
+    /// What a gesture on a feature asked of the app, drained by `app.rs` after
+    /// the frame.
+    ///
+    /// Held here rather than carried out in the panel's response because it
+    /// ends in a layout operation: Edit on Bench raises the Track Edit panel,
+    /// and the frame swaps the dock out of the state while a tab body draws.
+    /// See [`ImageDetail::take_point_gesture`].
+    point_gesture: Option<PointGesture>,
 }
 
 /// Whether a mouse button other than the primary one is down.
@@ -183,6 +192,13 @@ pub struct ImageDetailResponse {
     /// The pixel the context menu's `Add observation to bench track here` was
     /// clicked for: a candidate joins the bench's active track there.
     pub add_bench_observation: Option<[f32; 2]>,
+    /// `Edit on Bench` was chosen on a feature, or one was double-clicked:
+    /// put the point it observes on the bench and raise the Track Edit panel.
+    ///
+    /// Read by the panel itself rather than by the dock, because the gesture
+    /// ends in a layout operation and so has to outlive the tab body: `show`
+    /// turns it into the [`PointGesture`] `app.rs` drains after the frame.
+    pub edit_on_bench: Option<usize>,
     /// A mark of the bench layer was clicked: select this observation of the
     /// active track in the Track Edit panel. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
@@ -213,7 +229,17 @@ impl ImageDetail {
             zoom: 1.0,
             last_display_size: None,
             bench_drag: None,
+            point_gesture: None,
         }
+    }
+
+    /// Take what this panel's last frame asked of the app, if anything.
+    ///
+    /// Drained by `app.rs` once the dock is back in the state, for the reason
+    /// the viewport's point menu is drained there: applied inside the tab body
+    /// the raise would land on the placeholder dock and be thrown away with it.
+    pub(crate) fn take_point_gesture(&mut self) -> Option<PointGesture> {
+        self.point_gesture.take()
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -478,6 +504,7 @@ impl ImageDetail {
             context_menu_pixel: None,
             start_bench_cluster: None,
             add_bench_observation: None,
+            edit_on_bench: None,
             select_bench_row: None,
             bench_edit: None,
             view: None,
@@ -614,8 +641,18 @@ impl ImageDetail {
             &mut response,
         );
 
-        // --- Input handling --- (returns true on double-click view reset)
-        if self.handle_input(
+        // What a double-click means, settled before the view input runs and
+        // against the geometry the gesture was made on: on a feature that
+        // observes a point it is Edit on Bench, and anywhere else it is the
+        // zoom `handle_input` applies.
+        let double_click_point = interact_response
+            .double_clicked()
+            .then(|| self.point_under_pointer(ui, image_rect, effective_scale))
+            .flatten();
+        response.edit_on_bench = double_click_point;
+
+        // --- Input handling ---
+        self.handle_input(
             ui,
             &interact_response,
             panel_rect,
@@ -625,9 +662,8 @@ impl ImageDetail {
             scroll_input,
             gesture_events,
             self.bench_drag.is_some(),
-        ) {
-            return response;
-        }
+            double_click_point.is_some(),
+        );
 
         // Recompute image rect after pan/zoom changes from input
         let effective_scale = base_scale * self.zoom;
@@ -698,6 +734,13 @@ impl ImageDetail {
         // same pixel the next frame's would.
         if let Some(pixel) = response.context_menu_pixel {
             self.menu_pixel = Some(pixel);
+        }
+
+        // The one gesture this panel cannot answer inside a tab body: the
+        // point index the menu entry or the double-click named becomes the
+        // request `app.rs` applies once the dock is back in the state.
+        if let Some(point) = response.edit_on_bench {
+            self.point_gesture = Some(PointGesture::EditOnBench(PointRef::new(recon_id, point)));
         }
 
         // The one mark that draws over the features rather than under them.

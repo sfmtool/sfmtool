@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! View manipulation for the image detail panel: drag-pan, right-drag zoom,
-//! mouse-wheel / trackpad scroll, pinch-to-zoom, the Z / double-click view
-//! reset, and Windows DirectManipulation gesture events.
+//! mouse-wheel / trackpad scroll, pinch-to-zoom, the double-click zoom and the
+//! `Z` view reset, and Windows DirectManipulation gesture events.
 
 use super::ImageDetail;
 use crate::platform::{self, GestureEvent, ScrollInput};
+
+/// One double-click's worth of zoom: half a power of two, so two of them
+/// double the magnification and the steps land on the round zooms a reader
+/// thinks in.
+const DOUBLE_CLICK_ZOOM: f32 = std::f32::consts::SQRT_2;
 
 /// Drag zoom speed: maps pixel delta to zoom factor.
 const DRAG_ZOOM_SPEED: f32 = 0.005;
@@ -17,8 +22,12 @@ const TRACKPAD_ZOOM_SPEED: f32 = 0.01;
 
 impl ImageDetail {
     /// Process all view-manipulation input for the current frame, mutating
-    /// `pan`/`zoom`. Returns `true` if a double-click reset the view, signalling
-    /// the caller to skip feature interaction and return early.
+    /// `pan`/`zoom`.
+    ///
+    /// `double_click_taken` says a double-click this frame already meant
+    /// something else -- Edit on Bench on the feature under it -- so the zoom
+    /// below leaves it alone. Decided by the caller, which is the only place
+    /// that has both the gesture and the overlay.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_input(
         &mut self,
@@ -31,14 +40,20 @@ impl ImageDetail {
         scroll_input: &ScrollInput,
         gesture_events: &[GestureEvent],
         bench_dragging: bool,
-    ) -> bool {
+        double_click_taken: bool,
+    ) {
         let pointer_over = platform::pointer_in_rect(ui.ctx(), panel_rect);
 
-        // Double-click to reset view
-        if interact_response.double_clicked() {
-            self.reset_view();
-            // Don't process this as a feature click
-            return true;
+        // Double-click off a feature: one step in, about the cursor. Anchored
+        // where every other zoom here is anchored, so the pixel under the
+        // pointer stays under it, and clamped by the same limits.
+        if interact_response.double_clicked() && !double_click_taken {
+            let cursor_rel = ui
+                .input(|i| i.pointer.hover_pos())
+                .map(|p| p - panel_center)
+                .unwrap_or(egui::Vec2::ZERO);
+            self.zoom_at(DOUBLE_CLICK_ZOOM, cursor_rel);
+            self.clamp_pan(display_size, panel_size);
         }
 
         // Z key to reset view (when panel is hovered)
@@ -173,7 +188,5 @@ impl ImageDetail {
                 }
             }
         }
-
-        false
     }
 }

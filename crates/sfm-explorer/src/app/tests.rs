@@ -179,3 +179,61 @@ fn a_hidden_node_has_no_ray_source() {
     state.solo = None;
     assert!(track_ray_source(&state).is_some(), "and released");
 }
+
+// ── What a click on a picked point does ─────────────────────────────────
+
+/// The Action Log's texts, oldest first.
+fn texts(state: &AppState) -> Vec<String> {
+    state
+        .action_log
+        .entries()
+        .map(|entry| entry.text.clone())
+        .collect()
+}
+
+/// A double-click reaches this twice, because the second click of one is a
+/// click in its own right: the first selects, the second stages.
+///
+/// What it has to leave behind is one bench item, the Track Edit panel raised,
+/// and one Action Log row per thing that actually happened -- one selection,
+/// however many clicks named the same point.
+#[test]
+fn a_double_click_on_a_point_stages_it_once_and_raises_track_edit() {
+    let (mut state, id) = edits::adjustable_state();
+    let point = PointRef::new(id, 11);
+    state.hide_panel(crate::dock::Tab::TrackEdit);
+
+    super::apply_point_click(&mut state, point, false);
+    super::apply_point_click(&mut state, point, true);
+
+    assert_eq!(state.selected_point, Some(point));
+    let bench = state.scene[0].history.current_bench();
+    assert_eq!(bench.entries().len(), 1, "the double-click staged twice");
+    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+
+    let rows = texts(&state);
+    let selections = rows.iter().filter(|t| t.starts_with("Selected ")).count();
+    assert_eq!(
+        selections, 1,
+        "the second click logged a selection: {rows:?}"
+    );
+    let staged = rows
+        .iter()
+        .filter(|t| t.contains("on the bench as"))
+        .count();
+    assert_eq!(staged, 1, "the point was staged twice: {rows:?}");
+}
+
+/// A single click is the selection and nothing else: the gesture that stages a
+/// track is the double, and a reader clicking through a cloud collects no
+/// bench items.
+#[test]
+fn a_single_click_on_a_point_only_selects_it() {
+    let (mut state, id) = edits::adjustable_state();
+    let point = PointRef::new(id, 11);
+
+    super::apply_point_click(&mut state, point, false);
+
+    assert_eq!(state.selected_point, Some(point));
+    assert!(state.scene[0].history.current_bench().entries().is_empty());
+}

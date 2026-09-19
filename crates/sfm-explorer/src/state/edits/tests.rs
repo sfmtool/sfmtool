@@ -13,6 +13,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::Entry;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
+use crate::state::edits::PointGesture;
 use crate::state::AppState;
 use crate::test_support::{assert_timed_from_the_work, phase_rows};
 
@@ -1642,13 +1643,13 @@ fn a_reconstruction_with_no_pixels_is_refused_in_the_menu_s_own_words() {
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
-// ── The viewport's point menu ───────────────────────────────────────────
+// ── The point gestures ──────────────────────────────────────────────────
 
 #[test]
 fn a_menu_that_only_opened_selects_the_point_and_edits_nothing() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::Opened(point));
+    state.apply_point_gesture(PointGesture::Opened(point));
     assert_eq!(state.selected_point, Some(point));
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
@@ -1657,7 +1658,7 @@ fn a_menu_that_only_opened_selects_the_point_and_edits_nothing() {
 fn choosing_retriangulate_selects_the_point_and_pushes_its_version() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::Retriangulate(point));
+    state.apply_point_gesture(PointGesture::Retriangulate(point));
     assert_eq!(state.scene[0].history.versions().len(), 2);
     assert_eq!(
         state.scene[0].history.current_version().label,
@@ -1678,7 +1679,7 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
     state.hide_panel(crate::dock::Tab::TrackEdit);
     assert!(!state.is_panel_open(crate::dock::Tab::TrackEdit));
 
-    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::EditOnBench(point));
+    state.apply_point_gesture(PointGesture::EditOnBench(point));
 
     assert_eq!(state.selected_point, Some(point));
     // The same staging the Track Edit panel's own button does, and then the
@@ -1686,4 +1687,61 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "the point is not on the bench");
     assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+}
+
+/// A second Edit on Bench on the same point -- a double-click after a menu, or
+/// one double-click after another -- activates the item that is there rather
+/// than putting a second one on, and raises the panel again.
+///
+/// This is what makes a double-click safe: the gesture arrives as two clicks
+/// and the panel is reached from two places, so the step has to be one a
+/// reader can repeat without collecting duplicates.
+#[test]
+fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    let label = crate::bench::active_track_label(state.bench(id).expect("the node has a bench"))
+        .expect("a track is active")
+        .to_string();
+
+    state.hide_panel(crate::dock::Tab::TrackEdit);
+    state.apply_point_gesture(PointGesture::EditOnBench(point));
+
+    let bench = state.scene[0].history.current_bench();
+    assert_eq!(bench.entries().len(), 1, "a second item joined the bench");
+    assert_eq!(
+        crate::bench::active_track_label(bench),
+        Some(label.as_str()),
+        "the item already there is not the active one",
+    );
+    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+}
+
+/// The raise is a layout operation, so it has to reach the dock the state
+/// holds. The frame takes that dock *out* of the state while a tab body draws
+/// and puts it straight back, which is why both panels' gestures are drained
+/// in `app.rs` after the `DockArea` call rather than inside one.
+///
+/// Applied against the placeholder the swap leaves behind, the staging still
+/// lands and the raise is thrown away with the placeholder -- which is the
+/// regression this pins.
+#[test]
+fn a_gesture_applied_while_the_dock_is_swapped_out_loses_the_raise() {
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    state.hide_panel(crate::dock::Tab::TrackEdit);
+
+    let dock = std::mem::replace(&mut state.dock, egui_dock::DockState::new(Vec::new()));
+    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    let placeholder = std::mem::replace(&mut state.dock, dock);
+
+    assert!(
+        placeholder.find_tab(&crate::dock::Tab::TrackEdit).is_some(),
+        "the raise did not land on the placeholder, so this test proves nothing",
+    );
+    assert!(
+        !state.is_panel_open(crate::dock::Tab::TrackEdit),
+        "the raise reached the real dock from inside the swap",
+    );
 }

@@ -7472,7 +7472,7 @@ fn a_rect_named_from_its_far_corner_frames_the_same_region() {
     assert_eq!(forwards, backwards, "the corners' order changed the view");
 }
 
-/// `fit` is what `Z` and a double-click do: the whole photograph, centred.
+/// `fit` is what `Z` does: the whole photograph, centred.
 #[test]
 fn a_fit_target_shows_the_whole_photograph() {
     let (mut state, mut viewer) = looking_at(8.0);

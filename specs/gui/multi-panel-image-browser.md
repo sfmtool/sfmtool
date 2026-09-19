@@ -796,7 +796,8 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 | Zoom | Ctrl + two-finger scroll | Zoom toward cursor position |
 | Zoom | Ctrl + DM Pan gesture | Zoom |
 | Zoom | DM Zoom gesture | Zoom toward cursor position |
-| Fit | Z key / Double-click | Reset pan and zoom to fit image in panel |
+| Zoom | Double-click off a feature | One step of √2 in, toward the cursor position |
+| Fit | Z key | Reset pan and zoom to fit image in panel |
 
 - **Sign conventions**: Mouse drag uses "grab the content" convention (content
   follows cursor). DM gestures and trackpad scroll use "push/scroll viewport"
@@ -807,6 +808,15 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 - **Zoom limits**: Minimum = 1.0 (fit-to-panel). Maximum = 32×.
 - **Pan limits**: Clamped so the image overlaps the panel by at least 50px.
 - **View persistence**: The view outlives the image it was set on — see below.
+- **What a double-click means is decided before the view input runs.** On a
+  feature that observes a point it is `Edit on Bench` (see "the context menu"
+  below) and the view does not move; anywhere else -- empty image, or a keypoint
+  the solve matched to no point -- it is the zoom above. The hit test is the
+  click's own, so a double-click stages the point a single click there would
+  have selected. Two double-clicks are a doubling of the magnification, and √2
+  is what puts the steps on the round zooms a reader thinks in.
+- **Fit is the `Z` key**, with the pointer over the panel, and the wire's
+  `set_image_detail_view { fit }` ([mcp-server.md](mcp-server.md)).
 
 ### Image Detail: the context menu
 
@@ -817,29 +827,56 @@ puts a menu up. The menu is opened on egui's own `clicked_by(Secondary)` rather
 than on the raw platform button state the pan/zoom handler reads, which is what
 makes that distinction available at all.
 
-Its two entries act on the node's **bench**
-([`bench.md`](bench.md)) rather than on the reconstruction: `Start cluster on
-the bench here`, which puts a cluster-stage track on the bench seeded at the
-clicked pixel with the node's own default patch radius, and `Add
-observation to bench track here`, which adds a candidate sighting at that pixel
-to the bench's active track. Both are edited afterwards in the Track Edit panel
-([`track-edit.md`](track-edit.md)), and the commit there is what reaches the
-reconstruction. This is the viewer's only way to name a pixel, so it is where
-every gesture that needs one lives.
+Its three entries act on the node's **bench** ([`bench.md`](bench.md)) rather
+than on the reconstruction, in this order:
 
-Both entries are offered whatever backs the node's observations, because a bench
-track is seeds in one image's pixels until it is
+| Entry | What it does |
+|-------|--------------|
+| `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises the Track Edit panel on it |
+| `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius |
+| `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track |
+
+All three are edited afterwards in the Track Edit panel
+([`track-edit.md`](track-edit.md)), and the commit there is what reaches the
+reconstruction. The lower two are the viewer's only way to name a pixel, so this
+is where every gesture that needs one lives.
+
+`Edit on Bench` is the same entry the 3D viewport's point menu offers, under the
+same name and reporting the same request
+([viewport-navigation.md](viewport-navigation.md) § "The point context menu"),
+so one gesture is one code path wherever it was made. What it needs is a
+**point**, and what names one here is the feature under the place the menu was
+opened at. Which features those are is what the observations are backed by: an
+`embedded_patches` node keeps a keypoint per observation, so every feature it
+draws belongs to a point; a `sift_files` node draws the `.sift` keypoints, and
+one the solve matched to nothing is a feature with no point behind it. Both ways
+of having nothing to stage grey the entry rather than hide it, in words that say
+which it was -- there is no feature here, or that feature belongs to no 3D
+point. The hit test is the one a left click selects by, so the entry offers the
+point a click there would have selected.
+
+The two lower entries are offered whatever backs the node's observations,
+because a bench track is seeds in one image's pixels until it is
 committed. Starting a cluster needs nothing but a pixel and a node no background
 task is holding; adding to the bench track is greyed, saying so, until a track
 is on the bench. An image the active track already holds a sighting in is not a
 refusal -- a second one joins as a candidate and is scored like any other, and
 it is the `in` verdict a track cannot hold twice
-([`../core/bench/editable-track.md`](../core/bench/editable-track.md)).
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)). A busy
+node greys all three, carrying the state's own busy sentence.
 
 The pixel is recorded on the frame the menu opens, in source-image coordinates
 through the same `panel_to_image` transform the feature hit-testing uses: the
 menu's entries are laid out on later frames, by which time the pointer has moved
-off the place the user named.
+off the place the user named. It is also what `Edit on Bench` hit-tests at, so
+the point the entry stages is the point that was under the pointer when the menu
+went up.
+
+`Edit on Bench` ends in a layout operation, which the other two do not, so it
+alone cannot be carried out where the panel's response is read: the frame swaps
+the dock out of the state while a tab body draws, and a raise applied there
+would land on the placeholder. The panel keeps the request instead, as the
+viewport keeps its menu's, and `app.rs` drains both once the dock is back.
 
 **Rendering** (`image_detail/`):
 - `base_scale = min(panel_w / tex_w, panel_h / tex_h)` fits the image to panel
@@ -884,8 +921,8 @@ between reconstructions with `[` / `]`, clicking a thumbnail in the strip, or
 selecting a different image in the Scene Graph. Comparing a detail — a feature
 that moves, a blur, a mis-registered edge — means being zoomed in on it while
 the switch happens, so the view is **not** reset on any of those. Only the
-explicit `Z` / double-click Fit resets it. Animation playback needs no special
-case for this: it is the same image switch as any other.
+explicit `Z` fit resets it. Animation playback needs no special case for this:
+it is the same image switch as any other.
 
 What is held fixed is the *region of the image*, not the raw `pan`. `pan` is in
 panel pixels, so the same value frames a different part of an image of another
@@ -914,8 +951,8 @@ within a frame is never mistaken for a change of extent. `reset_view` clears
 Three things ask this panel to look somewhere: a row click in another panel
 (below), the wire's `set_image_detail_view`
 ([mcp-server.md](mcp-server.md) § "The Image Detail view"), and the panel's own
-`Z` / double-click fit. What each of them *means* is one pure function over the
-frame's geometry, in
+`Z` fit. What each of them *means* is one pure function over the frame's
+geometry, in
 [image_detail/view.rs](../../crates/sfm-explorer/src/image_detail/view.rs), so
 two callers asking for the same place land in the same pixel:
 

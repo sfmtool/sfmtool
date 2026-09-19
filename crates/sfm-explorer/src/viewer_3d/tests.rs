@@ -16,10 +16,11 @@
 use eframe::egui;
 use sfmtool_core::SfmrReconstruction;
 
-use super::{PointMenuRequest, Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
+use super::{Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
 use crate::platform::ScrollInput;
 use crate::scene::{PointRef, SceneNode};
 use crate::scene_renderer::PickTarget;
+use crate::state::edits::PointGesture;
 use crate::state::AppState;
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1200.0, 800.0);
@@ -179,7 +180,7 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
     assert_eq!(viewer.menu_point, Some(point));
     // The gesture asks for the point to be selected, which is `dock.rs`'s to
     // carry out, and it asks before any entry is chosen.
-    assert_eq!(viewer.point_menu, Some(PointMenuRequest::Opened(point)));
+    assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
     let offered: Vec<&str> = viewer
         .menu_entry_rects
         .iter()
@@ -252,10 +253,7 @@ fn choosing_edit_on_bench_reports_the_point_the_menu_opened_on() {
         None,
         EDIT_ON_BENCH_LABEL,
     );
-    assert_eq!(
-        viewer.point_menu,
-        Some(PointMenuRequest::EditOnBench(point))
-    );
+    assert_eq!(viewer.point_menu, Some(PointGesture::EditOnBench(point)));
 }
 
 #[test]
@@ -273,10 +271,44 @@ fn choosing_retriangulate_reports_the_point_the_menu_opened_on() {
         None,
         RETRIANGULATE_POINT_LABEL,
     );
-    assert_eq!(
-        viewer.point_menu,
-        Some(PointMenuRequest::Retriangulate(point))
-    );
+    assert_eq!(viewer.point_menu, Some(PointGesture::Retriangulate(point)));
+}
+
+/// The viewport's half of the double-click: the click is recorded with the
+/// flag that says it was one, and the pick that decides what it lands on
+/// arrives a frame later through the GPU readback. `app.rs` resolves the two
+/// together (`apply_point_click`), which is where Edit on Bench is asked for.
+#[test]
+fn a_double_click_is_recorded_on_the_pending_click() {
+    let (mut viewer, ctx, mut state) = settled();
+
+    primary_clicks(&mut viewer, &ctx, &mut state, 1);
+    assert!(viewer.pending_click.is_some(), "the click was not recorded");
+    assert!(!viewer.pending_click_is_double, "one click read as two");
+
+    // Taken the way the readback takes it, so the second gesture is recorded
+    // into an empty slot exactly as it is in the viewer.
+    viewer.pending_click = None;
+    primary_clicks(&mut viewer, &ctx, &mut state, 2);
+    assert!(viewer.pending_click.is_some(), "the click was not recorded");
+    assert!(viewer.pending_click_is_double, "two clicks read as one");
+}
+
+/// `count` primary press/release pairs at one place, in one frame: what egui
+/// counts as a single click, a double-click, and so on.
+fn primary_clicks(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, count: usize) {
+    let mut events = vec![egui::Event::PointerMoved(OVER_A_POINT)];
+    for _ in 0..count {
+        for pressed in [true, false] {
+            events.push(egui::Event::PointerButton {
+                pos: OVER_A_POINT,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+    }
+    run_frame(viewer, ctx, state, events, OVER_A_POINT, None, None);
 }
 
 #[test]

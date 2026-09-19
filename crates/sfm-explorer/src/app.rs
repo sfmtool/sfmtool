@@ -902,13 +902,16 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
-                // The viewport's point menu is the one tab response that ends
-                // in a layout operation (Edit on Bench raises Track Edit), so it
-                // is applied here, with the dock back in the state. Applied
-                // inside the tab body the raise would land on the placeholder
-                // dock and be overwritten by the line above.
+                // The two panels' point gestures are the tab responses that end
+                // in a layout operation (Edit on Bench raises Track Edit), so
+                // they are applied here, with the dock back in the state.
+                // Applied inside a tab body the raise would land on the
+                // placeholder dock and be overwritten by the line above.
                 if let Some(request) = viewer_3d.point_menu.take() {
-                    app_state.apply_point_menu(request);
+                    app_state.apply_point_gesture(request);
+                }
+                if let Some(request) = image_detail.take_point_gesture() {
+                    app_state.apply_point_gesture(request);
                 }
             });
         });
@@ -1020,7 +1023,11 @@ impl App {
                     }
                 }
                 Some(PickTarget::Point(point)) if point_is_live(&self.state, point) => {
-                    self.state.select_point(point);
+                    apply_point_click(
+                        &mut self.state,
+                        point,
+                        self.viewer_3d.pending_click_is_double,
+                    );
                 }
                 None if !self.viewer_3d.pending_click_is_alt => {
                     // Clicked on background (non-Alt) — deselect. The image
@@ -1066,6 +1073,33 @@ fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
         Uploaded::Built(n) => {
             progress_note!(*phase, "{n} {}", if n == 1 { unit } else { units })
         }
+    }
+}
+
+/// What a viewport click that picked a point does: select it, and on a
+/// double-click put its track on the bench and raise the Track Edit panel.
+///
+/// The pick arrives one frame late through the GPU readback, so this is reached
+/// from [`App::process_pick_readback`] rather than from the panel body -- which
+/// is also what makes the raise safe: that phase runs after the egui pass has
+/// put the dock back in the state, so the layout operation lands on the real
+/// dock rather than on the placeholder the pass swapped in.
+///
+/// A double-click arrives as two clicks, and the first of them already selected
+/// the point, so the selection here moves nothing and writes no second Action
+/// Log row. Staging a point a track already came from activates that track
+/// rather than putting a second one on ([`crate::state::AppState`]'s bench),
+/// so a double-click on a point already on the bench raises the panel on the
+/// item that is there.
+fn apply_point_click(
+    state: &mut crate::state::AppState,
+    point: crate::scene::PointRef,
+    is_double: bool,
+) {
+    if is_double {
+        state.apply_point_gesture(crate::state::edits::PointGesture::EditOnBench(point));
+    } else {
+        state.select_point(point);
     }
 }
 

@@ -56,6 +56,7 @@ during Zoom to Fit to center on the point cloud.
 | Set target | Alt + Click | Set target to the point under the cursor (depth pick) |
 | Enter camera view | Double-click frustum | Select frustum and enter camera view mode (see [camera-views.md](camera-views.md)) |
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
+| Edit on Bench | Double-click a point | Select that point, put its track on the bench and raise the Track Edit panel (see [The point context menu](#the-point-context-menu)) |
 
 ### The point context menu
 
@@ -91,6 +92,23 @@ borrowed out of `AppState` while it draws, so what it leaves behind is a request
 the frame carries out afterwards. Selecting the point is part of opening, not
 part of choosing, so a menu dismissed without a choice still leaves the viewer
 looking at the point it was opened on.
+
+**A double-click on a point is `Edit on Bench` without the menu** -- the dot or
+its patch, since the pick gives the two one id. It is the same request the entry
+reports, so the two gestures are one code path, and it is resolved where the
+click is: the pick arrives a frame late through the GPU readback, so the flag
+saying the click was a double travels with the pending click and the two meet in
+`process_pick_readback`. That phase runs after the egui pass has put the dock
+back in the state, which is what makes the raise land on the real dock rather
+than on the placeholder a tab body sees.
+
+A double-click arrives as two clicks and the first of them has already selected
+the point, so the selection moves once and the Action Log carries one
+`Selected point …` row however many clicks named it. Staging a point a track
+already came from activates that track rather than putting a second one on
+([bench.md](bench.md)), so a repeated double-click raises the panel on the item
+that is already there. A double-click on a frustum or on empty space keeps its
+own meaning: camera view, and clearing the selection.
 
 ### Trackpad Controls
 

@@ -686,6 +686,276 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
     texts
 }
 
+// ── Edit on Bench, and what a double-click means ────────────────────────
+
+use super::overlay::{edit_on_bench_entry, feature_at, FeatureHit};
+use crate::state::edits::PointGesture;
+use crate::viewer_3d::EDIT_ON_BENCH_LABEL;
+
+/// `Edit on Bench` stands at the top of the menu, above the two bench entries,
+/// and it is **drawn** where it cannot run rather than hidden: the menu here is
+/// opened over empty image, so nothing is under it to stage.
+#[test]
+fn the_feature_menu_puts_edit_on_bench_at_the_top() {
+    let texts = context_menu_texts(BenchMenu::default());
+    let entries: Vec<&str> = texts
+        .iter()
+        .map(String::as_str)
+        .filter(|text| {
+            [
+                EDIT_ON_BENCH_LABEL,
+                START_CLUSTER_LABEL,
+                ADD_BENCH_OBSERVATION_LABEL,
+            ]
+            .contains(text)
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            EDIT_ON_BENCH_LABEL,
+            START_CLUSTER_LABEL,
+            ADD_BENCH_OBSERVATION_LABEL
+        ],
+    );
+}
+
+/// What the entry needs, and the two ways of having nothing to stage told
+/// apart: no feature at all, and a `.sift` keypoint the solve matched to no
+/// point. Either is a sentence a reader can act on.
+#[test]
+fn edit_on_bench_needs_a_feature_with_a_point_behind_it() {
+    assert_eq!(
+        edit_on_bench_entry(BenchMenu::default(), Some(FeatureHit::Point(7))),
+        Ok(7),
+    );
+
+    let why = edit_on_bench_entry(BenchMenu::default(), Some(FeatureHit::Unmatched))
+        .expect_err("an unmatched keypoint names no point");
+    assert!(why.contains("belongs to no 3D point"), "{why}");
+
+    let why =
+        edit_on_bench_entry(BenchMenu::default(), None).expect_err("empty image names no point");
+    assert!(why.contains("no feature here"), "{why}");
+
+    // A busy node refuses every step on it, in the state's own words, as the
+    // two entries below this one do.
+    assert_eq!(
+        edit_on_bench_entry(
+            BenchMenu {
+                busy: Some(BUSY),
+                active_track: None,
+            },
+            Some(FeatureHit::Point(7)),
+        ),
+        Err(BUSY.to_string()),
+    );
+}
+
+/// The hit test the entry and the double-click read: a tracked feature inside
+/// the radius wins over an untracked one nearer the query, so the menu offers
+/// the point a click there would have selected, and an untracked keypoint on
+/// its own reports itself rather than nothing.
+#[test]
+fn the_hit_test_prefers_a_tracked_feature_and_still_reports_an_unmatched_one() {
+    let feature = |x: f32, point: u32| super::DisplayFeature {
+        position: [x, 0.0],
+        affine_shape: [[4.0, 0.0], [0.0, 4.0]],
+        point_index: point,
+        max_track_angle_deg: f32::NAN,
+        inverse_depth_z: f32::NAN,
+        condition_number: f32::NAN,
+    };
+    let features = vec![feature(0.0, super::UNTRACKED), feature(3.0, 12)];
+    let tree = super::build_feature_tree(&features);
+
+    assert_eq!(
+        feature_at(&features, &tree, &[0.5, 0.0], 8.0),
+        Some(FeatureHit::Point(12)),
+        "the untracked keypoint nearer the query swallowed the tracked one",
+    );
+    let alone = vec![feature(0.0, super::UNTRACKED)];
+    let alone_tree = super::build_feature_tree(&alone);
+    assert_eq!(
+        feature_at(&alone, &alone_tree, &[0.5, 0.0], 8.0),
+        Some(FeatureHit::Unmatched),
+    );
+    assert_eq!(feature_at(&features, &tree, &[80.0, 0.0], 8.0), None);
+}
+
+/// Where feature `i` of the gesture fixture sits in the source image: a grid
+/// coarse enough that the click's 8-panel-pixel radius can only ever catch one
+/// of them.
+fn feature_pixel(i: usize) -> [f32; 2] {
+    [
+        200.0 + 100.0 * (i % 8) as f32,
+        200.0 + 100.0 * (i / 8) as f32,
+    ]
+}
+
+/// A `sift_files` node and the keypoint cache behind its image 0.
+fn gesture_fixture() -> (SceneNode, crate::state::CachedSiftFeatures) {
+    let node = demo_node("/runs/gestures.sfmr");
+    let count = node.recon().point_set.max_track_feature_index[0] as usize + 1;
+    let sift = crate::state::CachedSiftFeatures {
+        positions_xy: (0..count).map(feature_pixel).collect(),
+        affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
+        read_count: count,
+    };
+    (node, sift)
+}
+
+/// Two frames with the pointer at `at`: one to settle the panel's rects and
+/// prepare the overlay, and one carrying `clicks` press/release pairs, which is
+/// what egui counts a double-click out of.
+fn click_frames(
+    detail: &mut ImageDetail,
+    node: &SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    image: &ImageU8,
+    at: egui::Pos2,
+    clicks: usize,
+) {
+    let ctx = egui::Context::default();
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    crate::platform::set_test_pointer_pos(Some(at));
+    for frame in 0..2 {
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        if frame == 1 {
+            for _ in 0..clicks {
+                for pressed in [true, false] {
+                    events.push(egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::default(),
+                    });
+                }
+            }
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            events,
+            ..Default::default()
+        };
+        crate::test_support::run_frame_headless(&ctx, input, |ui| {
+            detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(0),
+                None,
+                None,
+                None,
+                BenchMenu::default(),
+                &[],
+                &crate::platform::ScrollInput::default(),
+                Some(sift),
+                Some(image),
+                &display,
+                &mut intrinsics_display,
+            );
+        });
+    }
+    crate::platform::set_test_pointer_pos(None);
+}
+
+/// The source pixel the panel is showing under `at`, read out of the view the
+/// frame left behind. The anchor a zoom has to hold fixed.
+fn pixel_under(detail: &ImageDetail, image: &ImageU8, at: egui::Pos2) -> egui::Vec2 {
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let scale = (PANEL.x / w).min(PANEL.y / h) * detail.zoom;
+    let display = egui::vec2(w * scale, h * scale);
+    let origin = egui::pos2(PANEL.x / 2.0, PANEL.y / 2.0) + detail.pan - display / 2.0;
+    (at - origin) / scale
+}
+
+/// Double-clicking a feature that observes a point is Edit on Bench: the panel
+/// leaves behind the same request the viewport's menu entry reports, and the
+/// view does not move.
+#[test]
+fn double_clicking_a_feature_asks_for_its_point_on_the_bench() {
+    let (node, sift) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    let (&feature, &point) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's first image tracks features");
+    let at = to_panel(&image, {
+        let [x, y] = feature_pixel(feature as usize);
+        [f64::from(x), f64::from(y)]
+    });
+
+    let mut detail = ImageDetail::new();
+    click_frames(&mut detail, &node, &sift, &image, at, 2);
+
+    assert_eq!(
+        detail.take_point_gesture(),
+        Some(PointGesture::EditOnBench(crate::scene::PointRef::new(
+            node.id,
+            point as usize,
+        ))),
+    );
+    assert_eq!(detail.zoom, 1.0, "the gesture zoomed as well as staging");
+    // One request, taken once: the frame drains it, and nothing is left for a
+    // second bench item.
+    assert_eq!(detail.take_point_gesture(), None);
+}
+
+/// A single click on the same feature selects it and asks for nothing: the
+/// gesture that stages a track is the double.
+#[test]
+fn a_single_click_on_a_feature_asks_for_nothing() {
+    let (node, sift) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    let (&feature, _) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's first image tracks features");
+    let at = to_panel(&image, {
+        let [x, y] = feature_pixel(feature as usize);
+        [f64::from(x), f64::from(y)]
+    });
+
+    let mut detail = ImageDetail::new();
+    click_frames(&mut detail, &node, &sift, &image, at, 1);
+
+    assert_eq!(detail.take_point_gesture(), None);
+    assert_eq!(detail.zoom, 1.0, "a single click zoomed");
+}
+
+/// A double-click anywhere else zooms in one step, about the cursor: the pixel
+/// under the pointer is the pixel still under it afterwards.
+#[test]
+fn double_clicking_off_a_feature_zooms_in_about_the_cursor() {
+    let (node, sift) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    // Well clear of the fixture's grid, and off-centre on both axes so a zoom
+    // that ignored the cursor would move the pixel under it.
+    let at = egui::pos2(700.0, 600.0);
+
+    let mut detail = ImageDetail::new();
+    click_frames(&mut detail, &node, &sift, &image, at, 1);
+    let before = pixel_under(&detail, &image, at);
+    let zoom = detail.zoom;
+
+    click_frames(&mut detail, &node, &sift, &image, at, 2);
+
+    assert_eq!(detail.take_point_gesture(), None, "empty image was staged");
+    let ratio = detail.zoom / zoom;
+    assert!(
+        (ratio - std::f32::consts::SQRT_2).abs() < 1e-5,
+        "the step was {ratio}x, not sqrt(2)",
+    );
+    let after = pixel_under(&detail, &image, at);
+    assert!(
+        (after.x - before.x).abs() < 1e-2 && (after.y - before.y).abs() < 1e-2,
+        "the anchor pixel moved: {before:?} -> {after:?}",
+    );
+}
+
 // ── The bench layer ─────────────────────────────────────────────────────
 
 /// A node of [`projected_embedded_demo`] and the bench track its point 2 makes:

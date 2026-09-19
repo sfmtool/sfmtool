@@ -622,9 +622,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                     (
                         "fit",
                         flag(
-                            "True for the whole photograph: zoom 1.0, centred — what Z and a \
-                             double-click in the panel do. It settles its own zoom, so a zoom \
-                             argument beside it is refused.",
+                            "True for the whole photograph: zoom 1.0, centred — what Z does in \
+                             the panel. It settles its own zoom, so a zoom argument beside it \
+                             is refused.",
                         ),
                     ),
                     (
@@ -989,9 +989,12 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             name: "create_bench_track",
             description: "Put one 3D point of the reconstruction on the bench as a track-stage \
                           track, and make it the active track, so its observations can be judged \
-                          one at a time and the result committed back over the point. Putting on \
-                          a point a track already came from activates that track rather than \
-                          putting a second one on. The reply names the item.",
+                          one at a time and the result committed back over the point. This is \
+                          what Edit on Bench does at the window: the entry on a point's menu \
+                          in the 3D viewport and on a feature's menu in Image Detail, and what \
+                          double-clicking either of them does. Putting on a point a track \
+                          already came from activates that track rather than putting a second \
+                          one on. The reply names the item.",
             kind: Write,
             schema: object(
                 &[],

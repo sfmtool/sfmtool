@@ -267,6 +267,28 @@ impl DecodedViews {
 #[cfg(test)]
 pub(crate) mod tests;
 
+/// What a panel's gesture on a point asked of the app.
+///
+/// Reported rather than done, for the reason every panel reports its gestures:
+/// the panel holds the node borrowed out of [`AppState`] while it draws, and
+/// each of these needs that state mutably. Two panels report it -- the 3D
+/// viewport's point context menu and its double-click
+/// ([`crate::viewer_3d::Viewer3D`]), and the Image Detail panel's feature menu
+/// and its double-click ([`crate::image_detail::ImageDetail`]) -- so one
+/// gesture is one code path wherever it was made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointGesture {
+    /// A menu opened on this point. Select it, so that what the entries will
+    /// act on is also what the rest of the viewer is looking at.
+    Opened(PointRef),
+    /// `Edit on Bench` was chosen, or the point was double-clicked: put its
+    /// track on the bench and show the Track Edit panel.
+    EditOnBench(PointRef),
+    /// `Retriangulate Point` was chosen: re-solve this point from its own
+    /// observations.
+    Retriangulate(PointRef),
+}
+
 impl AppState {
     /// Delete the selected point from the node it belongs to.
     ///
@@ -317,27 +339,25 @@ impl AppState {
         retriangulate_refusal(self.node(id)?, busy.as_deref())
     }
 
-    /// Carry out whatever the 3D viewport's point context menu asked for.
+    /// Carry out whatever a panel's gesture on a point asked for.
     ///
-    /// Here rather than in the viewport for the reason every other panel's
-    /// response is applied outside it: `Viewer3D::show` holds the node borrowed
-    /// out of this state while it draws, and each of these needs it mutably.
+    /// Here rather than in the panel for the reason every other panel response
+    /// is applied outside it: the panel holds the node borrowed out of this
+    /// state while it draws, and each of these needs it mutably.
     ///
     /// The selection moves first in every case, so a menu that merely *opened*
     /// on a point leaves the rest of the viewer looking at that point whether
     /// or not an entry is chosen afterwards.
-    pub fn apply_point_menu(&mut self, request: crate::viewer_3d::PointMenuRequest) {
-        use crate::viewer_3d::PointMenuRequest;
-
+    pub fn apply_point_gesture(&mut self, request: PointGesture) {
         let point = match request {
-            PointMenuRequest::Opened(point)
-            | PointMenuRequest::EditOnBench(point)
-            | PointMenuRequest::Retriangulate(point) => point,
+            PointGesture::Opened(point)
+            | PointGesture::EditOnBench(point)
+            | PointGesture::Retriangulate(point) => point,
         };
         self.select_point(point);
         match request {
-            PointMenuRequest::Opened(_) => {}
-            PointMenuRequest::EditOnBench(point) => {
+            PointGesture::Opened(_) => {}
+            PointGesture::EditOnBench(point) => {
                 // The same call the Track Edit panel's own button makes. That
                 // button lives inside the panel and so has nothing to raise;
                 // this one is reached from the viewport, and a track staged
@@ -347,7 +367,7 @@ impl AppState {
                     Err(why) => self.action_log.fail(Kind::Bench, why),
                 }
             }
-            PointMenuRequest::Retriangulate(point) => {
+            PointGesture::Retriangulate(point) => {
                 let _ = self.retriangulate_point(point);
             }
         }

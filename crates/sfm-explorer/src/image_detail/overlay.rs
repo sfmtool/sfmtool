@@ -12,6 +12,23 @@ use sfmtool_core::bench::EditableTrack;
 use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;
 
+/// What the pointer found where a gesture was made: the feature nearest it
+/// inside the hit radius, and whether that feature observes a point.
+///
+/// The distinction is the whole reason this is not an `Option<usize>`. An
+/// `embedded_patches` node keeps its keypoints inline, one per observation, so
+/// every feature it draws belongs to a point; a `sift_files` node draws the
+/// `.sift` keypoints, and a keypoint the solve matched to nothing is a feature
+/// with no point behind it. The gestures that need a point refuse on
+/// [`FeatureHit::Unmatched`] in words that say which of the two it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeatureHit {
+    /// A feature observing this point, by its live index in the version.
+    Point(usize),
+    /// A keypoint this version has no live point for.
+    Unmatched,
+}
+
 /// The start-a-cluster entry's label, and what the Track Edit panel's empty
 /// state quotes so the two cannot drift.
 ///
@@ -42,6 +59,36 @@ pub struct BenchMenu<'a> {
     /// gesture that names no item means the active one.
     pub active_track: Option<&'a EditableTrack>,
 }
+
+/// Which point the menu's Edit-on-Bench entry would stage, and why it is greyed
+/// when it would stage none.
+///
+/// What it needs beyond a node no background task is holding is a point, which
+/// the feature under the place the menu was opened at is what names. Both ways
+/// of having none are refusals a reader can act on, so they are told apart:
+/// there was no feature there at all, or there was one the solve matched to no
+/// point.
+pub(crate) fn edit_on_bench_entry(
+    bench: BenchMenu<'_>,
+    feature: Option<FeatureHit>,
+) -> Result<usize, String> {
+    if let Some(why) = bench.busy {
+        return Err(why.to_string());
+    }
+    match feature {
+        Some(FeatureHit::Point(point)) => Ok(point),
+        Some(FeatureHit::Unmatched) => Err(UNMATCHED_FEATURE.to_string()),
+        None => Err(NO_FEATURE.to_string()),
+    }
+}
+
+/// Why Edit on Bench is greyed over a keypoint the solve matched to no point.
+pub(crate) const UNMATCHED_FEATURE: &str =
+    "That feature belongs to no 3D point, so there is no track to put on the bench.";
+
+/// Why Edit on Bench is greyed where there is no feature at all.
+pub(crate) const NO_FEATURE: &str = "There is no feature here, so there is no point to put on \
+                                     the bench.";
 
 /// Whether the menu's start-a-cluster entry can run, and why not when it is
 /// greyed.
@@ -81,6 +128,33 @@ pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), St
 }
 
 impl ImageDetail {
+    /// The point the feature under the pointer observes, at the panel geometry
+    /// the frame starts from, or `None` where there is no such feature.
+    ///
+    /// The one question a double-click asks before the view input runs: on a
+    /// feature with a point behind it the gesture is Edit on Bench, and
+    /// anywhere else it is the zoom. The hit radius is the click's own, so a
+    /// double-click stages the point a single click there would have selected.
+    pub(super) fn point_under_pointer(
+        &self,
+        ui: &egui::Ui,
+        image_rect: egui::Rect,
+        effective_scale: f32,
+    ) -> Option<usize> {
+        let overlay = self.feature_overlay.as_ref()?;
+        let pos = ui.input(|i| i.pointer.interact_pos())?;
+        let pixel = [
+            (pos.x - image_rect.min.x) / effective_scale,
+            (pos.y - image_rect.min.y) / effective_scale,
+        ];
+        find_nearest_tracked_feature(
+            &overlay.features,
+            &overlay.tree,
+            &pixel,
+            8.0 / effective_scale,
+        )
+    }
+
     /// Draw feature overlays for the current image, run click hit-testing and
     /// hover reporting, and render the hover tooltip. Populates
     /// `response.select_point` / `response.hovered_point`.
@@ -296,6 +370,32 @@ impl ImageDetail {
             }
         }
         egui::Popup::context_menu(interact_response).show(|ui| {
+            // ── Edit on Bench, first ──
+            //
+            // The point is the one the feature at the place the menu was opened
+            // at observes, hit-tested through the same rule a left click
+            // selects by, so the entry and the click cannot disagree about
+            // which point is under the pointer. Refused rather than hidden
+            // where there is none, so a reader can see the gesture exists and
+            // read why it cannot run here.
+            let pixel = response.context_menu_pixel.or(self.menu_pixel);
+            let hit = pixel.and_then(|pixel| {
+                feature_at(features, feature_tree, &pixel, 8.0 / effective_scale)
+            });
+            let point = edit_on_bench_entry(bench, hit);
+            let button = egui::Button::new(crate::viewer_3d::EDIT_ON_BENCH_LABEL);
+            let clicked = match &point {
+                Ok(_) => ui.add(button).clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.edit_on_bench = point.ok();
+                ui.close();
+            }
+
             // ── The bench's two entries ──
             //
             // Nothing either of them does reaches the reconstruction: each is a
@@ -307,7 +407,6 @@ impl ImageDetail {
             // The pixel is the one the menu was opened at, carried out in the
             // response rather than read back off the app state, so a bench
             // gesture is the click that made it.
-            let pixel = response.context_menu_pixel.or(self.menu_pixel);
             let button = egui::Button::new(START_CLUSTER_LABEL);
             let clicked = match start_cluster_entry(bench) {
                 Ok(()) => ui.add(button).clicked(),
@@ -557,16 +656,21 @@ pub(crate) fn ellipse_points(
     )
 }
 
-/// Find the nearest tracked feature to a position in image pixel coordinates.
-/// Uses a KD-tree for O(log n) lookup instead of linear scan.
-/// `hit_radius_px` is the maximum distance in image pixels.
-/// Returns the point_index of the nearest tracked feature, or None if none is close enough.
-fn find_nearest_tracked_feature(
+/// Find the feature nearest a position in image pixel coordinates, and say
+/// whether it observes a point.
+///
+/// Uses a KD-tree for O(log n) lookup instead of a linear scan. `hit_radius_px`
+/// is the maximum distance in image pixels. A tracked feature inside the radius
+/// wins over an untracked one nearer the query, which is what makes the answer
+/// a superset of [`find_nearest_tracked_feature`]'s: the two cannot disagree
+/// about which point is under the pointer, so the context menu offers what a
+/// click there would select.
+pub(super) fn feature_at(
     features: &[DisplayFeature],
     tree: &PointCloud2<f32>,
     query_px: &[f32; 2],
     hit_radius_px: f32,
-) -> Option<usize> {
+) -> Option<FeatureHit> {
     if features.is_empty() {
         return None;
     }
@@ -575,16 +679,32 @@ fn find_nearest_tracked_feature(
     // radius runs out of candidates.
     const CANDIDATES: usize = 5;
     let neighbors = tree.nearest_k_within_radius(query_px, 1, CANDIDATES, hit_radius_px);
+    let mut any = false;
     for &index in &neighbors {
         if index == u32::MAX {
             break;
         }
+        any = true;
         let feature = &features[index as usize];
         if feature.is_tracked() {
-            return Some(feature.point_index as usize);
+            return Some(FeatureHit::Point(feature.point_index as usize));
         }
     }
-    None
+    any.then_some(FeatureHit::Unmatched)
+}
+
+/// [`feature_at`] narrowed to the point a feature observes: what a click
+/// selects and what the hover tooltip describes.
+fn find_nearest_tracked_feature(
+    features: &[DisplayFeature],
+    tree: &PointCloud2<f32>,
+    query_px: &[f32; 2],
+    hit_radius_px: f32,
+) -> Option<usize> {
+    match feature_at(features, tree, query_px, hit_radius_px) {
+        Some(FeatureHit::Point(point)) => Some(point),
+        Some(FeatureHit::Unmatched) | None => None,
+    }
 }
 
 /// Radius of a value-coloured feature dot, and the gap the selection ring
