@@ -1241,7 +1241,7 @@ pub(crate) fn convertible_state(dir: &std::path::Path) -> (AppState, ReconId) {
             .collect();
         let path = recon.sift_path_for_image(image);
         std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
-        crate::descriptor_index::tests::write_sift(
+        crate::sift_index::tests::write_sift(
             &path,
             &recon.image_table.images[image].name,
             &vec![vec![0u8; 128]; count],

@@ -162,7 +162,7 @@ impl Operation {
         kind: Kind::Bench,
     };
 
-    /// One bench track searched from, in a descriptor index
+    /// One bench track searched from, in the node's SIFT index
     /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
     /// index").
     ///
@@ -177,11 +177,11 @@ impl Operation {
         kind: Kind::Bench,
     };
 
-    /// A node's descriptor index built over its `.sift` files and written
-    /// ([`crate::descriptor_index`]). Not cancellable: the forest build and the
-    /// file write are each one call.
-    pub(crate) const BUILD_DESCRIPTOR_INDEX: Operation = Operation {
-        name: "Build descriptor index",
+    /// A node's SIFT index built over its `.sift` files and written beside its
+    /// `.sfmr` ([`crate::sift_index`]). Not cancellable: the forest build and
+    /// the file write are each one call.
+    pub(crate) const BUILD_SIFT_INDEX: Operation = Operation {
+        name: "Build SIFT index",
         cancellable: false,
         kind: Kind::Bench,
     };
@@ -202,7 +202,7 @@ impl Operation {
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_SEARCH,
-        Operation::BUILD_DESCRIPTOR_INDEX,
+        Operation::BUILD_SIFT_INDEX,
     ];
 }
 
@@ -316,13 +316,13 @@ pub(crate) enum Finished {
         /// The Action Log sentence, up to the serials.
         text: String,
     },
-    /// A descriptor index built and reopened, for the node the task ran on.
+    /// A SIFT index built and reopened, for the node the task ran on.
     ///
-    /// Not a version: the index is a file beside the workspace and a handle on
-    /// it, and nothing about the reconstruction or the bench moved. So the GUI
-    /// thread installs the handle and writes the row, and Undo has nothing to
-    /// take back.
-    DescriptorIndex {
+    /// Not a version: the index is a file beside the node's `.sfmr` and a
+    /// handle on it, and nothing about the reconstruction or the bench moved.
+    /// So the GUI thread installs the handle and writes the row, and Undo has
+    /// nothing to take back.
+    SiftIndex {
         /// The `.kdf` that was written.
         path: std::path::PathBuf,
         /// It, opened.
@@ -722,14 +722,14 @@ impl AppState {
             // pushed: the handle is installed and the row says what was built.
             // A node that has left the scene in the meantime leaves the file on
             // disk, which the next session opens.
-            Finished::DescriptorIndex { path, forest, text } => {
+            Finished::SiftIndex { path, forest, text } => {
                 match self.scene.iter().any(|n| n.id == node) {
                     false => Err(format!(
                         "{} of {label} finished, but it is no longer loaded.",
                         operation.name
                     )),
                     true => {
-                        self.install_descriptor_index(node, path, forest);
+                        self.install_sift_index(node, path, forest);
                         Ok(text)
                     }
                 }

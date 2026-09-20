@@ -24,8 +24,8 @@ track as its bench layer),
 it shows and every step it calls), [`panel-layout.md`](panel-layout.md) (its tab
 and its home), [`background-tasks.md`](background-tasks.md) (where Evaluate, Fit,
 the stage change, the descriptor search and the index build run),
-[`../workspace/workspace.md`](../workspace/workspace.md) (where a workspace's
-`index.kdf` lives),
+[`sift-index.md`](sift-index.md) (the `.kdf` a search queries, where it lives
+and what makes one stale),
 [`../core/features/kdf-constellation-query.md`](../core/features/kdf-constellation-query.md)
 (the query a search runs), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
@@ -36,9 +36,9 @@ the stage change, the descriptor search and the index build run),
 ## The interface
 
 The panel is [track_edit/](../../crates/sfm-explorer/src/track_edit/): `mod.rs`
-holds the state, the tabs, the header, the toolbar, the sliders and the
-Descriptor index row, with the index itself and its two steps in
-[descriptor_index.rs](../../crates/sfm-explorer/src/descriptor_index.rs),
+holds the state, the tabs, the header, the toolbar and the sliders, with the
+node's SIFT index and its steps in
+[sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs),
 [table.rs](../../crates/sfm-explorer/src/track_edit/table.rs) the observation
 table, and [tile.rs](../../crates/sfm-explorer/src/track_edit/tile.rs) the
 per-observation tile each row draws.
@@ -67,8 +67,7 @@ pub struct TrackEditResponse {
     pub split: Option<Vec<usize>>,
     pub commit: bool,
     pub set_verdict: Option<(usize, Verdict)>,
-    pub open_descriptor_index: bool,     // the row's Open..., which needs a chooser
-    pub build_descriptor_index: bool,    // the row's Build
+    pub build_sift_index: bool,          // a row's Build/Rebuild SIFT Index to Search
     pub search_descriptors: Option<usize>,  // a row's context menu, on that observation
     pub select_image: Option<usize>,
     pub hovered_image: Option<usize>,
@@ -249,14 +248,6 @@ a drag moves the panel's copy and leaves the track's where it is. Sliders that
 said something other than the track's bars would paint the table by a rule the
 track does not hold, and hand that rule to the next press of the button.
 
-**The Descriptor index row**, between the sliders and the table: the `.kdf` a
-search would query, or `none`, with *Open...* and *Build* beside it. It is above
-the table because the index is the **node's** rather than any row's -- every
-row's search goes through the same file -- and a chooser per row would suggest
-otherwise. *Build* greys with the sentence saying what is missing, which on a
-node whose images have no `.sift` companion is that there are no descriptors to
-index. See § "The descriptor index".
-
 **The observation table**, one row per observation in index order. The column
 headings are drawn above the scroll area rather than as its first row, so they
 stay put while the rows move under them and the bottom of a long track still
@@ -362,7 +353,8 @@ The verdict control is the one real widget in a row: the row rect is registered
 first and the control after it, so a click that lands on the control cycles the
 verdict and one anywhere else on the row selects the image.
 
-**Right-clicking a row** opens a context menu with one entry, *Search for
+**Right-clicking a row** opens a context menu with one entry, and what that
+entry is depends on the node's SIFT index. With a current one it is *Search for
 matching features*, quoted from one constant as the Image Detail menu's entries
 are. It runs the descriptor search from **that** observation
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
@@ -371,8 +363,16 @@ labelled by the report's own sentence and writes one Action Log row of kind
 `Bench`; the candidates it added appear in the table with `search (N)` in their
 *From* column and the header's counts move. It is a row gesture and not a
 toolbar one because what a search searches from is one sighting's patch, not the
-track's. It greys with the sentence saying what is missing: no index open, or an
-image whose `.sift` file cannot be read.
+track's. It greys with the sentence saying what is missing, which on this side
+of the question is an image whose `.sift` file cannot be read.
+
+With no index beside the node, or one that is out of date, the entry is the
+remedy instead: it reads *Build SIFT Index to Search* or *Rebuild SIFT Index to
+Search*, starts the build and runs no search
+([`sift-index.md`](sift-index.md) § "The search entry"). A person who finds a
+search missing has no reason to look above the table for the cure, which is why
+the panel itself names no index file and offers no chooser: that is the Scene
+tree's SIFT Index row.
 
 A row is also selected from **outside** the panel: the Image Detail panel's
 bench layer draws the active track over the photograph, and clicking one of its
@@ -381,64 +381,18 @@ marks selects that observation's row here
 layer"). The mark and the row are one observation, so the two are one gesture,
 and the click replaces the row selection as a plain click on a row does.
 
-### The descriptor index
+### The SIFT index behind the search
 
-A search needs a forest of the capture's descriptors, and the panel is where one
-is named. The row shows the path of the open index, elided to its column and
-with the descriptor count in its hover text, or `none`.
+A search needs a forest of the capture's descriptors, and that forest belongs to
+the reconstruction rather than to this panel: every track on the node's bench
+queries the same file, written beside the node's `.sfmr` and named after it.
+Where it lives, the three states it can be in, what makes one stale and the
+Scene tree row that says which are all in
+[`sift-index.md`](sift-index.md).
 
-**The default is opened on sight.** It is `index.kdf` in the directory the
-node's `.sift` files live in ([`../workspace/workspace.md`](../workspace/workspace.md)
-§ "The Descriptor Index"), and the viewer opens it whenever the panel draws and
-whenever the first item goes onto the node's bench, provided the file is there.
-Opening a `.kdf` decodes no tree and no descriptor block
-([`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)),
-so looking costs a stat and a header read, and a session finds what the last one
-built. The look is remembered per node, including the miss, so a workspace with
-no index is not stat-ed once a frame. **Nothing is built behind the person's
-back**: an index that is not there is the ordinary state of a workspace, and the
-row says `none` rather than refusing anything.
-
-**The index has to be this node's images, in this node's order.** A match names
-a corpus image and the candidate it becomes names a node image, and nothing
-downstream can tell the two apart, so the check is at the moment a file is
-adopted: an index whose image table says something else is refused naming the
-first image it disagrees on. That is the one thing opening can fail on, and it
-fails in the caller's hand.
-
-*Open...* is for an index somewhere else, through the dock's file chooser.
-*Build* is a background task over every `.sift` file the node's images resolve
-to, reporting the phases `read descriptors`, `build forest` and `write index`;
-it writes the default path, replacing what is there, and opens what it wrote.
-The corpus it writes carries **one image-table row per image of the node**,
-in the node's own order, including images with no `.sift` file -- an image with
-no features contributes no descriptor and still takes its row, which is what
-keeps a corpus image index and a node image index the same number.
-
-**A build may be told where to write, inside the workspace.** The wire's
-`build_descriptor_index` takes an optional `path`, because a second index over
-the same capture under a name of its own is a reasonable thing for an agent to
-ask for. A path that resolves outside the node's workspace directory is refused
-naming the workspace: an index is written beside the features it indexes, and a
-step that took a string and wrote wherever it pointed would be a different kind
-of tool. A relative path is resolved against that workspace, `.` and `..` are
-folded lexically -- the file is not there yet, so there is nothing to
-canonicalize -- and the default path is what a build with no `path` writes.
-
-**The path is spelled in one convention.** The feature directory is stored in
-the `.sfmr` with `/` between its parts, so a path joined onto a Windows
-workspace comes out as `…\images\features/sift-…\index.kdf`: it opens, and it
-reads in the row, the reply and the log as two conventions arguing. The default
-path is rebuilt from its components where it is formed, so what the panel, the
-wire and the Action Log say is the platform's own spelling throughout.
-
-Neither is a version. An index is a file beside the workspace and a handle on
-it; the reconstruction and the bench are untouched, so there is nothing for Undo
-to take back, and what each writes is one Action Log row of kind `Bench`. The
-row the **lazy** open writes is the **viewer's** rather than whoever was acting:
-nobody asked for it, and it lands in the middle of the step that set it off, so
-attributing it to that step's actor would make it the last row the step wrote --
-which is the row a wire reply reads back as the step's own report.
+What this panel does with it is the row entry above, and one thing besides: it
+asks the node to look for its index when it draws, so a session finds what the
+last one built without anyone asking for it.
 
 ### The way onto the bench
 
@@ -479,9 +433,10 @@ draw the tabs, the header, the toolbar, the sliders and every row. What the
 table drew is recorded unconditionally, in row order, so the assertions read the
 very table the app draws rather than a second computation of it. Covered: an
 empty bench offering the way in, naming the menu entry that is the other, and
-drawing no rows; the Descriptor index row saying `none` and greying *Build* on a
-node with no `.sift` files; a row's context menu carrying the search entry,
-greyed with its own sentence when no index is open; a row per observation in
+drawing no rows; the panel drawing no index row of its own; a row's context menu
+carrying the search entry against a current SIFT index and the build entry under
+either of its other two labels otherwise, with the build label asking for the
+build and for no search; a row per observation in
 index order; a verdict showing under the same observation index, pinned; the
 sliders painting the rows, leaving a pinned verdict where it is, and the
 painting matching what applying the bars then produces; the cells following the
@@ -504,12 +459,8 @@ nothing and a second formatting of the same idea could disagree with it; and the
 Status cell of a row carrying `walked_px` reading `walked 19 px, kept at seed`
 where the same row without the flag reads `localized`.
 
-[descriptor_index/tests.rs](../../crates/sfm-explorer/src/descriptor_index/tests.rs),
-headless over a temporary workspace with a real `.sift` file per image: the
-default path being `index.kdf` beside them and spelled with one kind of
-separator whatever the `.sfmr` stored; a build writing a caller's path inside
-the workspace and opening what it wrote, and refusing one outside it or one that
-climbs out with `..`, naming the workspace and starting no task.
+The index the search queries has its own module and its own tests
+([`sift-index.md`](sift-index.md) § "Testing").
 
 The Panels menu entry and the tab's presence are covered by the layout test that
 walks every tab. There is no windowed `ui_basic` test, for the reason the

@@ -40,8 +40,8 @@ overlays are still going).
 The bench half of the history is in
 [document.rs](../../crates/sfm-explorer/src/document.rs); every step on it is an
 `AppState` method in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the
-descriptor index a search queries is in
-[descriptor_index.rs](../../crates/sfm-explorer/src/descriptor_index.rs).
+SIFT index a search queries is in
+[sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs).
 
 ```rust
 /// One hand edit of a track's geometry, in the form the core steps take.
@@ -163,7 +163,7 @@ impl AppState {
                                   search_px: Option<f64>) -> Result<(), String>;
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
         -> Result<(), String>;
-    /// Ask the node's descriptor index which other photographs hold the patch
+    /// Ask the node's SIFT index which other photographs hold the patch
     /// around one observation, and add each as a candidate.
     pub(crate) fn start_bench_descriptor_search(
         &mut self, id: ReconId, label: &str, observation: usize,
@@ -174,17 +174,21 @@ impl AppState {
 }
 
 // The index the search queries, in
-// [descriptor_index.rs](../../crates/sfm-explorer/src/descriptor_index.rs).
+// [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs) and specified in
+// [sift-index.md](sift-index.md).
 impl AppState {
-    pub(crate) fn descriptor_index(&self, id: ReconId) -> Option<&DescriptorIndex>;
-    pub(crate) fn default_descriptor_index_path(&self, id: ReconId) -> Option<PathBuf>;
-    /// Open the default index if the file is there and none is open, and
+    pub(crate) fn sift_index(&self, id: ReconId) -> Option<&SiftIndex>;
+    pub(crate) fn sift_index_state(&self, id: ReconId) -> SiftIndexState;
+    pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
+    /// Open the node's index if the file is there and nothing has looked yet,
+    /// re-derive its state when a version has moved the image table, and
     /// remember the look either way.
-    pub(crate) fn open_default_descriptor_index(&mut self, id: ReconId);
-    pub(crate) fn open_descriptor_index(&mut self, id: ReconId, path: Option<PathBuf>)
+    pub(crate) fn refresh_sift_index(&mut self, id: ReconId);
+    pub(crate) fn open_sift_index(&mut self, id: ReconId, path: Option<PathBuf>)
         -> Result<PathBuf, String>;
-    pub(crate) fn build_descriptor_index_refusal(&self, id: ReconId) -> Option<String>;
-    pub(crate) fn start_build_descriptor_index(&mut self, id: ReconId, path: Option<PathBuf>)
+    pub(crate) fn close_sift_index(&mut self, id: ReconId) -> Result<(), String>;
+    pub(crate) fn build_sift_index_refusal(&self, id: ReconId) -> Option<String>;
+    pub(crate) fn start_build_sift_index(&mut self, id: ReconId, path: Option<PathBuf>)
         -> Result<(), String>;
 }
 ```
@@ -377,9 +381,9 @@ cursor.
 
 A reading, a fit and a stage change run as **background tasks**
 ([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
-track` and `Set track stage`, beside `Search descriptors` and `Build descriptor
+track` and `Set track stage`, beside `Search descriptors` and `Build SIFT
 index`, which read a `.kdf` and a capture's `.sift` files rather than
-photographs ([`track-edit.md`](track-edit.md) § "The descriptor index"). All but
+photographs ([`sift-index.md`](sift-index.md)). All but
 the index build are **cancellable**: the kernels they run take the `Progress`
 for their phases and poll its flag as well -- between the reading's rounds and
 between the views the localizer renders, and in front of the forest query and
@@ -522,10 +526,11 @@ panel means when it names no item.
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // commit_bench_track           { "reconstruction_label": "bull" }
 //
-// The descriptor index, which is the node's rather than any track's, and the
+// The SIFT index, which is the node's rather than any track's, and the
 // search through it, which is one observation's.
-// open_descriptor_index           { "reconstruction_label": "bull" }
-// build_descriptor_index          { "reconstruction_label": "bull" }
+// open_sift_index                 { "reconstruction_label": "bull" }
+// build_sift_index                { "reconstruction_label": "bull" }
+// close_sift_index                { "reconstruction_label": "bull" }
 // search_bench_track_descriptors  { "reconstruction_label": "bull", "observation": 0 }
 ```
 
@@ -587,7 +592,7 @@ split name what they made, a rename names the label the item now holds, and an
 added observation names the index it took.
 
 **The sentence is the step's own.** A step can set something else off -- putting
-the first item on a bench looks for the node's default descriptor index, and
+the first item on a bench looks for the node's SIFT index, and
 finding one writes a row of its own, after the step's. The reply reads the log
 back for what the call did, so a row nobody asked for would arrive under the
 step's label. Those rows are the **viewer's** (`Actor::Viewer`), which is what
@@ -606,18 +611,19 @@ through the counts for whichever row is new. So `undo`, `redo` and
 `jump_to_version` need no bench variant: the history they walk already holds the
 bench steps.
 
-**The two index tools push no version.** An index is a file beside the
-workspace and a handle on it, so `open_descriptor_index` and
-`build_descriptor_index` change neither the reconstruction nor the bench, and
-their reply is the index -- its path, whether it is open, and its descriptor
-count -- rather than a version. `get_bench` reports the same shape under
-`descriptor_index`, carrying the **default** path even when nothing is open, so
-an agent can see where a build would put one; that path is spelled in one
-convention, the platform's own, rather than in the mixture a feature directory
-stored with `/` produces when it is joined onto a Windows workspace. A build
-takes a `path` of the caller's and refuses one that resolves outside the node's
-workspace directory ([`track-edit.md`](track-edit.md) § "The descriptor index").
-The search itself is an ordinary bench step and answers as one.
+**The three index tools push no version.** An index is a file beside the node's
+`.sfmr` and a handle on it, so `open_sift_index`, `build_sift_index` and
+`close_sift_index` change neither the reconstruction nor the bench, and their
+reply is the index -- its path, which of the three states it is in, its
+descriptor and image counts, and the sentence saying why it is stale -- rather
+than a version. `get_bench` reports the same object under `sift_index`,
+carrying the node's own index path even when nothing is open, so an agent can
+see where a build would put one; that path is spelled in one convention, the
+platform's own. A build takes a `path` of the caller's and refuses one that
+resolves outside the directory holding the `.sfmr`, and a search against an
+index that is not `current` is refused with that index's own sentence
+([`sift-index.md`](sift-index.md)). The search itself is an ordinary bench step
+and answers as one.
 
 **The steps that read a file answer in two levels**, as the bundle
 adjustment does: with the version they pushed when they finish inside the reply

@@ -265,24 +265,70 @@ impl TrackEdit {
             .as_ref()
             .map(|(_, label)| label.clone())
             .unwrap_or_default();
+        // When the node's index is absent or out of date the entry itself is
+        // the remedy: a person who finds the search greyed has no reason to
+        // look anywhere else for it, so the row offers the build in its place.
+        // The build does not then run the search -- a build over a large
+        // capture takes long enough that the person has moved on, and
+        // candidates landing on a track unasked are a surprise.
+        let sources = self.build_refusal.as_ref().and_then(|(_, why)| why.clone());
         crate::context_menu::on_secondary_click(&row_response).show(|ui| {
-            let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
-            let clicked = match state.bench_search_refusal(id, &label, observation) {
-                None => ui
-                    .add(button)
-                    .on_hover_text(
-                        "Ask the descriptor index which other photographs hold the patch \
-                         around this observation, and add each as a candidate",
-                    )
-                    .clicked(),
-                Some(why) => {
-                    ui.add_enabled(false, button).on_disabled_hover_text(why);
-                    false
+            match state.sift_index_state(id) {
+                crate::sift_index::SiftIndexState::Current => {
+                    let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
+                    let clicked = match state.bench_search_refusal(id, &label, observation) {
+                        None => ui
+                            .add(button)
+                            .on_hover_text(
+                                "Ask the SIFT index which other photographs hold the patch \
+                                 around this observation, and add each as a candidate",
+                            )
+                            .clicked(),
+                        Some(why) => {
+                            ui.add_enabled(false, button).on_disabled_hover_text(why);
+                            false
+                        }
+                    };
+                    if clicked {
+                        response.search_descriptors = Some(observation);
+                        ui.close();
+                    }
                 }
-            };
-            if clicked {
-                response.search_descriptors = Some(observation);
-                ui.close();
+                kind => {
+                    let stale = kind == crate::sift_index::SiftIndexState::Stale;
+                    let text = match stale {
+                        true => super::REBUILD_INDEX_TO_SEARCH,
+                        false => super::BUILD_INDEX_TO_SEARCH,
+                    };
+                    // The staleness sentence where there is one, so the entry
+                    // says what is wrong as well as what to do about it.
+                    let hint = state
+                        .sift_index(id)
+                        .and_then(|index| index.stale_reason())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            "Index every .sift file of this reconstruction into a .kdf beside \
+                             its .sfmr. Runs on a worker thread, and does not then run the \
+                             search."
+                                .to_string()
+                        });
+                    let refusal = state
+                        .busy_refusal(id)
+                        .or_else(|| state.sift_index_home_refusal(id))
+                        .or(sources.clone());
+                    let button = egui::Button::new(text);
+                    let clicked = match refusal {
+                        None => ui.add(button).on_hover_text(hint).clicked(),
+                        Some(why) => {
+                            ui.add_enabled(false, button).on_disabled_hover_text(why);
+                            false
+                        }
+                    };
+                    if clicked {
+                        response.build_sift_index = true;
+                        ui.close();
+                    }
+                }
             }
         });
 

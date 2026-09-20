@@ -394,7 +394,7 @@ pub(crate) enum Command {
         track: Option<String>,
         stage: sfmtool_core::bench::StageKind,
     },
-    /// Ask the node's descriptor index which other photographs hold the patch
+    /// Ask the node's SIFT index which other photographs hold the patch
     /// around one observation, and add each as a candidate, on a worker.
     SearchBenchTrackDescriptors {
         reconstruction_label: String,
@@ -409,18 +409,22 @@ pub(crate) enum Command {
         /// query's own bar.
         min_inliers: Option<usize>,
     },
-    /// Adopt a `.kdf` as the node's descriptor index.
-    OpenDescriptorIndex {
+    /// Adopt a `.kdf` as the node's SIFT index.
+    OpenSiftIndex {
         reconstruction_label: String,
-        /// The file, or `None` for the default path beside the node's `.sift`
-        /// files.
+        /// The file, or `None` for the node's own index path beside its
+        /// `.sfmr`.
         path: Option<String>,
     },
-    /// Build a descriptor index over the node's `.sift` files, on a worker.
-    BuildDescriptorIndex {
+    /// Build a SIFT index over the node's `.sift` files, on a worker.
+    BuildSiftIndex {
         reconstruction_label: String,
-        /// Where to write it, or `None` for the default path.
+        /// Where to write it, or `None` for the node's own index path.
         path: Option<String>,
+    },
+    /// Let go of the node's open SIFT index.
+    CloseSiftIndex {
+        reconstruction_label: String,
     },
     /// What the background operation is doing, or what the last one did.
     ///
@@ -1214,18 +1218,21 @@ pub(crate) fn apply_with_window(
             radius_px,
             min_inliers,
         ),
-        Command::OpenDescriptorIndex {
+        Command::OpenSiftIndex {
             reconstruction_label,
             path,
-        } => done(bench::open_descriptor_index(
+        } => done(bench::open_sift_index(
             state,
             &reconstruction_label,
             path.as_deref(),
         )),
-        Command::BuildDescriptorIndex {
+        Command::BuildSiftIndex {
             reconstruction_label,
             path,
-        } => bench::build_descriptor_index(state, &reconstruction_label, path.as_deref()),
+        } => bench::build_sift_index(state, &reconstruction_label, path.as_deref()),
+        Command::CloseSiftIndex {
+            reconstruction_label,
+        } => done(bench::close_sift_index(state, &reconstruction_label)),
         Command::GetBackgroundTask => done(read::get_background_task(state)),
         Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {
@@ -1746,8 +1753,9 @@ impl Command {
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
-            Command::OpenDescriptorIndex { .. } => "open_descriptor_index",
-            Command::BuildDescriptorIndex { .. } => "build_descriptor_index",
+            Command::OpenSiftIndex { .. } => "open_sift_index",
+            Command::BuildSiftIndex { .. } => "build_sift_index",
+            Command::CloseSiftIndex { .. } => "close_sift_index",
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
@@ -1946,11 +1954,12 @@ impl Command {
             | Command::FitBenchTrack { .. }
             | Command::SetBenchTrackStage { .. }
             | Command::SearchBenchTrackDescriptors { .. }
-            // The two that are about the index rather than about a track:
+            // The three that are about the index rather than about a track:
             // nothing on the bench moves, and the row belongs beside the search
             // that will use them.
-            | Command::OpenDescriptorIndex { .. }
-            | Command::BuildDescriptorIndex { .. } => Kind::Bench,
+            | Command::OpenSiftIndex { .. }
+            | Command::BuildSiftIndex { .. }
+            | Command::CloseSiftIndex { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }

@@ -28,8 +28,7 @@ a pure function that produces a report, and installing the report is a step
 like any other; the commit is one ordinary edit; the Point Track Detail panel
 stays view-only; the bench and the editable track are values and pure
 functions in `sfmtool-core`, bound to Python, and the viewer adds only the
-history, the panels and the wire. **Not decided:** where a workspace's
-descriptor index lives on disk.
+history, the panels and the wire.
 
 Related standing specs: [`../gui/bench.md`](../gui/bench.md),
 [`../gui/track-edit.md`](../gui/track-edit.md) and
@@ -58,7 +57,8 @@ and [`../core/patch/member-coherence-validation.md`](../core/patch/member-cohere
 (the track stage's kernels), [`../core/patch/candidate-track-spawning.md`](../core/patch/candidate-track-spawning.md)
 (the pipeline an upgrade runs), [`../formats/kdf-file-format.md`](../formats/kdf-file-format.md)
 and [`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)
-(the descriptor index), and [`sfm-explorer-editing.md`](sfm-explorer-editing.md)
+(the SIFT index), [`../gui/sift-index.md`](../gui/sift-index.md) (where
+it lives and what makes one stale), and [`sfm-explorer-editing.md`](sfm-explorer-editing.md)
 (the umbrella, whose "split a track and merge two" this draft absorbs).
 
 ---
@@ -434,12 +434,13 @@ feature's own descriptor, so a single-descriptor hit is a special case of the
 constellation with one correspondence, and it is the geometric consistency of
 the rest that earns the candidate a warp rather than a guess.
 
-The forest has to exist. The panel carries a **Descriptor index** row naming the
-`.kdf` it will search, with a file chooser and a **Build** button that runs the
-forest build over the workspace's `.sift` files as a background task and writes
-the file. A node with no
-workspace, or an `embedded_patches` file whose workspace has no `.sift` files,
-has no descriptor search, and the row says which.
+The forest has to exist, and it belongs to the reconstruction: the node's Scene
+tree carries a **SIFT Index** row naming the `.kdf` beside its `.sfmr`, with a
+file chooser and a **Build SIFT Index** entry that runs the forest build over
+the node's `.sift` files as a background task and writes the file
+([`../gui/sift-index.md`](../gui/sift-index.md)). A node that has never been
+saved, or one whose images have no `.sift` companion, has no descriptor search,
+and the row says which.
 
 ### From the view sweep
 
@@ -596,7 +597,8 @@ its own panel, not here. Below the row, the panel shows the active track.
 **Empty.** With no track on the bench: `No track on the bench`, above three
 ways in, each naming its gesture: *Put selected track on the bench* (greyed
 with no point selected), *Start from a pixel: right-click in Image Detail*, and
-*Open a descriptor index...*. The Point Track Detail panel gains the first of
+*Build a SIFT index: the Scene tree's SIFT Index row*. The Point Track Detail
+panel gains the first of
 these as one line under its stored-patch tile, beside the hints it already
 carries, quoting the button's label from one constant. Putting a point on the
 bench that already has a track with that origin makes that track active rather
@@ -760,7 +762,7 @@ recorded.
 
 A refusal is in the bench's own words and pushes nothing: *"IMG_0042@142,198 is
 at the cluster stage; upgrade it before committing."*, *"Image 4 already has a observation
-in; turn it out first."*, *"No descriptor index is open for this workspace."*,
+in; turn it out first."*, *"No SIFT index is open."*,
 *"Nothing on the bench is called `bull-nose`."*
 
 ---
@@ -1043,15 +1045,15 @@ covered by the existing layout test that walks every tab.
 
 ## Open questions
 
-- ~~**Where a workspace's `.kdf` lives.**~~ Settled: `index.kdf` in the feature
-  directory it indexes, beside the `.sift` files it was built from, recorded in
-  [`../workspace/workspace.md`](../workspace/workspace.md) § "The Descriptor
-  Index".
+- ~~**Where a reconstruction's `.kdf` lives.**~~ Settled:
+  `<stem>-sift-index.kdf` beside the `.sfmr` it indexes, recorded in
+  [`../gui/sift-index.md`](../gui/sift-index.md) and
+  [`../workspace/workspace.md`](../workspace/workspace.md) § "The SIFT Index".
 - **The cluster stage's images across nodes.** A observation names an image of one
   node. A workspace with two nodes loaded over the same images could in
-  principle pull observations from either, and the descriptor index is per workspace
-  rather than per node. This draft holds the bench to one node and leaves the
-  cross-node case for when a use turns up.
+  principle pull observations from either, and a SIFT index is per node. This
+  draft holds the bench to one node and leaves the cross-node case for when a
+  use turns up.
 - ~~**Which observation's descriptor to search from**~~ Settled: the search
   names its observation, and the gesture is a context menu on that row, so the
   question is answered by the row the person right-clicked rather than by a
@@ -1081,14 +1083,14 @@ covered by the existing layout test that walks every tab.
    tile column.
 3. **Done.** The constellation query in core, filed as
    [`../core/features/kdf-constellation-query.md`](../core/features/kdf-constellation-query.md);
-   then `sfmtool_core::bench::search_descriptors` over it, the Descriptor index
-   row with its *Open...* and *Build*, and the search as a row's context-menu
-   entry. Filed as
+   then `sfmtool_core::bench::search_descriptors` over it, the Scene tree's
+   SIFT Index row with its *Build SIFT Index*, *Open...* and *Close Index*, and
+   the search as a row's context-menu entry. Filed as
    [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
    § "Searching the descriptor index",
-   [`../gui/track-edit.md`](../gui/track-edit.md) § "The descriptor index" and
-   [`../workspace/workspace.md`](../workspace/workspace.md) § "The Descriptor
-   Index", which settles where a workspace's `.kdf` lives.
+   [`../gui/sift-index.md`](../gui/sift-index.md) and
+   [`../workspace/workspace.md`](../workspace/workspace.md) § "The SIFT Index",
+   which settles where a reconstruction's `.kdf` lives.
 4. The view sweep with the keypoint-search switch.
 5. Pull-in from a point and from the bench, the coherence grid, and the merging
    commit. *Split off selected observations* arrived with step 2.

@@ -81,30 +81,26 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
         // The index a descriptor search would query, reported here rather than
         // on the track because it is the node's: every track's search goes
         // through the same file.
-        "descriptor_index": descriptor_index(state, id),
+        "sift_index": sift_index(state, id),
     }))
 }
 
-/// The descriptor index beside a node, as every reply that names one states it.
+/// The SIFT index beside a node, as every reply that names one states it.
 ///
-/// `open` is the fact a caller acts on; `path` is the file, which is the
-/// default path even when nothing is open, so an agent can see where a build
-/// would put one.
-fn descriptor_index(state: &AppState, id: ReconId) -> Value {
-    match state.descriptor_index(id) {
-        Some(index) => json!({
-            "open": true,
-            "path": index.path.display().to_string(),
-            "feature_count": index.feature_count(),
-        }),
-        None => json!({
-            "open": false,
-            "path": state
-                .default_descriptor_index_path(id)
-                .map(|path| path.display().to_string()),
-            "feature_count": Value::Null,
-        }),
-    }
+/// `state` is the fact a caller acts on -- `current` is the one a search runs
+/// against -- and `path` is the file, which is the node's own index path even
+/// when nothing is open, so an agent can see where a build would put one.
+pub(super) fn sift_index(state: &AppState, id: ReconId) -> Value {
+    let index = state.sift_index(id);
+    json!({
+        "state": state.sift_index_state(id).name(),
+        "path": index
+            .map(|index| index.path.display().to_string())
+            .or_else(|| state.sift_index_path(id).map(|path| path.display().to_string())),
+        "descriptors": index.map(|index| index.feature_count()),
+        "images": index.map(|index| index.images),
+        "stale_reason": index.and_then(|index| index.stale_reason()),
+    })
 }
 
 /// `get_bench_track`: one track's table, which is the Track Edit panel's own
@@ -636,44 +632,47 @@ pub(super) fn search_bench_track_descriptors(
     }
 }
 
-/// `open_descriptor_index`: the `.kdf` a search queries, adopted for one node.
+/// `open_sift_index`: the `.kdf` a search queries, adopted for one node.
 ///
-/// Not an edit and not a version: the index is a file beside the workspace and
-/// a handle on it, and nothing about the reconstruction or the bench moves. So
-/// the reply is the index itself rather than a version, and there is nothing
-/// for `undo` to take back.
-pub(super) fn open_descriptor_index(
-    state: &mut AppState,
-    label: &str,
-    path: Option<&str>,
-) -> JsonReply {
+/// Not an edit and not a version: the index is a file beside the node's `.sfmr`
+/// and a handle on it, and nothing about the reconstruction or the bench moves.
+/// So the reply is the index itself rather than a version, and there is nothing
+/// for `undo` to take back. A file that is not an index of this node opens all
+/// the same and reports `state: "stale"` with the sentence saying why.
+pub(super) fn open_sift_index(state: &mut AppState, label: &str, path: Option<&str>) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     state
-        .open_descriptor_index(id, path.map(std::path::PathBuf::from))
+        .open_sift_index(id, path.map(std::path::PathBuf::from))
         .map_err(ToolError::new)?;
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        "descriptor_index": descriptor_index(state, id),
+        "sift_index": sift_index(state, id),
     }))
 }
 
-/// `build_descriptor_index`: every `.sift` file of the node indexed, written
-/// and opened, on a worker thread.
-pub(super) fn build_descriptor_index(
-    state: &mut AppState,
-    label: &str,
-    path: Option<&str>,
-) -> Outcome {
+/// `close_sift_index`: the open forest let go of, the file left where it is.
+pub(super) fn close_sift_index(state: &mut AppState, label: &str) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    state.close_sift_index(id).map_err(ToolError::new)?;
+    Ok(json!({
+        "reconstruction_label": node_label(state, id),
+        "sift_index": sift_index(state, id),
+    }))
+}
+
+/// `build_sift_index`: every `.sift` file of the node indexed, written beside
+/// its `.sfmr` and opened, on a worker thread.
+pub(super) fn build_sift_index(state: &mut AppState, label: &str, path: Option<&str>) -> Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    match state.start_build_descriptor_index(id, path.map(std::path::PathBuf::from)) {
+    match state.start_build_sift_index(id, path.map(std::path::PathBuf::from)) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started_or(state, id, |state| {
             Ok(json!({
                 "reconstruction_label": node_label(state, id),
-                "descriptor_index": descriptor_index(state, id),
+                "sift_index": sift_index(state, id),
             }))
         }),
     }

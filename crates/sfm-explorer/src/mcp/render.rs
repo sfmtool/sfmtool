@@ -28,7 +28,7 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         "scene": state
             .scene
             .iter()
-            .map(|node| reconstruction(node, state.solo))
+            .map(|node| reconstruction(node, state.solo, super::bench::sift_index(state, node.id)))
             .collect::<Vec<_>>(),
         "selection": selection(state),
         "solo": state.solo.and_then(|id| label_of(state, id)),
@@ -61,7 +61,12 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
 /// it is being drawn.
 ///
 /// `path` is `null` for a node that came from no file, which is demo data.
-pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
+///
+/// `sift_index` is handed in rather than read here, because the index lives on
+/// `AppState` and one caller holds the node mutably while it builds this entry.
+/// It is [`super::bench::sift_index`]'s object either way, so the scene reply
+/// and `get_bench` say the same thing about the same file.
+pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, sift_index: Value) -> Value {
     let recon = node.recon();
     json!({
         "label": node.label,
@@ -111,6 +116,11 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
         // `embedded_patches` node converted in the viewer has frames and no
         // bitmaps, so this stays false.
         "has_patch_data": node.has_patch_data(),
+        // The `.kdf` beside this node's `.sfmr`, in the shape `get_bench`
+        // reports it: the forest a bench search queries is a fact about the
+        // reconstruction, so the scene entry is where an agent finds out
+        // whether there is one and whether it is still good.
+        "sift_index": sift_index,
     })
 }
 

@@ -67,8 +67,10 @@ Scene (root, implicit)
 │   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the active one marked
 │   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
 │   │   └── IMG_0004@120,90  3 in
-│   └── Patches                   ← toggle-only row, present when the recon
-│                                    carries patch data; not expandable
+│   ├── Patches                   ← toggle-only row, present when the recon
+│   │                                carries patch data; not expandable
+│   └── SIFT Index  1.2M descriptors  ← the .kdf beside the .sfmr, and whether
+│                                       it is current, stale or absent
 ├── Reconstruction "run_b"
 │   └── …
 ```
@@ -293,7 +295,7 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors),
   `Retriangulate All Points`, `Prune Covered Observations`,
-  `Convert to Embedded Patches`, `Close`.
+  `Build SIFT Index`, `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Retriangulate All Points`** re-solves every point of the node from its own
@@ -323,6 +325,18 @@ fixed-height for virtualization.
   `prune_covered_observations` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer. A prune that finds nothing
   covered pushes no version and says so in the Action Log.
+- **`Build SIFT Index`** indexes every `.sift` file of the node into a `.kdf`
+  beside its `.sfmr` and opens it, on a worker thread
+  ([background-tasks.md](background-tasks.md), [sift-index.md](sift-index.md)).
+  It reads *`Rebuild SIFT Index`* when one is already open. It sits above
+  `Convert to Embedded Patches` because it is where a person looks first when
+  they find a bench search greyed; the `SIFT Index` row below offers the same
+  entry, with the *Open...* and *Close Index* that go with it. It is **live only
+  on a node that has been saved, whose images have at least one `.sift`
+  companion, and that nothing is running on**, and greyed with the reason
+  otherwise. The gate is `AppState::build_sift_index_refusal`, which the wire's
+  `build_sift_index` and the operation itself also ask, so the greyed entry and
+  a call that asks anyway give one answer.
 - **`Convert to Embedded Patches`** is the one entry on this menu that edits the
   reconstruction. It runs the minimal `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
@@ -444,6 +458,22 @@ poses. The panel that edits a track on it is [track-edit.md](track-edit.md).
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
 
+**SIFT Index row** — `SIFT Index  1.2M descriptors` — last among the group rows,
+after Points and after Patches where that row is present. It says whether the
+node has the `.kdf` a bench search queries and whether it is still an index of
+this reconstruction: the descriptor count when it is current, `stale` in the
+warning colour when it is not, `none` dimmed when there is no file, and
+`building...` while the build runs. No eye and no children — nothing here is
+drawn in the viewport and there is nothing under it to list — and clicking it
+selects nothing. Its hover text carries the path, the counts, and the sentence
+naming the first discrepancy when it is stale. Its context menu carries
+`Build SIFT Index` (reading `Rebuild SIFT Index` when one is open), `Open...`
+and `Close Index`, each greyed with its own sentence while the node is busy.
+`Open...` reports the gesture and nothing else, and `dock.rs` puts up the file
+chooser, as it does for the resection's `.matches` file: that is what keeps the
+panel a pure egui function a headless frame can run. The row and everything
+behind it are [sift-index.md](sift-index.md).
+
 ### Panel plumbing
 
 Following the existing per-panel response pattern threaded through `dock.rs`:
@@ -470,6 +500,10 @@ pub struct SceneGraphResponse {
     /// A Bench row, named by its position so the response stays `Copy`.
     pub activate_bench_item: Option<(ReconId, usize)>,
     pub discard_bench_item: Option<(ReconId, usize)>,
+    /// The SIFT Index row's menu, and the build entry on the node's own.
+    pub build_sift_index: Option<ReconId>,
+    pub open_sift_index: Option<ReconId>,
+    pub close_sift_index: Option<ReconId>,
 }
 ```
 
@@ -1100,6 +1134,13 @@ bundle from `retain_nodes` on the next frame.
   selection auto-scroll, eye and interaction-cursor toggles,
   selected-reconstruction marking, `Align to` menu gating (point mode
   disabled without feature indexes).
+- **The SIFT Index row**, through the same whole frames: it says `none`, counts
+  a current index's descriptors and reads `stale`; its menu carries the build,
+  the open and the close, and the close reports the node; the reconstruction
+  row's menu carries the build **above** `Convert to Embedded Patches`, asserted
+  on where the two entries were drawn; and an unsaved node's build entry is dead
+  under the *Save ‹label› first* sentence. What the states themselves mean is
+  tested in [sift-index.md](sift-index.md)'s own module.
 - **Upload tests** on the `noop` wgpu backend
   (`scene_renderer/upload/tests.rs` pattern): two-node upload produces two
   bundles; close releases one; pick bases are contiguous, non-overlapping,

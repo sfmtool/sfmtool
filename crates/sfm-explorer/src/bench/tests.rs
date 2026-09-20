@@ -785,12 +785,12 @@ fn a_photometric_step_refuses_what_the_track_alone_decides() {
 /// and the candidates it added are in the track under the search's own
 /// provenance, at the place and the size the index's warp says.
 ///
-/// The fixture is [`crate::descriptor_index::tests::searchable`]: a workspace of
+/// The fixture is [`crate::sift_index::tests::searchable`]: a workspace of
 /// real `.sift` files with one patch planted in the query image and carried
 /// into two others under warps the test states, indexed into a real `.kdf`.
 #[test]
 fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
-    use crate::descriptor_index::tests as fixture;
+    use crate::sift_index::tests as fixture;
 
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, label) = fixture::searchable(dir.path());
@@ -876,10 +876,10 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
 }
 
 /// With no index open the gesture is refused in the caller's own hand, naming
-/// the row that would give it one, and starts no task.
+/// the row that would give the node one, and starts no task.
 #[test]
 fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
-    use crate::descriptor_index::tests as fixture;
+    use crate::sift_index::tests as fixture;
 
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = fixture::state_in(dir.path());
@@ -890,7 +890,7 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
     let why = state
         .bench_search_refusal(id, &label, 0)
         .expect("nothing to search");
-    assert!(why.contains("No descriptor index is open"), "{why}");
+    assert!(why.contains("No SIFT index is open"), "{why}");
     let refusal = state
         .start_bench_descriptor_search(id, &label, 0, None, None)
         .expect_err("the step asks the same question the menu does");

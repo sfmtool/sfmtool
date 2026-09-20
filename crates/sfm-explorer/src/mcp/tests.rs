@@ -3695,11 +3695,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "observation": 0 }),
         ),
         (
-            "open_descriptor_index",
+            "open_sift_index",
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
-            "build_descriptor_index",
+            "build_sift_index",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "close_sift_index",
             json!({ "reconstruction_label": "alpha" }),
         ),
         ("get_background_task", json!({})),
@@ -3965,15 +3969,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty writes, the one that writes a file, and the one
+    // Fifteen reads, fifty-one writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 66, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 67, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        50
+        51
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4038,7 +4042,7 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
     // have to be one number. They were "twenty-three" and "the twenty-two".
     let bench = catalog
         .iter()
-        .filter(|spec| spec.name.contains("bench") || spec.name.contains("descriptor_index"))
+        .filter(|spec| spec.name.contains("bench") || spec.name.contains("sift_index"))
         .count();
     let family = format!("{} tools that read and work the", spelled(bench));
     assert!(
@@ -8538,17 +8542,17 @@ fn a_move_across_a_deleted_camera_image_follows_it_by_name() {
     assert_eq!(after, Value::Null, "{after}");
 }
 
-// ── The descriptor index and the search through it ──────────────────────
+// ── The SIFT index and the search through it ────────────────────────────
 
 /// `get_bench` reports the index a search would query, the two index tools give
 /// a node one, and the search itself is a background task an agent polls for.
 ///
 /// Over the workspace fixture rather than [`benchable`]: a search needs real
 /// `.sift` files and a real `.kdf`, which is what
-/// [`crate::descriptor_index::tests::searchable`] builds.
+/// [`crate::sift_index::tests::searchable`] builds.
 #[test]
-fn the_descriptor_index_and_the_search_are_on_the_wire() {
-    use crate::descriptor_index::tests as fixture;
+fn the_sift_index_and_the_search_are_on_the_wire() {
+    use crate::sift_index::tests as fixture;
 
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, item) = fixture::searchable(dir.path());
@@ -8562,17 +8566,17 @@ fn the_descriptor_index_and_the_search_are_on_the_wire() {
         "get_bench",
         json!({ "reconstruction_label": label }),
     );
-    let index = &bench["descriptor_index"];
-    assert_eq!(index["open"], json!(true), "{bench}");
+    let index = &bench["sift_index"];
+    assert_eq!(index["state"], json!("current"), "{bench}");
     assert!(
         index["path"]
             .as_str()
             .expect("a path")
-            .ends_with("index.kdf"),
+            .ends_with("demo-sift-index.kdf"),
         "{bench}"
     );
     assert!(
-        index["feature_count"].as_u64().expect("a count") > 0,
+        index["descriptors"].as_u64().expect("a count") > 0,
         "{bench}"
     );
 
@@ -8617,10 +8621,10 @@ fn the_descriptor_index_and_the_search_are_on_the_wire() {
     let opened = call(
         &mut state,
         &mut viewer,
-        "open_descriptor_index",
+        "open_sift_index",
         json!({ "reconstruction_label": label, "path": path }),
     );
-    assert_eq!(opened["descriptor_index"]["open"], json!(true), "{opened}");
+    assert_eq!(opened["sift_index"]["state"], json!("current"), "{opened}");
     assert_eq!(
         state.node(id).expect("loaded").history.versions().len(),
         before,
@@ -8636,7 +8640,7 @@ fn the_descriptor_index_and_the_search_are_on_the_wire() {
 /// the viewer's rather than the caller's, and the reply skips it.
 #[test]
 fn a_create_that_opens_the_default_index_still_reports_the_create() {
-    use crate::descriptor_index::tests as fixture;
+    use crate::sift_index::tests as fixture;
 
     // One session builds the index; a second opens the same workspace with
     // nothing open yet, which is the state the first create meets.
@@ -8644,7 +8648,7 @@ fn a_create_that_opens_the_default_index_still_reports_the_create() {
     let (_built, _, _) = fixture::searchable(dir.path());
     let (mut state, id) = fixture::state_in(dir.path());
     assert!(
-        state.descriptor_index(id).is_none(),
+        state.sift_index(id).is_none(),
         "the fresh session has opened nothing yet"
     );
     let label = state.node(id).expect("loaded").label.clone();
@@ -8665,11 +8669,11 @@ fn a_create_that_opens_the_default_index_still_reports_the_create() {
     );
     // The index really did open in the middle of it, and said so in a row of
     // the viewer's own.
-    assert!(state.descriptor_index(id).is_some());
+    assert!(state.sift_index(id).is_some());
     let opened = state
         .action_log
         .entries()
-        .find(|entry| entry.text.starts_with("Opened the descriptor index"))
+        .find(|entry| entry.text.starts_with("Opened the SIFT index"))
         .expect("the open wrote a row");
     assert_eq!(opened.actor, crate::action_log::Actor::Viewer);
 }
@@ -8679,7 +8683,7 @@ fn a_create_that_opens_the_default_index_still_reports_the_create() {
 /// deferring to a worker that could never answer.
 #[test]
 fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
-    use crate::descriptor_index::tests as fixture;
+    use crate::sift_index::tests as fixture;
 
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = fixture::state_in(dir.path());
@@ -8702,15 +8706,15 @@ fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
         "get_bench",
         json!({ "reconstruction_label": label }),
     );
-    assert_eq!(bench["descriptor_index"]["open"], json!(false), "{bench}");
+    assert_eq!(bench["sift_index"]["state"], json!("none"), "{bench}");
     assert!(
-        bench["descriptor_index"]["path"]
+        bench["sift_index"]["path"]
             .as_str()
             .expect("the default path is named even when nothing is open")
-            .ends_with("index.kdf"),
+            .ends_with("demo-sift-index.kdf"),
         "{bench}"
     );
-    assert_eq!(bench["descriptor_index"]["feature_count"], Value::Null);
+    assert_eq!(bench["sift_index"]["descriptors"], Value::Null);
 
     let command = tools::parse(
         "search_bench_track_descriptors",
@@ -8724,14 +8728,14 @@ fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
     .expect("a valid call");
     let error = refused(&mut state, &mut viewer, command);
     assert!(
-        error.to_string().contains("No descriptor index is open"),
+        error.to_string().contains("No SIFT index is open"),
         "{error}"
     );
 
     // And a build over a node whose images have no `.sift` companion is refused
     // the same way, in front of the worker.
     let command = tools::parse(
-        "build_descriptor_index",
+        "build_sift_index",
         Some(
             &json!({ "reconstruction_label": label })
                 .as_object()

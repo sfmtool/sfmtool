@@ -14,14 +14,14 @@ one, on one node, with an id of its own. One task runs at a time. The eight
 operations are the three whole-value edits -- `Bundle adjust`, `Convert to
 embedded patches` and `Retriangulate all points` -- and the five the bench runs
 -- `Evaluate track`, `Fit track`, `Set track stage`, `Search descriptors` and
-`Build descriptor index` ([bench.md](bench.md)). All but the last are
+`Build SIFT index` ([bench.md](bench.md)). All but the last are
 **cancellable**: the four bench steps that read photographs poll the flag on
 either side of the decode and inside the kernels -- between the reading's rounds
 and between the views the localizer renders, which is where a widened search
 spends its time, and in front of the forest query and between the candidates for
 the search; the adjustment polls between its rounds and its iterations, the
 conversion between its three stages and the images of its `.sift` read, and the
-retriangulation between its own three. `Build descriptor index` is not: the
+retriangulation between its own three. `Build SIFT index` is not: the
 forest build and the file write are each one call that never asks whether it
 should stop.
 
@@ -443,7 +443,7 @@ pub(crate) enum Report {
 /// deciding at poll time from the flag alone races a solve that finished on its
 /// own between the last poll and the cancel. What it produced is one variant
 /// per kind of answer: a whole reconstruction, one item of the bench, or a
-/// descriptor index that is no version at all.
+/// SIFT index that is no version at all.
 pub(crate) enum Finished {
     Produced {
         /// The next value, and the map from the input's rows to its own.
@@ -464,10 +464,10 @@ pub(crate) enum Finished {
         version_label: String,
         text: String,
     },
-    /// A descriptor index built and reopened. Not a version: the index is a
-    /// file beside the workspace and a handle on it, so the handle is
+    /// A SIFT index built and reopened. Not a version: the index is a
+    /// file beside the node's `.sfmr` and a handle on it, so the handle is
     /// installed, a row is written, and Undo has nothing to take back.
-    DescriptorIndex {
+    SiftIndex {
         path: PathBuf,
         forest: Arc<LazyKdForestU8>,
         text: String,

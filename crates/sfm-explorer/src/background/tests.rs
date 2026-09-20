@@ -502,8 +502,7 @@ fn real_task(operation: Operation) -> RealTask {
         // reads a real `.sift` file, neither of which the demo node has.
         "Search descriptors" => {
             let workspace = tempfile::tempdir().expect("a temporary directory");
-            let (mut state, id, label) =
-                crate::descriptor_index::tests::searchable(workspace.path());
+            let (mut state, id, label) = crate::sift_index::tests::searchable(workspace.path());
             let job = state
                 .bench_search_job(id, &label, 0, None, None)
                 .expect("the fixture has an index and a searchable observation");

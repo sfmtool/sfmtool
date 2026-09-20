@@ -155,7 +155,6 @@ my_project/
 ├── frames/features/sift-colmap-d124.../  # Extracted features (auto-created)
 │   ├── scene_0001.jpg.sift
 │   ├── scene_0002.jpg.sift
-│   ├── index.kdf                     # Descriptor index (built on request)
 │   └── ...
 ├── photos/features/sift-colmap-d124.../  # Features for photos (auto-created)
 │   ├── DSC_0001.JPG.sift
@@ -166,6 +165,7 @@ my_project/
 │   └── 20250115-01-sequential_1-50-verified.matches
 └── sfmr/                               # Default reconstruction output directory
     ├── 20250115-00-frames_1-50.sfmr
+    ├── 20250115-00-frames_1-50-sift-index.kdf   # SIFT index (built on request)
     ├── 20250115-01-frames_1-100.sfmr
     └── 20250116-00-photos_1-88.sfmr
 ```
@@ -198,36 +198,34 @@ This convention means:
 - Features stay close to their source images in the filesystem
 - Different feature configurations coexist without conflict
 
-### The Descriptor Index
+### The SIFT Index
 
-A capture's descriptors can be indexed into one
+A reconstruction's descriptors can be indexed into one
 [`.kdf` file](../formats/kdf-file-format.md), so that a patch of one photograph
 can be looked for in every other one
 ([the constellation query](../core/features/kdf-constellation-query.md)). That
-index is called `index.kdf` and it lives **in the feature directory it indexes**,
-beside the `.sift` files it was built from:
+index is the **`.sfmr` file's sibling** and takes its name from it: the index of
+`<dir>/<stem>.sfmr` is `<dir>/<stem>-sift-index.kdf`.
 
 ```
-frames/features/sift-sfmtool-d1245b460906df27ee4730273e0aba41/index.kdf
+sfmr/20250115-00-frames_1-50.sfmr
+sfmr/20250115-00-frames_1-50-sift-index.kdf
 ```
 
-Beside them rather than at the workspace root because an index is a statement
-about one set of `.sift` files: a workspace whose feature settings change gets a
-second feature directory (§ "Feature Prefix Directory"), and an index written to
-the root would silently describe whichever extraction happened to come first.
-Under this convention the two coexist exactly as the extractions do, and
-deleting an extraction deletes its index with it.
-
-An image's feature directory is `{image_parent}/{feature_prefix_dir}`, so a
-capture whose images sit in several directories has several. The index goes in
-the **first image's**: it is an index over the whole capture whichever of them
-holds it, and a rule that answered differently per image would leave a second
-session looking somewhere else.
+Beside the reconstruction rather than beside the features because the corpus it
+holds is a statement about one reconstruction's images, in that
+reconstruction's order: a match it returns names an image by its row in the
+index and the observation that match becomes names an image by its row in the
+reconstruction, and the two have to be the same number. Under this convention
+two reconstructions saved in one directory have two indexes, and a
+reconstruction whose images span several image directories still has one index
+in one obvious place.
 
 The file is optional and nothing creates it as part of `sfm ws init` or `sfm
-sift`. The SfM Explorer's Track Edit panel opens it when it is there and offers
-to build one when it is not
-([`../gui/track-edit.md`](../gui/track-edit.md) § "The descriptor index").
+sift`. The SfM Explorer opens the one beside a loaded `.sfmr` when it is there,
+says on the node's Scene tree row whether it is still an index of that
+reconstruction, and offers to build one where a person finds they need it
+([`../gui/sift-index.md`](../gui/sift-index.md)).
 
 ## Workspace Discovery
 

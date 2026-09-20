@@ -128,6 +128,82 @@ fn row_y(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, image: us
     panic!("no row of the table answered for image {image}");
 }
 
+/// The raw input one headless frame is driven with.
+fn input(events: Vec<egui::Event>) -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        events,
+        ..Default::default()
+    }
+}
+
+/// The strings one frame of the panel painted, with `events` delivered.
+fn painted(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &AppState,
+    events: Vec<egui::Event>,
+) -> Vec<String> {
+    crate::test_support::painted_texts(ctx, input(events), |ui| {
+        panel.show(ui, state);
+    })
+}
+
+/// A panel and a context that have laid the table out once, so the pointer has
+/// rects to resolve against.
+fn settled(state: &AppState) -> (TrackEdit, egui::Context) {
+    let mut panel = TrackEdit::new();
+    let ctx = egui::Context::default();
+    run_frame(&mut panel, &ctx, state);
+    (panel, ctx)
+}
+
+/// Right-click at `at` and leave the menu it opened laid out.
+///
+/// Three frames: one to register the rows, one that right-clicks, and one
+/// more, because the menu's entries are laid out on a later frame.
+fn open_row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, at: egui::Pos2) {
+    for frame in 0..3 {
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        if frame == 1 {
+            for pressed in [true, false] {
+                events.push(egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        painted(panel, ctx, state, events);
+    }
+}
+
+/// The strings the first table row's context menu painted.
+fn row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> Vec<String> {
+    let y = row_y(panel, ctx, state, 0);
+    let at = egui::pos2(400.0, y);
+    open_row_menu(panel, ctx, state, at);
+    painted(panel, ctx, state, vec![egui::Event::PointerMoved(at)])
+}
+
+/// Where an open menu drew the entry called `text`.
+fn menu_entry_pos(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &AppState,
+    text: &str,
+) -> egui::Pos2 {
+    crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
+        panel.show(ui, state);
+    })
+    .into_iter()
+    .find(|painted| painted.text == text)
+    .unwrap_or_else(|| panic!("{text:?} was not painted"))
+    .rect
+    .center()
+}
+
 /// Put [`POINT`] on the bench and draw one frame over it.
 fn on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
     let (mut state, id) = state();
@@ -292,7 +368,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     use sfmtool_core::bench::Stage;
 
     let dir = tempfile::tempdir().unwrap();
-    let (mut state, id, label) = crate::descriptor_index::tests::searchable(dir.path());
+    let (mut state, id, label) = crate::sift_index::tests::searchable(dir.path());
     cache_photographs(&mut state, id);
     state
         .start_bench_descriptor_search(id, &label, 0, None, None)
@@ -671,84 +747,104 @@ fn a_heading_stands_at_the_x_offset_its_column_is_drawn_at() {
     );
 }
 
-// ── The descriptor index row and the row's own menu ─────────────────────
+// ── The row's own menu and the SIFT index behind it ─────────────────────
 
-/// The Descriptor index row is drawn above the table, says `none` when nothing
-/// is open, and greys *Build* on a node whose images have no `.sift` file.
+/// The panel is about one track: nothing above the table names the node's
+/// index, which lives on the Scene tree's own row.
 #[test]
-fn the_descriptor_index_row_says_none_and_greys_build_with_no_sift_files() {
+fn the_panel_draws_no_sift_index_row() {
     let (state, _id, _label, mut panel, ctx) = on_the_bench();
-    let texts = crate::test_support::painted_texts(
-        &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
-            ..Default::default()
-        },
-        |ui| {
-            panel.show(ui, &state);
-        },
-    );
-    for label in ["Descriptor index", "none", "Open...", "Build"] {
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    for absent in ["Descriptor index", "SIFT Index", "Open..."] {
         assert!(
-            texts.iter().any(|t| t == label),
-            "{label} is not in the row: {texts:?}"
+            !texts.iter().any(|t| t == absent),
+            "{absent} is still drawn above the table: {texts:?}"
         );
     }
-    // The demo node has no workspace on disk, so there is nothing to index and
-    // the button says so rather than offering a build that would fail.
-    let id = state.selected_recon.expect("a selected reconstruction");
-    let why = state
-        .build_descriptor_index_refusal(id)
-        .expect("a node with no .sift files has nothing to index");
-    assert!(why.contains("No .sift file"), "{why}");
 }
 
-/// Right-clicking a row opens the search entry, greyed with the sentence saying
-/// what is missing when no index is open.
+/// With no index beside the node, the entry a row offers is the build, because
+/// a person who finds the search missing has no reason to look anywhere else.
 #[test]
-fn a_row_s_context_menu_offers_the_search_and_greys_it_without_an_index() {
-    let (state, id, label, mut panel, ctx) = on_the_bench();
-    let y = row_y(&mut panel, &ctx, &state, 0);
-    let at = egui::pos2(400.0, y);
+fn a_row_s_menu_offers_the_build_when_the_node_has_no_index() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let texts = row_menu(&mut panel, &ctx, &state);
+    assert!(
+        texts.iter().any(|t| t == super::BUILD_INDEX_TO_SEARCH),
+        "the build entry is not in the row's menu: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == super::SEARCH_DESCRIPTORS_LABEL),
+        "the search is offered with no index to run it against: {texts:?}"
+    );
+}
 
-    // Three frames: one to register the rows, one that right-clicks, and one
-    // more, because the menu's entries are laid out on a later frame.
-    let mut texts = Vec::new();
-    for frame in 0..3 {
-        let mut events = vec![egui::Event::PointerMoved(at)];
-        if frame == 1 {
-            for pressed in [true, false] {
-                events.push(egui::Event::PointerButton {
-                    pos: at,
-                    button: egui::PointerButton::Secondary,
-                    pressed,
-                    modifiers: egui::Modifiers::default(),
-                });
-            }
-        }
-        texts = crate::test_support::painted_texts(
-            &ctx,
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
-                events,
-                ..Default::default()
-            },
-            |ui| {
-                panel.show(ui, &state);
-            },
-        );
-    }
+/// With a current index the entry is the search itself, live.
+#[test]
+fn a_row_s_menu_offers_the_search_against_a_current_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, _) = crate::sift_index::tests::searchable(dir.path());
+    cache_photographs(&mut state, id);
+    let (mut panel, ctx) = settled(&state);
+
+    let texts = row_menu(&mut panel, &ctx, &state);
     assert!(
         texts.iter().any(|t| t == super::SEARCH_DESCRIPTORS_LABEL),
         "the search entry is not in the row's menu: {texts:?}"
     );
+    assert!(
+        !texts.iter().any(|t| t == super::REBUILD_INDEX_TO_SEARCH),
+        "a current index is offered a rebuild: {texts:?}"
+    );
+}
 
-    // Greyed rather than absent, with the sentence naming the row that would
-    // give it an index.
-    let why = state
-        .bench_search_refusal(id, &label, 0)
-        .expect("no index is open on this node");
-    assert!(why.contains("Descriptor index"), "{why}");
+/// With a stale one the entry is the rebuild, and choosing it starts the build
+/// and no search.
+#[test]
+fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, _) = crate::sift_index::tests::searchable(dir.path());
+    cache_photographs(&mut state, id);
+    // The features of one image, extracted again after the build.
+    {
+        let recon = state.node(id).expect("loaded").recon();
+        crate::sift_index::tests::write_sift(
+            &recon.sift_path_for_image(2),
+            &recon.image_table.images[2].name,
+            &vec![vec![5u8; 128]; 3],
+            &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+        );
+    }
+    let path = state.sift_index(id).expect("built").path.clone();
+    state.open_sift_index(id, Some(path)).expect("it opens");
+    assert_eq!(
+        state.sift_index_state(id),
+        crate::sift_index::SiftIndexState::Stale
+    );
+
+    let (mut panel, ctx) = settled(&state);
+    let y = row_y(&mut panel, &ctx, &state, 0);
+    let at = egui::pos2(400.0, y);
+    open_row_menu(&mut panel, &ctx, &state, at);
+    let texts = painted(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![egui::Event::PointerMoved(at)],
+    );
+    assert!(
+        texts.iter().any(|t| t == super::REBUILD_INDEX_TO_SEARCH),
+        "the rebuild entry is not in the row's menu: {texts:?}"
+    );
+
+    // Clicking it asks for the build, and asks for no search.
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::REBUILD_INDEX_TO_SEARCH);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert!(response.build_sift_index, "the entry started no build");
+    assert_eq!(
+        response.search_descriptors, None,
+        "the build does not run the search when it finishes, and does not run it now"
+    );
 }
 
 /// *Duplicate* is the toolbar's own way to a second patch over neighbouring

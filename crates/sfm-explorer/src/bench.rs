@@ -310,7 +310,7 @@ impl AppState {
             .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
         let text = format!("Put point {} on the bench as {}", point.point, report.label);
         self.push_bench_step(index, next, text);
-        self.open_default_descriptor_index(point.recon);
+        self.refresh_sift_index(point.recon);
         Ok(report.label)
     }
 
@@ -366,7 +366,7 @@ impl AppState {
         // Putting something on the bench is the moment a search becomes
         // possible, so it is the moment to look for the index that would serve
         // one. The look is remembered, so the second item costs nothing.
-        self.open_default_descriptor_index(image.recon);
+        self.refresh_sift_index(image.recon);
         Ok(Seeded {
             label: report.label,
             pixel: seeded.pixel,
@@ -987,7 +987,7 @@ impl AppState {
         self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
     }
 
-    /// Search the node's descriptor index from one observation of the track
+    /// Search the node's SIFT index from one observation of the track
     /// called `label`, on a worker thread.
     ///
     /// The step that grows a track by more than one sighting at a time: the
@@ -1048,12 +1048,8 @@ impl AppState {
         if let Some(why) = self.busy_refusal(id) {
             return Some(why);
         }
-        if self.descriptor_index(id).is_none() {
-            return Some(
-                "No descriptor index is open. Open or build one in the Descriptor index row \
-                 above the table."
-                    .to_string(),
-            );
+        if let Some(why) = self.sift_index_search_refusal(id) {
+            return Some(why);
         }
         let track = self.bench_track(id, label)?;
         let row = track.observations.get(observation)?;
@@ -1096,8 +1092,8 @@ impl AppState {
         let image = ImageRef::new(id, row.image as usize);
         let forest = Arc::clone(
             &self
-                .descriptor_index(id)
-                .ok_or_else(|| "No descriptor index is open.".to_string())?
+                .sift_index(id)
+                .ok_or_else(|| "No SIFT index is open.".to_string())?
                 .forest,
         );
         let keypoints = self.image_keypoints(image)?;

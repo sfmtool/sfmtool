@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Sixty-six tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty
+Sixty-seven tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty-one
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -168,13 +168,14 @@ write, and one writes a file.
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
-| `open_descriptor_index` | write | Adopt a `.kdf` as one reconstruction's descriptor index |
-| `build_descriptor_index` | write | Index every `.sift` file of one reconstruction, write it and open it, on a worker thread |
+| `open_sift_index` | write | Adopt a `.kdf` as one reconstruction's SIFT index |
+| `build_sift_index` | write | Index every `.sift` file of one reconstruction into a `.kdf` beside its `.sfmr`, and open it, on a worker thread |
+| `close_sift_index` | write | Let go of the SIFT index open beside one reconstruction |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the fifty writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the fifty-one writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -391,7 +392,13 @@ addressable. No arguments.
                    "tint": null },
       "transformed": false,               // SceneNode::has_transform
       "feature_source": "sift_files",     // or "embedded_patches"
-      "has_patch_data": false             // narrower: the frames *and* the bitmaps
+      "has_patch_data": false,            // narrower: the frames *and* the bitmaps
+      "sift_index": {                     // the .kdf beside this node's .sfmr
+        "state": "current",               // or "stale", or "none"
+        "path": "C:/work/seoul_bull-sift-index.kdf",
+        "descriptors": 20413, "images": 17,
+        "stale_reason": null              // the first discrepancy, when stale
+      }
     }
   ],
   "selection": {
@@ -2104,7 +2111,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Twenty-three tools that read and work the **bench** beside a node
+Twenty-four tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2128,7 +2135,7 @@ the commit naming the point it wrote. So `undo`, `redo` and `jump_to_version`
 need no bench variant: the history they walk already holds the bench steps, and
 `get_history` lists them among the rest. The sentence is the **step's own**: a
 step that sets something else off -- putting the first item on a bench opens the
-node's default descriptor index, which writes a row after the step's -- writes
+node's SIFT index, which writes a row after the step's -- writes
 that row as the viewer rather than as the caller, and the reply skips the
 viewer's rows ([bench.md](bench.md) § "The wire"). It skips `Selection` rows for
 the same reason: a commit selects the point it wrote
@@ -2197,7 +2204,7 @@ a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Four of the twenty-three are the patch a track is**, and they are the wire's
+**Four of the twenty-four are the patch a track is**, and they are the wire's
 half of the handles the Image Detail panel's bench layer offers
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). `move_bench_track` slides the patch across its own plane until its
@@ -2240,16 +2247,24 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Three of the twenty-three are about the descriptor index**, which is the node's
-rather than any track's: `open_descriptor_index` adopts a `.kdf`,
-`build_descriptor_index` makes one out of the node's `.sift` files -- at a
-`path` of the caller's where it names one, refused when that path resolves
-outside the node's workspace directory -- and
-`get_bench` reports which is open under `descriptor_index`, with the path a
-build would write to even when none is. Neither of the two pushes a version --
-an index is a file beside the workspace and a handle on it, and nothing about
-the reconstruction or the bench moves -- so `undo` has nothing to take back and
-the reply is the index rather than a version.
+**Four of the twenty-four are about the SIFT index**, which is the node's
+rather than any track's: `open_sift_index` adopts a `.kdf`, `build_sift_index`
+makes one out of the node's `.sift` files -- at a `path` of the caller's where
+it names one, refused when that path resolves outside the directory holding the
+`.sfmr` -- `close_sift_index` lets go of what is open, and `get_bench` reports
+it under `sift_index`, with the path a build would write to even when none is
+open. None of the three pushes a version -- an index is a file beside the
+node's `.sfmr` and a handle on it, and nothing about the reconstruction or the
+bench moves -- so `undo` has nothing to take back and the reply is the index
+rather than a version.
+
+**The reply says which of three states the index is in**, because an index that
+is open is not necessarily an index of this reconstruction: `current` when it
+is over exactly this node's images, in this node's order, from the `.sift` files
+on disk now; `stale` with a `stale_reason` naming the first discrepancy when it
+is not; `none` when there is nothing open. Only `current` answers a search
+([sift-index.md](sift-index.md)). `descriptors` and `images` are the corpus's
+counts, `null` when nothing is open.
 
 **`search_bench_track_descriptors` is the third way an observation reaches a
 track**, beside the pixel and the point, and the only one that proposes several
@@ -3147,7 +3162,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-six tools**, fifteen of them reads and one of them
+- **The catalog is sixty-seven tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

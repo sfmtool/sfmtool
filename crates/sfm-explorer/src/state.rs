@@ -583,18 +583,18 @@ pub struct AppState {
     /// Cleared when the scene changes.
     pub sift_cache: HashMap<ImageRef, CachedSiftFeatures>,
 
-    /// The descriptor index open beside each node, which a bench search
-    /// queries ([`crate::descriptor_index`]).
+    /// The SIFT index open beside each node, which a bench search queries
+    /// ([`crate::sift_index`]).
     ///
     /// One per node rather than one per panel: the index names that node's
-    /// images, and the Track Edit panel only shows which file is open.
+    /// images, and the panels only show which file is open and whether it is
+    /// still good.
     ///
-    /// `None` is "looked for the default and there was none", memoized the way
-    /// a failed decode is in [`Self::full_res_cache`]: a workspace whose index
-    /// has never been built is the ordinary case, and the panel would otherwise
-    /// stat the same absent file every frame.
-    pub(crate) descriptor_indexes:
-        HashMap<ReconId, Option<crate::descriptor_index::DescriptorIndex>>,
+    /// `None` is "looked beside the .sfmr and there was none", memoized the way
+    /// a failed decode is in [`Self::full_res_cache`]: a reconstruction whose
+    /// index has never been built is the ordinary case, and the tree would
+    /// otherwise stat the same absent file every frame.
+    pub(crate) sift_indexes: HashMap<ReconId, Option<crate::sift_index::SiftIndex>>,
 
     /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
     /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
@@ -806,7 +806,7 @@ impl AppState {
             length_scale: DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03, // fallback until points loaded
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
-            descriptor_indexes: HashMap::new(),
+            sift_indexes: HashMap::new(),
             full_res_cache: HashMap::new(),
             show_demo_dialog: false,
             demo_num_points: 1000,
@@ -921,7 +921,7 @@ impl AppState {
         self.hovered_image = None;
         self.hovered_point = None;
         self.sift_cache.clear();
-        self.descriptor_indexes.clear();
+        self.sift_indexes.clear();
         self.full_res_cache.clear();
         self.resect_matches.clear();
         self.resect_matches_cache = None;
@@ -939,7 +939,7 @@ impl AppState {
     /// leaves them where they are).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
-        self.forget_descriptor_index(id);
+        self.forget_sift_index(id);
         self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);

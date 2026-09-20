@@ -3106,3 +3106,171 @@ fn the_prune_entry_is_greyed_while_the_node_is_busy() {
     open.send(()).expect("the worker is waiting");
     state.finish_background_task();
 }
+
+// ── The SIFT Index row ──────────────────────────────────────────────────
+
+/// Wide enough that the status text beside the row's name is not clipped away.
+const INDEX_ROW_WIDTH: f32 = 600.0;
+
+/// The strings one settled frame painted, at a width the row fits in.
+fn index_row_texts(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+) -> Vec<String> {
+    painted_at_width(panel, ctx, state, INDEX_ROW_WIDTH);
+    painted_at_width(panel, ctx, state, INDEX_ROW_WIDTH)
+}
+
+/// A node with `.sift` files and a built index, and the state holding it.
+fn indexed(dir: &std::path::Path) -> (AppState, crate::scene::ReconId) {
+    let (state, id, _) = crate::sift_index::tests::searchable(dir);
+    (state, id)
+}
+
+#[test]
+fn the_sift_index_row_says_none_on_a_node_with_no_index() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx) = settled(&mut state);
+    let texts = index_row_texts(&mut panel, &ctx, &mut state);
+    assert!(
+        texts.iter().any(|t| t == "SIFT Index"),
+        "the row is not drawn: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "none"),
+        "the row does not say there is no index: {texts:?}"
+    );
+}
+
+#[test]
+fn the_sift_index_row_counts_the_descriptors_of_a_current_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = indexed(dir.path());
+    let descriptors = state.sift_index(id).expect("built").feature_count();
+    let (mut panel, ctx) = settled(&mut state);
+    let texts = index_row_texts(&mut panel, &ctx, &mut state);
+    let expected = format!("{descriptors} descriptors");
+    assert!(
+        texts.contains(&expected),
+        "the row does not say {expected:?}: {texts:?}"
+    );
+}
+
+#[test]
+fn the_sift_index_row_says_stale_when_the_index_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = indexed(dir.path());
+    // One image's features extracted again after the build.
+    {
+        let recon = state.node(id).expect("loaded").recon();
+        crate::sift_index::tests::write_sift(
+            &recon.sift_path_for_image(2),
+            &recon.image_table.images[2].name,
+            &vec![vec![5u8; 128]; 3],
+            &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+        );
+    }
+    let path = state.sift_index(id).expect("built").path.clone();
+    state.open_sift_index(id, Some(path)).expect("it opens");
+
+    let (mut panel, ctx) = settled(&mut state);
+    let texts = index_row_texts(&mut panel, &ctx, &mut state);
+    assert!(
+        texts.iter().any(|t| t == "stale"),
+        "the row does not say the index is out of date: {texts:?}"
+    );
+}
+
+/// The row's menu carries the three ways to give a node an index or take one
+/// away, and the build reads *Rebuild* once there is one.
+#[test]
+fn the_sift_index_row_s_menu_offers_the_build_the_open_and_the_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = indexed(dir.path());
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "sift_index"));
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, INDEX_ROW_WIDTH);
+    for entry in [
+        super::menus::CLOSE_SIFT_INDEX,
+        "Open...",
+        super::REBUILD_SIFT_INDEX,
+    ] {
+        assert!(
+            texts.iter().any(|t| t == entry),
+            "{entry} is not in the row's menu: {texts:?}"
+        );
+    }
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "close_sift_index"));
+    assert_eq!(response.close_sift_index, Some(id));
+}
+
+/// On a node with no index the same entry reads *Build*, and choosing it asks
+/// the dock for one.
+#[test]
+fn the_sift_index_row_s_menu_builds_a_first_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = crate::sift_index::tests::state_in(dir.path());
+    crate::sift_index::tests::with_sift_files(&state, id, [900.0, 500.0]);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "sift_index"));
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, INDEX_ROW_WIDTH);
+    assert!(
+        texts.iter().any(|t| t == super::BUILD_SIFT_INDEX),
+        "the build entry is not in the row's menu: {texts:?}"
+    );
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_index"));
+    assert_eq!(response.build_sift_index, Some(id));
+}
+
+/// The reconstruction row's own menu carries the build too, above *Convert to
+/// Embedded Patches*: it is where a person looks first.
+#[test]
+fn the_reconstruction_row_s_menu_offers_the_build_above_the_conversion() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = crate::sift_index::tests::state_in(dir.path());
+    crate::sift_index::tests::with_sift_files(&state, id, [900.0, 500.0]);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let build = panel
+        .hit_rect(row_id(id, "build_sift_index"))
+        .expect("the build entry was not drawn on the reconstruction row's menu");
+    let convert = panel
+        .hit_rect(row_id(id, "to_embedded_patches"))
+        .expect("the conversion entry was not drawn");
+    assert!(
+        build.min.y < convert.min.y,
+        "the build sits below the conversion: {build:?} against {convert:?}"
+    );
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_index"));
+    assert_eq!(response.build_sift_index, Some(id));
+}
+
+/// A node that has never been saved has nowhere to put an index, and both
+/// menus say which thing to do about it rather than offering a build that
+/// would fail.
+#[test]
+fn an_unsaved_node_s_build_entry_is_greyed_with_the_save_first_sentence() {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "sift_index"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_index"));
+    assert_eq!(
+        response.build_sift_index, None,
+        "the entry was live on a node with nowhere to write"
+    );
+    let why = state
+        .build_sift_index_refusal(id)
+        .expect("nowhere to write it");
+    assert!(why.starts_with("Save demo first"), "{why}");
+}

@@ -1456,7 +1456,7 @@ fn build_catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "search_bench_track_descriptors",
-            description: "Ask the node's descriptor index which OTHER photographs hold the patch \
+            description: "Ask the node's SIFT index which OTHER photographs hold the patch \
                           around one observation of a bench track, and add each as a candidate. \
                           It is a constellation query, not a lookup of one descriptor: the \
                           detected keypoints within radius_px of the observation are looked up in \
@@ -1466,9 +1466,10 @@ fn build_catalog() -> Vec<ToolSpec> {
                           new candidate takes, so it arrives where and at the size the warp says \
                           the patch is — evaluate_bench_track is what then scores it. An image the \
                           track already has an observation in is left alone whatever its verdict, \
-                          and so is the searched image itself. Needs an index: open_descriptor_index \
-                          or build_descriptor_index first, and get_bench reports whether one is \
-                          open. Runs on a worker thread and answers as evaluate_bench_track does.",
+                          and so is the searched image itself. Needs a CURRENT index: \
+                          build_sift_index or open_sift_index first, and get_bench reports the \
+                          state under sift_index. Runs on a worker thread and answers as \
+                          evaluate_bench_track does.",
             kind: Write,
             schema: object(
                 &[
@@ -1505,17 +1506,19 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "open_descriptor_index",
-            description: "Adopt a .kdf descriptor index for one reconstruction, which is what \
-                          search_bench_track_descriptors queries. Omit path for the default, \
-                          which is index.kdf in the directory the node's .sift files live in. \
-                          The index has to be over THIS reconstruction's images in THIS \
-                          reconstruction's order — a match names a corpus image and the \
-                          candidate it becomes names a reconstruction image — and one that is \
-                          not is refused naming the first image it disagrees on. Nothing about \
-                          the reconstruction or the bench moves, so this pushes no version and \
-                          undo has nothing to take back. The viewer opens the default index on \
-                          its own when the file is there; this is for one somewhere else.",
+            name: "open_sift_index",
+            description: "Adopt a .kdf SIFT index for one reconstruction, which is what \
+                          search_bench_track_descriptors queries. Omit path for the node's own, \
+                          which is <stem>-sift-index.kdf beside its .sfmr file. A file that \
+                          opens is adopted whether or not it fits: get_bench reports state \
+                          current when it is over exactly this reconstruction's images, in this \
+                          reconstruction's order, from the .sift files on disk now, and stale \
+                          with a stale_reason otherwise. Only a current index answers a search, \
+                          because a match names a corpus image and the candidate it becomes \
+                          names a reconstruction image. Nothing about the reconstruction or the \
+                          bench moves, so this pushes no version and undo has nothing to take \
+                          back. The viewer opens the node's own index when the file is there; \
+                          this is for one somewhere else.",
             kind: Write,
             schema: object(
                 &[(
@@ -1523,21 +1526,24 @@ fn build_catalog() -> Vec<ToolSpec> {
                     json!({
                         "type": "string",
                         "description":
-                            "The .kdf to open. Omit for the default path, which get_bench \
-                             reports under descriptor_index.",
+                            "The .kdf to open. Omit for the node's own index path, which \
+                             get_bench reports under sift_index.",
                     }),
                 )],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },
         ToolSpec {
-            name: "build_descriptor_index",
-            description: "Build a descriptor index over every .sift file of one reconstruction, \
-                          write it and open it. The corpus carries one image-table row per image \
-                          of the node, in the node's own order, including images with no .sift \
-                          file, which is what lets a search name node images directly. Omit path \
-                          for the default, beside the .sift files. Refused when no .sift file of \
-                          the node can be found. Reading every descriptor of a capture takes a \
+            name: "build_sift_index",
+            description: "Build a SIFT index over every .sift file of one reconstruction, write \
+                          it beside the node's .sfmr and open it. The corpus carries one \
+                          image-table row per image of the node, in the node's own order, \
+                          including images with no .sift file, which is what lets a search name \
+                          node images directly, and it records each image's .sift content hash \
+                          so a later re-extraction reads as stale. Omit path for \
+                          <stem>-sift-index.kdf beside the .sfmr. Refused when the \
+                          reconstruction has never been saved, and when no .sift file of the \
+                          node can be found. Reading every descriptor of a capture takes a \
                           while, so it runs on a worker thread and answers as \
                           evaluate_bench_track does.",
             kind: Write,
@@ -1547,13 +1553,21 @@ fn build_catalog() -> Vec<ToolSpec> {
                     json!({
                         "type": "string",
                         "description":
-                            "Where to write the .kdf. Omit for the default path, which \
-                             get_bench reports under descriptor_index. An existing file there \
-                             is replaced.",
+                            "Where to write the .kdf, inside the directory holding the .sfmr. \
+                             Omit for the node's own index path, which get_bench reports under \
+                             sift_index. An existing file there is replaced.",
                     }),
                 )],
                 &[("reconstruction_label", edited_label_schema())],
             ),
+        },
+        ToolSpec {
+            name: "close_sift_index",
+            description: "Let go of the SIFT index open beside one reconstruction, leaving the \
+                          file where it is. get_bench then reports state none, and a search is \
+                          refused until one is built or opened again. Refused when none is open.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
             name: "get_background_task",
@@ -2412,13 +2426,16 @@ pub(crate) fn parse(
             radius_px: args.optional_f64("radius_px")?,
             min_inliers: args.optional_usize("min_inliers")?,
         },
-        "open_descriptor_index" => Command::OpenDescriptorIndex {
+        "open_sift_index" => Command::OpenSiftIndex {
             reconstruction_label: args.required_string("reconstruction_label")?,
             path: args.optional_string("path")?,
         },
-        "build_descriptor_index" => Command::BuildDescriptorIndex {
+        "build_sift_index" => Command::BuildSiftIndex {
             reconstruction_label: args.required_string("reconstruction_label")?,
             path: args.optional_string("path")?,
+        },
+        "close_sift_index" => Command::CloseSiftIndex {
+            reconstruction_label: args.required_string("reconstruction_label")?,
         },
         "get_background_task" => Command::GetBackgroundTask,
         "cancel_background_task" => Command::CancelBackgroundTask,

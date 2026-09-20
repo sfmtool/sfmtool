@@ -4,11 +4,13 @@
 //! The Scene Graph's context menus: everything that opens on a right-click and
 //! closes when it is used.
 //!
-//! Two menus, one per row kind. The reconstruction row's
+//! Three menus, one per row kind. The reconstruction row's
 //! ([`node_context_menu`]) carries the whole-node actions (select, zoom to fit,
-//! align, reset transform, tint, convert to embedded patches, close) and the
-//! image row's ([`image_context_menu`]) carries the resection, the camera move
-//! and the image deletion. They are together because a menu is
+//! align, reset transform, tint, build the SIFT index, convert to embedded
+//! patches, close), the SIFT Index row's ([`sift_index_menu`]) carries the
+//! three ways to give a node an index or take one away, and the image row's
+//! ([`image_context_menu`]) carries the resection, the camera move and the
+//! image deletion. They are together because a menu is
 //! the one place in the panel where an item is *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
 //! refusal, and those three read as a set.
@@ -26,7 +28,7 @@ use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, NodeTint, ReconId, SceneNode, TINT_PALETTE};
 
 use super::cameras::{ResectAvailability, MATCHES_DISABLED_HINT};
-use super::{row_id, AlignTarget, TreeOutput};
+use super::{row_id, AlignTarget, SiftIndexRow, TreeOutput};
 
 /// The reconstruction row's context menu.
 ///
@@ -55,6 +57,10 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_retriangulate_entry(ui, node, out);
     show_prune_covered_entry(ui, node, out);
+    // Above the conversion because it is where a person looks first: the
+    // reconstruction row is the row they have in hand when they find a search
+    // greyed, and the SIFT Index row below it offers the same entry.
+    show_build_index_entry(ui, node.id, out);
     show_convert_entry(ui, node, out);
     ui.separator();
     if ui.button("Close").clicked() {
@@ -159,6 +165,69 @@ fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput)
         .clicked()
     {
         out.response.convert_to_embedded_patches = Some(node.id);
+        ui.close();
+    }
+}
+
+/// `Build SIFT Index` / `Rebuild SIFT Index`: every `.sift` file of the node
+/// indexed into a `.kdf` beside its `.sfmr`.
+///
+/// On both menus that name the index, under one function, so the two cannot
+/// drift apart in what they are called or in when they are live. Greyed rather
+/// than hidden on its own sentence, like every other refusable entry here: an
+/// entry that vanishes reads as one that was never built.
+fn show_build_index_entry(ui: &mut egui::Ui, id: ReconId, out: &mut TreeOutput) {
+    let Some(index) = out.indexes.get(&id) else {
+        return;
+    };
+    let refusal = index.build_refusal.clone();
+    let entry = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(index.build_label()))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Index every .sift file of this reconstruction into a .kdf beside its .sfmr, and \
+             open it. What a bench search queries. Runs on a worker thread.",
+        );
+    if out.hit(row_id(id, "build_sift_index"), entry).clicked() {
+        out.response.build_sift_index = Some(id);
+        ui.close();
+    }
+}
+
+/// What the entry that lets go of an open index is called, in the menu and in
+/// the tests that aim at it.
+pub(crate) const CLOSE_SIFT_INDEX: &str = "Close Index";
+
+/// The SIFT Index row's own menu: the build, a file of the person's choosing,
+/// and letting go of what is open.
+pub(super) fn sift_index_menu(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    index: &SiftIndexRow,
+    out: &mut TreeOutput,
+) {
+    let id = node.id;
+    show_build_index_entry(ui, id, out);
+    let busy = out.busy_refusal(id).map(str::to_string);
+    let open = ui
+        .add_enabled(busy.is_none(), egui::Button::new("Open..."))
+        .on_disabled_hover_text(busy.clone().unwrap_or_default())
+        .on_hover_text(
+            "Search a .kdf of your own choosing. One that is not over this \
+                        reconstruction's images opens all the same, and the row says why it \
+                        will not do.",
+        );
+    if out.hit(row_id(id, "open_sift_index"), open).clicked() {
+        out.response.open_sift_index = Some(id);
+        ui.close();
+    }
+    let close = index.close_refusal.clone().or(busy);
+    let entry = ui
+        .add_enabled(close.is_none(), egui::Button::new(CLOSE_SIFT_INDEX))
+        .on_disabled_hover_text(close.unwrap_or_default())
+        .on_hover_text("Let go of the open index, leaving the file where it is.");
+    if out.hit(row_id(id, "close_sift_index"), entry).clicked() {
+        out.response.close_sift_index = Some(id);
         ui.close();
     }
 }

@@ -23,7 +23,6 @@ mod cli;
 mod close_prompt;
 mod colormap;
 mod context_menu;
-mod descriptor_index;
 mod dock;
 mod document;
 mod edit_history_panel;
@@ -44,6 +43,7 @@ mod resect;
 mod scene;
 mod scene_graph;
 mod scene_renderer;
+mod sift_index;
 mod state;
 #[cfg(test)]
 mod test_support;
