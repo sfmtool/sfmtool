@@ -753,7 +753,7 @@ The operations:
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
 | the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection |
-| `patch frames`, `read keypoints` and `assemble` | `SfmrReconstruction::to_embedded_patches`, one count per image under the read | |
+| `patch frames`, `read keypoints` and `assemble` | `SfmrReconstruction::to_embedded_patches`, with the frame build's own `read feature scales`, `patch spatial index`, `patch sizes`, `finite frames` and `infinity frames` nested under the first of them; a count per image under each `.sift` walk | 15.8 s / 1.5 s / 0.43 s on a 4054-image, 1.07M-point capture |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
 | `localize` and `refine` | the two calls a bench fit makes | |

@@ -12,6 +12,7 @@ use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
 use sfmtool_core::patch::cloud::{PatchCloud, PatchExtent, PatchNormal};
+use sfmtool_core::progress::Progress;
 
 use super::args::{parse_extent, parse_normal};
 use crate::PySfmrReconstruction;
@@ -79,11 +80,15 @@ impl PyPatchCloud {
     ) -> PyResult<Self> {
         let normal = parse_normal(normal, k_neighbors)?;
         let extent = parse_extent(extent, extent_value, pixel_reduce, feature_reduce)?;
+        // Nothing here is listening and nothing can ask this to stop, so the
+        // build reports into the null sink: the Python signature is the same
+        // one it has always had.
         let inner = PatchCloud::from_reconstruction(
             &recon.inner,
             normal,
             extent,
             exclude_points_at_infinity,
+            &Progress::none(),
         )
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
@@ -276,6 +281,7 @@ impl PyPatchCloud {
             normal_policy,
             extent_policy,
             exclude_points_at_infinity,
+            &Progress::none(),
         )
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })

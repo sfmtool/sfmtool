@@ -325,6 +325,7 @@ fn feature_size_without_sift_is_an_error() {
             across: ViewReduce::Median,
         },
         true,
+        &Progress::none(),
     )
     .unwrap_err();
     // Every observation fails for the unreadable-scale reason (no `.sift`); none
@@ -335,7 +336,10 @@ fn feature_size_without_sift_is_an_error() {
         unreadable_scale,
         coincident_with_camera,
         ..
-    } = err;
+    } = err
+    else {
+        panic!("{err} is not a missing-scale refusal")
+    };
     assert!(observations > 0);
     assert_eq!(unreadable_scale, observations);
     assert_eq!(coincident_with_camera, 0);
@@ -345,6 +349,7 @@ fn feature_size_without_sift_is_an_error() {
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.1),
         true,
+        &Progress::none(),
     )
     .expect("Fixed extent needs no sift files");
     assert_eq!(cloud.len(), 12);
@@ -710,8 +715,14 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
         factor: 5.0,
         across: ViewReduce::Median,
     };
-    let from_recon =
-        PatchCloud::from_reconstruction(&recon, PatchNormal::MeanViewing, extent, false).unwrap();
+    let from_recon = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::MeanViewing,
+        extent,
+        false,
+        &Progress::none(),
+    )
+    .unwrap();
 
     let positions: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
     let weights: Vec<f64> = recon.point_set.points.iter().map(|p| p.w).collect();
@@ -735,6 +746,7 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
         PatchNormal::MeanViewing,
         extent,
         false,
+        &Progress::none(),
     )
     .unwrap();
 
@@ -754,8 +766,14 @@ fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
         radius_px: 4.0,
         across: ViewReduce::Min,
     };
-    let from_recon =
-        PatchCloud::from_reconstruction(&recon, PatchNormal::Stored, extent, false).unwrap();
+    let from_recon = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::Stored,
+        extent,
+        false,
+        &Progress::none(),
+    )
+    .unwrap();
 
     let positions: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
     let weights: Vec<f64> = recon.point_set.points.iter().map(|p| p.w).collect();
@@ -785,6 +803,7 @@ fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
         PatchNormal::Stored,
         extent,
         false,
+        &Progress::none(),
     )
     .unwrap();
     assert_clouds_equal(&from_recon, &from_arrays);
@@ -821,6 +840,7 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
             across: ViewReduce::Median,
         },
         false,
+        &Progress::none(),
     )
     .unwrap_err();
     let PatchCloudError::MissingFeatureScale {
@@ -828,7 +848,10 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
         observations,
         unreadable_scale,
         coincident_with_camera,
-    } = err;
+    } = err
+    else {
+        panic!("{err} is not a missing-scale refusal")
+    };
     assert_eq!(point_index, 0);
     assert_eq!(observations, 1);
     assert_eq!(unreadable_scale, 1);
@@ -851,6 +874,7 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
             across: ViewReduce::Median,
         },
         false,
+        &Progress::none(),
     )
     .unwrap();
     assert_eq!(ok.len(), 2);
@@ -888,6 +912,7 @@ fn from_tracks_builds_infinity_tangent_frames() {
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.1),
         false,
+        &Progress::none(),
     )
     .unwrap();
     assert_eq!(cloud.len(), 2);
@@ -912,6 +937,7 @@ fn from_tracks_builds_infinity_tangent_frames() {
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.1),
         true,
+        &Progress::none(),
     )
     .unwrap();
     assert_eq!(finite_only.len(), 1);
@@ -956,6 +982,7 @@ fn from_tracks_pixel_radius_reads_the_view_camera_model() {
             PatchNormal::MeanViewing,
             extent,
             false,
+            &Progress::none(),
         )
         .unwrap()
     };
@@ -1029,6 +1056,7 @@ fn from_tracks_feature_size_reads_the_view_camera_model() {
             PatchNormal::MeanViewing,
             extent,
             false,
+            &Progress::none(),
         )
         .unwrap()
     };
@@ -1282,4 +1310,161 @@ fn from_affine_shape_at_depth_refuses_a_bad_depth_or_shape() {
         .is_none(),
         "a zero shape has no frame"
     );
+}
+
+// ── Reporting and cancellation ──────────────────────────────────────────
+
+/// Every phase a build left, and every fraction it reported, in the order the
+/// sink saw them.
+fn reported_by_a_build(recon: &SfmrReconstruction) -> (Vec<&'static str>, Vec<f32>) {
+    use crate::progress::Event;
+    use std::sync::Mutex;
+
+    let left = Mutex::new(Vec::new());
+    let fractions = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| match event {
+        Event::Leave { phase, .. } => left.lock().unwrap().push(phase),
+        Event::Fraction { of_whole } => fractions.lock().unwrap().push(of_whole),
+        _ => {}
+    };
+    PatchCloud::from_reconstruction(
+        recon,
+        PatchNormal::MeanViewing,
+        PatchExtent::FeatureSize {
+            factor: 5.0,
+            across: ViewReduce::Median,
+        },
+        false,
+        &Progress::to(&sink),
+    )
+    .expect("the fixture has a .sift file per image");
+    (left.into_inner().unwrap(), fractions.into_inner().unwrap())
+}
+
+/// A build names the passes it makes and moves the bar through all of them:
+/// the `.sift` walk is nearly the whole of it, so a bar that only moved once
+/// the frames were built would sit still for the part that takes the time.
+#[test]
+fn a_build_names_its_passes_and_climbs_to_the_end() {
+    let mut recon = SfmrReconstruction::demo(12);
+    let _ = write_demo_sift(&mut recon, "reporting");
+
+    let (left, fractions) = reported_by_a_build(&recon);
+    // No point is at infinity and `MeanViewing` wants no spatial index, so
+    // those two passes leave no row at all.
+    assert_eq!(
+        left,
+        ["read feature scales", "patch sizes", "finite frames"]
+    );
+
+    assert!(!fractions.is_empty(), "a build that said nothing");
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    // Within a float's width of ascending. Exact monotonicity is the
+    // collector's guarantee rather than a kernel's, and the only dips here are
+    // the last rounding bit of one stage's end against the next stage's start.
+    assert!(
+        fractions.windows(2).all(|w| w[1] >= w[0] - 1e-6),
+        "the fractions ran backwards: {fractions:?}"
+    );
+    assert_eq!(
+        fractions.last().copied(),
+        Some(1.0),
+        "a finished build ends at its end"
+    );
+    // The `.sift` walk owns nearly the whole bar, and it reports inside it:
+    // something arrives well before the frames are reached.
+    assert!(
+        fractions.iter().any(|&f| (0.0..0.5).contains(&f)),
+        "nothing was reported while the scales were read: {fractions:?}"
+    );
+}
+
+/// A build that is asked to stop stops, and hands back nothing: a cloud
+/// missing the points that had not been framed is not the cloud anybody asked
+/// for.
+#[test]
+fn a_build_that_is_asked_to_stop_hands_back_nothing() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let positions = vec![Point3::new(0.0, 0.0, 3.0), Point3::new(0.5, 0.0, 3.0)];
+    let weights = vec![1.0, 1.0];
+    let obs_offsets = vec![0usize, 1, 2];
+    let obs_images = vec![0u32, 0];
+    let quats = vec![UnitQuaternion::identity()];
+    let trans = vec![Vector3::zeros()];
+    let cams = vec![pinhole(500.0, 320.0, 240.0, 640, 480)];
+
+    let flag = AtomicBool::new(true);
+    let build = |progress: &Progress<'_>| {
+        PatchCloud::from_tracks(
+            &positions,
+            &weights,
+            None,
+            &obs_offsets,
+            &obs_images,
+            None,
+            &quats,
+            &trans,
+            &cams,
+            PatchNormal::MeanViewing,
+            PatchExtent::Fixed(0.1),
+            false,
+            progress,
+        )
+    };
+    let stopped = build(&Progress::none().cancelled_by(&flag));
+    assert!(
+        matches!(stopped, Err(PatchCloudError::Cancelled)),
+        "a raised flag did not stop the build"
+    );
+
+    // The same flag unset builds the cloud, so what stopped it was the flag
+    // rather than the arguments.
+    flag.store(false, Ordering::Relaxed);
+    assert_eq!(
+        build(&Progress::none().cancelled_by(&flag))
+            .expect("nothing asked it to stop")
+            .len(),
+        2
+    );
+}
+
+/// The `.sift` walk hears a cancel between the images, which is where a read
+/// of one file begins and ends.
+#[test]
+fn a_cancel_between_the_images_stops_the_scale_read() {
+    use crate::progress::Event;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    let mut recon = SfmrReconstruction::demo(12);
+    let _ = write_demo_sift(&mut recon, "cancel");
+
+    let flag = AtomicBool::new(false);
+    let read = Mutex::new(0u64);
+    // Raised by the very count that says one image is behind it, so the next
+    // poll is the loop's own, one iteration later.
+    let sink = |event: Event<'_>| {
+        if let Event::Count { done, unit, .. } = event {
+            if unit == "image" {
+                *read.lock().unwrap() = done;
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+    };
+    let stopped = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::MeanViewing,
+        PatchExtent::default(),
+        false,
+        &Progress::to(&sink).cancelled_by(&flag),
+    );
+    assert!(
+        matches!(stopped, Err(PatchCloudError::Cancelled)),
+        "the walk ran on past the cancel"
+    );
+    assert_eq!(*read.lock().unwrap(), 1);
 }

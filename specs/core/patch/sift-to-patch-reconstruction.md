@@ -53,21 +53,32 @@ It reads a `.sift` file per image -- twice over under the default
 once for the detections and the image hashes -- so its cost grows with the image
 count and it takes a `Progress` like every other kernel that can outlast a
 frame ([operation-progress.md](../../gui/operation-progress.md)). Three stages
-under it, sharing the bar 45/45/10:
+under it, sharing the bar 93/5/2:
 
 | Phase | What it covers | What it notes |
 |---|---|---|
-| `patch frames` | the `PatchCloud::from_reconstruction` build, including the per-image scale read `FeatureSize` needs | the point count |
+| `patch frames` | the `PatchCloud::from_reconstruction` build, whose own passes are named underneath it ([patch-cloud.md](patch-cloud.md), "What a build reports") | the point count |
 | `read keypoints` | one `.sift` per image: the detections, and the `image_file_xxh128` each image's hash is decoded from | the image count, plus one `Count` per image as it goes |
 | `assemble` | the per-observation keypoint column, the output value, and its column validation | the observation count |
 
-**Cancellation is polled between the stages and between the images of the read**,
-which is where a `.sift` read is one call and therefore where a stop can land. A
-cancelled conversion returns `ReconstructionError::Cancelled` and builds nothing:
-the call is a function of its input and writes a new value, so there is no
-half-converted state to leave behind. `&Progress::none()` reports nothing and
-never stops, which is what the PyO3 binding passes: the Python signature is
-unchanged.
+The weights follow the measured division, and it is lopsided because the two
+`.sift` walks do not read the same thing: the frame build's walk decompresses
+each file's affine shapes, where the keypoint read takes the positions and the
+metadata alone. On a 4054-image, 1.07M-point, 16.3M-observation capture the
+three stages are 15.8 s, 1.5 s and 0.43 s with the files in cache, and 47.3 s,
+1.8 s and 0.45 s without. **Every stage reports a fraction**: the walks count
+their images, the passes over the points and the observations report on a
+boundary every two-hundredth of the way through, and the bar therefore moves
+from the first stage to the last rather than standing at zero for the frame
+build and then jumping.
+
+**Cancellation is polled between the stages, between the images of both walks,
+and at those same boundaries within each pass**, so a stop lands within a
+fraction of a percent of the stage it is asked in. A cancelled conversion
+returns `ReconstructionError::Cancelled` and builds nothing: the call is a
+function of its input and writes a new value, so there is no half-converted
+state to leave behind. `&Progress::none()` reports nothing and never stops,
+which is what the PyO3 binding passes: the Python signature is unchanged.
 
 ## Operating contract: surfel ops require `embedded_patches`
 

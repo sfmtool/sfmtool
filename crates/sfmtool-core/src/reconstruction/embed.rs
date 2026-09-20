@@ -17,7 +17,8 @@
 //! It reads a `.sift` file per image, twice over in the default sizing policy,
 //! so it is long enough to report and long enough to want stopping: it takes a
 //! [`Progress`] like every other kernel that can outlast a frame, names three
-//! stages under it, and polls the cancel flag between the images.
+//! stages under it, moves the bar within each of them, and polls the cancel
+//! flag between the images and through the passes over the points.
 
 use ndarray::Array2;
 
@@ -25,7 +26,7 @@ use sfmtool_sift_format::{read_sift_metadata, read_sift_positions};
 
 use super::data::ReconstructionError;
 use super::{ObservationSource, SfmrReconstruction};
-use crate::patch::cloud::{PatchCloud, PatchExtent, PatchNormal};
+use crate::patch::cloud::{PatchCloud, PatchCloudError, PatchExtent, PatchNormal};
 use crate::progress::Progress;
 use crate::progress_note;
 
@@ -54,14 +55,16 @@ impl SfmrReconstruction {
     ///   re-hashing of the image bytes.
     ///
     /// `progress` is where this call names its three stages -- `patch frames`
-    /// (the [`PatchCloud::from_reconstruction`] build), `read keypoints` (one
-    /// count per image over the `.sift` detections and image hashes), and
-    /// `assemble` (the per-observation keypoint column and the validated
-    /// output) -- and it is also how the call is asked to stop: the flag is
-    /// polled between the stages and between the images of the read, and a
-    /// cancelled conversion returns [`ReconstructionError::Cancelled`] with
-    /// nothing built. Pass `&Progress::none()` to report nothing and never
-    /// stop.
+    /// (the [`PatchCloud::from_reconstruction`] build, which names stages of
+    /// its own underneath), `read keypoints` (one count per image over the
+    /// `.sift` detections and image hashes), and `assemble` (the
+    /// per-observation keypoint column and the validated output) -- and it is
+    /// also how the call is asked to stop: the flag is polled between the
+    /// stages, between the images of both `.sift` walks, and at intervals
+    /// through the passes over the points and the observations, and a cancelled
+    /// conversion returns [`ReconstructionError::Cancelled`] with nothing
+    /// built. Every stage reports a fraction, so the bar moves throughout. Pass
+    /// `&Progress::none()` to report nothing and never stop.
     ///
     /// Errors with [`ReconstructionError::Unsupported`] if the reconstruction is
     /// already `embedded_patches` (no `.sift` to copy from) or the patch frame
@@ -110,12 +113,18 @@ impl SfmrReconstruction {
             ObservationSource::EmbeddedPatches { .. } => unreachable!(),
         };
 
-        // The three stages share the bar in proportion to what they cost: the
-        // frame build and the keypoint read each walk every `.sift` file once
-        // (the first for the keypoint scales `FeatureSize` sizes from, the
-        // second for the detections and the image hashes), and the assembly is
-        // a scatter over the observations with no file behind it.
-        let [framing, reading, assembling] = progress.split([0.45, 0.45, 0.10]);
+        // The three stages share the bar in proportion to what they cost, and
+        // the frame build is almost all of it. Both file-walking stages read a
+        // `.sift` per image, but they do not read the same thing: the frame
+        // build's walk decompresses each file's affine shapes for the keypoint
+        // scales `FeatureSize` sizes from, where the keypoint read takes the
+        // positions and the metadata alone. On a 4054-image, 1.07M-point,
+        // 16.3M-observation capture that is 15.8 s of framing against 1.5 s of
+        // reading and 0.43 s of assembly with the files in cache, and 47.3 s
+        // against 1.8 s and 0.45 s without. The weights sit between the two,
+        // since what the cache changes is how much the first stage dominates by
+        // and not which one does.
+        let [framing, reading, assembling] = progress.split([0.93, 0.05, 0.02]);
         progress.check_cancel()?;
 
         // Patch frames from the chosen normal/extent policy — no refinement.
@@ -124,11 +133,14 @@ impl SfmrReconstruction {
         // every point ends up with a real (non-zero) frame.
         let (patch_u, patch_v) = {
             let mut phase = framing.phase("patch frames");
-            let cloud =
-                PatchCloud::from_reconstruction(self, normal, extent, false).map_err(|e| {
-                    ReconstructionError::Unsupported(format!(
+            let cloud = PatchCloud::from_reconstruction(self, normal, extent, false, &phase)
+                .map_err(|e| match e {
+                    // The one failure that is not a refusal: the build was
+                    // asked to stop, which this call reports in its own words.
+                    PatchCloudError::Cancelled => ReconstructionError::Cancelled,
+                    e => ReconstructionError::Unsupported(format!(
                         "to_embedded_patches: building patch frames failed: {e}"
-                    ))
+                    )),
                 })?;
             progress_note!(phase, "{} points", self.point_set.points.len());
             cloud.to_halfvec_arrays(self.point_set.points.len())
@@ -188,7 +200,15 @@ impl SfmrReconstruction {
             Some(inline) => inline.clone(),
             None => {
                 let mut keypoints_xy = Array2::<f32>::zeros((m, 2));
+                // A scatter over sixteen million observations, so the bar moves
+                // and the flag is read on a boundary rather than per row: one
+                // report per `step` is two hundred across the stage.
+                let step = (m / 200).max(1);
                 for (j, obs) in self.point_set.tracks.iter().enumerate() {
+                    if j.is_multiple_of(step) {
+                        assembling.check_cancel()?;
+                        assembling.set_fraction(j as f32 / m.max(1) as f32);
+                    }
                     let img = obs.image_index as usize;
                     let fidx = feature_indexes[j] as usize;
                     let pos = positions_per_image[img].get(fidx).ok_or_else(|| {
@@ -220,6 +240,9 @@ impl SfmrReconstruction {
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;
         progress_note!(assembling, "{m} observations");
+        // The stage is over, and its last boundary was up to `step` rows short
+        // of the end; this is also the operation's own end, so the bar fills.
+        assembling.set_fraction(1.0);
         Ok(out)
     }
 }

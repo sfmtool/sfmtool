@@ -360,10 +360,14 @@ and its LM iterations against the budget, so the bar is measured rather than a
 spinner, and it polls the cancel flag between rounds and between iterations, so
 Cancel is live ([operation-progress.md](operation-progress.md)).
 
-`to_embedded_patches` fills in the phases and the count: three stages --
-`patch frames`, `read keypoints` and `assemble` -- with one count per image
-under the read, so the bar is measured there, and it polls the flag between the
-stages and between the images. A cancelled one is
+`to_embedded_patches` fills in the phases, the count and the fraction: three
+stages -- `patch frames`, `read keypoints` and `assemble`, the frame build's own
+passes nested under the first -- with one count per image under each of its two
+`.sift` walks and a fraction reported every two-hundredth of the way through
+each pass over the points and the observations. Every stage moves the bar, which
+matters because the frame build is over nine tenths of the wait: a conversion
+that reported nothing until the keypoint read would draw the spinner for all of
+it. It polls the flag at each of those same places, and a cancelled one is
 `ReconstructionError::Cancelled`, which the job turns into
 `Finished::Cancelled`.
 

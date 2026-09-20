@@ -13,12 +13,16 @@ use ndarray::Array2;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
+use crate::progress::{Cancelled, Progress};
+use crate::progress_note;
 use crate::reconstruction::SfmrReconstruction;
 use crate::spatial::PointCloud;
 
 /// Errors from [`PatchCloud::from_reconstruction`].
 #[derive(Debug)]
 pub enum PatchCloudError {
+    /// The caller asked the build to stop, and it did, with nothing built.
+    Cancelled,
     /// [`PatchExtent::FeatureSize`] could not derive a world size for point
     /// `point_index` because none of its observations yielded a usable keypoint
     /// scale. The counts break the `observations` down by cause so the message
@@ -45,6 +49,10 @@ pub enum PatchCloudError {
 impl std::fmt::Display for PatchCloudError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PatchCloudError::Cancelled => f.write_str(
+                "building the patch frames was asked to stop before it had an answer, so \
+                 nothing was built",
+            ),
             PatchCloudError::MissingFeatureScale {
                 point_index,
                 observations,
@@ -65,6 +73,12 @@ impl std::fmt::Display for PatchCloudError {
 }
 
 impl std::error::Error for PatchCloudError {}
+
+impl From<Cancelled> for PatchCloudError {
+    fn from(_: Cancelled) -> Self {
+        PatchCloudError::Cancelled
+    }
+}
 
 /// An oriented planar patch (surfel) in world space.
 ///
@@ -593,11 +607,21 @@ impl PatchCloud {
     /// keypoint scale is unreadable in every view, or (finite points only) it
     /// coincides with every observing camera centre so the distance-scaled size
     /// vanishes. The error carries the per-cause breakdown.
+    ///
+    /// `progress` is where this build names its stages and hears that it should
+    /// stop. [`PatchExtent::FeatureSize`] opens `read feature scales` over the
+    /// `.sift` walk and the per-observation scale lookup that follows it, and
+    /// every policy opens the stages [`Self::from_tracks`] names after it. The
+    /// flag is polled between the images of the walk and at intervals through
+    /// each pass over the points, and a build that is asked to stop returns
+    /// [`PatchCloudError::Cancelled`] with nothing built. Pass
+    /// `&Progress::none()` to report nothing and never stop.
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
         exclude_points_at_infinity: bool,
+        progress: &Progress<'_>,
     ) -> Result<Self, PatchCloudError> {
         // Per-point geometry.
         let positions: Vec<Point3<f64>> =
@@ -656,22 +680,50 @@ impl PatchCloud {
         // past 90° off axis at z ≤ 0, where a pinhole `σ·z/f` gated on z > 0 could
         // not size them at all, while a perspective view's own `σ·|z|/f` keeps the
         // `sec θ` magnification of its image plane that a bare range reading drops.
-        let obs_scales: Vec<Option<f64>> = if matches!(extent, PatchExtent::FeatureSize { .. }) {
+        //
+        // That walk is what this call costs whenever it happens at all: on a
+        // 4054-image, 1.07M-point, 16.3M-observation capture it is 14.9 s of a
+        // 15.8 s build, against 0.8 s to size and frame every point. A policy
+        // that reads no scales skips it entirely, so it is given no share of
+        // the bar rather than a share nothing would ever move.
+        let reads_scales = matches!(extent, PatchExtent::FeatureSize { .. });
+        let [scales, framing] = if reads_scales {
+            progress.split([0.95, 0.05])
+        } else {
+            progress.split([0.0, 1.0])
+        };
+
+        let obs_scales: Vec<Option<f64>> = if reads_scales {
+            let n_images = recon.image_table.images.len();
+            let n_obs = recon.point_set.tracks.len();
+            let mut phase = scales.phase("read feature scales");
+            progress_note!(phase, "{n_images} images");
+            // Reading the files is all but the last hundredth of the stage;
+            // turning what was read into one scale per observation is the rest.
+            let [reading, mapping] = phase.split([0.98, 0.02]);
+            let mut img_scales: Vec<Option<Vec<f64>>> = Vec::with_capacity(n_images);
+            for i in 0..n_images {
+                // Between the images rather than inside one file's read: a
+                // `.sift` read is one call, so this is where a cancel lands.
+                reading.check_cancel()?;
+                img_scales.push(read_image_scales(recon, i));
+                reading.count(i as u64 + 1, Some(n_images as u64), "image");
+            }
             let feature_indexes = recon.feature_indexes();
-            let img_scales: Vec<Option<Vec<f64>>> = (0..recon.image_table.images.len())
-                .map(|i| read_image_scales(recon, i))
-                .collect();
-            (0..recon.point_set.tracks.len())
-                .map(|j| {
-                    let img = recon.point_set.tracks[j].image_index as usize;
-                    feature_indexes.map(|f| f[j]).and_then(|feature_index| {
-                        img_scales
-                            .get(img)
-                            .and_then(|s| s.as_ref())
-                            .and_then(|scales| scales.get(feature_index as usize).copied())
-                    })
-                })
-                .collect()
+            let pass = PassProgress::new(&mapping, n_obs);
+            let mut resolved = Vec::with_capacity(n_obs);
+            for j in 0..n_obs {
+                pass.at(j)?;
+                let img = recon.point_set.tracks[j].image_index as usize;
+                resolved.push(feature_indexes.map(|f| f[j]).and_then(|feature_index| {
+                    img_scales
+                        .get(img)
+                        .and_then(|s| s.as_ref())
+                        .and_then(|scales| scales.get(feature_index as usize).copied())
+                }));
+            }
+            pass.done();
+            resolved
         } else {
             Vec::new()
         };
@@ -687,7 +739,7 @@ impl PatchCloud {
             cam_translations: &cam_translations,
             cam_intrinsics: &cam_intrinsics,
         };
-        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
+        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity, &framing)
     }
 
     /// Build a patch cloud from in-memory arrays instead of a reconstruction.
@@ -719,6 +771,16 @@ impl PatchCloud {
     ///   error and its per-cause breakdown are unchanged.
     ///
     /// The resulting patches' `point_indexes` are row indexes into `positions`.
+    ///
+    /// `progress` covers the passes this makes over the arrays: `patch spatial
+    /// index` (built only for [`PatchNormal::Geometric`] and
+    /// [`PatchExtent::RelativeToSpacing`]), `patch sizes` (only for
+    /// [`PatchExtent::FeatureSize`]), `finite frames`, and `infinity frames`
+    /// where any point is at infinity. Each reports within a share
+    /// proportional to what it costs when it runs. The cancel flag is polled at
+    /// intervals through each pass, and a build that is asked to stop returns
+    /// [`PatchCloudError::Cancelled`]. Pass `&Progress::none()` to report
+    /// nothing and never stop.
     #[allow(clippy::too_many_arguments)]
     pub fn from_tracks(
         positions: &[Point3<f64>],
@@ -733,6 +795,7 @@ impl PatchCloud {
         normal: PatchNormal,
         extent: PatchExtent,
         exclude_points_at_infinity: bool,
+        progress: &Progress<'_>,
     ) -> Result<Self, PatchCloudError> {
         // A NaN scale counts as an unreadable scale, mirroring the `.sift` path's
         // "missing scale" so the MissingFeatureScale taxonomy is unchanged.
@@ -754,7 +817,7 @@ impl PatchCloud {
             cam_translations,
             cam_intrinsics,
         };
-        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
+        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity, progress)
     }
 
     /// Serialize to the per-point in-plane half-extent vector arrays
@@ -902,6 +965,7 @@ fn build_patch_cloud(
     normal: PatchNormal,
     extent: PatchExtent,
     exclude_points_at_infinity: bool,
+    progress: &Progress<'_>,
 ) -> Result<PatchCloud, PatchCloudError> {
     let n_points = scene.positions.len();
     let finite: Vec<usize> = (0..n_points).filter(|&i| scene.weights[i] != 0.0).collect();
@@ -918,40 +982,66 @@ fn build_patch_cloud(
     // spacing-relative extent.
     let need_spatial = matches!(normal, PatchNormal::Geometric { .. })
         || matches!(extent, PatchExtent::RelativeToSpacing(_));
-    let cloud = if need_spatial && !finite.is_empty() {
-        let mut flat = Vec::with_capacity(finite.len() * 3);
-        for &i in &finite {
-            let p = scene.positions[i];
-            flat.extend_from_slice(&[p.x, p.y, p.z]);
-        }
-        Some(PointCloud::<f64, 3>::new(&flat, finite.len()))
-    } else {
-        None
-    };
+    // Each pass gets a share of what it costs when it runs, and nothing at all
+    // when the policies do not ask for it, so the bar never waits on a stage
+    // that is not there. Sizing touches every observation where framing touches
+    // every point, which on a 1.07M-point, 16.3M-observation capture is 0.66 s
+    // against 0.15 s. The index is a k-nearest-neighbours pass over every
+    // finite point, which is heavier than either of them wherever a policy asks
+    // for one, so it is weighted well above both rather than from a number
+    // measured on that capture, where no policy wanted it.
+    let [indexing, sizing, framing] = progress.split([
+        if need_spatial { 20.0 } else { 0.0 },
+        if matches!(extent, PatchExtent::FeatureSize { .. }) {
+            4.4
+        } else {
+            0.0
+        },
+        1.0,
+    ]);
 
-    let spacing_half = if let PatchExtent::RelativeToSpacing(factor) = extent {
-        let mut d: Vec<f64> = cloud
-            .as_ref()
-            .map(|c| c.nearest_neighbor_distances())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|x| x.is_finite())
-            .collect();
-        d.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let median = if d.is_empty() { 1.0 } else { d[d.len() / 2] };
-        median * factor
-    } else {
-        0.0
-    };
+    let (spacing_half, geo_k, geo_neighbors) = {
+        // Opened only where there is an index to build: a stage that did not
+        // run is not a row reading zero.
+        let _phase = need_spatial.then(|| indexing.phase("patch spatial index"));
+        indexing.check_cancel()?;
+        let cloud = if need_spatial && !finite.is_empty() {
+            let mut flat = Vec::with_capacity(finite.len() * 3);
+            for &i in &finite {
+                let p = scene.positions[i];
+                flat.extend_from_slice(&[p.x, p.y, p.z]);
+            }
+            Some(PointCloud::<f64, 3>::new(&flat, finite.len()))
+        } else {
+            None
+        };
 
-    let geo_k = match normal {
-        PatchNormal::Geometric { k_neighbors } => k_neighbors,
-        _ => 0,
-    };
-    let geo_neighbors = if geo_k > 0 {
-        cloud.as_ref().map(|c| c.self_nearest_k(geo_k))
-    } else {
-        None
+        let spacing_half = if let PatchExtent::RelativeToSpacing(factor) = extent {
+            let mut d: Vec<f64> = cloud
+                .as_ref()
+                .map(|c| c.nearest_neighbor_distances())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|x| x.is_finite())
+                .collect();
+            d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = if d.is_empty() { 1.0 } else { d[d.len() / 2] };
+            median * factor
+        } else {
+            0.0
+        };
+
+        let geo_k = match normal {
+            PatchNormal::Geometric { k_neighbors } => k_neighbors,
+            _ => 0,
+        };
+        let geo_neighbors = if geo_k > 0 {
+            cloud.as_ref().map(|c| c.self_nearest_k(geo_k))
+        } else {
+            None
+        };
+        indexing.set_fraction(1.0);
+        (spacing_half, geo_k, geo_neighbors)
     };
 
     // FeatureSize: per-finite-point world half-size from the observing keypoints'
@@ -959,8 +1049,12 @@ fn build_patch_cloud(
     // no readable scale in any view — or coincident with every camera centre
     // (`‖p_cam‖ ≈ 0`) — is an error.
     let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
+        let mut phase = sizing.phase("patch sizes");
+        progress_note!(phase, "{} points", finite.len());
+        let pass = PassProgress::new(&sizing, finite.len());
         let mut halves = vec![f64::NAN; finite.len()];
         for (fi, &p) in finite.iter().enumerate() {
+            pass.at(fi)?;
             let center = scene.positions[p];
             let start = scene.obs_offsets[p];
             let end = scene.obs_offsets[p + 1];
@@ -1001,15 +1095,27 @@ fn build_patch_cloud(
             }
             halves[fi] = factor * reduce(&mut sizes, across);
         }
+        pass.done();
         halves
     } else {
         Vec::new()
     };
 
+    // The two framing passes share the last stage in proportion to how many
+    // points each of them frames, so a cloud of one kind alone leaves the other
+    // no share to sit in.
+    let n_infinity = n_points - finite.len();
+    let [finite_framing, infinity_framing] =
+        framing.split([finite.len() as f32, n_infinity as f32]);
+
     let mut patches = Vec::with_capacity(finite.len());
     let mut point_indexes = Vec::with_capacity(finite.len());
 
+    let mut phase = finite_framing.phase("finite frames");
+    progress_note!(phase, "{} points", finite.len());
+    let pass = PassProgress::new(&finite_framing, finite.len());
     for (fi, &p) in finite.iter().enumerate() {
+        pass.at(fi)?;
         let center = scene.positions[p];
         let start = scene.obs_offsets[p];
         let end = scene.obs_offsets[p + 1];
@@ -1086,13 +1192,21 @@ fn build_patch_cloud(
         ));
         point_indexes.push(p as u32);
     }
+    pass.done();
+    drop(phase);
 
     let mut cloud_out = PatchCloud {
         patches,
         point_indexes,
     };
     if !exclude_points_at_infinity {
-        push_infinity_patches(&mut cloud_out, scene, extent, spacing_half)?;
+        push_infinity_patches(
+            &mut cloud_out,
+            scene,
+            extent,
+            spacing_half,
+            &infinity_framing,
+        )?;
     }
     Ok(cloud_out)
 }
@@ -1125,6 +1239,7 @@ fn push_infinity_patches(
     scene: &PatchScene<'_>,
     extent: PatchExtent,
     spacing_half: f64,
+    progress: &Progress<'_>,
 ) -> Result<(), PatchCloudError> {
     let infinity: Vec<usize> = (0..scene.positions.len())
         .filter(|&i| scene.weights[i] == 0.0)
@@ -1132,9 +1247,13 @@ fn push_infinity_patches(
     if infinity.is_empty() {
         return Ok(());
     }
+    let mut phase = progress.phase("infinity frames");
+    progress_note!(phase, "{} points", infinity.len());
+    let pass = PassProgress::new(progress, infinity.len());
     cloud.patches.reserve(infinity.len());
     cloud.point_indexes.reserve(infinity.len());
-    for &p in &infinity {
+    for (ii, &p) in infinity.iter().enumerate() {
+        pass.at(ii)?;
         let dir = scene.positions[p];
         let start = scene.obs_offsets[p];
         let end = scene.obs_offsets[p + 1];
@@ -1197,7 +1316,66 @@ fn push_infinity_patches(
         ));
         cloud.point_indexes.push(p as u32);
     }
+    pass.done();
     Ok(())
+}
+
+/// How many times a pass over the points or the observations says where it has
+/// got to, at most.
+///
+/// The unit of progress is one point, of which a large capture has a million
+/// and more; a report apiece would be a million events through the caller's
+/// sink, and a cancel poll apiece a million atomic loads. So a pass reports
+/// only where its index crosses a boundary, and asks whether to stop at the
+/// same boundaries: a pass half a second long then answers a Cancel within a
+/// couple of milliseconds, which is sooner than the button can be released.
+const REPORTS_PER_PASS: usize = 200;
+
+/// A serial pass over the points, reporting at most [`REPORTS_PER_PASS`] times
+/// within the range it was given.
+///
+/// One per pass rather than one shared counter, which is what
+/// `KdForestU8::build` needs and this does not: these loops are serial, so the
+/// index *is* the count, and nothing can arrive out of order for a collector to
+/// put back in order.
+struct PassProgress<'p, 'a> {
+    progress: &'p Progress<'a>,
+    /// What the index runs up to, floored at 1 so an empty pass divides.
+    total: usize,
+    /// How many items pass between two reports.
+    step: usize,
+}
+
+impl<'p, 'a> PassProgress<'p, 'a> {
+    /// The reporter for a pass over `total` items.
+    fn new(progress: &'p Progress<'a>, total: usize) -> Self {
+        Self {
+            progress,
+            total: total.max(1),
+            step: (total / REPORTS_PER_PASS).max(1),
+        }
+    }
+
+    /// Entering item `index`, counted from 0. One remainder off a boundary, and
+    /// a report plus a cancel poll on one.
+    ///
+    /// # Errors
+    ///
+    /// [`Cancelled`] when the caller has asked the build to stop.
+    fn at(&self, index: usize) -> Result<(), Cancelled> {
+        if !index.is_multiple_of(self.step) {
+            return Ok(());
+        }
+        self.progress.check_cancel()?;
+        self.progress.set_fraction(index as f32 / self.total as f32);
+        Ok(())
+    }
+
+    /// The pass is over, so its range is full. Said explicitly because the last
+    /// boundary is up to `step` items short of the end.
+    fn done(&self) {
+        self.progress.set_fraction(1.0);
+    }
 }
 
 /// How to choose each patch's surface normal in [`PatchCloud::from_reconstruction`].

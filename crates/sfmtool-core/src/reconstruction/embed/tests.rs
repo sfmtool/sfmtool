@@ -71,8 +71,8 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
     recon
 }
 
-/// The conversion names its three stages, in order, and says how much each one
-/// covered.
+/// The conversion names its three stages, in order, with the frame builder's
+/// own passes under the first of them, and says how much each one covered.
 #[test]
 fn the_conversion_names_its_stages() {
     let dir = tempfile::tempdir().unwrap();
@@ -97,14 +97,31 @@ fn the_conversion_names_its_stages() {
 
     let left = left.lock().unwrap();
     let names: Vec<&str> = left.iter().map(|(phase, _)| *phase).collect();
-    assert_eq!(names, ["patch frames", "read keypoints", "assemble"]);
-    assert_eq!(left[0].1.as_deref(), Some("12 points"));
-    assert_eq!(left[1].1.as_deref(), Some("8 images"));
-    assert_eq!(left[2].1.as_deref(), Some("24 observations"));
-    // One count per image, in order, against the total the caller knows.
+    // A parent closes after everything it contained, so the three passes the
+    // frame build makes come out before the stage they sit inside.
+    assert_eq!(
+        names,
+        [
+            "read feature scales",
+            "patch sizes",
+            "finite frames",
+            "patch frames",
+            "read keypoints",
+            "assemble",
+        ]
+    );
+    assert_eq!(left[0].1.as_deref(), Some("8 images"));
+    assert_eq!(left[1].1.as_deref(), Some("12 points"));
+    assert_eq!(left[2].1.as_deref(), Some("12 points"));
+    assert_eq!(left[3].1.as_deref(), Some("12 points"));
+    assert_eq!(left[4].1.as_deref(), Some("8 images"));
+    assert_eq!(left[5].1.as_deref(), Some("24 observations"));
+    // One count per image, in order, against the total the caller knows: once
+    // for the scale walk the frames are sized from, once for the keypoint read.
+    let per_image: Vec<_> = (1..=8).map(|i| (i, Some(8), "image")).collect();
     assert_eq!(
         *images.lock().unwrap(),
-        (1..=8).map(|i| (i, Some(8), "image")).collect::<Vec<_>>()
+        [per_image.clone(), per_image].concat()
     );
 
     assert_eq!(embedded.metadata.feature_source, "embedded_patches");
@@ -118,8 +135,9 @@ fn the_conversion_names_its_stages() {
     assert_eq!(keypoints[[0, 0]], 100.0);
 }
 
-/// Cancelled after the first image, it stops with [`ReconstructionError::Cancelled`]
-/// and leaves the reconstruction it was reading alone.
+/// Cancelled after the first image of the first `.sift` walk, it stops with
+/// [`ReconstructionError::Cancelled`] and leaves the reconstruction it was
+/// reading alone.
 #[test]
 fn a_cancel_between_the_images_stops_the_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -184,5 +202,68 @@ fn a_missing_sift_file_is_refused_while_the_frames_are_built() {
     assert!(
         error.to_string().contains("building patch frames failed"),
         "{error}"
+    );
+}
+
+/// The bar moves from the first stage to the last. The frame build is the
+/// expensive one and it owns almost the whole range, so a conversion that
+/// reported nothing until the keypoint read would sit at zero for as long as
+/// the work took.
+#[test]
+fn the_bar_moves_through_every_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let recon = fixture(&dir);
+
+    // The fractions, and where the `read keypoints` stage opened among them, so
+    // that "something was reported while the frames were built" is a statement
+    // about the stream rather than about a number chosen here.
+    let fractions = Mutex::new(Vec::new());
+    let before_the_read = Mutex::new(None);
+    let sink = |event: Event<'_>| match event {
+        Event::Fraction { of_whole } => fractions.lock().unwrap().push(of_whole),
+        Event::Enter {
+            phase: "read keypoints",
+            ..
+        } => {
+            *before_the_read.lock().unwrap() = Some(fractions.lock().unwrap().len());
+        }
+        _ => {}
+    };
+    recon
+        .to_embedded_patches(
+            PatchNormal::MeanViewing,
+            PatchExtent::default(),
+            &Progress::to(&sink),
+        )
+        .expect("the fixture has a .sift file per image");
+
+    let fractions = fractions.into_inner().unwrap();
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    // Within a float's width of ascending. Exact monotonicity is the
+    // collector's guarantee rather than a kernel's, and the only dips here are
+    // the last rounding bit of one stage's end against the next stage's start.
+    assert!(
+        fractions.windows(2).all(|w| w[1] >= w[0] - 1e-6),
+        "the fractions ran backwards: {fractions:?}"
+    );
+    assert_eq!(
+        fractions.last().copied(),
+        Some(1.0),
+        "a finished conversion ends at its end"
+    );
+    let framing = before_the_read
+        .into_inner()
+        .unwrap()
+        .expect("the keypoint read opened");
+    assert!(
+        framing > 0,
+        "the frame build reported nothing before the keypoint read began"
+    );
+    assert!(
+        fractions[..framing].iter().any(|&f| f > 0.0),
+        "the frame build's share never moved: {fractions:?}"
     );
 }

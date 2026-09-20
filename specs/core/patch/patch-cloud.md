@@ -270,11 +270,16 @@ impl PatchCloud {
     /// needed by an operation that scatters per-point results back and must leave
     /// infinity points untouched (normal refinement's normal write-back), or that
     /// wants the historical finite-only behavior (e.g. the strips viz).
+    ///
+    /// `progress` is where the build names its passes, moves the bar and hears
+    /// that it should stop; see "What a build reports" below. A caller with
+    /// nothing to report passes `&Progress::none()`.
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
         exclude_points_at_infinity: bool,
+        progress: &Progress<'_>,
     ) -> Result<Self, PatchCloudError>;
 }
 
@@ -337,6 +342,47 @@ pub enum ViewReduce { Min, Max, Median, Mean }
 
 `SfmrReconstruction` exposes `positions`, `normals`, cameras and poses, so
 `from_reconstruction` is the bridge from a solved model to a patch cloud.
+
+### What a build reports
+
+A build over a million points is minutes of a viewer's wait, so it takes a
+`Progress` ([operation-progress.md](../../gui/operation-progress.md)) and names
+each pass it makes as a phase. A pass that the chosen policies do not ask for
+opens no phase and takes no share of the bar, so the bar never waits on a stage
+that is not there:
+
+| Phase | When it runs | What it covers | What it notes |
+|---|---|---|---|
+| `read feature scales` | `FeatureSize` only, and only from `from_reconstruction` | the `.sift` walk, one file per image, and the per-observation scale lookup that follows it | the image count, plus one `Count` per image |
+| `patch spatial index` | `Geometric` normals or `RelativeToSpacing` extent | the `PointCloud` build, the nearest-neighbour spacing and the k-nearest-neighbour lists | |
+| `patch sizes` | `FeatureSize` only | the per-finite-point world half-size, reduced across the observing views | the finite point count |
+| `finite frames` | always | one surfel frame per finite point | the finite point count |
+| `infinity frames` | any point at infinity, with `exclude_points_at_infinity = false` | one tangent-sphere frame per point at infinity | the infinity point count |
+
+The shares follow what each pass costs when it runs. The `.sift` walk dominates
+wherever it happens at all: on a 4054-image, 1.07M-point, 16.3M-observation
+capture it is 14.9 s of a 15.8 s build, against 0.66 s of sizing and 0.15 s of
+framing. The spatial index is a k-nearest-neighbour pass over every finite point
+and is weighted above both of those.
+
+**A pass reports on a boundary rather than per point.** The unit of progress is
+one point, of which a large capture has a million and more, and a report apiece
+would be a million events through the caller's sink; so each pass divides itself
+into two hundred boundaries and reports its fraction at those, ending with its
+own range full. The `.sift` walk is the exception and counts per image, because
+an image is already a coarse enough unit and the count is worth reading in
+words.
+
+**Cancellation is polled at those same boundaries**, and between the images of
+the walk, where one file's read is one call. A build that is asked to stop
+returns `PatchCloudError::Cancelled` with nothing built; `to_embedded_patches`
+turns that into `ReconstructionError::Cancelled` rather than into a refusal, and
+every other failure into `Unsupported`.
+
+`from_tracks` takes the same parameter and opens the same phases bar
+`read feature scales`, which has no files to walk. `&Progress::none()` reports
+nothing and never stops, which is what both PyO3 bindings pass; the Python
+signatures are unchanged.
 
 ### Back-projecting a pixel radius
 
@@ -568,6 +614,11 @@ cloud = PatchCloud.from_tracks(
     # parameters as from_reconstruction, with the same defaults ...
 )
 ```
+
+The core entry point takes a trailing `progress: &Progress<'_>` as
+`from_reconstruction` does, and opens the same phases bar `read feature scales`
+(see "What a build reports"). The binding passes `&Progress::none()`, so the
+Python signature above is the whole of it.
 
 Semantics match `from_reconstruction` exactly, sourced from the arrays:
 

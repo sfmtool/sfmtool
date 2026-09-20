@@ -1199,6 +1199,7 @@ fn batch_with_all_none_keypoints_matches_unanchored() {
 #[test]
 fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
     use crate::patch::cloud::{PatchExtent, PatchNormal};
+    use crate::progress::Progress;
 
     let recon = crate::reconstruction::SfmrReconstruction::demo(6);
     let cloud = PatchCloud::from_reconstruction(
@@ -1206,6 +1207,7 @@ fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.05),
         true,
+        &Progress::none(),
     )
     .unwrap();
     let tv = track_views_from_reconstruction(&recon, &cloud);
