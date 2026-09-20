@@ -513,6 +513,9 @@ SIMD sitting inside the policy that calls it**
   (1105) cover scalar/AVX2 equivalence.
 
 **`keypoint_localize.rs`: the subdirectory split landed, the tail block did not**
+> _Status (2026-09-20): Done — extracted the tail-registration block, seed-offset
+> helpers and result finalization into `keypoint_localize/tail.rs`, preserving the
+> historical `keypoint_grid_offset` public path._
 > _Partially resolved, and the file moved `camera/` → `patch/`. It gained five
 > submodules (`basis.rs` 111, `kernels.rs` 460, `params.rs` 224, `prof.rs` 265,
 > `search.rs` 707) — and still grew 1483 → **1633**._
