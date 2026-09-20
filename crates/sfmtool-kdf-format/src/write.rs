@@ -583,6 +583,11 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 .compression_method(zip::CompressionMethod::Stored)
                 .large_file(true),
         )?;
+        // One compression context for every block. A block is a couple of KiB
+        // and a capture has hundreds of thousands of them, so a context per
+        // block (`zstd::encode_all`) spends the write allocating and clearing
+        // match tables sized for a stream of unknown length.
+        let mut compressor = zstd::bulk::Compressor::new(options.compression_level)?;
         let mut stored = 0u64;
         let mut offsets = vec![0u64];
         for ids in order.chunks(q) {
@@ -592,7 +597,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 block.extend_from_slice(&data.vectors[base..base + data.dimension]);
             }
             let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
-            let frame = zstd::encode_all(raw, options.compression_level)?;
+            let frame = compressor.compress(raw)?;
             zip.write_all(&frame)?;
             stored += frame.len() as u64;
             offsets.push(stored);
@@ -621,7 +626,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 let block: Vec<FeatureGeometry> =
                     ids.iter().map(|&id| src.geometry[id as usize]).collect();
                 let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
-                let frame = zstd::encode_all(raw, options.compression_level)?;
+                let frame = compressor.compress(raw)?;
                 zip.write_all(&frame)?;
                 stored += frame.len() as u64;
                 offsets.push(stored);

@@ -568,8 +568,12 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
     let mut feature_tool_hashes = vec![[0u8; 16]; images];
     let mut sift_content_hashes = vec![[0u8; 16]; images];
     let mut dimension = 0usize;
+    // How the time divides on a 370-image, 3M-descriptor capture: the write
+    // is about half, and the read and the forest share the rest. Only the
+    // read reports within its share, so the bar steps at the other two.
+    let [read, forest_share, write] = progress.split([0.25, 0.25, 0.5]);
     {
-        let mut phase = progress.phase("read descriptors");
+        let mut phase = read.phase("read descriptors");
         for (index, (image, sift_path)) in sources.iter().enumerate() {
             phase.set_fraction(index as f32 / sources.len() as f32);
             let data = match sfmtool_sift_format::read_sift_partial(sift_path, usize::MAX) {
@@ -631,7 +635,7 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
 
     let count = origins.len();
     let forest = {
-        let _phase = progress.phase("build forest");
+        let _phase = forest_share.phase("build forest");
         KdForestU8::build(&descriptors, count, dimension, KdForestParams::default())
     };
 
@@ -644,7 +648,7 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         geometry,
     };
     {
-        let _phase = progress.phase("write index");
+        let _phase = write.phase("write index");
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return Finished::Failed(format!("Cannot create {}: {e}", parent.display()));
