@@ -168,19 +168,46 @@ sentence would report this one instead
 ## Building one
 
 *Build* is a background task over every `.sift` file the node's images resolve
-to, reporting the phases `read descriptors`, `build forest` and `write index`.
-It writes the node's index path, replacing what is there, and opens what it
-wrote.
+to, reporting the phases `read descriptors`, `build forest` and `write index`,
+with `count features` and `read features` under the first of them. It writes the
+node's index path, replacing what is there, and opens what it wrote.
 
-**All three phases report, and all three stop.** The three are roughly a
-quarter, a quarter and a half of the time on a 370-image capture, and each moves
-the bar within its own share: the read per image, the forest per leaf placed
-across its trees, and the write per batch of blocks weighted by where the
-write's own time goes ([`../formats/kdf-file-format.md`](../formats/kdf-file-format.md)).
+**All three phases report, and all three stop.** The three are a sixteenth, nine
+sixteenths and six sixteenths of the time, which is what both a 370-image and a
+4054-image capture divide into to within a sixteenth, and each moves the bar
+within its own share: the read per image, the forest per leaf placed across its
+trees, and the write per batch of blocks weighted by where the write's own time
+goes ([`../formats/kdf-file-format.md`](../formats/kdf-file-format.md)).
 Per leaf rather than per tree, because the trees are built in parallel and four
 of them are four steps that all land at the end. The same three places are where
 the build reads the cancel flag, so *Cancel* stops it within a block rather than
 at the end of a phase ([`background-tasks.md`](background-tasks.md)).
+
+**The files are read in parallel, in two passes, and the corpus is built
+exactly once.** A `.sift` read is an open, a seek and a zstd expand with nothing
+shared between two of them, so the files go onto the same pool the forest build
+and the write use; on a 4054-image, 40.6M-descriptor capture that is 4.4 seconds
+of reading rather than 22. What the workers cannot do is append, because a
+corpus row's place is its image's place: the first pass therefore reads each
+file's metadata, which says how many features it holds without expanding one,
+and the counts give every image the offset of its own stretch of the corpus. The
+second pass expands straight into that stretch, so the files come back in
+whatever order the workers finish and every row still lands where image order
+puts it. **Sizing the buffer once is also what keeps the peak down**: 40.6M
+descriptors are 5.2 GB, and a buffer grown by appending holds the old and the
+new copy at every doubling. Only the descriptors, the keypoint centres, the
+affine shapes and the content hashes are expanded -- the thumbnail every `.sift`
+also carries is left compressed, which takes a sixth off the read before any of
+it is parallel
+([`../formats/sift-file-format.md`](../formats/sift-file-format.md)).
+
+The cancel flag is read in front of each file in both passes, so a stopping
+build finishes at most one file per worker and hands back nothing. A file that
+cannot be read fails the build naming it, and when several cannot, the one named
+is the first in **image** order rather than the first a worker reached, so the
+same capture fails the same way twice. The corpus buffer is let go of as soon as
+the forest holds its own copy, which is before the write, the longest of the
+three stages.
 
 **A build writes straight at the index path and replaces what is there.** The
 writer is asked for that replacement by name

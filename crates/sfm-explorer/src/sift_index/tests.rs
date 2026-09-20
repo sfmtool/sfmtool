@@ -702,6 +702,175 @@ fn closing_lets_go_of_the_index_and_leaves_the_file() {
     assert_eq!(state.sift_index_state(id), SiftIndexState::None);
 }
 
+// ── What the read makes of the files ────────────────────────────────────
+
+/// The corpus is the corpus of one thread, whatever order the workers read the
+/// files in.
+///
+/// Asserted over the arrays rather than over the file, because they are what
+/// the order could disturb: the rows, the origins that name which image and
+/// which feature each row is, the geometry beside them, and the per-image
+/// hashes, all of which a misplaced image would move.
+#[test]
+fn the_parallel_read_lands_every_row_where_one_thread_puts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+    let recon = state.node(id).expect("loaded").recon();
+    let sources = super::readable_sift_files(recon);
+    let images = recon.image_table.images.len();
+
+    let many = read_corpus_of(&sources, images);
+    let one = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("a pool of one")
+        .install(|| read_corpus_of(&sources, images));
+
+    assert_eq!(many.descriptors, one.descriptors);
+    assert_eq!(many.origins, one.origins);
+    assert_eq!(many.geometry, one.geometry);
+    assert_eq!(many.feature_tool_hashes, one.feature_tool_hashes);
+    assert_eq!(many.sift_content_hashes, one.sift_content_hashes);
+    // And it is the corpus the node describes: a row per feature of every image
+    // that has a `.sift` file, in image order.
+    assert_eq!(
+        many.descriptors.len(),
+        many.origins.len() * sfmtool_sift_format::DESCRIPTOR_DIM
+    );
+    let mut expected: Vec<u32> = Vec::new();
+    for (image, path) in &sources {
+        let count = sfmtool_sift_format::read_sift_metadata(path)
+            .expect("the fixture's files")
+            .1
+            .feature_count;
+        expected.extend(std::iter::repeat_n(*image, count as usize));
+    }
+    let read: Vec<u32> = many.origins.iter().map(|o| o.image_index).collect();
+    assert_eq!(read, expected);
+}
+
+/// The whole build is the build of one thread, down to the bytes of the file.
+#[test]
+fn a_build_on_one_thread_writes_the_same_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+
+    let many = dir.path().join("many.kdf");
+    let job = state
+        .build_sift_index_job(id, Some(many.clone()))
+        .expect("a node with .sift files can be indexed");
+    assert!(matches!(job(&Progress::none()), Finished::SiftIndex { .. }));
+
+    let one = dir.path().join("one.kdf");
+    let job = state
+        .build_sift_index_job(id, Some(one.clone()))
+        .expect("a node with .sift files can be indexed");
+    let built = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("a pool of one")
+        .install(|| job(&Progress::none()));
+    assert!(matches!(built, Finished::SiftIndex { .. }));
+
+    assert_eq!(
+        std::fs::read(&many).expect("written"),
+        std::fs::read(&one).expect("written"),
+        "the index a pool built is the index one thread built"
+    );
+}
+
+/// A cancel during the read stops it where it is and hands back nothing.
+///
+/// The flag goes up on the first image the second pass reports, which is inside
+/// the parallel read rather than before it: what the workers still holding a
+/// file do with it is the question, and the answer is that the build ends as
+/// cancelled and writes no file.
+#[test]
+fn a_cancel_during_the_read_stops_it_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+    let job = state
+        .build_sift_index_job(id, None)
+        .expect("a node with .sift files can be indexed");
+
+    let flag = AtomicBool::new(false);
+    let reading = AtomicBool::new(false);
+    let counted = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| match event {
+        Event::Enter {
+            phase: "read features",
+            ..
+        } => {
+            reading.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Event::Count { done, unit, .. } if reading.load(std::sync::atomic::Ordering::Relaxed) => {
+            counted.lock().unwrap().push((done, unit));
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        _ => {}
+    };
+    let finished = job(&Progress::to(&sink).cancelled_by(&flag));
+
+    assert!(
+        matches!(finished, Finished::Cancelled),
+        "the build did not stop"
+    );
+    assert!(
+        !index_of(dir.path()).exists(),
+        "a cancelled build wrote an index"
+    );
+    let counted = counted.into_inner().unwrap();
+    assert!(
+        !counted.is_empty() && counted.iter().all(|(_, unit)| *unit == "image"),
+        "the read counts the images it has done: {counted:?}"
+    );
+}
+
+/// Two unreadable files name the first of them in image order, every time.
+///
+/// The workers reach them in whatever order they are handed the files, so the
+/// message a build fails with would be whichever one lost the race if the
+/// outcomes were not put back in image order before one is picked.
+#[test]
+fn an_unreadable_file_is_named_and_it_is_the_first_of_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+    let (first, second) = {
+        let recon = state.node(id).expect("loaded").recon();
+        (recon.sift_path_for_image(2), recon.sift_path_for_image(5))
+    };
+    // Present, so the build takes them as sources, and not a ZIP archive.
+    for path in [&first, &second] {
+        std::fs::write(path, b"not a .sift file").unwrap();
+    }
+
+    for _ in 0..8 {
+        let job = state
+            .build_sift_index_job(id, None)
+            .expect("a node with .sift files can be indexed");
+        let Finished::Failed(why) = job(&Progress::none()) else {
+            panic!("a build over an unreadable file did not fail");
+        };
+        assert!(
+            why.starts_with(&format!("Cannot read {}", first.display())),
+            "{why}"
+        );
+        assert!(!why.contains(&second.display().to_string()), "{why}");
+    }
+    assert!(!index_of(dir.path()).exists(), "nothing was written");
+}
+
+/// The read of a corpus, with nothing listening.
+fn read_corpus_of(sources: &[(u32, PathBuf)], images: usize) -> super::Corpus {
+    super::read_corpus(sources, images, &Progress::none())
+        .ok()
+        .expect("a corpus")
+}
+
 // ── What the build reports, and what a cancel leaves ────────────────────
 
 /// Every fraction `job` reported, and what it came back with.
@@ -721,10 +890,10 @@ fn fractions_of(job: crate::background::Job, cancel: Option<&AtomicBool>) -> (Ve
     (seen.into_inner().unwrap(), finished)
 }
 
-/// The bar moves through all three phases. The read is the first quarter, so a
-/// fraction above it is the forest saying something, and one above a half is
-/// the write: a build that only reported its read would leave the bar standing
-/// still for the ten seconds that matter.
+/// The bar moves through all three phases. The read is the first sixteenth, so
+/// a fraction above it is the forest saying something, and one above five
+/// eighths is the write: a build that only reported its read would leave the
+/// bar standing still for the ten seconds that matter.
 #[test]
 fn a_build_reports_through_the_forest_and_the_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -749,11 +918,11 @@ fn a_build_reports_through_the_forest_and_the_write() {
         "{fractions:?}"
     );
     assert!(
-        fractions.iter().any(|f| *f > 0.25 && *f < 0.5),
+        fractions.iter().any(|f| *f > 0.0625 && *f < 0.625),
         "the forest build reported nothing: {fractions:?}"
     );
     assert!(
-        fractions.iter().any(|f| *f > 0.5 && *f < 1.0),
+        fractions.iter().any(|f| *f > 0.625 && *f < 1.0),
         "the write reported nothing: {fractions:?}"
     );
     assert_eq!(

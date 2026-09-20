@@ -50,6 +50,41 @@ pub fn read_sift_partial(path: &Path, count: usize) -> Result<SiftData, SiftErro
     read_sift_from_archive(&mut archive, Some(count))
 }
 
+/// Read every feature of a `.sift` file, and nothing else.
+///
+/// The three feature columns and the content hashes that identify the archive
+/// they came out of, with the thumbnail and the feature-tool metadata left
+/// compressed. That is what a consumer indexing a capture's descriptors reads:
+/// over a few thousand images the thumbnails alone are hundreds of megabytes to
+/// decompress and discard, and the columns come back flat, so the descriptors
+/// are one slice to copy out.
+pub fn read_sift_features(path: &Path) -> Result<SiftFeatures, SiftError> {
+    let file = open_file(path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
+    let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
+    let total = metadata.feature_count as usize;
+
+    let positions_xy: Vec<[f32; 2]> =
+        read_binary_array(&mut archive, &positions_entry_name(total), total)?;
+    let affine_shapes: Vec<[[f32; 2]; 2]> =
+        read_binary_array(&mut archive, &affine_shapes_entry_name(total), total)?;
+    let descriptors: Vec<u8> = read_binary_array(
+        &mut archive,
+        &descriptors_entry_name(total),
+        total * DESCRIPTOR_DIM,
+    )?;
+
+    Ok(SiftFeatures {
+        content_hash,
+        positions_xy,
+        affine_shapes,
+        descriptors,
+    })
+}
+
 /// Read only feature positions from a `.sift` file.
 ///
 /// Returns `(N, 2)` positions as `Vec<[f32; 2]>`. Reads only the positions
@@ -64,12 +99,8 @@ pub fn read_sift_positions(path: &Path, count: usize) -> Result<Vec<[f32; 2]>, S
     let total = metadata.feature_count as usize;
     let read_count = count.min(total);
 
-    let positions = read_partial_f32_array(
-        &mut archive,
-        &format!("features/positions_xy.{total}.2.float32.zst"),
-        read_count,
-        2,
-    )?;
+    let positions =
+        read_partial_f32_array(&mut archive, &positions_entry_name(total), read_count, 2)?;
 
     let mut result = Vec::with_capacity(read_count);
     for i in 0..positions.nrows() {
@@ -98,15 +129,11 @@ pub fn read_sift_keypoints(path: &Path, count: usize) -> Result<SiftKeypoints, S
     let total = metadata.feature_count as usize;
     let read_count = count.min(total);
 
-    let positions = read_partial_f32_array(
-        &mut archive,
-        &format!("features/positions_xy.{total}.2.float32.zst"),
-        read_count,
-        2,
-    )?;
+    let positions =
+        read_partial_f32_array(&mut archive, &positions_entry_name(total), read_count, 2)?;
     let shapes = read_partial_f32_array(
         &mut archive,
-        &format!("features/affine_shapes.{total}.2.2.float32.zst"),
+        &affine_shapes_entry_name(total),
         read_count,
         4,
     )?;
@@ -163,57 +190,42 @@ fn read_sift_from_archive<R: Read + Seek>(
 
     // Positions: (N, 2) f32
     let positions_xy = if read_count == total {
-        let pos_vec: Vec<f32> = read_binary_array(
-            archive,
-            &format!("features/positions_xy.{total}.2.float32.zst"),
-            total * 2,
-        )?;
+        let pos_vec: Vec<f32> =
+            read_binary_array(archive, &positions_entry_name(total), total * 2)?;
         Array2::from_shape_vec((total, 2), pos_vec)
             .map_err(|e| SiftError::ShapeMismatch(format!("positions_xy reshape: {e}")))?
     } else {
-        read_partial_f32_array(
-            archive,
-            &format!("features/positions_xy.{total}.2.float32.zst"),
-            read_count,
-            2,
-        )?
+        read_partial_f32_array(archive, &positions_entry_name(total), read_count, 2)?
     };
 
     // Affine shapes: (N, 2, 2) f32
     let affine_shapes = if read_count == total {
-        let shape_vec: Vec<f32> = read_binary_array(
-            archive,
-            &format!("features/affine_shapes.{total}.2.2.float32.zst"),
-            total * 4,
-        )?;
+        let shape_vec: Vec<f32> =
+            read_binary_array(archive, &affine_shapes_entry_name(total), total * 4)?;
         Array3::from_shape_vec((total, 2, 2), shape_vec)
             .map_err(|e| SiftError::ShapeMismatch(format!("affine_shapes reshape: {e}")))?
     } else {
-        let flat = read_partial_f32_array(
-            archive,
-            &format!("features/affine_shapes.{total}.2.2.float32.zst"),
-            read_count,
-            4,
-        )?;
+        let flat =
+            read_partial_f32_array(archive, &affine_shapes_entry_name(total), read_count, 4)?;
         flat.into_shape_with_order((read_count, 2, 2))
             .map_err(|e| SiftError::ShapeMismatch(format!("affine_shapes reshape: {e}")))?
     };
 
-    // Descriptors: (N, 128) u8
+    // Descriptors: (N, DESCRIPTOR_DIM) u8
     let descriptors = if read_count == total {
         let desc_vec: Vec<u8> = read_binary_array(
             archive,
-            &format!("features/descriptors.{total}.128.uint8.zst"),
-            total * 128,
+            &descriptors_entry_name(total),
+            total * DESCRIPTOR_DIM,
         )?;
-        Array2::from_shape_vec((total, 128), desc_vec)
+        Array2::from_shape_vec((total, DESCRIPTOR_DIM), desc_vec)
             .map_err(|e| SiftError::ShapeMismatch(format!("descriptors reshape: {e}")))?
     } else {
         read_partial_u8_array(
             archive,
-            &format!("features/descriptors.{total}.128.uint8.zst"),
+            &descriptors_entry_name(total),
             read_count,
-            128,
+            DESCRIPTOR_DIM,
         )?
     };
 

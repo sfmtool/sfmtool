@@ -92,6 +92,10 @@ rfd = "0.17"
 rand = "0.10"
 image = "0.25"
 ndarray = "0.17"
+# The SIFT index build reads a `.sift` file per image, which is an open and a
+# zstd expand with nothing shared between two of them, so it reads them on the
+# pool the forest build and the index write already use.
+rayon = "1.12"
 # The Action Log's timestamps and their local-time formatting. Over `chrono`
 # for a smaller dependency graph, and over `time` because `time`'s local-offset
 # lookup is unsound on Unix without an opt-in flag. Needs rustc 1.70, well

@@ -17,14 +17,18 @@
 //! the capture and is a background task the person asks for.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use sfmtool_core::features::kdforest::{
-    KdForestParams, KdForestU8, KdfError, KdfSiftSources, KdfWorkspaceContents,
-    KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
+    FeatureGeometry, FeatureOrigin, KdForestParams, KdForestU8, KdfError, KdfSiftSources,
+    KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions,
+    LazyKdForestU8,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{progress_note, SfmrReconstruction};
+use sfmtool_sift_format::DESCRIPTOR_DIM;
 
 use crate::action_log::{Actor, Kind};
 use crate::background::{Finished, Job, Operation};
@@ -573,79 +577,29 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
     } = plan;
 
     let images = image_names.len();
-    let mut descriptors: Vec<u8> = Vec::new();
-    let mut origins = Vec::new();
-    let mut geometry = Vec::new();
-    // Zeros for an image with no `.sift` file, which is what a later staleness
-    // check expects to find for one.
-    let mut feature_tool_hashes = vec![[0u8; 16]; images];
-    let mut sift_content_hashes = vec![[0u8; 16]; images];
-    let mut dimension = 0usize;
-    // How the time divides on a 370-image, 3M-descriptor capture: about 1.7 s,
-    // 3.4 s and 4.5 s, or 0.18 / 0.36 / 0.46. On a 4054-image, 40M-descriptor
-    // one the forest grows fastest of the three and lands nearer 0.24 / 0.47 /
-    // 0.29, so these shares sit between the two shapes rather than fitting
-    // either exactly. Each stage reports within its own share -- the read per
-    // image, the forest per leaf, the write per batch of blocks -- so the bar
-    // moves through all three.
-    let [read, forest_share, write] = progress.split([0.2, 0.4, 0.4]);
-    {
-        let mut phase = read.phase("read descriptors");
-        for (index, (image, sift_path)) in sources.iter().enumerate() {
-            if phase.is_cancelled() {
-                return Finished::Cancelled;
-            }
-            phase.set_fraction(index as f32 / sources.len() as f32);
-            let data = match sfmtool_sift_format::read_sift_partial(sift_path, usize::MAX) {
-                Ok(data) => data,
-                Err(e) => {
-                    return Finished::Failed(format!("Cannot read {}: {e}", sift_path.display()))
-                }
-            };
-            // The identities the file records, read off the very archive the
-            // descriptors came out of: the staleness test compares these
-            // against the `.sift` on disk, so an index built here and never
-            // touched since reads as current.
-            if let Some(hash) = decode_xxh128(&data.content_hash.content_xxh128) {
-                sift_content_hashes[*image as usize] = hash;
-            }
-            if let Some(hash) = decode_xxh128(&data.content_hash.feature_tool_xxh128) {
-                feature_tool_hashes[*image as usize] = hash;
-            }
-            let rows = data.descriptors.nrows();
-            let dim = data.descriptors.ncols();
-            if rows == 0 {
-                continue;
-            }
-            if dimension == 0 {
-                dimension = dim;
-            } else if dim != dimension {
-                return Finished::Failed(format!(
-                    "{} holds {dim}-byte descriptors and the rest hold {dimension}-byte ones.",
-                    sift_path.display()
-                ));
-            }
-            for row in 0..rows {
-                descriptors.extend(data.descriptors.row(row).iter().copied());
-                origins.push(sfmtool_core::features::kdforest::FeatureOrigin {
-                    image_index: *image,
-                    image_feature_index: row as u32,
-                });
-                geometry.push([
-                    [data.positions_xy[[row, 0]], data.positions_xy[[row, 1]]],
-                    [
-                        data.affine_shapes[[row, 0, 0]],
-                        data.affine_shapes[[row, 0, 1]],
-                    ],
-                    [
-                        data.affine_shapes[[row, 1, 0]],
-                        data.affine_shapes[[row, 1, 1]],
-                    ],
-                ]);
-            }
-        }
-        progress_note!(phase, "{} descriptors", origins.len());
-    }
+    // How the time divides on a 370-image, 3M-descriptor capture: about 0.2 s
+    // of reading against 3.4 s of forest and some 2 s of writing, or
+    // 0.04 / 0.62 / 0.35. On a 4054-image, 40M-descriptor one the read stays
+    // the smallest of the three at 4.4 s against 46 s and 30 s, or
+    // 0.05 / 0.57 / 0.37, so the two shapes agree to within a sixteenth and
+    // these shares are the sixteenths between them. Exact
+    // sixteenths, because the weights are normalised in `f32` and three that
+    // sum to one only approximately leave the finished bar a hair short of its
+    // end. Each stage reports within its own share -- the read per image, the
+    // forest per leaf, the write per batch of blocks -- so the bar moves
+    // through all three.
+    let [read, forest_share, write] = progress.split([0.0625, 0.5625, 0.375]);
+    let Corpus {
+        descriptors,
+        origins,
+        geometry,
+        feature_tool_hashes,
+        sift_content_hashes,
+    } = match read_corpus(&sources, images, &read) {
+        Ok(corpus) => corpus,
+        Err(Stopped::Cancelled) => return Finished::Cancelled,
+        Err(Stopped::Failed(why)) => return Finished::Failed(why),
+    };
     if origins.is_empty() {
         return Finished::Failed(
             "Every .sift file of this reconstruction is empty, so there is nothing to index."
@@ -659,7 +613,7 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         match KdForestU8::build(
             &descriptors,
             count,
-            dimension,
+            DESCRIPTOR_DIM,
             KdForestParams::default(),
             &phase,
         ) {
@@ -667,6 +621,10 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
             Err(_) => return Finished::Cancelled,
         }
     };
+    // The forest keeps its own copy of the descriptors, so from here the corpus
+    // buffer is a second one nothing reads. On a 40M-descriptor capture that is
+    // 5.2 GB, and the write that follows is the longest stage of the build.
+    drop(descriptors);
 
     let sources = KdfSiftSources {
         workspace,
@@ -718,6 +676,262 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         ),
         path,
         forest: Arc::new(opened),
+    }
+}
+
+/// One capture's `.sift` files, read into the arrays the forest and the file
+/// are made of.
+struct Corpus {
+    /// Every descriptor of every image end to end, [`DESCRIPTOR_DIM`] bytes to
+    /// the row, in image order and within an image in feature order.
+    descriptors: Vec<u8>,
+    /// Which image and which of its features each corpus row came from.
+    origins: Vec<FeatureOrigin>,
+    /// Each corpus row's keypoint centre and affine shape.
+    geometry: Vec<FeatureGeometry>,
+    /// Per **node** image, zero for one with no `.sift` file.
+    feature_tool_hashes: Vec<[u8; 16]>,
+    /// Per **node** image, zero for one with no `.sift` file, which is what a
+    /// later staleness check expects to find for one.
+    sift_content_hashes: Vec<[u8; 16]>,
+}
+
+/// The two identities one `.sift` file records, as the image table holds them.
+struct Identities {
+    feature_tool: Option<[u8; 16]>,
+    content: Option<[u8; 16]>,
+}
+
+/// Where one image's features go, handed to whichever worker reads that image.
+///
+/// The two slices are that image's own stretch of the corpus, disjoint from
+/// every other slot's, so the files are read in whatever order the workers take
+/// them and every row still lands where image order puts it.
+struct Slot<'a> {
+    path: &'a Path,
+    /// `features * DESCRIPTOR_DIM` bytes.
+    descriptors: &'a mut [u8],
+    /// `features` rows, which is what says how many the file is expected to
+    /// hold.
+    geometry: &'a mut [FeatureGeometry],
+}
+
+/// What one image's read came back with: the value, `None` for a file the read
+/// skipped because the build is stopping, and `Err` with what to say about it.
+type Outcome<T> = Result<Option<T>, String>;
+
+/// Why a read handed back no corpus, which is the two ways the job can end
+/// without one.
+enum Stopped {
+    Cancelled,
+    Failed(String),
+}
+
+/// Read every `.sift` file of the capture into one corpus, in image order.
+///
+/// The files are read in parallel -- each is an open, a seek and a zstd expand,
+/// with nothing shared between two of them -- and the order they come back in
+/// is not the order they are placed. **Two passes are what keeps that from
+/// costing a second copy of the corpus.** The first reads each file's metadata,
+/// which is a few hundred bytes and says how many features the file holds; the
+/// counts give every image its offset, so the second pass expands straight into
+/// its own stretch of one buffer sized exactly once. Collecting whole images
+/// and concatenating them afterwards would hold the capture twice over, and on
+/// a 40M-descriptor capture one copy is 5.2 GB.
+///
+/// The two passes are the phases `count features` and `read features`, each
+/// reporting a count per image through a counter its workers share. A cancel is
+/// read before each file, so a stopping build finishes at most one file per
+/// worker and hands back nothing. When several files fail, the one named is the
+/// first in image order, whichever worker reached it first.
+fn read_corpus(
+    sources: &[(u32, PathBuf)],
+    images: usize,
+    progress: &Progress<'_>,
+) -> Result<Corpus, Stopped> {
+    let mut phase = progress.phase("read descriptors");
+    // Counting is a twelfth of the read on a warm cache and rather more on a
+    // cold one, where it is the pass that pays for finding 4054 files at all:
+    // 0.38 s against 3.97 s warm, 1.53 s against 4.11 s cold.
+    let [counting, reading] = phase.split([0.125, 0.875]);
+    let counts = feature_counts(sources, &counting)?;
+    let corpus = read_features(sources, &counts, images, &reading)?;
+    progress_note!(phase, "{} descriptors", corpus.origins.len());
+    Ok(corpus)
+}
+
+/// How many features each source holds, off its metadata alone.
+fn feature_counts(
+    sources: &[(u32, PathBuf)],
+    progress: &Progress<'_>,
+) -> Result<Vec<usize>, Stopped> {
+    let phase = progress.phase("count features");
+    let tally = Tally::new(&phase, sources.len());
+    let counted: Vec<Outcome<usize>> = sources
+        .par_iter()
+        .map(|(_, path)| {
+            if phase.is_cancelled() {
+                return Ok(None);
+            }
+            let count = match sfmtool_sift_format::read_sift_metadata(path) {
+                Ok((_, metadata, _)) => metadata.feature_count as usize,
+                Err(e) => return Err(format!("Cannot read {}: {e}", path.display())),
+            };
+            tally.one();
+            Ok(Some(count))
+        })
+        .collect();
+    settle(counted, &phase)
+}
+
+/// Expand every file's features into one corpus, `counts` having said where
+/// each image's rows go.
+fn read_features(
+    sources: &[(u32, PathBuf)],
+    counts: &[usize],
+    images: usize,
+    progress: &Progress<'_>,
+) -> Result<Corpus, Stopped> {
+    let phase = progress.phase("read features");
+    let rows: usize = counts.iter().sum();
+    let mut descriptors = vec![0u8; rows * DESCRIPTOR_DIM];
+    let mut geometry = vec![[[0.0f32; 2]; 3]; rows];
+    // Which image and which feature a row is depends on the counts alone, so
+    // the column is filled here rather than by the workers.
+    let mut origins = Vec::with_capacity(rows);
+    for ((image, _), count) in sources.iter().zip(counts) {
+        origins.extend((0..*count as u32).map(|feature| FeatureOrigin {
+            image_index: *image,
+            image_feature_index: feature,
+        }));
+    }
+
+    let tally = Tally::new(&phase, sources.len());
+    let mut descriptor_rest = descriptors.as_mut_slice();
+    let mut geometry_rest = geometry.as_mut_slice();
+    let mut slots = Vec::with_capacity(sources.len());
+    for ((_, path), count) in sources.iter().zip(counts) {
+        let (mine, rest) = descriptor_rest.split_at_mut(count * DESCRIPTOR_DIM);
+        descriptor_rest = rest;
+        let (shapes, rest) = geometry_rest.split_at_mut(*count);
+        geometry_rest = rest;
+        slots.push(Slot {
+            path,
+            descriptors: mine,
+            geometry: shapes,
+        });
+    }
+
+    let read: Vec<Outcome<Identities>> = slots
+        .into_par_iter()
+        .map(|slot| {
+            if phase.is_cancelled() {
+                return Ok(None);
+            }
+            let data = match sfmtool_sift_format::read_sift_features(slot.path) {
+                Ok(data) => data,
+                Err(e) => return Err(format!("Cannot read {}: {e}", slot.path.display())),
+            };
+            // The file is opened twice, so a file rewritten between the two
+            // reads is the one thing the offsets cannot absorb. It is caught
+            // here rather than trusted, because the alternative is descriptors
+            // landing in another image's rows.
+            if data.positions_xy.len() != slot.geometry.len() {
+                return Err(format!(
+                    "{} holds {} features and held {} a moment ago, so it was written while \
+                     this index was being built. Build it again.",
+                    slot.path.display(),
+                    data.positions_xy.len(),
+                    slot.geometry.len()
+                ));
+            }
+            slot.descriptors.copy_from_slice(&data.descriptors);
+            for ((row, centre), shape) in slot
+                .geometry
+                .iter_mut()
+                .zip(&data.positions_xy)
+                .zip(&data.affine_shapes)
+            {
+                *row = [*centre, shape[0], shape[1]];
+            }
+            tally.one();
+            // The identities the file records, read off the very archive the
+            // descriptors came out of: the staleness test compares these
+            // against the `.sift` on disk, so an index built here and never
+            // touched since reads as current.
+            Ok(Some(Identities {
+                feature_tool: decode_xxh128(&data.content_hash.feature_tool_xxh128),
+                content: decode_xxh128(&data.content_hash.content_xxh128),
+            }))
+        })
+        .collect();
+    let identities = settle(read, &phase)?;
+
+    // Zeros for an image with no `.sift` file at all.
+    let mut feature_tool_hashes = vec![[0u8; 16]; images];
+    let mut sift_content_hashes = vec![[0u8; 16]; images];
+    for ((image, _), identity) in sources.iter().zip(identities) {
+        if let Some(hash) = identity.feature_tool {
+            feature_tool_hashes[*image as usize] = hash;
+        }
+        if let Some(hash) = identity.content {
+            sift_content_hashes[*image as usize] = hash;
+        }
+    }
+    Ok(Corpus {
+        descriptors,
+        origins,
+        geometry,
+        feature_tool_hashes,
+        sift_content_hashes,
+    })
+}
+
+/// What a pass over the files came to, as the job's own answer.
+///
+/// A cancel outranks a failure: a build the person stopped hands back nothing
+/// whatever else it ran into. Otherwise the failure reported is the first in
+/// **image** order rather than the first a worker hit, so two unreadable files
+/// name the same one on every run.
+fn settle<T>(outcomes: Vec<Outcome<T>>, progress: &Progress<'_>) -> Result<Vec<T>, Stopped> {
+    if progress.is_cancelled() {
+        return Err(Stopped::Cancelled);
+    }
+    let mut values = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        match outcome {
+            Ok(Some(value)) => values.push(value),
+            Ok(None) => return Err(Stopped::Cancelled),
+            Err(message) => return Err(Stopped::Failed(message)),
+        }
+    }
+    Ok(values)
+}
+
+/// The counter the workers of one pass report through.
+///
+/// They finish in whatever order the files come back in, so what moves the bar
+/// is how many are done rather than which one a worker is on -- the same shape
+/// the forest build's own counter has.
+struct Tally<'p, 'a> {
+    progress: &'p Progress<'a>,
+    done: AtomicU64,
+    total: u64,
+}
+
+impl<'p, 'a> Tally<'p, 'a> {
+    fn new(progress: &'p Progress<'a>, total: usize) -> Self {
+        Self {
+            progress,
+            done: AtomicU64::new(0),
+            total: total as u64,
+        }
+    }
+
+    /// Count one file, and say so.
+    fn one(&self) {
+        let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+        self.progress.count(done, Some(self.total), "image");
     }
 }
 

@@ -171,7 +171,12 @@ descriptors use the original SIFT formulation or domain size pooling depends on 
 
 All `feature_count` descriptors live in one entry,
 `features/descriptors.{feature_count}.128.uint8.zst`, in the same row order as
-`positions_xy` and `affine_shapes`.
+`positions_xy` and `affine_shapes`. The width is part of the entry's name, so a
+reader is never told how wide a descriptor is and a consumer laying several
+files' descriptors out end to end can size the buffer before it opens one. In
+this repository that width has a single declaration,
+`sfmtool_sift_format::DESCRIPTOR_DIM`, from which the entry name above, the read
+path, the write path and the shape check are all derived.
 
 ### `thumbnail_y_x_rgb.128.128.3.uint8.zst`
 

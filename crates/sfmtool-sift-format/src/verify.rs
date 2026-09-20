@@ -64,24 +64,15 @@ pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
     content_hash_digests.push_bytes(&metadata_raw);
 
     // 3. features/positions_xy
-    let pos_raw = read_zst_entry(
-        &mut archive,
-        &format!("features/positions_xy.{feature_count}.2.float32.zst"),
-    )?;
+    let pos_raw = read_zst_entry(&mut archive, &positions_entry_name(feature_count))?;
     content_hash_digests.push_bytes(&pos_raw);
 
     // 4. features/affine_shapes
-    let shape_raw = read_zst_entry(
-        &mut archive,
-        &format!("features/affine_shapes.{feature_count}.2.2.float32.zst"),
-    )?;
+    let shape_raw = read_zst_entry(&mut archive, &affine_shapes_entry_name(feature_count))?;
     content_hash_digests.push_bytes(&shape_raw);
 
     // 5. features/descriptors
-    let desc_raw = read_zst_entry(
-        &mut archive,
-        &format!("features/descriptors.{feature_count}.128.uint8.zst"),
-    )?;
+    let desc_raw = read_zst_entry(&mut archive, &descriptors_entry_name(feature_count))?;
     content_hash_digests.push_bytes(&desc_raw);
 
     // 6. thumbnail_y_x_rgb

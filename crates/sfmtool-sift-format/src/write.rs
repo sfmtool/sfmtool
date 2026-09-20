@@ -60,7 +60,7 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
     let pos_bytes: &[u8] = bytemuck::cast_slice(data.positions_xy.as_slice().unwrap());
     write_binary_entry(
         &mut zip,
-        &format!("features/positions_xy.{feature_count}.2.float32.zst"),
+        &positions_entry_name(feature_count),
         pos_bytes,
         zstd_level,
     )?;
@@ -70,7 +70,7 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
     let shape_bytes: &[u8] = bytemuck::cast_slice(data.affine_shapes.as_slice().unwrap());
     write_binary_entry(
         &mut zip,
-        &format!("features/affine_shapes.{feature_count}.2.2.float32.zst"),
+        &affine_shapes_entry_name(feature_count),
         shape_bytes,
         zstd_level,
     )?;
@@ -80,7 +80,7 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
     let desc_bytes: &[u8] = data.descriptors.as_slice().unwrap();
     write_binary_entry(
         &mut zip,
-        &format!("features/descriptors.{feature_count}.128.uint8.zst"),
+        &descriptors_entry_name(feature_count),
         desc_bytes,
         zstd_level,
     )?;
@@ -117,9 +117,9 @@ fn validate_dimensions(data: &SiftData, feature_count: usize) -> Result<(), Sift
             data.affine_shapes.shape()
         )));
     }
-    if data.descriptors.shape() != [feature_count, 128] {
+    if data.descriptors.shape() != [feature_count, DESCRIPTOR_DIM] {
         return Err(SiftError::ShapeMismatch(format!(
-            "descriptors shape {:?} != [{feature_count}, 128]",
+            "descriptors shape {:?} != [{feature_count}, {DESCRIPTOR_DIM}]",
             data.descriptors.shape()
         )));
     }
