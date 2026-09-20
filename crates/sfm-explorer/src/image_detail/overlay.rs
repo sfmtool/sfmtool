@@ -369,7 +369,7 @@ impl ImageDetail {
                 response.context_menu_pixel = Some(panel_to_image(pos));
             }
         }
-        egui::Popup::context_menu(interact_response).show(|ui| {
+        crate::context_menu::on_secondary_click(interact_response).show(|ui| {
             // ── Edit on Bench, first ──
             //
             // The point is the one the feature at the place the menu was opened

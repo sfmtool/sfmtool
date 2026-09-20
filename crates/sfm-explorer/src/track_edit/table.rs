@@ -265,7 +265,7 @@ impl TrackEdit {
             .as_ref()
             .map(|(_, label)| label.clone())
             .unwrap_or_default();
-        egui::Popup::context_menu(&row_response).show(|ui| {
+        crate::context_menu::on_secondary_click(&row_response).show(|ui| {
             let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
             let clicked = match state.bench_search_refusal(id, &label, observation) {
                 None => ui

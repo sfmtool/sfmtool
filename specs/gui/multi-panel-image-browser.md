@@ -825,7 +825,12 @@ threshold, opens a context menu at the pointer. A right **drag** is the zoom
 above, and the threshold is what tells the two apart, so a zoom gesture never
 puts a menu up. The menu is opened on egui's own `clicked_by(Secondary)` rather
 than on the raw platform button state the pan/zoom handler reads, which is what
-makes that distinction available at all.
+makes that distinction available at all. A **left** press opens nothing however
+long it is held: like every menu in this window it is built from
+`context_menu::on_secondary_click`, which drops the long touch that egui's own
+`Popup::context_menu` also opens on, because on Windows the left mouse button
+reaches egui as a touch contact
+([scene-graph.md](scene-graph.md) § "Panel plumbing").
 
 Its three entries act on the node's **bench** ([`bench.md`](bench.md)) rather
 than on the reconstruction, in this order:

@@ -22,6 +22,7 @@ mod camera_lock;
 mod cli;
 mod close_prompt;
 mod colormap;
+mod context_menu;
 mod descriptor_index;
 mod dock;
 mod document;

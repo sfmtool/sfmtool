@@ -463,8 +463,8 @@ the `SceneNode` and the next frame's display mirror carries it to the GPU —
 there is nothing for `dock.rs` to arbitrate. Solo is app-level view state, so it
 travels through the response like every other request the panel makes.
 
-The reconstruction row's menu is built from `egui::Popup::context_menu` with
-`PopupCloseBehavior::CloseOnClickOutside` rather than from
+The reconstruction row's menu is built from `context_menu::on_secondary_click`
+(see below) with `PopupCloseBehavior::CloseOnClickOutside` rather than from
 `Response::context_menu`, whose default closes the menu on **any** click inside
 it — which would tear the whole thing down the moment the user set one of the
 `Align to` radio buttons. Closing is therefore explicit: each item that acts
@@ -489,6 +489,22 @@ Nothing above the window can observe any of this — the panel behaves correctly
 under `Context::run_ui` — so it is guarded by a windowed test that drives real
 synthetic mouse input (`ui_basic.rs`,
 `a_real_right_click_opens_the_reconstruction_rows_context_menu`).
+
+The left button staying on the touch path is why **every** context menu in this
+window is built from `context_menu::on_secondary_click`
+([`context_menu.rs`](../../crates/sfm-explorer/src/context_menu.rs)) rather than
+from `egui::Popup::context_menu`. egui's own builder opens on
+`Response::secondary_clicked`, which is a right click *or* a long touch, since
+egui implements press-and-hold for a context menu on touch screens; with the
+left button arriving as a contact, resting a left press for egui's
+`max_click_duration` of 0.8 s would otherwise put the menu up under a left
+button, which is what a slow pan does before its drag begins.
+`on_secondary_click`
+keeps everything else about the builder (menu kind, layout, style, pointer
+anchoring, and the explicit close when the widget under the menu is clicked) and
+opens on `clicked_by(Secondary)` alone. Press-and-hold on a real touch screen
+therefore opens no menu here, which is the accepted cost of a window driven by a
+mouse or a touchpad.
 
 `has_pointer` ownership of hover state follows
 [cross-panel-hover.md](cross-panel-hover.md) unchanged: when the

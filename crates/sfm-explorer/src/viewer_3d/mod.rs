@@ -327,7 +327,7 @@ impl Viewer3D {
             return;
         };
         let mut rects = Vec::with_capacity(2);
-        egui::Popup::context_menu(response).show(|ui| {
+        crate::context_menu::on_secondary_click(response).show(|ui| {
             let mut entry = |ui: &mut egui::Ui, text: &'static str, hint: &str| -> bool {
                 let button = egui::Button::new(text);
                 let (response, clicked) = match busy {

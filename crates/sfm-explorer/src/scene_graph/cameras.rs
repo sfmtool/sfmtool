@@ -369,11 +369,11 @@ fn show_camera_image_rows(
             if row.hovered() {
                 out.response.hovered_image = Some(image);
             }
-            // Built from `Popup` for the same reason the reconstruction row's
-            // menu is: `Response::context_menu` closes on any click inside it,
-            // and a greyed entry the user clicks to read its explanation would
-            // take the menu down with it.
-            egui::Popup::context_menu(&row)
+            // `close_behavior` is set for the same reason the reconstruction
+            // row's menu sets it: egui's default closes on any click inside the
+            // menu, and a greyed entry the user clicks to read its explanation
+            // would take the menu down with it.
+            crate::context_menu::on_secondary_click(&row)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| image_context_menu(ui, node.id, index, image, &resect, out));
         }

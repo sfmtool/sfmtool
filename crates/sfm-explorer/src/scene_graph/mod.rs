@@ -572,12 +572,12 @@ fn show_node_header(
     if row.double_clicked() {
         out.response.zoom_to_node = Some(node.id);
     }
-    // Built from `Popup` rather than `Response::context_menu` for the sake of
-    // one setting: egui's default menu closes on *any* click inside it, which
-    // would tear the whole menu down the moment the user set one of the two
-    // `Align to` radio buttons. `CloseOnClickOutside` leaves closing to the
-    // explicit `ui.close()` on each item that actually does something.
-    egui::Popup::context_menu(&row)
+    // Built with an explicit `close_behavior` for the sake of one setting:
+    // egui's default menu closes on *any* click inside it, which would tear the
+    // whole menu down the moment the user set one of the two `Align to` radio
+    // buttons. `CloseOnClickOutside` leaves closing to the explicit
+    // `ui.close()` on each item that actually does something.
+    crate::context_menu::on_secondary_click(&row)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| node_context_menu(ui, node, out));
 
@@ -722,7 +722,7 @@ fn show_bench_stage_group(
             if row.clicked() {
                 out.response.activate_bench_item = Some((id, position));
             }
-            egui::Popup::context_menu(&row).show(|ui| {
+            crate::context_menu::on_secondary_click(&row).show(|ui| {
                 let discard = ui.button("Discard");
                 let key = format!("bench_discard_{}", entry.label);
                 if out.hit(row_id(id, &key), discard).clicked() {

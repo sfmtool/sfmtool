@@ -156,6 +156,7 @@ sfmtool/
 │   │       │   └── table.rs          # Observation table, rows, verdict controls
 │   │       ├── bench.rs              # Every bench step as a version of the node
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
+│   │       ├── context_menu.rs       # The context-menu builder every panel opens with
 │   │       ├── metrics.rs            # Reprojection error, ray angles, triangulation diagnostics
 │   │       ├── platform/
 │   │       │   ├── mod.rs
@@ -201,6 +202,7 @@ sfmtool/
 | `bench.rs` | Every step on a node's bench, as a version of that node: the `AppState` methods that call the pure `sfmtool_core::bench` steps, push one version and write one Action Log row, and the two that read photographs as background tasks. See [bench.md](bench.md). |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
+| `context_menu.rs` | `on_secondary_click(&response)`, the builder every context menu in the window is opened with. It is `egui::Popup::context_menu` restricted to `clicked_by(Secondary)`: egui's own builder also opens on a long touch, and on Windows the left mouse button reaches egui as a touch contact, so a left press rested for 0.8 s would otherwise put the menu up. See [scene-graph.md](scene-graph.md) § "Panel plumbing". |
 | `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — the Point Track Detail table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
