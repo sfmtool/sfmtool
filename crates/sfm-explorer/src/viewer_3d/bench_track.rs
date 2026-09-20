@@ -36,6 +36,13 @@ const CIRCLE_SEGMENTS: usize = 24;
 /// half-length: small enough to sit inside the square it marks the middle of.
 const CIRCLE_RADIUS: f64 = 1.0 / 8.0;
 
+/// How far everything drawn in the frame's plane is lifted along the outward
+/// normal, as a fraction of the frame's half-length. The patch's own bitmap
+/// lies in that plane, and the pass reads in-front-or-behind off the depth
+/// buffer, so geometry exactly coplanar with it flickers between the two. A
+/// fraction of the half-length keeps the lift independent of the scene's size.
+const PLANE_LIFT: f64 = 1e-3;
+
 /// How far the normal stands off the frame, in half-lengths -- one side length,
 /// which is long enough to be grabbed and short enough not to cross the scene.
 const NORMAL_LENGTH: f64 = 2.0;
@@ -177,12 +184,14 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     // A place travels through the whole similarity; a direction keeps only its
     // rotation, the translation dropping out and the uniform scale cancelling
     // in the projection's divide.
+    // A direction has no depth to fight over, so only a place is lifted.
+    let lift = frame.normal() * (PLANE_LIFT * half);
     let place = |xyz: Vector3<f64>| -> [f32; 4] {
         if at_infinity {
             let d = rotation * xyz;
             [d.x as f32, d.y as f32, d.z as f32, 0.0]
         } else {
-            let p = bench.transform.apply_to_point(&Point3::from(xyz));
+            let p = bench.transform.apply_to_point(&Point3::from(xyz + lift));
             [p.x as f32, p.y as f32, p.z as f32, 1.0]
         }
     };

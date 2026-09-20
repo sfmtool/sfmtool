@@ -100,6 +100,12 @@ The marks all lie in one plane with the frame, so from the side the whole
 figure collapses to a line with the normal standing out of it. That is correct
 and is the view in which the normal handle is easiest to use.
 
+**Everything in the frame's plane is drawn `h / 1000` off it**, along the
+outward normal. The patch's own bitmap lies in that plane, and geometry exactly
+coplanar with it would flicker between in front and behind. The lift is a
+fraction of `h` so that it does not depend on the scene's size. A track at
+infinity is not lifted.
+
 **Sizes are world sizes.** The dot, the circles and the arrow scale with the
 patch, so the figure looks the same at every distance and is small when the
 patch is small on screen. Handles are reached by zooming in, as in Image

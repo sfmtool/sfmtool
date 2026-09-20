@@ -190,6 +190,14 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
         .collect();
     assert_eq!(placed.len(), figure.marks.len());
 
+    // What is drawn stands `PLANE_LIFT` off the plane, and the plane is where
+    // the keypoint's ray was met, so the lift comes back off first.
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track-stage track");
+    };
+    let frame = payload.frame.as_ref().expect("a frame");
+    let lift = frame.normal() * (super::PLANE_LIFT * frame.half_extent[0]);
+
     for (observation, mark) in placed.iter().zip(&figure.marks) {
         let (camera, pose) =
             geometry::view_of(image_table, observation.image as usize).expect("the view");
@@ -197,7 +205,7 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
             f64::from(mark.segment.b[0]),
             f64::from(mark.segment.b[1]),
             f64::from(mark.segment.b[2]),
-        );
+        ) - lift;
         let back = geometry::project(&camera, &pose, q, 1.0).expect("q_i projects");
         let site = observation.site().expect("a placed sighting");
         let offset = (back[0] - site[0]).hypot(back[1] - site[1]);
