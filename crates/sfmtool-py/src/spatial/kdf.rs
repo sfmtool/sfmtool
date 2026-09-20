@@ -210,10 +210,13 @@ impl PyLazyKdForest {
     ///     path: The `.kdf` file to open.
     ///     cache_bytes: Decoded-data cache budget (default 256 MiB).
     ///     max_in_flight_bytes: Ceiling on concurrent decode reservations.
-    ///     max_compressed_bytes: Ceiling on one entry's compressed buffer.
-    ///     max_metadata_bytes: Ceiling on the decoded metadata JSON.
+    ///     max_compressed_bytes: Ceiling on one entry's compressed buffer
+    ///         (default 384 MiB, set by the corpus row map).
+    ///     max_metadata_bytes: Ceiling on the decoded metadata JSON
+    ///         (default 384 MiB).
     ///     max_chunk_bytes: Ceiling on one decoded chunk.
-    ///     max_address_map_bytes: Ceiling on the storage row map, read at open.
+    ///     max_address_map_bytes: Ceiling on the storage row map, read at open
+    ///         (default 768 MiB, five bytes a feature).
     ///     max_leaf_features: Ceiling on the rows one leaf may own.
     ///     query_workers: Threads used by batch queries (default 1).
     ///
@@ -867,11 +870,12 @@ fn read_kdf(
 ///
 /// It reads the ZIP central directory and the metadata entry only, so it costs
 /// the same on a 5 GB file as on a 5 KB one, and splits the total by each
-/// version-2 section's role.
+/// section's role.
 ///
 /// Args:
 ///     path: The `.kdf` to inspect.
-///     max_metadata_bytes: Ceiling on the decoded metadata JSON (default 64 MiB).
+///     max_metadata_bytes: Ceiling on the decoded metadata JSON (default 384 MiB,
+///         matching the limit an open applies).
 ///
 /// Returns:
 ///     A dict describing the file: `feature_count`, `dimension`, `scalar_type`,
@@ -891,7 +895,8 @@ fn kdf_file_summary<'py>(
     path: PathBuf,
     max_metadata_bytes: Option<usize>,
 ) -> PyResult<Py<PyDict>> {
-    let limit = max_metadata_bytes.unwrap_or(64 << 20);
+    let limit =
+        max_metadata_bytes.unwrap_or_else(|| LazyKdForestOptions::default().max_metadata_bytes);
     let summary = py.detach(|| kdf_summary(&path, limit)).map_err(to_py_err)?;
 
     let d = PyDict::new(py);

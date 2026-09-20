@@ -210,9 +210,11 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
         entry.read_to_end(&mut raw).unwrap();
         // The descriptor corpus is one entry of per-block frames, so damaging
         // block 0 means damaging the first frame in it. Byte 8 is inside that
-        // frame and past its magic, so the failure surfaces as either a decode
-        // error or a digest mismatch — both of which must be errors, and neither
-        // of which may appear before the block is asked for.
+        // frame and past its magic, so reading the block fails to decode it —
+        // and does so when the block is asked for, not at open. What a read
+        // cannot tell is whether an intact frame holds the right bytes; that is
+        // the whole-file verification below, which recomputes the corpus section
+        // digest and finds this.
         if name.starts_with("features/corpus.") {
             assert!(raw.len() > 8, "corpus container is unexpectedly small");
             raw[8] ^= 0x55;
@@ -527,6 +529,139 @@ fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
         std::fs::read(&loud).unwrap(),
         "the reporting write wrote different bytes"
     );
+}
+
+/// A corpus wide enough that every stage of the write has real work to divide:
+/// several batches of descriptor and geometry blocks, several origin blocks, and
+/// several chunks in each of its trees.
+///
+/// Feature `i`'s leading coordinate rises with `i`, so splitting a contiguous
+/// range at the coordinate of its middle feature is a split every feature
+/// honours, and the trees this builds are trees a full verification accepts.
+fn many_blocked(features: usize, leaf: usize) -> (Vec<u8>, KdfForestData<'static, u8>) {
+    let dim = 128;
+    let mut vectors = vec![0u8; features * dim];
+    for i in 0..features {
+        vectors[i * dim] = (i * 256 / features) as u8;
+        vectors[i * dim + 1] = (i % 251) as u8;
+    }
+    let leading: Vec<u8> = (0..features).map(|i| (i * 256 / features) as u8).collect();
+    let mut nodes = Vec::new();
+    build_balanced(&leading, 0, features, leaf, &mut nodes);
+    let feature_ids: Vec<u32> = (0..features as u32).collect();
+    let data = KdfForestData {
+        vectors: &[],
+        feature_count: features,
+        dimension: dim,
+        trees: vec![
+            KdfTree {
+                nodes: nodes.clone(),
+                feature_ids: feature_ids.clone(),
+            },
+            KdfTree { nodes, feature_ids },
+        ],
+        provenance: None,
+        descriptor_order: None,
+    };
+    (vectors, data)
+}
+
+/// Append the subtree over `lo..hi` in preorder, returning its arena index.
+fn build_balanced(
+    leading: &[u8],
+    lo: usize,
+    hi: usize,
+    leaf: usize,
+    nodes: &mut Vec<KdfNode<u8>>,
+) -> u32 {
+    let here = nodes.len() as u32;
+    if hi - lo <= leaf {
+        nodes.push(KdfNode::Leaf {
+            start: lo as u32,
+            len: (hi - lo) as u32,
+        });
+        return here;
+    }
+    let mid = lo + (hi - lo) / 2;
+    nodes.push(KdfNode::Leaf { start: 0, len: 1 });
+    let left = build_balanced(leading, lo, mid, leaf, nodes);
+    let right = build_balanced(leading, mid, hi, leaf, nodes);
+    nodes[here as usize] = KdfNode::Internal {
+        split_dimension: 0,
+        split: leading[mid],
+        left,
+        right,
+    };
+    here
+}
+
+/// The archive is decided by the data, not by how many threads compressed it.
+///
+/// Blocks and chunks are compressed across the thread pool in ordered batches,
+/// so the one thing that could go wrong is an ordering or a carried-over
+/// compression state — either of which would show up as different bytes here.
+/// A single-threaded pool takes the same path as a sixteen-threaded one, so this
+/// compares the work divided against the work not divided at all.
+#[test]
+fn the_written_bytes_do_not_depend_on_the_thread_count() {
+    let features = 4096;
+    let (vectors, mut data) = many_blocked(features, 8);
+    data.vectors = &vectors;
+    let sources = KdfSiftSources {
+        image_names: (0..8).map(|i| format!("image{i}.jpg")).collect(),
+        feature_tool_hashes: vec![[1; 16]; 8],
+        sift_content_hashes: vec![[2; 16]; 8],
+        origins: (0..features)
+            .map(|i| FeatureOrigin {
+                image_index: (i / 512) as u32,
+                image_feature_index: (i % 512) as u32,
+            })
+            .collect(),
+        geometry: (0..features)
+            .map(|i| [[i as f32, 1.0], [1.0, 0.0], [0.0, 1.0]])
+            .collect(),
+        ..sourced()
+    };
+    let options = KdfWriteOptions {
+        target_descriptor_block_bytes: 128,
+        target_chunk_bytes: 4096,
+        origin_block_rows: 512,
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut written = Vec::new();
+    for threads in [1usize, 2, 16] {
+        let path = dir.path().join(format!("threads-{threads}.kdf"));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| write_kdf(&path, &data, Some(&sources), &options, &Progress::none()))
+            .unwrap();
+        written.push((threads, std::fs::read(&path).unwrap()));
+    }
+    for (threads, bytes) in &written[1..] {
+        assert_eq!(
+            written[0].1.len(),
+            bytes.len(),
+            "{threads} threads wrote a file of a different size"
+        );
+        assert!(
+            written[0].1 == *bytes,
+            "{threads} threads wrote different bytes"
+        );
+    }
+
+    // And the one file they all wrote is a file that verifies: the digests it
+    // records are the digests of the bytes it holds, and its trees describe the
+    // corpus they were built over.
+    let path = dir.path().join("threads-1.kdf");
+    let report = verify_kdf::<u8>(&path, LazyKdForestOptions::default()).unwrap();
+    assert_eq!(report.features, features);
+    assert_eq!(report.descriptor_blocks, features);
+    assert_eq!(report.origin_blocks, 8);
+    assert!(report.chunks > 2 * 2, "{report:?} has too few chunks");
 }
 
 /// A write that is asked to stop stops, and leaves no file where it was going.

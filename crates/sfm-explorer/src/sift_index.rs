@@ -581,11 +581,14 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
     let mut feature_tool_hashes = vec![[0u8; 16]; images];
     let mut sift_content_hashes = vec![[0u8; 16]; images];
     let mut dimension = 0usize;
-    // How the time divides on a 370-image, 3M-descriptor capture: the write is
-    // about half, and the read and the forest share the rest. Each reports
-    // within its own share -- the read per image, the forest per leaf, the
-    // write per batch of blocks -- so the bar moves through all three.
-    let [read, forest_share, write] = progress.split([0.25, 0.25, 0.5]);
+    // How the time divides on a 370-image, 3M-descriptor capture: about 1.7 s,
+    // 3.4 s and 4.5 s, or 0.18 / 0.36 / 0.46. On a 4054-image, 40M-descriptor
+    // one the forest grows fastest of the three and lands nearer 0.24 / 0.47 /
+    // 0.29, so these shares sit between the two shapes rather than fitting
+    // either exactly. Each stage reports within its own share -- the read per
+    // image, the forest per leaf, the write per batch of blocks -- so the bar
+    // moves through all three.
+    let [read, forest_share, write] = progress.split([0.2, 0.4, 0.4]);
     {
         let mut phase = read.phase("read descriptors");
         for (index, (image, sift_path)) in sources.iter().enumerate() {

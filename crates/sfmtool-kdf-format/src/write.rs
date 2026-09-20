@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use std::io::{Seek, Write};
 use std::path::Path;
 
-use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
+use rayon::prelude::*;
+use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry, SectionDigests};
 use sfmtool_progress::Progress;
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::ZipWriter;
@@ -18,28 +19,77 @@ use crate::types::*;
 /// descriptor block loop, the geometry block loop, and the packed tree chunks
 /// the content hash closes.
 ///
-/// Measured over a 400 k-descriptor, 128-D corpus of four trees with SIFT
+/// Measured over a 3.0 M-descriptor, 128-D corpus of four trees with SIFT
 /// sources at the default options, which is the shape the viewer's SIFT index
-/// build writes: 16%, 1%, 5%, 41%, 15%, 15% and a 8% unreported tail, which the
-/// last share absorbs so the bar does not reach its end and stop there. The
-/// descriptor loop dominates because it is the only stage whose input is the
-/// whole corpus at its full width: 128 bytes a feature against the geometry
-/// loop's 24 and the row map's 4. Validation is a sixth of it because it reads
-/// every scalar once and sorts every tree's feature IDs.
+/// build writes: 2%, 2%, 2%, 48%, 36%, 2%, and a 9% unreported tail the last
+/// share absorbs so the bar does not reach its end and stop there.
+///
+/// The two block loops are almost the whole write, and they are close to each
+/// other despite the descriptor corpus being five times the bytes: the geometry
+/// rows are float32 and compress far less well than descriptor bytes do, so zstd
+/// spends comparably long on both. Everything else has become small. Validation,
+/// the tree packing, the heading and the chunk loop each divide their work
+/// across the thread pool or have little to do, and the heading no longer
+/// carries an integrity directory that grew with the block count.
 ///
 /// A corpus written without [`KdfSiftSources`] carries no geometry and no
 /// origins, and its bar then stands still for those shares rather than
 /// reporting wrongly: the weights are a constant estimate of where the time
 /// goes, and one that is wrong makes the bar uneven rather than untrue.
-const STAGE_SHARES: [f32; 6] = [0.16, 0.02, 0.05, 0.41, 0.15, 0.21];
+const STAGE_SHARES: [f32; 6] = [0.02, 0.02, 0.02, 0.48, 0.36, 0.10];
 
-/// How many block-loop iterations pass between two reports.
+/// How many blocks one batch of a block loop compresses together.
 ///
-/// A default block is two KiB, so a capture has a couple of hundred thousand of
-/// them, and an event apiece would be a cross-thread wake per block. Two
-/// hundred reports over a stage is more than a bar can show.
-fn report_every(blocks: usize) -> usize {
-    (blocks / 200).max(1)
+/// The batch is the unit of everything that is not the compression itself: one
+/// progress report, one cancellation check, and one ordered hand-off to the
+/// serial writer. Two hundred reports over a stage is more than a bar can show,
+/// so a batch is a two-hundredth of the stage — until that would hold more than
+/// a few thousand blocks, where the cap takes over and a large corpus simply
+/// gets more reports than two hundred. The cap is what bounds the extra memory:
+/// a batch holds its blocks' raw and compressed bytes at once, which at a
+/// default two-KiB block is about sixteen MiB and does not grow with the corpus.
+/// The floor keeps a batch worth handing to a thread pool at all.
+fn block_batch(blocks: usize) -> usize {
+    (blocks / 200).clamp(256, 4096)
+}
+
+/// Compress and hash one batch of blocks, in parallel, into writing order.
+///
+/// `gather` fills a worker-owned buffer with one block's raw bytes; the worker
+/// then compresses that buffer into its own frame and digests it. Every frame is
+/// independent, so the only thing the caller must still do in order is write
+/// them — which is why this returns a `Vec` in batch order rather than writing
+/// anything itself.
+///
+/// The zstd context is per worker and not per block. A block is a couple of KiB
+/// and a capture has hundreds of thousands of them, so a context apiece spends
+/// the write allocating and clearing match tables sized for a stream of unknown
+/// length; that was a measured ten-fold regression. A single-shot compression
+/// does not carry state between calls, so a frame is the same bytes whichever
+/// worker produced it and however the blocks were batched.
+fn encode_batch<F>(
+    batch: &[&[u32]],
+    level: i32,
+    gather: F,
+) -> Result<Vec<(Vec<u8>, u128)>, KdfError>
+where
+    F: Fn(&[u32], &mut Vec<u8>) + Sync,
+{
+    batch
+        .par_iter()
+        .map_init(
+            || (None::<zstd::bulk::Compressor<'static>>, Vec::<u8>::new()),
+            |(slot, raw), ids| -> Result<(Vec<u8>, u128), KdfError> {
+                if slot.is_none() {
+                    *slot = Some(zstd::bulk::Compressor::new(level)?);
+                }
+                raw.clear();
+                gather(ids, raw);
+                let frame = slot.as_mut().expect("initialized").compress(raw)?;
+                Ok((frame, xxh3_128(raw)))
+            },
+        )
+        .collect()
 }
 
 struct PackedChunk<S: KdfScalar> {
@@ -167,7 +217,13 @@ fn validate_input<S: KdfScalar>(
             data.vectors.len()
         )));
     }
-    if data.vectors.iter().any(|&v| !v.is_finite()) {
+    // Every scalar of the corpus, every geometry row, and every tree's feature
+    // permutation is read here, which is a whole-corpus pass whichever way it is
+    // written. The parallel forms below produce the same verdict as the serial
+    // ones: each is a pure predicate over independent rows, and where a tree or
+    // an origin is at fault the results are collected in input order so the
+    // error names the same one every run.
+    if data.vectors.par_iter().any(|&v| !v.is_finite()) {
         return Err(KdfError::InvalidFormat(
             "vectors contain non-finite values".into(),
         ));
@@ -198,8 +254,14 @@ fn validate_input<S: KdfScalar>(
             "descriptor block row count exceeds uint32".into(),
         ));
     }
-    for (ti, tree) in data.trees.iter().enumerate() {
-        validate_tree(tree, data.feature_count, data.dimension, ti)?;
+    for outcome in data
+        .trees
+        .par_iter()
+        .enumerate()
+        .map(|(ti, tree)| validate_tree(tree, data.feature_count, data.dimension, ti))
+        .collect::<Vec<_>>()
+    {
+        outcome?;
     }
     if let Some(src) = sources {
         if S::TYPE_NAME != "uint8" || data.dimension != 128 {
@@ -219,10 +281,8 @@ fn validate_input<S: KdfScalar>(
         }
         if src
             .geometry
-            .iter()
-            .flatten()
-            .flatten()
-            .any(|v| !v.is_finite())
+            .par_iter()
+            .any(|row| row.iter().flatten().any(|v| !v.is_finite()))
         {
             return Err(KdfError::InvalidFormat(
                 "feature geometry contains non-finite values".into(),
@@ -236,7 +296,6 @@ fn validate_input<S: KdfScalar>(
             ));
         }
         let mut names = HashSet::new();
-        let mut pairs = HashSet::new();
         if !src
             .image_names
             .iter()
@@ -246,17 +305,30 @@ fn validate_input<S: KdfScalar>(
                 "image names must be unique relative POSIX paths".into(),
             ));
         }
-        for &o in &src.origins {
-            if o.image_index as usize >= src.image_names.len() {
-                return Err(KdfError::InvalidFormat(
-                    "origin image index is out of range".into(),
-                ));
-            }
-            if !pairs.insert(o) {
-                return Err(KdfError::InvalidFormat(
-                    "duplicate image-feature origin pair".into(),
-                ));
-            }
+        if src
+            .origins
+            .par_iter()
+            .any(|o| o.image_index as usize >= src.image_names.len())
+        {
+            return Err(KdfError::InvalidFormat(
+                "origin image index is out of range".into(),
+            ));
+        }
+        // A pair is unique iff no two are equal, which a sort answers without a
+        // hash table: the set this replaces held one entry per corpus feature,
+        // and at a few million features its probing cost more than ordering the
+        // pairs does. The packing is order-preserving on the pair, so equal
+        // packed values mean equal pairs and nothing else.
+        let mut pairs: Vec<u64> = src
+            .origins
+            .par_iter()
+            .map(|o| (o.image_index as u64) << 32 | o.image_feature_index as u64)
+            .collect();
+        pairs.par_sort_unstable();
+        if pairs.par_windows(2).any(|w| w[0] == w[1]) {
+            return Err(KdfError::InvalidFormat(
+                "duplicate image-feature origin pair".into(),
+            ));
         }
     }
     Ok(())
@@ -350,7 +422,7 @@ fn validate_tree<S: KdfScalar>(
         )));
     }
     let mut ids = tree.feature_ids.clone();
-    ids.sort_unstable();
+    ids.par_sort_unstable();
     if ids.iter().copied().ne(0..n as u32) {
         return Err(KdfError::InvalidFormat(format!(
             "tree {ti} feature ids are not a permutation"
@@ -552,10 +624,11 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         options.compression_level,
     )?;
     let metadata_digest = xxh3_128(&metadata_raw);
-    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
+    let mut section_digests = SectionDigests::new();
     section_digests.push(metadata_digest);
+    let heading_phase = shares.heading.detail_phase("heading");
 
-    let (images_digest, origin_digests) = if let Some(src) = sources {
+    let (images_digest, origins_digest) = if let Some(src) = sources {
         let imeta = ImagesMetadata {
             image_count: src.image_names.len() as u32,
         };
@@ -602,7 +675,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         // The image table is written; the origins are the rest of the heading,
         // bar the row map the next stage opens with.
         shares.heading.set_fraction(0.2);
-        let mut ods = Vec::new();
+        let mut ods = SectionDigests::new();
         let origin_blocks = src.origins.len().div_ceil(options.origin_block_rows);
         for (b, rows) in src.origins.chunks(options.origin_block_rows).enumerate() {
             let image_indexes: Vec<u32> = rows.iter().map(|o| o.image_index).collect();
@@ -635,16 +708,15 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 .set_fraction(0.2 + 0.6 * (b + 1) as f32 / origin_blocks as f32);
         }
         shares.heading.check_cancel()?;
+        let origins_digest = ods.finish();
         section_digests.push(images_digest);
-        for &digest in &ods {
-            section_digests.push(digest);
-        }
-        (Some(images_digest), Some(ods))
+        section_digests.push(origins_digest);
+        (Some(images_digest), Some(origins_digest))
     } else {
         (None, None)
     };
 
-    let (storage_digest, descriptor_digests, geometry_digests) = {
+    let (storage_digest, descriptors_digest, geometry_digest) = {
         let q = descriptor_rows;
         let tree_zero = &data.trees[0].feature_ids;
         let order: &[u32] = match data.descriptor_order {
@@ -686,13 +758,12 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         section_digests.push(sd);
         shares.heading.set_fraction(1.0);
         shares.heading.check_cancel()?;
+        drop(heading_phase);
         // One container entry of independent per-block frames, plus the offsets
-        // that address them. Each frame is still compressed and hashed exactly
-        // as a standalone block entry was, so a block read decodes one frame and
-        // the digest list is unchanged; what goes away is one ZIP directory
-        // record per block, which at small block sizes is most of the file's
-        // entries and most of its open cost.
-        let mut ds = Vec::new();
+        // that address them. What goes away against a standalone entry per block
+        // is one ZIP directory record apiece, which at small block sizes is most
+        // of the file's entries and most of its open cost.
+        //
         // Stream frames directly: buffering the container duplicates the entire
         // compressed corpus in memory. ZIP64 permits a stream larger than 4 GiB.
         zip.start_file(
@@ -701,77 +772,52 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 .compression_method(zip::CompressionMethod::Stored)
                 .large_file(true),
         )?;
-        // One compression context for every block. A block is a couple of KiB
-        // and a capture has hundreds of thousands of them, so a context per
-        // block (`zstd::encode_all`) spends the write allocating and clearing
-        // match tables sized for a stream of unknown length.
-        let mut compressor = zstd::bulk::Compressor::new(options.compression_level)?;
-        let mut stored = 0u64;
-        let mut offsets = vec![0u64];
-        let blocks = data.feature_count.div_ceil(q);
-        let every = report_every(blocks);
         let descriptor_phase = shares.descriptors.detail_phase("descriptor blocks");
-        for (b, ids) in order.chunks(q).enumerate() {
-            let mut block = Vec::with_capacity(ids.len() * data.dimension);
-            for &id in ids {
-                let base = id as usize * data.dimension;
-                block.extend_from_slice(&data.vectors[base..base + data.dimension]);
-            }
-            let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
-            let frame = compressor.compress(raw)?;
-            zip.write_all(&frame)?;
-            stored += frame.len() as u64;
-            offsets.push(stored);
-            let d = xxh3_128(raw);
-            ds.push(d);
-            section_digests.push(d);
-            // Between batches rather than between blocks: a block is two KiB of
-            // work, and the flag is worth reading once every couple of hundred
-            // of them.
-            if (b + 1) % every == 0 {
-                shares
-                    .descriptors
-                    .set_fraction((b + 1) as f32 / blocks as f32);
-                shares.descriptors.check_cancel()?;
-            }
-        }
-        shares.descriptors.set_fraction(1.0);
+        let (descriptors_digest, descriptor_offsets) = write_blocks(
+            &mut zip,
+            order,
+            q,
+            options.compression_level,
+            shares.descriptors,
+            |ids, raw| {
+                for &id in ids {
+                    let base = id as usize * data.dimension;
+                    raw.extend_from_slice(bytemuck::cast_slice(
+                        &data.vectors[base..base + data.dimension],
+                    ));
+                }
+            },
+        )?;
+        section_digests.push(descriptors_digest);
         drop(descriptor_phase);
-        let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
+        let offsets_raw: &[u8] = bytemuck::cast_slice(descriptor_offsets.as_slice());
         write_binary_entry(
             &mut zip,
-            &block_offsets_entry_name(offsets.len()),
+            &block_offsets_entry_name(descriptor_offsets.len()),
             offsets_raw,
             options.compression_level,
         )?;
-        let geometry_digests = if let Some(src) = sources {
+        let geometry_digest = if let Some(src) = sources {
             zip.start_file(
                 geometry_entry_name(data.feature_count),
                 zip::write::SimpleFileOptions::default()
                     .compression_method(zip::CompressionMethod::Stored)
                     .large_file(true),
             )?;
-            let mut gs = Vec::new();
-            let mut stored = 0u64;
-            let mut offsets = vec![0u64];
             let geometry_phase = shares.geometry.detail_phase("geometry blocks");
-            for (b, ids) in order.chunks(q).enumerate() {
-                let block: Vec<FeatureGeometry> =
-                    ids.iter().map(|&id| src.geometry[id as usize]).collect();
-                let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
-                let frame = compressor.compress(raw)?;
-                zip.write_all(&frame)?;
-                stored += frame.len() as u64;
-                offsets.push(stored);
-                let digest = xxh3_128(raw);
-                gs.push(digest);
-                section_digests.push(digest);
-                if (b + 1) % every == 0 {
-                    shares.geometry.set_fraction((b + 1) as f32 / blocks as f32);
-                    shares.geometry.check_cancel()?;
-                }
-            }
-            shares.geometry.set_fraction(1.0);
+            let (digest, offsets) = write_blocks(
+                &mut zip,
+                order,
+                q,
+                options.compression_level,
+                shares.geometry,
+                |ids, raw| {
+                    for &id in ids {
+                        raw.extend_from_slice(bytemuck::bytes_of(&src.geometry[id as usize]));
+                    }
+                },
+            )?;
+            section_digests.push(digest);
             drop(geometry_phase);
             let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
             write_binary_entry(
@@ -780,93 +826,65 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 offsets_raw,
                 options.compression_level,
             )?;
-            Some(gs)
+            Some(digest)
         } else {
             None
         };
-        (sd, ds, geometry_digests)
+        (sd, descriptors_digest, geometry_digest)
     };
 
-    let mut chunk_digests = Vec::new();
+    let mut trees_digest = SectionDigests::new();
     let total_chunks: usize = packed.iter().map(Vec::len).sum();
     let mut written_chunks = 0usize;
     let chunk_phase = shares.chunks.detail_phase("tree chunks");
     for (ti, chunks) in packed.iter().enumerate() {
-        let mut td = Vec::new();
-        for (ci, chunk) in chunks.iter().enumerate() {
-            let mut columns = vec![0u32; NODE_COLUMNS * chunk.nodes.len()];
-            let mut splits = vec![S::ZERO; chunk.nodes.len()];
-            for (i, (&logical, node)) in chunk.logical_nodes.iter().zip(&chunk.nodes).enumerate() {
-                columns[i] = match node {
-                    DecodedNode::Internal { .. } => 0,
-                    DecodedNode::Leaf { .. } => 1,
-                };
-                columns[chunk.nodes.len() + i] = logical;
-                match *node {
-                    DecodedNode::Internal {
-                        split_dimension,
-                        split,
-                        left,
-                        right,
-                    } => {
-                        columns[2 * chunk.nodes.len() + i] = split_dimension as u32;
-                        columns[3 * chunk.nodes.len() + i] = left.chunk;
-                        columns[4 * chunk.nodes.len() + i] = left.local;
-                        columns[5 * chunk.nodes.len() + i] = left.logical;
-                        columns[6 * chunk.nodes.len() + i] = right.chunk;
-                        columns[7 * chunk.nodes.len() + i] = right.local;
-                        columns[8 * chunk.nodes.len() + i] = right.logical;
-                        splits[i] = split;
+        // A tree is the batch here: there are hundreds of chunks rather than
+        // hundreds of thousands, and a chunk is about a megabyte, so a whole
+        // tree's frames are tens of megabytes held for as long as it takes to
+        // write them out in order.
+        let encoded = chunks
+            .par_iter()
+            .map_init(
+                || None::<zstd::bulk::Compressor<'static>>,
+                |slot, chunk| -> Result<(Vec<u8>, u128), KdfError> {
+                    if slot.is_none() {
+                        *slot = Some(zstd::bulk::Compressor::new(options.compression_level)?);
                     }
-                    DecodedNode::Leaf { start, .. } => columns[9 * chunk.nodes.len() + i] = start,
-                }
-            }
-            // The three integer arrays share one entry: they are always read
-            // together — decoding a node needs the columns and the splits, and
-            // reaching a leaf needs the IDs — and they compress alike. Vectors
-            // stay separate despite also always being read with them, because
-            // bulk descriptor bytes in the same zstd frame as these columns make
-            // both compress worse.
-            let nb: &[u8] = bytemuck::cast_slice(columns.as_slice());
-            let sb: &[u8] = bytemuck::cast_slice(splits.as_slice());
-            let fb: &[u8] = bytemuck::cast_slice(chunk.feature_ids.as_slice());
-            let mut payload = Vec::with_capacity(nb.len() + sb.len() + fb.len());
-            payload.extend_from_slice(nb);
-            payload.extend_from_slice(sb);
-            payload.extend_from_slice(fb);
-            write_binary_entry(
-                &mut zip,
-                &chunk_entry_name::<S>(ti, ci, chunk.nodes.len(), chunk.feature_ids.len()),
-                &payload,
-                options.compression_level,
+                    let payload = chunk_payload(chunk);
+                    let digest = xxh3_128(&payload);
+                    let frame = slot.as_mut().expect("initialized").compress(&payload)?;
+                    Ok((frame, digest))
+                },
+            )
+            .collect::<Result<Vec<_>, _>>()?;
+        for (ci, ((frame, digest), chunk)) in encoded.iter().zip(chunks).enumerate() {
+            zip.start_file(
+                chunk_entry_name::<S>(ti, ci, chunk.nodes.len(), chunk.feature_ids.len()),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
             )?;
-            let d = xxh3_128(&payload);
-            td.push(d);
-            section_digests.push(d);
-            // A chunk is a megabyte of nodes, so there are hundreds of them
-            // rather than hundreds of thousands, and each is its own report.
+            zip.write_all(frame)?;
+            trees_digest.push(*digest);
             written_chunks += 1;
             shares
                 .chunks
                 .set_fraction(written_chunks as f32 / total_chunks as f32);
         }
         shares.chunks.check_cancel()?;
-        chunk_digests.push(td);
     }
     drop(chunk_phase);
+    let trees_digest = trees_digest.finish();
+    section_digests.push(trees_digest);
 
     let hashes = ContentHash {
         metadata_xxh128: format_hash(metadata_digest),
-        chunks_xxh128: chunk_digests
-            .iter()
-            .map(|v| v.iter().map(|&d| format_hash(d)).collect())
-            .collect(),
-        content_xxh128: format_hash(section_digests.finish()),
-        storage_rows_xxh128: format_hash(storage_digest),
-        descriptor_blocks_xxh128: descriptor_digests.into_iter().map(format_hash).collect(),
-        geometry_blocks_xxh128: geometry_digests.map(|v| v.into_iter().map(format_hash).collect()),
         images_xxh128: images_digest.map(format_hash),
-        origins_xxh128: origin_digests.map(|v| v.into_iter().map(format_hash).collect()),
+        origins_xxh128: origins_digest.map(format_hash),
+        storage_rows_xxh128: format_hash(storage_digest),
+        descriptors_xxh128: format_hash(descriptors_digest),
+        geometry_xxh128: geometry_digest.map(format_hash),
+        trees_xxh128: format_hash(trees_digest),
+        content_xxh128: format_hash(section_digests.finish()),
     };
     write_json_entry(
         &mut zip,
@@ -876,4 +894,97 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
     )?;
     zip.finish()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests;
+
+/// One chunk's wire payload: node columns, then splits, then feature IDs.
+///
+/// The three integer arrays share one entry because they are always read
+/// together — decoding a node needs the columns and the splits, and reaching a
+/// leaf needs the IDs — and they compress alike. Vectors stay separate despite
+/// also always being read with them, because bulk descriptor bytes in the same
+/// zstd frame as these columns make both compress worse.
+fn chunk_payload<S: KdfScalar>(chunk: &PackedChunk<S>) -> Vec<u8> {
+    let m = chunk.nodes.len();
+    let mut columns = vec![0u32; NODE_COLUMNS * m];
+    let mut splits = vec![S::ZERO; m];
+    for (i, (&logical, node)) in chunk.logical_nodes.iter().zip(&chunk.nodes).enumerate() {
+        columns[i] = match node {
+            DecodedNode::Internal { .. } => 0,
+            DecodedNode::Leaf { .. } => 1,
+        };
+        columns[m + i] = logical;
+        match *node {
+            DecodedNode::Internal {
+                split_dimension,
+                split,
+                left,
+                right,
+            } => {
+                columns[2 * m + i] = split_dimension as u32;
+                columns[3 * m + i] = left.chunk;
+                columns[4 * m + i] = left.local;
+                columns[5 * m + i] = left.logical;
+                columns[6 * m + i] = right.chunk;
+                columns[7 * m + i] = right.local;
+                columns[8 * m + i] = right.logical;
+                splits[i] = split;
+            }
+            DecodedNode::Leaf { start, .. } => columns[9 * m + i] = start,
+        }
+    }
+    let nb: &[u8] = bytemuck::cast_slice(columns.as_slice());
+    let sb: &[u8] = bytemuck::cast_slice(splits.as_slice());
+    let fb: &[u8] = bytemuck::cast_slice(chunk.feature_ids.as_slice());
+    let mut payload = Vec::with_capacity(nb.len() + sb.len() + fb.len());
+    payload.extend_from_slice(nb);
+    payload.extend_from_slice(sb);
+    payload.extend_from_slice(fb);
+    payload
+}
+
+/// Stream one blocked section into the open container entry.
+///
+/// Returns the section's digest and its `blocks + 1` frame boundaries. The
+/// blocks are compressed and hashed a batch at a time across the thread pool and
+/// then written in block order, so the entry's bytes, the boundaries and the
+/// digest are what a single thread would have produced. Cancellation and the
+/// stage fraction are read on this thread between batches, once every batch
+/// rather than once every couple of KiB of compression.
+fn write_blocks<W: Write + Seek, F>(
+    zip: &mut ZipWriter<W>,
+    order: &[u32],
+    rows_per_block: usize,
+    level: i32,
+    progress: &Progress<'_>,
+    gather: F,
+) -> Result<(u128, Vec<u64>), KdfError>
+where
+    F: Fn(&[u32], &mut Vec<u8>) + Sync,
+{
+    let blocks = order.len().div_ceil(rows_per_block);
+    let batch = block_batch(blocks);
+    let mut digests = SectionDigests::new();
+    let mut offsets = Vec::with_capacity(blocks + 1);
+    offsets.push(0u64);
+    let mut stored = 0u64;
+    // The corpus order is sliced a batch at a time rather than all at once: a
+    // slice per block would be sixteen bytes a block held for the whole stage,
+    // which is the one part of this loop that would grow with the corpus.
+    for (bi, group) in order.chunks(rows_per_block * batch).enumerate() {
+        let ids: Vec<&[u32]> = group.chunks(rows_per_block).collect();
+        for (frame, digest) in encode_batch(&ids, level, &gather)? {
+            zip.write_all(&frame)?;
+            stored += frame.len() as u64;
+            offsets.push(stored);
+            digests.push(digest);
+        }
+        let done = ((bi + 1) * batch).min(blocks);
+        progress.set_fraction(done as f32 / blocks as f32);
+        progress.check_cancel()?;
+    }
+    progress.set_fraction(1.0);
+    Ok((digests.finish(), offsets))
 }

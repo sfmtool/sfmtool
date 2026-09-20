@@ -5008,6 +5008,7 @@ name = "sfmtool-kdf-format"
 version = "0.2.0"
 dependencies = [
  "bytemuck",
+ "rayon",
  "serde",
  "serde_json",
  "sfmtool-archive-io",

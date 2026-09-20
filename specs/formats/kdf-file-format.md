@@ -1,6 +1,6 @@
 # The KDF file format
 
-Version 2 stores every descriptor exactly once in a blocked corpus shared by all
+A `.kdf` stores every descriptor exactly once in a blocked corpus shared by all
 trees. SIFT-backed files also embed each feature's image-space keypoint and 2x2
 affine shape in a co-blocked geometry corpus, so descriptor matches can be turned
 into image constellations without reopening the source `.sift` files.
@@ -41,7 +41,7 @@ directory entries. Names are unique.
 | `features/block_offsets.{C+1}.uint64.zst` | Where each vector frame starts |
 | `features/geometry.{N}.3.2.float32.frames` | SIFT keypoints and affine shapes, one frame per vector block; SIFT mode only |
 | `features/geometry_block_offsets.{C+1}.uint64.zst` | Where each geometry frame starts; SIFT mode only |
-| `content_hash.json.zst` | Metadata, chunk and whole-file hashes |
+| `content_hash.json.zst` | One digest per section, and one over all of them |
 
 Here C = `ceil(N / descriptor_block_rows)` is the number of descriptor blocks.
 Every entry is a single zstd frame **except** `features/corpus` and optional
@@ -76,7 +76,7 @@ Required fields in `metadata.json.zst`:
 | Field | Type and meaning |
 |-------|------------------|
 | `format` | String `"kdf"` |
-| `version` | Integer `2` |
+| `version` | Integer `3` |
 | `scalar_type` | String `"uint8"` or `"float32"` |
 | `metric` | String `"squared_l2"` |
 | `feature_count` | Integer N, `0 <= N <= 2^32 - 1`; valid IDs are `0..N` exclusive |
@@ -99,9 +99,7 @@ such as build parameters, seed, descriptor normalization, or source identity.
 It confers no source-file dependency and is not needed to interpret the index.
 There is no implicit SIFT normalization or distance conversion.
 
-Version 2 is a clean break from version 1: readers reject version-1 files rather
-than interpreting either of its descriptor-placement variants. Readers also
-reject unsupported scalar, metric, kind, or source names. Unknown JSON fields are
+Readers reject unsupported scalar, metric, kind, or source names. Unknown JSON fields are
 ignored. Source entries below are conditional; unexpected ZIP entries are
 rejected. Changes to binary interpretation, required entries, or required
 semantics require a version increment. An older reader rejects rather than
@@ -151,7 +149,7 @@ then absolute_path, then a containing workspace, matching SFMR. Image paths
 resolve against that workspace, never directly against the KDF's parent.
 For image `frames/a.jpg` and prefix `features/sift-example`, its source is
 `frames/features/sift-example/a.jpg.sift` within the workspace. All images use
-this one prefix convention; multiple workspace configurations are outside version 2.
+this one prefix convention; multiple workspace configurations are outside this format.
 
 One geometry row is the row-major float32 matrix
 `[[x, y], [a11, a12], [a21, a22]]`. Its first row is the SIFT keypoint center in
@@ -166,8 +164,8 @@ The tool hash equals the referenced SIFT file's stored `feature_tool_xxh128`;
 the content hash equals its stored `content_xxh128`. Neither hashes the compressed
 ZIP file. Source verification checks both identities, feature index bounds,
 dimension/type compatibility, byte equality with the indexed descriptor, and
-bitwise equality of the embedded keypoint/affine float32 row. Version 2 stores source
-descriptors and geometry unchanged; transformed embeddings use
+bitwise equality of the embedded keypoint/affine float32 row. Source
+descriptors and geometry are stored unchanged; transformed embeddings use
 `feature_source = "none"` until a transform provenance contract is defined.
 Missing or changed SIFT files do not prevent ANN or reading origins: references
 identify provenance, while vectors are embedded. External source verification
@@ -232,7 +230,7 @@ It is a target rather than a bound: a leaf larger than the target is indivisible
 
 ### Descriptor and geometry addressing
 
-Version 2 requires positive integer `metadata.descriptor_block_rows` Q. The
+The format requires a positive integer `metadata.descriptor_block_rows` Q. The
 storage row table is a permutation of `0..N`: entry i gives the physical vector row for
 original feature ID i. Block b stores rows `[b*Q, min((b+1)*Q,N))`, with R equal
 to that interval's length. Blocks are dense from zero through `ceil(N/Q)-1`,
@@ -273,43 +271,84 @@ holds the single value zero.
 
 ### Hash composition
 
-`content_hash.json.zst` has `metadata_xxh128`, `chunks_xxh128` (an array of
-arrays indexed by tree then chunk), and `content_xxh128`. Each value is a
-32-character lowercase hexadecimal XXH128 digest, except the nested arrays.
-Metadata hashes the exact decoded JSON bytes. A chunk hashes its `chunk` entry's
-decoded bytes. `storage_rows_xxh128` is the decoded row map's digest and
-`descriptor_blocks_xxh128` holds one digest over each block's decoded vector
-bytes in numeric block order. SIFT mode additionally requires
-`geometry_blocks_xxh128`, with one digest over each decoded `3x2` geometry block
-in the same block order. Offset entries are covered by no digest of their own:
-they are
-addressing rather than content, and a wrong value is caught by the three
-structural checks on it plus the block digest of whatever it addressed.
-SIFT mode additionally requires `images_xxh128` (one digest over the four images
-entries' decoded bytes in lexicographic path order) and `origins_xxh128` (an
-array of block digests, each hashing image_indexes then image_feature_indexes decoded
-bytes). Both fields are absent in generic mode. The whole-file hash hashes the
-metadata digest, then images and origin-block digests if present (numeric block
-order), then the storage-row digest, descriptor-block digests, optional
-geometry-block digests, followed by every tree chunk digest
-in numeric tree/chunk order, each serialized as 16 big-endian bytes, following
-the archive-container convention. The hash entry itself is excluded.
+Every value in `content_hash.json.zst` is a 32-character lowercase hexadecimal
+XXH128 digest, and there is exactly one of them per section. The entry therefore
+has the same handful of hundred bytes for three features and for a hundred
+million, and a reader budgets it as a constant.
+
+Digests are folded by one rule, used at both levels. **Folding** a sequence of
+digests means digesting the concatenation of its members, each written as its 16
+big-endian bytes, in sequence order. Folding an empty sequence digests zero
+bytes.
+
+| Field | Digest of |
+|-------|-----------|
+| `metadata_xxh128` | The exact decoded bytes of `metadata.json.zst` |
+| `images_xxh128` | The four `images/` entries' decoded bytes, concatenated in lexicographic path order |
+| `origins_xxh128` | The fold of the origin blocks' digests, in numeric block order; a block digests its `image_indexes` decoded bytes followed by its `image_feature_indexes` decoded bytes |
+| `storage_rows_xxh128` | The decoded row map |
+| `descriptors_xxh128` | The fold of the descriptor blocks' digests, in numeric block order; a block digests its decoded vector bytes |
+| `geometry_xxh128` | The fold of the geometry blocks' digests, in numeric block order; a block digests its decoded `3x2` float32 bytes |
+| `trees_xxh128` | The fold of the chunk digests, in numeric tree order and then numeric chunk order within a tree; a chunk digests its `chunk` entry's decoded bytes |
+| `content_xxh128` | The fold of the section digests above, in the order this table lists them, skipping those a generic file omits |
+
+`images_xxh128`, `origins_xxh128` and `geometry_xxh128` are present exactly in
+SIFT mode and absent in generic mode. `content_xxh128` covers only the other
+fields; the hash entry itself is excluded.
+
+A section made of many items is folded rather than hashed as one stream because
+folding lets the items be digested independently and in any order, and still
+fixes one answer. A writer that compresses blocks across a thread pool therefore
+records the same digest as one that walks them in a loop.
+
+Offset entries carry no digest. They are addressing rather than content, and a
+wrong value is caught by the three structural checks on the offsets plus the
+section digest over whatever they addressed.
 
 This identity depends on packing, node layout and JSON serialization, but not
 compression level. It is not a canonical identity of the vector set. Repacking
 requires recomputing hashes. Hashes detect corruption, not malicious tampering.
 ZIP CRC also covers each entry's stored compressed bytes.
 
-Opening can validate the metadata, hash directory, expected entry set, lengths
-and references' declared ranges without reading every chunk. Chunk decoding
-checks exact sizes, local field constraints and its digest. Full verification
-also checks reachability, ID permutations, split constraints, and every
-descriptor, origin, and geometry block; it necessarily reads the whole file. Lazy access does not certify
-unread chunks. All size arithmetic is checked before allocation, and readers
-may reject files exceeding explicit resource limits. The ZIP dependency indexes
-the central directory by filename, so opening separately counts its raw file
-records and rejects a count greater than the unique-name index; otherwise a
-duplicate name would be collapsed before entry-set validation could see it.
+### What is checked, and when
+
+Opening validates the metadata, the integrity directory's own composition, the
+expected entry set, lengths and references' declared ranges without reading any
+chunk, and it hashes the two things it reads in full: `metadata.json.zst` and the
+storage row map.
+
+**Nothing else is hashed until a full verification asks for it.** Decoding a
+chunk or a block checks its exact size and the local constraints its contents
+must satisfy, and stops there; the digest that would confirm those bytes lives in
+a section digest, which can only be computed by reading the whole section. A
+query reads a few blocks out of millions, so it can afford neither. What this
+buys is that a block read is a seek, a decode and a bounds check, at a cost that
+does not depend on how large the file is.
+
+Full verification is the one place a file's integrity is established. It
+recomputes every section digest from the bytes on disk, folds them, and compares
+both the sections and the whole-file digest against the directory; it also checks
+reachability, ID permutations, split constraints, and that every tree describes
+the same vectors. It necessarily reads the whole file. The digest half is
+[`KdfFile::verify_content`](../../crates/sfmtool-kdf-format/src/read.rs) and the
+structural half is
+[`verify_kdf`](../../crates/sfmtool-kdf-format/src/verify.rs), which calls it
+first.
+
+All size arithmetic is checked before allocation, and readers may reject files
+exceeding explicit resource limits. The ZIP dependency indexes the central
+directory by filename, so opening separately counts its raw file records and
+rejects a count greater than the unique-name index; otherwise a duplicate name
+would be collapsed before entry-set validation could see it.
+
+### Version
+
+`metadata.json`'s `version` is 3. A reader accepts that number and no other, in
+either direction: there is one on-disk shape at a time and no translation between
+shapes. A file carrying another version is refused with a message naming the
+version it holds, the version the reader wants, and the remedy — a `.kdf` is
+derived from the `.sift` files it was built over, so rebuilding it is always
+available and is always the fix.
 
 ## Where this format departs from the container conventions
 
@@ -362,15 +401,16 @@ compressible topology columns.
 **Each corpus is one entry of many frames.** Descriptor and optional geometry
 blocks must stay
 independently decodable — reading one descriptor may not require decompressing the
-corpus — so they remain one frame each, and each keeps its own digest. What changes
-is that the frames are concatenated into a single entry and addressed by a stored
-offsets array instead of by the ZIP directory.
+corpus — so they remain one frame each, and each is digested on its own before
+those digests are folded into the section's. What changes is that the frames are
+concatenated into a single entry and addressed by a stored offsets array instead
+of by the ZIP directory.
 
 This is the departure that matters most, because the useful configurations use
 small blocks: at 16 KiB on DinoLedge, descriptor blocks were ~76,000 of ~100,000
 entries and become one corpus entry plus one offsets entry, taking the measured
 version-1 open latency from 674 ms to 130 ms. SIFT geometry adds its own two
-entries in version 2. It also makes block size
+entries. It also makes block size
 free in entry count, which it was not before — the choice is now purely about
 read granularity. Unlike the grouping above it costs nothing in compression,
 because the frames are unchanged; only their addressing moved.
@@ -384,9 +424,9 @@ What is preserved is the part that carries the weight. The file is still a ZIP o
 STORE entries, so standard tools still list it and still extract any entry. Binary
 arrays are still little-endian and row-major with no headers of their own. Names
 still encode shape and type, and every decoded length is still derivable from a
-name and checked against it. The digests still cover decoded bytes, still compose
-into `content_xxh128` the same way, and still identify the same byte sequences they
-did when those bytes sat in separate entries. A reader that knows this section can
+name and checked against it. The digests still cover decoded bytes and still
+identify the same byte sequences they would have identified had those bytes sat
+in separate entries. A reader that knows this section can
 still be written against the spec alone, in another language, without consulting
 the implementation — which is the standard `specs/formats/` is actually held to.
 
@@ -421,7 +461,7 @@ eager `KdForest` it would be compared against is `uint8` only.
 
 ### Version-1 DinoLedge layout study (2026-09-09)
 
-This section records the measurements that selected version 2's one-corpus
+This section records the measurements that selected the one-corpus
 layout. Tree-local paths and totals below describe the rejected version-1
 alternative, not entries a version-2 writer emits.
 
@@ -524,7 +564,7 @@ chunk metadata/hash JSON adds a few MB decoded before compression. Near or over
 Eight trees roughly double the dominant storage, giving a planning range near
 8.0–8.8 GB. The version-1 shared descriptor corpus removes three raw vector copies
 (3.726 GB), approximately 2.87–2.89 GB compressed under these proxy ratios.
-Version 2 additionally embeds six float32 geometry values per SIFT feature:
+The format additionally embeds six float32 geometry values per SIFT feature:
 232,870,752 decoded bytes for this 9,702,948-row corpus. JPEG pixels and
 thumbnails remain external. The geometry's compressed size was not part of this
 version-1 measurement.
@@ -535,7 +575,7 @@ Building the projected file confirms the decoded arithmetic exactly and lands at
 the bottom of the projected range. Four trees over 9,701,948 of these descriptors
 at a 1 MiB chunk target and zstd level 3, via the version-1 revision of
 [`scripts/benchmark_kdf_layouts.py`](../../scripts/benchmark_kdf_layouts.py)
-(the current script measures version 2):
+(the current script measures version 3):
 
 | Section | Decoded | Stored | Ratio |
 |---------|---------|--------|-------|
@@ -579,7 +619,7 @@ source payload hashes. No source files were modified and no `.kdf` was built.
 
 ### Format tradeoffs
 
-Version 2 pays one uint32 row-map entry per feature to remove `T-1` descriptor
+The format pays one uint32 row-map entry per feature to remove `T-1` descriptor
 copies. The version-1 comparison measured the corpus layout 3.3-3.4x smaller
 across corpora spanning 276x in size and faster in every measured regime except
 a fully resident warm batch. That evidence makes the corpus layout the only

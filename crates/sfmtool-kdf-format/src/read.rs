@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use rayon::prelude::*;
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::ZipArchive;
 
@@ -277,6 +278,12 @@ impl<S: KdfScalar> KdfFile<S> {
             remaining.min(options.max_compressed_bytes),
         )?;
         let metadata: Metadata = serde_json::from_slice(&metadata_raw)?;
+        // Before the integrity directory, not with the rest of the metadata
+        // validation after it: a directory written to another version of the
+        // format does not parse as this one's, and a person whose index is a
+        // version behind should read that rather than a deserializer's account
+        // of where the JSON stopped matching.
+        check_format_and_version(&metadata)?;
         let remaining = remaining
             .checked_sub(metadata_raw.len())
             .ok_or_else(|| KdfError::ResourceLimit("metadata exceeds budget".into()))?;
@@ -832,6 +839,151 @@ impl<S: KdfScalar> KdfFile<S> {
         &self.metadata
     }
 
+    /// Recompute every section digest from the bytes on disk and compare.
+    ///
+    /// This is the whole of the file's integrity check. Opening verifies the two
+    /// things it reads eagerly — the metadata and the corpus row map — and
+    /// nothing else; a tree chunk, a descriptor block, a geometry block or an
+    /// origin block decoded on demand is checked for shape and for the
+    /// constraints its content must satisfy, but its bytes are not hashed. The
+    /// cost of hashing them is proportional to the whole file, which is a price
+    /// a query cannot pay and a deliberate audit can.
+    ///
+    /// Every block is read, so this is a full pass over the file. The corpus and
+    /// geometry sections divide across the thread pool, because a block there is
+    /// addressed by offset and needs no shared reader; the tree chunks and the
+    /// origin blocks are ZIP entries read through one archive, and stay in order.
+    pub fn verify_content(&self) -> Result<(), KdfError> {
+        let metadata_digest = parse_hash(&self.hashes.metadata_xxh128)?;
+        let mut sections = sfmtool_archive_io::SectionDigests::new();
+        sections.push(metadata_digest);
+        if self.metadata.feature_source == "sift_files" {
+            // Reading the table is what checks the images section: it recomputes
+            // that digest over the four entries and refuses a mismatch.
+            self.image_table()?;
+            sections.push(parse_hash(
+                self.hashes.images_xxh128.as_deref().expect("validated"),
+            )?);
+            sections.push(self.check_section(
+                "origins",
+                self.hashes.origins_xxh128.as_deref().expect("validated"),
+                self.origin_block_digests()?,
+            )?);
+        }
+        // The row map is hashed at open, against this same digest.
+        sections.push(parse_hash(&self.hashes.storage_rows_xxh128)?);
+        sections.push(self.check_section(
+            "descriptors",
+            &self.hashes.descriptors_xxh128,
+            self.corpus_block_digests(&self.corpus, "descriptor")?,
+        )?);
+        if let Some(corpus) = self.geometry_corpus.as_ref() {
+            sections.push(self.check_section(
+                "geometry",
+                self.hashes.geometry_xxh128.as_deref().expect("validated"),
+                self.corpus_block_digests(corpus, "geometry")?,
+            )?);
+        }
+        sections.push(self.check_section(
+            "trees",
+            &self.hashes.trees_xxh128,
+            self.tree_chunk_digests()?,
+        )?);
+        if hash_string(sections.finish()) != self.hashes.content_xxh128 {
+            return Err(KdfError::Integrity("whole-file hash mismatch".into()));
+        }
+        Ok(())
+    }
+
+    /// Fold one section's per-item digests and compare against what is stored.
+    fn check_section(&self, what: &str, stored: &str, items: Vec<u128>) -> Result<u128, KdfError> {
+        let mut section = sfmtool_archive_io::SectionDigests::new();
+        for digest in items {
+            section.push(digest);
+        }
+        let digest = section.finish();
+        if hash_string(digest) != stored {
+            return Err(KdfError::Integrity(format!("{what} hash mismatch")));
+        }
+        Ok(digest)
+    }
+
+    /// Digest every block of one blocked corpus, in block order.
+    fn corpus_block_digests(&self, corpus: &Corpus, label: &str) -> Result<Vec<u128>, KdfError> {
+        let q = self.metadata.descriptor_block_rows as usize;
+        let blocks = self.len().div_ceil(q);
+        let row_bytes = if label == "geometry" {
+            std::mem::size_of::<FeatureGeometry>()
+        } else {
+            self.dim() * std::mem::size_of::<S>()
+        };
+        (0..blocks)
+            .into_par_iter()
+            .map(|b| {
+                let rows = q.min(self.len() - b * q);
+                let (raw, _) = self.read_corpus_frame(corpus, label, b as u32, rows * row_bytes)?;
+                Ok(xxh3_128(&raw))
+            })
+            .collect()
+    }
+
+    /// Digest every origin block, in block order, as the writer composed them.
+    fn origin_block_digests(&self) -> Result<Vec<u128>, KdfError> {
+        let q = self.metadata.origin_block_rows.expect("validated") as usize;
+        let blocks = self.len().div_ceil(q);
+        let mut out = Vec::with_capacity(blocks);
+        for b in 0..blocks {
+            let r = q.min(self.len() - b * q);
+            let a_name = format!("origins/{b}/image_indexes.{r}.uint32.zst");
+            let f_name = format!("origins/{b}/image_feature_indexes.{r}.uint32.zst");
+            let mut archive = self.archive.lock().unwrap();
+            let a_raw = read_exact_raw(
+                &mut archive,
+                &self.entries,
+                &a_name,
+                r * 4,
+                self.max_compressed_bytes,
+            )?;
+            let f_raw = read_exact_raw(
+                &mut archive,
+                &self.entries,
+                &f_name,
+                r * 4,
+                self.max_compressed_bytes,
+            )?;
+            drop(archive);
+            let mut h = Xxh3::new();
+            h.update(&a_raw);
+            h.update(&f_raw);
+            out.push(h.digest128());
+        }
+        Ok(out)
+    }
+
+    /// Digest every packed tree chunk, in tree order and then chunk order.
+    fn tree_chunk_digests(&self) -> Result<Vec<u128>, KdfError> {
+        let mut out = Vec::new();
+        for (ti, tree) in self.metadata.trees.iter().enumerate() {
+            for (ci, meta) in tree.chunks.iter().enumerate() {
+                let m = meta.node_count as usize;
+                let p = meta.feature_count as usize;
+                let name = chunk_entry_name::<S>(ti, ci, m, p);
+                let spans = chunk_spans::<S>(m, p);
+                let mut archive = self.archive.lock().unwrap();
+                let raw = read_exact_raw(
+                    &mut archive,
+                    &self.entries,
+                    &name,
+                    spans.total,
+                    self.max_compressed_bytes,
+                )?;
+                drop(archive);
+                out.push(xxh3_128(&raw));
+            }
+        }
+        Ok(out)
+    }
+
     fn tree_chunk(&self, tree: u32, chunk: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
         let meta = self
             .metadata
@@ -866,12 +1018,6 @@ impl<S: KdfScalar> KdfFile<S> {
             self.max_compressed_bytes,
         )?;
         drop(archive);
-        let expected = &self.hashes.chunks_xxh128[tree as usize][chunk as usize];
-        if hash_string(xxh3_128(&raw)) != *expected {
-            return Err(KdfError::Integrity(format!(
-                "tree {tree} chunk {chunk} hash mismatch"
-            )));
-        }
         let columns: Vec<u32> = bytes_to_pod(&name, &raw[..spans.nodes_end], NODE_COLUMNS * m)?;
         let splits: Vec<S> = bytes_to_pod(&name, &raw[spans.nodes_end..spans.splits_end], m)?;
         let feature_ids: Vec<u32> = bytes_to_pod(&name, &raw[spans.splits_end..spans.total], p)?;
@@ -952,13 +1098,6 @@ impl<S: KdfScalar> KdfFile<S> {
             .get_or_load(CacheKey::Descriptor(block), declared, || {
                 let (raw, compressed) =
                     self.read_corpus_frame(&self.corpus, "descriptor", block, declared)?;
-                if hash_string(xxh3_128(&raw))
-                    != self.hashes.descriptor_blocks_xxh128[block as usize]
-                {
-                    return Err(KdfError::Integrity(format!(
-                        "descriptor block {block} hash mismatch"
-                    )));
-                }
                 let values: Vec<S> = bytes_to_pod(
                     &corpus_entry_name::<S>(self.len(), self.dim()),
                     &raw,
@@ -989,17 +1128,6 @@ impl<S: KdfScalar> KdfFile<S> {
             .get_or_load(CacheKey::Geometry(block), declared, || {
                 let (raw, compressed) =
                     self.read_corpus_frame(corpus, "geometry", block, declared)?;
-                if hash_string(xxh3_128(&raw))
-                    != self
-                        .hashes
-                        .geometry_blocks_xxh128
-                        .as_ref()
-                        .expect("validated")[block as usize]
-                {
-                    return Err(KdfError::Integrity(format!(
-                        "geometry block {block} hash mismatch"
-                    )));
-                }
                 let values: Vec<FeatureGeometry> =
                     bytes_to_pod(&geometry_entry_name(self.len()), &raw, rows)?;
                 if values.iter().flatten().flatten().any(|v| !v.is_finite()) {
@@ -1039,16 +1167,6 @@ impl<S: KdfScalar> KdfFile<S> {
                     self.max_compressed_bytes,
                 )?;
                 drop(archive);
-                let mut h = Xxh3::new();
-                h.update(&a_raw);
-                h.update(&f_raw);
-                if hash_string(h.digest128())
-                    != self.hashes.origins_xxh128.as_ref().expect("validated")[block as usize]
-                {
-                    return Err(KdfError::Integrity(format!(
-                        "origin block {block} hash mismatch"
-                    )));
-                }
                 let images: Vec<u32> = bytes_to_pod(&a_name, &a_raw, r)?;
                 let features: Vec<u32> = bytes_to_pod(&f_name, &f_raw, r)?;
                 let origins: Vec<FeatureOrigin> = images
@@ -1101,16 +1219,32 @@ fn central_directory_entry_count(mut file: std::fs::File, start: u64) -> Result<
     Ok(count)
 }
 
+/// Refuse a file this build does not read, before anything else is decoded.
+///
+/// A version this build does not write is not read either, in either direction:
+/// there is one on-disk shape at a time and no translation layer. The message
+/// names the remedy, because an index is derived from the `.sift` files it was
+/// built from and rebuilding it is the whole fix.
+fn check_format_and_version(m: &Metadata) -> Result<(), KdfError> {
+    if m.format != "kdf" || m.metric != "squared_l2" {
+        return Err(KdfError::InvalidFormat(
+            "unsupported format or metric".into(),
+        ));
+    }
+    if m.version != KDF_FORMAT_VERSION {
+        return Err(KdfError::InvalidFormat(format!(
+            "this is a version {} index and this build reads version {}; rebuild the index",
+            m.version, KDF_FORMAT_VERSION
+        )));
+    }
+    Ok(())
+}
+
 fn validate_metadata<S: KdfScalar>(
     m: &Metadata,
     h: &ContentHash,
     o: &LazyKdForestOptions,
 ) -> Result<usize, KdfError> {
-    if m.format != "kdf" || m.version != KDF_FORMAT_VERSION || m.metric != "squared_l2" {
-        return Err(KdfError::InvalidFormat(
-            "unsupported format, version, or metric".into(),
-        ));
-    }
     if m.scalar_type != S::TYPE_NAME {
         return Err(KdfError::ScalarType {
             file: m.scalar_type.clone(),
@@ -1143,16 +1277,8 @@ fn validate_metadata<S: KdfScalar>(
             "invalid SIFT source metadata".into(),
         ));
     }
-    if h.chunks_xxh128.len() != m.trees.len() {
-        return Err(KdfError::InvalidFormat(
-            "chunk hash tree count mismatch".into(),
-        ));
-    }
     let mut largest = 0usize;
-    for (ti, tree) in m.trees.iter().enumerate() {
-        if h.chunks_xxh128[ti].len() != tree.chunks.len() {
-            return Err(KdfError::InvalidFormat("chunk hash count mismatch".into()));
-        }
+    for tree in m.trees.iter() {
         if m.feature_count == 0 {
             if tree.root.is_some() || !tree.chunks.is_empty() {
                 return Err(KdfError::InvalidFormat(
@@ -1212,80 +1338,64 @@ fn validate_metadata<S: KdfScalar>(
     Ok(largest)
 }
 
+/// Check the integrity directory against what the metadata says the file holds.
+///
+/// There is one digest per section and the set of sections is decided by the
+/// feature source, so this is a presence test and a syntax test. Nothing here
+/// counts digests against blocks or chunks: the directory's size does not depend
+/// on the corpus.
 fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
-    for s in std::iter::once(&h.metadata_xxh128)
-        .chain(std::iter::once(&h.content_xxh128))
-        .chain(h.chunks_xxh128.iter().flatten())
-    {
-        parse_hash(s)?;
-    }
-    let descriptor_blocks = (m.feature_count as usize).div_ceil(m.descriptor_block_rows as usize);
-    if h.descriptor_blocks_xxh128.len() != descriptor_blocks {
-        return Err(KdfError::InvalidFormat(
-            "descriptor block hash count mismatch".into(),
-        ));
-    }
     let sift = m.feature_source == "sift_files";
     if sift
-        != (h.images_xxh128.is_some()
-            && h.origins_xxh128.is_some()
-            && h.geometry_blocks_xxh128.is_some())
+        != (h.images_xxh128.is_some() && h.origins_xxh128.is_some() && h.geometry_xxh128.is_some())
     {
         return Err(KdfError::InvalidFormat(
             "source hash fields mismatch feature source".into(),
         ));
     }
-    let origin_blocks = m
-        .origin_block_rows
-        .map_or(0, |q| (m.feature_count as usize).div_ceil(q as usize));
-    if h.origins_xxh128.as_ref().map_or(0, Vec::len) != origin_blocks {
-        return Err(KdfError::InvalidFormat(
-            "origin block hash count mismatch".into(),
-        ));
-    }
-    if h.geometry_blocks_xxh128.as_ref().map_or(0, Vec::len)
-        != if sift { descriptor_blocks } else { 0 }
-    {
-        return Err(KdfError::InvalidFormat(
-            "geometry block hash count mismatch".into(),
-        ));
-    }
-    for s in std::iter::once(&h.storage_rows_xxh128)
-        .chain(h.images_xxh128.iter())
-        .chain(h.descriptor_blocks_xxh128.iter())
-        .chain(h.geometry_blocks_xxh128.iter().flatten())
-        .chain(h.origins_xxh128.iter().flatten())
+    for s in [
+        &h.metadata_xxh128,
+        &h.content_xxh128,
+        &h.storage_rows_xxh128,
+        &h.descriptors_xxh128,
+        &h.trees_xxh128,
+    ]
+    .into_iter()
+    .chain(h.images_xxh128.iter())
+    .chain(h.origins_xxh128.iter())
+    .chain(h.geometry_xxh128.iter())
     {
         parse_hash(s)?;
     }
-    let mut sections = sfmtool_archive_io::SectionDigests::new();
-    sections.push(parse_hash(&h.metadata_xxh128)?);
-    if let Some(v) = &h.images_xxh128 {
-        sections.push(parse_hash(v)?);
-    }
-    if let Some(values) = &h.origins_xxh128 {
-        for v in values {
-            sections.push(parse_hash(v)?);
-        }
-    }
-    sections.push(parse_hash(&h.storage_rows_xxh128)?);
-    for v in &h.descriptor_blocks_xxh128 {
-        sections.push(parse_hash(v)?);
-    }
-    if let Some(values) = &h.geometry_blocks_xxh128 {
-        for v in values {
-            sections.push(parse_hash(v)?);
-        }
-    }
-    for v in h.chunks_xxh128.iter().flatten() {
-        sections.push(parse_hash(v)?);
-    }
-    if hash_string(sections.finish()) != h.content_xxh128 {
+    // The whole-file digest is a fold over the section digests, so a directory
+    // that disagrees with itself is caught here, before a byte of payload is
+    // read. What it does not say is whether either matches the data; that is
+    // `verify_content`'s question.
+    if hash_string(compose_content_hash(h)?) != h.content_xxh128 {
         return Err(KdfError::Integrity(
             "whole-file digest composition mismatch".into(),
         ));
     }
     Ok(())
+}
+
+/// Fold an integrity directory's section digests in the order the format fixes.
+fn compose_content_hash(h: &ContentHash) -> Result<u128, KdfError> {
+    let mut sections = sfmtool_archive_io::SectionDigests::new();
+    for s in [Some(&h.metadata_xxh128), h.images_xxh128.as_ref()]
+        .into_iter()
+        .chain([
+            h.origins_xxh128.as_ref(),
+            Some(&h.storage_rows_xxh128),
+            Some(&h.descriptors_xxh128),
+            h.geometry_xxh128.as_ref(),
+            Some(&h.trees_xxh128),
+        ])
+        .flatten()
+    {
+        sections.push(parse_hash(s)?);
+    }
+    Ok(sections.finish())
 }
 
 fn expected_entries<S: KdfScalar>(

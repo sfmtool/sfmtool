@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Current `.kdf` wire-format version.
-pub const KDF_FORMAT_VERSION: u32 = 2;
+pub const KDF_FORMAT_VERSION: u32 = 3;
 
 /// Errors from persistent forest I/O, validation, and resource accounting.
 #[derive(thiserror::Error, Debug)]
@@ -158,10 +158,30 @@ impl Default for KdfWriteOptions {
 }
 
 /// Limits for lazy opening, decoding, caching, and query scratch.
+///
+/// The defaults divide into two kinds, and the difference is what a limit is
+/// there to bound. Three of them — [`cache_bytes`](Self::cache_bytes),
+/// [`max_in_flight_bytes`](Self::max_in_flight_bytes),
+/// [`max_chunk_bytes`](Self::max_chunk_bytes) — bound a decoded item or a set of
+/// them, and an item is a block or a chunk whose size the write options fix at a
+/// megabyte or less however large the corpus is; so is
+/// [`max_leaf_features`](Self::max_leaf_features), which bounds one leaf. Those
+/// do not move with the corpus and their defaults do not either.
+///
+/// Two do move with it, linearly, and their defaults are set by what the largest
+/// index worth opening needs. A hundred-million-descriptor index is about
+/// 0.5 GB of corpus row map and 0.34 GB of it compressed on disk, so
+/// [`max_address_map_bytes`](Self::max_address_map_bytes) is 768 MiB and
+/// [`max_compressed_bytes`](Self::max_compressed_bytes) is 384 MiB, which reach
+/// about 160 M and about 112 M descriptors respectively at 128-D uint8.
 #[derive(Clone, Debug)]
 pub struct LazyKdForestOptions {
     /// Maximum bytes used by the eagerly loaded feature-ID-to-storage-row map.
-    /// Defaults to 256 MiB.
+    ///
+    /// The map is four bytes a feature and is validated with a one-byte-a-feature
+    /// scratch beside it, so this is five bytes a feature and the only limit that
+    /// bounds an allocation the whole corpus decides. Defaults to 768 MiB, which
+    /// is about 160 M features.
     pub max_address_map_bytes: usize,
     /// Maximum number of feature IDs that a leaf accessor or query may copy.
     /// Defaults to 1,048,576 features.
@@ -178,14 +198,19 @@ pub struct LazyKdForestOptions {
     pub max_in_flight_bytes: usize,
     /// Maximum compressed bytes buffered for any one entry or frame read.
     ///
-    /// Must be positive; defaults to 64 MiB. Open-time metadata reads apply both
-    /// this compressed-byte budget and the decoded
-    /// [`max_metadata_bytes`](Self::max_metadata_bytes) budget, except the
-    /// integrity directory may use the metadata budget for its compressed frame.
+    /// Two quite different reads meet here. A block frame is a couple of KiB and
+    /// a tree chunk about a megabyte, whatever the corpus; the corpus row map is
+    /// four bytes a feature and compresses to about three and a half, because it
+    /// is a permutation and a permutation has little to compress. That entry is
+    /// what sets this default: 384 MiB, which is about 112 M features at 128-D
+    /// uint8. Must be positive.
     pub max_compressed_bytes: usize,
     /// Maximum decoded metadata bytes and approximate ZIP-directory bookkeeping bytes.
     ///
-    /// Must be positive; defaults to 64 MiB.
+    /// The integrity directory holds one digest a section, so its size does not
+    /// depend on the corpus; what grows is the ZIP directory and the chunk
+    /// directory inside `metadata.json`, at roughly four thousandths of a byte a
+    /// feature between them. Must be positive; defaults to 384 MiB.
     pub max_metadata_bytes: usize,
     /// Maximum decoded size in bytes of any single cache item declared by the file.
     ///
@@ -201,12 +226,12 @@ pub struct LazyKdForestOptions {
 impl Default for LazyKdForestOptions {
     fn default() -> Self {
         Self {
-            max_address_map_bytes: 256 << 20,
+            max_address_map_bytes: 768 << 20,
             max_leaf_features: 1_048_576,
             cache_bytes: 256 << 20,
             max_in_flight_bytes: 64 << 20,
-            max_compressed_bytes: 64 << 20,
-            max_metadata_bytes: 64 << 20,
+            max_compressed_bytes: 384 << 20,
+            max_metadata_bytes: 384 << 20,
             max_chunk_bytes: 64 << 20,
             query_workers: 1,
         }
@@ -478,19 +503,27 @@ pub(crate) struct ChunkMetadata {
     pub decoded_bytes: u64,
 }
 
+/// One digest per section, and one over all of them.
+///
+/// Every field is a 32-character lowercase hexadecimal XXH3-128 digest, so the
+/// entry has the same small size for a thousand descriptors and for a hundred
+/// million. A section made of many items — corpus blocks, origin blocks, tree
+/// chunks — folds those items into its one digest by the rule the format
+/// specification states, which is the rule this struct's whole-file
+/// [`content_xxh128`](Self::content_xxh128) folds the sections by.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ContentHash {
     pub metadata_xxh128: String,
-    pub chunks_xxh128: Vec<Vec<String>>,
-    pub content_xxh128: String,
-    pub storage_rows_xxh128: String,
-    pub descriptor_blocks_xxh128: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub geometry_blocks_xxh128: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images_xxh128: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub origins_xxh128: Option<Vec<String>>,
+    pub origins_xxh128: Option<String>,
+    pub storage_rows_xxh128: String,
+    pub descriptors_xxh128: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_xxh128: Option<String>,
+    pub trees_xxh128: String,
+    pub content_xxh128: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

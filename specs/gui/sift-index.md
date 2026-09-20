@@ -71,6 +71,13 @@ A stale index **stays open and stays named**, so a person sees what is there
 and why it will not do. *Open...* on a file that is stale for this node opens it
 in that state and says so in the Action Log, rather than refusing.
 
+A file that does not open at all is not a fourth state: the node reads `none`,
+and the Action Log carries one row saying which file it was and what the format
+reader said about it. The commonest reason is a `.kdf` written to an earlier
+version of the format, whose refusal names the remedy, and `none` is already the
+state whose entry offers to build one — so the row a person reads and the entry
+they reach for agree.
+
 ### When the question is asked
 
 The state is derived when an index is opened or built, and again when a version

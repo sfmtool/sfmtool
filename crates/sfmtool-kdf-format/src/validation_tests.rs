@@ -100,8 +100,17 @@ fn tiny_u8_content_hash_is_stable() {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     let raw = sfmtool_archive_io::read_zst_entry(&mut archive, "content_hash.json.zst").unwrap();
     let hash: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    // Frozen from the original writer at HEAD 6528c746.
-    assert_eq!(hash["content_xxh128"], "583f0b7dd71eb8a5107042f3d0de4012");
+    // Frozen from the version 3 writer. The whole-file digest depends on
+    // packing, node layout and JSON serialization, so a change to any of those
+    // lands here first.
+    assert_eq!(hash["content_xxh128"], "cf4fe8eb28d7891f29fe619fe2e60f52");
+    // One digest a section, whatever the corpus: nothing in this object is a
+    // list, so its size does not grow with the number of blocks or chunks.
+    let object = hash.as_object().unwrap();
+    assert!(
+        object.values().all(serde_json::Value::is_string),
+        "the integrity directory holds a digest per section, not a list: {object:?}"
+    );
 }
 
 fn read_stored(path: &Path) -> StoredEntries {
@@ -176,6 +185,49 @@ fn parse_hash(value: &str) -> u128 {
     u128::from_str_radix(value, 16).unwrap()
 }
 
+/// The format's one folding rule: sixteen big-endian bytes per item, in order.
+fn fold(items: &[u128]) -> u128 {
+    let mut composition = Vec::with_capacity(items.len() * 16);
+    for value in items {
+        composition.extend_from_slice(&value.to_be_bytes());
+    }
+    xxh3_128(&composition)
+}
+
+/// The name of every entry under `prefix`, in ascending block or chunk index.
+fn indexed_entries(entries: &StoredEntries, prefix: &str, suffix: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some((name, _)) = entries
+        .iter()
+        .find(|(name, _)| name.starts_with(&format!("{prefix}{}/{suffix}", out.len())))
+    {
+        out.push(name.clone());
+    }
+    out
+}
+
+/// Every block frame of one container entry, sliced by its offsets array.
+fn container_frames(entries: &StoredEntries, container: &str, offsets: &str) -> Vec<Vec<u8>> {
+    let container = entry_starting_with(entries, container);
+    let offsets_name = entry_starting_with(entries, offsets);
+    let offsets_raw = decode_entry(entries, &offsets_name);
+    let offsets: &[u64] = bytemuck::cast_slice(&offsets_raw);
+    let corpus = stored(entries, &container);
+    offsets
+        .windows(2)
+        .map(|pair| corpus[pair[0] as usize..pair[1] as usize].to_vec())
+        .collect()
+}
+
+/// Fold a blocked container's raw block bytes into its one section digest.
+fn container_digest(entries: &StoredEntries, container: &str, offsets: &str) -> u128 {
+    let digests: Vec<u128> = container_frames(entries, container, offsets)
+        .iter()
+        .map(|frame| xxh3_128(&zstd::decode_all(Cursor::new(frame)).unwrap()))
+        .collect();
+    fold(&digests)
+}
+
 /// Recompute every section digest from the current decoded payloads.
 ///
 /// The helper intentionally mirrors the format's composition order rather than
@@ -199,86 +251,63 @@ fn refresh_hashes(entries: &mut StoredEntries) {
         hashes.images_xxh128 = Some(format_hash(hash.digest128()));
     }
 
-    if let Some(origin_hashes) = &mut hashes.origins_xxh128 {
-        for (block, digest) in origin_hashes.iter_mut().enumerate() {
-            let images = entry_starting_with(entries, &format!("origins/{block}/image_indexes."));
-            let features =
-                entry_starting_with(entries, &format!("origins/{block}/image_feature_indexes."));
-            *digest = format_hash(hash_pair(
-                &decode_entry(entries, &images),
-                &decode_entry(entries, &features),
-            ));
-        }
+    if hashes.origins_xxh128.is_some() {
+        let images = indexed_entries(entries, "origins/", "image_indexes.");
+        let features = indexed_entries(entries, "origins/", "image_feature_indexes.");
+        let digests: Vec<u128> = images
+            .iter()
+            .zip(&features)
+            .map(|(a, f)| hash_pair(&decode_entry(entries, a), &decode_entry(entries, f)))
+            .collect();
+        hashes.origins_xxh128 = Some(format_hash(fold(&digests)));
     }
 
     let name = entry_starting_with(entries, "features/storage_rows.");
     hashes.storage_rows_xxh128 = format_hash(xxh3_128(&decode_entry(entries, &name)));
 
-    {
-        let descriptor_hashes = &mut hashes.descriptor_blocks_xxh128;
-        let corpus = entry_starting_with(entries, "features/corpus.");
-        let offsets_name = entry_starting_with(entries, "features/block_offsets.");
-        let offsets_raw = decode_entry(entries, &offsets_name);
-        let offsets: &[u64] = bytemuck::cast_slice(&offsets_raw);
-        let corpus = stored(entries, &corpus);
-        for (digest, pair) in descriptor_hashes.iter_mut().zip(offsets.windows(2)) {
-            let raw =
-                zstd::decode_all(Cursor::new(&corpus[pair[0] as usize..pair[1] as usize])).unwrap();
-            *digest = format_hash(xxh3_128(&raw));
-        }
+    hashes.descriptors_xxh128 = format_hash(container_digest(
+        entries,
+        "features/corpus.",
+        "features/block_offsets.",
+    ));
+
+    if hashes.geometry_xxh128.is_some() {
+        hashes.geometry_xxh128 = Some(format_hash(container_digest(
+            entries,
+            "features/geometry.",
+            "features/geometry_block_offsets.",
+        )));
     }
 
-    if let Some(geometry_hashes) = &mut hashes.geometry_blocks_xxh128 {
-        let corpus = entry_starting_with(entries, "features/geometry.");
-        let offsets_name = entry_starting_with(entries, "features/geometry_block_offsets.");
-        let offsets_raw = decode_entry(entries, &offsets_name);
-        let offsets: &[u64] = bytemuck::cast_slice(&offsets_raw);
-        let corpus = stored(entries, &corpus);
-        for (digest, pair) in geometry_hashes.iter_mut().zip(offsets.windows(2)) {
-            let raw =
-                zstd::decode_all(Cursor::new(&corpus[pair[0] as usize..pair[1] as usize])).unwrap();
-            *digest = format_hash(xxh3_128(&raw));
+    let mut chunk_digests = Vec::new();
+    for tree in 0.. {
+        let chunks = indexed_entries(entries, &format!("trees/{tree}/chunks/"), "chunk.");
+        if chunks.is_empty()
+            && !entries
+                .iter()
+                .any(|(n, _)| n.starts_with(&format!("trees/{tree}/")))
+        {
+            break;
+        }
+        for name in chunks {
+            chunk_digests.push(xxh3_128(&decode_entry(entries, &name)));
         }
     }
+    hashes.trees_xxh128 = format_hash(fold(&chunk_digests));
 
-    for (tree, chunk_hashes) in hashes.chunks_xxh128.iter_mut().enumerate() {
-        for (chunk, digest) in chunk_hashes.iter_mut().enumerate() {
-            let prefix = format!("trees/{tree}/chunks/{chunk}/");
-            let topology = entry_starting_with(entries, &format!("{prefix}chunk."));
-            let topology = decode_entry(entries, &topology);
-            *digest = format_hash(xxh3_128(&topology));
-        }
-    }
-
-    let mut sections = vec![parse_hash(&hashes.metadata_xxh128)];
-    if let Some(value) = &hashes.images_xxh128 {
-        sections.push(parse_hash(value));
-    }
-    if let Some(values) = &hashes.origins_xxh128 {
-        sections.extend(values.iter().map(|value| parse_hash(value)));
-    }
-    sections.push(parse_hash(&hashes.storage_rows_xxh128));
-    sections.extend(
-        hashes
-            .descriptor_blocks_xxh128
-            .iter()
-            .map(|value| parse_hash(value)),
-    );
-    if let Some(values) = &hashes.geometry_blocks_xxh128 {
-        sections.extend(values.iter().map(|value| parse_hash(value)));
-    }
-    sections.extend(
-        hashes
-            .chunks_xxh128
-            .iter()
-            .flatten()
-            .map(|value| parse_hash(value)),
-    );
-    let mut composition = Vec::with_capacity(sections.len() * 16);
-    for value in sections {
-        composition.extend_from_slice(&value.to_be_bytes());
-    }
-    hashes.content_xxh128 = format_hash(xxh3_128(&composition));
+    let sections: Vec<u128> = [Some(&hashes.metadata_xxh128), hashes.images_xxh128.as_ref()]
+        .into_iter()
+        .chain([
+            hashes.origins_xxh128.as_ref(),
+            Some(&hashes.storage_rows_xxh128),
+            Some(&hashes.descriptors_xxh128),
+            hashes.geometry_xxh128.as_ref(),
+            Some(&hashes.trees_xxh128),
+        ])
+        .flatten()
+        .map(|value| parse_hash(value))
+        .collect();
+    hashes.content_xxh128 = format_hash(fold(&sections));
     replace_decoded(
         entries,
         "content_hash.json.zst",
@@ -542,9 +571,14 @@ fn metadata_version_scalar_and_declared_shape_are_checked() {
             value["version"] = old_or_future.into();
             *raw = serde_json::to_vec(&value).unwrap();
         });
+        // A version this build does not write is refused with the remedy in the
+        // message, because rebuilding is the only way past it: there is no
+        // translation from an older shape and none to a newer one.
         assert_invalid(
             open_error(&version),
-            "unsupported format, version, or metric",
+            &format!(
+                "this is a version {old_or_future} index and this build reads version 3; rebuild the index"
+            ),
         );
     }
 

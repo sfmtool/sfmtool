@@ -36,12 +36,12 @@ pub struct KdfWriteOptions {
     pub replace_existing: bool,    // default: false, so a destination that exists is refused
 }
 pub struct LazyKdForestOptions {
-    pub max_address_map_bytes: usize, // provisional: 256 MiB
+    pub max_address_map_bytes: usize, // 768 MiB: 5 bytes a feature
     pub max_leaf_features: usize,     // provisional: 1,048,576
     pub cache_bytes: usize,        // provisional: 256 MiB decoded cache
     pub max_in_flight_bytes: usize,// provisional: 64 MiB decode reservations
-    pub max_compressed_bytes: usize, // provisional: 64 MiB per-entry compressed scratch
-    pub max_metadata_bytes: usize, // provisional: 64 MiB
+    pub max_compressed_bytes: usize, // 384 MiB: the compressed row map sets this
+    pub max_metadata_bytes: usize, // 384 MiB
     pub max_chunk_bytes: usize,    // provisional: 64 MiB decoded
     pub query_workers: usize,     // provisional: 1; caller can raise
 }
@@ -106,7 +106,10 @@ not an invitation to persist arbitrary user metrics. `Neighbor` retains original
 row ID and squared distance. Fallible queries are necessary because an unread
 chunk can fail after open succeeds. Errors distinguish I/O (with entry context),
 unsupported format/scalar, invalid shape/query/options, resource limit, malformed
-structure and integrity mismatch. A failed query or batch returns an error, not
+structure and integrity mismatch. A chunk or block read checks its decoded size
+and the constraints its contents must satisfy; it does not hash them, because a
+digest in this format covers a whole section and a query reads a few blocks out
+of millions. Hashing is what the offline verifier below does. A failed query or batch returns an error, not
 an apparently successful shortened result.
 
 Illustrative usage, with a file built from the same in-memory index:
@@ -170,10 +173,11 @@ what the eager forest's matching `resolve_descriptors` exists for.
 Origin and geometry blocks are cached on demand under the same byte budget as tree chunks;
 only blocks covering requested result IDs are read. Image metadata/hashes load
 on first source-table access, within the metadata budget. Normal ANN reads
-neither origins, geometry, nor image tables. Offline KDF verification checks
-origin ranges, uniqueness, and every geometry block; a separate explicit source
-verifier checks referenced SIFT hashes, feature bounds, vector equality, and
-keypoint/affine equality, reporting missing files distinctly.
+neither origins, geometry, nor image tables. Offline KDF verification recomputes
+every section digest from the bytes on disk and checks origin ranges, uniqueness,
+and every geometry block; a separate explicit source verifier checks referenced
+SIFT hashes, feature bounds, vector equality, and keypoint/affine equality,
+reporting missing files distinctly.
 Repacking preserves this mapping. Exporting a descriptor subset retains its
 original SIFT feature indices even though input row IDs are newly dense.
 
@@ -200,7 +204,7 @@ rather than silently paging it. Report resident map and validation-scratch bytes
 the map is separate from the decoded chunk cache and metadata limit.
 
 Descriptor, optional geometry, tree, and origin blocks use the same byte-weighted
-cache with distinct key kinds, integrity checks and single-load coordination.
+cache with distinct key kinds and single-load coordination.
 Before requesting descriptors, copy the ordered leaf IDs into query scratch
 and release the tree chunk pin. Process rows in leaf order, deduplicating IDs before
 fetching vectors; release a descriptor block pin before requesting another block.
@@ -444,8 +448,8 @@ There are two distinct sources of overhead relative to an eager forest:
 - With a resident working set, lazy traversal validates addresses, tracks visited
   nodes, resolves storage rows and acquires pins. Eager traversal indexes resident
   arrays directly. Disk speed cannot explain a run with zero reads.
-- Under cache pressure, misses require admission, reads, decompression and integrity
-  checking. Eviction can make the same block decode repeatedly. The old eviction
+- Under cache pressure, misses require admission, reads and decompression.
+  Eviction can make the same block decode repeatedly. The old eviction
   scan additionally cost CPU time proportional to resident entries per replacement.
 
 A release cache-only probe (`benchmark_cache_churn`, 10,000 replacements, no file
@@ -602,13 +606,13 @@ advantage seen from the other side. On `dino_dog_toy`, shared is at full speed b
 256 MiB (0.24 s) while tree-local still needs 1 GiB (0.48 s) and takes 8.03 s at
 64 MiB. A file 3.3x smaller fits a cache 3.3x sooner.
 
-**The hash directory grows with the block count, and is read at open.**
-`descriptor_blocks_xxh128` holds one digest per descriptor block, so a small block
-size makes a large directory: 9.7M descriptors in 4 KiB blocks is ~303,000 digests,
-around 10 MB of JSON parsed before the first query, and 2 KiB blocks double it.
-This is the part of a small block size that is *not* free — the container made block
-count free in ZIP entries, but not here — and it is most of why open time climbs as
-blocks shrink, the offsets array being the smaller term.
+**The hash directory is a fixed handful of hundred bytes.** It holds one digest
+per section rather than one per block, so a small block size costs nothing there
+and the offsets array is the only open-time term that grows as blocks shrink.
+(The measurements in this section were taken against a layout that held one
+digest per block, where 9.7M descriptors in 4 KiB blocks meant ~303,000 digests
+and around 10 MB of JSON parsed before the first query; the open times below
+carry that cost and a repeat of the sweep would not.)
 
 **Descriptor block reuse is a tree-0 effect, and it collapses as trees are
 added.** The shared corpus is laid out in tree-0 leaf order, so tree 0's leaves are
@@ -1191,8 +1195,8 @@ lazily and in the caller's requested order including repeats, the writer's
 refusal to overwrite an existing destination, and a `ResourceLimit` when the
 address-map budget cannot hold the row map. The corruption case is the
 one that pins the laziness contract: a damaged descriptor block leaves
-`open` succeeding and reading nothing, makes the direct access fail, and makes
-full verification fail.
+`open` succeeding and reading nothing, makes the direct access fail on the frame
+it cannot decode, and makes full verification fail on the corpus section digest.
 
 [`sfmtool-kdf-format/src/validation_tests.rs`](../../../crates/sfmtool-kdf-format/src/validation_tests.rs)
 builds the negative surface around a hash-aware archive mutator. It changes a

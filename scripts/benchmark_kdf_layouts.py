@@ -1,10 +1,10 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sweep version-2 `.kdf` blocking and cache settings on a real SIFT corpus.
+"""Sweep `.kdf` blocking and cache settings on a real SIFT corpus.
 
 Runs a staged sweep from `specs/core/features/lazy-kdforest-query.md` against a
-workspace's `.sift` files. Version 2 has one descriptor corpus; this measures
+workspace's `.sift` files. The format has one descriptor corpus; this measures
 tree-chunk size, descriptor/geometry block size, cache budget and worker count.
 
 The stages are deliberately not a Cartesian product: stage 1 screens tree-chunk

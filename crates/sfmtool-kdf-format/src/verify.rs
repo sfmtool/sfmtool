@@ -6,12 +6,23 @@ use std::path::{Path, PathBuf};
 
 use crate::{DecodedNode, KdfError, KdfFile, KdfScalar, LazyKdForestOptions, Verification};
 
-/// Read and semantically verify every tree, descriptor, and origin block.
+/// Read and verify every tree, descriptor, and origin block.
+///
+/// This is where a `.kdf`'s integrity is established. Two things are checked and
+/// they are independent: that the bytes on disk are the bytes the file records
+/// digests for, which [`KdfFile::verify_content`] settles section by section,
+/// and that what those bytes decode to is a well-formed forest — every node
+/// reachable once, every feature ID a permutation, every descriptor on the right
+/// side of the splits above it, and every tree describing the same vectors.
+///
+/// Ordinary reading checks neither, so a file that has never been through here
+/// is a file whose blocks have only ever been checked for shape.
 pub fn verify_kdf<S: KdfScalar>(
     path: &Path,
     options: LazyKdForestOptions,
 ) -> Result<Verification, KdfError> {
     let file = KdfFile::<S>::open(path, options)?;
+    file.verify_content()?;
     let mut reference: Option<Vec<S>> = None;
     let mut chunk_addresses = HashSet::new();
     for ti in 0..file.tree_count() {

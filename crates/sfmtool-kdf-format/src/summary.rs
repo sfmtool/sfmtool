@@ -198,7 +198,7 @@ fn section_of(name: &str) -> &'static str {
 ///
 /// ```no_run
 /// # fn main() -> Result<(), sfmtool_kdf_format::KdfError> {
-/// let summary = sfmtool_kdf_format::kdf_summary("corpus.kdf".as_ref(), 64 << 20)?;
+/// let summary = sfmtool_kdf_format::kdf_summary("corpus.kdf".as_ref(), 384 << 20)?;
 /// for section in &summary.sections {
 ///     println!("{:>18}  {:>12}", section.section, section.compressed_bytes);
 /// }
