@@ -569,20 +569,14 @@ struct Shares<'p, 'a> {
     chunks: &'p Progress<'a>,
 }
 
-fn write_into<W: Write + Seek, S: KdfScalar>(
-    writer: W,
+fn metadata<S: KdfScalar>(
     data: &KdfForestData<'_, S>,
     sources: Option<&KdfSiftSources>,
     options: &KdfWriteOptions,
     packed: &[Vec<PackedChunk<S>>],
-    shares: Shares<'_, '_>,
-) -> Result<(), KdfError> {
-    let row_bytes = data
-        .dimension
-        .checked_mul(std::mem::size_of::<S>())
-        .ok_or_else(|| KdfError::ResourceLimit("row byte size overflow".into()))?;
-    let descriptor_rows = (options.target_descriptor_block_bytes / row_bytes).max(1);
-    let metadata = Metadata {
+    descriptor_rows: usize,
+) -> Metadata {
+    Metadata {
         format: "kdf".into(),
         version: KDF_FORMAT_VERSION,
         scalar_type: S::TYPE_NAME.into(),
@@ -615,228 +609,253 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         origin_block_rows: sources.map(|_| options.origin_block_rows as u32),
         workspace: sources.map(|s| s.workspace.clone()),
         provenance: data.provenance.clone(),
+    }
+}
+
+fn write_images_and_origins<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    sources: Option<&KdfSiftSources>,
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<(Option<u128>, Option<u128>), KdfError> {
+    let Some(src) = sources else {
+        return Ok((None, None));
     };
-    let mut zip = ZipWriter::new(writer);
-    let metadata_raw = write_json_entry(
-        &mut zip,
-        "metadata.json.zst",
-        &metadata,
+
+    let imeta = ImagesMetadata {
+        image_count: src.image_names.len() as u32,
+    };
+    // Section hash order is lexicographic path order, intentionally distinct
+    // from the origin-pair order below.
+    let feature_hash_raw = bytemuck::cast_slice(src.feature_tool_hashes.as_slice());
+    write_binary_entry(
+        zip,
+        &format!(
+            "images/feature_tool_hashes.{}.uint128.zst",
+            src.image_names.len()
+        ),
+        feature_hash_raw,
         options.compression_level,
     )?;
-    let metadata_digest = xxh3_128(&metadata_raw);
-    let mut section_digests = SectionDigests::new();
-    section_digests.push(metadata_digest);
-    let heading_phase = shares.heading.detail_phase("heading");
+    let imeta_raw = write_json_entry(
+        zip,
+        "images/metadata.json.zst",
+        &imeta,
+        options.compression_level,
+    )?;
+    let names_raw = write_json_entry(
+        zip,
+        "images/names.json.zst",
+        &src.image_names,
+        options.compression_level,
+    )?;
+    let sift_hash_raw = bytemuck::cast_slice(src.sift_content_hashes.as_slice());
+    write_binary_entry(
+        zip,
+        &format!(
+            "images/sift_content_hashes.{}.uint128.zst",
+            src.image_names.len()
+        ),
+        sift_hash_raw,
+        options.compression_level,
+    )?;
+    let mut ih = Xxh3::new();
+    ih.update(feature_hash_raw);
+    ih.update(&imeta_raw);
+    ih.update(&names_raw);
+    ih.update(sift_hash_raw);
+    let images_digest = ih.digest128();
 
-    let (images_digest, origins_digest) = if let Some(src) = sources {
-        let imeta = ImagesMetadata {
-            image_count: src.image_names.len() as u32,
-        };
-        // Section hash order is lexicographic path order, intentionally distinct
-        // from the origin-pair order below.
-        let feature_hash_raw = bytemuck::cast_slice(src.feature_tool_hashes.as_slice());
+    // The image table is written; the origins are the rest of the heading,
+    // bar the row map the next stage opens with.
+    progress.set_fraction(0.2);
+    let mut origin_digests = SectionDigests::new();
+    let origin_blocks = src.origins.len().div_ceil(options.origin_block_rows);
+    for (b, rows) in src.origins.chunks(options.origin_block_rows).enumerate() {
+        let image_indexes: Vec<u32> = rows.iter().map(|o| o.image_index).collect();
+        let feature_indexes: Vec<u32> = rows.iter().map(|o| o.image_feature_index).collect();
+        let a = bytemuck::cast_slice(image_indexes.as_slice());
+        let f = bytemuck::cast_slice(feature_indexes.as_slice());
         write_binary_entry(
-            &mut zip,
-            &format!(
-                "images/feature_tool_hashes.{}.uint128.zst",
-                src.image_names.len()
-            ),
-            feature_hash_raw,
+            zip,
+            &format!("origins/{b}/image_indexes.{}.uint32.zst", rows.len()),
+            a,
             options.compression_level,
         )?;
-        let imeta_raw = write_json_entry(
-            &mut zip,
-            "images/metadata.json.zst",
-            &imeta,
-            options.compression_level,
-        )?;
-        let names_raw = write_json_entry(
-            &mut zip,
-            "images/names.json.zst",
-            &src.image_names,
-            options.compression_level,
-        )?;
-        let sift_hash_raw = bytemuck::cast_slice(src.sift_content_hashes.as_slice());
         write_binary_entry(
-            &mut zip,
+            zip,
             &format!(
-                "images/sift_content_hashes.{}.uint128.zst",
-                src.image_names.len()
+                "origins/{b}/image_feature_indexes.{}.uint32.zst",
+                rows.len()
             ),
-            sift_hash_raw,
+            f,
             options.compression_level,
         )?;
-        let mut ih = Xxh3::new();
-        ih.update(feature_hash_raw);
-        ih.update(&imeta_raw);
-        ih.update(&names_raw);
-        ih.update(sift_hash_raw);
-        let images_digest = ih.digest128();
-        // The image table is written; the origins are the rest of the heading,
-        // bar the row map the next stage opens with.
-        shares.heading.set_fraction(0.2);
-        let mut ods = SectionDigests::new();
-        let origin_blocks = src.origins.len().div_ceil(options.origin_block_rows);
-        for (b, rows) in src.origins.chunks(options.origin_block_rows).enumerate() {
-            let image_indexes: Vec<u32> = rows.iter().map(|o| o.image_index).collect();
-            let feature_indexes: Vec<u32> = rows.iter().map(|o| o.image_feature_index).collect();
-            let a = bytemuck::cast_slice(image_indexes.as_slice());
-            let f = bytemuck::cast_slice(feature_indexes.as_slice());
-            write_binary_entry(
-                &mut zip,
-                &format!("origins/{b}/image_indexes.{}.uint32.zst", rows.len()),
-                a,
-                options.compression_level,
-            )?;
-            write_binary_entry(
-                &mut zip,
-                &format!(
-                    "origins/{b}/image_feature_indexes.{}.uint32.zst",
-                    rows.len()
-                ),
-                f,
-                options.compression_level,
-            )?;
-            let mut h = Xxh3::new();
-            h.update(a);
-            h.update(f);
-            ods.push(h.digest128());
-            // A block is 131 072 rows, so a capture has a couple of dozen of
-            // them and each one is worth a report of its own.
-            shares
-                .heading
-                .set_fraction(0.2 + 0.6 * (b + 1) as f32 / origin_blocks as f32);
-        }
-        shares.heading.check_cancel()?;
-        let origins_digest = ods.finish();
-        section_digests.push(images_digest);
-        section_digests.push(origins_digest);
-        (Some(images_digest), Some(origins_digest))
-    } else {
-        (None, None)
-    };
+        let mut h = Xxh3::new();
+        h.update(a);
+        h.update(f);
+        origin_digests.push(h.digest128());
+        // A block is 131 072 rows, so a capture has a couple of dozen of
+        // them and each one is worth a report of its own.
+        progress.set_fraction(0.2 + 0.6 * (b + 1) as f32 / origin_blocks as f32);
+    }
+    progress.check_cancel()?;
+    Ok((Some(images_digest), Some(origin_digests.finish())))
+}
 
-    let (storage_digest, descriptors_digest, geometry_digest) = {
-        let q = descriptor_rows;
-        let tree_zero = &data.trees[0].feature_ids;
-        let order: &[u32] = match data.descriptor_order {
-            Some(explicit) => {
-                if explicit.len() != data.feature_count {
-                    return Err(KdfError::ShapeMismatch(format!(
-                        "descriptor_order has {} entries, expected {}",
-                        explicit.len(),
-                        data.feature_count
-                    )));
-                }
-                let mut seen = vec![false; data.feature_count];
-                for &id in explicit {
-                    let slot = seen.get_mut(id as usize).ok_or_else(|| {
-                        KdfError::InvalidFormat("descriptor_order has an out-of-range ID".into())
-                    })?;
-                    if std::mem::replace(slot, true) {
-                        return Err(KdfError::InvalidFormat(
-                            "descriptor_order repeats an ID".into(),
-                        ));
-                    }
-                }
-                explicit
+fn descriptor_order<'a, S: KdfScalar>(
+    data: &'a KdfForestData<'_, S>,
+) -> Result<&'a [u32], KdfError> {
+    match data.descriptor_order {
+        Some(explicit) => {
+            if explicit.len() != data.feature_count {
+                return Err(KdfError::ShapeMismatch(format!(
+                    "descriptor_order has {} entries, expected {}",
+                    explicit.len(),
+                    data.feature_count
+                )));
             }
-            None => tree_zero,
-        };
-        let mut storage_rows = vec![0u32; data.feature_count];
-        for (row, &id) in order.iter().enumerate() {
-            storage_rows[id as usize] = row as u32;
-        }
-        let raw = bytemuck::cast_slice(storage_rows.as_slice());
-        write_binary_entry(
-            &mut zip,
-            &format!("features/storage_rows.{}.uint32.zst", data.feature_count),
-            raw,
-            options.compression_level,
-        )?;
-        let sd = xxh3_128(raw);
-        section_digests.push(sd);
-        shares.heading.set_fraction(1.0);
-        shares.heading.check_cancel()?;
-        drop(heading_phase);
-        // One container entry of independent per-block frames, plus the offsets
-        // that address them. What goes away against a standalone entry per block
-        // is one ZIP directory record apiece, which at small block sizes is most
-        // of the file's entries and most of its open cost.
-        //
-        // Stream frames directly: buffering the container duplicates the entire
-        // compressed corpus in memory. ZIP64 permits a stream larger than 4 GiB.
-        zip.start_file(
-            corpus_entry_name::<S>(data.feature_count, data.dimension),
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored)
-                .large_file(true),
-        )?;
-        let descriptor_phase = shares.descriptors.detail_phase("descriptor blocks");
-        let (descriptors_digest, descriptor_offsets) = write_blocks(
-            &mut zip,
-            order,
-            q,
-            options.compression_level,
-            shares.descriptors,
-            |ids, raw| {
-                for &id in ids {
-                    let base = id as usize * data.dimension;
-                    raw.extend_from_slice(bytemuck::cast_slice(
-                        &data.vectors[base..base + data.dimension],
+            let mut seen = vec![false; data.feature_count];
+            for &id in explicit {
+                let slot = seen.get_mut(id as usize).ok_or_else(|| {
+                    KdfError::InvalidFormat("descriptor_order has an out-of-range ID".into())
+                })?;
+                if std::mem::replace(slot, true) {
+                    return Err(KdfError::InvalidFormat(
+                        "descriptor_order repeats an ID".into(),
                     ));
                 }
-            },
-        )?;
-        section_digests.push(descriptors_digest);
-        drop(descriptor_phase);
-        let offsets_raw: &[u8] = bytemuck::cast_slice(descriptor_offsets.as_slice());
-        write_binary_entry(
-            &mut zip,
-            &block_offsets_entry_name(descriptor_offsets.len()),
-            offsets_raw,
-            options.compression_level,
-        )?;
-        let geometry_digest = if let Some(src) = sources {
-            zip.start_file(
-                geometry_entry_name(data.feature_count),
-                zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored)
-                    .large_file(true),
-            )?;
-            let geometry_phase = shares.geometry.detail_phase("geometry blocks");
-            let (digest, offsets) = write_blocks(
-                &mut zip,
-                order,
-                q,
-                options.compression_level,
-                shares.geometry,
-                |ids, raw| {
-                    for &id in ids {
-                        raw.extend_from_slice(bytemuck::bytes_of(&src.geometry[id as usize]));
-                    }
-                },
-            )?;
-            section_digests.push(digest);
-            drop(geometry_phase);
-            let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
-            write_binary_entry(
-                &mut zip,
-                &geometry_block_offsets_entry_name(offsets.len()),
-                offsets_raw,
-                options.compression_level,
-            )?;
-            Some(digest)
-        } else {
-            None
-        };
-        (sd, descriptors_digest, geometry_digest)
-    };
+            }
+            Ok(explicit)
+        }
+        None => Ok(&data.trees[0].feature_ids),
+    }
+}
 
+fn write_storage_rows<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    order: &[u32],
+    feature_count: usize,
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<u128, KdfError> {
+    let mut storage_rows = vec![0u32; feature_count];
+    for (row, &id) in order.iter().enumerate() {
+        storage_rows[id as usize] = row as u32;
+    }
+    let raw = bytemuck::cast_slice(storage_rows.as_slice());
+    write_binary_entry(
+        zip,
+        &format!("features/storage_rows.{feature_count}.uint32.zst"),
+        raw,
+        options.compression_level,
+    )?;
+    let digest = xxh3_128(raw);
+    progress.set_fraction(1.0);
+    progress.check_cancel()?;
+    Ok(digest)
+}
+
+fn write_descriptor_corpus<W: Write + Seek, S: KdfScalar>(
+    zip: &mut ZipWriter<W>,
+    data: &KdfForestData<'_, S>,
+    order: &[u32],
+    descriptor_rows: usize,
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<u128, KdfError> {
+    // One container entry of independent per-block frames, plus the offsets
+    // that address them. What goes away against a standalone entry per block
+    // is one ZIP directory record apiece, which at small block sizes is most
+    // of the file's entries and most of its open cost.
+    //
+    // Stream frames directly: buffering the container duplicates the entire
+    // compressed corpus in memory. ZIP64 permits a stream larger than 4 GiB.
+    zip.start_file(
+        corpus_entry_name::<S>(data.feature_count, data.dimension),
+        zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(true),
+    )?;
+    let descriptor_phase = progress.detail_phase("descriptor blocks");
+    let (digest, offsets) = write_blocks(
+        zip,
+        order,
+        descriptor_rows,
+        options.compression_level,
+        progress,
+        |ids, raw| {
+            for &id in ids {
+                let base = id as usize * data.dimension;
+                raw.extend_from_slice(bytemuck::cast_slice(
+                    &data.vectors[base..base + data.dimension],
+                ));
+            }
+        },
+    )?;
+    drop(descriptor_phase);
+    let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
+    write_binary_entry(
+        zip,
+        &block_offsets_entry_name(offsets.len()),
+        offsets_raw,
+        options.compression_level,
+    )?;
+    Ok(digest)
+}
+
+fn write_geometry_corpus<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    sources: Option<&KdfSiftSources>,
+    feature_count: usize,
+    order: &[u32],
+    descriptor_rows: usize,
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<Option<u128>, KdfError> {
+    let Some(src) = sources else {
+        return Ok(None);
+    };
+    zip.start_file(
+        geometry_entry_name(feature_count),
+        zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(true),
+    )?;
+    let geometry_phase = progress.detail_phase("geometry blocks");
+    let (digest, offsets) = write_blocks(
+        zip,
+        order,
+        descriptor_rows,
+        options.compression_level,
+        progress,
+        |ids, raw| {
+            for &id in ids {
+                raw.extend_from_slice(bytemuck::bytes_of(&src.geometry[id as usize]));
+            }
+        },
+    )?;
+    drop(geometry_phase);
+    let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
+    write_binary_entry(
+        zip,
+        &geometry_block_offsets_entry_name(offsets.len()),
+        offsets_raw,
+        options.compression_level,
+    )?;
+    Ok(Some(digest))
+}
+
+fn write_tree_chunks<W: Write + Seek, S: KdfScalar>(
+    zip: &mut ZipWriter<W>,
+    packed: &[Vec<PackedChunk<S>>],
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<u128, KdfError> {
     let mut trees_digest = SectionDigests::new();
     let total_chunks: usize = packed.iter().map(Vec::len).sum();
     let mut written_chunks = 0usize;
-    let chunk_phase = shares.chunks.detail_phase("tree chunks");
+    let chunk_phase = progress.detail_phase("tree chunks");
     for (ti, chunks) in packed.iter().enumerate() {
         // A tree is the batch here: there are hundreds of chunks rather than
         // hundreds of thousands, and a chunk is about a megabyte, so a whole
@@ -866,14 +885,79 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             zip.write_all(frame)?;
             trees_digest.push(*digest);
             written_chunks += 1;
-            shares
-                .chunks
-                .set_fraction(written_chunks as f32 / total_chunks as f32);
+            progress.set_fraction(written_chunks as f32 / total_chunks as f32);
         }
-        shares.chunks.check_cancel()?;
+        progress.check_cancel()?;
     }
     drop(chunk_phase);
-    let trees_digest = trees_digest.finish();
+    Ok(trees_digest.finish())
+}
+
+fn write_into<W: Write + Seek, S: KdfScalar>(
+    writer: W,
+    data: &KdfForestData<'_, S>,
+    sources: Option<&KdfSiftSources>,
+    options: &KdfWriteOptions,
+    packed: &[Vec<PackedChunk<S>>],
+    shares: Shares<'_, '_>,
+) -> Result<(), KdfError> {
+    let row_bytes = data
+        .dimension
+        .checked_mul(std::mem::size_of::<S>())
+        .ok_or_else(|| KdfError::ResourceLimit("row byte size overflow".into()))?;
+    let descriptor_rows = (options.target_descriptor_block_bytes / row_bytes).max(1);
+    let metadata = metadata(data, sources, options, packed, descriptor_rows);
+    let mut zip = ZipWriter::new(writer);
+    let metadata_raw = write_json_entry(
+        &mut zip,
+        "metadata.json.zst",
+        &metadata,
+        options.compression_level,
+    )?;
+    let metadata_digest = xxh3_128(&metadata_raw);
+    let mut section_digests = SectionDigests::new();
+    section_digests.push(metadata_digest);
+    let heading_phase = shares.heading.detail_phase("heading");
+
+    let (images_digest, origins_digest) =
+        write_images_and_origins(&mut zip, sources, options, shares.heading)?;
+    if let Some(images_digest) = images_digest {
+        section_digests.push(images_digest);
+    }
+    if let Some(origins_digest) = origins_digest {
+        section_digests.push(origins_digest);
+    }
+
+    let order = descriptor_order(data)?;
+    let storage_digest =
+        write_storage_rows(&mut zip, order, data.feature_count, options, shares.heading)?;
+    section_digests.push(storage_digest);
+    drop(heading_phase);
+
+    let descriptors_digest = write_descriptor_corpus(
+        &mut zip,
+        data,
+        order,
+        descriptor_rows,
+        options,
+        shares.descriptors,
+    )?;
+    section_digests.push(descriptors_digest);
+
+    let geometry_digest = write_geometry_corpus(
+        &mut zip,
+        sources,
+        data.feature_count,
+        order,
+        descriptor_rows,
+        options,
+        shares.geometry,
+    )?;
+    if let Some(geometry_digest) = geometry_digest {
+        section_digests.push(geometry_digest);
+    }
+
+    let trees_digest = write_tree_chunks(&mut zip, packed, options, shares.chunks)?;
     section_digests.push(trees_digest);
 
     let hashes = ContentHash {

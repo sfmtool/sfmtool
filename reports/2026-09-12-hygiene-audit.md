@@ -869,6 +869,7 @@ the four monoliths grew 8%**
   rather than a property of statement order.
 
 **A new instance in the newest crate: `write_into` is 46% of `kdf-format/write.rs`**
+> _Status (2026-09-20): Done — `write_into` is now an 87-line driver over private metadata, images/origins, storage-row, descriptor-corpus, geometry-corpus, and tree-chunk helpers; the driver retains the explicit `SectionDigests` fold in wire-section order._
 - Location: `crates/sfmtool-kdf-format/src/write.rs:395–724` (**330** of 724)
 - Problem: The same shape as the four above — metadata (407–449), images and origin
   blocks (450–525), descriptor corpus (555–600), geometry corpus (600–640), tree chunks
