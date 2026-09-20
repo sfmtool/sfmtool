@@ -8,9 +8,10 @@
 //!
 //! **One locator resolution is one full snapshot of the app's accessibility
 //! subtree**, and that is what shapes this file. `wait_attached`, `press`,
-//! `toggle` and `elements` each walk the whole tree — on Windows a single
-//! `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation the
-//! tests ask for*, not per launch, and it is the platform's, not the viewer's:
+//! `toggle` and `elements` each walk the whole tree — once per clause of the
+//! selector, where the root is the process rather than a window — so the cost
+//! is per *operation the tests ask for*, not per launch, and it is the
+//! platform's, not the viewer's:
 //! around 0.5s on a developer's machine and around 17s on a GitHub-hosted
 //! Windows runner, against 3.8s for a launch, attach and teardown there. An
 //! operation is that request, not a walk: one that polls for its condition or
@@ -24,9 +25,11 @@
 //! since the menu item and the dialog's button each appear a poll or two after
 //! the press that makes them. And a run of consecutive read-only assertions is
 //! asked as *one* snapshot rather than one apiece: [`Probed::wait_all`] polls a
-//! comma-separated selector group, which resolves in a single walk, and then
-//! answers every one of the caller's expectations off the elements it was
-//! handed — in memory, for nothing. Assertions of *absence* ride along:
+//! comma-separated selector group, and then answers every one of the caller's
+//! expectations off the elements it was handed — in memory, for nothing. (What
+//! the platform charges for that group is another matter, and on Windows it is
+//! a walk *per clause*; see [`Probed::wait_all`].) Assertions of *absence* ride
+//! along:
 //! something the group names and the snapshot does not hold is absent in the
 //! same observation that proved the rest present. (Only a `Locator` method
 //! resolves; a `press` on an `Element` a lookup already handed back invokes
@@ -47,7 +50,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, Once};
 use std::time::{Duration, Instant};
 
-use xa11y::{App, AppExt, Element, ElementData, Locator, Toggled};
+use xa11y::{App, AppExt, Element, ElementData, Locator, Toggled, TreeNode};
 
 /// Serializes the UI tests so at most one `sfm-explorer` window is alive at a
 /// time. `cargo test` runs tests on multiple threads by default, and several
@@ -83,12 +86,18 @@ fn ui_test_lock() -> MutexGuard<'static, ()> {
 static OPS: AtomicU64 = AtomicU64::new(0);
 /// Nanoseconds spent inside those resolutions.
 static OP_NANOS: AtomicU64 = AtomicU64::new(0);
-/// The same two, plus launch time and wall time, accumulated over every test
+/// Calls into the accessibility API run since then, and the nanoseconds spent
+/// inside them — the *platform's* share of `OP_NANOS`. See [`walked`].
+static WALKS: AtomicU64 = AtomicU64::new(0);
+static WALK_NANOS: AtomicU64 = AtomicU64::new(0);
+/// The same four, plus launch time and wall time, accumulated over every test
 /// this process has run, for the `UIPROBE TOTAL` line.
 static TOTAL_TESTS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_LAUNCH_NANOS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_OP_NANOS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_WALKS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// Zero the per-test counters and start the clock a `UIPROBE` line is measured
@@ -103,6 +112,8 @@ static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 fn begin_accounting() -> Instant {
     OPS.store(0, Ordering::Relaxed);
     OP_NANOS.store(0, Ordering::Relaxed);
+    WALKS.store(0, Ordering::Relaxed);
+    WALK_NANOS.store(0, Ordering::Relaxed);
     Instant::now()
 }
 
@@ -122,6 +133,39 @@ fn measured<T>(op: impl FnOnce() -> T) -> T {
     let out = op();
     OPS.fetch_add(1, Ordering::Relaxed);
     OP_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    out
+}
+
+/// Run one call into the accessibility API, counting it and timing it.
+///
+/// **A different counter from [`measured`], asking a different question, and
+/// the two are deliberately not nested one-to-one.** An `op` is what a *test*
+/// asked for and must stay a fingerprint of the suite's shape; a `walk` is what
+/// the *platform* was actually asked to do to service it, and moves with the
+/// run. One op is one or many walks — a poll that waits three ticks for a
+/// widget walks three times, a [`Probe::press_revealing`] that has to press
+/// twice walks four — so `walks` is never a second spelling of `ops`, and a
+/// reader who wants suite shape reads `ops` and a reader who wants platform
+/// traffic reads `walks`.
+///
+/// What this buys is the one thing `op_ms` cannot say: where an operation's
+/// time went. Bracketing only the call, never the `sleep` between two of them,
+/// makes `walk_ms` the platform's share and `op_ms − walk_ms` the suite's own
+/// waiting — which is the difference between a tree query that is expensive and
+/// an app that is slow to draw, two problems with nothing in common and no
+/// shared fix.
+///
+/// **The split is only exact where this file owns the loop**, which is
+/// [`Probed::wait_all`]. `Locator::wait_attached` and `Locator::wait_until`
+/// poll inside xa11y, so a walk around one of those is a whole wait, its
+/// sleeps included, and reads as platform time that partly is not. They are
+/// still counted, because a call that is not counted at all is worse, but the
+/// clean read of `op_ms − walk_ms` is the one taken over a `wait_all`.
+fn walked<T>(query: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let out = query();
+    WALKS.fetch_add(1, Ordering::Relaxed);
+    WALK_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     out
 }
 
@@ -214,7 +258,9 @@ struct Probe(Locator);
 
 impl Probe {
     fn wait_attached(&self, timeout: Duration) -> xa11y::Result<Element> {
-        measured(|| retrying_transient("wait_attached", || self.0.wait_attached(timeout)))
+        measured(|| {
+            retrying_transient("wait_attached", || walked(|| self.0.wait_attached(timeout)))
+        })
     }
 
     fn wait_until(
@@ -222,7 +268,11 @@ impl Probe {
         predicate: impl Fn(Option<&ElementData>) -> bool,
         timeout: Duration,
     ) -> xa11y::Result<Option<Element>> {
-        measured(|| retrying_transient("wait_until", || self.0.wait_until(&predicate, timeout)))
+        measured(|| {
+            retrying_transient("wait_until", || {
+                walked(|| self.0.wait_until(&predicate, timeout))
+            })
+        })
     }
 
     /// Press this element and confirm it revealed `revealed`, pressing once
@@ -260,9 +310,9 @@ impl Probe {
     /// guard costs those sites nothing at all.
     fn press_revealing(&self, revealed: &Probe, timeout: Duration) -> xa11y::Result<Element> {
         measured(|| {
-            let first = self.0.press();
+            let first = walked(|| self.0.press());
             if let Ok(element) = retrying_transient("press_revealing/confirm", || {
-                revealed.0.wait_attached(timeout)
+                walked(|| revealed.0.wait_attached(timeout))
             }) {
                 // It opened. A transient error from the press was a report
                 // about the call, not about the app.
@@ -272,11 +322,11 @@ impl Probe {
             // diagnosis than anything a second attempt would produce.
             first?;
             println!("UIPROBE RETRY op=press_revealing attempt=2 of 2 (nothing was revealed)");
-            self.0.press()?;
+            walked(|| self.0.press())?;
             // The second press is not re-confirmed here: the caller's own next
             // lookup is the confirmation, and it fails with the selector it
             // actually wanted rather than with this one.
-            revealed.0.wait_attached(timeout)
+            walked(|| revealed.0.wait_attached(timeout))
         })
     }
 
@@ -289,7 +339,7 @@ impl Probe {
     /// `wait_until` on `states.checked` instead, which already fails loudly if
     /// the toggle did not land.
     fn toggle(&self) -> xa11y::Result<()> {
-        measured(|| self.0.toggle())
+        measured(|| walked(|| self.0.toggle()))
     }
 }
 
@@ -417,9 +467,19 @@ impl Probed for App {
     /// walk per assertion, around 25s apiece on the Windows runner — even
     /// though the tree they were asking about was the same tree. Here the
     /// clauses are joined into one selector *group*, which `Locator::elements`
-    /// resolves in one walk, and each expectation is then decided against the
+    /// resolves together, and each expectation is then decided against the
     /// `ElementData` already in hand. A five-assertion cluster costs one
     /// operation instead of five.
+    ///
+    /// **One operation is not the same thing as one walk, and on Windows it is
+    /// not one walk here.** xa11y resolves a group against the synthesized
+    /// application root `App::by_pid` hands back there by walking the tree once
+    /// per clause and merging by document path, so a five-clause group is five
+    /// descents. Measured on Windows 11 against the empty-state tree (56
+    /// nodes), one clause costs ~1.1s and this test's five-clause group ~5.4s,
+    /// while the universal selector returns all 56 nodes for the price of its
+    /// one clause — the cost tracks clauses, not matches. The `walks` counter
+    /// is what makes that visible in a log; see [`walked`].
     ///
     /// The waiting is what makes the substitution honest. `elements` on its own
     /// resolves once and returns, so swapping it in for a `wait_attached` would
@@ -445,7 +505,7 @@ impl Probed for App {
             expectations.iter().any(|expect| expect.present),
             "wait_all needs at least one node to wait *for*"
         );
-        // One group, so one walk: `Locator::elements` parses the commas into
+        // One group, so one tick: `Locator::elements` parses the commas into
         // clauses and resolves them together, returning every match in document
         // order. The absent clauses belong in it as much as the present ones —
         // they are how the snapshot is asked about the node that must not be
@@ -460,7 +520,7 @@ impl Probed for App {
             retrying_transient("wait_all", || {
                 let started = Instant::now();
                 loop {
-                    let found = locator.elements()?;
+                    let found = walked(|| locator.elements())?;
                     let unmet: Vec<String> = expectations
                         .iter()
                         .filter(|expect| {
@@ -634,8 +694,8 @@ impl Guard {
     /// Print this test's `UIPROBE` line, and the running `UIPROBE TOTAL`.
     ///
     /// ```text
-    /// UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 total_ms=2951
-    /// UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 total_ms=44699 mean_launch_ms=892 mean_op_ms=956
+    /// UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
+    /// UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
     /// ```
     ///
     /// `launch_ms` is the runner-speed yardstick: spawning a process, waiting
@@ -646,10 +706,21 @@ impl Guard {
     /// asked for, which only a change to the tests moves — and `mean_op_ms` is
     /// what the platform charged for one. It is not a snapshot count: servicing
     /// one request may take the platform several whole-subtree walks, when a
-    /// wait polls for its condition or a transient failure is retried, and
-    /// `op_ms` is where that lands. Comparing two logs, then: `ops` down is a
-    /// cheaper suite, `mean_launch_ms` and `mean_op_ms` down together is a
-    /// faster machine, and `total_ms` alone says nothing about which happened.
+    /// wait polls for its condition or a transient failure is retried.
+    ///
+    /// `walks` is that snapshot count, and `walk_ms` the time inside those
+    /// calls and nothing else — so it is what splits a slow `op_ms` into the
+    /// two unrelated things it adds together. `walk_ms` near `op_ms` says the
+    /// platform's tree query is what costs; a gap says the suite was asleep in
+    /// a poll loop waiting for the app to draw, and no amount of asking for
+    /// fewer operations would have helped. `mean_walk_ms` is the price of one
+    /// tree query, which against a tree size (see [`window_appears`], which
+    /// prints one) gives a per-node figure comparable across platforms. See
+    /// [`walked`] for which calls are counted and where the split is exact.
+    ///
+    /// Comparing two logs, then: `ops` down is a cheaper suite,
+    /// `mean_launch_ms` and `mean_walk_ms` down together is a faster machine,
+    /// and `total_ms` alone says nothing about which happened.
     ///
     /// libtest offers no end-of-suite hook, so the `TOTAL` line is cumulative
     /// and re-printed after every test; the last one is the run's. That also
@@ -673,6 +744,8 @@ impl Guard {
         let launch = self.launch.get().unwrap_or_default();
         let ops = OPS.load(Ordering::Relaxed);
         let op_nanos = OP_NANOS.load(Ordering::Relaxed);
+        let walks = WALKS.load(Ordering::Relaxed);
+        let walk_nanos = WALK_NANOS.load(Ordering::Relaxed);
 
         let tests = TOTAL_TESTS.fetch_add(1, Ordering::Relaxed) + 1;
         let launch_total = TOTAL_LAUNCH_NANOS
@@ -680,6 +753,9 @@ impl Guard {
             + launch.as_nanos() as u64;
         let ops_total = TOTAL_OPS.fetch_add(ops, Ordering::Relaxed) + ops;
         let op_nanos_total = TOTAL_OP_NANOS.fetch_add(op_nanos, Ordering::Relaxed) + op_nanos;
+        let walks_total = TOTAL_WALKS.fetch_add(walks, Ordering::Relaxed) + walks;
+        let walk_nanos_total =
+            TOTAL_WALK_NANOS.fetch_add(walk_nanos, Ordering::Relaxed) + walk_nanos;
         let nanos_total = TOTAL_NANOS.fetch_add(total.as_nanos() as u64, Ordering::Relaxed)
             + total.as_nanos() as u64;
 
@@ -693,21 +769,26 @@ impl Guard {
         // verdict, so without it both lines below start mid-line and `^UIPROBE`
         // matches only the `TOTAL` one.
         println!(
-            "\nUIPROBE test={name} launch_ms={} ops={ops} op_ms={} total_ms={}",
+            "\nUIPROBE test={name} launch_ms={} ops={ops} op_ms={} walks={walks} walk_ms={} \
+             total_ms={}",
             launch.as_millis(),
             ms(op_nanos),
+            ms(walk_nanos),
             total.as_millis(),
         );
         println!(
-            "UIPROBE TOTAL tests={tests} launch_ms={} ops={ops_total} op_ms={} total_ms={} \
-             mean_launch_ms={} mean_op_ms={}",
+            "UIPROBE TOTAL tests={tests} launch_ms={} ops={ops_total} op_ms={} \
+             walks={walks_total} walk_ms={} total_ms={} mean_launch_ms={} mean_op_ms={} \
+             mean_walk_ms={}",
             ms(launch_total),
             ms(op_nanos_total),
+            ms(walk_nanos_total),
             ms(nanos_total),
             ms(launch_total) / tests,
             // `checked_div`: a suite filtered down to tests that resolve
             // nothing reports no mean rather than dividing by zero.
             ms(op_nanos_total).checked_div(ops_total).unwrap_or(0),
+            ms(walk_nanos_total).checked_div(walks_total).unwrap_or(0),
         );
     }
 
@@ -880,7 +961,62 @@ fn try_attach_app(child: ChildHandle<'_>) -> Result<App, String> {
 #[test]
 fn window_appears() {
     let _guard = Guard::new();
-    attach(_guard.child());
+    let app = attach(_guard.child());
+    report_tree_size(&app);
+}
+
+/// Print the `UIPROBE TREE` line: how big the tree a walk crosses actually is.
+///
+/// ```text
+/// UIPROBE TREE nodes=214 depth=11 walk_ms=478
+/// ```
+///
+/// `mean_walk_ms` says what one tree query costs and says nothing about why,
+/// because the two candidate whys — a tree with a lot of nodes in it, and a
+/// platform that is slow per node — are indistinguishable without the
+/// denominator. This is the denominator: `walk_ms / nodes` is the per-node
+/// price, and that is the number that compares across three platforms whose
+/// trees are the same shape and whose walk costs differ by orders of
+/// magnitude.
+///
+/// Measured here, in the one test that otherwise resolves nothing, so the
+/// figure costs the suite one walk per run rather than one per test — and so
+/// that it is taken against the viewer's *empty* state, which every test that
+/// does not load a scene is also walking. It is deliberately not a test of its
+/// own: another `Guard` is another launch, which is the expensive half of this
+/// suite.
+///
+/// `nodes` and `walk_ms` come from resolving the universal selector, which is
+/// the same `Locator::elements` call [`Probed::wait_all`] makes and therefore
+/// prices the same work; `depth` comes from a second, recursive descent, since
+/// a flat match list has no shape. The depth walk is not what `walk_ms`
+/// reports, and is not counted as a [`walked`] call, because per-node
+/// `get_children` and a single group resolution are not the same query and
+/// averaging them together would blur exactly the number this line exists to
+/// sharpen.
+fn report_tree_size(app: &App) {
+    let started = Instant::now();
+    let nodes = walked(|| app.locator("*").elements()).map(|found| found.len());
+    let walk = started.elapsed();
+    let depth = app.tree(None).map(|root| node_depth(&root));
+    match (nodes, depth) {
+        (Ok(nodes), Ok(depth)) => println!(
+            "\nUIPROBE TREE nodes={nodes} depth={depth} walk_ms={}",
+            walk.as_millis()
+        ),
+        // Not an assertion: this line is a measurement the suite reports, and
+        // a test named for whether the window appears must not start failing
+        // over the shape of the tree inside it.
+        (nodes, depth) => println!(
+            "\nUIPROBE TREE unavailable: nodes={nodes:?} depth={depth:?} walk_ms={}",
+            walk.as_millis()
+        ),
+    }
+}
+
+/// How many levels `node` spans, counting itself as one.
+fn node_depth(node: &TreeNode) -> usize {
+    1 + node.children.iter().map(node_depth).max().unwrap_or(0)
 }
 
 /// The window respects the 800×600 minimum size constraint.

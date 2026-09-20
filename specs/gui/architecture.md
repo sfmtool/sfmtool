@@ -524,19 +524,31 @@ drives each route a shortcut replaces —
 `the_scene_panel_lists_the_loaded_reconstruction` presses through the menu and
 the dialog, then asserts on what arrived — so the route stays covered.
 
-**A run of consecutive read-only assertions costs one snapshot, not one each.**
+**A run of consecutive read-only assertions is one operation, not one each.**
 `wait_all` takes a list of expectations — each a role and an exact name, either
 `Expect::present` or `Expect::absent` — joins their clauses into a single
 comma-separated selector *group*, and polls it: `Locator::elements` resolves the
-whole group in one walk, and every expectation is then decided against the
-`ElementData` already in hand, which is a field read rather than a cross-process
-call. It returns the first tick on which they all hold, and hands back the
-snapshot, so a caller that wants an element's `states.checked` takes it from
-there. The polling is what makes the substitution honest: a bare `elements`
-resolves once and returns, so it would trade the cost for flakiness on a runner
-where a widget routinely lands a poll or two after the query that wants it. The
-five assertions in `the_menu_bar_holds_file_edit_go_and_panels` are one
-operation; across the suite the collapse takes `ops` from 38 to 24.
+whole group, and every expectation is then decided against the `ElementData`
+already in hand, which is a field read rather than a cross-process call. It
+returns the first tick on which they all hold, and hands back the snapshot, so a
+caller that wants an element's `states.checked` takes it from there. The polling
+is what makes the substitution honest: a bare `elements` resolves once and
+returns, so it would trade the cost for flakiness on a runner where a widget
+routinely lands a poll or two after the query that wants it. The five assertions
+in `the_menu_bar_holds_file_edit_go_and_panels` are one operation; across the
+suite the collapse takes `ops` from 38 to 24.
+
+**What one operation costs is a platform question, and on Windows it is not one
+walk.** xa11y resolves a group of *n* clauses against a synthesized application
+root — which is what `App::by_pid` hands back on Windows — by walking the tree
+once per clause and merging the results by document path, so a five-clause group
+is five descents rather than one. Measured on a developer's Windows 11 machine
+against the viewer's empty-state tree (56 nodes), a one-clause `elements` call
+takes ~1.1s and the five-clause group `the_menu_bar_holds_file_edit_go_and_panels`
+asks takes ~5.4s, alternated to rule out ordering. Match count does not enter
+into it: the universal selector `*` returns all 56 nodes for the price of its one
+clause. So `ops` and cost are different currencies there, and the `walks` counter
+below is what tells them apart.
 
 Assertions of **absence** ride in those groups rather than being asked
 separately, and that is what makes them sound. An absence means nothing against
@@ -560,8 +572,8 @@ drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
 
 ```text
-UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 total_ms=2951
-UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 total_ms=44699 mean_launch_ms=892 mean_op_ms=956
+UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
+UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
 ```
 
 `launch_ms` is the process spawn, GPU init and window registration up to the
@@ -574,16 +586,43 @@ time inside them; `total_ms` is the guard's whole life, teardown included. The
 split is the point, because the two costs have different causes and different
 fixes. `launch_ms` is work no change to the tests can make cheaper, so
 `mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
-only when the tests ask for more or fewer operations, and `mean_op_ms` is what
-the platform charged for one. A cheaper suite shows as `ops` falling with
-`mean_launch_ms` steady; a faster runner shows as `mean_launch_ms` and
-`mean_op_ms` falling together with `ops` unchanged. `total_ms` alone
-distinguishes neither, which is why one log now carries all of them — no
-historical baseline required. The counters are process-wide statics reset per
-guard, which is sound only because `UI_TEST_LOCK` keeps exactly one guard
-alive at a time. All three invocations of the suite pass `--nocapture`, since
-libtest discards a passing test's stdout and these lines are wanted on green
-runs above all.
+only when the tests ask for more or fewer operations. A cheaper suite shows as
+`ops` falling with `mean_launch_ms` steady. `total_ms` alone distinguishes
+neither, which is why one log now carries all of them — no historical baseline
+required. The counters are process-wide statics reset per guard, which is sound
+only because `UI_TEST_LOCK` keeps exactly one guard alive at a time. All three
+invocations of the suite pass `--nocapture`, since libtest discards a passing
+test's stdout and these lines are wanted on green runs above all.
+
+`walks` and `walk_ms` count the calls *into* the accessibility API and the time
+inside them, and they exist because `op_ms` on its own conflates two unrelated
+things: a tree query that is expensive, and a poll loop asleep waiting for the
+app to finish drawing. One op is one or many walks — a wait that polls three
+ticks walks three times, a `press_revealing` that has to press twice walks four —
+so `walks` is never a second spelling of `ops`. `walk_ms` close to `op_ms` says
+the platform's query is what costs and a cheaper suite means asking for fewer or
+smaller queries; a gap says the suite was waiting on the app and no op-count
+lever would have helped. `mean_walk_ms` is the price of one query. The split is
+exact where the suite owns the loop, which is `wait_all`; `Locator::wait_attached`
+and `Locator::wait_until` poll inside xa11y, so a walk around one of those is a
+whole wait with its sleeps included, and the clean reading of `op_ms − walk_ms` is
+the one taken over a `wait_all`.
+
+`window_appears` prints the denominator those averages need, once per run, since
+it is the one test that otherwise resolves nothing:
+
+```text
+UIPROBE TREE nodes=56 depth=5 walk_ms=158
+```
+
+`nodes` and `walk_ms` come from resolving the universal selector `*` — the same
+`Locator::elements` call `wait_all` makes, so it prices the same work — and
+`depth` from a second recursive descent, since a flat match list has no shape.
+`walk_ms / nodes` is the per-node price, and that is the figure that compares
+across three platforms whose trees are the same shape and whose walk costs
+differ by orders of magnitude. It is measured against the viewer's empty state,
+which is what every test that does not load a scene is also walking, and it is
+not a test of its own because another `Guard` is another launch.
 
 **A cross-process call can fail because the tree moved, not because the suite
 was wrong, and the two are guarded differently.** The read-only probes —
