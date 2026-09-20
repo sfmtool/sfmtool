@@ -9,10 +9,14 @@
 //! **One locator resolution is one full snapshot of the app's accessibility
 //! subtree**, and that is what shapes this file. `wait_attached`, `press`,
 //! `toggle` and `elements` each walk the whole tree — on Windows a single
-//! `FindAllBuildCache(TreeScope_Subtree)` — so their cost is per
-//! *operation*, not per launch, and it is the platform's, not the viewer's:
+//! `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation the
+//! tests ask for*, not per launch, and it is the platform's, not the viewer's:
 //! around 0.5s on a developer's machine and around 17s on a GitHub-hosted
-//! Windows runner, against 3.8s for a launch, attach and teardown there.
+//! Windows runner, against 3.8s for a launch, attach and teardown there. An
+//! operation is that request, not a walk: one that polls for its condition or
+//! retries a transient failure spends several walks and is still counted once,
+//! which is what keeps `ops` a fingerprint of the tests rather than of the run
+//! (see [`measured`]).
 //!
 //! Two habits follow. Setup goes through the **command line** rather than the
 //! accessibility API — `--demo` in place of driving File > Load Demo Data… and
@@ -194,8 +198,9 @@ fn retrying_transient<T>(
 /// A [`Locator`] that reports what it costs, wrapping only the methods this
 /// suite calls.
 ///
-/// One method call here is one resolution — one whole-subtree snapshot, per
-/// this file's module comment — so this is the single place the suite's
+/// One method call here is one resolution *request* — the unit of work a test
+/// asks for, which the platform may service with more than one whole-subtree
+/// walk when it polls or retries — so this is the single place the suite's
 /// dominant cost can be counted without deriving it by reading the test
 /// bodies, loops and all. Each method forwards its arguments unchanged and
 /// returns what the inner call returned: nothing a test waits for or asserts
@@ -637,11 +642,14 @@ impl Guard {
     /// for the GPU and for the OS to register the window is work the suite
     /// cannot make cheaper, so `mean_launch_ms` moving between two runs means
     /// the *machine* moved. `ops` and `mean_op_ms` are the suite's own cost:
-    /// `ops` is how many whole-subtree snapshots the tests asked for, which
-    /// only a change to the tests moves, and `mean_op_ms` is what the platform
-    /// charges for one. Comparing two logs, then: `ops` down is a cheaper
-    /// suite, `mean_launch_ms` and `mean_op_ms` down together is a faster
-    /// machine, and `total_ms` alone says nothing about which happened.
+    /// `ops` is how many *resolution requests* the tests made — units of work
+    /// asked for, which only a change to the tests moves — and `mean_op_ms` is
+    /// what the platform charged for one. It is not a snapshot count: servicing
+    /// one request may take the platform several whole-subtree walks, when a
+    /// wait polls for its condition or a transient failure is retried, and
+    /// `op_ms` is where that lands. Comparing two logs, then: `ops` down is a
+    /// cheaper suite, `mean_launch_ms` and `mean_op_ms` down together is a
+    /// faster machine, and `total_ms` alone says nothing about which happened.
     ///
     /// libtest offers no end-of-suite hook, so the `TOTAL` line is cumulative
     /// and re-printed after every test; the last one is the run's. That also

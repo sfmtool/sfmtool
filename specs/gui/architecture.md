@@ -565,15 +565,17 @@ UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 total_ms=44699 mean_la
 ```
 
 `launch_ms` is the process spawn, GPU init and window registration up to the
-first successful attach; `ops` is how many locator resolutions ran under that
+first successful attach; `ops` is how many resolution *requests* ran under that
 guard, counted by a thin wrapper over the `Locator` methods the suite calls
-(`Element` actions resolve nothing and are not counted); `op_ms` is the
+(`Element` actions resolve nothing and are not counted) — a request, not a
+tree walk, since one that polls for its condition or retries a transient
+failure spends several walks and is still counted once; `op_ms` is the
 time inside them; `total_ms` is the guard's whole life, teardown included. The
 split is the point, because the two costs have different causes and different
 fixes. `launch_ms` is work no change to the tests can make cheaper, so
 `mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
-only when the tests ask for more or fewer snapshots, and `mean_op_ms` is what
-the platform charges for one. A cheaper suite shows as `ops` falling with
+only when the tests ask for more or fewer operations, and `mean_op_ms` is what
+the platform charged for one. A cheaper suite shows as `ops` falling with
 `mean_launch_ms` steady; a faster runner shows as `mean_launch_ms` and
 `mean_op_ms` falling together with `ops` unchanged. `total_ms` alone
 distinguishes neither, which is why one log now carries all of them — no
