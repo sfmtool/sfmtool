@@ -956,6 +956,17 @@ jobs:
   # manifest to the workspace means adding it to prune-caches' sparse-checkout
   # too; `crates/*/Cargo.toml` already covers every workspace member.
   #
+  # Everything hashed here is pinned to LF in .gitattributes and must stay that
+  # way. Windows runners default to core.autocrlf=true, so without the pin they
+  # compute a different generation from Linux and macOS for the same commit --
+  # measured on this PR before the pin was extended: Windows b0986aa1… against
+  # bc4759dc… on both others. prune-caches runs on ubuntu-latest and prunes with
+  # the one hash it computes, so every Windows target cache would have read as
+  # "no current-generation entry for this prefix" and never been pruned,
+  # accumulating ~1.3 GB per generation against the 10 GB budget. Cargo.lock was
+  # already pinned for exactly this reason; putting the manifests in the key is
+  # what put Cargo.toml beside it.
+  #
   # GitHub's 10 GB per-repo budget is the constraint, and the LRU eviction it
   # triggers picks victims by last access, not by whether anything still wants
   # them -- so staying under it has to be CI's job. Three rules do that:

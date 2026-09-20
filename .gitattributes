@@ -1,9 +1,23 @@
-# Keep Cargo.lock byte-identical across platforms. Windows runners default to
-# core.autocrlf=true and would rewrite it to CRLF, which changes
-# hashFiles('Cargo.lock') (diverging the Windows Rust cache key) and perturbs
-# cargo's build fingerprints. Scoped to this one file on purpose — we do not
-# want to force eol on Windows-native files.
+# Keep the files the Rust cache keys are computed from byte-identical across
+# platforms. Windows runners default to core.autocrlf=true and would rewrite
+# them to CRLF, which changes what `hashFiles` returns there (diverging the
+# Windows Rust cache key) and perturbs cargo's build fingerprints.
+#
+# `Cargo.toml` is here because the target caches are keyed on
+# `hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml')` -- see "Rust
+# caches" in ci.yml. Without it the Windows runners computed a different
+# generation from Linux and macOS (measured: b0986aa1… against bc4759dc…), and
+# because prune-caches runs on ubuntu-latest and prunes with the *one* hash it
+# computes, every Windows target cache would have read as "no current-generation
+# entry for this prefix" and never been pruned -- accumulating a ~1.3 GB entry
+# per generation against a 10 GB budget. A pattern with no slash matches the
+# basename at any depth, so this one line covers the root manifest and every
+# crate's.
+#
+# Still scoped deliberately: these are the build-metadata files CI hashes, not
+# a blanket rule. We do not want to force eol on Windows-native files.
 Cargo.lock text eol=lf
+Cargo.toml text eol=lf
 
 # Shell scripts are not Windows-native files: bash, including Git Bash on the
 # Windows runners, reads a CRLF line ending as a stray `\r` in every command.
