@@ -14,8 +14,8 @@ from click.testing import CliRunner
 
 from sfmtool import RangeExpr
 from sfmtool._commands.compare import _parse_labels
-from sfmtool._compare import compare_reconstructions
-from sfmtool._compare_fragments import (
+from sfmtool.compare import compare_reconstructions
+from sfmtool.compare._fragments import (
     decompose_fragments,
     print_fragment_decomposition,
 )

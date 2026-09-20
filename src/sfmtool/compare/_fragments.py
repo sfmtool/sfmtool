@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .align.core import ImageMatch, estimate_similarity_with_orientations
-from ._sfmtool.geometry import Se3Transform
+from ..align.core import ImageMatch, estimate_similarity_with_orientations
+from .._sfmtool.geometry import Se3Transform
 
 
 @dataclass

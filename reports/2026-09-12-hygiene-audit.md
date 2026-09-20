@@ -1465,6 +1465,12 @@ sibling already shows the fix**
 **Flat modules whose only consumer is one sibling, and seven phase labels that
 contradict themselves**
 
+> _Status (2026-09-20): Done — the comparison core and fragment decomposition
+> now live together in `src/sfmtool/compare/`, with the command entering through
+> the package's public `compare_reconstructions` export. The former
+> `_compare_strips.py` had already moved into the cohesive `strips/` engine, so
+> that later structure remains intact._
+
 > _Status (2026-09-18): Partially done — all seven labels now read `[N/7]`, and
 > `_rectification.py` moved to `visualization/_rectification.py` beside its one
 > production importer. The `compare/` subpackage move for the 1,708-line trio is

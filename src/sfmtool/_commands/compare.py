@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._compare import compare_reconstructions
+from ..compare import compare_reconstructions
 from .._sfmtool.reconstruction import SfmrReconstruction
 
 

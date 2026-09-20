@@ -118,7 +118,7 @@ observations within an image.
 | `sfm align --method points` | `align/by_points.py` → pairwise finder → least-squares/RANSAC ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
 | `sfm merge` | `merge/reconstructions.py` → grouping + `merge_points_and_tracks_py` → PnP pose refinement |
 | `sfm xform --align-to` | `xform/_align_to.py` → pairwise finder → similarity fit |
-| `sfm compare` | `_compare.py` → pairwise finder (feature-index or coordinate-based) |
+| `sfm compare` | `compare/_core.py` → pairwise finder (feature-index or coordinate-based) |
 
 See [`specs/cli/reconstruction/align-command.md`](../../cli/reconstruction/align-command.md) and
 [`specs/cli/reconstruction/merge-command.md`](../../cli/reconstruction/merge-command.md) for the CLI

@@ -8,15 +8,15 @@ from pathlib import Path
 
 import numpy as np
 
-from .align.core import ImageMatch, estimate_pairwise_alignment
-from ._compare_fragments import decompose_fragments, print_fragment_decomposition
-from ._histogram_utils import print_histogram
-from ._point_correspondence import (
+from ..align.core import ImageMatch, estimate_pairwise_alignment
+from .._histogram_utils import print_histogram
+from .._point_correspondence import (
     find_point_correspondences,
     find_point_correspondences_by_coordinate,
 )
-from ._sfmtool.reconstruction import SfmrReconstruction
-from ._sfmtool.geometry import RotQuaternion
+from .._sfmtool.reconstruction import SfmrReconstruction
+from .._sfmtool.geometry import RotQuaternion
+from ._fragments import decompose_fragments, print_fragment_decomposition
 
 
 def _characteristic_scene_scale(recon: SfmrReconstruction) -> float:
@@ -236,7 +236,7 @@ def compare_reconstructions(
         if alignment_result is None:
             print("  --strips: skipped (alignment unavailable)")
         else:
-            from .strips import render_comparison_strips
+            from ..strips import render_comparison_strips
 
             render_comparison_strips(
                 recon1,
@@ -370,7 +370,7 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
     print(f"    Images: {recon.image_count}")
 
     try:
-        from ._path_summary import summarize_path_list
+        from .._path_summary import summarize_path_list
 
         print("    Image paths:")
         print(
@@ -386,7 +386,7 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
 
 def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> None:
     """Compare camera intrinsics between two reconstructions."""
-    from .camera.cameras import _CAMERA_PARAM_NAMES
+    from ..camera.cameras import _CAMERA_PARAM_NAMES
 
     cameras1 = recon1.cameras
     cameras2 = recon2.cameras
