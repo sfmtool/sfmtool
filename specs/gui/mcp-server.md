@@ -3152,9 +3152,11 @@ where a test hands no host over.
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud` and `max_dimension`.
-- **Schema and parser cannot drift**: every property any tool advertises is one
-  the parser accepts, walked over the whole catalog rather than tool by tool, so
-  a tool added later is covered by construction. The vocabulary rule is asserted
+- **Schema and parser cannot drift**: the cached catalog schema supplies the
+  accepted top-level argument names to the parser, so a tool has one declaration
+  of that vocabulary. Nested objects keep their own local closed-object checks.
+  A catalog-wide regression adds an unknown key to every representative call;
+  the vocabulary rule is asserted
   the same way, including that a panel argument is `panel_name` and never
   `panel`, and that `hud` — the one allowed initialism — is on `screenshot` and
   nowhere else, so a second one cannot arrive quietly.

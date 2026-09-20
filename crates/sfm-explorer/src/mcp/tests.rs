@@ -3755,18 +3755,79 @@ fn every_advertised_tool_parses_to_matching_command_metadata() {
     }
 }
 
-/// A misspelled argument is refused rather than ignored. An agent that believes
-/// it asked for something it did not is the failure this surface is shaped to
-/// avoid, and `additionalProperties: false` only binds clients that enforce it.
+/// A misspelled argument is refused by every advertised tool. Starting from
+/// the representative valid calls keeps this check independent of each
+/// branch's other validation rules.
 #[test]
-fn an_unknown_argument_is_refused_by_name() {
+fn every_advertised_tool_refuses_an_unknown_top_level_argument() {
+    for (name, arguments) in representative_tool_calls() {
+        let mut arguments = arguments.as_object().cloned().expect("an object");
+        arguments.insert("unknown_argument".into(), json!(true));
+        let error = tools::parse(name, Some(&arguments)).expect_err("rejected");
+        assert!(
+            error
+                .0
+                .starts_with(&format!("{name} has no argument \"unknown_argument\" — ")),
+            "{name}: {error}"
+        );
+    }
+}
+
+#[test]
+fn schema_driven_unknown_argument_errors_remain_compatible() {
     let arguments = json!({ "reconstruction_labelz": "alpha" })
         .as_object()
         .cloned()
         .expect("an object");
     let error = tools::parse("list_camera_images", Some(&arguments)).expect_err("rejected");
-    assert!(error.0.contains("reconstruction_labelz"), "{error}");
-    assert!(error.0.contains("reconstruction_label"), "{error}");
+    assert_eq!(
+        error.0,
+        "list_camera_images has no argument \"reconstruction_labelz\" — it takes limit, \
+         offset, reconstruction_label."
+    );
+
+    let arguments = json!({
+        "look_through": { "camera_image": 0, "unknown_argument": true }
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let error = tools::parse("set_view", Some(&arguments)).expect_err("rejected");
+    assert_eq!(
+        error.0,
+        "set_view.look_through has no argument \"unknown_argument\" — it takes \
+         reconstruction_label, camera_image."
+    );
+
+    let arguments = json!({ "unknown_argument": true })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    assert_eq!(
+        tools::parse("get_scene", Some(&arguments))
+            .expect_err("rejected")
+            .0,
+        "get_scene has no argument \"unknown_argument\" — it takes none."
+    );
+
+    let arguments = json!({ "offset": "bad", "unknown_argument": true })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    assert!(
+        tools::parse("list_camera_images", Some(&arguments))
+            .expect_err("rejected")
+            .0
+            .contains("has no argument \"unknown_argument\""),
+        "unknown-key validation must precede value validation"
+    );
+
+    assert_eq!(
+        tools::parse("not_a_tool", Some(&arguments))
+            .expect_err("rejected")
+            .0,
+        "There is no tool named \"not_a_tool\". Call tools/list for what this viewer offers."
+    );
 }
 
 #[test]

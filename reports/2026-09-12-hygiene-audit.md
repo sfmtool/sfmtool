@@ -151,6 +151,10 @@ machine-checked**
 > representative call fixture that is parsed and checked against `Command::tool_name()`
 > and the catalog/command read-only classification. Schema/parser key deduplication
 > remains open._
+>
+> _Status (2026-09-19): Done — top-level unknown-argument validation now reads the
+> accepted keys from the cached tool schemas, with catalog-wide and nested-object
+> compatibility regressions. Nested argument objects retain their local validation._
 
 - Location: `crates/sfm-explorer/src/mcp/tools.rs` **56–904** (`catalog`, 849 — the
   longest function in the workspace) and **1194–1569** (`parse`, 376); `mcp/mod.rs`

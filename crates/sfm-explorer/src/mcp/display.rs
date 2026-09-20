@@ -187,13 +187,6 @@ fn feature_size_px(feature: &FeatureDisplaySettings) -> Value {
 /// value or an inverted size filter is turned away before a `Command` exists —
 /// which is what makes a refusal atomic without [`set`] needing a rollback.
 pub(super) fn parse_change(args: &Args) -> Result<ImageDetailDisplayChange, ToolError> {
-    args.reject_unknown(&[
-        "overlay_mode",
-        "max_features",
-        "feature_size_px",
-        "tracked_only",
-        "intrinsics",
-    ])?;
     let change = ImageDetailDisplayChange {
         overlay_mode: parse_overlay_mode(args)?,
         // Doubly optional: absent leaves the cap alone, an explicit null lifts
@@ -628,18 +621,6 @@ fn view_document(state: &AppState, view: Option<ViewGeometry>) -> Value {
 /// display parse holds its vocabularies: a call that named two places has asked
 /// two questions, and answering half of it would be worse than turning it away.
 pub(super) fn parse_view(args: &Args) -> Result<ImageDetailViewRequest, ToolError> {
-    args.reject_unknown(&[
-        "reconstruction_label",
-        "camera_image",
-        "pixel",
-        "rect",
-        "point",
-        "feature",
-        "bench_observation",
-        "track",
-        "fit",
-        "zoom",
-    ])?;
     let target = parse_target(args)?;
     let zoom: Option<f32> = match args.optional_f64("zoom")? {
         None => None,

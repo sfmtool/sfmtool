@@ -54,7 +54,12 @@ pub(crate) struct ToolSpec {
 
 /// Every tool this surface advertises, in the order `tools/list` reports them:
 /// the reads first, then the writes, then the one that hands back a picture.
-pub(crate) fn catalog() -> Vec<ToolSpec> {
+pub(crate) fn catalog() -> &'static [ToolSpec] {
+    static CATALOG: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(build_catalog)
+}
+
+fn build_catalog() -> Vec<ToolSpec> {
     use ToolKind::{Read, Save, Write};
     vec![
         ToolSpec {
@@ -2044,60 +2049,51 @@ pub(crate) fn parse(
     let map = arguments.unwrap_or_else(|| EMPTY.get_or_init(Map::new));
     let args = Args { tool: name, map };
 
+    // A tool's closed input schema is the single source of truth for its
+    // top-level vocabulary. Unknown names deliberately skip this lookup and
+    // reach the match's existing unknown-tool error below.
+    if let Some(spec) = catalog().iter().find(|spec| spec.name == name) {
+        let allowed = spec.schema["properties"]
+            .as_object()
+            .expect("every tool schema has object properties")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        args.reject_unknown(&allowed)?;
+    }
+
     let command = match name {
-        "get_scene" => {
-            args.reject_unknown(&[])?;
-            Command::GetScene
-        }
-        "list_camera_images" => {
-            args.reject_unknown(&["reconstruction_label", "offset", "limit"])?;
-            Command::ListCameraImages {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-                offset: args.optional_usize("offset")?.unwrap_or(0),
-                limit: args
-                    .optional_usize("limit")?
-                    .unwrap_or(super::read::DEFAULT_LIMIT),
-            }
-        }
-        "get_camera_image" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image"])?;
-            Command::GetCameraImage {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-            }
-        }
-        "get_camera_intrinsics" => {
-            args.reject_unknown(&["reconstruction_label", "camera_intrinsics_index"])?;
-            Command::GetCameraIntrinsics {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-                camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
-            }
-        }
-        "get_point" => {
-            args.reject_unknown(&["point"])?;
-            Command::GetPoint {
-                point: args.point("point")?,
-            }
-        }
-        "get_action_log" => {
-            args.reject_unknown(&["since_revision", "limit", "actors", "detail"])?;
-            Command::GetActionLog {
-                since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
-                limit: args
-                    .optional_usize("limit")?
-                    .unwrap_or(super::read::ACTION_LOG_DEFAULT_LIMIT),
-                actors: args.actors("actors")?,
-                detail: args.optional_bool("detail")?.unwrap_or(false),
-            }
-        }
-        "open_reconstruction" => {
-            args.reject_unknown(&["path"])?;
-            Command::OpenReconstruction {
-                path: std::path::PathBuf::from(args.required_string("path")?),
-            }
-        }
+        "get_scene" => Command::GetScene,
+        "list_camera_images" => Command::ListCameraImages {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            offset: args.optional_usize("offset")?.unwrap_or(0),
+            limit: args
+                .optional_usize("limit")?
+                .unwrap_or(super::read::DEFAULT_LIMIT),
+        },
+        "get_camera_image" => Command::GetCameraImage {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+        },
+        "get_camera_intrinsics" => Command::GetCameraIntrinsics {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
+        },
+        "get_point" => Command::GetPoint {
+            point: args.point("point")?,
+        },
+        "get_action_log" => Command::GetActionLog {
+            since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
+            limit: args
+                .optional_usize("limit")?
+                .unwrap_or(super::read::ACTION_LOG_DEFAULT_LIMIT),
+            actors: args.actors("actors")?,
+            detail: args.optional_bool("detail")?.unwrap_or(false),
+        },
+        "open_reconstruction" => Command::OpenReconstruction {
+            path: std::path::PathBuf::from(args.required_string("path")?),
+        },
         "close_reconstruction" => {
-            args.reject_unknown(&["reconstruction_label", "all"])?;
             let all = args.optional_bool("all")?.unwrap_or(false);
             let label = args.optional_string("reconstruction_label")?;
             match (all, label) {
@@ -2119,34 +2115,21 @@ pub(crate) fn parse(
                 }
             }
         }
-        "select_reconstruction" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::SelectReconstruction {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "select_camera_image" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image"])?;
-            Command::SelectCameraImage {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-            }
-        }
-        "select_camera_intrinsics" => {
-            args.reject_unknown(&["reconstruction_label", "camera_intrinsics_index"])?;
-            Command::SelectCameraIntrinsics {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-                camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
-            }
-        }
-        "select_point" => {
-            args.reject_unknown(&["point"])?;
-            Command::SelectPoint {
-                point: args.point("point")?,
-            }
-        }
+        "select_reconstruction" => Command::SelectReconstruction {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "select_camera_image" => Command::SelectCameraImage {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+        },
+        "select_camera_intrinsics" => Command::SelectCameraIntrinsics {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
+        },
+        "select_point" => Command::SelectPoint {
+            point: args.point("point")?,
+        },
         "clear_selection" => {
-            args.reject_unknown(&["scope"])?;
             let scope = match args.optional_string("scope")?.as_deref() {
                 None | Some("all") => SelectionScope::All,
                 Some("camera_image") => SelectionScope::CameraImage,
@@ -2162,16 +2145,6 @@ pub(crate) fn parse(
             Command::ClearSelection { scope }
         }
         "set_reconstruction_display" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "visible",
-                "interactive",
-                "show_points",
-                "show_camera_images",
-                "show_patches",
-                "show_points_at_infinity",
-                "tint",
-            ])?;
             let change = DisplayChange {
                 visible: args.optional_bool("visible")?,
                 interactive: args.optional_bool("interactive")?,
@@ -2196,26 +2169,17 @@ pub(crate) fn parse(
                 change,
             }
         }
-        "set_solo" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::SetSolo {
-                reconstruction_label: args.optional_string("reconstruction_label")?,
-            }
-        }
-        "get_image_detail_display" => {
-            args.reject_unknown(&[])?;
-            Command::GetImageDetailDisplay
-        }
+        "set_solo" => Command::SetSolo {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+        },
+        "get_image_detail_display" => Command::GetImageDetailDisplay,
         // Every vocabulary this tool has is static — seven modes, two ladders,
         // the bounds on a size filter — so the whole call is validated here and
         // `apply` cannot fail. That is what makes a refusal atomic.
         "set_image_detail_display" => Command::SetImageDetailDisplay {
             change: super::display::parse_change(&args)?,
         },
-        "get_image_detail_view" => {
-            args.reject_unknown(&[])?;
-            Command::GetImageDetailView
-        }
+        "get_image_detail_view" => Command::GetImageDetailView,
         // The one-target rule, the zoom's range and the targets that refuse a
         // zoom are all settled here, before a `Command` exists: what is left
         // for the tool body is resolving the handles, which is the part that
@@ -2223,26 +2187,16 @@ pub(crate) fn parse(
         "set_image_detail_view" => Command::SetImageDetailView {
             request: super::display::parse_view(&args)?,
         },
-        "get_timing_detail" => {
-            args.reject_unknown(&[])?;
-            Command::GetTimingDetail
-        }
+        "get_timing_detail" => Command::GetTimingDetail,
         // Required rather than a toggle, for the reason `set_solo` takes the
         // state it wants: an agent issuing a toggle cannot know the outcome
         // without reading first, and a retried call would undo itself.
-        "set_timing_detail" => {
-            args.reject_unknown(&["enabled"])?;
-            Command::SetTimingDetail {
-                enabled: args.required_bool("enabled")?,
-            }
-        }
+        "set_timing_detail" => Command::SetTimingDetail {
+            enabled: args.required_bool("enabled")?,
+        },
         "set_view" => parse_set_view(&args)?,
-        "get_window_layout" => {
-            args.reject_unknown(&[])?;
-            Command::GetWindowLayout
-        }
+        "get_window_layout" => Command::GetWindowLayout,
         "set_window_layout" => {
-            args.reject_unknown(&["sfm_explorer_layout", "window", "layout"])?;
             let document = Value::Object(args.map.clone());
             // Carried through unparsed: `WindowLayout::from_value` reads it in
             // the tool body, so a document the viewer will not accept is a
@@ -2258,66 +2212,38 @@ pub(crate) fn parse(
             }
             Command::SetWindowLayout { document }
         }
-        "show_panel" => {
-            args.reject_unknown(&["panel_name"])?;
-            Command::ShowPanel {
-                panel: args.panel("panel_name")?,
-            }
-        }
-        "hide_panel" => {
-            args.reject_unknown(&["panel_name"])?;
-            Command::HidePanel {
-                panel: args.panel("panel_name")?,
-            }
-        }
-        "get_history" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::GetHistory {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "undo" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::Undo {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "redo" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::Redo {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "jump_to_version" => {
-            args.reject_unknown(&["reconstruction_label", "serial"])?;
-            Command::JumpToVersion {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                serial: args.required_string("serial")?,
-            }
-        }
-        "save_reconstruction" => {
-            args.reject_unknown(&["reconstruction_label", "path"])?;
-            Command::SaveReconstruction {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                path: args.optional_string("path")?.map(std::path::PathBuf::from),
-            }
-        }
-        "delete_point" => {
-            args.reject_unknown(&["reconstruction_label", "point"])?;
-            Command::DeletePoint {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                point: args.point("point")?,
-            }
-        }
-        "delete_camera_image" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image"])?;
-            Command::DeleteCameraImage {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-            }
-        }
+        "show_panel" => Command::ShowPanel {
+            panel: args.panel("panel_name")?,
+        },
+        "hide_panel" => Command::HidePanel {
+            panel: args.panel("panel_name")?,
+        },
+        "get_history" => Command::GetHistory {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "undo" => Command::Undo {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "redo" => Command::Redo {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "jump_to_version" => Command::JumpToVersion {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            serial: args.required_string("serial")?,
+        },
+        "save_reconstruction" => Command::SaveReconstruction {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            path: args.optional_string("path")?.map(std::path::PathBuf::from),
+        },
+        "delete_point" => Command::DeletePoint {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            point: args.point("point")?,
+        },
+        "delete_camera_image" => Command::DeleteCameraImage {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+        },
         "move_camera_image" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image", "world_from_camera"])?;
             let pose = args
                 .map
                 .get("world_from_camera")
@@ -2340,47 +2266,26 @@ pub(crate) fn parse(
                 translation: inner.required_vec3("translation")?,
             }
         }
-        "resect_camera_image" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image", "from_matches"])?;
-            Command::ResectCameraImage {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-                from_matches: args.optional_bool("from_matches")?.unwrap_or(false),
-            }
-        }
-        "bundle_adjust" => {
-            args.reject_unknown(&["reconstruction_label", "release_focal"])?;
-            Command::BundleAdjust {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
-            }
-        }
-        "convert_to_embedded_patches" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::ConvertToEmbeddedPatches {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "retriangulate_point" => {
-            args.reject_unknown(&["reconstruction_label", "point"])?;
-            Command::RetriangulatePoint {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                point: args.point("point")?,
-            }
-        }
-        "retriangulate_all_points" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::RetriangulateAllPoints {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
+        "resect_camera_image" => Command::ResectCameraImage {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+            from_matches: args.optional_bool("from_matches")?.unwrap_or(false),
+        },
+        "bundle_adjust" => Command::BundleAdjust {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
+        },
+        "convert_to_embedded_patches" => Command::ConvertToEmbeddedPatches {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "retriangulate_point" => Command::RetriangulatePoint {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            point: args.point("point")?,
+        },
+        "retriangulate_all_points" => Command::RetriangulateAllPoints {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
         "prune_covered_observations" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "footprint_fraction",
-                "ratio",
-                "min_fine_radius_px",
-            ])?;
             let defaults = PruneCoveredOptions::default();
             Command::PruneCoveredObservations {
                 reconstruction_label: args.required_string("reconstruction_label")?,
@@ -2396,238 +2301,128 @@ pub(crate) fn parse(
                 },
             }
         }
-        "get_bench" => {
-            args.reject_unknown(&["reconstruction_label"])?;
-            Command::GetBench {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-            }
-        }
-        "get_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track"])?;
-            Command::GetBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-            }
-        }
-        "create_bench_cluster" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "camera_image",
-                "pixel",
-                "radius_px",
-                "affine",
-                "feature",
-            ])?;
-            Command::CreateBenchCluster {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-                seed: parse_seed(&args)?,
-            }
-        }
-        "create_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "point"])?;
-            Command::CreateBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                point: args.point("point")?,
-            }
-        }
-        "activate_bench_item" => {
-            args.reject_unknown(&["reconstruction_label", "item"])?;
-            Command::ActivateBenchItem {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                item: args.required_string("item")?,
-            }
-        }
-        "rename_bench_item" => {
-            args.reject_unknown(&["reconstruction_label", "item", "label"])?;
-            Command::RenameBenchItem {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                item: args.required_string("item")?,
-                label: args.required_string("label")?,
-            }
-        }
-        "discard_bench_item" => {
-            args.reject_unknown(&["reconstruction_label", "item"])?;
-            Command::DiscardBenchItem {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                item: args.required_string("item")?,
-            }
-        }
-        "add_bench_track_observation" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "track",
-                "camera_image",
-                "pixel",
-                "radius_px",
-                "affine",
-                "feature",
-            ])?;
-            Command::AddBenchTrackObservation {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                camera_image: args.camera_image("camera_image")?,
-                seed: parse_seed(&args)?,
-            }
-        }
-        "duplicate_bench_item" => {
-            args.reject_unknown(&["reconstruction_label", "item"])?;
-            Command::DuplicateBenchItem {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                item: args.optional_string("item")?,
-            }
-        }
-        "move_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track", "observation", "pixel"])?;
-            Command::MoveBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observation: args.required_usize("observation")?,
-                pixel: args.required_pixel_f64("pixel")?,
-            }
-        }
-        "move_bench_track_observation" => {
-            args.reject_unknown(&["reconstruction_label", "track", "observation", "pixel"])?;
-            Command::MoveBenchTrackObservation {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observation: args.required_usize("observation")?,
-                pixel: args.required_pixel_f64("pixel")?,
-            }
-        }
-        "resize_bench_track" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "track",
-                "observation",
-                "edge",
-                "pixel",
-            ])?;
-            Command::ResizeBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observation: args.required_usize("observation")?,
-                edge: args.edge("edge")?,
-                pixel: args.required_pixel_f64("pixel")?,
-            }
-        }
-        "rotate_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track", "degrees", "observation"])?;
-            Command::RotateBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                degrees: args.required_f64("degrees")?,
-                observation: args.optional_usize("observation")?,
-            }
-        }
-        "set_bench_track_verdict" => {
-            args.reject_unknown(&["reconstruction_label", "track", "observation", "verdict"])?;
-            Command::SetBenchTrackVerdict {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observation: args.required_usize("observation")?,
-                verdict: args.verdict("verdict")?,
-            }
-        }
-        "apply_bench_track_thresholds" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "track",
-                "min_zncc",
-                "max_shift_px",
-                "max_keypoint_uncertainty",
-                "min_relative_zncc",
-            ])?;
-            Command::ApplyBenchTrackThresholds {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                thresholds: super::ThresholdChange {
-                    min_zncc: args.optional_f64("min_zncc")?,
-                    max_shift_px: args.optional_f64("max_shift_px")?,
-                    max_keypoint_uncertainty: args.optional_f64("max_keypoint_uncertainty")?,
-                    min_relative_zncc: args.optional_f64("min_relative_zncc")?,
-                },
-            }
-        }
-        "split_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track", "observations"])?;
-            Command::SplitBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observations: args.observations("observations")?,
-            }
-        }
-        "commit_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track"])?;
-            Command::CommitBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-            }
-        }
-        "evaluate_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track", "search_px"])?;
-            Command::EvaluateBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                search_px: args.optional_f64("search_px")?,
-            }
-        }
-        "fit_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track", "search_px"])?;
-            Command::FitBenchTrack {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                search_px: args.optional_f64("search_px")?,
-            }
-        }
-        "set_bench_track_stage" => {
-            args.reject_unknown(&["reconstruction_label", "track", "stage"])?;
-            Command::SetBenchTrackStage {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                stage: args.stage("stage")?,
-            }
-        }
-        "search_bench_track_descriptors" => {
-            args.reject_unknown(&[
-                "reconstruction_label",
-                "track",
-                "observation",
-                "radius_px",
-                "min_inliers",
-            ])?;
-            Command::SearchBenchTrackDescriptors {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                track: args.optional_string("track")?,
-                observation: args.required_usize("observation")?,
-                radius_px: args.optional_f64("radius_px")?,
-                min_inliers: args.optional_usize("min_inliers")?,
-            }
-        }
-        "open_descriptor_index" => {
-            args.reject_unknown(&["reconstruction_label", "path"])?;
-            Command::OpenDescriptorIndex {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                path: args.optional_string("path")?,
-            }
-        }
-        "build_descriptor_index" => {
-            args.reject_unknown(&["reconstruction_label", "path"])?;
-            Command::BuildDescriptorIndex {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                path: args.optional_string("path")?,
-            }
-        }
-        "get_background_task" => {
-            args.reject_unknown(&[])?;
-            Command::GetBackgroundTask
-        }
-        "cancel_background_task" => {
-            args.reject_unknown(&[])?;
-            Command::CancelBackgroundTask
-        }
+        "get_bench" => Command::GetBench {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
+        "get_bench_track" => Command::GetBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+        },
+        "create_bench_cluster" => Command::CreateBenchCluster {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+            seed: parse_seed(&args)?,
+        },
+        "create_bench_track" => Command::CreateBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            point: args.point("point")?,
+        },
+        "activate_bench_item" => Command::ActivateBenchItem {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.required_string("item")?,
+        },
+        "rename_bench_item" => Command::RenameBenchItem {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.required_string("item")?,
+            label: args.required_string("label")?,
+        },
+        "discard_bench_item" => Command::DiscardBenchItem {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.required_string("item")?,
+        },
+        "add_bench_track_observation" => Command::AddBenchTrackObservation {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            camera_image: args.camera_image("camera_image")?,
+            seed: parse_seed(&args)?,
+        },
+        "duplicate_bench_item" => Command::DuplicateBenchItem {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            item: args.optional_string("item")?,
+        },
+        "move_bench_track" => Command::MoveBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            pixel: args.required_pixel_f64("pixel")?,
+        },
+        "move_bench_track_observation" => Command::MoveBenchTrackObservation {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            pixel: args.required_pixel_f64("pixel")?,
+        },
+        "resize_bench_track" => Command::ResizeBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            edge: args.edge("edge")?,
+            pixel: args.required_pixel_f64("pixel")?,
+        },
+        "rotate_bench_track" => Command::RotateBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            degrees: args.required_f64("degrees")?,
+            observation: args.optional_usize("observation")?,
+        },
+        "set_bench_track_verdict" => Command::SetBenchTrackVerdict {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            verdict: args.verdict("verdict")?,
+        },
+        "apply_bench_track_thresholds" => Command::ApplyBenchTrackThresholds {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            thresholds: super::ThresholdChange {
+                min_zncc: args.optional_f64("min_zncc")?,
+                max_shift_px: args.optional_f64("max_shift_px")?,
+                max_keypoint_uncertainty: args.optional_f64("max_keypoint_uncertainty")?,
+                min_relative_zncc: args.optional_f64("min_relative_zncc")?,
+            },
+        },
+        "split_bench_track" => Command::SplitBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observations: args.observations("observations")?,
+        },
+        "commit_bench_track" => Command::CommitBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+        },
+        "evaluate_bench_track" => Command::EvaluateBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            search_px: args.optional_f64("search_px")?,
+        },
+        "fit_bench_track" => Command::FitBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            search_px: args.optional_f64("search_px")?,
+        },
+        "set_bench_track_stage" => Command::SetBenchTrackStage {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            stage: args.stage("stage")?,
+        },
+        "search_bench_track_descriptors" => Command::SearchBenchTrackDescriptors {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            radius_px: args.optional_f64("radius_px")?,
+            min_inliers: args.optional_usize("min_inliers")?,
+        },
+        "open_descriptor_index" => Command::OpenDescriptorIndex {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            path: args.optional_string("path")?,
+        },
+        "build_descriptor_index" => Command::BuildDescriptorIndex {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            path: args.optional_string("path")?,
+        },
+        "get_background_task" => Command::GetBackgroundTask,
+        "cancel_background_task" => Command::CancelBackgroundTask,
         "screenshot" => {
-            args.reject_unknown(&["panel_name", "hud", "max_dimension"])?;
             let panel = match args.map.get("panel_name") {
                 None | Some(Value::Null) => None,
                 Some(_) => Some(args.panel("panel_name")?),
@@ -2715,20 +2510,6 @@ fn parse_seed(args: &Args) -> Result<crate::bench::Seed, ToolError> {
 /// the agent did not ask for. The explicit camera is one form however many of
 /// its pieces a call carries, so any of them puts the call in it.
 fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
-    args.reject_unknown(&[
-        "fit",
-        "look_through",
-        "exit_camera_view",
-        "position",
-        "target",
-        "forward",
-        "up",
-        "orientation_wxyz",
-        "target_distance",
-        "world_up",
-        "fov_short_axis_deg",
-    ])?;
-
     let present = |key: &str| args.map.contains_key(key);
     let explicit: Vec<&str> = PLACEMENT_KEYS
         .into_iter()
