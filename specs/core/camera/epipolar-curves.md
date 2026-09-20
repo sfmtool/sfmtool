@@ -1,6 +1,11 @@
 # Epipolar Curves for Non-Perspective Cameras
 
-## The Problem
+Epipolar curve sampling produces, for a pixel in one image, the polyline in a
+second image along which its match must lie. It traces that locus through both
+cameras' full projection models, so match inspection remains geometrically
+correct when fisheye and wide-FOV distortion bends the locus away from a line.
+
+## Geometry
 
 The epipolar constraint `p2ᵀ F p1 = 0` only holds when `p1`, `p2` are pixel
 coordinates of a **pinhole** camera (equivalently, normalized image coordinates
@@ -50,60 +55,25 @@ survives only on the `--undistort` branch.
 
 The curve sampling lives in
 [epipolar.rs](../../../crates/sfmtool-core/src/camera/epipolar.rs)
-(`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
-bound as `sfmtool._sfmtool.epipolar_curves` and consumed by `sfm epipolar`
-through
-[_epipolar_display.py](../../../src/sfmtool/visualization/_epipolar_display.py).
+(`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`).
+The poses passed to both functions are `cam_from_world` transforms.
 
 ```rust
-// crates/sfmtool-core/src/camera/epipolar.rs
-
-/// Controls how an epipolar curve is sampled into a polyline.
 pub struct EpipolarCurveOptions {
-    /// Maximum allowed perpendicular distance (pixels) from a segment's
-    /// midpoint to its chord before the segment is further subdivided.
-    /// Default: 0.5.
     pub curvature_tolerance: f64,
-    /// Hard cap on the number of vertices in a single polyline. Stops
-    /// subdivision once reached, even if the tolerance is not met. Default: 256.
     pub max_vertices: usize,
 }
 
-impl Default for EpipolarCurveOptions {
-    fn default() -> Self {
-        Self { curvature_tolerance: 0.5, max_vertices: 256 }
-    }
-}
-
-/// Plot the epipolar curve in camera 2's image for pixel `p1` in camera 1.
-///
-/// Back-projects `p1` through `cam1`'s full model, brackets the depth interval
-/// over which the world ray's reprojection stays inside camera 2's image, and
-/// adaptively subdivides that interval until every chord lies within
-/// `curvature_tolerance` pixels of the true curve. Returns an empty polyline
-/// when the baseline is degenerate or no in-image interval is found.
-///
-/// The returned polyline is fully inside `[0, cam2.width) × [0, cam2.height)`;
-/// the caller can draw it directly with `cv2.polylines` (no further clipping).
-///
-/// `anchor_depth` is the seed depth in camera 1 used to bracket the in-image
-/// interval — typically the reconstructed depth of the observed track when
-/// triangulated, otherwise the baseline length `‖C2 − C1‖`. The algorithm
-/// walks outward in log-depth from this seed, so an order-of-magnitude
-/// estimate is fine.
 pub fn plot_epipolar_curve(
     p1: [f64; 2],
     cam1: &CameraIntrinsics,
-    pose1: &RigidTransform,          // cam1_from_world
+    pose1: &RigidTransform,
     cam2: &CameraIntrinsics,
-    pose2: &RigidTransform,          // cam2_from_world
+    pose2: &RigidTransform,
     anchor_depth: f64,
     opts: &EpipolarCurveOptions,
 ) -> Vec<[f64; 2]>;
 
-/// Batch form: one polyline per input pixel (with a per-feature anchor
-/// depth), parallelized over points. `anchor_depths.len()` must equal
-/// `points1.len()`.
 pub fn plot_epipolar_curves_batch(
     points1: &[[f64; 2]],
     anchor_depths: &[f64],
@@ -114,6 +84,20 @@ pub fn plot_epipolar_curves_batch(
     opts: &EpipolarCurveOptions,
 ) -> Vec<Vec<[f64; 2]>>;
 ```
+
+`plot_epipolar_curve` returns vertices inside `[0, cam2.width) × [0,
+cam2.height)`. It returns no vertices for a degenerate baseline or when Phase 1
+finds no in-image sample. It can return one vertex when the bracket collapses
+within `BRACKET_LOG_TOL` or its second endpoint cannot be projected; callers
+must therefore treat fewer than two vertices as non-drawable. Otherwise the
+vertices form the sampled curve in order. The batch form runs the same operation
+in parallel and preserves input order; `anchor_depths.len()` must equal
+`points1.len()`.
+
+`anchor_depth` is only a search seed, so an order-of-magnitude estimate is
+enough. Rust normalizes it as `max(abs(anchor_depth), MIN_ANCHOR)` before taking
+its logarithm: negative finite inputs use their magnitude, and zero or a tiny
+magnitude uses `MIN_ANCHOR = 1e-12`.
 
 ### Algorithm
 
@@ -136,33 +120,34 @@ subdivide it.
 
 #### Phase 1: endpoint bracketing
 
-The goal is to find `(λ_in, λ_out)` with `λ_in < λ_out`, both in-image, such
-that `in_image` is false just outside the interval. Operate in log-depth (so
-"halving / doubling" reads as ±1 step) and treat `log_anchor = ln(anchor_depth)`
-as the seed.
+The goal is to find `(λ_in, λ_out)` with `λ_in < λ_out` and both endpoints
+in-image. When an out-of-image probe exists, it brackets the corresponding
+endpoint; otherwise the endpoint is the farthest in-image probe allowed by the
+search cap. Operate in log-depth (so "halving / doubling" reads as ±1 step) and
+start at normalized `log_anchor`.
 
 1. **Seed in-image search.** Probe `in_image` at `log_anchor`, then at
    `log_anchor ± k·LOG_STEP` for `k = 1 .. BRACKET_MAX_STEPS` in alternation
    until *some* probe lands in-image, or all are exhausted (→ return empty).
    `LOG_STEP = ln(2)` (one octave per step); `BRACKET_MAX_STEPS = 24` (≈16
    million-fold range, enough for any plausible reconstruction).
-2. **Bisect each side.** From the in-image seed, walk down in steps of
+2. **Walk down.** From the in-image seed `log_seed`, walk down in steps of
    `LOG_STEP` until a probe falls out of image, giving a bracket
    `[log_λ_lo, log_λ_hi]` where `in_image(log_λ_hi)` is true and
    `in_image(log_λ_lo)` is false. Bisect until
-   `|log_λ_hi − log_λ_lo| < BRACKET_LOG_TOL` (default `1e-3`, i.e. ~0.1% in λ).
-   Take the in-image endpoint as `log_λ_in`.
+   `|log_λ_hi − log_λ_lo| < BRACKET_LOG_TOL` (`1e-3`, i.e. ~0.1% in λ),
+   then take the in-image side as `log_λ_in`. If no out-of-image probe is found,
+   use the farthest in-image probe, `log_seed - BRACKET_MAX_STEPS · LOG_STEP`.
 3. **Walk up.** Same procedure expanding upward to find `log_λ_out`. If
    `BRACKET_MAX_STEPS` are exhausted without finding an out-of-image probe,
-   accept `log_λ_out = log_anchor + BRACKET_MAX_STEPS · LOG_STEP` (the
+   accept `log_λ_out = log_seed + BRACKET_MAX_STEPS · LOG_STEP` (the
    vanishing-point endpoint is effectively at infinity; the cap is fine in
    practice because curve geometry flattens rapidly there).
 
 The bisection's tolerance is in log-depth, not pixel position. That's
 intentional: it's cheap, well-conditioned even when the projection grows
-infinitely sensitive near the camera-2 image-plane horizon, and the final
-endpoint is then refined by the adaptive subdivision below to whatever pixel
-budget the caller wants.
+infinitely sensitive near the camera-2 image-plane horizon. The separate
+adaptive-subdivision tolerance controls the curve's pixel-space approximation.
 
 #### Phase 2: adaptive subdivision
 
@@ -200,9 +185,9 @@ Algorithm:
      gap candidates flanking it.
 4. Emit the final pixel sequence (drop the `t` parameter values).
 
-This collapses to two vertices for pinhole / mild radial cameras (the chord
-deviation is zero along a straight line) and only spends samples in
-high-curvature regions of fisheye projections.
+This normally collapses to two vertices when the projected locus is straight
+and only spends additional samples in high-curvature regions. The Phase-1
+single-vertex exits happen before subdivision.
 
 Midpoints where `π(t_m)` returns `None` (the predicate flipped to false
 between two in-image endpoints — see the disconnected-interval note below)
@@ -223,8 +208,7 @@ workarounds for a model the curve cannot handle.
 ### Degeneracies
 
 - **Near-zero baseline** (`‖C2 − C1‖ ≈ 0`): the epipolar plane is ill-defined;
-  return an empty polyline (caller skips drawing), matching today's near-zero `F`
-  behavior.
+  return an empty polyline, which the caller skips drawing.
 - **Anchor depth at which the curve isn't visible**: the Phase-1 seed search
   probes ±`BRACKET_MAX_STEPS` octaves around `anchor_depth` looking for any
   in-image point. If none is found, return an empty polyline. With a
@@ -240,9 +224,9 @@ workarounds for a model the curve cannot handle.
   different edges, and (b) the world ray crosses behind camera 2 between two
   visible segments. The algorithm returns only the component containing the
   bracketing seed; the omitted component is documented as a known limitation.
-  Phase-2 protects against the second component leaking in across an
-  in-image segment by truncating subdivision when a midpoint projection
-  fails the predicate (see Phase 2 step 2).
+  Phase 2 stops subdividing a gap when its midpoint projection fails the
+  predicate (step 3); the retained endpoints are still joined by the straight
+  chord described above.
 
 ## Rectification and Fisheye
 
@@ -255,8 +239,8 @@ images — is the recommended path for those cameras.
 
 ## PyO3 Binding
 
-Exposed as `sfmtool._sfmtool.epipolar_curves`
-(`crates/sfmtool-py/src/analysis/epipolar.rs`):
+Exposed as `sfmtool._sfmtool.epipolar_curves` by the
+[PyO3 binding](../../../crates/sfmtool-py/src/analysis/epipolar.rs):
 
 ```python
 epipolar_curves(
@@ -266,32 +250,36 @@ epipolar_curves(
     cam2: CameraIntrinsics, q2_wxyz: NDArray[4], t2: NDArray[3],
     *, curvature_tolerance: float = 0.5,
     max_vertices: int = 256,
-) -> list[NDArray[M, 2]]   # one polyline per input point; lengths vary
+) -> list[NDArray[M, 2]]   # one result per input; M may be 0, 1, or more
 ```
 
-`_epipolar_display.py` calls this in place of `F @ p1` + `cv2.line`, then draws
-each polyline directly with `cv2.polylines`. No image-rectangle clipping
-happens on the Python side — Rust already constrains every returned vertex to
-be inside the image.
+[_epipolar_display.py](../../../src/sfmtool/visualization/_epipolar_display.py)
+calls this in place of `F @ p1` + `cv2.line`. It ignores results shorter than
+two vertices and passes all others to `cv2.polylines`; it does no
+image-rectangle clipping because Rust constrains every returned vertex to the
+image.
 
 ### Caller-side seeding strategy
 
-`_epipolar_display.py` picks `anchor_depth` per feature with a two-tier
-fallback:
+`_epipolar_display.py` picks `anchor_depth` per feature as follows:
 
 1. **Triangulated track**: if the feature observation in image 1 is linked to a
-   3D point in the reconstruction, use that point's depth as seen from camera 1
-   (`(R1 · X + t1).z`). This is guaranteed in-image for the feature's true
-   match, so Phase-1's first probe lands in-image with zero seed search.
+   3D point in the reconstruction, use its positive depth in canonical camera-1
+   coordinates, `-(R1 · X + t1).z`. This is used only when the point is in
+   front of camera 1.
 2. **Otherwise**: use the baseline length `‖C2 − C1‖`. For typical photogrammetry
    pairs, features sit at 10–100× the baseline, so this is within ~3–7 octaves
    of the truth — well inside Phase-1's ±24-octave seed-search range. One
    subtraction and one `norm`, computed once per image pair.
+3. **Degenerate baseline fallback**: if that length is below `1e-9`, use `1.0`
+   as the seed. Rust independently detects the same degenerate camera pair with
+   `MIN_BASELINE` and returns an empty result, so the substitute exists only to
+   keep the anchor array finite and positive.
 
-Neither tier costs anything per image pair beyond one subtraction and one `norm`:
-the anchor is a per-feature O(1) lookup against the track index, never a scan over
-the reconstruction's points. That is what keeps anchoring cheap enough to do
-per feature rather than once per pair from a scene-wide statistic.
+This strategy costs nothing per image pair beyond one subtraction and one
+`norm`: the anchor is a per-feature O(1) lookup against the track index, never a
+scan over the reconstruction's points. That is what keeps anchoring cheap enough
+to do per feature rather than once per pair from a scene-wide statistic.
 
 ## Out of Scope
 
@@ -305,7 +293,7 @@ separate, larger work.
 
 | Name | Default | Notes |
 |------|---------|-------|
-| `anchor_depth` | observed track depth (if triangulated), else baseline length `‖C2 − C1‖` | Seed depth for Phase-1 bracketing |
+| `anchor_depth` | observed positive track depth when available; otherwise baseline length, with `1.0` substituted for a baseline below `1e-9` | Seed depth for Phase-1 bracketing; Rust uses `max(abs(value), MIN_ANCHOR)` |
 | `curvature_tolerance` | `0.5` (pixels) | Max chord-to-midpoint deviation before a segment is further split |
 | `max_vertices` | `256` | Hard cap per polyline — stops runaway subdivision |
 
@@ -314,6 +302,8 @@ of the camera and scene:
 
 | Constant | Value | Role |
 |----------|-------|------|
+| `MIN_BASELINE` | `1e-9` | Baselines below this length return an empty curve |
+| `MIN_ANCHOR` | `1e-12` | Floor applied after taking `abs(anchor_depth)`, before `ln` |
 | `LOG_STEP` | `ln(2)` | One octave per bracketing step |
 | `BRACKET_MAX_STEPS` | `24` | ±24 octaves of seed search before giving up |
 | `BRACKET_LOG_TOL` | `1e-3` | Bisection tolerance in log-depth |

@@ -598,6 +598,13 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `derived.rs:18` says FIELD_COLS is "the same density the Image Detail overlay layer **will** default to", future tense for a shipped default. `cameras.rs:141` renders `1 image` singular, which the camera-row description (447–450) does not mention.
 
 ### specs/core/camera/epipolar-curves.md
+> _Status (2026-09-20): **Done** — reconciled the standing spec with the current
+> Rust sampler, PyO3 binding, and Python display: it now opens purpose-first,
+> documents zero/one/many-vertex results, `MIN_BASELINE`, `MIN_ANCHOR`, anchor
+> normalization and the display's degenerate-baseline fallback, measures capped
+> boundary probes from `log_seed`, fixes the Phase-2 cross-reference, and keeps
+> copyable signatures while removing duplicated Rust doc-comment prose._
+>
 > _Status (2026-09-18): **Partially done** — the change-order residue is converted to
 > present tense. "New API goes in …" is "The API lives in …", now a relative link;
 > "the special case in the current display code disappears" states that there is no
