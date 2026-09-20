@@ -682,13 +682,16 @@ impl PatchCloud {
         // `sec θ` magnification of its image plane that a bare range reading drops.
         //
         // That walk is what this call costs whenever it happens at all: on a
-        // 4054-image, 1.07M-point, 16.3M-observation capture it is 14.9 s of a
-        // 15.8 s build, against 0.8 s to size and frame every point. A policy
-        // that reads no scales skips it entirely, so it is given no share of
-        // the bar rather than a share nothing would ever move.
+        // 4054-image, 1.07M-point, 16.3M-observation capture it is 3.4 s of a
+        // 4.5 s build, against 0.95 s to size and frame every point, which is
+        // the 25/32 below. Written as exact thirty-seconds because the weights
+        // are normalised in `f32` and two that sum to one only approximately
+        // leave the finished bar a hair short of its end. A policy that reads
+        // no scales skips the walk entirely, so it is given no share of the bar
+        // rather than a share nothing would ever move.
         let reads_scales = matches!(extent, PatchExtent::FeatureSize { .. });
         let [scales, framing] = if reads_scales {
-            progress.split([0.95, 0.05])
+            progress.split([0.78125, 0.21875])
         } else {
             progress.split([0.0, 1.0])
         };
@@ -1450,16 +1453,20 @@ impl Default for PatchExtent {
 
 /// Per-feature keypoint scales (column-0 norm of the affine shape) read from an
 /// image's `.sift` file, or `None` if it cannot be read.
+///
+/// Reads the keypoint columns and leaves the descriptors and the thumbnail
+/// compressed: a scale is the affine shape's first column, and the descriptors
+/// beside it are a hundred times the bytes.
 fn read_image_scales(recon: &SfmrReconstruction, image_index: usize) -> Option<Vec<f64>> {
     let read_count = *recon.point_set.max_track_feature_index.get(image_index)? as usize + 1;
     let path = recon.sift_path_for_image(image_index);
-    let data = sfmtool_sift_format::read_sift_partial(&path, read_count).ok()?;
-    let aff = &data.affine_shapes;
+    let (_, shapes) = sfmtool_sift_format::read_sift_keypoints(&path, read_count).ok()?;
     Some(
-        (0..aff.shape()[0])
-            .map(|i| {
-                let a00 = aff[[i, 0, 0]] as f64;
-                let a10 = aff[[i, 1, 0]] as f64;
+        shapes
+            .iter()
+            .map(|shape| {
+                let a00 = shape[0][0] as f64;
+                let a10 = shape[1][0] as f64;
                 (a00 * a00 + a10 * a10).sqrt()
             })
             .collect(),

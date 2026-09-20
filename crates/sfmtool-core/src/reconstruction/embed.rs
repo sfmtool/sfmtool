@@ -114,17 +114,21 @@ impl SfmrReconstruction {
         };
 
         // The three stages share the bar in proportion to what they cost, and
-        // the frame build is almost all of it. Both file-walking stages read a
-        // `.sift` per image, but they do not read the same thing: the frame
-        // build's walk decompresses each file's affine shapes for the keypoint
-        // scales `FeatureSize` sizes from, where the keypoint read takes the
-        // positions and the metadata alone. On a 4054-image, 1.07M-point,
-        // 16.3M-observation capture that is 15.8 s of framing against 1.5 s of
-        // reading and 0.43 s of assembly with the files in cache, and 47.3 s
-        // against 1.8 s and 0.45 s without. The weights sit between the two,
-        // since what the cache changes is how much the first stage dominates by
-        // and not which one does.
-        let [framing, reading, assembling] = progress.split([0.93, 0.05, 0.02]);
+        // the frame build is the largest. Both file-walking stages read a
+        // `.sift` per image and neither expands a descriptor: the frame build's
+        // walk takes each file's affine shapes for the keypoint scales
+        // `FeatureSize` sizes from, where the keypoint read takes the positions
+        // and the metadata, so the two are within a factor of two of each other
+        // and what separates the stages is the sizing and framing the first one
+        // does afterwards. On a 4054-image, 1.07M-point, 16.3M-observation
+        // capture that is 4.5 s of framing against 1.9 s of reading and 0.92 s
+        // of assembly with the files in cache, and 5.5 s against 2.5 s and
+        // 1.1 s on a colder one. The weights sit between the two, since what
+        // the cache changes is how much the first stage dominates by and not
+        // which one does, and they are exact eighths because three weights that
+        // sum to one only approximately leave the finished bar a hair short of
+        // its end.
+        let [framing, reading, assembling] = progress.split([0.625, 0.25, 0.125]);
         progress.check_cancel()?;
 
         // Patch frames from the chosen normal/extent policy — no refinement.

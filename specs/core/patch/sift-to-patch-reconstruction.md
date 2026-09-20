@@ -61,12 +61,13 @@ under it, sharing the bar 93/5/2:
 | `read keypoints` | one `.sift` per image: the detections, and the `image_file_xxh128` each image's hash is decoded from | the image count, plus one `Count` per image as it goes |
 | `assemble` | the per-observation keypoint column, the output value, and its column validation | the observation count |
 
-The weights follow the measured division, and it is lopsided because the two
-`.sift` walks do not read the same thing: the frame build's walk decompresses
-each file's affine shapes, where the keypoint read takes the positions and the
-metadata alone. On a 4054-image, 1.07M-point, 16.3M-observation capture the
-three stages are 15.8 s, 1.5 s and 0.43 s with the files in cache, and 47.3 s,
-1.8 s and 0.45 s without. **Every stage reports a fraction**: the walks count
+The weights follow the measured division. The two `.sift` walks read nearly the
+same thing and neither expands a descriptor: the frame build's walk takes each
+file's affine shapes, where the keypoint read takes the positions and the
+metadata. What makes the first stage the largest is the sizing and framing it
+does after its walk. On a 4054-image, 1.07M-point, 16.3M-observation capture the
+three stages are 4.5 s, 1.9 s and 0.92 s with the files in cache, and 5.5 s,
+2.5 s and 1.1 s on a colder one. **Every stage reports a fraction**: the walks count
 their images, the passes over the points and the observations report on a
 boundary every two-hundredth of the way through, and the bar therefore moves
 from the first stage to the last rather than standing at zero for the frame

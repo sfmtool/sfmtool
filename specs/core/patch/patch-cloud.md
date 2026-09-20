@@ -361,9 +361,11 @@ that is not there:
 
 The shares follow what each pass costs when it runs. The `.sift` walk dominates
 wherever it happens at all: on a 4054-image, 1.07M-point, 16.3M-observation
-capture it is 14.9 s of a 15.8 s build, against 0.66 s of sizing and 0.15 s of
-framing. The spatial index is a k-nearest-neighbour pass over every finite point
-and is weighted above both of those.
+capture it is 3.4 s of a 4.5 s build, against 0.77 s of sizing and 0.18 s of
+framing. It reads each file's keypoint columns and leaves the descriptors
+compressed, which is what keeps one file's read to a fraction of the bytes it
+holds. The spatial index is a k-nearest-neighbour pass over every finite point
+and is weighted above the sizing and the framing.
 
 **A pass reports on a boundary rather than per point.** The unit of progress is
 one point, of which a large capture has a million and more, and a report apiece
