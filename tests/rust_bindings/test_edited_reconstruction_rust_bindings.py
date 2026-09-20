@@ -454,8 +454,11 @@ class TestPruneCoveredObservations:
         )
 
     def test_a_prune_that_retires_nothing_hands_the_value_back(self, embedded):
-        # A footprint of a hundredth of the projected radius reaches nothing.
-        after, report = embedded.prune_covered_observations(footprint_fraction=0.01)
+        # No feature is a billion times finer than another, so the scale test
+        # passes no pair whatever this platform's solve put where. A small
+        # footprint alone does not promise that: two detections of one corner
+        # at different scales sit at almost the same pixel.
+        after, report = embedded.prune_covered_observations(ratio=1e9)
         assert report["changed"] is False
         assert report["census"]["rows_removed"] == 0
         assert report["points_after"] == report["points_before"]
