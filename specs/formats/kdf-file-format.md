@@ -271,15 +271,40 @@ holds the single value zero.
 
 ### Hash composition
 
-Every value in `content_hash.json.zst` is a 32-character lowercase hexadecimal
-XXH128 digest, and there is exactly one of them per section. The entry therefore
-has the same handful of hundred bytes for three features and for a hundred
-million, and a reader budgets it as a constant.
+Every value in `content_hash.json.zst` is one digest, and there is exactly one of
+them per section. The entry therefore has the same handful of hundred bytes for
+three features and for a hundred million, and a reader budgets it as a constant.
 
-Digests are folded by one rule, used at both levels. **Folding** a sequence of
-digests means digesting the concatenation of its members, each written as its 16
-big-endian bytes, in sequence order. Folding an empty sequence digests zero
-bytes.
+**The digest function.** A digest is the 128-bit variant of XXH3 with seed 0 and
+no secret, applied to a byte string. Its result is an unsigned 128-bit integer.
+Where a digest is stored, it is written as that integer's 32 lowercase
+hexadecimal digits, most significant digit first, zero-padded on the left.
+Where a digest is itself hashed, it is written as that integer's 16 bytes, most
+significant byte first, which is the byte string the 32 hexadecimal digits spell.
+
+**The tree.** The digests form a Merkle tree of fixed depth, three levels at its
+deepest:
+
+1. A **leaf digest** is the digest of one item's decoded bytes. An item is one
+   descriptor block, one geometry block, one origin block or one tree chunk. The
+   table below says which bytes each kind of item contributes. Leaf digests are
+   not stored in the file.
+2. A **section digest** is either the digest of the section's decoded bytes,
+   for a section the table defines as one byte string (`metadata`, `images`,
+   `storage_rows`), or the *fold* of the section's leaf digests, for a section
+   made of items (`origins`, `descriptors`, `geometry`, `trees`). A folded
+   section node has one child per item, however many items there are; there are
+   no intermediate nodes and no fixed fan-out.
+3. The **content digest** `content_xxh128` is the fold of the section digests
+   present in the file.
+
+**Folding** a sequence of digests `d_0, d_1, ..., d_(n-1)` means taking the
+digest of the byte string `B(d_0) || B(d_1) || ... || B(d_(n-1))`, where `B(d)`
+is the 16-byte form above and `||` is concatenation. The sequence order is part
+of the definition and is given per field in the table. Nothing else enters the
+byte string: no count, no separator, no field name. Folding an empty sequence is
+the digest of the empty byte string. Folding a sequence of one digest `d` is the
+digest of `B(d)`, which is not `d`.
 
 | Field | Digest of |
 |-------|-----------|
@@ -297,9 +322,12 @@ SIFT mode and absent in generic mode. `content_xxh128` covers only the other
 fields; the hash entry itself is excluded.
 
 A section made of many items is folded rather than hashed as one stream because
-folding lets the items be digested independently and in any order, and still
-fixes one answer. A writer that compresses blocks across a thread pool therefore
-records the same digest as one that walks them in a loop.
+the leaf digests, which between them read every byte of the section, have no
+dependency on one another: they can be computed independently, concurrently and
+in any order. Only the fold is sequential, and its input is 16 bytes per item. A
+writer or verifier that spreads the items across a thread pool therefore arrives
+at the same section digest as one that walks them in a loop, and the result does
+not depend on how many threads ran or how the items were batched.
 
 Offset entries carry no digest. They are addressing rather than content, and a
 wrong value is caught by the three structural checks on the offsets plus the
