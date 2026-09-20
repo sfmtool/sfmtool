@@ -1,12 +1,18 @@
 # Operation progress: what a long computation tells its caller
 
-A long-running function in `sfmtool-core` takes a `Progress`, the one parameter
-that carries what it has to say and how it is told to stop: which stage it is
-in and what each stage cost, a remark worth keeping, what it is doing at this
-instant, how far along it is, and, in the other direction, stop. The viewer
-collects what comes back, and an Action Log row expands to show it.
+A long-running function takes a `Progress`, the one parameter that carries what
+it has to say and how it is told to stop: which stage it is in and what each
+stage cost, a remark worth keeping, what it is doing at this instant, how far
+along it is, and, in the other direction, stop. The viewer collects what comes
+back, and an Action Log row expands to show it.
 
-The parameter is [`crates/sfmtool-core/src/progress.rs`](../../crates/sfmtool-core/src/progress.rs).
+The parameter is its own crate,
+[`crates/sfmtool-progress/src/lib.rs`](../../crates/sfmtool-progress/src/lib.rs),
+which depends on nothing but `std`, so the file-format crates report through the
+same type the algorithm crate does without depending on the algorithm crate.
+`sfmtool-core` re-exports it as its own `progress` module and its four macros at
+its own root, so `sfmtool_core::progress::Progress` and
+`sfmtool_core::progress_info!` name what is in that crate.
 The viewer's collector is
 [`crates/sfm-explorer/src/progress.rs`](../../crates/sfm-explorer/src/progress.rs),
 the panel is

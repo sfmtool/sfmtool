@@ -3,6 +3,14 @@
 
 //! What a long computation tells its caller, and how it is told to stop.
 //!
+//! A crate of its own, depending on nothing but `std`, because the callers are
+//! not all in one place: the algorithm crate, the file-format crates whose
+//! writes run for seconds, and the viewer that draws the bar all report through
+//! the same parameter, and a format crate cannot depend on the algorithm crate
+//! to get at it. `sfmtool-core` re-exports the whole of this as its own
+//! `progress` module, so `sfmtool_core::progress::Progress` and
+//! `sfmtool_core::progress_info!` name what is here.
+//!
 //! A kernel here runs for anywhere between a millisecond and several minutes,
 //! and for that whole time it has no way to say anything. Five things are
 //! missing and they are one problem: which stage it is in and what each stage
@@ -197,7 +205,7 @@ pub enum Event<'a> {
 /// rather than `&mut` so that it never conflicts with another borrow.
 ///
 /// ```
-/// use sfmtool_core::progress::{Event, Progress};
+/// use sfmtool_progress::{Event, Progress};
 /// use std::sync::Mutex;
 ///
 /// let seen = Mutex::new(Vec::new());
@@ -394,7 +402,7 @@ impl<'a> Progress<'a> {
     /// served by an even bar than by a panic or a dead one.
     ///
     /// ```
-    /// use sfmtool_core::progress::Progress;
+    /// use sfmtool_progress::Progress;
     ///
     /// let progress = Progress::none();
     /// let [_materialise, solve, _row_map] = progress.split([0.05, 0.90, 0.05]);
@@ -608,8 +616,8 @@ impl fmt::Debug for Phase<'_> {
 /// [`Phase`] guard; the rest is a `format!` call.
 ///
 /// ```
-/// use sfmtool_core::progress::{Event, Progress};
-/// use sfmtool_core::progress_info;
+/// use sfmtool_progress::{Event, Progress};
+/// use sfmtool_progress::progress_info;
 /// use std::sync::Mutex;
 ///
 /// fn expensive() -> usize {
@@ -632,9 +640,9 @@ impl fmt::Debug for Phase<'_> {
 macro_rules! progress_info {
     ($progress:expr, $($arg:tt)*) => {{
         let progress = &$progress;
-        if progress.wants($crate::progress::Level::Info) {
+        if progress.wants($crate::Level::Info) {
             progress.message(
-                $crate::progress::Level::Info,
+                $crate::Level::Info,
                 ::core::format_args!($($arg)*),
             );
         }
@@ -645,8 +653,8 @@ macro_rules! progress_info {
 /// nothing is listening.
 ///
 /// ```
-/// use sfmtool_core::progress::{Event, Level, Progress};
-/// use sfmtool_core::progress_warn;
+/// use sfmtool_progress::{Event, Level, Progress};
+/// use sfmtool_progress::progress_warn;
 /// use std::sync::Mutex;
 ///
 /// let seen = Mutex::new(Vec::new());
@@ -666,9 +674,9 @@ macro_rules! progress_info {
 macro_rules! progress_warn {
     ($progress:expr, $($arg:tt)*) => {{
         let progress = &$progress;
-        if progress.wants($crate::progress::Level::Warn) {
+        if progress.wants($crate::Level::Warn) {
             progress.message(
-                $crate::progress::Level::Warn,
+                $crate::Level::Warn,
                 ::core::format_args!($($arg)*),
             );
         }
@@ -682,8 +690,8 @@ macro_rules! progress_warn {
 /// rather than one line per item that accumulates.
 ///
 /// ```
-/// use sfmtool_core::progress::{Event, Progress};
-/// use sfmtool_core::progress_status;
+/// use sfmtool_progress::{Event, Progress};
+/// use sfmtool_progress::progress_status;
 /// use std::sync::Mutex;
 ///
 /// let latest = Mutex::new(String::new());
@@ -702,7 +710,7 @@ macro_rules! progress_warn {
 macro_rules! progress_status {
     ($progress:expr, $($arg:tt)*) => {{
         let progress = &$progress;
-        if progress.wants($crate::progress::Level::Info) {
+        if progress.wants($crate::Level::Info) {
             progress.set_status_message(::core::format_args!($($arg)*));
         }
     }};
@@ -715,8 +723,8 @@ macro_rules! progress_status {
 /// to the phase's own [`Event::Leave`].
 ///
 /// ```
-/// use sfmtool_core::progress::{Event, Progress};
-/// use sfmtool_core::progress_note;
+/// use sfmtool_progress::{Event, Progress};
+/// use sfmtool_progress::progress_note;
 /// use std::sync::Mutex;
 ///
 /// let seen = Mutex::new(Vec::new());

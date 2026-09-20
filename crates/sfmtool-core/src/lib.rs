@@ -34,7 +34,6 @@ pub mod features;
 pub mod geometry;
 pub mod numeric;
 pub mod patch;
-pub mod progress;
 pub mod reconstruction;
 pub mod spatial;
 pub mod spherical;
@@ -57,6 +56,13 @@ pub use reconstruction::{
     ReconstructionError, RecordObservation, ReprojectionSample, RowMap, SfmrImage,
     SfmrReconstruction, TrackObservation,
 };
+/// The progress parameter is its own crate, so the file-format crates can
+/// report through the very type this one does without depending on this one.
+/// It is re-exported as this crate's `progress` module, and its four macros at
+/// this crate's root, so `sfmtool_core::progress::Progress` and
+/// `sfmtool_core::progress_info!` name what they have always named.
+pub use sfmtool_progress as progress;
+pub use sfmtool_progress::{progress_info, progress_note, progress_status, progress_warn};
 /// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on
 /// `sfmtool-sfmr-format` directly.

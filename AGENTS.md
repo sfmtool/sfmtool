@@ -72,7 +72,11 @@ deleting the lines.
     `inspect --strips` (surfel strip rendering, NCC scoring, montage layout)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
-- `crates/` — Cargo workspace, 10 crates:
+- `crates/` — Cargo workspace, 11 crates:
+  - `sfmtool-progress` — the `Progress` parameter a long call reports its
+    phases, messages, counts and fraction through and is cancelled by. Its own
+    crate, std-only, so the format crates report through the same type
+    `sfmtool-core` does; core re-exports it as `sfmtool_core::progress`
   - `sfmtool-sift-format`, `sfmtool-matches-format`, `sfmtool-sfmr-format`,
     `sfmtool-camrig-format`, `sfmtool-kdf-format` — on-disk formats (all ZIP + zstd)
   - `sfmtool-archive-io` — the ZIP + zstd container primitives those five share

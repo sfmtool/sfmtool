@@ -3,6 +3,7 @@
 
 [workspace]
 members = [
+    "crates/sfmtool-progress",
     "crates/sfmtool-archive-io",
     "crates/sfmtool-sift-format",
     "crates/sfmtool-sfmr-format",

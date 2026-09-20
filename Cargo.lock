@@ -4993,6 +4993,7 @@ dependencies = [
  "sfmtool-camrig-format",
  "sfmtool-kdf-format",
  "sfmtool-matches-format",
+ "sfmtool-progress",
  "sfmtool-sfmr-format",
  "sfmtool-sift-format",
  "tempfile",
@@ -5010,6 +5011,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sfmtool-archive-io",
+ "sfmtool-progress",
  "sfmtool-sift-format",
  "tempfile",
  "thiserror 2.0.20",
@@ -5032,6 +5034,13 @@ dependencies = [
  "xxhash-rust",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "sfmtool-progress"
+version = "0.2.0"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]

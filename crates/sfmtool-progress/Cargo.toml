@@ -1,0 +1,22 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sfmtool-progress"
+version = "0.2.0"
+edition = "2021"
+rust-version.workspace = true
+license = "Apache-2.0"
+description = "The progress, phase and cancellation parameter sfmtool's long-running calls report through"
+
+[dependencies]
+
+# Nothing but `std` in the crate itself. rayon is here because the parallel
+# case is what the design exists for, and the test that holds it to that has to
+# run a rayon loop.
+[dev-dependencies]
+rayon = "1.12"
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

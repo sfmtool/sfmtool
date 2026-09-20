@@ -33,6 +33,7 @@ sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 sfmtool-camrig-format = { path = "../sfmtool-camrig-format" }
 sfmtool-matches-format = { path = "../sfmtool-matches-format" }
 sfmtool-kdf-format = { path = "../sfmtool-kdf-format" }
+sfmtool-progress = { path = "../sfmtool-progress" }
 
 # GPU compute (optional)
 wgpu = { version = "30", features = ["dx12", "vulkan"], optional = true }
