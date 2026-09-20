@@ -508,15 +508,23 @@ features are off rather than reporting anything, so every invocation that is
 supposed to see this file — including the clippy gate that type-checks it on
 Linux — names the feature explicitly.
 
-**One locator resolution is one full snapshot of the app's accessibility
+**One locator resolution is one full snapshot of the viewer's accessibility
 subtree**, and that is what the suite is written around. `wait_attached`,
 `press`, `toggle` and `elements` each walk the whole tree — on Windows a single
 `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation*, not per
-launch, and it is the platform's rather than the viewer's: roughly half a second
-on a developer's machine against roughly seventeen on a GitHub-hosted Windows
-runner, where a launch, attach and teardown together cost 3.8s. (Only a
+launch, and it is the platform's rather than the viewer's: roughly a tenth of a
+second on a developer's machine, and a launch, attach and teardown together cost
+3.8s on a GitHub-hosted Windows runner. (Only a
 `Locator` method resolves; a `press` on an `Element` a lookup has already handed
-back invokes what it holds and queries nothing.) Two habits follow. Setup goes
+back invokes what it holds and queries nothing.) Three habits follow.
+
+Every locator is rooted at the viewer's **window** rather than at its process,
+and on Windows that is the difference between the platform's own subtree query
+and a generic fallback — see "Where a search starts" below. `attach` resolves
+that window once and hands back an `Attached`, which is what every test holds
+and the only thing that makes a locator.
+
+Setup goes
 through the **command line** rather than the accessibility API: `--demo` appends
 the node File > Load Demo Data… makes, at the dialog's default point count and
 with the same `None` path, after any files named on the line. Exactly one test
@@ -538,17 +546,37 @@ routinely lands a poll or two after the query that wants it. The five assertions
 in `the_menu_bar_holds_file_edit_go_and_panels` are one operation; across the
 suite the collapse takes `ops` from 38 to 24.
 
-**What one operation costs is a platform question, and on Windows it is not one
-walk.** xa11y resolves a group of *n* clauses against a synthesized application
-root — which is what `App::by_pid` hands back on Windows — by walking the tree
-once per clause and merging the results by document path, so a five-clause group
-is five descents rather than one. Measured on a developer's Windows 11 machine
-against the viewer's empty-state tree (56 nodes), a one-clause `elements` call
-takes ~1.1s and the five-clause group `the_menu_bar_holds_file_edit_go_and_panels`
-asks takes ~5.4s, alternated to rule out ordering. Match count does not enter
-into it: the universal selector `*` returns all 56 nodes for the price of its one
-clause. So `ops` and cost are different currencies there, and the `walks` counter
-below is what tells them apart.
+**Where a search starts decides what it costs, and on Windows by more than an
+order of magnitude.** `App::by_pid` hands back a *synthesized* per-process
+`application` node there, because UI Automation has no process node of its own.
+Nothing live is behind it, so UIA's own subtree query cannot be scoped to it,
+and xa11y answers a search rooted there with a generic descent instead: one
+level-by-level walk fetching each node's properties in its own cross-process
+call, repeated **once per clause** of the selector. A top-level window is a real
+HWND-backed element, so the same search becomes one
+`FindAllBuildCache(TreeScope_Subtree)` that fetches the whole subtree in a
+single COM call and evaluates every clause against it in one pass. Measured on a
+developer's Windows 11 machine against the viewer's empty-state tree (56 nodes),
+alternated to rule out ordering: process-rooted, a one-clause `elements` call
+takes ~0.22s and the five-clause group
+`the_menu_bar_holds_file_edit_go_and_panels` asks takes ~0.88s — a 4.0x clause
+multiplier; window-rooted, ~0.10s and ~0.10s, a multiplier of 1.0. Across the
+suite that takes `op_ms` from ~11.9s to ~4.9s on that machine, and the whole
+`ui-test-windows` job was ~1,075s of locator resolution before it.
+
+Scoping to the window loses nothing to look at: the viewer runs a single egui
+viewport, so its menus and popups are painted inside that one HWND rather than
+in native popup windows, and winit's helper windows never register with
+AccessKit — the synthesized application node's only child is the window. macOS
+and Linux take the generic descent whatever the root is, so there the change is
+simply a smaller subtree. It costs one `App::windows` call per launch (~0.2s on
+Windows, charged to `launch_ms`), where the saving is per operation.
+
+That descent has one consequence the suite respects: it matches only
+*descendants* of its root, never the root itself, while a UIA subtree query is
+scoped inclusively. So a window-rooted `window` selector matches on Windows and
+not on the other two, and `window_min_size` — the one test that asks about the
+window node rather than about something in it — keeps the process-rooted form.
 
 Assertions of **absence** ride in those groups rather than being asked
 separately, and that is what makes them sound. An absence means nothing against
@@ -567,6 +595,14 @@ collapse; the assertions after an interaction take a fresh snapshot, which is
 why `toggle_hud_layer_checkbox` is still three operations and
 `a_real_right_click_opens_the_reconstruction_rows_context_menu` is two.
 
+The window `Attached` holds is the one snapshot that deliberately outlives
+those interactions, and it is sound because what goes stale across a frame is a
+*widget* node. A top-level window is not republished: on Windows the handle
+resolves to an element acquired from the HWND, on Linux to the AT-SPI object
+path AccessKit registers for the window, on macOS to the AXWindow — all three
+last as long as the window, which is as long as the `Guard` that owns the
+process.
+
 **The suite reports what it costs, in every log.** As each test's `Guard`
 drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
@@ -584,7 +620,9 @@ tree walk, since one that polls for its condition or retries a transient
 failure spends several walks and is still counted once; `op_ms` is the
 time inside them; `total_ms` is the guard's whole life, teardown included. The
 split is the point, because the two costs have different causes and different
-fixes. `launch_ms` is work no change to the tests can make cheaper, so
+fixes. `launch_ms` is a process spawn, a GPU, and an OS registering a window
+and its accessibility tree — work no change to what the tests *ask* makes
+cheaper, so
 `mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
 only when the tests ask for more or fewer operations. A cheaper suite shows as
 `ops` falling with `mean_launch_ms` steady. `total_ms` alone distinguishes
@@ -612,12 +650,16 @@ the one taken over a `wait_all`.
 it is the one test that otherwise resolves nothing:
 
 ```text
-UIPROBE TREE nodes=56 depth=5 walk_ms=158
+UIPROBE TREE nodes=56 depth=4 walk_ms=99
 ```
 
 `nodes` and `walk_ms` come from resolving the universal selector `*` — the same
-`Locator::elements` call `wait_all` makes, so it prices the same work — and
+`Locator::elements` call `wait_all` makes, rooted where `wait_all` roots it, so
+it prices the same work — and
 `depth` from a second recursive descent, since a flat match list has no shape.
+The tree measured is the window's subtree; Windows counts the window itself in
+it and the other two do not, a one-node difference that does not move a per-node
+price.
 `walk_ms / nodes` is the per-node price, and that is the figure that compares
 across three platforms whose trees are the same shape and whose walk costs
 differ by orders of magnitude. It is measured against the viewer's empty state,
@@ -646,7 +688,7 @@ equivalent because it reveals nothing; its callers confirm `states.checked` with
 a `wait_until`, which already fails loudly if the toggle did not land.
 
 **That confirmation is returned, not discarded, and this is what makes the guard
-free.** Confirming costs a full subtree snapshot — ~25s on the Windows runner —
+free.** Confirming costs a full subtree snapshot — the dearest thing this suite does on a Windows runner —
 so `press_revealing` hands the element back and every call site that wants the
 revealed item takes it from there instead of resolving the same selector again.
 A menu opening is therefore one snapshot rather than two, and the sites that
@@ -668,7 +710,10 @@ a plain multi-threaded `cargo test` raced the next test's own `rename` of it and
 failed that test with "Access is denied".
 
 The suite attaches the same way everywhere — `App::by_pid` on the viewer it
-launched, which is what keeps it off a viewer the developer already has open.
+launched, which is what keeps it off a viewer the developer already has open,
+followed by `App::windows` for the window the locators are rooted at. Both are
+part of attaching, so a process whose window has not registered yet is a launch
+that has not finished and is retried as one, by the scheme below.
 What differs per platform is the accessibility API that answers, what the node
 it hands back is, and what has to exist before there is a tree to reach:
 
@@ -678,8 +723,9 @@ it hands back is, and what has to exist before there is a tree to reach:
 | macOS | AXUIElement | the AXApplication | the Accessibility (TCC) grant, on the exact test binary |
 | Linux | AT-SPI2 (D-Bus) | the `application` node AccessKit's Unix adapter registers | a display, a session bus, and the AT-SPI daemons on it |
 
-The root is a *process* on all three, so it carries no bounds of its own; a test
-that wants window geometry locates the `window` under it. Windows only grew that
+The root `by_pid` resolves is a *process* on all three, so it carries no bounds
+of its own — a process is not a rectangle — and the `window` under it is what
+`window_min_size` locates and reads. Windows only grew that
 shape in xa11y 0.15 — before it, an "app" there was a top-level window, `by_pid`
 landed on one of winit's helper windows rather than the UI, and the suite had to
 match this viewer's window by its title instead.
