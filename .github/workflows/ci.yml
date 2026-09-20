@@ -681,8 +681,17 @@ jobs:
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
+      - name: Report UI environment
+        shell: powershell
+        run: .\scripts\ci_windows_ui_snapshot.ps1 -Phase before-tests
+
       - name: UI tests
         run: pixi run -e ui ui-test
+
+      - name: Report UI environment after tests
+        if: always()
+        shell: powershell
+        run: .\scripts\ci_windows_ui_snapshot.ps1 -Phase after-tests
 
       - name: Save Rust target
         # Main only, and only a new generation (the cache-hit guard): a PR's

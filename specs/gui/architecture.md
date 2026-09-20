@@ -698,6 +698,19 @@ differ by orders of magnitude. It is measured against the viewer's empty state,
 which is what every test that does not load a scene is also walking, and it is
 not a test of its own because another `Guard` is another launch.
 
+The Windows job also brackets the suite with
+[`ci_windows_ui_snapshot.ps1`](../../scripts/ci_windows_ui_snapshot.ps1). Its
+`UIENV` lines record the hosted image and OS, CPU model and topology, current
+clock and load, memory and disk, interactive session and desktop processes,
+display mode, power plan, effective Defender state, and UI Automation version.
+These are observations rather than setup: an unavailable probe reports itself
+and cannot suppress the tests. The same snapshot after the suite distinguishes
+a runner that arrived slow from resource pressure accumulated by the build.
+This matters because identical `windows-2025-vs2026` images split into fast and
+slow populations while UI Automation performs the same 32 walks; the system
+properties are the evidence needed to tell which host attribute moves with the
+cost.
+
 **A cross-process call can fail because the tree moved, not because the suite
 was wrong, and the two are guarded differently.** The read-only probes —
 `wait_attached`, `wait_until`, `wait_all` — retry a bounded number of times when
