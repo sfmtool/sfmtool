@@ -46,7 +46,7 @@
 //! [`Guard::report`] for the fields and [`Attached::probe`] for what is
 //! counted.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, Once};
@@ -92,7 +92,10 @@ static OP_NANOS: AtomicU64 = AtomicU64::new(0);
 /// inside them — the *platform's* share of `OP_NANOS`. See [`walked`].
 static WALKS: AtomicU64 = AtomicU64::new(0);
 static WALK_NANOS: AtomicU64 = AtomicU64::new(0);
-/// The same four, plus launch time and wall time, accumulated over every test
+/// Nanoseconds spent finding the window every locator is rooted at, which is
+/// neither of the above and is reported on its own. See [`Attached::window`].
+static WINDOW_NANOS: AtomicU64 = AtomicU64::new(0);
+/// The same five, plus launch time and wall time, accumulated over every test
 /// this process has run, for the `UIPROBE TOTAL` line.
 static TOTAL_TESTS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_LAUNCH_NANOS: AtomicU64 = AtomicU64::new(0);
@@ -100,6 +103,7 @@ static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_OP_NANOS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_WALKS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_WALK_NANOS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_WINDOW_NANOS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 
 /// Zero the per-test counters and start the clock a `UIPROBE` line is measured
@@ -116,6 +120,7 @@ fn begin_accounting() -> Instant {
     OP_NANOS.store(0, Ordering::Relaxed);
     WALKS.store(0, Ordering::Relaxed);
     WALK_NANOS.store(0, Ordering::Relaxed);
+    WINDOW_NANOS.store(0, Ordering::Relaxed);
     Instant::now()
 }
 
@@ -444,11 +449,11 @@ impl Snapshot {
     }
 }
 
-/// The attached viewer: its process root, and its window.
+/// The attached viewer: its process root, and — once something asks for it —
+/// its window.
 ///
 /// [`attach`] hands one of these back and every test holds one, because the
-/// window is what the suite's locators are rooted at and resolving it is part
-/// of the launch rather than part of any test.
+/// window is what the suite's locators are rooted at.
 ///
 /// **Rooting at the window instead of the process is this suite's largest
 /// lever on Windows**, and the reason is a guard inside xa11y. `App::by_pid`
@@ -479,8 +484,8 @@ impl Snapshot {
 /// [`Self::app_probe`].
 struct Attached {
     app: App,
-    /// The viewer's window, resolved once by [`window_of`] and held for the
-    /// life of the test.
+    /// The viewer's window, resolved by [`Self::window`] the first time
+    /// anything roots a search at it, and held for the life of the test.
     ///
     /// **A snapshot that deliberately outlives the interactions the tests
     /// make**, which every other snapshot in this file must not — and it is
@@ -492,10 +497,50 @@ struct Attached {
     /// registers for the window, and on macOS the AXWindow. All three last as
     /// long as the window does, which is as long as the [`Guard`] that owns the
     /// process.
-    window: Element,
+    window: OnceCell<Element>,
 }
 
 impl Attached {
+    /// The window every [`Self::probe`] is rooted at, found on first use.
+    ///
+    /// **Deferred rather than resolved at attach, because finding it is not
+    /// cheap and five of this suite's nineteen launches never need it.** The
+    /// four MCP tests drive the viewer over HTTP and the fifth,
+    /// [`window_min_size`], asks the *process* about the window node; none of
+    /// them roots a search anywhere. Resolving eagerly charged all nineteen —
+    /// ~0.2s each on a developer's Windows machine and, on a GitHub-hosted
+    /// Windows runner, around 10s.
+    ///
+    /// That is not a walk and no limit reaches it. `App::windows` is one
+    /// provider call that materializes *every* top-level window of the process
+    /// before anything can look at one, so the cheaper-looking alternatives are
+    /// the same call underneath: measured on Windows 11, `App::windows`,
+    /// `App::children`, and `app.locator("window").first().element()` — which
+    /// does push a limit down into the walk — cost 68, 69 and 67ms, within
+    /// noise of each other. What makes it dear on a runner is what it *is*: a
+    /// desktop-wide `FindAllBuildCache` filtered to this pid, then, per window,
+    /// re-acquiring it from its HWND (which is where AccessKit's UIA provider
+    /// gets activated), a cache build and a property read — every one of them a
+    /// cross-process call on a machine that charges hundreds of milliseconds
+    /// for one. `App::by_pid`, which answers with `FindFirstBuildCache` and no
+    /// re-acquisition, costs 10ms against those 68.
+    ///
+    /// It is reported as its own `window_ms` rather than folded into
+    /// `launch_ms` or `op_ms`: it is neither the machine's speed nor what a
+    /// test asked to look at, and a run where it dominates should say so in
+    /// the field that names it. See [`Guard::report`].
+    ///
+    /// Panics if the window never appears, which for a viewer whose process is
+    /// already attached is a viewer that never drew one.
+    fn window(&self) -> &Element {
+        self.window.get_or_init(|| {
+            let started = Instant::now();
+            let found = window_of(&self.app, ATTACH_TIMEOUT);
+            WINDOW_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            found.unwrap_or_else(|e| panic!("{e}"))
+        })
+    }
+
     /// `attached.probe(selector)` in place of `app.locator(selector)`: the same
     /// lookup, rooted at the window, counted and timed.
     ///
@@ -504,9 +549,10 @@ impl Attached {
     /// one this suite is trying not to use — see the note on [`Attached`] for
     /// what that costs. The only deliberate use of it is [`Self::app_probe`].
     fn probe(&self, selector: &str) -> Probe {
+        let window = self.window();
         Probe(Locator::new(
-            std::sync::Arc::clone(self.window.provider()),
-            Some(self.window.data().clone()),
+            std::sync::Arc::clone(window.provider()),
+            Some(window.data().clone()),
             selector,
         ))
     }
@@ -755,14 +801,25 @@ impl Guard {
     /// Print this test's `UIPROBE` line, and the running `UIPROBE TOTAL`.
     ///
     /// ```text
-    /// UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
-    /// UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
+    /// UIPROBE test=file_menu_items launch_ms=675 window_ms=88 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
+    /// UIPROBE TOTAL tests=19 launch_ms=16960 window_ms=1320 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
     /// ```
     ///
     /// `launch_ms` is the runner-speed yardstick: spawning a process, waiting
-    /// for the GPU and for the OS to register the window is work the suite
-    /// cannot make cheaper, so `mean_launch_ms` moving between two runs means
-    /// the *machine* moved. `ops` and `mean_op_ms` are the suite's own cost:
+    /// for the GPU and for the OS to publish an accessibility root is work the
+    /// suite cannot make cheaper, so `mean_launch_ms` moving between two runs
+    /// means the *machine* moved.
+    ///
+    /// `window_ms` is finding the window the locators are rooted at, which is
+    /// none of the other three: not the machine's speed, not a tree walk, and
+    /// not something a test asked to look at. It is its own field because it
+    /// is paid at most once per launch and only by a test that roots a search
+    /// — five of nineteen do not — so folding it into `launch_ms` would make
+    /// the yardstick move for a reason the machine did not, and folding it into
+    /// `op_ms` would charge one test for what every later question reuses. See
+    /// [`Attached::window`].
+    ///
+    /// `ops` and `mean_op_ms` are the suite's own cost:
     /// `ops` is how many *resolution requests* the tests made — units of work
     /// asked for, which only a change to the tests moves — and `mean_op_ms` is
     /// what the platform charged for one. It is not a snapshot count: servicing
@@ -807,6 +864,7 @@ impl Guard {
         let op_nanos = OP_NANOS.load(Ordering::Relaxed);
         let walks = WALKS.load(Ordering::Relaxed);
         let walk_nanos = WALK_NANOS.load(Ordering::Relaxed);
+        let window_nanos = WINDOW_NANOS.load(Ordering::Relaxed);
 
         let tests = TOTAL_TESTS.fetch_add(1, Ordering::Relaxed) + 1;
         let launch_total = TOTAL_LAUNCH_NANOS
@@ -817,6 +875,8 @@ impl Guard {
         let walks_total = TOTAL_WALKS.fetch_add(walks, Ordering::Relaxed) + walks;
         let walk_nanos_total =
             TOTAL_WALK_NANOS.fetch_add(walk_nanos, Ordering::Relaxed) + walk_nanos;
+        let window_nanos_total =
+            TOTAL_WINDOW_NANOS.fetch_add(window_nanos, Ordering::Relaxed) + window_nanos;
         let nanos_total = TOTAL_NANOS.fetch_add(total.as_nanos() as u64, Ordering::Relaxed)
             + total.as_nanos() as u64;
 
@@ -830,18 +890,20 @@ impl Guard {
         // verdict, so without it both lines below start mid-line and `^UIPROBE`
         // matches only the `TOTAL` one.
         println!(
-            "\nUIPROBE test={name} launch_ms={} ops={ops} op_ms={} walks={walks} walk_ms={} \
-             total_ms={}",
+            "\nUIPROBE test={name} launch_ms={} window_ms={} ops={ops} op_ms={} walks={walks} \
+             walk_ms={} total_ms={}",
             launch.as_millis(),
+            ms(window_nanos),
             ms(op_nanos),
             ms(walk_nanos),
             total.as_millis(),
         );
         println!(
-            "UIPROBE TOTAL tests={tests} launch_ms={} ops={ops_total} op_ms={} \
+            "UIPROBE TOTAL tests={tests} launch_ms={} window_ms={} ops={ops_total} op_ms={} \
              walks={walks_total} walk_ms={} total_ms={} mean_launch_ms={} mean_op_ms={} \
              mean_walk_ms={}",
             ms(launch_total),
+            ms(window_nanos_total),
             ms(op_nanos_total),
             ms(walk_nanos_total),
             ms(nanos_total),
@@ -974,12 +1036,12 @@ const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// client rather than out of discovery, so it is not addressed, and the retry
 /// stays until a few hundred more runs say it can go.
 ///
-/// **Finding the window is part of attaching**, not something a test does
-/// later — [`Attached`] says why every locator needs it. That is a second thing
-/// that can be slow to exist on a cold runner, and hanging it here rather than
-/// on the first probe means the one waiting-and-relaunching scheme covers both:
-/// a process whose window has not registered yet is a launch that has not
-/// finished, and is retried as one.
+/// **This resolves the process and nothing else.** The window the suite's
+/// locators are rooted at is found on first use instead, by
+/// [`Attached::window`], which says why. So `launch_ms` measures what it always
+/// did — a spawn, a GPU, and the OS publishing an accessibility root — and a
+/// viewer that attaches but never draws a window fails in the test's first
+/// probe rather than in a relaunch here.
 fn attach(child: ChildHandle<'_>) -> Attached {
     init();
     let first = match try_attach(child) {
@@ -1019,13 +1081,12 @@ fn attach(child: ChildHandle<'_>) -> Attached {
 /// Addressing by pid rather than title also makes the MCP tests' `[MCP :port]`
 /// title suffix a non-issue, and picks out *this* viewer when the developer
 /// running the suite has one of their own open.
-///
-/// The window under that root is resolved here too, for the reason [`attach`]
-/// gives.
 fn try_attach(child: ChildHandle<'_>) -> Result<Attached, String> {
     let app = App::by_pid(child.id(), ATTACH_TIMEOUT).map_err(|e| format!("{e:?}"))?;
-    let window = window_of(&app, ATTACH_TIMEOUT)?;
-    Ok(Attached { app, window })
+    Ok(Attached {
+        app,
+        window: OnceCell::new(),
+    })
 }
 
 /// The viewer's window, waiting for the OS to register it.
@@ -1033,23 +1094,22 @@ fn try_attach(child: ChildHandle<'_>) -> Result<Attached, String> {
 /// `App::windows` is a question about the process's *top-level* windows rather
 /// than a tree walk — on Windows one enumeration of the desktop's windows
 /// filtered to this pid, on the other two the application node's children
-/// filtered to windows and dialogs. It is not free (around 0.2s on a
-/// developer's Windows machine, single-attempt, and it lands in `launch_ms`
-/// because [`attach`] is where it happens), but it is paid once per launch
-/// against a saving on every resolution the tests then make — see
-/// [`Attached`]. It is deliberately not counted as a [`walked`] call, for the
-/// same reason `App::by_pid` is not: both are how the suite finds the app, not
-/// what a test asked it to look at.
+/// filtered to windows and dialogs. What it costs, and why nothing cheaper
+/// answers the same question, is on [`Attached::window`], which is this
+/// function's only caller and where the result is cached.
 ///
 /// The first window is the one, and there is only ever one: the viewer runs a
-/// single egui viewport, and winit's helper windows are untitled and never
-/// register with AccessKit. A `rfd` file dialog would be a second top-level
-/// window, but this runs before any test has pressed anything, and no test
-/// opens one at all.
+/// single egui viewport, so the provider reports exactly one child here
+/// (verified against the live tree — winit's helper windows are not desktop
+/// children of window control type and do not appear). A `rfd` file dialog
+/// would be a second top-level window, but no test opens one, and
+/// `press_revealing` presses the File menu rather than the `Open...` in it.
 ///
 /// Polling rather than asking once, because the application node can exist
 /// before its window does — most visibly on macOS, where the AXApplication
-/// registers at launch and the window follows.
+/// registers at launch and the window follows. On Windows it never waits:
+/// `App::by_pid` resolves through a desktop child of window control type, so
+/// [`attach`] returning at all means a window is already there.
 fn window_of(app: &App, budget: Duration) -> Result<Element, String> {
     let deadline = Instant::now() + budget;
     loop {
@@ -1116,7 +1176,7 @@ fn report_tree_size(app: &Attached) {
     let started = Instant::now();
     let nodes = walked(|| app.probe("*").0.elements()).map(|found| found.len());
     let walk = started.elapsed();
-    let depth = app.window.tree(None).map(|root| node_depth(&root));
+    let depth = app.window().tree(None).map(|root| node_depth(&root));
     match (nodes, depth) {
         (Ok(nodes), Ok(depth)) => println!(
             "\nUIPROBE TREE nodes={nodes} depth={depth} walk_ms={}",

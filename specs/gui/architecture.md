@@ -569,8 +569,29 @@ viewport, so its menus and popups are painted inside that one HWND rather than
 in native popup windows, and winit's helper windows never register with
 AccessKit — the synthesized application node's only child is the window. macOS
 and Linux take the generic descent whatever the root is, so there the change is
-simply a smaller subtree. It costs one `App::windows` call per launch (~0.2s on
-Windows, charged to `launch_ms`), where the saving is per operation.
+simply a smaller subtree.
+
+**Finding that window is its own cost, and nothing cheaper answers the same
+question.** `App::windows` is one provider call that materializes *every*
+top-level window of the process before anything can look at one, so a limit
+cannot reach it: measured on Windows 11, `App::windows`, `App::children` and
+`app.locator("window").first().element()` — the last of which *does* push a
+limit down into the walk — cost 68, 69 and 67ms, within noise of each other,
+and the process reports exactly one window, so there is nothing to skip. What
+makes it dear on a runner is what it is: a desktop-wide `FindAllBuildCache`
+filtered to this pid, then, per window, re-acquiring it from its HWND — which
+is where AccessKit's UIA provider gets activated — a cache build and a property
+read, every one a cross-process call on a machine that charges hundreds of
+milliseconds for one. `App::by_pid`, which answers with `FindFirstBuildCache`
+and no re-acquisition, costs 10ms against those 68; on a GitHub-hosted Windows
+runner the gap is ~0.2s against ~10s.
+
+So it is **deferred to first use** rather than resolved at attach. Five of the
+suite's nineteen launches never root a search — the four MCP tests drive the
+viewer over HTTP, and `window_min_size` asks the process about the window
+node — and those pay nothing. The rest pay once, and it is reported as its own
+`window_ms` field rather than folded into `launch_ms` or `op_ms`; see "the
+suite reports what it costs" below.
 
 That descent has one consequence the suite respects: it matches only
 *descendants* of its root, never the root itself, while a UIA subtree query is
@@ -608,23 +629,30 @@ drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
 
 ```text
-UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
-UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
+UIPROBE test=file_menu_items launch_ms=675 window_ms=88 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
+UIPROBE TOTAL tests=19 launch_ms=16960 window_ms=1320 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
 ```
 
-`launch_ms` is the process spawn, GPU init and window registration up to the
-first successful attach; `ops` is how many resolution *requests* ran under that
+`launch_ms` is the process spawn, GPU init and accessibility-root registration
+up to the
+first successful attach; `window_ms` is finding the window the locators are
+rooted at, which happens at most once per launch and only in a test that roots
+a search; `ops` is how many resolution *requests* ran under that
 guard, counted by a thin wrapper over the `Locator` methods the suite calls
 (`Element` actions resolve nothing and are not counted) — a request, not a
 tree walk, since one that polls for its condition or retries a transient
 failure spends several walks and is still counted once; `op_ms` is the
 time inside them; `total_ms` is the guard's whole life, teardown included. The
-split is the point, because the two costs have different causes and different
-fixes. `launch_ms` is a process spawn, a GPU, and an OS registering a window
-and its accessibility tree — work no change to what the tests *ask* makes
+split is the point, because the costs have different causes and different
+fixes. `launch_ms` is a process spawn, a GPU, and an OS publishing an
+accessibility root — work no change to what the tests *ask* makes
 cheaper, so
 `mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
-only when the tests ask for more or fewer operations. A cheaper suite shows as
+only when the tests ask for more or fewer operations. `window_ms` is neither:
+not the machine's speed, and not something a test asked to look at, so folding
+it into `launch_ms` would make the yardstick move for a reason the machine did
+not, and folding it into `op_ms` would charge one test for what every later
+question in it reuses. A cheaper suite shows as
 `ops` falling with `mean_launch_ms` steady. `total_ms` alone distinguishes
 neither, which is why one log now carries all of them — no historical baseline
 required. The counters are process-wide statics reset per guard, which is sound
@@ -711,9 +739,8 @@ failed that test with "Access is denied".
 
 The suite attaches the same way everywhere — `App::by_pid` on the viewer it
 launched, which is what keeps it off a viewer the developer already has open,
-followed by `App::windows` for the window the locators are rooted at. Both are
-part of attaching, so a process whose window has not registered yet is a launch
-that has not finished and is retried as one, by the scheme below.
+and nothing else; the window the locators are rooted at is found separately, on
+first use, for the reason given above.
 What differs per platform is the accessibility API that answers, what the node
 it hands back is, and what has to exist before there is a tree to reach:
 
