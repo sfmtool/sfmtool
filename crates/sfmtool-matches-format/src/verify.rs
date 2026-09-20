@@ -98,19 +98,9 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
         }
     }
 
+    errors.extend(check_backbone_counts(metadata));
+
     if metadata.has_clusters {
-        if metadata.cluster_count.is_none() || metadata.cluster_member_count.is_none() {
-            errors.push(
-                "cluster-bearing file requires metadata.cluster_count and \
-                 metadata.cluster_member_count"
-                    .into(),
-            );
-        }
-        if metadata.image_pair_count.is_some() || metadata.match_count.is_some() {
-            errors.push(
-                "cluster-bearing file must not set metadata.image_pair_count / match_count".into(),
-            );
-        }
         if has_prefix("image_pairs/") {
             errors.push(
                 "file stores clusters but contains image_pairs/ entries (exactly one backbone \
@@ -134,16 +124,6 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
             );
         }
     } else {
-        if metadata.image_pair_count.is_none() || metadata.match_count.is_none() {
-            errors.push(
-                "pairwise file requires metadata.image_pair_count and metadata.match_count".into(),
-            );
-        }
-        if metadata.cluster_count.is_some() || metadata.cluster_member_count.is_some() {
-            errors.push(
-                "pairwise file must not set metadata.cluster_count / cluster_member_count".into(),
-            );
-        }
         if has_prefix("clusters/") {
             errors.push(
                 "file stores image_pairs but contains clusters/ entries (exactly one backbone \

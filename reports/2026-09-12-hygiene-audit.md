@@ -913,6 +913,9 @@ workspace that has a crate for exactly this**
   has round-trip and hash-stability fixtures that fail loudly on any divergence.
 
 **A three-place copy of the matches backbone rule, already textually drifted**
+> _Status (2026-09-20): Done — `types::check_backbone_counts` now owns the four
+> backbone-specific metadata count rules and their error strings; the reader,
+> writer and verifier all consume it, with focused coverage pinning message order._
 - Location: `crates/matches-format/src/read.rs:167–180`, `238–243`, `299–306`;
   `write.rs:539–558` (inside `validate_structure`); `verify.rs:104–144` (inside
   `structure_errors`)

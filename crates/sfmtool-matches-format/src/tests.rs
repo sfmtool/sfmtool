@@ -697,6 +697,32 @@ fn test_write_validation_cluster_file_with_pair_counts() {
 }
 
 #[test]
+fn test_backbone_count_errors_are_pinned() {
+    let mut pairwise = make_test_data().metadata;
+    pairwise.image_pair_count = None;
+    pairwise.cluster_count = Some(2);
+    assert_eq!(
+        check_backbone_counts(&pairwise),
+        vec![
+            "pairwise file requires metadata.image_pair_count and metadata.match_count".to_owned(),
+            "pairwise file must not set metadata.cluster_count / cluster_member_count".to_owned(),
+        ]
+    );
+
+    let mut cluster = make_cluster_test_data().metadata;
+    cluster.cluster_count = None;
+    cluster.image_pair_count = Some(2);
+    assert_eq!(
+        check_backbone_counts(&cluster),
+        vec![
+            "cluster-bearing file requires metadata.cluster_count and metadata.cluster_member_count"
+                .to_owned(),
+            "cluster-bearing file must not set metadata.image_pair_count / match_count".to_owned(),
+        ]
+    );
+}
+
+#[test]
 fn test_write_validation_bad_csr() {
     // starts[0] != 0
     let mut data = make_cluster_test_data();

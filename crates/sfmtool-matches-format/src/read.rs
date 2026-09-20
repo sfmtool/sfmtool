@@ -164,19 +164,16 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     };
 
     // === Backbone: image pairs XOR clusters ===
+    // Historically the reader rejected forbidden counts before missing
+    // required counts, while the writer and verifier report required counts
+    // first. Pop from the shared, required-first list to preserve that reader
+    // behavior when malformed metadata violates both halves at once.
+    if let Some(error) = check_backbone_counts(&metadata).pop() {
+        return Err(MatchesError::InvalidFormat(error));
+    }
     let image_pairs = if metadata.has_clusters {
-        if metadata.image_pair_count.is_some() || metadata.match_count.is_some() {
-            return Err(MatchesError::InvalidFormat(
-                "cluster-bearing file must not set metadata.image_pair_count / match_count".into(),
-            ));
-        }
         None
     } else {
-        if metadata.cluster_count.is_some() || metadata.cluster_member_count.is_some() {
-            return Err(MatchesError::InvalidFormat(
-                "pairwise file must not set metadata.cluster_count / cluster_member_count".into(),
-            ));
-        }
         Some(read_pairs_section(&decoded, &metadata)?)
     };
 
@@ -233,16 +230,11 @@ fn read_pairs_section(
     decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
 ) -> Result<PairsData, MatchesError> {
-    let pair_count = metadata.image_pair_count.ok_or_else(|| {
-        MatchesError::InvalidFormat(
-            "pairwise file requires metadata.image_pair_count and metadata.match_count".into(),
-        )
-    })? as usize;
-    let match_count = metadata.match_count.ok_or_else(|| {
-        MatchesError::InvalidFormat(
-            "pairwise file requires metadata.image_pair_count and metadata.match_count".into(),
-        )
-    })? as usize;
+    // `read_matches` checks the backbone count invariant before dispatching.
+    let pair_count = metadata
+        .image_pair_count
+        .expect("backbone counts validated") as usize;
+    let match_count = metadata.match_count.expect("backbone counts validated") as usize;
 
     // Cross-check pairs section metadata
     let pairs_meta: serde_json::Value = decoded.json_entry(entries::image_pairs_metadata())?;
@@ -294,20 +286,11 @@ fn read_clusters_section(
     decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
 ) -> Result<ClustersData, MatchesError> {
-    let cluster_count = metadata.cluster_count.ok_or_else(|| {
-        MatchesError::InvalidFormat(
-            "cluster-bearing file requires metadata.cluster_count and \
-             metadata.cluster_member_count"
-                .into(),
-        )
-    })? as usize;
-    let member_count = metadata.cluster_member_count.ok_or_else(|| {
-        MatchesError::InvalidFormat(
-            "cluster-bearing file requires metadata.cluster_count and \
-             metadata.cluster_member_count"
-                .into(),
-        )
-    })? as usize;
+    // `read_matches` checks the backbone count invariant before dispatching.
+    let cluster_count = metadata.cluster_count.expect("backbone counts validated") as usize;
+    let member_count = metadata
+        .cluster_member_count
+        .expect("backbone counts validated") as usize;
 
     // Cross-check clusters section metadata
     let clusters_meta: serde_json::Value = decoded.json_entry(entries::clusters_metadata())?;

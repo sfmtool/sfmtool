@@ -209,6 +209,39 @@ pub struct MatchesMetadata {
     pub has_cluster_patches: bool,
 }
 
+/// Return violations of the backbone-specific metadata count rule.
+///
+/// The required-count error precedes the forbidden-count error so callers
+/// that accumulate diagnostics report the same stable order as the writer.
+pub(crate) fn check_backbone_counts(metadata: &MatchesMetadata) -> Vec<String> {
+    let mut errors = Vec::new();
+    if metadata.has_clusters {
+        if metadata.cluster_count.is_none() || metadata.cluster_member_count.is_none() {
+            errors.push(
+                "cluster-bearing file requires metadata.cluster_count and metadata.cluster_member_count"
+                    .into(),
+            );
+        }
+        if metadata.image_pair_count.is_some() || metadata.match_count.is_some() {
+            errors.push(
+                "cluster-bearing file must not set metadata.image_pair_count / match_count".into(),
+            );
+        }
+    } else {
+        if metadata.image_pair_count.is_none() || metadata.match_count.is_none() {
+            errors.push(
+                "pairwise file requires metadata.image_pair_count and metadata.match_count".into(),
+            );
+        }
+        if metadata.cluster_count.is_some() || metadata.cluster_member_count.is_some() {
+            errors.push(
+                "pairwise file must not set metadata.cluster_count / cluster_member_count".into(),
+            );
+        }
+    }
+    errors
+}
+
 /// Content integrity hashes from `content_hash.json.zst`.
 ///
 /// All hash values are plain 32-character lowercase hex strings.

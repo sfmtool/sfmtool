@@ -533,24 +533,8 @@ fn validate_structure(data: &MatchesData) -> Result<(), MatchesError> {
     // Backbone-specific summary counts: pairwise files carry
     // image_pair_count / match_count, cluster files carry cluster_count /
     // cluster_member_count — never both.
-    if has_pairs {
-        invalid!(
-            data.metadata.image_pair_count.is_none() || data.metadata.match_count.is_none(),
-            "pairwise file requires metadata.image_pair_count and metadata.match_count"
-        );
-        invalid!(
-            data.metadata.cluster_count.is_some() || data.metadata.cluster_member_count.is_some(),
-            "pairwise file must not set metadata.cluster_count / cluster_member_count"
-        );
-    } else {
-        invalid!(
-            data.metadata.cluster_count.is_none() || data.metadata.cluster_member_count.is_none(),
-            "cluster-bearing file requires metadata.cluster_count and metadata.cluster_member_count"
-        );
-        invalid!(
-            data.metadata.image_pair_count.is_some() || data.metadata.match_count.is_some(),
-            "cluster-bearing file must not set metadata.image_pair_count / match_count"
-        );
+    if let Some(error) = check_backbone_counts(&data.metadata).into_iter().next() {
+        return Err(MatchesError::InvalidFormat(error));
     }
 
     Ok(())
