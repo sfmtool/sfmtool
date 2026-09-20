@@ -289,6 +289,9 @@ fn the_normal_segment_is_the_last_handle_the_pointer_can_take() {
         circles: vec![(2, Pos2::new(160.0, 100.0))],
         // Out along the panel's `+x`, through both of them.
         normal: Some((centre, Pos2::new(300.0, 100.0))),
+        // No arrowhead in this one: what is claimed is the order among the
+        // three handles that share the centre.
+        tilt: None,
     };
 
     assert_eq!(
@@ -304,4 +307,41 @@ fn the_normal_segment_is_the_last_handle_the_pointer_can_take() {
     // And where the segment alone is in reach, it is what the pointer has.
     assert_eq!(handles.hit(Pos2::new(230.0, 104.0)), Some(Handle::Normal));
     assert_eq!(handles.hit(Pos2::new(230.0, 120.0)), None);
+}
+
+/// The other end of that order: the arrowhead is the **first** handle the
+/// pointer can take.
+///
+/// It has to be. It is a point at the far end of the very segment
+/// [`Handle::Normal`] is, so a segment tested first would take every press
+/// meant for it; and a view that carries the head over a corner or a mark is an
+/// ordinary view of a patch seen at a slant. Where there is no arrowhead -- a
+/// track at infinity draws no normal at all -- the same press falls through to
+/// whatever else is under it.
+#[test]
+fn the_arrowhead_is_the_first_handle_the_pointer_can_take() {
+    let centre = Pos2::new(100.0, 100.0);
+    let head = Pos2::new(300.0, 100.0);
+    let crowded = |tilt: Option<Tilt>| Handles {
+        dot: Some(centre),
+        // A corner and a mark carried onto the head by the view.
+        corners: [Some(head), None, None, None],
+        circles: vec![(2, head)],
+        normal: Some((centre, head)),
+        tilt,
+    };
+
+    let handles = crowded(Some(Tilt::Aim));
+    assert_eq!(handles.hit(head), Some(Handle::Arrowhead(Tilt::Aim)));
+    assert_eq!(
+        handles.hit(head + egui::vec2(0.0, 4.0)),
+        Some(Handle::Arrowhead(Tilt::Aim)),
+        "the head keeps its whole reach against the corner and the mark on it",
+    );
+    // Off its reach, the segment it caps is what is left.
+    assert_eq!(handles.hit(Pos2::new(230.0, 104.0)), Some(Handle::Normal));
+
+    // With no arrowhead the corner under it takes the press, which is the same
+    // order read with the first entry removed.
+    assert_eq!(crowded(None).hit(head), Some(Handle::Corner(0)));
 }

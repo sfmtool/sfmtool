@@ -1237,7 +1237,7 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "offset_bench_track",
             description: "Move a bench track's patch along its own outward normal -- the \
-                          normal-segment drag in the 3D viewer, and the one gesture no \
+                          normal-segment drag in the 3D viewer, and one of the two gestures no \
                           photograph can make. A sighting says which ray the patch lies along \
                           and nothing about how far down it the surface is, so this is where \
                           the depth of a patch is settled: distance is a world length, positive \
@@ -1260,6 +1260,45 @@ fn build_catalog() -> Vec<ToolSpec> {
                             "description":
                                 "How far to move, in the reconstruction's own world units, \
                                  positive along the patch's outward normal.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "tilt_bench_track",
+            description: "Turn a bench track's patch to face a new outward normal -- the \
+                          arrowhead drag in the 3D viewer, and the other gesture no photograph \
+                          can make. A sighting says which ray the patch lies along and nothing \
+                          about which way the surface under it faces, so this is where the \
+                          orientation of a patch is settled. The turn is the least rotation onto \
+                          the normal named, about the axis square to the old normal and the new \
+                          one, so no spin about the normal comes with it -- that is \
+                          rotate_bench_track's. The centre and the half-length do not move, and \
+                          every observation keeps its own in-plane offset, its keypoint becoming \
+                          the projection of that offset rebuilt on the turned axes; a sighting \
+                          the turned patch no longer projects into is left with no keypoint. \
+                          The turn stops 80 degrees from any observation's camera, which is \
+                          where that photograph would be looking along the surface rather than \
+                          at it, and the reply's sentence names the observation that stopped it. \
+                          Nothing is pinned, and a track at infinity is refused: its normal is \
+                          its own bearing.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "normal",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description":
+                                "[x, y, z] in the reconstruction's own coordinates: the outward \
+                                 normal the patch should face. Any non-zero length -- only the \
+                                 direction is read.",
                         }),
                     ),
                 ],
@@ -2408,6 +2447,11 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             distance: args.required_f64("distance")?,
+        },
+        "tilt_bench_track" => Command::TiltBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            normal: args.required_vec3("normal")?,
         },
         "rotate_bench_track" => Command::RotateBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,

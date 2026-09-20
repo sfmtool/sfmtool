@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Sixty-eight tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty-two
+Sixty-nine tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty-three
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -160,6 +160,7 @@ write, and one writes a file.
 | `move_bench_track_observation` | write | Put one observation's own sighting at a pixel, by hand |
 | `resize_bench_track` | write | Put one edge of the patch under a pixel, the opposite edge held still |
 | `offset_bench_track` | write | Move the patch along its own outward normal; every sighting follows |
+| `tilt_bench_track` | write | Turn the patch to face a new outward normal, no further than its observations can see |
 | `rotate_bench_track` | write | Turn the patch in its own plane |
 | `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose |
@@ -176,7 +177,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the fifty-two writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the fifty-three writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2112,7 +2113,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Twenty-five tools that read and work the **bench** beside a node
+Twenty-six tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2205,7 +2206,7 @@ a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Five of the twenty-five are the patch a track is**, and they are the wire's
+**Six of the twenty-six are the patch a track is**, and they are the wire's
 half of the handles the Image Detail panel's bench layer offers
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). `move_bench_track` slides the patch across its own plane until its
@@ -2220,13 +2221,27 @@ parallelogram at the cluster stage -- and the pixel is in that observation's
 image; a turn at the **track** stage names no observation, because there is one
 surfel and it turns about its own normal.
 
-**`offset_bench_track` names no pixel at all**, being the wire's half of the one
-handle no photograph carries: it moves the patch `distance` world units along
-its own outward normal, positive toward the face the patch shows. A sighting
-says which ray the patch lies along and nothing about how far down it the
-surface is, so depth is settled out in the world -- by this tool, or by the
-normal-segment drag in the 3D viewer it shares a step with. A track at infinity
-is refused, its normal being its own bearing.
+**`offset_bench_track` and `tilt_bench_track` name no pixel at all**, being the
+wire's half of the two handles no photograph carries. The first moves the patch
+`distance` world units along its own outward normal, positive toward the face
+the patch shows: a sighting says which ray the patch lies along and nothing
+about how far down it the surface is. The second turns the patch to face the
+outward `normal` named, by the **least** rotation -- the one about the axis
+square to the old normal and the new one -- so no spin about the normal comes
+with it, that being `rotate_bench_track`'s; a sighting says nothing about which
+way the surface under it faces either. Both are settled out in the world, by
+these tools or by the drags in the 3D viewer they share their steps with: the
+normal's own segment, and the arrowhead at the end of it. Both refuse a track at
+infinity, its normal being its own bearing.
+
+**A tilt stops 80 degrees from any observation's camera**, which is where that
+photograph would be looking along the surface rather than at it and its tile
+would be a smear of a few pixels stretched over the square. The allowed normals
+are the intersection of one spherical cap per observation, so the step walks the
+arc toward what was asked and stops at the last allowed normal on it; the
+sentence then ends *"stopped 80.0 degrees from IMG_0042.jpg"*, naming the
+observation's image. An observation already past the cap constrains nothing, or
+a track that starts outside the region could never be turned back into it.
 
 **At the track stage the patch is the thing every sighting is a view of**, so
 the three tools that move its centre -- the translation, the resize and the
@@ -2239,14 +2254,17 @@ sighting keeps its own offset from where the centre projects, which is where
 that photograph sees the patch's content against where the geometry puts its
 middle, and is what the tiles are cut on. The sighting the call came through
 lands under the pixel it named, because its plane point plus the displacement
-*is* the plane point under that pixel. That is what makes the gesture worth
-having: a patch can be slid, turned and sized until it covers the piece of
-surface a person means. None of them pins anything, because where the patch is
-says nothing about whether a sighting belongs to it. The **fifth** tool,
-`move_bench_track_observation`, is the one that moves a single sighting: the
-cluster stage's dot, where there is no shared geometry, and a script placing one
-keypoint of a track-stage track by hand. It writes that observation alone, pins
-it, and drops the measurements read at the old pixel.
+*is* the plane point under that pixel. A **tilt** keeps the same thing by the
+other arithmetic: the centre does not move at all, and each sighting's own
+in-plane offset is read on the frame as it stood and rebuilt on the turned axes,
+so what survives is the pair rather than the point. That is what makes the
+gestures worth having: a patch can be slid, turned, sized and aimed until it
+covers the piece of surface a person means. None of them pins anything, because
+where the patch is says nothing about whether a sighting belongs to it. The
+**sixth** tool, `move_bench_track_observation`, is the one that moves a single
+sighting: the cluster stage's dot, where there is no shared geometry, and a
+script placing one keypoint of a track-stage track by hand. It writes that
+observation alone, pins it, and drops the measurements read at the old pixel.
 
 **`duplicate_bench_item` is how a second patch over neighbouring ground is
 started.** A patch slid, turned and sized until it covers one piece of surface
@@ -2259,7 +2277,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the twenty-five are about the SIFT index**, which is the node's
+**Four of the twenty-six are about the SIFT index**, which is the node's
 rather than any track's: `open_sift_index` adopts a `.kdf`, `build_sift_index`
 makes one out of the node's `.sift` files -- at a `path` of the caller's where
 it names one, refused when that path resolves outside the directory holding the
@@ -3174,7 +3192,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-eight tools**, fifteen of them reads and one of them
+- **The catalog is sixty-nine tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

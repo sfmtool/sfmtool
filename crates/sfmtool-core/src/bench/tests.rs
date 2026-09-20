@@ -3144,6 +3144,314 @@ fn an_offset_refuses_a_distance_that_is_not_one_and_a_track_at_infinity() {
     ));
 }
 
+/// The unit vector from `at` to image `image`'s camera centre, which is the
+/// line of sight [`MAX_TILT_DEG`] is measured from.
+fn line_of_sight(edited: &EditedReconstruction, image: usize, at: Point3<f64>) -> Vector3<f64> {
+    let (_, pose) = view(edited, image);
+    (pose.inverse_translation_origin() - at).normalize()
+}
+
+/// The angle between two unit vectors, in degrees.
+fn between(a: Vector3<f64>, b: Vector3<f64>) -> f64 {
+    a.dot(&b).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+/// The same track with its surfel turned by hand to face `normal`, every
+/// sighting left where it is.
+///
+/// What a tilt is driven from when the **starting** direction is the claim:
+/// `tilt_frame` will not put a normal past an observation's cap, so a track
+/// that starts past one has to be built rather than turned there.
+fn facing(track: &EditableTrack, normal: Vector3<f64>) -> EditableTrack {
+    let mut next = track.clone();
+    let Stage::Track(payload) = &mut next.stage else {
+        unreachable!("a track from a point is at the track stage");
+    };
+    let frame = payload.frame.as_mut().expect("a stored patch");
+    let turn = nalgebra::Rotation3::rotation_between(&frame.normal(), &normal.normalize())
+        .expect("the direction asked for is not the reverse of the fixture's normal");
+    frame.u_axis = turn * frame.u_axis;
+    frame.v_axis = turn * frame.v_axis;
+    next
+}
+
+/// The other edit no photograph can name: which way the surface under the
+/// sightings faces. The surfel turns about its centre by the least rotation, so
+/// no spin comes with the tilt, and every sighting keeps the in-plane offset it
+/// was measured at, rebuilt on the turned axes.
+#[test]
+fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    // A measurement read over the square as it stood, which the turn must not
+    // keep: it says nothing about a square facing somewhere else.
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc = Some(0.91);
+    assert!(
+        track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
+        "the column fixture should carry a consensus bitmap to drop"
+    );
+    // The fixture's keypoints are each point's exact projection, so every
+    // in-plane offset is zero and a step that reset them all would pass. Put
+    // each sighting somewhere of its own first, which is what a photograph says
+    // when it sees the patch's content off the frame's middle.
+    for (k, observation) in track.observations.iter_mut().enumerate() {
+        let site = observation.site().expect("a sighting");
+        observation.track.as_mut().expect("a track slot").keypoint = Some([
+            (site[0] + 2.0 + k as f64) as f32,
+            (site[1] - 3.0 + 2.0 * k as f64) as f32,
+        ]);
+    }
+    let was = frame_of(&track);
+    let offsets = plane_offsets(&track, &edited);
+    assert!(
+        offsets.iter().all(|(a, b)| a.hypot(*b) > 1e-6),
+        "every sighting should sit off the frame's middle: {offsets:?}",
+    );
+
+    // Twenty degrees off the normal toward `+u`, which is well inside every
+    // observation's cap and so is reached whole.
+    let (sin, cos) = 20.0_f64.to_radians().sin_cos();
+    let asked = was.normal() * cos + was.u_axis * sin;
+    let (next, report) = tilt_frame(&track, &edited, asked * 3.0).expect("a finite direction");
+    assert!(report.changed);
+    assert_eq!(report.stopped, None, "nothing should have capped this turn");
+    assert!(
+        (report.asked - asked).norm() < 1e-12,
+        "the normal asked for should be reported as the unit vector it names",
+    );
+    assert!((report.degrees - 20.0).abs() < 1e-9, "{}", report.degrees);
+    assert_eq!(report.placed, next.observations.len());
+
+    let frame = frame_of(&next);
+    assert!((frame.normal() - asked).norm() < 1e-12);
+    assert!((report.normal - frame.normal()).norm() < 1e-12);
+    // The centre and the size stay exactly where they were: a tilt is a turn
+    // about the centre and nothing else.
+    assert_eq!(frame.center, was.center);
+    assert_eq!(frame.half_extent, was.half_extent);
+    assert_eq!(next.track().and_then(|p| p.position), Some(was.center));
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+
+    // **The least rotation**: its axis is perpendicular to both normals, so `u`
+    // and `v` keep their own components along it and no spin about the normal
+    // comes with the turn.
+    let axis = was.normal().cross(&frame.normal()).normalize();
+    assert!(
+        (frame.u_axis.dot(&axis) - was.u_axis.dot(&axis)).abs() < 1e-12
+            && (frame.v_axis.dot(&axis) - was.v_axis.dot(&axis)).abs() < 1e-12,
+        "the turn spun the square about its own normal",
+    );
+    assert!(frame.normal().dot(&axis).abs() < 1e-12);
+
+    // Every offset survived, and every keypoint is the projection of the place
+    // that offset names on the **turned** axes -- worked out here from the pair
+    // read before the turn rather than from anything the step did.
+    let now = plane_offsets(&next, &edited);
+    assert_eq!(now.len(), offsets.len());
+    for (before, after) in offsets.iter().zip(&now) {
+        assert!(
+            (after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6,
+            "a tilt scrambled a sighting's place on the plane: {before:?} became {after:?}",
+        );
+    }
+    for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
+        let (camera, pose) = view(&edited, observation.image as usize);
+        let place = frame.center + frame.u_axis * *a + frame.v_axis * *b;
+        let (u, v) = camera
+            .ray_to_pixel({
+                let pc = pose.transform_point_homogeneous(place.coords, 1.0);
+                [pc.x, pc.y, pc.z]
+            })
+            .expect("the turned patch is still in front of the fixture's cameras");
+        let site = observation.site().expect("a sighting");
+        assert!(
+            (site[0] - u).abs() < 1e-3 && (site[1] - v).abs() < 1e-3,
+            "image {} should sight the turned patch at {:?}, it sights {site:?}",
+            observation.image,
+            [u, v],
+        );
+        assert!(!observation.pinned, "a tilt is not a verdict");
+        let measurement = observation.track.as_ref().expect("a track slot");
+        assert_eq!(measurement.zncc, None);
+        assert_eq!(measurement.reason, None);
+    }
+
+    // A turn inside the tolerance is no turn, on the bar a spin is held to.
+    let (again, report) = tilt_frame(&next, &edited, frame.normal()).expect("a finite direction");
+    assert!(!report.changed);
+    assert_eq!(report.placed, 0);
+    assert_eq!(report.normal, frame.normal());
+    assert_eq!(frame_of(&again).u_axis, frame.u_axis);
+}
+
+/// A sighting whose own piece of the patch swings out behind its camera is left
+/// with no keypoint, rather than with the one it had before the square turned.
+#[test]
+fn a_tilt_that_swings_a_sighting_behind_its_camera_leaves_no_keypoint() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let was = frame_of(&track);
+
+    // Image 0 sees the patch's content far out along `+u` -- many half-lengths,
+    // so the offset is a piece of world several units long. Off its sensor,
+    // which is not the question a projection answers here: what matters is that
+    // the place is in front of the camera before the turn and behind it after.
+    let (camera, pose) = view(&edited, 0);
+    let far = corner_pixel(&was, &camera, &pose, 100.0, 0.0);
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([far[0] as f32, far[1] as f32]);
+    let (reach, _) = plane_offsets(&track, &edited)[0];
+    assert!(
+        reach > 4.0,
+        "the sighting should sit further out than the cameras stand off the plane: {reach}",
+    );
+
+    // Turned down toward `-u`, which takes `+u` and that sighting's own place
+    // with it, through the plane the cameras stand in.
+    let (sin, cos) = 89.0_f64.to_radians().sin_cos();
+    let (next, report) = tilt_frame(&track, &edited, was.normal() * cos - was.u_axis * sin)
+        .expect("a finite direction");
+    assert!(report.changed);
+    assert_eq!(report.placed, 1, "only the centred sighting should survive");
+
+    let lost = next.observations[0].track.as_ref().expect("a track slot");
+    assert_eq!(lost.keypoint, None);
+    assert_eq!(lost.reason, Some(Unmeasured::NoProjection));
+    assert!(!next.observations[0].pinned);
+    assert!(next.observations[1]
+        .track
+        .as_ref()
+        .expect("a track slot")
+        .keypoint
+        .is_some());
+}
+
+/// The cap is the whole point of the gesture: the normal can be swung until a
+/// photograph would be looking along the surface, and no further. An
+/// observation already past the cap constrains nothing, or a track that starts
+/// outside the region could never be turned back into it.
+#[test]
+fn a_tilt_stops_eighty_degrees_from_an_observation_and_names_which() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let was = frame_of(&track);
+    let sight = |image: usize| line_of_sight(&edited, image, was.center);
+
+    // Asked for a normal 89 degrees over, which is past what either camera can
+    // still see the patch at.
+    let (sin, cos) = 89.0_f64.to_radians().sin_cos();
+    let asked = was.normal() * cos + was.u_axis * sin;
+    let (next, report) = tilt_frame(&track, &edited, asked).expect("a finite direction");
+    assert!(report.changed);
+    let stop = report
+        .stopped
+        .expect("the cap should have cut the turn short");
+    assert!(
+        report.degrees < 89.0 - 1.0,
+        "the turn should have stopped short of what was asked: {}",
+        report.degrees,
+    );
+    assert!((report.asked - asked).norm() < 1e-12, "the ask is reported");
+
+    // It stopped exactly on the cap of the observation it names, and no
+    // observation is past the cap.
+    let reached = frame_of(&next).normal();
+    assert!(
+        (between(reached, sight(stop.observation)) - MAX_TILT_DEG).abs() < 1e-6,
+        "the normal stands {} degrees off the observation that stopped it",
+        between(reached, sight(stop.observation)),
+    );
+    assert_eq!(
+        stop.image, next.observations[stop.observation].image,
+        "the stop names the image its observation is in",
+    );
+    for observation in 0..next.observations.len() {
+        assert!(
+            between(reached, sight(observation)) <= MAX_TILT_DEG + 1e-6,
+            "observation {observation} is past the cap at {} degrees",
+            between(reached, sight(observation)),
+        );
+    }
+
+    // A track whose normal is **already** past one observation's cap: built
+    // 85 degrees off image 0's line of sight, leaning toward image 1's, which
+    // is close enough to it to still hold the patch.
+    let (e0, e1) = (sight(0), sight(1));
+    let past = nalgebra::Rotation3::from_axis_angle(
+        &nalgebra::Unit::new_normalize(e0.cross(&e1)),
+        85.0_f64.to_radians(),
+    ) * e0;
+    let outside = facing(&track, past);
+    assert!(between(frame_of(&outside).normal(), e0) > MAX_TILT_DEG);
+    assert!(between(frame_of(&outside).normal(), e1) < MAX_TILT_DEG);
+
+    // Turned back toward where it started, which is inside both caps: the
+    // observation it is already past says nothing, so the turn is made whole.
+    let (back, report) = tilt_frame(&outside, &edited, was.normal()).expect("a finite direction");
+    assert_eq!(
+        report.stopped, None,
+        "an observation already past the cap constrained a turn back inside it",
+    );
+    assert!((frame_of(&back).normal() - was.normal()).norm() < 1e-9);
+}
+
+/// The three refusals: a direction that is not one, a track at infinity, whose
+/// normal is its own bearing, and a cluster, which has no surfel to turn.
+#[test]
+fn a_tilt_refuses_a_normal_that_is_not_one_a_bearing_and_a_cluster() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    for normal in [
+        Vector3::new(f64::NAN, 0.0, 1.0),
+        Vector3::new(0.0, f64::INFINITY, 1.0),
+        Vector3::zeros(),
+        Vector3::new(1e-14, 0.0, 0.0),
+    ] {
+        assert!(
+            matches!(
+                tilt_frame(&track, &edited, normal),
+                Err(TrackEditError::BadNormal(_))
+            ),
+            "{normal:?} was taken for a direction",
+        );
+    }
+    assert!(matches!(
+        tilt_frame(
+            &as_bearing(&track, &edited),
+            &edited,
+            Vector3::new(0.0, 0.0, 1.0)
+        ),
+        Err(TrackEditError::AtInfinity)
+    ));
+
+    let (bench, made) =
+        create_cluster(&Bench::new(), &pixel_seed(0, scene_pixel(&edited))).expect("a usable seed");
+    assert!(matches!(
+        tilt_frame(
+            &track_of(&bench, &made.label),
+            &edited,
+            Vector3::new(0.0, 0.0, 1.0)
+        ),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+}
+
 #[test]
 fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_old_square() {
     let scene = Scene::new();

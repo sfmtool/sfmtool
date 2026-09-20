@@ -169,6 +169,12 @@ states what differs:
 - **Reach**: nine panel pixels for the dot, a corner, the arrowhead and a
   circle; eight from an edge or from the normal's segment. Where reaches
   overlap the order is arrowhead, corner, dot, circle, edge, normal segment.
+  The arrowhead is first because it is a point at the far end of the segment
+  that is last, and anything between them would take the presses meant for it.
+  One consequence is worth knowing: seen exactly down the normal the whole
+  arrow collapses onto the centre, so the head covers the dot and takes its
+  presses. That view is the aim's own best one, and a few degrees of lean pulls
+  the head clear and gives the dot back.
 - **Cursors**: `Move` on the dot and `Grabbing` while it is held, and a circle
   selects rather than moves, so it takes `PointingHand`. The normal's segment
   takes the resize cursor along its own on-screen direction. The arrowhead takes
@@ -204,7 +210,7 @@ degenerate-view tests read the same on either side of it.
 | Edge | the frame's plane | the offset along that edge's axis is `p`; new half-length `(p + h) / 2`, centre moved `h' - h` along it, far edge held |
 | Corner | the frame's plane | the angle swept about `n` from the press point to the pointer, both read about `c` |
 | Normal segment | the line `c + t n` | the point of that line nearest the ray; the centre moves by that point's `t` less the press's own, along `n` |
-| Arrowhead, aiming | the plane square to `n` through `c + 4h n` | the new normal is the unit vector from `c` to the hit |
+| Arrowhead, aiming | the plane square to `n` through `c + 4h n` | the new normal is the unit vector from `c` to `c + 4h n` carried by the pointer's travel across that plane since the press |
 | Arrowhead, swinging | the plane through `c` square to the swing axis `a` | the angle swept about `a` from the press's point to the pointer's turns the normal about `a` |
 
 **The degenerate views are refused at the press.** Three handles read the
@@ -238,14 +244,21 @@ through.
 
 **Aiming**, when the normal lies near the line of sight. The pointer's ray is met
 with the plane square to `n` through `c + 4h n`, twice the arrow's own length
-out, and the new normal is the unit vector from `c` to that meeting. The plane is
-the one fixed at the press, `n` being the normal the arrowhead had then, so the
-gesture is a single map from the window onto the sphere of normals rather than a
-thing that moves as it is used. Two properties follow from the distance. The
+out, and the new normal is the unit vector from `c` to `c + 4h n` displaced by
+however far the pointer has travelled across that plane since the press. The
+plane is the one fixed at the press, `n` being the normal the arrowhead had then,
+so the gesture is a single map from the window onto the sphere of normals rather
+than a thing that moves as it is used. The press's own offset is kept for the
+reason the centre dot's is: the arrowhead is *drawn* at `2h` and *read* at `4h`,
+so a press that took the head is not standing where the plane's middle projects,
+and reading the meeting outright would turn the normal over before the pointer
+had moved at all -- which a drag that ends where it started is not allowed to do.
+Two properties follow from the distance. The
 pointer crosses `4h` of that plane for 45 degrees of tilt while the arrowhead is
 drawn at `2h`, so the aim is **half as sensitive as the figure looks** and a
 small correction is a small motion, which is what the handle is for: a normal is
-read off a surface a few degrees at a time. And the direction from `c` to a point
+read off a surface a few degrees at a time. And the travel being in-plane, the
+answer keeps the whole `4h` along `n`; the direction from `c` to a point
 of a plane can never reach the plane's own direction, so one gesture turns the
 normal by less than 90 degrees and cannot push it through the frame at all.
 
@@ -300,7 +313,11 @@ what the tiles are cut on.
   second time. The sightings therefore move by *different* amounts in their
   photographs, and that spread is the parallax the old depth was wrong by.
 - **Tilt.** `u`, `v` and so `n` are rotated about `c`. Each keypoint becomes
-  the projection of `c + a_i u' + b_i v'`.
+  the projection of `c + a_i u' + b_i v'`. `(a_i, b_i)` is read on the frame as
+  it stood **before** the turn, for the reason the offset's is: this edit takes
+  the plane with it too. Unlike the other three this is not a rigid carry of
+  each plane point -- the pair is kept and the place is built again on the new
+  axes -- but what it preserves is the same thing.
 
 **A tilt stops 80 degrees from any observation.** With `e_i` the unit vector
 from `c` to observation `i`'s camera centre, a normal is **allowed** when the

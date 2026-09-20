@@ -218,7 +218,6 @@ impl Viewer3D {
             self.bench_drag = None;
             return false;
         };
-        let handles = bench_track::Handles::project(figure, &self.camera, rect);
         // The node's similarity, which the figure went out through and a pointer
         // has to come back through: the core steps act in the reconstruction's
         // own coordinates and the figure is drawn in the world's.
@@ -235,8 +234,18 @@ impl Viewer3D {
         let eye = into_recon.apply_to_point(&self.camera.position());
         let plane_refused = geometry::plane_is_edge_on(frame, eye);
         let normal_refused = geometry::normal_is_end_on(frame, eye);
+        // The arrowhead takes no refusal of its own, and needs none: its two
+        // gestures are decided by the same cosine the two above are, at a third
+        // bar, and each is well determined exactly where the other is not.
+        let handles = bench_track::Handles::project(
+            figure,
+            &self.camera,
+            rect,
+            geometry::tilt_gesture(frame, eye),
+        );
         let takes_press = |handle: bench_track::Handle| !match handle {
             bench_track::Handle::Normal => normal_refused,
+            bench_track::Handle::Arrowhead(_) => false,
             _ => plane_refused,
         };
         if self
@@ -333,8 +342,9 @@ impl Viewer3D {
     ///
     /// **The handle decides what the ray is met with**, because that is what
     /// the gesture is about: the three plane handles name a point of the
-    /// frame's plane, and the normal's segment names a point of the line the
-    /// normal runs along.
+    /// frame's plane, the normal's segment a point of the line the normal runs
+    /// along, and the arrowhead a point of whichever plane the gesture it took
+    /// at the press reads.
     fn bench_ray_point(
         &self,
         rect: Rect,
@@ -348,6 +358,9 @@ impl Viewer3D {
         let direction = into_recon.rotation.to_rotation_matrix() * direction;
         match handle {
             bench_track::Handle::Normal => geometry::normal_line_point(frame, origin, direction),
+            bench_track::Handle::Arrowhead(tilt) => {
+                geometry::tilt_point(frame, tilt, origin, direction)
+            }
             _ => geometry::plane_point(frame, origin, direction),
         }
     }

@@ -600,6 +600,24 @@ impl AppState {
                     report.distance, centre.x, centre.y, centre.z
                 )
             }
+            // The turn actually made, and the observation that cut it short
+            // where one did: a tilt held against the cap has to say why it went
+            // no further, the way a slide says a pixel was brought inside the
+            // photograph. The bar is core's own constant, so the rule and the
+            // sentence about it cannot drift apart.
+            geometry::EditReport::Tilted(report) => {
+                let stopped = report
+                    .stopped
+                    .map(|stop| {
+                        format!(
+                            ", stopped {:.1} degrees from {}",
+                            sfmtool_core::bench::MAX_TILT_DEG,
+                            self.image_name(ImageRef::new(id, stop.image as usize))
+                        )
+                    })
+                    .unwrap_or_default();
+                format!("Tilted {label} by {:.1} degrees{stopped}", report.degrees)
+            }
             geometry::EditReport::Moved(report) => {
                 let name = self.image_name(ImageRef::new(id, report.image as usize));
                 let moved = report

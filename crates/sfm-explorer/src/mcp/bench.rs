@@ -409,6 +409,31 @@ pub(super) fn offset_bench_track(
     Ok(reply)
 }
 
+/// `tilt_bench_track`: the patch turned to face a new outward normal.
+///
+/// The wire's half of the 3D viewport's arrowhead drag, and the second patch
+/// tool that names no pixel: a photograph says which ray the patch lies along
+/// and nothing about which way the surface under it faces. The turn is the
+/// least rotation onto `normal`, so no spin about the normal comes with it, and
+/// every sighting keeps the in-plane offset it was measured at, rebuilt on the
+/// turned axes. It stops `MAX_TILT_DEG` from any observation's camera, which is
+/// where a photograph would be looking along the surface rather than at it, and
+/// the sentence says which observation stopped it. A track at infinity is
+/// refused: its normal is its own bearing.
+pub(super) fn tilt_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    normal: [f64; 3],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::Tilt { normal };
+    let (reply, _) = patched(state, id, &item, &edit)?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "normal", json!(normal));
+    Ok(reply)
+}
+
 /// `rotate_bench_track`: the patch turned in its own plane.
 ///
 /// What turns depends on the stage, which is why `observation` is optional: a

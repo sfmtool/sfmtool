@@ -59,6 +59,22 @@ const NO_EFFECT_PX: f64 = 1e-3;
 /// which no gesture and no caller means.
 const NO_EFFECT_RAD: f64 = 1e-9;
 
+/// A direction this short names no direction, and a rotation between two of
+/// them has no axis.
+const MIN_DIRECTION: f64 = 1e-12;
+
+/// How far from an observation's line of sight the surfel's outward normal may
+/// be turned, in degrees.
+///
+/// The bar [`tilt_frame`] stops at, and the number the sentence a stopped tilt
+/// writes names, so the rule and what is said about it are one value. Past it a
+/// photograph sees the patch so obliquely that its tile is a smear of a few
+/// pixels stretched over the square, and the correlation that tile is scored by
+/// says nothing; the allowed normals are the intersection of one spherical cap
+/// per observation, so a tilt held against the limit traces the edge of what the
+/// existing sightings can see.
+pub const MAX_TILT_DEG: f64 = 80.0;
+
 /// What putting an item on the bench did.
 ///
 /// The label is the whole of it: an item is named by its label everywhere, and
@@ -474,6 +490,9 @@ pub enum TrackEditError {
     BadAngle(f64),
     /// The offset asked for is not a finite distance.
     BadDistance(f64),
+    /// The outward normal asked for is not a finite direction, or is too short
+    /// to name one.
+    BadNormal([f64; 3]),
     /// The track is at infinity, and a direction patch's normal is its own
     /// bearing: there is no normal standing off the frame to move along or to
     /// turn.
@@ -531,6 +550,9 @@ impl std::fmt::Display for TrackEditError {
             TrackEditError::BadAngle(angle) => write!(f, "{angle} is not an angle"),
             TrackEditError::BadDistance(distance) => {
                 write!(f, "{distance} is not a distance")
+            }
+            TrackEditError::BadNormal(n) => {
+                write!(f, "({}, {}, {}) is not a direction", n[0], n[1], n[2])
             }
             TrackEditError::AtInfinity => write!(
                 f,
@@ -1565,6 +1587,240 @@ pub fn offset_frame(
     ))
 }
 
+/// The observation a tilt stopped [`MAX_TILT_DEG`] short of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TiltStop {
+    /// The observation, by its position in the track's list.
+    pub observation: usize,
+    /// The image it is in, which is what a sentence about the stop names.
+    pub image: u32,
+}
+
+/// What one tilt of the surfel did.
+///
+/// [`OffsetFrameReport`]'s companion for the other gesture no photograph can
+/// name. What was asked for and what happened are separate fields here, because
+/// the two part company whenever an observation's own view of the patch cuts
+/// the turn short, and a caller has to be able to say so.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TiltFrameReport {
+    /// How far the surfel turned, in degrees, and never negative: a rotation's
+    /// angle is read about its own axis, and the axis is chosen by the turn.
+    pub degrees: f64,
+    /// The outward normal the caller asked for, as a unit vector. Reported
+    /// whether or not it was reached, so a stopped tilt can name what it was
+    /// aimed at and a no-effect sentence what was meant.
+    pub asked: Vector3<f64>,
+    /// The outward normal the surfel now shows.
+    pub normal: Vector3<f64>,
+    /// The observation whose [`MAX_TILT_DEG`] cap stopped the turn short, or
+    /// `None` for a turn that reached `asked`.
+    ///
+    /// One `Option` over the pair rather than two beside each other: "it was
+    /// stopped" and "by this observation" are the same fact, and nothing should
+    /// be able to carry one without the other.
+    pub stopped: Option<TiltStop>,
+    /// How many sightings the turned patch projects into, and so how many
+    /// keypoints were written. Zero for a step that changed nothing.
+    pub placed: usize,
+    /// Whether anything changed: a turn under `NO_EFFECT_RAD` is no turn, the
+    /// same bar in the same unit [`rotate_frame`] holds a spin to.
+    pub changed: bool,
+}
+
+/// Turn the surfel about its centre, by the least rotation, toward the outward
+/// normal `normal`, stopping [`MAX_TILT_DEG`] from any observation's camera.
+///
+/// The second edit no photograph can name, and the 3D viewer's arrowhead drag:
+/// a sighting says which ray the patch lies along and nothing about which way
+/// the surface under it faces, so the patch's orientation is settled out in the
+/// world where the frame can be seen against the geometry around it.
+///
+/// **The rotation is the least one** taking the normal the patch shows to
+/// `normal`, the rotation about `n_old x n_new`, and the report states the
+/// angle of the arc walked rather than the rotation's own reading of itself.
+/// `u` and `v` are both carried
+/// by it, so a tilt adds no spin about the normal: spin is
+/// [`rotate_frame`]'s. Where the two normals are collinear there is no such
+/// rotation to speak of -- at zero none is needed, and at a half turn every
+/// rotation about an axis in the frame's plane is equally least -- and the
+/// frame's own `u` is taken as the direction the arc leaves in, which holds `v`
+/// and reverses `u` and `n`.
+///
+/// **The centre and the half-lengths do not move**, and each keypoint becomes
+/// the projection of `c + a_i u' + b_i v'`: every observation keeps the
+/// in-plane offset `(a_i, b_i)` it was measured at, read on the frame as it
+/// stood before the turn and rebuilt on the turned axes. That is not the rigid
+/// carry a slide makes -- the pair is kept and the point is built again -- but
+/// it preserves the same thing, which is where each photograph sees the patch's
+/// content against where the geometry puts its middle. A sighting the turned
+/// patch no longer projects into is left with no keypoint and
+/// [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection).
+///
+/// **The turn stops [`MAX_TILT_DEG`] from any observation.** With `e_i` the
+/// unit vector from the centre to observation `i`'s camera centre, a normal is
+/// allowed when the angle between it and `e_i` is at most that, for every
+/// observation, whatever its verdict. The step walks the great arc from the
+/// current normal toward `normal` and stops at the last allowed normal on it,
+/// so a caller held against the limit traces the edge of what the existing
+/// sightings can see. An observation **already** past the cap before the turn
+/// constrains nothing, since otherwise a track that starts outside the region
+/// could not be turned back into it.
+///
+/// The bitmap and the measurements go, as they do for a resize, and nothing is
+/// pinned: which way the patch faces says nothing about whether a sighting
+/// belongs to it.
+///
+/// A **track at infinity** is refused as [`TrackEditError::AtInfinity`], a
+/// direction patch's normal being its own bearing; a `normal` that is not a
+/// finite direction is refused as [`TrackEditError::BadNormal`].
+pub fn tilt_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    normal: Vector3<f64>,
+) -> Result<(EditableTrack, TiltFrameReport), TrackEditError> {
+    let named = [normal.x, normal.y, normal.z];
+    let length = normal.norm();
+    if !named.iter().all(|c| c.is_finite()) || length < MIN_DIRECTION {
+        return Err(TrackEditError::BadNormal(named));
+    }
+    let asked = normal / length;
+    let frame = frame_of(track)?;
+    if frame.w == 0.0 {
+        return Err(TrackEditError::AtInfinity);
+    }
+    let was = frame.normal();
+
+    // The great arc from the normal the patch shows to the one asked for: its
+    // whole length `theta`, and the unit in-plane direction `perp` it leaves
+    // `was` in, so the normal part way along it is
+    // `was cos(phi) + perp sin(phi)`.
+    let along = was.dot(&asked).clamp(-1.0, 1.0);
+    let across = asked - was * along;
+    // `atan2` of the sine against the cosine rather than `acos` of the cosine
+    // alone. Near zero and near the half turn an `acos` loses the angle
+    // wholesale -- a turn of a nanoradian leaves the cosine `1.0` to the last
+    // bit, and the error in a cosine that *is* resolved lands on the answer
+    // divided by its sine -- and the bar a turn of nothing is judged by is a
+    // nanoradian. The two-argument form is conditioned the same at every angle.
+    let theta = across.norm().atan2(along);
+    let perp = if across.norm() > MIN_DIRECTION {
+        across.normalize()
+    } else {
+        // Collinear: at zero the arc has no length and this is never read, and
+        // at a half turn no direction is more nearly the least than another.
+        frame.u_axis
+    };
+    let (phi, stopped) = tilt_stop(track, edited, frame.center, was, perp, theta);
+
+    let unchanged = TiltFrameReport {
+        degrees: phi.to_degrees(),
+        asked,
+        normal: was,
+        stopped,
+        placed: 0,
+        changed: false,
+    };
+    if phi <= NO_EFFECT_RAD {
+        return Ok((track.clone(), unchanged));
+    }
+
+    let reached = was * phi.cos() + perp * phi.sin();
+    // The least rotation, which is what this step means by a tilt, taken from
+    // `nalgebra` rather than built here. It is `None` only for the half turn,
+    // where the axis is genuinely undefined and the arc's own is taken; below
+    // that its axis *is* the arc's, `was x reached` being `sin(phi)` along
+    // `was x perp`. What the report states is `phi` and not this rotation's own
+    // angle, for the reason above: the two agree to the last bits of a turn
+    // anyone means, and only one of them can be trusted at a nanoradian.
+    let rotation = nalgebra::Rotation3::rotation_between(&was, &reached).unwrap_or_else(|| {
+        nalgebra::Rotation3::from_axis_angle(
+            &nalgebra::Unit::new_normalize(was.cross(&perp)),
+            std::f64::consts::PI,
+        )
+    });
+
+    let u = rotation * frame.u_axis;
+    let v = rotation * frame.v_axis;
+    let centre = frame.center;
+    let mut next = track.clone();
+    {
+        let (_, turned, bitmap) = track_payload_mut(&mut next);
+        turned.u_axis = u;
+        turned.v_axis = v;
+        *bitmap = None;
+    }
+    // Each sighting's offset read on the old axes and rebuilt on the new ones,
+    // which is the tilt's whole effect on where the photographs look.
+    let placed = place_keypoints(&mut next, edited, frame, |at| {
+        let offset = at - centre;
+        centre + u * offset.dot(&frame.u_axis) + v * offset.dot(&frame.v_axis)
+    });
+    Ok((
+        next,
+        TiltFrameReport {
+            normal: u.cross(&v).normalize(),
+            placed,
+            changed: true,
+            ..unchanged
+        },
+    ))
+}
+
+/// How far along the arc the tilt may go, and the observation that stopped it.
+///
+/// `theta` is the arc's whole length and `perp` the unit direction it leaves
+/// `was` in, so the answer is an angle in `[0, theta]`. Along the arc, one
+/// observation's cosine against its own line of sight `e` is
+/// `f(phi) = a cos(phi) + b sin(phi)` with `a = was . e` and `b = perp . e`,
+/// which is `r cos(phi - psi)` for `r = hypot(a, b)` and `psi = atan2(b, a)`.
+/// An observation that constrains at all starts at or above the bar, so
+/// `r >= a >= cos(MAX_TILT_DEG) > 0` and `|psi| <= acos(bar / r)`: the curve
+/// rises to its peak at `psi` and falls through the bar once, at
+/// `psi + acos(bar / r)`, which is the first crossing and so the stop.
+fn tilt_stop(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    center: Point3<f64>,
+    was: Vector3<f64>,
+    perp: Vector3<f64>,
+    theta: f64,
+) -> (f64, Option<TiltStop>) {
+    let bar = MAX_TILT_DEG.to_radians().cos();
+    let mut reach = theta;
+    let mut stopped = None;
+    for (observation, sighting) in track.observations.iter().enumerate() {
+        // An observation in an image the reconstruction does not have says
+        // nothing about which way the patch may face, as it takes no keypoint.
+        let Ok((_, cam_from_world)) = view_of(edited, sighting.image) else {
+            continue;
+        };
+        let to_eye = cam_from_world.inverse_translation_origin() - center;
+        let distance = to_eye.norm();
+        if !distance.is_finite() || distance < MIN_DIRECTION {
+            continue;
+        }
+        let eye = to_eye / distance;
+        let a = was.dot(&eye);
+        // Already outside this observation's cap, so it constrains nothing:
+        // otherwise a track that starts outside the region could never be
+        // turned back into it.
+        if a < bar {
+            continue;
+        }
+        let b = perp.dot(&eye);
+        let crossing = b.atan2(a) + (bar / a.hypot(b)).clamp(-1.0, 1.0).acos();
+        if crossing < reach {
+            reach = crossing.max(0.0);
+            stopped = Some(TiltStop {
+                observation,
+                image: sighting.image,
+            });
+        }
+    }
+    (reach, stopped)
+}
+
 /// What one turn of the surfel did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RotateFrameReport {
@@ -1815,44 +2071,57 @@ fn track_payload_mut(
     )
 }
 
-/// Carry every sighting by `displacement`, and drop every measurement read
-/// before the patch moved.
+/// Carry every sighting by `displacement`: [`place_keypoints`] for the three
+/// steps that move the surfel rigidly without turning it.
 ///
-/// The rule the three steps that move the centre share, and **not** a
-/// reprojection of the centre: a keypoint is where that photograph sees the
-/// patch's *content*, and the gap between it and the centre's projection is
-/// that observation's own in-plane offset -- the thing the tile is cut on and
-/// the correlation is scored at. Resetting every keypoint to the centre's
-/// projection would throw all of those away and scramble the correlation, so
-/// what moves is the **place**: each sighting's own plane point is found by
-/// re-anchoring the patch on it (`OrientedPatch::anchored_at_keypoint`, its own
-/// camera and pose), the displacement is added to that point, and the result is
-/// projected back. Every offset therefore survives the move exactly, and the
-/// sighting the drag came through lands under the pointer, because its plane
-/// point plus the displacement *is* the plane point under the pixel.
-///
-/// **`was` is the frame as it stood before the move**, and it has to be: the
-/// offsets being preserved are the ones read on the plane the sightings were
-/// measured against. For a slide and a resize the plane does not move and
-/// either frame would answer the same; an offset along the normal takes the
-/// plane with it, and re-anchoring on the frame's new position would read each
-/// ray against the plane it has already reached and displace it a second time.
-///
-/// A sighting that has never been localized has no keypoint to carry, so it
-/// takes the projection of the centre plus the displacement, which is where the
-/// centre now is -- the only place the patch says it could be. (A **bearing**'s
-/// moved centre is renormalized by its step and this one is not, which is the
-/// same direction and so the same pixel.) One that no longer projects at all is
-/// left with no keypoint and the reason that says so, rather than with a stale
-/// one.
-///
-/// Returns how many keypoints were written, which is how many photographs still
-/// hold the patch.
+/// Every in-plane offset survives such a move exactly, and the sighting a drag
+/// came through lands under the pointer, because its plane point plus the
+/// displacement *is* the plane point under that pixel.
 fn carry_keypoints(
     track: &mut EditableTrack,
     edited: &EditedReconstruction,
     was: &OrientedPatch,
     displacement: Vector3<f64>,
+) -> usize {
+    place_keypoints(track, edited, was, |at| at + displacement)
+}
+
+/// Put every sighting where `place` takes its own plane point, and drop every
+/// measurement read before the patch moved.
+///
+/// The rule every step that moves the surfel shares, and **not** a reprojection
+/// of the centre: a keypoint is where that photograph sees the patch's
+/// *content*, and the gap between it and the centre's projection is that
+/// observation's own in-plane offset -- the thing the tile is cut on and the
+/// correlation is scored at. Resetting every keypoint to the centre's
+/// projection would throw all of those away and scramble the correlation, so
+/// what moves is the **place**: each sighting's own plane point is found by
+/// re-anchoring the patch on it (`OrientedPatch::anchored_at_keypoint`, its own
+/// camera and pose), `place` says where that piece of the patch's content has
+/// gone, and the result is projected back.
+///
+/// **`was` is the frame as it stood before the move**, and it has to be: the
+/// offsets being preserved are the ones read on the plane the sightings were
+/// measured against. For a slide and a resize the plane does not move and
+/// either frame would answer the same; an offset along the normal and a tilt
+/// take the plane with them, and re-anchoring on the frame's new position would
+/// read each ray against the plane it has already reached and displace it a
+/// second time.
+///
+/// A sighting that has never been localized has no offset to keep, so its plane
+/// point is the centre itself and it takes `place`'s answer for that -- the only
+/// place the patch says it could be. (A **bearing**'s moved centre is
+/// renormalized by its step and this one is not, which is the same direction and
+/// so the same pixel.) One that no longer projects at all is left with no
+/// keypoint and the reason that says so, rather than with a stale one.
+///
+/// Returns how many keypoints were written, which is how many photographs still
+/// hold the patch.
+fn place_keypoints(
+    track: &mut EditableTrack,
+    edited: &EditedReconstruction,
+    was: &OrientedPatch,
+    place: impl Fn(Point3<f64>) -> Point3<f64>,
 ) -> usize {
     let mut placed = 0;
     for observation in &mut track.observations {
@@ -1873,7 +2142,7 @@ fn carry_keypoints(
                         // Never localized, so there is no offset to keep.
                         None => was.center,
                     };
-                    project_center(&camera, &cam_from_world, from + displacement, was.w)
+                    project_center(&camera, &cam_from_world, place(from), was.w)
                 });
         observation.track = Some(match landed {
             Some(pixel) => {

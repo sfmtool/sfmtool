@@ -343,6 +343,14 @@ pub(crate) enum Command {
         /// How far, in world units, positive toward the face the patch shows.
         distance: f64,
     },
+    /// Turn the track-stage surfel to face a new outward normal. Every
+    /// sighting is rebuilt on the turned axes.
+    TiltBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The outward normal wanted, in the reconstruction's own coordinates.
+        normal: [f64; 3],
+    },
     /// Turn the patch in its own plane.
     RotateBenchTrack {
         reconstruction_label: String,
@@ -1155,6 +1163,16 @@ pub(crate) fn apply_with_window(
             track.as_deref(),
             distance,
         )),
+        Command::TiltBenchTrack {
+            reconstruction_label,
+            track,
+            normal,
+        } => done(bench::tilt_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            normal,
+        )),
         Command::RotateBenchTrack {
             reconstruction_label,
             track,
@@ -1763,6 +1781,7 @@ impl Command {
             Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
             Command::ResizeBenchTrack { .. } => "resize_bench_track",
             Command::OffsetBenchTrack { .. } => "offset_bench_track",
+            Command::TiltBenchTrack { .. } => "tilt_bench_track",
             Command::RotateBenchTrack { .. } => "rotate_bench_track",
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
@@ -1966,6 +1985,7 @@ impl Command {
             | Command::MoveBenchTrackObservation { .. }
             | Command::ResizeBenchTrack { .. }
             | Command::OffsetBenchTrack { .. }
+            | Command::TiltBenchTrack { .. }
             | Command::RotateBenchTrack { .. }
             | Command::SetBenchTrackVerdict { .. }
             | Command::ApplyBenchTrackThresholds { .. }

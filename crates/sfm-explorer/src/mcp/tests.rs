@@ -3659,6 +3659,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "distance": 0.042 }),
         ),
         (
+            "tilt_bench_track",
+            json!({ "reconstruction_label": "alpha", "normal": [0.1, -0.2, 0.97] }),
+        ),
+        (
             "rotate_bench_track",
             json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
         ),
@@ -3973,15 +3977,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-two writes, the one that writes a file, and the one
-    // that hands back a picture.
-    assert_eq!(catalog.len(), 68, "the catalog has grown or shrunk");
+    // Fifteen reads, fifty-three writes, the one that writes a file, and the
+    // one that hands back a picture.
+    assert_eq!(catalog.len(), 69, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        52
+        53
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -6698,6 +6702,166 @@ fn offsetting_refuses_a_track_at_infinity_and_a_distance_that_is_not_one() {
     )
     .to_string();
     assert!(refused.contains("distance"), "{refused}");
+    assert_eq!(version_count(&state), before, "a refusal pushes nothing");
+}
+
+/// The other patch tool that names no pixel: which way the patch faces, which
+/// no photograph can say. The version's sentence carries the turn actually
+/// made.
+#[test]
+fn tilting_a_bench_track_turns_its_normal_and_says_how_far() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+    let frame = |state: &AppState| {
+        state
+            .bench_track(state.scene[0].id, &item)
+            .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+            .expect("a track from a point carries the stored patch")
+    };
+    let was = frame(&state);
+
+    // Ten degrees over toward the patch's own `+u`, which every observation can
+    // still see it at, so the turn is made whole. Named at three times unit
+    // length, because only the direction is read.
+    let (sin, cos) = 10.0_f64.to_radians().sin_cos();
+    let asked = (was.normal() * cos + was.u_axis * sin) * 3.0;
+    let tilted = call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_track",
+        json!({ "reconstruction_label": "run_a", "normal": [asked.x, asked.y, asked.z] }),
+    );
+    assert_eq!(tilted["item"], json!(item), "{tilted}");
+    assert_eq!(
+        tilted["normal"],
+        json!([asked.x, asked.y, asked.z]),
+        "{tilted}"
+    );
+    assert_eq!(tilted["changed"], json!(true), "{tilted}");
+    assert_eq!(version_count(&state), before + 1);
+    assert_eq!(
+        tilted["label"].as_str().expect("a version label"),
+        format!("Tilted {item} by 10.0 degrees"),
+        "{tilted}"
+    );
+
+    // The patch really faces there now, and its centre and size did not move:
+    // a tilt is a turn about the centre and nothing else.
+    let now = frame(&state);
+    assert_eq!(now.center, was.center);
+    assert_eq!(now.half_extent, was.half_extent);
+    assert!(
+        (now.normal() - asked.normalize()).norm() < 1e-9,
+        "the patch faces {:?}, not {:?}",
+        now.normal(),
+        asked.normalize(),
+    );
+
+    // A normal is absolute where a distance is relative, so naming the one it
+    // already faces is no turn, and it says so in its own words.
+    let still = call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_track",
+        json!({
+            "reconstruction_label": "run_a",
+            "normal": [now.normal().x, now.normal().y, now.normal().z],
+        }),
+    );
+    assert_eq!(still["changed"], json!(false), "{still}");
+    let report = still["report"].as_str().expect("a sentence");
+    assert!(report.starts_with(&format!("Tilted {item}:")), "{report}");
+    assert!(report.contains("no effect"), "{report}");
+    assert_eq!(version_count(&state), before + 1, "{still}");
+}
+
+/// The cap is the whole point of the handle: the normal turns until a
+/// photograph would be looking along the surface and no further, and the
+/// sentence names the observation's image that stopped it.
+#[test]
+fn a_tilt_past_what_the_observations_can_see_stops_and_names_the_image() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let id = state.scene[0].id;
+    let was = state
+        .bench_track(id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .expect("a track from a point carries the stored patch");
+
+    // Square to the normal the patch has, which is further over than any
+    // photograph of it can still see.
+    let across = was.u_axis;
+    let tilted = call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_track",
+        json!({
+            "reconstruction_label": "run_a",
+            "normal": [across.x, across.y, across.z],
+        }),
+    );
+    assert_eq!(tilted["changed"], json!(true), "{tilted}");
+    let label = tilted["label"].as_str().expect("a version label");
+    assert!(
+        label.contains("stopped 80.0 degrees from "),
+        "a capped tilt should say so: {label}",
+    );
+    // The image it names is one of the track's own, read back off the state
+    // rather than written into the test.
+    let names: Vec<String> = state
+        .bench_track(id, &item)
+        .expect("the track")
+        .observations
+        .iter()
+        .map(|observation| {
+            state.image_name(crate::scene::ImageRef::new(id, observation.image as usize))
+        })
+        .collect();
+    assert!(
+        names.iter().any(|name| label.ends_with(name.as_str())),
+        "{label} names no image of {names:?}",
+    );
+    // And it stopped short of what was asked: the normal is still well clear of
+    // the direction named.
+    let now = state
+        .bench_track(id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .expect("a patch");
+    assert!(
+        now.normal().dot(&across) < 0.9,
+        "the turn was not capped at all",
+    );
+}
+
+/// A track at infinity has no normal standing off it to turn -- a direction
+/// patch's normal is its own bearing -- and a direction that is not one is
+/// turned away at the parse. Neither pushes a version.
+#[test]
+fn tilting_refuses_a_track_at_infinity_and_a_normal_that_is_not_one() {
+    let (mut state, mut viewer) = benchable_with(bearing_demo());
+    on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_track",
+        json!({ "reconstruction_label": "run_a", "normal": [0.0, 0.0, 1.0] }),
+    )
+    .to_string();
+    assert!(refused.contains("infinity"), "{refused}");
+
+    for normal in [json!([0.0, 0.0]), json!("up"), json!([0.0, "up", 1.0])] {
+        let refused = refused_call(
+            &mut state,
+            &mut viewer,
+            "tilt_bench_track",
+            json!({ "reconstruction_label": "run_a", "normal": normal }),
+        )
+        .to_string();
+        assert!(refused.contains("normal"), "{normal} gave {refused}");
+    }
     assert_eq!(version_count(&state), before, "a refusal pushes nothing");
 }
 

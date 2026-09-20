@@ -226,14 +226,26 @@ pub fn resize_from_edge_to(
     point: Point3<f64>,                  // where that edge should lie
 ) -> Result<(EditableTrack, ResizeReport), TrackEditError>;
 
-/// Move the surfel along its own outward normal, which is the one place a
-/// pixel cannot name: a sighting says which ray the patch lies along and not
-/// how far down it the surface is.
+/// Move the surfel along its own outward normal, which is one of the two
+/// places a pixel cannot name: a sighting says which ray the patch lies along
+/// and not how far down it the surface is.
 pub fn offset_frame(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     distance: f64,                       // world units, signed, along `n`
 ) -> Result<(EditableTrack, OffsetFrameReport), TrackEditError>;
+
+/// Turn the surfel about its centre, by the least rotation, toward the outward
+/// normal named -- the other place a pixel cannot name -- stopping
+/// `MAX_TILT_DEG` from any observation's camera.
+pub fn tilt_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    normal: Vector3<f64>,                // any non-zero length; the direction is read
+) -> Result<(EditableTrack, TiltFrameReport), TrackEditError>;
+
+/// How far from an observation's line of sight a tilt may carry the normal.
+pub const MAX_TILT_DEG: f64 = 80.0;
 
 pub fn rotate_frame(
     track: &EditableTrack,
@@ -307,6 +319,21 @@ pub struct OffsetFrameReport {
     pub placed: usize,                   // keypoints written
     pub changed: bool,
 }
+
+/// What was asked for and what happened are separate fields, the two parting
+/// company whenever an observation's own view of the patch caps the turn.
+pub struct TiltFrameReport {
+    pub degrees: f64,                    // how far it turned, never negative
+    pub asked: Vector3<f64>,             // the unit normal named
+    pub normal: Vector3<f64>,            // the one the patch now shows
+    pub stopped: Option<TiltStop>,       // the observation whose cap ended it
+    pub placed: usize,                   // keypoints written
+    pub changed: bool,
+}
+
+/// One `Option` over the pair, "it was stopped" and "by this observation"
+/// being the same fact.
+pub struct TiltStop { pub observation: usize, pub image: u32 }
 
 pub struct RotateFrameReport { pub degrees: f64, pub changed: bool }
 
@@ -982,10 +1009,10 @@ what the first wrote.
 
 ### Placing, sizing and turning by hand
 
-Nine steps put a person's own hand on the track's geometry, and they are the
+Ten steps put a person's own hand on the track's geometry, and they are the
 steps behind the Image Detail panel's bench handles
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
-§ "The bench layer") and the wire's five patch tools.
+§ "The bench layer") and the wire's six patch tools.
 
 **At the track stage a track has one surfel and every observation is a view of
 it**, so the three gestures over the outline are gestures over *the patch*: it
@@ -1070,12 +1097,13 @@ of the resize, so a tool call, a drag in a photograph and a drag in the 3D
 viewer cannot resize differently.
 
 **`offset_frame` moves the surfel along its own outward normal**, `distance`
-world units, positive toward the face the patch shows. It is the one hand step
-no pixel can name, and that is what it is for: a sighting says which ray the
-patch lies along and says nothing about how far down it the surface is, so a
-patch's depth is settled where the frame can be seen against the geometry
-around it rather than in any one photograph. The axes, the half-length and the
-plane's orientation are untouched; the plane itself travels with the centre.
+world units, positive toward the face the patch shows. It is one of the two
+hand steps no pixel can name, and that is what it is for: a sighting says
+which ray the patch lies along and says nothing about how far down it the
+surface is, so a patch's depth is settled where the frame can be seen against
+the geometry around it rather than in any one photograph. The axes, the
+half-length and the plane's orientation are untouched; the plane itself
+travels with the centre.
 **Every** observation's keypoint is carried by that same displacement and keeps
 its own in-plane offset `(a_i, b_i)`, so each becomes the projection of
 `c' + a_i u + b_i v` -- the same rule a slide follows, with the one visible
@@ -1088,6 +1116,57 @@ refused as `TrackEditError::AtInfinity`, a direction patch's normal being its
 own bearing, so there is no line standing off the frame to move along; a
 distance that is not finite is refused as `BadDistance`, the way an angle that
 is not one is refused as `BadAngle`.
+
+**`tilt_frame` turns the surfel to face a new outward normal**, and is the
+other hand step no pixel can name: a sighting says which ray the patch lies
+along and nothing about which way the surface under it faces, so the patch's
+orientation is settled out in the world too. The turn is the **least rotation**
+taking the normal the patch shows onto the one named -- the rotation about
+`n_old x n_new` -- and `u` and `v` are both carried by it, so a tilt adds no
+spin about the normal; spin is `rotate_frame`'s. Where the two normals are
+collinear there is no such rotation to speak of: at zero none is needed, and at
+a half turn every rotation about an axis in the frame's plane is equally least,
+so the frame's own `u` is taken as the direction the arc leaves in, which holds
+`v` and reverses `u` and `n`.
+
+The centre and the half-lengths do not move, and each keypoint becomes the
+projection of `c + a_i u' + b_i v'`: every observation keeps the in-plane offset
+`(a_i, b_i)` it was measured at, read on the frame as it stood **before** the
+turn and rebuilt on the turned axes. That is not the rigid carry a slide makes
+-- the pair is kept and the point is built again -- but it preserves the same
+thing, which is where each photograph sees the patch's content against where
+the geometry puts its middle. A sighting the turned patch no longer projects
+into is left with no keypoint and `Unmeasured::NoProjection`. Nothing is
+pinned: which way the patch faces says nothing about whether a sighting belongs
+to it.
+
+**A tilt stops `MAX_TILT_DEG` from any observation.** With `e_i` the unit
+vector from the centre to observation `i`'s camera centre, a normal is *allowed*
+when the angle between it and `e_i` is at most that, for every observation,
+whatever its verdict. Past it a photograph sees the patch so obliquely that its
+tile is a smear of a few pixels stretched over the square, and the correlation
+that tile is scored by says nothing. The allowed normals are the intersection of
+one spherical cap per observation, so the step walks the great arc from the
+current normal toward the one named and stops at the last allowed normal on it,
+and a caller held against the limit traces the edge of what the existing
+sightings can see. An observation **already** past the cap before the turn
+constrains nothing, since otherwise a track that starts outside the region could
+not be turned back into it. The report carries the normal asked for beside the
+one reached, and names the observation that stopped the turn, so a caller can
+say so in its own sentence.
+
+The angle the report states is the arc's own, taken as `atan2` of the sine
+against the cosine rather than from the rotation's reading of itself: a turn is
+judged no turn below a nanoradian, and an `acos` of a cosine alone cannot
+resolve that -- a turn of a nanoradian leaves the cosine `1.0` to the last bit,
+and near the half turn the error in a cosine that *is* resolved lands on the
+answer divided by its sine.
+
+A **bearing** (`w == 0`) is refused as `TrackEditError::AtInfinity`, a direction
+patch's normal being its own bearing, so there is no normal standing off the
+frame to turn; a `normal` that is not a finite direction, or is too short to
+name one, is refused as `BadNormal`, the way a distance that is not one is
+refused as `BadDistance`.
 
 **`rotate_frame` turns the surfel about its own outward normal.** The axes are
 rotated as a pair by a rotation whose axis *is* the normal, so both keep their
@@ -1112,8 +1191,8 @@ restores the rest, and the next fit fuses a new bitmap at the size and turn the
 frame now has.
 
 **The stage decides which step applies.** `translate_frame`,
-`translate_frame_to`, `resize_frame`, `resize_from_edge_to`, `offset_frame` and
-`rotate_frame` are the track stage's and refuse a cluster;
+`translate_frame_to`, `resize_frame`, `resize_from_edge_to`, `offset_frame`,
+`tilt_frame` and `rotate_frame` are the track stage's and refuse a cluster;
 `set_observation_shape` is the
 cluster stage's and refuses a track. `set_observation_keypoint` and
 `resize_from_edge` work at either and do the stage's own arithmetic.
@@ -1135,7 +1214,8 @@ So each step judges in the units of the value it moves -- a centre within `1e-6`
 of the patch's own half-length, an offset within `1e-6` of that half-length too,
 a half-length within `1e-6` of itself, an affine
 coefficient within `1e-6` of the shape's largest, a sighting within `1e-3` px, a
-turn within `1e-9` rad -- while the steps that compare a verdict, a stage or a
+turn within `1e-9` rad, a tilt within that same `1e-9` rad of the normal it
+already shows -- while the steps that compare a verdict, a stage or a
 label compare those exactly, there being nothing to round. What the caller does
 with the flag is the caller's: the viewer pushes no version and records the row
 that says so ([`../../gui/bench.md`](../../gui/bench.md) § "The wire").
@@ -1801,6 +1881,28 @@ neither. Beside them: a patch pushed out past the cameras leaves every sighting
 with no keypoint and `NoProjection`; the bitmap and the measurements go and
 nothing is pinned; an offset inside the patch's own tolerance reports
 `changed: false` and hands the track back; and a distance that is not one, a
+track at infinity and a cluster are each refused in their own words.
+
+The **tilt** is tested for the three claims that make it a tilt rather than
+some other turn. It is the **least** rotation: the axis is perpendicular to
+both normals, so `u` and `v` keep their own components along it and no spin
+comes with the turn. The centre and both half-lengths are untouched. And, with
+every sighting first put somewhere of its own on the plane so the claim is not
+vacuous, each keeps its `(a_i, b_i)` and each keypoint comes back as the
+projection of `c + a_i u' + b_i v'` -- computed in the test from the pair read
+*before* the turn and the axes read after it, so the step is held to the
+arithmetic rather than to its own.
+
+The cap is tested from both sides. A turn asked 89 degrees over stops with its
+normal exactly `MAX_TILT_DEG` from the observation the report names, with no
+observation past the cap and the normal asked for still in the report; and a
+track built facing 85 degrees off one camera and 69 off the other -- so it
+starts outside one cap -- is turned back inside without being stopped at all,
+which is the rule that keeps the region reachable from outside it. Beside them:
+a sighting whose own piece of the patch swings out behind its camera is left
+with no keypoint and `NoProjection` while the centred one survives; the bitmap
+and the measurements go and nothing is pinned; a turn onto the normal the patch
+already shows reports `changed: false`; and a direction that is not one, a
 track at infinity and a cluster are each refused in their own words.
 
 The fit is tested against the kernels themselves: a track put on the bench from

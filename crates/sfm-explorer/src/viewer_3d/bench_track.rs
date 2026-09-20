@@ -26,14 +26,16 @@
 //! the pass drew back through the viewport's camera, so the square a person
 //! takes hold of is the square they can see: the dot slides it across its plane,
 //! an edge resizes it with the far edge held, a corner turns it about its
-//! normal, the normal's own segment moves it along that normal, and an
+//! normal, the normal's own segment moves it along that normal, the arrowhead
+//! at the far end of that segment turns the normal itself, and an
 //! observation's circle selects that row in Track Edit. The
 //! pointer is read as a **ray of the viewport's camera** met with the patch's
 //! own geometry ([`crate::bench::geometry`]), which is the same idea the Image
 //! Detail panel reads a pixel by, and the edit it names is handed to the same
-//! core step. The segment is the one handle with no counterpart in a
-//! photograph, which is why it is here: a sighting names the ray the patch lies
-//! along and says nothing about how far down it the surface is.
+//! core step. The segment and the arrowhead are the two handles with no
+//! counterpart in a photograph, which is why they are here: a sighting names
+//! the ray the patch lies along, and says nothing about how far down it the
+//! surface is or which way it faces.
 
 use egui::{Color32, CursorIcon, Pos2, Rect};
 use nalgebra::{Point3, Vector3};
@@ -41,7 +43,7 @@ use sfmtool_core::bench::{Edge, EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{EditedReconstruction, Se3Transform};
 
-use crate::bench::geometry::{self, PatchEdit};
+use crate::bench::geometry::{self, PatchEdit, Tilt};
 use crate::bench::{distance_to_segment, resize_cursor, verdict_color};
 use crate::scene::ReconId;
 
@@ -63,7 +65,12 @@ const PLANE_LIFT: f64 = 1e-3;
 
 /// How far the normal stands off the frame, in half-lengths -- one side length,
 /// which is long enough to be grabbed and short enough not to cross the scene.
-const NORMAL_LENGTH: f64 = 2.0;
+///
+/// Visible to [`crate::bench::geometry`], which states the arrowhead's aiming
+/// plane in terms of it: the arrow a person sees and the distance their pointer
+/// is read at are two facts about one handle, and a second literal could drift
+/// from this one silently.
+pub(crate) const NORMAL_LENGTH: f64 = 2.0;
 
 /// How far back along the normal the arrowhead's barbs reach, as a fraction of
 /// the normal's own length.
@@ -438,7 +445,12 @@ fn arrow(
 // ---- The handles -----------------------------------------------------------
 
 /// What the pointer has hold of in the viewport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Eq`, the arrowhead's swing carrying the axis it turns about: the gesture
+/// is decided at the press and the handle is what a drag holds on to, so the
+/// axis travels with it rather than being read again each frame off an eye that
+/// has since moved.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Handle {
     /// The centre dot: dragging it slides the surfel across its own plane.
     Dot,
@@ -448,10 +460,14 @@ pub(crate) enum Handle {
     /// One corner: dragging it turns the patch about its outward normal.
     Corner(usize),
     /// The normal's segment: dragging it moves the patch along its own normal,
-    /// which is the one thing no photograph can say -- a sighting names the ray
-    /// the patch lies along and not how far down it the surface is. The
-    /// arrowhead at the far end of the same normal is drawing and not a handle.
+    /// which is one of the two things no photograph can say -- a sighting names
+    /// the ray the patch lies along and not how far down it the surface is.
     Normal,
+    /// The arrowhead at the far end of that segment: dragging it turns the
+    /// normal, which is the other. Which of its two gestures the drag makes was
+    /// decided at the press ([`geometry::tilt_gesture`]) and is carried here,
+    /// so it does not change character halfway through.
+    Arrowhead(Tilt),
     /// One observation's circle. It edits nothing -- where a photograph sees the
     /// patch's content is that photograph's answer and not a thing to drag --
     /// but a click on it selects that row in Track Edit, as clicking a mark in
@@ -561,6 +577,15 @@ impl Drag {
             Handle::Normal => Some(PatchEdit::Offset {
                 distance: (self.to - self.from).dot(&frame.normal()),
             }),
+            // Both gestures state their answer as a normal, so the core step
+            // knows nothing of which one named it.
+            Handle::Arrowhead(tilt) => {
+                geometry::tilt_normal(frame, tilt, self.from, self.to).map(|normal| {
+                    PatchEdit::Tilt {
+                        normal: [normal.x, normal.y, normal.z],
+                    }
+                })
+            }
             Handle::Circle { .. } => None,
         }
     }
@@ -584,12 +609,30 @@ pub(crate) struct Handles {
     circles: Vec<(usize, Pos2)>,
     /// The normal's segment, centre first and the arrow's tip second, when both
     /// ends projected. `None` for a track at infinity, which draws no normal.
+    ///
+    /// The tip is the **arrowhead's** own place as well: the head is drawn at
+    /// the far end of this very segment, so there is one projection rather than
+    /// two that could disagree.
     normal: Option<(Pos2, Pos2)>,
+    /// Which gesture a press on the arrowhead would make, or `None` when there
+    /// is no arrowhead to press.
+    ///
+    /// Carried here rather than worked out in [`Handles::hit`] because it is a
+    /// reading of the **eye** against the frame, in the reconstruction's own
+    /// coordinates, and neither of those is in the picture this projection is
+    /// of.
+    tilt: Option<Tilt>,
 }
 
 impl Handles {
-    /// The figure as `camera` drew it in `rect`.
-    pub(crate) fn project(figure: &Figure, camera: &ViewportCamera, rect: Rect) -> Self {
+    /// The figure as `camera` drew it in `rect`, with `tilt` the gesture its
+    /// arrowhead would make.
+    pub(crate) fn project(
+        figure: &Figure,
+        camera: &ViewportCamera,
+        rect: Rect,
+        tilt: Option<Tilt>,
+    ) -> Self {
         let at = |p: [f32; 4]| {
             camera.project_homogeneous(
                 Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])),
@@ -611,23 +654,32 @@ impl Handles {
                 .normal
                 .as_ref()
                 .and_then(|arrow| Some((at(arrow[0].a)?, at(arrow[0].b)?))),
+            tilt,
         }
     }
 
     /// The handle under `pos`, or `None` when the pointer is on none of them.
     ///
-    /// Corners, then the dot, then the circles, then the edges, then the
-    /// normal's segment. The dot and the circles sit inside the square they
-    /// mark and a corner is where two edges meet, so a nearest-thing search
-    /// over all of them at once would make the smaller handles unreachable; the
-    /// normal is last because it leaves the centre, where every other handle
-    /// already is, and a person reaching for it has the whole of its length to
-    /// reach for.
+    /// The arrowhead, then the corners, then the dot, then the circles, then
+    /// the edges, then the normal's segment. The dot and the circles sit inside
+    /// the square they mark and a corner is where two edges meet, so a
+    /// nearest-thing search over all of them at once would make the smaller
+    /// handles unreachable; the normal's segment is last because it leaves the
+    /// centre, where every other handle already is, and a person reaching for
+    /// it has the whole of its length to reach for. The arrowhead is **first**
+    /// for the other half of that reason: it is a point at the far end of that
+    /// same segment, so anything tested before it would take every press meant
+    /// for it.
     pub(crate) fn hit(&self, pos: Pos2) -> Option<Handle> {
         let nearest = |best: Option<(f32, Handle)>, distance: f32, handle: Handle| match best {
             Some((d, _)) if d <= distance => best,
             _ => Some((distance, handle)),
         };
+        if let Some((tilt, (_, tip))) = self.tilt.zip(self.normal) {
+            if (tip - pos).length() <= HANDLE_HIT_RADIUS {
+                return Some(Handle::Arrowhead(tilt));
+            }
+        }
         let mut found = None;
         for (k, corner) in self.corners.iter().enumerate() {
             let Some(at) = corner else { continue };
@@ -695,10 +747,27 @@ impl Handles {
     /// case turned around, so what it hands [`resize_cursor`] is the segment's
     /// perpendicular: the cursor wanted lies on the line, and that function
     /// answers with the perpendicular of what it is given.
+    ///
+    /// The arrowhead takes the cursor of the gesture it is about to make. An
+    /// **aim** is free in two directions at once, which is `AllScroll`; winit
+    /// draws that with the same glyph as the dot's `Move` on Windows, both
+    /// landing on `IDC_SIZEALL`, and that is expected rather than a mistake --
+    /// the distinction is for this code's own clarity and for the platforms
+    /// that render the two apart. A **swing** travels along the arc the
+    /// arrowhead turns on, which is the corner's own case: its cursor is the
+    /// perpendicular of its radius from the centre, so what [`resize_cursor`]
+    /// is handed is that radius.
     pub(crate) fn cursor(&self, handle: Handle) -> CursorIcon {
         match handle {
             Handle::Dot => CursorIcon::Move,
             Handle::Circle { .. } => CursorIcon::PointingHand,
+            Handle::Arrowhead(Tilt::Aim) => CursorIcon::AllScroll,
+            Handle::Arrowhead(Tilt::Swing(_)) => self
+                .normal
+                .map(|(_, tip)| tip)
+                .zip(self.centre())
+                .map(|(tip, centre)| resize_cursor(tip - centre))
+                .unwrap_or(CursorIcon::Move),
             Handle::Normal => self
                 .normal
                 .map(|(centre, tip)| {

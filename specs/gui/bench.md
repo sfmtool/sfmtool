@@ -471,7 +471,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-four MCP tools
+An agent gets the same bench a human does, through twenty-five MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -508,7 +508,7 @@ panel means when it names no item.
 //                                "verdict": "in" }
 //
 // The patch: the three handles the Image Detail panel's bench layer offers,
-// the one the 3D viewer adds, and the one that moves a single sighting rather
+// the two the 3D viewer adds, and the one that moves a single sighting rather
 // than the patch.
 // move_bench_track           { "reconstruction_label": "bull", "observation": 3,
 //                              "pixel": [1041.6, 1702.9] }
@@ -517,6 +517,8 @@ panel means when it names no item.
 // resize_bench_track           { "reconstruction_label": "bull", "observation": 3,
 //                                "edge": "+u", "pixel": [1049.0, 1702.9] }
 // offset_bench_track           { "reconstruction_label": "bull", "distance": 0.042 }
+// tilt_bench_track             { "reconstruction_label": "bull",
+//                                "normal": [0.1, -0.2, 0.97] }
 // rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3 }
 // rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3,
 //                                "observation": 3 }   // the cluster stage's
@@ -585,15 +587,21 @@ except a turn at the track stage, where there is one surfel and no sighting need
 be named; a turn at the **cluster** stage has no surfel to turn and is refused
 without one.
 
-`offset_bench_track` names no pixel and no observation, because no photograph
-can say what it says: it moves the patch `distance` world units along its own
-outward normal, positive toward the face the patch shows. A sighting names the
-ray the patch lies along and not how far down it the surface is, so this is
-where a patch's depth is settled -- by the tool, or by the normal-segment drag
-in the 3D viewer it shares a step with. A track at infinity is refused, a
-direction patch's normal being its own bearing. `move_bench_track_observation`
-is the last of them, and the only one that moves a single sighting: the cluster
-stage's dot, and a script that means one keypoint.
+`offset_bench_track` and `tilt_bench_track` name no pixel and no observation,
+because no photograph can say what they say. The first moves the patch
+`distance` world units along its own outward normal, positive toward the face
+the patch shows: a sighting names the ray the patch lies along and not how far
+down it the surface is, so this is where a patch's depth is settled. The second
+turns the patch to face the outward `normal` named, by the least rotation and so
+with no spin about the normal, and stops 80 degrees from any observation's
+camera -- where that photograph would be looking along the surface rather than
+at it -- the sentence naming the image that stopped it: a sighting says nothing
+about which way the surface under it faces either. Each is settled by the tool
+or by the 3D viewer drag it shares a step with, the normal's segment and the
+arrowhead at the end of it. Both refuse a track at infinity, a direction patch's
+normal being its own bearing. `move_bench_track_observation` is the last of
+them, and the only one that moves a single sighting: the cluster stage's dot,
+and a script that means one keypoint.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -814,5 +822,5 @@ still read.
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-four tools for the steps that exist
+  proposed in the same draft. The twenty-five tools for the steps that exist
   are § "The wire".

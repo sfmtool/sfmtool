@@ -8,8 +8,9 @@
 //! it, how far off is it -- and they have to agree to the pixel, because a panel
 //! draws the answer while the tool states it. So all of them build the same
 //! [`PatchEdit`] and hand it to the same [`apply`], which is one core step
-//! each. The last of the questions is the 3D viewport's alone: a photograph
-//! names the ray the patch lies along and not how far down it the surface is.
+//! each. The last two of the questions are the 3D viewport's alone: a
+//! photograph names the ray the patch lies along, and says nothing about how
+//! far down it the surface is or which way it faces.
 //!
 //! The arithmetic that turns a pointer into a patch is core's
 //! (`sfmtool_core::bench::resize_from_edge`,
@@ -21,10 +22,11 @@
 //! left for this module is the two readings the core steps do not take as
 //! inputs: the turn a corner drag swept, and the size a sentence reports.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Rotation3, Unit, Vector3};
 use sfmtool_core::bench::{
     self, Edge, EditableTrack, MoveObservationReport, Observation, OffsetFrameReport, ResizeReport,
-    RotateFrameReport, ShapeReport, TrackEditError, TranslateFrameReport, TranslateToReport,
+    RotateFrameReport, ShapeReport, TiltFrameReport, TrackEditError, TranslateFrameReport,
+    TranslateToReport,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -43,8 +45,9 @@ const MIN_OFFSET: f64 = 1e-12;
 /// What a drag of a bench handle in either panel produces and what each of the
 /// wire's patch tools names, in the form the core steps take: a pixel of one
 /// image or a place in the world for the gestures that name one, an angle for
-/// the two that turn something, and a signed length for the one that settles a
-/// depth.
+/// the two that turn something in a plane, a signed length for the one that
+/// settles a depth, and a direction for the one that settles which way the
+/// surface faces.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PatchEdit {
     /// Slide the track-stage surfel across its own plane until its centre sits
@@ -94,12 +97,24 @@ pub(crate) enum PatchEdit {
     /// Move the track-stage surfel this many world units along its outward
     /// normal, positive toward the face it shows.
     ///
-    /// The 3D viewport's normal-segment drag, and the one edit no photograph
-    /// can name: a sighting says which ray the patch lies along and nothing
-    /// about how far down it the surface is.
+    /// The 3D viewport's normal-segment drag, and one of the two edits no
+    /// photograph can name: a sighting says which ray the patch lies along and
+    /// nothing about how far down it the surface is.
     Offset {
         /// How far, in the reconstruction's own units.
         distance: f64,
+    },
+    /// Turn the track-stage surfel about its centre until it faces this
+    /// outward normal, by the least rotation and no further than the
+    /// observations can still see it.
+    ///
+    /// The 3D viewport's arrowhead drag, and the other edit no photograph can
+    /// name: a sighting says which ray the patch lies along and nothing about
+    /// which way the surface under it faces.
+    Tilt {
+        /// The outward normal wanted, in the reconstruction's own coordinates.
+        /// Any non-zero length: the step reads the direction.
+        normal: [f64; 3],
     },
     /// Turn the track-stage surfel by this many radians about its normal.
     Rotate {
@@ -127,6 +142,9 @@ pub(crate) enum EditReport {
     Moved(MoveObservationReport),
     /// The surfel moved along its own normal, every sighting following.
     Offset(OffsetFrameReport),
+    /// The surfel turned to face a new normal, every sighting rebuilt on the
+    /// turned axes.
+    Tilted(TiltFrameReport),
     /// The patch resized by one of its edges.
     Resized(ResizeReport),
     /// The surfel turned.
@@ -159,6 +177,7 @@ impl EditReport {
             EditReport::Translated(report) => report.changed,
             EditReport::SlidTo(report) => report.changed,
             EditReport::Offset(report) => report.changed,
+            EditReport::Tilted(report) => report.changed,
             EditReport::Moved(report) => report.changed,
             EditReport::Resized(report) => report.changed,
             EditReport::Rotated(report) => report.changed,
@@ -180,6 +199,7 @@ impl EditReport {
             EditReport::Resized(report) => report.pixel,
             EditReport::SlidTo(_)
             | EditReport::Offset(_)
+            | EditReport::Tilted(_)
             | EditReport::Rotated(_)
             | EditReport::Turned { .. } => None,
         }
@@ -194,6 +214,7 @@ impl EditReport {
             EditReport::Resized(report) => report.clamped_from,
             EditReport::SlidTo(_)
             | EditReport::Offset(_)
+            | EditReport::Tilted(_)
             | EditReport::Rotated(_)
             | EditReport::Turned { .. } => None,
         }
@@ -217,6 +238,17 @@ impl EditReport {
             EditReport::Offset(_) => {
                 format!("Moved {label} along its normal: no effect, the patch already stands there")
             }
+            // Two different nothings, and a reader should be able to tell them
+            // apart: a tilt held against the cap of an observation that is
+            // already looking along the surface turns by nothing, and that is a
+            // fact about the sightings rather than about what was asked for.
+            EditReport::Tilted(report) => match report.stopped {
+                Some(_) => format!(
+                    "Tilted {label}: no effect, the patch already faces as far over as its \
+                     observations allow"
+                ),
+                None => format!("Tilted {label}: no effect, no turn was asked for"),
+            },
             EditReport::Moved(report) => format!(
                 "Moved observation {} of {label}: no effect, the sighting already sits there",
                 report.observation
@@ -275,6 +307,10 @@ pub(crate) fn apply(
         PatchEdit::Offset { distance } => {
             let (next, report) = bench::offset_frame(track, edited, distance)?;
             Ok((next, EditReport::Offset(report)))
+        }
+        PatchEdit::Tilt { normal } => {
+            let (next, report) = bench::tilt_frame(track, edited, Vector3::from(normal))?;
+            Ok((next, EditReport::Tilted(report)))
         }
         PatchEdit::Rotate { angle_rad } => {
             let (next, report) = bench::rotate_frame(track, angle_rad)?;
@@ -477,6 +513,35 @@ pub(crate) const MAX_BEARING_ANGLE_DEG: f64 = 85.0;
 /// A ray direction this short names no direction.
 const MIN_DIRECTION: f64 = 1e-12;
 
+/// `direction` as a unit vector, or `None` when it names no direction.
+fn unit(direction: Vector3<f64>) -> Option<Vector3<f64>> {
+    let length = direction.norm();
+    (length.is_finite() && length >= MIN_DIRECTION).then(|| direction / length)
+}
+
+/// Where the ray from `origin` along the unit `ray` meets the plane through
+/// `at` square to `normal`, in front of the eye.
+///
+/// The one ray-plane meeting the viewport's readings are built out of. Which
+/// plane is the whole of what tells them apart: the frame's own for the three
+/// handles that name a place on it, the one standing off along the normal for
+/// the arrowhead's aim, and the one the arrowhead travels in for its swing.
+/// `None` when the ray runs along the plane or meets it behind the eye, which
+/// is not the place a pointer named.
+fn ray_plane(
+    origin: Point3<f64>,
+    ray: Vector3<f64>,
+    at: Point3<f64>,
+    normal: Vector3<f64>,
+) -> Option<Point3<f64>> {
+    let denominator = ray.dot(&normal);
+    if denominator.abs() < MIN_DIRECTION {
+        return None;
+    }
+    let distance = (at - origin).dot(&normal) / denominator;
+    (distance > 0.0 && distance.is_finite()).then(|| origin + ray * distance)
+}
+
 /// Where the ray from `origin` along `direction` meets the frame, in the
 /// frame's own coordinates.
 ///
@@ -496,11 +561,7 @@ pub(crate) fn plane_point(
     origin: Point3<f64>,
     direction: Vector3<f64>,
 ) -> Option<Point3<f64>> {
-    let length = direction.norm();
-    if !length.is_finite() || length < MIN_DIRECTION {
-        return None;
-    }
-    let ray = direction / length;
+    let ray = unit(direction)?;
     if frame.w == 0.0 {
         let bearing = frame.center.coords.normalize();
         let along = ray.dot(&bearing);
@@ -509,13 +570,7 @@ pub(crate) fn plane_point(
         }
         return Some(Point3::from(ray / ray.dot(&frame.center.coords)));
     }
-    let normal = frame.normal();
-    let denominator = ray.dot(&normal);
-    if denominator.abs() < MIN_DIRECTION {
-        return None;
-    }
-    let distance = (frame.center - origin).dot(&normal) / denominator;
-    (distance > 0.0 && distance.is_finite()).then(|| origin + ray * distance)
+    ray_plane(origin, ray, frame.center, frame.normal())
 }
 
 /// Whether the frame's plane is too near edge-on from `eye` for a pointer to be
@@ -568,8 +623,11 @@ pub(crate) fn normal_is_end_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool 
 /// The magnitude of the cosine between the frame's normal and the view ray
 /// through its centre, or `None` when `eye` names no view of it.
 ///
-/// The one number both degenerate-view tests are decided by, which is why they
-/// are complementary rather than merely similar.
+/// The one number all three of this module's view tests are decided by, which
+/// is why the two refusals are complementary rather than merely similar and why
+/// the arrowhead ([`tilt_gesture`]) needs no refusal of its own: it reads the
+/// same cosine at a third bar, and its two gestures fail where the two refusals
+/// do, one each.
 fn view_cosine(frame: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
     let view = frame.center - eye;
     let length = view.norm();
@@ -602,11 +660,7 @@ pub(crate) fn normal_line_point(
     if frame.w == 0.0 {
         return None;
     }
-    let length = direction.norm();
-    if !length.is_finite() || length < MIN_DIRECTION {
-        return None;
-    }
-    let ray = direction / length;
+    let ray = unit(direction)?;
     let normal = frame.normal();
     let along = ray.dot(&normal);
     let denominator = 1.0 - along * along;
@@ -630,17 +684,165 @@ pub(crate) fn turn_on_plane(
     from: Point3<f64>,
     to: Point3<f64>,
 ) -> Option<f64> {
-    let start = on_axes(frame, from)?;
-    let now = on_axes(frame, to)?;
-    Some(wrapped(now.1.atan2(now.0) - start.1.atan2(start.0)))
+    turn_about(frame.center, frame.normal(), from, to)
 }
 
-/// One place's offset from the frame's centre, on the frame's own axes, or
-/// `None` when it names no direction in the plane.
-fn on_axes(frame: &OrientedPatch, point: Point3<f64>) -> Option<(f64, f64)> {
-    let offset = point - frame.center;
-    let pair = (offset.dot(&frame.u_axis), offset.dot(&frame.v_axis));
-    (pair.0.hypot(pair.1) > MIN_OFFSET).then_some(pair)
+/// The turn, in radians about the unit `axis`, that carries the direction from
+/// `centre` to `from` onto the direction from `centre` to `to`, both read in
+/// the plane through `centre` square to `axis`.
+///
+/// One reading serving the corner and the arrowhead's swing, which are the same
+/// gesture about two different axes: the corner turns the square about its own
+/// normal, and the swing turns the normal about an axis lying in the square
+/// ([`tilt_gesture`]). Each place's component along `axis` is dropped first, so
+/// a meeting that sits a rounding off the plane names the direction directly
+/// under it. `None` when either place is `centre` itself, where no direction is
+/// named.
+pub(crate) fn turn_about(
+    centre: Point3<f64>,
+    axis: Vector3<f64>,
+    from: Point3<f64>,
+    to: Point3<f64>,
+) -> Option<f64> {
+    let flat = |point: Point3<f64>| {
+        let offset = point - centre;
+        let offset = offset - axis * offset.dot(&axis);
+        (offset.norm() > MIN_OFFSET).then_some(offset)
+    };
+    let start = flat(from)?;
+    let now = flat(to)?;
+    // The signed angle about `axis` straight from the pair, rather than from a
+    // difference of two `atan2`s that would then have to be brought back into
+    // range: `atan2` already answers in `(-pi, pi]`.
+    Some(start.cross(&now).dot(&axis).atan2(start.dot(&now)))
+}
+
+// ---- The arrowhead's two gestures ------------------------------------------
+
+/// How near the line of sight the frame's normal has to lie before the
+/// arrowhead **aims** rather than swings, in degrees.
+///
+/// The same cosine the two degenerate-view refusals are decided by
+/// ([`plane_is_edge_on`], [`normal_is_end_on`]), read at a third bar, and that
+/// is why the arrowhead needs no refusal of its own: the aim's plane is square
+/// to the view exactly where the swing's axis is ill determined, and the swing's
+/// axis is well determined exactly where the aim's plane is edge-on. The two
+/// gestures are each other's cure, so between them the handle is always live.
+pub(crate) const AIM_ANGLE_DEG: f64 = 45.0;
+
+/// How far from the centre the aim's plane stands, in the frame's own
+/// half-lengths.
+///
+/// Twice the arrow's own [`NORMAL_LENGTH`](crate::viewer_3d::bench_track::NORMAL_LENGTH),
+/// stated in terms of it rather than as a second literal, because the two are
+/// facts about one handle: the pointer crosses `4h` of that plane for the 45
+/// degrees of tilt the arrowhead is drawn `2h` out for, so the aim is **half as
+/// sensitive as the figure looks** and a small correction is a small motion --
+/// which is what the handle is for, a normal being read off a surface a few
+/// degrees at a time.
+pub(crate) const AIM_PLANE_LENGTH: f64 = 2.0 * crate::viewer_3d::bench_track::NORMAL_LENGTH;
+
+/// Which of the arrowhead's two gestures a press makes, and what it is fixed
+/// to.
+///
+/// Decided at the press and carried for the whole drag, as the handle itself
+/// is, so a gesture does not change character halfway through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Tilt {
+    /// The normal lies near the line of sight, so the pointer's ray is met with
+    /// the plane square to it at [`AIM_PLANE_LENGTH`] half-lengths out and the
+    /// direction from the centre to that meeting is the new normal outright.
+    Aim,
+    /// The normal lies across the line of sight, so the pointer turns it about
+    /// this one axis: the unit vector of the frame's **own plane** nearest the
+    /// eye. The normal therefore keeps to the one plane through it square to
+    /// this axis and never rolls toward or away from the viewer, which is the
+    /// motion that is hardest to aim when the arrowhead is nearly side-on.
+    Swing(Vector3<f64>),
+}
+
+/// Which gesture the arrowhead makes from `eye`, or `None` when there is no
+/// arrowhead to press: a **direction patch**, whose normal is fixed by its
+/// bearing, or an eye that names no view of the frame.
+pub(crate) fn tilt_gesture(frame: &OrientedPatch, eye: Point3<f64>) -> Option<Tilt> {
+    if frame.w == 0.0 {
+        return None;
+    }
+    let cosine = view_cosine(frame, eye)?;
+    if cosine > AIM_ANGLE_DEG.to_radians().cos() {
+        return Some(Tilt::Aim);
+    }
+    // The part of the view direction square to the normal, which is the unit
+    // vector of the frame's plane nearest the eye. It is well determined
+    // exactly where the aim is not, `view_cosine` being its own complement.
+    let to_eye = unit(eye - frame.center)?;
+    let normal = frame.normal();
+    unit(to_eye - normal * to_eye.dot(&normal)).map(Tilt::Swing)
+}
+
+/// Where the pointer's ray meets the geometry `tilt` reads it against.
+///
+/// The counterpart of [`plane_point`] and [`normal_line_point`] for the
+/// arrowhead: the plane square to the normal at [`AIM_PLANE_LENGTH`]
+/// half-lengths for an aim, and the plane through the centre square to the
+/// swing's axis -- the plane the arrowhead travels in, and, the axis pointing at
+/// the eye as nearly as the frame allows, the plane most nearly facing the
+/// window -- for a swing.
+///
+/// The frame is the one the press was taken against, so the aim's plane is
+/// fixed for the whole drag and the gesture is a single map from the window
+/// onto the sphere of normals rather than a thing that moves as it is used.
+pub(crate) fn tilt_point(
+    frame: &OrientedPatch,
+    tilt: Tilt,
+    origin: Point3<f64>,
+    direction: Vector3<f64>,
+) -> Option<Point3<f64>> {
+    let ray = unit(direction)?;
+    match tilt {
+        Tilt::Aim => {
+            let normal = frame.normal();
+            let at = frame.center + normal * (AIM_PLANE_LENGTH * frame.half_extent[0]);
+            ray_plane(origin, ray, at, normal)
+        }
+        Tilt::Swing(axis) => ray_plane(origin, ray, frame.center, axis),
+    }
+}
+
+/// The outward normal a drag of the arrowhead names, from the two places
+/// [`tilt_point`] read for it.
+///
+/// **Aiming** answers with the direction from the centre to the plane's own
+/// middle carried by however far the pointer has travelled across the plane
+/// since the press. The press's own offset is kept for the reason the centre
+/// dot's is: the arrowhead is drawn at the arrow's length and read at twice it,
+/// so a press that took the head is not standing on the place the plane's middle
+/// projects to, and reading the meeting outright would jump the normal over
+/// before the pointer had moved at all. The travel is in-plane and the middle is
+/// [`AIM_PLANE_LENGTH`] half-lengths out along the normal, so the answer keeps
+/// that whole component along the normal: the direction from a point to a point
+/// of a plane can never reach the plane's own direction, and one gesture
+/// therefore turns the normal by less than 90 degrees and cannot push it through
+/// the frame at all.
+///
+/// **Swinging** answers with the normal turned about the axis by the angle the
+/// pointer swept about the centre, which is the corner's reading with the swing
+/// axis in place of the normal -- and is why the two take the same cursor.
+///
+/// `None` when the places name no answer: a swing read about the centre itself.
+pub(crate) fn tilt_normal(
+    frame: &OrientedPatch,
+    tilt: Tilt,
+    from: Point3<f64>,
+    to: Point3<f64>,
+) -> Option<Vector3<f64>> {
+    match tilt {
+        Tilt::Aim => unit(frame.normal() * (AIM_PLANE_LENGTH * frame.half_extent[0]) + (to - from)),
+        Tilt::Swing(axis) => {
+            let angle = turn_about(frame.center, axis, from, to)?;
+            Some(Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle) * frame.normal())
+        }
+    }
 }
 
 /// How wide the patch is in this image's own pixels: how far the projection of

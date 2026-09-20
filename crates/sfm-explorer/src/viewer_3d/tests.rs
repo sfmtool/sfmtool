@@ -25,7 +25,7 @@ use sfmtool_core::{Camera, SfmrReconstruction};
 
 use super::bench_track::{self, BenchGesture, HANDLE_HIT_RADIUS};
 use super::{Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
-use crate::bench::geometry::PatchEdit;
+use crate::bench::geometry::{self, PatchEdit};
 use crate::platform::ScrollInput;
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::scene_renderer::PickTarget;
@@ -826,10 +826,33 @@ fn a_corner_dragged_onto_its_neighbour_is_a_quarter_turn_and_one_version() {
     assert!((turned.normal() - was.normal()).norm() < 1e-12);
 }
 
+/// How far off the normal the eye stands for the **dot's** own tests.
+///
+/// A view exactly down the normal collapses the whole arrow onto the centre, so
+/// the arrowhead -- which is hit-tested ahead of everything, sitting as it does
+/// at the far end of the segment that leaves the centre -- takes the dot's
+/// presses. That is the arrangement rather than an accident: the aim is at its
+/// best in exactly the view where the arrow is shortest, and a few degrees of
+/// lean pulls the head clear.
+const DOT_LEAN_DEG: f64 = 15.0;
+
+/// Lean the view off the normal by [`DOT_LEAN_DEG`] and check the head really
+/// has come clear of the dot, so a test that means the dot presses the dot.
+fn look_past_the_arrowhead(staged: &mut Staged, track: &EditableTrack) {
+    look_off_normal(&mut staged.viewer, &frame_of(track), DOT_LEAN_DEG, STANDOFF);
+    staged.settle(track);
+    let (_, tip) = normal_segment(staged);
+    assert!(
+        (tip - dot(staged)).length() > 2.0 * HANDLE_HIT_RADIUS,
+        "the lean should carry the arrowhead clear of the dot's own reach",
+    );
+}
+
 #[test]
 fn a_dot_drag_is_one_version_whose_label_names_the_move() {
     let mut staged = staged();
     let track = staged.track();
+    look_past_the_arrowhead(&mut staged, &track);
     let press = dot(&staged);
 
     let dragged = gesture(
@@ -875,6 +898,7 @@ fn a_dot_drag_is_one_version_whose_label_names_the_move() {
 fn escape_leaves_no_edit_and_a_drag_that_ends_where_it_started_pushes_nothing() {
     let mut staged = staged();
     let track = staged.track();
+    look_past_the_arrowhead(&mut staged, &track);
     let press = dot(&staged);
 
     let cancelled = gesture(
@@ -1385,5 +1409,288 @@ fn the_normal_segments_cursor_lies_along_it_where_an_edges_lies_across_itself() 
             "at roll {roll} the segment took the cursor an edge of the same slope would",
         );
         assert!(cosine(across, along) < 22.5_f32.to_radians().sin());
+    }
+}
+
+// ---- The arrowhead ----------------------------------------------------------
+
+/// How far off the normal the eye stands for the arrowhead's **aiming** tests:
+/// inside [`geometry::AIM_ANGLE_DEG`], so the gesture is the aim, and far
+/// enough off it that the head is drawn well clear of the dot at the centre.
+const AIMING_DEG: f64 = 25.0;
+
+/// The arrowhead, in panel px: the far end of the very segment the normal
+/// handle is.
+fn arrowhead(staged: &Staged) -> egui::Pos2 {
+    normal_segment(staged).1
+}
+
+/// One primary button event.
+fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// A press on the arrowhead turns the patch's normal, and the viewport does not
+/// orbit while it is held.
+#[test]
+fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    let was = frame_of(&track);
+    look_off_normal(&mut staged.viewer, &was, AIMING_DEG, STANDOFF);
+    staged.settle(&track);
+
+    let head = arrowhead(&staged);
+    assert!(
+        (head - dot(&staged)).length() > 2.0 * HANDLE_HIT_RADIUS,
+        "this view should draw the head clear of the dot",
+    );
+    let step = egui::vec2(0.0, 40.0);
+
+    let dragged = gesture(&mut staged, &track, false, head, &[step], false);
+    assert_eq!(
+        dragged.orbited, 0.0,
+        "the scene orbited under a handle drag",
+    );
+    let PatchEdit::Tilt { normal } = edit_of(&dragged) else {
+        panic!("the press did not take the arrowhead");
+    };
+    assert!(
+        Vector3::from(normal).norm() > 0.0,
+        "the drag named no direction",
+    );
+
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&dragged))
+        .expect("a finite direction");
+    let labels = staged.versions();
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    let sentence = labels.last().expect("a version");
+    assert!(
+        sentence.starts_with(&format!("Tilted {} by ", staged.label))
+            && sentence.contains(" degrees"),
+        "the version's label does not name the tilt: {sentence}",
+    );
+
+    // The square turned about its own centre and nowhere else: the centre and
+    // the size are where they were, and the normal is not.
+    let tilted = staged.track();
+    let now = frame_of(&tilted);
+    assert_eq!(now.center, was.center);
+    assert_eq!(now.half_extent, was.half_extent);
+    assert!(
+        (now.normal() - was.normal()).norm() > 1e-3,
+        "the patch did not turn",
+    );
+
+    // The same motion from empty viewport is the orbit it always was.
+    let dragged = gesture(&mut staged, &tilted, false, EMPTY, &[step], false);
+    assert!(dragged.gesture.is_none(), "empty viewport edited the track");
+    assert!(
+        dragged.orbited > 0.0,
+        "a press off the handles should orbit"
+    );
+}
+
+/// Escape abandons the gesture, and a drag that ends where it started asks for
+/// the normal the patch already faces, which the step reads as no turn.
+#[test]
+fn escape_leaves_no_tilt_and_an_arrowhead_drag_that_ends_where_it_started_pushes_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    look_off_normal(&mut staged.viewer, &frame_of(&track), AIMING_DEG, STANDOFF);
+    staged.settle(&track);
+
+    let head = arrowhead(&staged);
+    let step = egui::vec2(0.0, 30.0);
+
+    let cancelled = gesture(&mut staged, &track, false, head, &[step], true);
+    assert!(
+        cancelled.gesture.is_none(),
+        "escape left a gesture behind: {:?}",
+        cancelled.gesture,
+    );
+
+    let still = gesture(
+        &mut staged,
+        &track,
+        false,
+        head,
+        &[step, egui::vec2(0.0, 0.0)],
+        false,
+    );
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&still))
+        .expect("the direction it already faces");
+    assert_eq!(
+        staged.versions().len(),
+        before,
+        "a drag that ended where it started pushed a version",
+    );
+}
+
+/// One frame of the viewport over `track`, for a test that has to look at the
+/// drag between the press and the release rather than only at what it produced.
+fn bench_frame(
+    staged: &mut Staged,
+    track: &EditableTrack,
+    events: Vec<egui::Event>,
+    pointer: egui::Pos2,
+) {
+    run_bench_frame(
+        &mut staged.viewer,
+        &staged.ctx,
+        &mut staged.state,
+        events,
+        pointer,
+        None,
+        None,
+        Some((track, None, false)),
+        &mut staged.rect,
+    );
+}
+
+/// The gesture is decided at the **press** and held for the whole drag.
+///
+/// Driven frame by frame rather than through [`gesture`], because what is
+/// claimed is a fact about the middle of the drag: the aim carries the normal
+/// well past [`geometry::AIM_ANGLE_DEG`], so a press made at the end of it
+/// would swing, and the drag that made it is an aim from the first frame to the
+/// last.
+#[test]
+fn the_arrowheads_gesture_is_chosen_at_the_press_and_does_not_change_under_it() {
+    let mut staged = staged();
+    let track = staged.track();
+    let frame = frame_of(&track);
+    look_off_normal(&mut staged.viewer, &frame, AIMING_DEG, STANDOFF);
+    staged.settle(&track);
+
+    let head = arrowhead(&staged);
+    // Well out along the head's own radius from the centre, which is the way
+    // the aim's plane carries the normal away from the eye.
+    let far = head + (head - dot(&staged)).normalized() * 400.0;
+    staged.viewer.bench_gesture = None;
+
+    bench_frame(
+        &mut staged,
+        &track,
+        vec![egui::Event::PointerMoved(head)],
+        head,
+    );
+    bench_frame(
+        &mut staged,
+        &track,
+        vec![egui::Event::PointerMoved(head), primary(head, true)],
+        head,
+    );
+    let took = staged
+        .viewer
+        .bench_drag
+        .expect("the press should have taken the arrowhead")
+        .handle;
+    assert_eq!(
+        took,
+        bench_track::Handle::Arrowhead(geometry::Tilt::Aim),
+        "this view is the aim's",
+    );
+    bench_frame(
+        &mut staged,
+        &track,
+        vec![egui::Event::PointerMoved(far)],
+        far,
+    );
+    assert_eq!(
+        staged
+            .viewer
+            .bench_drag
+            .expect("the drag should still be held")
+            .handle,
+        took,
+        "the gesture changed character halfway through",
+    );
+    bench_frame(
+        &mut staged,
+        &track,
+        vec![egui::Event::PointerMoved(far), primary(far, false)],
+        far,
+    );
+
+    let edit = match staged.viewer.bench_gesture.take() {
+        Some(BenchGesture::Edit(edit)) => edit,
+        other => panic!("the release named something else: {other:?}"),
+    };
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit)
+        .expect("a finite direction");
+
+    // And the normal it reached is past the bar, so a press made now would
+    // swing: the aim ran the normal through the place the two gestures part.
+    let eye = staged.viewer.camera.position();
+    assert!(
+        matches!(
+            geometry::tilt_gesture(&frame_of(&staged.track()), eye),
+            Some(geometry::Tilt::Swing(_)),
+        ),
+        "the drag should have carried the normal past the bar it was chosen by",
+    );
+}
+
+/// The arrowhead takes the cursor of the gesture it is about to make, and the
+/// swing's is checked against **the picture**: the head travels along the arc
+/// it turns on, so its cursor lies square to its own radius from the centre --
+/// the corner's reading, and that arc's tangent.
+#[test]
+fn the_arrowheads_cursor_is_the_gesture_it_is_about_to_make() {
+    let mut staged = staged();
+    let track = staged.track();
+    let frame = frame_of(&track);
+
+    // Near the line of sight, where the aim is free in two directions at once.
+    look_off_normal(&mut staged.viewer, &frame, AIMING_DEG, STANDOFF);
+    staged.settle(&track);
+    let head = arrowhead(&staged);
+    assert_eq!(
+        gesture(&mut staged, &track, false, head, &[], false).cursor,
+        egui::CursorIcon::AllScroll,
+        "an aim is free in two directions, which is the scroll-all cursor",
+    );
+
+    // Across it, where the head swings about one axis. Read at several rolls of
+    // the camera, so the claim is about the direction the radius runs in and
+    // not about the panel's own axes.
+    let eye = off_normal_eye(&frame);
+    let forward = (frame.center - eye).normalize();
+    let flat_up = (frame.v_axis - forward * frame.v_axis.dot(&forward)).normalize();
+    let right = forward.cross(&flat_up).normalize();
+    for roll in [0.0_f64, 35.0, 70.0, 110.0] {
+        let (sin, cos) = roll.to_radians().sin_cos();
+        let up = flat_up * cos + right * sin;
+        staged.viewer.camera.world_up = up;
+        staged.viewer.camera.camera = Camera::look_at(eye, frame.center, up);
+        staged.viewer.view_initialized = true;
+        staged.settle(&track);
+
+        let head = arrowhead(&staged);
+        let radius = head - dot(&staged);
+        let cursor = gesture(&mut staged, &track, false, head, &[], false).cursor;
+        assert!(
+            cursor_axis(cursor).dot(radius.normalized()).abs() < 22.5_f32.to_radians().sin(),
+            "the head stands {radius:?} off the centre and travels across that, so its \
+             cursor should be the tangent; at roll {roll} it was {cursor:?}, which lies {:?}",
+            cursor_axis(cursor),
+        );
+        // A corner of the square at the same slope reads the same way, which is
+        // the point: the two are one gesture about two axes.
+        assert_eq!(cursor, cursor_across(radius));
     }
 }
