@@ -226,6 +226,15 @@ pub fn resize_from_edge_to(
     point: Point3<f64>,                  // where that edge should lie
 ) -> Result<(EditableTrack, ResizeReport), TrackEditError>;
 
+/// Move the surfel along its own outward normal, which is the one place a
+/// pixel cannot name: a sighting says which ray the patch lies along and not
+/// how far down it the surface is.
+pub fn offset_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    distance: f64,                       // world units, signed, along `n`
+) -> Result<(EditableTrack, OffsetFrameReport), TrackEditError>;
+
 pub fn rotate_frame(
     track: &EditableTrack,
     angle_rad: f64,                      // about the outward normal
@@ -288,6 +297,15 @@ pub struct ResizeReport {
     pub changed: bool,
     pub pixel: Option<[f64; 2]>,         // the edge's pixel; none for resize_frame
     pub clamped_from: Option<[f64; 2]>,
+}
+
+/// `TranslateToReport` for the one gesture whose sign carries meaning, so the
+/// distance is reported as it was asked for rather than as a length.
+pub struct OffsetFrameReport {
+    pub distance: f64,                   // world units, signed, along `n`
+    pub center: Point3<f64>,
+    pub placed: usize,                   // keypoints written
+    pub changed: bool,
 }
 
 pub struct RotateFrameReport { pub degrees: f64, pub changed: bool }
@@ -964,10 +982,10 @@ what the first wrote.
 
 ### Placing, sizing and turning by hand
 
-Eight steps put a person's own hand on the track's geometry, and they are the
+Nine steps put a person's own hand on the track's geometry, and they are the
 steps behind the Image Detail panel's bench handles
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
-§ "The bench layer") and the wire's four patch tools.
+§ "The bench layer") and the wire's five patch tools.
 
 **At the track stage a track has one surfel and every observation is a view of
 it**, so the three gestures over the outline are gestures over *the patch*: it
@@ -1051,6 +1069,26 @@ arithmetic is core's rather than each caller's, and there is one implementation
 of the resize, so a tool call, a drag in a photograph and a drag in the 3D
 viewer cannot resize differently.
 
+**`offset_frame` moves the surfel along its own outward normal**, `distance`
+world units, positive toward the face the patch shows. It is the one hand step
+no pixel can name, and that is what it is for: a sighting says which ray the
+patch lies along and says nothing about how far down it the surface is, so a
+patch's depth is settled where the frame can be seen against the geometry
+around it rather than in any one photograph. The axes, the half-length and the
+plane's orientation are untouched; the plane itself travels with the centre.
+**Every** observation's keypoint is carried by that same displacement and keeps
+its own in-plane offset `(a_i, b_i)`, so each becomes the projection of
+`c' + a_i u + b_i v` -- the same rule a slide follows, with the one visible
+difference that the sightings move by *different* amounts in their photographs,
+and that spread is the parallax the old depth was wrong by. A sighting the
+moved patch no longer projects into is left with no keypoint and
+`Unmeasured::NoProjection`. Nothing is pinned: how far away the patch is says
+nothing about whether a sighting belongs to it. A **bearing** (`w == 0`) is
+refused as `TrackEditError::AtInfinity`, a direction patch's normal being its
+own bearing, so there is no line standing off the frame to move along; a
+distance that is not finite is refused as `BadDistance`, the way an angle that
+is not one is refused as `BadAngle`.
+
 **`rotate_frame` turns the surfel about its own outward normal.** The axes are
 rotated as a pair by a rotation whose axis *is* the normal, so both keep their
 lengths, the frame keeps its handedness and the patch keeps the plane and the
@@ -1074,8 +1112,9 @@ restores the rest, and the next fit fuses a new bitmap at the size and turn the
 frame now has.
 
 **The stage decides which step applies.** `translate_frame`,
-`translate_frame_to`, `resize_frame`, `resize_from_edge_to` and `rotate_frame`
-are the track stage's and refuse a cluster; `set_observation_shape` is the
+`translate_frame_to`, `resize_frame`, `resize_from_edge_to`, `offset_frame` and
+`rotate_frame` are the track stage's and refuse a cluster;
+`set_observation_shape` is the
 cluster stage's and refuses a track. `set_observation_keypoint` and
 `resize_from_edge` work at either and do the stage's own arithmetic.
 
@@ -1093,7 +1132,8 @@ into a ray, met with the patch's own plane and projected back, and the round tri
 returns the place it started from to within the arithmetic's last bits. An exact
 `!=` therefore reads every re-statement of where the patch already is as a move.
 So each step judges in the units of the value it moves -- a centre within `1e-6`
-of the patch's own half-length, a half-length within `1e-6` of itself, an affine
+of the patch's own half-length, an offset within `1e-6` of that half-length too,
+a half-length within `1e-6` of itself, an affine
 coefficient within `1e-6` of the shape's largest, a sighting within `1e-3` px, a
 turn within `1e-9` rad -- while the steps that compare a verdict, a stage or a
 label compare those exactly, there being nothing to round. What the caller does
@@ -1747,6 +1787,21 @@ the pixel form and through the world-point form with the place it names, leaves
 the patch at one centre and at one half-length, which is what having a single
 implementation of each edit means. A place that is not a finite point and a
 cluster are each refused in their own words.
+
+The **offset** is tested for the pair of claims that make it the step no pixel
+can name. The centre travels exactly the distance asked for along the outward
+normal while the axes, the half-length and the plane's orientation stay where
+they are; and, with every sighting first put somewhere of its own on the plane
+so the claim is not vacuous, each keeps its `(a_i, b_i)` and each keypoint comes
+back as the projection of `c' + a_i u + b_i v` -- computed in the test from the
+pair read *before* the move, so the step is held to the arithmetic rather than
+to its own. The sightings move by different amounts, which is the gesture: a
+step that read each ray against the plane it had already reached would preserve
+neither. Beside them: a patch pushed out past the cameras leaves every sighting
+with no keypoint and `NoProjection`; the bitmap and the measurements go and
+nothing is pinned; an offset inside the patch's own tolerance reports
+`changed: false` and hands the track back; and a distance that is not one, a
+track at infinity and a cluster are each refused in their own words.
 
 The fit is tested against the kernels themselves: a track put on the bench from
 a point fits to what a direct call of the same two kernels on the same frame and

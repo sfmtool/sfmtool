@@ -385,6 +385,30 @@ pub(super) fn resize_bench_track(
     Ok(reply)
 }
 
+/// `offset_bench_track`: the patch moved along its own outward normal.
+///
+/// The wire's half of the 3D viewport's normal-segment drag, and the one patch
+/// tool that names no pixel: a photograph says which ray the patch lies along
+/// and nothing about how far down it the surface is, so the distance is a world
+/// length and the sign is which way. Every sighting keeps its own in-plane
+/// offset and each keypoint becomes the projection of the patch where it now
+/// stands, which is a different move in every photograph -- that spread is the
+/// parallax the depth was wrong by. A track at infinity is refused: its normal
+/// is its own bearing.
+pub(super) fn offset_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    distance: f64,
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::Offset { distance };
+    let (reply, _) = patched(state, id, &item, &edit)?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "distance", json!(distance));
+    Ok(reply)
+}
+
 /// `rotate_bench_track`: the patch turned in its own plane.
 ///
 /// What turns depends on the stage, which is why `observation` is optional: a

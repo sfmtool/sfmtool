@@ -269,3 +269,39 @@ fn the_fog_distance_is_four_half_lengths_of_the_frame() {
     // The demo node is unaligned, so the world half-length is the stored one.
     assert!((f64::from(figure.fog_distance) - 4.0 * half).abs() < 1e-6 * half.max(1.0));
 }
+
+/// The order the pointer takes the handles in, where their reaches overlap.
+///
+/// Built from the projected geometry directly rather than driven through a
+/// frame, because what is claimed is the **order** and a view that puts three
+/// handles within eight pixels of each other is a view no test could read
+/// anything else off. The normal's segment leaves the frame's centre, where the
+/// dot and every mark of a well-placed track already sit, so it has to come
+/// last or it would take presses meant for them.
+#[test]
+fn the_normal_segment_is_the_last_handle_the_pointer_can_take() {
+    let centre = Pos2::new(100.0, 100.0);
+    let handles = Handles {
+        dot: Some(centre),
+        // Far enough away to keep out of this: the priority under test is the
+        // one among the three that share the centre.
+        corners: [None; 4],
+        circles: vec![(2, Pos2::new(160.0, 100.0))],
+        // Out along the panel's `+x`, through both of them.
+        normal: Some((centre, Pos2::new(300.0, 100.0))),
+    };
+
+    assert_eq!(
+        handles.hit(Pos2::new(104.0, 100.0)),
+        Some(Handle::Dot),
+        "the dot loses its own reach to the segment leaving it",
+    );
+    assert_eq!(
+        handles.hit(Pos2::new(162.0, 100.0)),
+        Some(Handle::Circle { observation: 2 }),
+        "a mark's circle loses its reach to the segment crossing it",
+    );
+    // And where the segment alone is in reach, it is what the pointer has.
+    assert_eq!(handles.hit(Pos2::new(230.0, 104.0)), Some(Handle::Normal));
+    assert_eq!(handles.hit(Pos2::new(230.0, 120.0)), None);
+}

@@ -471,7 +471,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-three MCP tools
+An agent gets the same bench a human does, through twenty-four MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -507,15 +507,16 @@ panel means when it names no item.
 // set_bench_track_verdict      { "reconstruction_label": "bull", "observation": 3,
 //                                "verdict": "in" }
 //
-// The patch: the three handles the Image Detail panel's bench layer offers.
+// The patch: the three handles the Image Detail panel's bench layer offers,
+// the one the 3D viewer adds, and the one that moves a single sighting rather
+// than the patch.
 // move_bench_track           { "reconstruction_label": "bull", "observation": 3,
 //                              "pixel": [1041.6, 1702.9] }
-// resize_bench_track ... rotate_bench_track ... and the one that moves a single
-// sighting rather than the patch:
 // move_bench_track_observation { "reconstruction_label": "bull", "observation": 3,
 //                                "pixel": [1041.6, 1702.9] }
 // resize_bench_track           { "reconstruction_label": "bull", "observation": 3,
 //                                "edge": "+u", "pixel": [1049.0, 1702.9] }
+// offset_bench_track           { "reconstruction_label": "bull", "distance": 0.042 }
 // rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3 }
 // rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3,
 //                                "observation": 3 }   // the cluster stage's
@@ -571,7 +572,7 @@ row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`
 only for an observation nothing says the place of, which is the state core's
 `Unmeasured::NoSeed` names.
 
-**The three patch tools are the panel's three handles**, and each is one
+**The patch tools are the panel's handles**, and each is one
 `edit_bench_patch`, so a drag and a tool call are the same version carrying the
 same sentence. `move_bench_track` slides the patch, `resize_bench_track` names
 an `edge` and a `pixel` rather than a size -- because that is what the gesture
@@ -582,9 +583,17 @@ Each names the `observation` whose outline is meant -- the surfel re-anchored on
 that sighting at the track stage, its own parallelogram at the cluster stage --
 except a turn at the track stage, where there is one surfel and no sighting need
 be named; a turn at the **cluster** stage has no surfel to turn and is refused
-without one. `move_bench_track_observation` is the fourth, and the only one that
-moves a single sighting: the cluster stage's dot, and a script that means one
-keypoint.
+without one.
+
+`offset_bench_track` names no pixel and no observation, because no photograph
+can say what it says: it moves the patch `distance` world units along its own
+outward normal, positive toward the face the patch shows. A sighting names the
+ray the patch lies along and not how far down it the surface is, so this is
+where a patch's depth is settled -- by the tool, or by the normal-segment drag
+in the 3D viewer it shares a step with. A track at infinity is refused, a
+direction patch's normal being its own bearing. `move_bench_track_observation`
+is the last of them, and the only one that moves a single sighting: the cluster
+stage's dot, and a script that means one keypoint.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -805,5 +814,5 @@ still read.
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-three tools for the steps that exist
+  proposed in the same draft. The twenty-four tools for the steps that exist
   are § "The wire".

@@ -590,6 +590,16 @@ impl AppState {
                     report.moved, centre.x, centre.y, centre.z
                 )
             }
+            // The signed distance rather than a length: an offset toward the
+            // cameras and one away from them are opposite answers about how far
+            // off the patch is, and the sentence has to tell them apart.
+            geometry::EditReport::Offset(report) => {
+                let centre = report.center;
+                format!(
+                    "Moved {label} by {:.3} units along its normal to ({:.3}, {:.3}, {:.3})",
+                    report.distance, centre.x, centre.y, centre.z
+                )
+            }
             geometry::EditReport::Moved(report) => {
                 let name = self.image_name(ImageRef::new(id, report.image as usize));
                 let moved = report

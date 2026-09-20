@@ -472,6 +472,12 @@ pub enum TrackEditError {
     BadSize(f64),
     /// The turn asked for is not a finite angle.
     BadAngle(f64),
+    /// The offset asked for is not a finite distance.
+    BadDistance(f64),
+    /// The track is at infinity, and a direction patch's normal is its own
+    /// bearing: there is no normal standing off the frame to move along or to
+    /// turn.
+    AtInfinity,
     /// The affine shape has no area, so there is no frame to warp a template
     /// through.
     BadShape([[f64; 2]; 2]),
@@ -523,6 +529,13 @@ impl std::fmt::Display for TrackEditError {
             }
             TrackEditError::BadSize(size) => write!(f, "{size} is not a size"),
             TrackEditError::BadAngle(angle) => write!(f, "{angle} is not an angle"),
+            TrackEditError::BadDistance(distance) => {
+                write!(f, "{distance} is not a distance")
+            }
+            TrackEditError::AtInfinity => write!(
+                f,
+                "this track is at infinity and its normal is fixed by its bearing"
+            ),
             TrackEditError::BadShape(shape) => write!(
                 f,
                 "the shape [[{}, {}], [{}, {}]] spans no area",
@@ -1199,7 +1212,7 @@ pub fn resize_from_edge_to(
         *position = Some(center);
         *bitmap = None;
     }
-    carry_keypoints(&mut next, edited, displacement);
+    carry_keypoints(&mut next, edited, frame, displacement);
     Ok((
         next,
         ResizeReport {
@@ -1401,7 +1414,7 @@ pub fn translate_frame_to(
         *position = Some(center);
         *bitmap = None;
     }
-    let placed = carry_keypoints(&mut next, edited, displacement);
+    let placed = carry_keypoints(&mut next, edited, frame, displacement);
     Ok((
         next,
         TranslateToReport {
@@ -1451,6 +1464,105 @@ fn in_plane_offset(frame: &OrientedPatch, point: Point3<f64>) -> Vector3<f64> {
     let delta = point - frame.center;
     let normal = frame.normal();
     delta - normal * delta.dot(&normal)
+}
+
+/// What one offset of the surfel along its normal did.
+///
+/// [`TranslateToReport`]'s companion for the one gesture whose **sign** carries
+/// meaning: an offset is a statement about depth, and a patch pushed away from
+/// the cameras and one pulled toward them are opposite answers. So the distance
+/// asked for is reported as it was asked, rather than as the unsigned length a
+/// slide reports -- there is nothing else for its magnitude to be, the whole
+/// displacement lying along the normal with no in-plane part to drop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OffsetFrameReport {
+    /// How far along the outward normal the caller asked to go, signed:
+    /// positive toward the face the patch shows, negative behind it. Reported
+    /// whether or not it came to anything, so a no-effect sentence can name
+    /// what was asked for.
+    pub distance: f64,
+    /// Where the centre now stands.
+    pub center: Point3<f64>,
+    /// How many sightings the moved centre projects into, and so how many
+    /// keypoints were written. Zero for a step that changed nothing.
+    pub placed: usize,
+    /// Whether anything changed: an offset of less than `NO_EFFECT_FRACTION` of
+    /// the patch's own half-length leaves the patch where it was.
+    pub changed: bool,
+}
+
+/// Move the surfel `distance` world units along its outward normal.
+///
+/// The one edit no photograph can name, and the 3D viewer's normal-segment
+/// drag: a sighting says which ray the patch lies along and says nothing about
+/// how far down it the surface is, so depth is settled out in the world where
+/// the frame can be seen against the geometry around it.
+///
+/// **What every sighting keeps is its in-plane offset `(a_i, b_i)`**, exactly as
+/// a slide's do. With `c' = c + distance * n`, each observation's keypoint
+/// becomes the projection of `c' + a_i u + b_i v`: the patch's own plane travels
+/// with it, and where each photograph sees the patch's content against where the
+/// geometry puts its middle is carried rather than recomputed. Unlike a slide,
+/// the sightings move in the photographs by *different* amounts, which is the
+/// whole of the gesture -- that spread is the parallax the depth is wrong by.
+/// A sighting the moved patch no longer projects into is left with no keypoint
+/// and [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection).
+///
+/// The axes, the half-length and the plane's orientation are untouched. The
+/// bitmap and the measurements go, as they do for a slide, and nothing is
+/// pinned: how far away the patch is says nothing about whether a sighting
+/// belongs to it.
+///
+/// A **track at infinity** is refused as [`TrackEditError::AtInfinity`]: a
+/// direction patch's normal is its own bearing, so there is no line standing off
+/// the frame to move along.
+pub fn offset_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    distance: f64,
+) -> Result<(EditableTrack, OffsetFrameReport), TrackEditError> {
+    if !distance.is_finite() {
+        return Err(TrackEditError::BadDistance(distance));
+    }
+    let frame = frame_of(track)?;
+    if frame.w == 0.0 {
+        return Err(TrackEditError::AtInfinity);
+    }
+    let was = frame.center;
+    // Judged against the patch's own half-length, because that is the unit the
+    // distance is in -- the same bar a slide's displacement is held to.
+    if distance.abs() <= NO_EFFECT_FRACTION * frame.half_extent[0].abs() {
+        return Ok((
+            track.clone(),
+            OffsetFrameReport {
+                distance,
+                center: was,
+                placed: 0,
+                changed: false,
+            },
+        ));
+    }
+    let displacement = frame.normal() * distance;
+    let center = was + displacement;
+
+    let mut next = track.clone();
+    {
+        let (position, moved, bitmap) = track_payload_mut(&mut next);
+        moved.center = center;
+        // The coordinate is the centre, as it is for every step that moves it.
+        *position = Some(center);
+        *bitmap = None;
+    }
+    let placed = carry_keypoints(&mut next, edited, frame, displacement);
+    Ok((
+        next,
+        OffsetFrameReport {
+            distance,
+            center,
+            placed,
+            changed: true,
+        },
+    ))
 }
 
 /// What one turn of the surfel did.
@@ -1703,10 +1815,10 @@ fn track_payload_mut(
     )
 }
 
-/// Carry every sighting along the plane by `displacement`, and drop every
-/// measurement read before the patch moved.
+/// Carry every sighting by `displacement`, and drop every measurement read
+/// before the patch moved.
 ///
-/// The rule the two steps that move the centre share, and **not** a
+/// The rule the three steps that move the centre share, and **not** a
 /// reprojection of the centre: a keypoint is where that photograph sees the
 /// patch's *content*, and the gap between it and the centre's projection is
 /// that observation's own in-plane offset -- the thing the tile is cut on and
@@ -1719,42 +1831,50 @@ fn track_payload_mut(
 /// sighting the drag came through lands under the pointer, because its plane
 /// point plus the displacement *is* the plane point under the pixel.
 ///
+/// **`was` is the frame as it stood before the move**, and it has to be: the
+/// offsets being preserved are the ones read on the plane the sightings were
+/// measured against. For a slide and a resize the plane does not move and
+/// either frame would answer the same; an offset along the normal takes the
+/// plane with it, and re-anchoring on the frame's new position would read each
+/// ray against the plane it has already reached and displace it a second time.
+///
 /// A sighting that has never been localized has no keypoint to carry, so it
-/// takes the projection of the new centre -- the only place the patch says it
-/// could be. One that no longer projects at all is left with no keypoint and
-/// the reason that says so, rather than with a stale one.
+/// takes the projection of the centre plus the displacement, which is where the
+/// centre now is -- the only place the patch says it could be. (A **bearing**'s
+/// moved centre is renormalized by its step and this one is not, which is the
+/// same direction and so the same pixel.) One that no longer projects at all is
+/// left with no keypoint and the reason that says so, rather than with a stale
+/// one.
 ///
 /// Returns how many keypoints were written, which is how many photographs still
 /// hold the patch.
 fn carry_keypoints(
     track: &mut EditableTrack,
     edited: &EditedReconstruction,
+    was: &OrientedPatch,
     displacement: Vector3<f64>,
 ) -> usize {
-    let Some(frame) = track.track().and_then(|payload| payload.frame.clone()) else {
-        return 0;
-    };
     let mut placed = 0;
     for observation in &mut track.observations {
-        let was = observation.track.as_ref().and_then(|m| m.keypoint);
-        let landed = view_of(edited, observation.image).ok().and_then(
-            |(camera, cam_from_world)| match was {
-                // Its own plane point, carried by the drag: the offset between
-                // the feature and the centre's projection is preserved.
-                Some(keypoint) => {
-                    let at = [f64::from(keypoint[0]), f64::from(keypoint[1])];
-                    let anchored = frame.anchored_at_keypoint(&camera, &cam_from_world, at)?;
-                    project_center(
-                        &camera,
-                        &cam_from_world,
-                        anchored.center + displacement,
-                        frame.w,
-                    )
-                }
-                // Never localized, so there is no offset to keep.
-                None => project_center(&camera, &cam_from_world, frame.center, frame.w),
-            },
-        );
+        let keypoint = observation.track.as_ref().and_then(|m| m.keypoint);
+        let landed =
+            view_of(edited, observation.image)
+                .ok()
+                .and_then(|(camera, cam_from_world)| {
+                    let from = match keypoint {
+                        // Its own plane point, carried by the drag: the offset
+                        // between the feature and the centre's projection is
+                        // preserved.
+                        Some(keypoint) => {
+                            let at = [f64::from(keypoint[0]), f64::from(keypoint[1])];
+                            was.anchored_at_keypoint(&camera, &cam_from_world, at)?
+                                .center
+                        }
+                        // Never localized, so there is no offset to keep.
+                        None => was.center,
+                    };
+                    project_center(&camera, &cam_from_world, from + displacement, was.w)
+                });
         observation.track = Some(match landed {
             Some(pixel) => {
                 placed += 1;

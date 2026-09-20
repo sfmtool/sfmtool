@@ -2946,6 +2946,204 @@ fn a_place_that_is_not_one_and_a_cluster_are_both_refused() {
     ));
 }
 
+/// Each sighting's in-plane offset `(a_i, b_i)` on the patch's own axes: where
+/// that photograph sees the patch's content against the frame's middle, read on
+/// the plane rather than in pixels.
+///
+/// **What an offset along the normal must not disturb.** The plane travels with
+/// the patch, so the pair is the whole of what says where the tile is cut, and
+/// each keypoint afterwards has to be the projection of `c' + a_i u + b_i v` and
+/// of nothing else.
+fn plane_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<(f64, f64)> {
+    let frame = frame_of(track);
+    track
+        .observations
+        .iter()
+        .map(|observation| {
+            let (camera, pose) = view(edited, observation.image as usize);
+            let site = observation.site().expect("a sighting");
+            let offset = frame
+                .keypoint_plane_offset(&camera, &pose, site)
+                .expect("the fixture's rays meet the plane");
+            (offset.dot(&frame.u_axis), offset.dot(&frame.v_axis))
+        })
+        .collect()
+}
+
+/// The one edit no photograph can name: the patch's depth. The centre travels
+/// the distance asked for along the outward normal and the plane goes with it,
+/// so each sighting keeps its own in-plane offset and each keypoint becomes the
+/// projection of the patch where it now stands.
+#[test]
+fn an_offset_moves_the_centre_along_the_normal_and_keeps_every_in_plane_offset() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    // A measurement read over the square where it stood, which the move must
+    // not keep: it says nothing about a patch a third of a unit away.
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc = Some(0.91);
+    assert!(
+        track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
+        "the column fixture should carry a consensus bitmap to drop"
+    );
+    // The fixture's keypoints are each point's exact projection, so every
+    // in-plane offset is zero and a step that reset them all would pass. Put
+    // each sighting somewhere of its own first, which is what a photograph says
+    // when it sees the patch's content off the frame's middle.
+    for (k, observation) in track.observations.iter_mut().enumerate() {
+        let site = observation.site().expect("a sighting");
+        observation.track.as_mut().expect("a track slot").keypoint = Some([
+            (site[0] + 2.0 + k as f64) as f32,
+            (site[1] - 3.0 + 2.0 * k as f64) as f32,
+        ]);
+    }
+    let was = frame_of(&track);
+    let offsets = plane_offsets(&track, &edited);
+    assert!(
+        offsets.iter().all(|(a, b)| a.hypot(*b) > 1e-6),
+        "every sighting should sit off the frame's middle: {offsets:?}",
+    );
+
+    let distance = -0.37;
+    let (next, report) = offset_frame(&track, &edited, distance).expect("a finite distance");
+    assert!(report.changed);
+    assert_eq!(report.distance, distance);
+    assert_eq!(report.placed, next.observations.len());
+
+    // The frame moved along its normal and nowhere else, and nothing about its
+    // shape or its orientation moved at all.
+    let frame = frame_of(&next);
+    assert_eq!(frame.u_axis, was.u_axis);
+    assert_eq!(frame.v_axis, was.v_axis);
+    assert_eq!(frame.half_extent, was.half_extent);
+    let moved = frame.center - was.center;
+    assert!(
+        (moved - was.normal() * distance).norm() < 1e-12,
+        "the centre should have moved {distance} along the normal, it moved by {moved:?}",
+    );
+    assert_eq!(report.center, frame.center);
+    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+
+    // Every offset survived, and every keypoint is the projection of the place
+    // that offset names on the **moved** plane -- worked out here from the pair
+    // that was read before the move, rather than from anything the step did.
+    let now = plane_offsets(&next, &edited);
+    assert_eq!(now.len(), offsets.len());
+    for (before, after) in offsets.iter().zip(&now) {
+        assert!(
+            (after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6,
+            "an offset scrambled a sighting's place on the plane: {before:?} became {after:?}",
+        );
+    }
+    for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
+        let (camera, pose) = view(&edited, observation.image as usize);
+        let place = frame.center + frame.u_axis * *a + frame.v_axis * *b;
+        let (u, v) = camera
+            .ray_to_pixel({
+                let pc = pose.transform_point_homogeneous(place.coords, 1.0);
+                [pc.x, pc.y, pc.z]
+            })
+            .expect("the moved patch is still in front of the fixture's cameras");
+        let site = observation.site().expect("a sighting");
+        assert!(
+            (site[0] - u).abs() < 1e-3 && (site[1] - v).abs() < 1e-3,
+            "image {} should sight the moved patch at {:?}, it sights {site:?}",
+            observation.image,
+            [u, v],
+        );
+        assert!(!observation.pinned, "an offset is not a verdict");
+        let measurement = observation.track.as_ref().expect("a track slot");
+        assert_eq!(measurement.zncc, None);
+        assert_eq!(measurement.reason, None);
+    }
+
+    // **The sightings moved by different amounts**, which is the whole of the
+    // gesture: the spread is the parallax the old depth was wrong by, and a
+    // slide would have moved them all alike.
+    let shifts: Vec<f64> = track
+        .observations
+        .iter()
+        .zip(&next.observations)
+        .map(|(before, after)| {
+            let (was, now) = (
+                before.site().expect("a sighting"),
+                after.site().expect("a sighting"),
+            );
+            (now[0] - was[0]).hypot(now[1] - was[1])
+        })
+        .collect();
+    assert!(
+        shifts
+            .windows(2)
+            .any(|pair| (pair[0] - pair[1]).abs() > 1e-3),
+        "every sighting moved by the same amount: {shifts:?}",
+    );
+
+    // An offset inside the patch's own tolerance is not an offset.
+    let (again, report) =
+        offset_frame(&next, &edited, frame.half_extent[0] * 1e-9).expect("a finite distance");
+    assert!(!report.changed);
+    assert_eq!(report.center, frame.center);
+    assert_eq!(report.placed, 0);
+    assert_eq!(frame_of(&again).center, frame.center);
+}
+
+/// A patch pushed past the cameras is in none of the photographs, and every
+/// sighting says so rather than keeping the keypoint it had where the patch was.
+#[test]
+fn an_offset_that_takes_the_patch_out_of_every_photograph_leaves_no_keypoint() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    // The outward normal faces the cameras, which stand a plane's depth in
+    // front of the patch, so this offset takes it out behind them.
+    let (next, report) = offset_frame(&track, &edited, WORLD.z + 1.0).expect("a finite distance");
+    assert!(report.changed);
+    assert_eq!(report.placed, 0, "nothing should still hold the patch");
+    for observation in &next.observations {
+        let measurement = observation.track.as_ref().expect("a track slot");
+        assert_eq!(measurement.keypoint, None);
+        assert_eq!(measurement.reason, Some(Unmeasured::NoProjection));
+        assert!(!observation.pinned);
+    }
+}
+
+/// The two refusals of the offset: a distance that is not one, and a track at
+/// infinity, whose normal is its own bearing and so has no line to move along.
+#[test]
+fn an_offset_refuses_a_distance_that_is_not_one_and_a_track_at_infinity() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    for distance in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(
+            offset_frame(&track, &edited, distance),
+            Err(TrackEditError::BadDistance(_))
+        ));
+    }
+    assert!(matches!(
+        offset_frame(&as_bearing(&track, &edited), &edited, 0.01),
+        Err(TrackEditError::AtInfinity)
+    ));
+
+    let (bench, made) =
+        create_cluster(&Bench::new(), &pixel_seed(0, scene_pixel(&edited))).expect("a usable seed");
+    assert!(matches!(
+        offset_frame(&track_of(&bench, &made.label), &edited, 0.01),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+}
+
 #[test]
 fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_old_square() {
     let scene = Scene::new();

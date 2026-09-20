@@ -226,12 +226,24 @@ impl Viewer3D {
             self.bench_drag = None;
             return false;
         };
-        // A plane seen edge-on turns a pixel of pointer motion into an unbounded
-        // distance along it, so none of the handles that read it takes a press
-        // and the cursor stays the viewport's own.
-        if geometry::plane_is_edge_on(frame, into_recon.apply_to_point(&self.camera.position())) {
+        // The two degenerate views, each refusing the handles that read its own
+        // geometry: a plane seen edge-on and a normal seen end-on both turn a
+        // pixel of pointer motion into an unbounded distance. They are
+        // complementary, so between them some handle is always live; a refused
+        // handle takes no press and shows no cursor, which is a refusal the
+        // person can see in the figure.
+        let eye = into_recon.apply_to_point(&self.camera.position());
+        let plane_refused = geometry::plane_is_edge_on(frame, eye);
+        let normal_refused = geometry::normal_is_end_on(frame, eye);
+        let takes_press = |handle: bench_track::Handle| !match handle {
+            bench_track::Handle::Normal => normal_refused,
+            _ => plane_refused,
+        };
+        if self
+            .bench_drag
+            .is_some_and(|drag| !takes_press(drag.handle))
+        {
             self.bench_drag = None;
-            return false;
         }
 
         let (pressed, down, pointer, modifiers) = ui.input(|i| {
@@ -250,9 +262,9 @@ impl Viewer3D {
         if self.bench_drag.is_none() && pressed && plain {
             let taken = pointer
                 .filter(|_| response.contains_pointer())
-                .and_then(|press| Some((press, handles.hit(press)?)))
+                .and_then(|press| Some((press, handles.hit(press).filter(|h| takes_press(*h))?)))
                 .and_then(|(press, handle)| {
-                    let at = self.bench_plane_point(rect, frame, &into_recon, press)?;
+                    let at = self.bench_ray_point(rect, frame, &into_recon, press, handle)?;
                     Some(bench_track::Drag::new(bench.node, handle, at, press))
                 });
             if let Some(drag) = taken {
@@ -263,12 +275,12 @@ impl Viewer3D {
                 self.bench_drag = Some(drag);
             }
         }
-        if let Some(pos) = response
+        if let Some((pos, handle)) = response
             .interact_pointer_pos()
             .or(pointer)
-            .filter(|_| self.bench_drag.is_some())
+            .zip(self.bench_drag.map(|drag| drag.handle))
         {
-            let at = self.bench_plane_point(rect, frame, &into_recon, pos);
+            let at = self.bench_ray_point(rect, frame, &into_recon, pos, handle);
             // Escape abandons the gesture. The drag is kept until the button
             // comes up so the viewport does not start orbiting halfway through.
             let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -298,6 +310,7 @@ impl Viewer3D {
             ui.input(|i| i.pointer.hover_pos())
                 .filter(|_| response.contains_pointer())
                 .and_then(|pos| handles.hit(pos))
+                .filter(|handle| takes_press(*handle))
         });
         if let Some(handle) = hovered {
             ui.ctx().set_cursor_icon(match self.bench_drag {
@@ -310,24 +323,33 @@ impl Viewer3D {
         self.bench_drag.is_some() || ended
     }
 
-    /// Where the pointer at `pos` meets the frame's plane, in the
+    /// Where the pointer at `pos` meets `handle`'s own geometry, in the
     /// reconstruction's own coordinates.
     ///
     /// The viewport's own ray, taken back through the node's similarity: the
-    /// figure is drawn in the world and the steps act in the reconstruction.
-    fn bench_plane_point(
+    /// figure is drawn in the world and the steps act in the reconstruction. A
+    /// similarity preserves angles, so the degenerate-view tests read the same
+    /// on either side of it.
+    ///
+    /// **The handle decides what the ray is met with**, because that is what
+    /// the gesture is about: the three plane handles name a point of the
+    /// frame's plane, and the normal's segment names a point of the line the
+    /// normal runs along.
+    fn bench_ray_point(
         &self,
         rect: Rect,
         frame: &sfmtool_core::patch::cloud::OrientedPatch,
         into_recon: &sfmtool_core::Se3Transform,
         pos: egui::Pos2,
+        handle: bench_track::Handle,
     ) -> Option<nalgebra::Point3<f64>> {
         let (origin, direction) = self.camera.ray_through(pos, rect);
-        geometry::plane_point(
-            frame,
-            into_recon.apply_to_point(&origin),
-            into_recon.rotation.to_rotation_matrix() * direction,
-        )
+        let origin = into_recon.apply_to_point(&origin);
+        let direction = into_recon.rotation.to_rotation_matrix() * direction;
+        match handle {
+            bench_track::Handle::Normal => geometry::normal_line_point(frame, origin, direction),
+            _ => geometry::plane_point(frame, origin, direction),
+        }
     }
 
     /// Handles mouse drag interactions (orbit, pan, zoom, nodal pan).

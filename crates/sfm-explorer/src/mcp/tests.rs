@@ -3655,6 +3655,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            "offset_bench_track",
+            json!({ "reconstruction_label": "alpha", "distance": 0.042 }),
+        ),
+        (
             "rotate_bench_track",
             json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
         ),
@@ -3969,15 +3973,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-one writes, the one that writes a file, and the one
+    // Fifteen reads, fifty-two writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 67, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 68, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        51
+        52
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -6587,6 +6591,114 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     );
     assert_eq!(rows["observations"][0]["pinned"], json!(true), "{rows}");
     assert_eq!(rows["observations"][1]["pinned"], json!(false), "{rows}");
+}
+
+/// The one patch tool that names no pixel: the depth of the patch, which no
+/// photograph can say. The version's sentence carries the signed distance and
+/// the place the centre reached.
+#[test]
+fn offsetting_a_bench_track_moves_it_along_its_normal_and_says_how_far() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+    let frame = |state: &AppState| {
+        state
+            .bench_track(state.scene[0].id, &item)
+            .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+            .expect("a track from a point carries the stored patch")
+    };
+    let was = frame(&state);
+
+    let distance = -0.042;
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "offset_bench_track",
+        json!({ "reconstruction_label": "run_a", "distance": distance }),
+    );
+    assert_eq!(moved["item"], json!(item), "{moved}");
+    assert_eq!(moved["distance"], json!(distance), "{moved}");
+    assert_eq!(moved["changed"], json!(true), "{moved}");
+    assert_eq!(version_count(&state), before + 1);
+
+    // The sentence a drag of the normal's segment writes, and the sign is in
+    // it: an offset toward the cameras and one away from them are opposite
+    // answers about how far off the patch is.
+    let now = frame(&state);
+    assert_eq!(
+        moved["label"].as_str().expect("a version label"),
+        format!(
+            "Moved {item} by {distance:.3} units along its normal to ({:.3}, {:.3}, {:.3})",
+            now.center.x, now.center.y, now.center.z
+        ),
+        "{moved}"
+    );
+
+    // And the patch really went that far along the normal, with its axes and
+    // its size left alone.
+    assert_eq!(now.half_extent, was.half_extent);
+    assert!((now.normal() - was.normal()).norm() < 1e-12);
+    assert!(
+        ((now.center - was.center) - was.normal() * distance).norm() < 1e-12,
+        "the patch went from {:?} to {:?}",
+        was.center,
+        now.center,
+    );
+
+    // A distance is relative where a pixel is absolute, so the same call again
+    // moves it again rather than naming where it already stands.
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "offset_bench_track",
+        json!({ "reconstruction_label": "run_a", "distance": distance }),
+    );
+    assert_eq!(again["changed"], json!(true), "{again}");
+
+    // Zero is the offset that changes nothing, and it says so in its own words
+    // rather than in a slide's.
+    let still = call(
+        &mut state,
+        &mut viewer,
+        "offset_bench_track",
+        json!({ "reconstruction_label": "run_a", "distance": 0.0 }),
+    );
+    assert_eq!(still["changed"], json!(false), "{still}");
+    let report = still["report"].as_str().expect("a sentence");
+    assert!(report.starts_with("Moved"), "{report}");
+    assert!(report.contains("along its normal"), "{report}");
+    assert!(report.contains("no effect"), "{report}");
+    assert_eq!(version_count(&state), before + 2, "{still}");
+}
+
+/// A track at infinity has no normal standing off it -- a direction patch's
+/// normal is its own bearing -- so the offset is refused in those words, and a
+/// distance JSON cannot carry is turned away at the parse. Neither pushes a
+/// version.
+#[test]
+fn offsetting_refuses_a_track_at_infinity_and_a_distance_that_is_not_one() {
+    let (mut state, mut viewer) = benchable_with(bearing_demo());
+    on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "offset_bench_track",
+        json!({ "reconstruction_label": "run_a", "distance": 0.05 }),
+    )
+    .to_string();
+    assert!(refused.contains("infinity"), "{refused}");
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "offset_bench_track",
+        json!({ "reconstruction_label": "run_a", "distance": "a little" }),
+    )
+    .to_string();
+    assert!(refused.contains("distance"), "{refused}");
+    assert_eq!(version_count(&state), before, "a refusal pushes nothing");
 }
 
 /// A turn at the cluster stage is one sighting's affine shape, so it has to

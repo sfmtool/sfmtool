@@ -335,6 +335,14 @@ pub(crate) enum Command {
         /// Where its midpoint should land, in that image's own px.
         pixel: [f64; 2],
     },
+    /// Move the track-stage surfel along its own outward normal. Every
+    /// sighting follows.
+    OffsetBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// How far, in world units, positive toward the face the patch shows.
+        distance: f64,
+    },
     /// Turn the patch in its own plane.
     RotateBenchTrack {
         reconstruction_label: String,
@@ -1137,6 +1145,16 @@ pub(crate) fn apply_with_window(
             edge,
             pixel,
         )),
+        Command::OffsetBenchTrack {
+            reconstruction_label,
+            track,
+            distance,
+        } => done(bench::offset_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            distance,
+        )),
         Command::RotateBenchTrack {
             reconstruction_label,
             track,
@@ -1744,6 +1762,7 @@ impl Command {
             Command::MoveBenchTrack { .. } => "move_bench_track",
             Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
             Command::ResizeBenchTrack { .. } => "resize_bench_track",
+            Command::OffsetBenchTrack { .. } => "offset_bench_track",
             Command::RotateBenchTrack { .. } => "rotate_bench_track",
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
@@ -1946,6 +1965,7 @@ impl Command {
             | Command::MoveBenchTrack { .. }
             | Command::MoveBenchTrackObservation { .. }
             | Command::ResizeBenchTrack { .. }
+            | Command::OffsetBenchTrack { .. }
             | Command::RotateBenchTrack { .. }
             | Command::SetBenchTrackVerdict { .. }
             | Command::ApplyBenchTrackThresholds { .. }

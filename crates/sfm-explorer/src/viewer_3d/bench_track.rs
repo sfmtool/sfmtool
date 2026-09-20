@@ -26,11 +26,14 @@
 //! the pass drew back through the viewport's camera, so the square a person
 //! takes hold of is the square they can see: the dot slides it across its plane,
 //! an edge resizes it with the far edge held, a corner turns it about its
-//! normal, and an observation's circle selects that row in Track Edit. The
+//! normal, the normal's own segment moves it along that normal, and an
+//! observation's circle selects that row in Track Edit. The
 //! pointer is read as a **ray of the viewport's camera** met with the patch's
 //! own geometry ([`crate::bench::geometry`]), which is the same idea the Image
 //! Detail panel reads a pixel by, and the edit it names is handed to the same
-//! core step.
+//! core step. The segment is the one handle with no counterpart in a
+//! photograph, which is why it is here: a sighting names the ray the patch lies
+//! along and says nothing about how far down it the surface is.
 
 use egui::{Color32, CursorIcon, Pos2, Rect};
 use nalgebra::{Point3, Vector3};
@@ -91,7 +94,9 @@ const SELECTED_CIRCLE_SCALE: f64 = 1.6;
 /// layer's reach is: a handle missed by two pixels orbits the scene instead,
 /// which the person then has to undo by eye, while one caught a little early is
 /// released without motion and does nothing.
-const HANDLE_HIT_RADIUS: f32 = 9.0;
+///
+/// Visible to the viewport's own tests, which aim presses clear of it.
+pub(super) const HANDLE_HIT_RADIUS: f32 = 9.0;
 
 /// How far from an edge of the square the pointer still grabs it, in panel px.
 ///
@@ -442,6 +447,11 @@ pub(crate) enum Handle {
     Edge(Edge),
     /// One corner: dragging it turns the patch about its outward normal.
     Corner(usize),
+    /// The normal's segment: dragging it moves the patch along its own normal,
+    /// which is the one thing no photograph can say -- a sighting names the ray
+    /// the patch lies along and not how far down it the surface is. The
+    /// arrowhead at the far end of the same normal is drawing and not a handle.
+    Normal,
     /// One observation's circle. It edits nothing -- where a photograph sees the
     /// patch's content is that photograph's answer and not a thing to drag --
     /// but a click on it selects that row in Track Edit, as clicking a mark in
@@ -464,10 +474,13 @@ pub(crate) enum BenchGesture {
 
 /// A handle being dragged, and where the pointer has taken it.
 ///
-/// Both ends are **places on the patch's own plane**, in the reconstruction's
-/// coordinates, rather than pixels of the window: what the gesture means is a
-/// statement about the patch, so it does not depend on where the figure happened
-/// to be drawn.
+/// Both ends are **places on the handle's own geometry**, in the
+/// reconstruction's coordinates, rather than pixels of the window: what the
+/// gesture means is a statement about the patch, so it does not depend on where
+/// the figure happened to be drawn. Which geometry depends on the handle -- the
+/// frame's plane for the three that name a place on it, the normal's line for
+/// the segment -- and the press decided the handle, so both ends of one drag are
+/// read the same way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Drag {
     /// The node whose bench it edits. A drag that outlives a change of selected
@@ -475,7 +488,7 @@ pub(crate) struct Drag {
     pub(crate) node: ReconId,
     /// What is being dragged.
     pub(crate) handle: Handle,
-    /// Where the press met the plane.
+    /// Where the press met the handle's geometry.
     from: Point3<f64>,
     /// Where the pointer meets it now.
     to: Point3<f64>,
@@ -494,7 +507,8 @@ pub(crate) struct Drag {
 }
 
 impl Drag {
-    /// A gesture just taken at `press`, which met the plane at `at`.
+    /// A gesture just taken at `press`, which met the handle's geometry at
+    /// `at`.
     pub(crate) fn new(node: ReconId, handle: Handle, at: Point3<f64>, press: Pos2) -> Self {
         Self {
             node,
@@ -508,7 +522,7 @@ impl Drag {
     }
 
     /// Follow the pointer: it is at `pos` in the panel and, when the ray still
-    /// meets the plane, at `at` on it.
+    /// reads against the handle's geometry, at `at` on it.
     pub(crate) fn follow(&mut self, pos: Pos2, at: Option<Point3<f64>>) {
         self.moved |= pos != self.press;
         if let Some(at) = at {
@@ -540,6 +554,13 @@ impl Drag {
             }),
             Handle::Corner(_) => geometry::turn_on_plane(frame, self.from, self.to)
                 .map(|angle_rad| PatchEdit::Rotate { angle_rad }),
+            // Both ends are points of the normal's own line, so their
+            // difference along it is the whole gesture -- and it is a
+            // difference, so a segment grabbed at its tip does not jump the
+            // patch out to where the tip was.
+            Handle::Normal => Some(PatchEdit::Offset {
+                distance: (self.to - self.from).dot(&frame.normal()),
+            }),
             Handle::Circle { .. } => None,
         }
     }
@@ -561,6 +582,9 @@ pub(crate) struct Handles {
     corners: [Option<Pos2>; 4],
     /// One per mark that projected: which observation it is, and where.
     circles: Vec<(usize, Pos2)>,
+    /// The normal's segment, centre first and the arrow's tip second, when both
+    /// ends projected. `None` for a track at infinity, which draws no normal.
+    normal: Option<(Pos2, Pos2)>,
 }
 
 impl Handles {
@@ -581,15 +605,24 @@ impl Handles {
                 .iter()
                 .filter_map(|mark| Some((mark.observation, at(mark.segment.b)?)))
                 .collect(),
+            // The drawn segment's own endpoints, so what is grabbed is the line
+            // on screen: the first stroke of the arrow runs centre to tip.
+            normal: figure
+                .normal
+                .as_ref()
+                .and_then(|arrow| Some((at(arrow[0].a)?, at(arrow[0].b)?))),
         }
     }
 
     /// The handle under `pos`, or `None` when the pointer is on none of them.
     ///
-    /// Corners, then the dot, then the circles, then the edges. The dot and the
-    /// circles sit inside the square they mark and a corner is where two edges
-    /// meet, so a nearest-thing search over all four at once would make the
-    /// smaller handles unreachable.
+    /// Corners, then the dot, then the circles, then the edges, then the
+    /// normal's segment. The dot and the circles sit inside the square they
+    /// mark and a corner is where two edges meet, so a nearest-thing search
+    /// over all of them at once would make the smaller handles unreachable; the
+    /// normal is last because it leaves the centre, where every other handle
+    /// already is, and a person reaching for it has the whole of its length to
+    /// reach for.
     pub(crate) fn hit(&self, pos: Pos2) -> Option<Handle> {
         let nearest = |best: Option<(f32, Handle)>, distance: f32, handle: Handle| match best {
             Some((d, _)) if d <= distance => best,
@@ -636,7 +669,12 @@ impl Handles {
                 found = nearest(found, distance, Handle::Edge(geometry::edge_of(k)));
             }
         }
-        found.map(|(_, handle)| handle)
+        if let Some((_, handle)) = found {
+            return Some(handle);
+        }
+        self.normal
+            .filter(|(a, b)| distance_to_segment(*a, *b, pos) <= EDGE_HIT_WIDTH)
+            .map(|_| Handle::Normal)
     }
 
     /// The cursor `handle` asks for, with the square's own orientation **on
@@ -652,10 +690,22 @@ impl Handles {
     /// across the edge to along the arc, which is the difference between the two
     /// gestures. A circle selects rather than moves, so it takes the pointing
     /// hand every other selectable mark in this window takes.
+    ///
+    /// The normal's segment is dragged **along** itself, which is an edge's
+    /// case turned around, so what it hands [`resize_cursor`] is the segment's
+    /// perpendicular: the cursor wanted lies on the line, and that function
+    /// answers with the perpendicular of what it is given.
     pub(crate) fn cursor(&self, handle: Handle) -> CursorIcon {
         match handle {
             Handle::Dot => CursorIcon::Move,
             Handle::Circle { .. } => CursorIcon::PointingHand,
+            Handle::Normal => self
+                .normal
+                .map(|(centre, tip)| {
+                    let along = tip - centre;
+                    resize_cursor(egui::vec2(-along.y, along.x))
+                })
+                .unwrap_or(CursorIcon::Move),
             Handle::Corner(k) => self
                 .corners
                 .get(k)

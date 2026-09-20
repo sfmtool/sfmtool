@@ -23,7 +23,7 @@ use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{Camera, SfmrReconstruction};
 
-use super::bench_track::{self, BenchGesture};
+use super::bench_track::{self, BenchGesture, HANDLE_HIT_RADIUS};
 use super::{Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
 use crate::bench::geometry::PatchEdit;
 use crate::platform::ScrollInput;
@@ -507,6 +507,24 @@ fn look_edge_on(viewer: &mut Viewer3D, frame: &OrientedPatch) {
     viewer.view_initialized = true;
 }
 
+/// Point it `degrees` off the patch's own normal, leaning toward `+u`, and
+/// `standoff` half-lengths out.
+///
+/// The view the **normal's** handle is read in: at zero it is
+/// [`look_square_at`], where the segment projects to a point, and the further
+/// off it goes the longer the segment lies across the screen -- while the plane,
+/// which the three other handles read, foreshortens by the same turn. `standoff`
+/// is the second half of that, a nearer eye making the segment larger on screen
+/// without making the view any less end-on.
+fn look_off_normal(viewer: &mut Viewer3D, frame: &OrientedPatch, degrees: f64, standoff: f64) {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let out = frame.normal() * cos + frame.u_axis * sin;
+    let eye = frame.center + out * (frame.half_extent[0] * standoff);
+    viewer.camera.world_up = frame.v_axis;
+    viewer.camera.camera = Camera::look_at(eye, frame.center, frame.v_axis);
+    viewer.view_initialized = true;
+}
+
 /// The figure the last frame built, which is the one on screen.
 fn figure(viewer: &Viewer3D) -> &bench_track::Figure {
     viewer.bench_figure.as_ref().expect("a figure was built")
@@ -539,6 +557,14 @@ fn corner(staged: &Staged, k: usize) -> egui::Pos2 {
 fn edge_mid(staged: &Staged, k: usize) -> egui::Pos2 {
     let (a, b) = (corner(staged, k), corner(staged, (k + 1) % 4));
     a + (b - a) * 0.5
+}
+
+/// The normal's segment, centre first and arrow tip second, in panel px.
+fn normal_segment(staged: &Staged) -> (egui::Pos2, egui::Pos2) {
+    let arrow = figure(&staged.viewer)
+        .normal
+        .expect("a finite frame carries its normal");
+    (on_panel(staged, arrow[0].a), on_panel(staged, arrow[0].b))
 }
 
 /// Where observation `observation`'s circle sits, in panel px.
@@ -1110,5 +1136,254 @@ fn a_corner_turns_the_cursor_along_its_arc_where_an_edge_lies_across_itself() {
             "a square's corner and the edge leaving it are 45 degrees apart, \
              so the cursor has to change between them",
         );
+    }
+}
+
+// ---- The normal's segment ---------------------------------------------------
+
+/// How far off the normal the eye stands for the segment's own tests: far
+/// enough that the segment lies well across the screen and the press is nowhere
+/// near the dot, near enough that the plane is still square-on and the three
+/// other handles are live beside it.
+const OFF_NORMAL_DEG: f64 = 60.0;
+
+/// The eye's place for [`OFF_NORMAL_DEG`], as a world point.
+fn off_normal_eye(frame: &OrientedPatch) -> Point3<f64> {
+    let (sin, cos) = OFF_NORMAL_DEG.to_radians().sin_cos();
+    frame.center + (frame.normal() * cos + frame.u_axis * sin) * (frame.half_extent[0] * STANDOFF)
+}
+
+/// A press on the normal's segment moves the patch along the normal, and the
+/// point the press had hold of follows the pointer.
+///
+/// That is the claim in the picture: the segment keeps its length, so the
+/// material point at the press's own fraction of it lands where the release
+/// was. Read off the **redrawn** figure, which is the one a person would see.
+#[test]
+fn a_normal_drag_moves_the_patch_along_its_normal_and_orbits_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    let was = frame_of(&track);
+    look_off_normal(&mut staged.viewer, &was, OFF_NORMAL_DEG, STANDOFF);
+    staged.settle(&track);
+
+    let (centre, tip) = normal_segment(&staged);
+    let along = tip - centre;
+    assert!(
+        along.length() > 4.0 * HANDLE_HIT_RADIUS,
+        "the fixture's view should draw a segment long enough to press away from the dot",
+    );
+    let press = centre + along * 0.5;
+    let release = tip;
+
+    let dragged = gesture(&mut staged, &track, false, press, &[release - press], false);
+    assert_eq!(
+        dragged.orbited, 0.0,
+        "the scene orbited under a handle drag",
+    );
+    let PatchEdit::Offset { distance } = edit_of(&dragged) else {
+        panic!("the press did not take the normal's segment");
+    };
+    assert!(distance.abs() > 0.0, "the drag asked for no distance");
+
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&dragged))
+        .expect("a finite distance");
+    let labels = staged.versions();
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    let sentence = labels.last().expect("a version");
+    assert!(
+        sentence.starts_with(&format!("Moved {} by ", staged.label))
+            && sentence.contains(" units along its normal to ("),
+        "the version's label does not name the offset: {sentence}",
+    );
+
+    // The patch moved along its normal and nowhere else, keeping its axes and
+    // its size.
+    let now = frame_of(&staged.track());
+    assert_eq!(now.half_extent, was.half_extent);
+    assert!((now.normal() - was.normal()).norm() < 1e-12);
+    let moved = now.center - was.center;
+    assert!(
+        (moved - was.normal() * moved.dot(&was.normal())).norm() < 1e-9 * moved.norm().max(1.0),
+        "the patch left its own normal: {moved:?}",
+    );
+
+    // And the picture: the half-way point of the segment is the material point
+    // the press had hold of, so the redrawn figure puts it under the release.
+    let moved_track = staged.track();
+    staged.settle(&moved_track);
+    let (centre, tip) = normal_segment(&staged);
+    let landed = centre + (tip - centre) * 0.5;
+    assert!(
+        (landed - release).length() < 1.0,
+        "the place the press had hold of should land on {release:?}, it landed on {landed:?}",
+    );
+
+    // The same motion from empty viewport is the orbit it always was.
+    let dragged = gesture(
+        &mut staged,
+        &moved_track,
+        false,
+        EMPTY,
+        &[release - press],
+        false,
+    );
+    assert!(dragged.gesture.is_none(), "empty viewport edited the track");
+    assert!(
+        dragged.orbited > 0.0,
+        "a press off the handles should orbit"
+    );
+}
+
+/// Escape abandons the gesture, and a drag that ends where it started asks for
+/// an offset the step reads as none.
+#[test]
+fn escape_leaves_no_offset_and_a_normal_drag_that_ends_where_it_started_pushes_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    look_off_normal(
+        &mut staged.viewer,
+        &frame_of(&track),
+        OFF_NORMAL_DEG,
+        STANDOFF,
+    );
+    staged.settle(&track);
+
+    let (centre, tip) = normal_segment(&staged);
+    let press = centre + (tip - centre) * 0.5;
+    let step = (tip - centre) * 0.4;
+
+    let cancelled = gesture(&mut staged, &track, false, press, &[step], true);
+    assert!(
+        cancelled.gesture.is_none(),
+        "escape left a gesture behind: {:?}",
+        cancelled.gesture,
+    );
+
+    let still = gesture(
+        &mut staged,
+        &track,
+        false,
+        press,
+        &[step, egui::vec2(0.0, 0.0)],
+        false,
+    );
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&still))
+        .expect("the depth it already stands at");
+    assert_eq!(
+        staged.versions().len(),
+        before,
+        "a drag that ended where it started pushed a version",
+    );
+}
+
+/// The two degenerate views are one bar read from its two ends, so this is one
+/// test: seen almost down the normal the segment takes no press, and that is
+/// exactly the view in which the plane handles are at their best.
+#[test]
+fn a_view_down_the_normal_refuses_the_segment_where_the_plane_handles_are_at_their_best() {
+    let mut staged = staged();
+    let track = staged.track();
+    // Inside the bar, and near enough that the segment is still tens of pixels
+    // long: what refuses it is the angle and not its size on screen.
+    look_off_normal(
+        &mut staged.viewer,
+        &frame_of(&track),
+        crate::bench::geometry::MIN_PLANE_ANGLE_DEG - 1.0,
+        3.0,
+    );
+    staged.settle(&track);
+
+    let (centre, tip) = normal_segment(&staged);
+    let press = centre + (tip - centre) * 0.6;
+    assert!(
+        (press - dot(&staged)).length() > HANDLE_HIT_RADIUS,
+        "the press should be out of the dot's own reach, on the segment alone",
+    );
+
+    let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
+    let refused = gesture(&mut staged, &track, false, press, &steps, false);
+    assert!(
+        refused.gesture.is_none(),
+        "the segment took a press seen end-on: {:?}",
+        refused.gesture,
+    );
+    assert!(
+        refused.orbited > 0.0,
+        "the viewport should navigate instead"
+    );
+    assert_eq!(
+        refused.cursor,
+        egui::CursorIcon::Default,
+        "a refused handle offers no cursor",
+    );
+
+    // The same view, square on the plane: the dot is exactly where it should be
+    // used, which is what makes the pair complementary.
+    let centre = dot(&staged);
+    let slid = gesture(&mut staged, &track, false, centre, &steps, false);
+    assert!(
+        matches!(edit_of(&slid), PatchEdit::SlideTo { .. }),
+        "the plane handles should be at their best in this view",
+    );
+    assert_eq!(slid.orbited, 0.0);
+}
+
+/// The normal's segment is dragged **along** itself where an edge is dragged
+/// across itself, so its cursor lies on the segment rather than square to it.
+///
+/// Checked against the figure's own geometry on screen, at several rolls of the
+/// camera, so the claim is about the direction the segment runs in and not
+/// about the panel's own axes.
+#[test]
+fn the_normal_segments_cursor_lies_along_it_where_an_edges_lies_across_itself() {
+    let mut staged = staged();
+    let track = staged.track();
+    let frame = frame_of(&track);
+    let eye = off_normal_eye(&frame);
+    let forward = (frame.center - eye).normalize();
+    // The patch's `v` taken into the image plane, which is the unrolled up, and
+    // the axis a roll about the view direction turns it toward.
+    let flat_up = (frame.v_axis - forward * frame.v_axis.dot(&forward)).normalize();
+    let right = forward.cross(&flat_up).normalize();
+
+    // Within the 22.5-degree quantization a resize cursor has, two directions
+    // count as the same when their cosine is over cos 22.5 and as square to
+    // each other when it is under sin 22.5.
+    let cosine = |cursor: egui::CursorIcon, direction: egui::Vec2| {
+        cursor_axis(cursor).dot(direction.normalized()).abs()
+    };
+
+    for roll in [0.0_f64, 35.0, 70.0, 110.0] {
+        let (sin, cos) = roll.to_radians().sin_cos();
+        let up = flat_up * cos + right * sin;
+        staged.viewer.camera.world_up = up;
+        staged.viewer.camera.camera = Camera::look_at(eye, frame.center, up);
+        staged.viewer.view_initialized = true;
+        staged.settle(&track);
+
+        let (centre, tip) = normal_segment(&staged);
+        let along = tip - centre;
+        let cursor = gesture(&mut staged, &track, false, centre + along * 0.5, &[], false).cursor;
+        assert!(
+            cosine(cursor, along) > 22.5_f32.to_radians().cos(),
+            "the segment runs {along:?} and is dragged along itself, so its cursor should \
+             lie on it; at roll {roll} it was {cursor:?}, which lies {:?}",
+            cursor_axis(cursor),
+        );
+        // An edge running the same way is dragged across itself, so the two
+        // cursors are the ones a person would tell apart.
+        let across = cursor_across(along);
+        assert_ne!(
+            cursor, across,
+            "at roll {roll} the segment took the cursor an edge of the same slope would",
+        );
+        assert!(cosine(across, along) < 22.5_f32.to_radians().sin());
     }
 }

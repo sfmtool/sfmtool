@@ -200,7 +200,7 @@ degenerate-view tests read the same on either side of it.
 | Centre dot | the frame's plane | slide the centre to that point, less the press's own offset from the centre |
 | Edge | the frame's plane | the offset along that edge's axis is `p`; new half-length `(p + h) / 2`, centre moved `h' - h` along it, far edge held |
 | Corner | the frame's plane | the angle swept about `n` from the press point to the pointer, both read about `c` |
-| Normal segment | the line `c + t n` | the point of that line nearest the ray, less the press's own `t`; the centre moves there |
+| Normal segment | the line `c + t n` | the point of that line nearest the ray; the centre moves by that point's `t` less the press's own, along `n` |
 | Arrowhead | the sphere of radius `L` about `c` | the new normal is the unit vector from `c` to the hit |
 
 **The degenerate views are refused at the press.** Three handles read the
@@ -209,7 +209,13 @@ unbounded distance. When the angle between the view ray through `c` and the
 plane is under 5 degrees, the dot, the edges and the corners take no press and
 show the default cursor. The normal segment is the mirror case: when the angle
 between `n` and the view ray is under 5 degrees the nearest-point solve is
-ill-conditioned and the segment takes no press. Between them some handle is
+ill-conditioned and the segment takes no press. The **line** is undirected, so
+that angle is read as a magnitude: a view straight up the normal is exactly as
+bad as one straight down it. Both tests are the same cosine, one refusing the
+view where it goes to zero and the other the view where it goes to one, which
+is what makes them complementary rather than merely alike: the nearest-point
+solve divides by `1 - (d . n)^2`, the square of the sine the plane's own
+reading is multiplied by. Between them some handle is
 always live, and the view in which one set dies is the view in which the other
 is at its best.
 
@@ -248,7 +254,12 @@ what the tiles are cut on.
 - **Offset along the normal.** `c' = c + d n`. Each observation's keypoint
   becomes the projection of `c' + a_i u + b_i v` into its image. An observation
   the moved patch no longer projects into is left with no keypoint and
-  `Unmeasured::NoProjection`, as a slide leaves it.
+  `Unmeasured::NoProjection`, as a slide leaves it. `(a_i, b_i)` is read on the
+  plane the sightings were measured against, which is the plane the patch is
+  **leaving**: unlike a slide, this edit takes the plane with it, so a reading
+  taken against the plane already reached would displace every sighting a
+  second time. The sightings therefore move by *different* amounts in their
+  photographs, and that spread is the parallax the old depth was wrong by.
 - **Tilt.** `u`, `v` and so `n` are rotated about `c`. Each keypoint becomes
   the projection of `c + a_i u' + b_i v'`.
 

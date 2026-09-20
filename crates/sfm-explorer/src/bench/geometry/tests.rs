@@ -92,6 +92,71 @@ fn a_plane_seen_edge_on_is_refused_and_a_bearings_never_is() {
     assert!(!plane_is_edge_on(&bearing(), Point3::new(400.0, 0.0, 0.0)));
 }
 
+/// The two refusals are one bar read from the two ends: an edge-on plane is a
+/// normal at its best and the other way about, so the view that kills one set of
+/// handles is the view the other set wants.
+#[test]
+fn the_normal_is_refused_end_on_exactly_where_the_plane_is_at_its_best() {
+    let frame = flat();
+    // Straight down the normal: the plane is square on and the line runs into
+    // the eye, where the closest-approach solve has nothing to divide by.
+    let down = Point3::new(0.0, 0.0, 4.0);
+    assert!(normal_is_end_on(&frame, down));
+    assert!(!plane_is_edge_on(&frame, down));
+
+    // Straight up it -- the far side -- is exactly as bad, the line being
+    // undirected.
+    assert!(normal_is_end_on(&frame, Point3::new(0.0, 0.0, -4.0)));
+
+    // In the plane, where the plane handles die and the normal stands across
+    // the view at its longest.
+    let across = Point3::new(4.0, 0.0, 0.0);
+    assert!(!normal_is_end_on(&frame, across));
+    assert!(plane_is_edge_on(&frame, across));
+
+    // The bar is the same angle for both, measured from the two ends: at
+    // `MIN_PLANE_ANGLE_DEG` off the normal neither is refused, and inside it
+    // only the normal is.
+    let at = |degrees: f64| {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Point3::new(4.0 * sin, 0.0, 4.0 * cos)
+    };
+    assert!(normal_is_end_on(&frame, at(MIN_PLANE_ANGLE_DEG - 0.5)));
+    assert!(!normal_is_end_on(&frame, at(MIN_PLANE_ANGLE_DEG + 0.5)));
+    assert!(!plane_is_edge_on(&frame, at(MIN_PLANE_ANGLE_DEG - 0.5)));
+
+    // A bearing has no normal to take hold of at all.
+    assert!(normal_is_end_on(&bearing(), Point3::new(0.0, 0.0, 4.0)));
+}
+
+#[test]
+fn a_ray_names_the_point_of_the_normal_line_it_comes_nearest() {
+    let frame = flat();
+    let eye = Point3::new(5.0, 0.0, 2.0);
+
+    // Straight at the line: the answer is the point the ray runs through.
+    let at = normal_line_point(&frame, eye, -Vector3::x()).expect("the ray crosses the line");
+    assert!((at - Point3::new(0.0, 0.0, 2.0)).norm() < 1e-12);
+
+    // The two lines need not meet: a ray passing a unit to one side names the
+    // point of the line it comes nearest, which is the same one.
+    let past = Point3::new(5.0, 1.0, 2.0);
+    let at = normal_line_point(&frame, past, -Vector3::x()).expect("a closest approach");
+    assert!((at - Point3::new(0.0, 0.0, 2.0)).norm() < 1e-12);
+
+    // The press's own place on the line, which is what a drag subtracts: a ray
+    // aimed higher names a point further along the normal.
+    let higher = normal_line_point(&frame, Point3::new(5.0, 0.0, 3.5), -Vector3::x())
+        .expect("a closest approach");
+    assert!((higher - at).dot(&frame.normal()) > 1.0);
+
+    // A ray along the line itself divides by the squared sine of nothing.
+    assert!(normal_line_point(&frame, eye, Vector3::z()).is_none());
+    assert!(normal_line_point(&frame, eye, Vector3::zeros()).is_none());
+    // And a bearing has no normal line.
+    assert!(normal_line_point(&bearing(), eye, -Vector3::x()).is_none());
+}
+
 #[test]
 fn a_turn_on_the_plane_is_the_angle_swept_about_the_centre() {
     let frame = flat();

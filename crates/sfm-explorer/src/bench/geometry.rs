@@ -3,12 +3,13 @@
 
 //! What a pointer means against a patch, and the one edit each answer is.
 //!
-//! The Image Detail panel's bench handles and the wire's three patch tools ask
-//! the same three questions -- where is this sighting, how large is this patch,
-//! which way up is it -- and they have to agree to the pixel, because the panel
-//! draws the answer while the tool states it. So both build the same
+//! The bench handles of both panels and the wire's patch tools ask the same
+//! questions -- where is this sighting, how large is this patch, which way up is
+//! it, how far off is it -- and they have to agree to the pixel, because a panel
+//! draws the answer while the tool states it. So all of them build the same
 //! [`PatchEdit`] and hand it to the same [`apply`], which is one core step
-//! each.
+//! each. The last of the questions is the 3D viewport's alone: a photograph
+//! names the ray the patch lies along and not how far down it the surface is.
 //!
 //! The arithmetic that turns a pointer into a patch is core's
 //! (`sfmtool_core::bench::resize_from_edge`,
@@ -22,8 +23,8 @@
 
 use nalgebra::{Point3, Vector3};
 use sfmtool_core::bench::{
-    self, Edge, EditableTrack, MoveObservationReport, Observation, ResizeReport, RotateFrameReport,
-    ShapeReport, TrackEditError, TranslateFrameReport, TranslateToReport,
+    self, Edge, EditableTrack, MoveObservationReport, Observation, OffsetFrameReport, ResizeReport,
+    RotateFrameReport, ShapeReport, TrackEditError, TranslateFrameReport, TranslateToReport,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -39,10 +40,11 @@ const MIN_OFFSET: f64 = 1e-12;
 
 /// One hand edit of a track's geometry.
 ///
-/// What a drag of a bench handle in the Image Detail panel produces and what
-/// each of the wire's three patch tools names, in the form the core steps take:
-/// a pixel of one image for the two gestures that name a place, and an angle
-/// for the two that turn something.
+/// What a drag of a bench handle in either panel produces and what each of the
+/// wire's patch tools names, in the form the core steps take: a pixel of one
+/// image or a place in the world for the gestures that name one, an angle for
+/// the two that turn something, and a signed length for the one that settles a
+/// depth.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PatchEdit {
     /// Slide the track-stage surfel across its own plane until its centre sits
@@ -89,6 +91,16 @@ pub(crate) enum PatchEdit {
         /// Where it should lie, in the reconstruction's own coordinates.
         point: [f64; 3],
     },
+    /// Move the track-stage surfel this many world units along its outward
+    /// normal, positive toward the face it shows.
+    ///
+    /// The 3D viewport's normal-segment drag, and the one edit no photograph
+    /// can name: a sighting says which ray the patch lies along and nothing
+    /// about how far down it the surface is.
+    Offset {
+        /// How far, in the reconstruction's own units.
+        distance: f64,
+    },
     /// Turn the track-stage surfel by this many radians about its normal.
     Rotate {
         /// The turn, positive about the outward normal.
@@ -113,6 +125,8 @@ pub(crate) enum EditReport {
     SlidTo(TranslateToReport),
     /// One sighting placed by hand.
     Moved(MoveObservationReport),
+    /// The surfel moved along its own normal, every sighting following.
+    Offset(OffsetFrameReport),
     /// The patch resized by one of its edges.
     Resized(ResizeReport),
     /// The surfel turned.
@@ -144,6 +158,7 @@ impl EditReport {
         match self {
             EditReport::Translated(report) => report.changed,
             EditReport::SlidTo(report) => report.changed,
+            EditReport::Offset(report) => report.changed,
             EditReport::Moved(report) => report.changed,
             EditReport::Resized(report) => report.changed,
             EditReport::Rotated(report) => report.changed,
@@ -163,7 +178,10 @@ impl EditReport {
             EditReport::Translated(report) => Some(report.pixel),
             EditReport::Moved(report) => Some(report.pixel),
             EditReport::Resized(report) => report.pixel,
-            EditReport::SlidTo(_) | EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+            EditReport::SlidTo(_)
+            | EditReport::Offset(_)
+            | EditReport::Rotated(_)
+            | EditReport::Turned { .. } => None,
         }
     }
 
@@ -174,7 +192,10 @@ impl EditReport {
             EditReport::Translated(report) => report.clamped_from,
             EditReport::Moved(report) => report.clamped_from,
             EditReport::Resized(report) => report.clamped_from,
-            EditReport::SlidTo(_) | EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+            EditReport::SlidTo(_)
+            | EditReport::Offset(_)
+            | EditReport::Rotated(_)
+            | EditReport::Turned { .. } => None,
         }
     }
 
@@ -188,6 +209,13 @@ impl EditReport {
         match self {
             EditReport::Translated(_) | EditReport::SlidTo(_) => {
                 format!("Moved {label}: no effect, the patch already sits there")
+            }
+            // Its own sentence, because a reader of the Action Log should be
+            // able to tell an offset from a slide without a version to read it
+            // off: the two gestures move the patch in different directions and
+            // one of them is not in the plane.
+            EditReport::Offset(_) => {
+                format!("Moved {label} along its normal: no effect, the patch already stands there")
             }
             EditReport::Moved(report) => format!(
                 "Moved observation {} of {label}: no effect, the sighting already sits there",
@@ -243,6 +271,10 @@ pub(crate) fn apply(
             let (next, report) =
                 bench::resize_from_edge_to(track, edited, edge, Point3::from(point))?;
             Ok((next, EditReport::Resized(report)))
+        }
+        PatchEdit::Offset { distance } => {
+            let (next, report) = bench::offset_frame(track, edited, distance)?;
+            Ok((next, EditReport::Offset(report)))
         }
         PatchEdit::Rotate { angle_rad } => {
             let (next, report) = bench::rotate_frame(track, angle_rad)?;
@@ -497,14 +529,93 @@ pub(crate) fn plane_is_edge_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool 
     if frame.w == 0.0 {
         return false;
     }
-    let view = frame.center - eye;
-    let length = view.norm();
-    if !length.is_finite() || length < MIN_DIRECTION {
+    let Some(cosine) = view_cosine(frame, eye) else {
         return true;
-    }
+    };
     // The sine of the angle between the ray and the plane is its cosine against
     // the normal, so this is that angle without an `asin`.
-    (view.dot(&frame.normal()) / length).abs() < MIN_PLANE_ANGLE_DEG.to_radians().sin()
+    cosine < MIN_PLANE_ANGLE_DEG.to_radians().sin()
+}
+
+/// Whether the frame's normal is too near end-on from `eye` for a pointer to be
+/// read along it: the angle between the normal and the view ray through the
+/// centre is under [`MIN_PLANE_ANGLE_DEG`].
+///
+/// The mirror of [`plane_is_edge_on`], on the same bar and on the same cosine:
+/// one refuses the view where that cosine goes to zero and this refuses the
+/// view where it goes to one, so the view in which the plane handles die is the
+/// view in which the normal is at its best and the other way about. Between
+/// them some handle always takes a press.
+///
+/// The **line** is undirected, so a view straight down the normal and a view
+/// straight up it are equally bad and the test is on the magnitude. What goes
+/// wrong there is [`normal_line_point`]'s divide: its denominator is the squared
+/// sine of this angle, which is what makes a pixel of pointer motion an
+/// unbounded distance along the line.
+///
+/// Always true for a **direction patch**, whose normal is its own bearing:
+/// there is no line standing off the frame to take hold of.
+pub(crate) fn normal_is_end_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool {
+    if frame.w == 0.0 {
+        return true;
+    }
+    let Some(cosine) = view_cosine(frame, eye) else {
+        return true;
+    };
+    cosine > MIN_PLANE_ANGLE_DEG.to_radians().cos()
+}
+
+/// The magnitude of the cosine between the frame's normal and the view ray
+/// through its centre, or `None` when `eye` names no view of it.
+///
+/// The one number both degenerate-view tests are decided by, which is why they
+/// are complementary rather than merely similar.
+fn view_cosine(frame: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
+    let view = frame.center - eye;
+    let length = view.norm();
+    (length.is_finite() && length >= MIN_DIRECTION)
+        .then(|| (view.dot(&frame.normal()) / length).abs())
+}
+
+/// The point of the frame's normal line `c + t n` nearest the ray from `origin`
+/// along `direction`.
+///
+/// Where the 3D viewport's normal-segment drag reads the pointer, and the
+/// counterpart of [`plane_point`] for the one handle that does not name a place
+/// on the plane. A point rather than the parameter `t`, so the press and the
+/// pointer are the same kind of thing as the plane handles' two places and the
+/// drag carries them in one pair; the signed distance the gesture means is their
+/// difference along `n`, which is the one reading left.
+///
+/// The two lines rarely meet, so what is taken is the nearest point of the
+/// **line** -- the closest-approach solve, whose denominator `1 - (d . n)^2` is
+/// the squared sine of the angle between the ray and the normal. That is the
+/// quantity [`normal_is_end_on`] refuses at the press, so the guard here is for
+/// the rays a live view can still throw rather than a second policy.
+///
+/// `None` for a **direction patch**, which has no normal to move along.
+pub(crate) fn normal_line_point(
+    frame: &OrientedPatch,
+    origin: Point3<f64>,
+    direction: Vector3<f64>,
+) -> Option<Point3<f64>> {
+    if frame.w == 0.0 {
+        return None;
+    }
+    let length = direction.norm();
+    if !length.is_finite() || length < MIN_DIRECTION {
+        return None;
+    }
+    let ray = direction / length;
+    let normal = frame.normal();
+    let along = ray.dot(&normal);
+    let denominator = 1.0 - along * along;
+    if denominator < MIN_DIRECTION {
+        return None;
+    }
+    let to_centre = frame.center - origin;
+    let t = (to_centre.dot(&ray) * along - to_centre.dot(&normal)) / denominator;
+    t.is_finite().then(|| frame.center + normal * t)
 }
 
 /// The turn, in radians about the patch's outward normal, that carries the

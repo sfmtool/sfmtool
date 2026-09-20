@@ -1235,6 +1235,37 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "offset_bench_track",
+            description: "Move a bench track's patch along its own outward normal -- the \
+                          normal-segment drag in the 3D viewer, and the one gesture no \
+                          photograph can make. A sighting says which ray the patch lies along \
+                          and nothing about how far down it the surface is, so this is where \
+                          the depth of a patch is settled: distance is a world length, positive \
+                          toward the face the patch shows and negative behind it. The plane \
+                          travels with the patch, so every observation keeps its own in-plane \
+                          offset and its keypoint becomes the projection of the patch where it \
+                          now stands -- a different move in every photograph, and that spread \
+                          is the parallax the old depth was wrong by. A sighting the moved patch \
+                          no longer projects into is left with no keypoint. Nothing is pinned, \
+                          and a track at infinity is refused: its normal is its own bearing.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "distance",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "How far to move, in the reconstruction's own world units, \
+                                 positive along the patch's outward normal.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "rotate_bench_track",
             description: "Turn a bench track's patch in its own plane — the corner drag on the \
                           Image Detail panel's bench layer. At the track stage the surfel turns \
@@ -2372,6 +2403,11 @@ pub(crate) fn parse(
             observation: args.required_usize("observation")?,
             edge: args.edge("edge")?,
             pixel: args.required_pixel_f64("pixel")?,
+        },
+        "offset_bench_track" => Command::OffsetBenchTrack {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            distance: args.required_f64("distance")?,
         },
         "rotate_bench_track" => Command::RotateBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,
