@@ -1000,3 +1000,37 @@ fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
     assert!(rows[0].1.contains("no effect"), "{}", rows[0].1);
     assert!(!rows[0].1.contains("0.000 units"), "{}", rows[0].1);
 }
+
+/// An edge is moved **across itself**, so every resize cursor names the
+/// direction perpendicular to the edge and never the edge's own.
+///
+/// The axis-aligned pair is self-evident enough that it was the only pair
+/// asserted, which is how the diagonals came to name the slope the edge has.
+/// Both bench layers read this one function, so both showed it.
+#[test]
+fn a_resize_cursor_names_the_way_the_edge_moves_not_the_way_it_lies() {
+    use egui::{CursorIcon, Vec2};
+
+    // The raster's `y` runs downward, so `(1, 1)` slopes down to the right and
+    // lies north-west to south-east; it is dragged north-east to south-west.
+    let cases = [
+        (Vec2::new(1.0, 0.0), CursorIcon::ResizeVertical),
+        (Vec2::new(0.0, 1.0), CursorIcon::ResizeHorizontal),
+        (Vec2::new(1.0, 1.0), CursorIcon::ResizeNeSw),
+        (Vec2::new(1.0, -1.0), CursorIcon::ResizeNwSe),
+    ];
+    for (direction, wanted) in cases {
+        for turned in [direction, -direction] {
+            // The same line either way round: an edge has no head and no tail.
+            assert_eq!(
+                super::resize_cursor(turned),
+                wanted,
+                "an edge running {turned:?} is dragged across itself"
+            );
+        }
+    }
+
+    // A degenerate edge names no direction, so it asks for nothing in
+    // particular rather than whatever `atan2(0, 0)` happens to be.
+    assert_eq!(super::resize_cursor(Vec2::ZERO), CursorIcon::Move);
+}

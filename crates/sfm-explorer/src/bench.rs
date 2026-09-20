@@ -90,12 +90,14 @@ pub(crate) fn distance_to_segment(a: egui::Pos2, b: egui::Pos2, pos: egui::Pos2)
 
 /// The resize cursor an edge running in `direction` on screen asks for.
 ///
-/// A near-horizontal edge is moved up and down, so it takes the vertical resize
-/// cursor; a near-vertical one takes the horizontal. In between, the diagonal
-/// whose slope the edge has: the raster's `y` runs downward, so an edge sloping
-/// down to the right runs north-west to south-east. Shared by both bench
-/// layers, because what names the cursor is where the edge is on the screen and
-/// not which panel drew it.
+/// An edge moves **across itself**, so the cursor names the perpendicular and
+/// not the edge: a near-horizontal edge is moved up and down, so it takes the
+/// vertical resize cursor, and a near-vertical one takes the horizontal. The
+/// diagonals read the same way, which is what makes them the other two and not
+/// the edge's own slope: the raster's `y` runs downward, so an edge sloping down
+/// to the right lies north-west to south-east and is moved north-east to
+/// south-west. Shared by both bench layers, because what names the cursor is
+/// where the edge is on the screen and not which panel drew it.
 pub(crate) fn resize_cursor(direction: egui::Vec2) -> egui::CursorIcon {
     if direction.length_sq() <= f32::EPSILON {
         return egui::CursorIcon::Move;
@@ -104,9 +106,9 @@ pub(crate) fn resize_cursor(direction: egui::Vec2) -> egui::CursorIcon {
     angle = angle.rem_euclid(180.0);
     match angle {
         a if a < 22.5 || a >= 157.5 => egui::CursorIcon::ResizeVertical,
-        a if a < 67.5 => egui::CursorIcon::ResizeNwSe,
+        a if a < 67.5 => egui::CursorIcon::ResizeNeSw,
         a if a < 112.5 => egui::CursorIcon::ResizeHorizontal,
-        _ => egui::CursorIcon::ResizeNeSw,
+        _ => egui::CursorIcon::ResizeNwSe,
     }
 }
 
