@@ -755,6 +755,9 @@ them**
   are asserted in four `tests.rs` totalling 2,131 lines.
 
 **Twelve forwarding accessors copy their callee's doc comments instead of linking them**
+> _Status (2026-09-20): Done — the 12 `SfmrReconstruction` forwarding accessors
+> now give a concise caller-facing summary and link to the canonical `PointSet` method._
+
 - Location: `crates/sfmtool-core/src/reconstruction/data.rs:303–360` and **405–460**,
   against `data/point_set.rs:167–384`
 - Problem: `SfmrReconstruction` forwards 12 accessors to the identically-named

@@ -323,51 +323,44 @@ pub struct SfmrReconstruction {
 }
 
 impl SfmrReconstruction {
-    /// The `feature_source` discriminator (`"sift_files"` / `"embedded_patches"`).
+    /// Returns the point set's feature-source discriminator (`"sift_files"` or
+    /// `"embedded_patches"`). See [`PointSet::feature_source`].
     pub fn feature_source(&self) -> &str {
         self.point_set.feature_source()
     }
 
-    /// Per-observation feature indexes (parallel to the tracks), or `None` for
-    /// an `embedded_patches` reconstruction.
+    /// Returns the point set's per-observation feature indexes. See
+    /// [`PointSet::feature_indexes`].
     pub fn feature_indexes(&self) -> Option<&[u32]> {
         self.point_set.feature_indexes()
     }
 
-    /// Per-observation sub-pixel keypoints `(M, 2)`, or `None` when this
-    /// reconstruction carries none inline.
-    ///
-    /// Always present for `embedded_patches`, where the inline column *is* the
-    /// observation coordinate; present for `sift_files` only when the file
-    /// carries the optional inline copy.
+    /// Returns the point set's inline sub-pixel keypoints. See
+    /// [`PointSet::keypoints_xy`].
     pub fn keypoints_xy(&self) -> Option<&Array2<f32>> {
         self.point_set.keypoints_xy()
     }
 
-    /// Per-image feature-tool hashes, or `None` for `embedded_patches`.
+    /// Returns the point set's per-image feature-tool hashes. See
+    /// [`PointSet::feature_tool_hashes`].
     pub fn feature_tool_hashes(&self) -> Option<&[[u8; 16]]> {
         self.point_set.feature_tool_hashes()
     }
 
-    /// Per-image `.sift`-content hashes, or `None` for `embedded_patches`.
+    /// Returns the point set's per-image `.sift`-content hashes. See
+    /// [`PointSet::sift_content_hashes`].
     pub fn sift_content_hashes(&self) -> Option<&[[u8; 16]]> {
         self.point_set.sift_content_hashes()
     }
 
-    /// Per-image source-image hashes, or `None` for `sift_files`.
+    /// Returns the point set's per-image source-image hashes. See
+    /// [`PointSet::image_file_hashes`].
     pub fn image_file_hashes(&self) -> Option<&[[u8; 16]]> {
         self.point_set.image_file_hashes()
     }
 
-    /// Check that the observation-source columns are parallel to the structures
-    /// they annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
-    /// must match the track count, and per-image columns (the hashes) must match
-    /// the image count. Returns an error message describing the first mismatch.
-    ///
-    /// `from_sfmr_data` builds these in lockstep, but the in-memory editors
-    /// (notably `clone_with_changes`, which can replace tracks and columns
-    /// independently) can leave them out of step; this is the guard those paths
-    /// run before handing back a reconstruction.
+    /// Validates the point set's observation-source columns against this
+    /// reconstruction's image count. See [`PointSet::validate_observation_columns`].
     pub fn validate_observation_columns(&self) -> Result<(), String> {
         self.point_set
             .validate_observation_columns(self.image_table.image_count())
@@ -432,12 +425,12 @@ impl SfmrReconstruction {
         self.image_table.image_count()
     }
 
-    /// Number of 3D points.
+    /// Returns the number of 3D points. See [`PointSet::point_count`].
     pub fn point_count(&self) -> usize {
         self.point_set.point_count()
     }
 
-    /// Number of track observations.
+    /// Returns the number of track observations. See [`PointSet::observation_count`].
     pub fn observation_count(&self) -> usize {
         self.point_set.observation_count()
     }
@@ -447,18 +440,13 @@ impl SfmrReconstruction {
         self.image_table.camera_count()
     }
 
-    /// Return the observations for a given 3D point. O(1) lookup.
+    /// Returns a point's observations. See [`PointSet::observations_for_point`].
     pub fn observations_for_point(&self, point_idx: usize) -> &[TrackObservation] {
         self.point_set.observations_for_point(point_idx)
     }
 
-    /// The observation row of the `(image, point, feature)` triple, or `None`
-    /// when that image does not observe that point through that feature.
-    ///
-    /// A row index is what the per-observation columns (`keypoints_xy`,
-    /// `observation_confidence`) are addressed by, while
-    /// `image_feature_to_point` is keyed by feature; this walks the point's
-    /// short observation run to cross the two.
+    /// Looks up the row for an `(image, point, feature)` observation. See
+    /// [`PointSet::observation_row`].
     pub fn observation_row(
         &self,
         image_index: usize,
@@ -469,7 +457,8 @@ impl SfmrReconstruction {
             .observation_row(image_index, point_index, feature_index)
     }
 
-    /// Return the image indices that observe a given 3D point.
+    /// Returns the image indices that observe a point. See
+    /// [`PointSet::track_image_indices`].
     pub fn track_image_indices(&self, point_idx: usize) -> Vec<usize> {
         self.point_set.track_image_indices(point_idx)
     }
