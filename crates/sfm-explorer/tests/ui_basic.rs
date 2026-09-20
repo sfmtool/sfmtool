@@ -504,10 +504,13 @@ impl Attached {
     /// The window every [`Self::probe`] is rooted at, found on first use.
     ///
     /// **Deferred rather than resolved at attach, because finding it is not
-    /// cheap and five of this suite's nineteen launches never need it.** The
-    /// four MCP tests drive the viewer over HTTP and the fifth,
-    /// [`window_min_size`], asks the *process* about the window node; none of
-    /// them roots a search anywhere. Resolving eagerly charged all nineteen —
+    /// cheap and five of this suite's nineteen launches never need it.** Four
+    /// of the five MCP tests speak only HTTP to the viewer's own endpoint, and
+    /// [`window_min_size`] asks the *process* about the window node; none of
+    /// those roots a search anywhere. (The fifth MCP test,
+    /// `taking_a_camera_in_hand_reaches_a_real_window` — a code span rather
+    /// than a link because it is Windows-only — drives the Edit menu through
+    /// the tree and does.) Resolving eagerly charged all nineteen —
     /// ~0.2s each on a developer's Windows machine and, on a GitHub-hosted
     /// Windows runner, around 10s.
     ///

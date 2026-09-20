@@ -589,8 +589,9 @@ and no re-acquisition, costs 10ms against those 68. The same call is around
 on a GitHub-hosted Windows runner.
 
 So it is **deferred to first use** rather than resolved at attach. Five of the
-suite's nineteen launches never root a search — the four MCP tests drive the
-viewer over HTTP, and `window_min_size` asks the process about the window
+suite's nineteen launches never root a search — four of the five MCP tests
+speak only HTTP to the viewer's own endpoint, and `window_min_size` asks the
+process about the window
 node — and those pay nothing. The rest pay once, and it is reported as its own
 `window_ms` field rather than folded into `launch_ms` or `op_ms`; see "the
 suite reports what it costs" below.
