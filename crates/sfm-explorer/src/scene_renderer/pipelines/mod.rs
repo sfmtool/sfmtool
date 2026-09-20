@@ -1,6 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+pub(super) mod bench_track;
 pub(super) mod bg_distorted;
 pub(super) mod bg_image;
 pub(super) mod distorted_quad;

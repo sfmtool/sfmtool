@@ -1074,9 +1074,9 @@ fn collect_bench_segments(shape: &egui::Shape, out: &mut Vec<([egui::Pos2; 2], e
     match shape {
         egui::Shape::LineSegment { points, stroke }
             if [
-                super::bench_track::IN_COLOR,
-                super::bench_track::CANDIDATE_COLOR,
-                super::bench_track::OUT_COLOR,
+                crate::bench::IN_COLOR,
+                crate::bench::CANDIDATE_COLOR,
+                crate::bench::OUT_COLOR,
             ]
             .contains(&stroke.color) =>
         {
@@ -1096,9 +1096,9 @@ fn is_bench_color(color: &egui::epaint::ColorMode) -> bool {
         color,
         egui::epaint::ColorMode::Solid(solid)
             if [
-                super::bench_track::IN_COLOR,
-                super::bench_track::CANDIDATE_COLOR,
-                super::bench_track::OUT_COLOR,
+                crate::bench::IN_COLOR,
+                crate::bench::CANDIDATE_COLOR,
+                crate::bench::OUT_COLOR,
             ]
             .contains(solid)
     )
@@ -1238,9 +1238,9 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
         .expect("a track from a point carries its keypoints");
 
     for (verdict, expected) in [
-        (Verdict::In, super::bench_track::IN_COLOR),
-        (Verdict::Candidate, super::bench_track::CANDIDATE_COLOR),
-        (Verdict::Out, super::bench_track::OUT_COLOR),
+        (Verdict::In, crate::bench::IN_COLOR),
+        (Verdict::Candidate, crate::bench::CANDIDATE_COLOR),
+        (Verdict::Out, crate::bench::OUT_COLOR),
     ] {
         let mut judged = track.clone();
         for observation in &mut judged.observations {

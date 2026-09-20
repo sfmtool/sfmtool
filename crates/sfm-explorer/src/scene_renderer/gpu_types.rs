@@ -91,6 +91,49 @@ pub(super) struct CompassEdgeInstance {
     pub endpoint_b: [f32; 4],
 }
 
+/// One edge of the bench figure: two homogeneous world endpoints and its own
+/// colour.
+///
+/// Wider than [`CompassEdgeInstance`] because the compass is one object in one
+/// colour, while this figure's marks each carry their observation's verdict
+/// colour. `w` is `1.0` for a place and `0.0` for a direction, which is how a
+/// track at infinity is drawn: rotation-only, as a point at infinity is.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct BenchEdgeInstance {
+    pub endpoint_a: [f32; 4],
+    pub endpoint_b: [f32; 4],
+    pub color: [f32; 4],
+}
+
+/// One vertex of the bench figure's filled centre disc.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct BenchDiscVertex {
+    pub position: [f32; 4],
+    pub color: [f32; 4],
+}
+
+/// Uniforms for the bench track pass.
+///
+/// [`FrustumUniforms`]'s camera block, with the hover index it has no use for
+/// replaced by the one number this pass needs that no other does: how far
+/// behind the scene a fragment fades to the floor opacity.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct BenchTrackUniforms {
+    pub view_proj: [[f32; 4]; 4],
+    pub view: [[f32; 4]; 4],
+    pub screen_size: [f32; 2],
+    pub line_half_width: f32,
+    /// Near clip distance, which the shader clips segments against and reads
+    /// the scene's own view-space depth back out of the reversed-Z buffer with.
+    pub near: f32,
+    /// World units, the figure's own `4h`.
+    pub fog_distance: f32,
+    pub _pad: [f32; 3],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FrustumEdge {
@@ -266,6 +309,12 @@ pub(super) const INDICATOR_LINE_HALF_WIDTH: f32 = 2.0;
 
 /// Half-width of frustum lines in pixels.
 pub(super) const FRUSTUM_LINE_HALF_WIDTH: f32 = 1.0;
+
+/// Half-width of the bench figure's lines in pixels.
+///
+/// Half of the 2.5 px stroke the Image Detail panel's bench layer draws the
+/// same track with, so the figure reads as the same layer in both panels.
+pub(super) const BENCH_LINE_HALF_WIDTH: f32 = 1.25;
 
 /// Uniforms for image quad / distorted quad thumbnail rendering.
 ///

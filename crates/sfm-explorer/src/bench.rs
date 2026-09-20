@@ -56,6 +56,32 @@ pub(crate) mod tests;
 
 pub(crate) use geometry::PatchEdit;
 
+/// The bench's colours, one per verdict, in a hue no other layer uses.
+///
+/// Here rather than in either panel because both draw the same track: the Image
+/// Detail panel's bench layer marks it in each photograph
+/// (`specs/gui/multi-panel-image-browser.md` § "The bench layer") and the 3D
+/// viewer draws its frame where it stands in the world
+/// ([`crate::viewer_3d::bench_track`]). The overlays around them draw the
+/// reconstruction in greens, greys and the colormaps; the bench is violet
+/// throughout, so what is committed and what is being considered are never
+/// confused at a glance -- and one violet cannot mean `in` in one panel and
+/// something else in the other.
+pub(crate) const IN_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 92, 246);
+/// [`IN_COLOR`]'s companion for an observation nobody has judged yet.
+pub(crate) const CANDIDATE_COLOR: egui::Color32 = egui::Color32::from_rgb(170, 140, 255);
+/// [`IN_COLOR`]'s companion for an observation judged out.
+pub(crate) const OUT_COLOR: egui::Color32 = egui::Color32::from_rgb(130, 104, 150);
+
+/// The colour one verdict is drawn in, wherever it is drawn.
+pub(crate) fn verdict_color(verdict: Verdict) -> egui::Color32 {
+    match verdict {
+        Verdict::In => IN_COLOR,
+        Verdict::Candidate => CANDIDATE_COLOR,
+        Verdict::Out => OUT_COLOR,
+    }
+}
+
 /// Constellation size a search asks for when nobody names a radius.
 ///
 /// Fifty, which is the size the query's own radius rule is stated at: the share

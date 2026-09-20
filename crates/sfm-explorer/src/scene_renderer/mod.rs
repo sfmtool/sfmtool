@@ -19,6 +19,7 @@
 //! existing instanced draw. See `specs/gui/scene-graph.md`.
 
 mod auto_point_size;
+mod bench_track;
 #[cfg(feature = "mcp")]
 mod capture;
 mod compass;
@@ -111,6 +112,20 @@ pub struct SceneRenderer {
     track_ray_bind_group_layout: Option<wgpu::BindGroupLayout>,
     track_ray_bind_group: Option<wgpu::BindGroup>, // recreated on resize
     track_ray_count: u32,
+
+    // ── The bench's active track (post-EDL, depth-aware) ──
+    bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
+    bench_track_disc_pipeline: Option<wgpu::RenderPipeline>,
+    bench_track_edge_buffer: Option<wgpu::Buffer>,
+    bench_track_edge_count: u32,
+    bench_track_disc_buffer: Option<wgpu::Buffer>,
+    bench_track_disc_count: u32,
+    bench_track_uniform_buffer: Option<wgpu::Buffer>,
+    bench_track_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    bench_track_bind_group: Option<wgpu::BindGroup>, // recreated on resize
+    /// The figure's own `4h`, kept from the upload so the frame's uniform write
+    /// does not have to be handed the track again.
+    bench_track_fog_distance: f32,
 
     // ── Frustum rendering ──
     frustum_pipeline: Option<wgpu::RenderPipeline>,
@@ -206,6 +221,16 @@ impl SceneRenderer {
             track_ray_bind_group_layout: None,
             track_ray_bind_group: None,
             track_ray_count: 0,
+            bench_track_edge_pipeline: None,
+            bench_track_disc_pipeline: None,
+            bench_track_edge_buffer: None,
+            bench_track_edge_count: 0,
+            bench_track_disc_buffer: None,
+            bench_track_disc_count: 0,
+            bench_track_uniform_buffer: None,
+            bench_track_bind_group_layout: None,
+            bench_track_bind_group: None,
+            bench_track_fog_distance: 0.0,
             frustum_pipeline: None,
             frustum_uniform_buffer: None,
             frustum_bind_group_layout: None,
@@ -506,6 +531,13 @@ impl SceneRenderer {
         self.track_ray_pipeline = Some(tr.pipeline);
         self.track_ray_uniform_buffer = Some(tr.uniform_buffer);
         self.track_ray_bind_group_layout = Some(tr.bind_group_layout);
+
+        // ── Bench track pipelines (post-EDL, depth-aware) ──
+        let bt = pipelines::bench_track::create(device);
+        self.bench_track_edge_pipeline = Some(bt.edge_pipeline);
+        self.bench_track_disc_pipeline = Some(bt.disc_pipeline);
+        self.bench_track_uniform_buffer = Some(bt.uniform_buffer);
+        self.bench_track_bind_group_layout = Some(bt.bind_group_layout);
 
         // ── Frustum wireframe pipeline ──
         let fr = pipelines::frustum::create(device);

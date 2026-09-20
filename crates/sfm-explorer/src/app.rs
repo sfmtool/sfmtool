@@ -656,6 +656,14 @@ impl App {
             }
         }
 
+        // The bench's active track, as the figure the 3D viewer built out of
+        // what the dock handed it. Rebuilt and re-uploaded every frame rather
+        // than gated on a change the way the rays are: the arrowhead's barbs
+        // turn to face the eye, so a camera move alone invalidates it, and it
+        // is a few hundred instances.
+        self.scene_renderer
+            .upload_bench_track(device, self.viewer_3d.bench_figure.as_ref());
+
         // Upload/clear background image for camera view mode. The background is
         // a singleton too, serving the camera view's own node — whose transform
         // the uniform update below needs, the mesh being built in that node's
@@ -768,6 +776,12 @@ impl App {
         self.scene_renderer
             .update_track_ray_uniforms(queue, &self.viewer_3d.camera);
         self.scene_renderer.render_track_rays(encoder);
+
+        // The bench's active track, last of the post-EDL passes: it is the
+        // thing being worked on, so nothing the frame drew is over it.
+        self.scene_renderer
+            .update_bench_track_uniforms(queue, &self.viewer_3d.camera);
+        self.scene_renderer.render_bench_track(encoder);
 
         // Copy 5x5 depth + pick region under the mouse (shared by hover + click)
         if let Some([px, py]) = self.viewer_3d.hover_pixel {

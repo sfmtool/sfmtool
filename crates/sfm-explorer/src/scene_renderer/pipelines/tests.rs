@@ -39,6 +39,7 @@ fn every_shader_compiles() {
     super::patch::create(&device);
     super::target::create(&device);
     super::track_ray::create(&device);
+    super::bench_track::create(&device);
     let bg_image = super::bg_image::create(&device);
     // These two reuse the bind-group layout of the pipeline they extend.
     super::bg_distorted::create(&device, &bg_image.bind_group_layout);

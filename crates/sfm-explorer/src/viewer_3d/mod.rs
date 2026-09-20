@@ -6,6 +6,10 @@
 //! Renders point clouds and camera frustums with orbit/pan/zoom camera
 //! navigation, keyboard fly mode, and animated transitions.
 
+/// Crate-visible because the scene renderer draws what it builds: the figure
+/// is world geometry with no GPU in it, and the pass that uploads it lives in
+/// [`crate::scene_renderer`].
+pub(crate) mod bench_track;
 mod camera;
 mod hud;
 mod input;
@@ -225,6 +229,14 @@ pub struct Viewer3D {
     /// frames: a menu opens on the frame of the click and an entry is chosen on
     /// a later one.
     pub point_menu: Option<PointGesture>,
+    /// The figure the bench's active track draws in the scene, as of the last
+    /// frame this panel was shown, or `None` when there is nothing to draw.
+    ///
+    /// Built here rather than in the upload because it is a reading of the
+    /// viewport camera -- the arrowhead's barbs turn to face the eye -- and the
+    /// eye is this panel's. `app.rs` uploads it and the pass draws it, on the
+    /// frame-behind cadence every other camera-derived value already runs on.
+    pub(crate) bench_figure: Option<bench_track::Figure>,
     /// Where each of the point menu's entries was drawn on the frame just
     /// past, empty on a frame with no menu up.
     ///
@@ -286,6 +298,7 @@ impl Viewer3D {
             hud_rect: None,
             menu_point: None,
             point_menu: None,
+            bench_figure: None,
             menu_entry_rects: Vec::new(),
         }
     }
@@ -398,6 +411,11 @@ impl Viewer3D {
         // what the point menu greys its entries with. Read before the node is
         // borrowed out of the scene, because the answer is the whole state's.
         busy: Option<&str>,
+        // The node's bench, as much of it as this layer draws: the active
+        // track, the value its marks unproject through and the node's
+        // transform. Read out by the dock for the reason `busy` above is --
+        // the state is borrowed mutably further down this same call.
+        bench: Option<bench_track::BenchTrack<'_>>,
         // The viewport's own keyboard bindings — `Z` and `Home` — are
         // discrete commands, so they record what they did. Taken as a separate
         // `&mut` rather than through `AppState` because `node` and `scene`
@@ -540,6 +558,12 @@ impl Viewer3D {
 
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui);
+
+        // The bench's active track, as the scene geometry the next frame's
+        // upload draws. After the camera has been moved by this frame's input,
+        // because the arrowhead is squared to the eye.
+        let eye = self.camera.position();
+        self.bench_figure = bench.and_then(|bench| bench_track::figure(&bench, eye));
 
         // The lock banner, over the scene and under nothing: it is what the
         // viewport is in the middle of.

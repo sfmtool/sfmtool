@@ -184,11 +184,29 @@ impl TabContext<'_> {
             .state
             .selected_recon
             .and_then(|id| self.state.busy_refusal(id));
+        // What the viewport is told about the node's bench: the active track,
+        // which its bench layer draws as scene geometry. Read out here, before
+        // the node is borrowed out of the scene, for the reason `busy` above
+        // is -- and owned (its own `Arc`, not a borrow of the state), the way
+        // the Image Detail panel's own bench value is read out.
+        let active = self.state.selected_recon.and_then(|id| {
+            let bench = self.state.bench(id)?;
+            bench
+                .track(crate::bench::active_track_label(bench)?)
+                .cloned()
+        });
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
+            let bench = active
+                .as_ref()
+                .map(|track| crate::viewer_3d::bench_track::BenchTrack {
+                    track,
+                    edited: node.edited(),
+                    transform: &node.transform,
+                });
             self.viewer_3d.show(
                 ui,
                 node,
@@ -206,9 +224,13 @@ impl TabContext<'_> {
                 self.hover_depth,
                 self.hover_pick,
                 busy.as_deref(),
+                bench,
                 &mut self.state.action_log,
             );
         } else {
+            // Nothing selected is nothing on a bench: the figure would
+            // otherwise hang in the scene after the node that held it closed.
+            self.viewer_3d.bench_figure = None;
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(100.0);

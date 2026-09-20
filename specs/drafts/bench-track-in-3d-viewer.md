@@ -28,9 +28,14 @@ that are not active draw nothing, as in Image Detail.
 
 It is drawn **in the scene, by the GPU**, the way the target compass is
 ([`../gui/point-cloud-rendering.md`](../gui/point-cloud-rendering.md) § "Depth-Aware
-Transparency"): a pass after the EDL pass that samples the scene's linear depth
-texture, so each fragment knows whether it is in front of the scene's geometry
-or behind it. The figure therefore shows **how it meets the geometry around
+Transparency"): a pass after the EDL pass that samples the scene's hardware
+depth buffer, so each fragment knows whether it is in front of the scene's
+geometry or behind it. The hardware buffer and not the linear-depth attachment,
+which a patch, a frustum and an image quad all write as zero: a frame sunk into
+a surfel has to read as behind it. Under the infinite reversed-Z projection
+`ndc_z = near / view_depth`, so dividing the two depths back out states the gap
+between them in world units, which is what lets the falloff below be in the
+patch's own size. The figure therefore shows **how it meets the geometry around
 it**: where the frame cuts through the point cloud or a patch, the part in
 front is drawn at full strength and the part behind is drawn through, dimmed.
 

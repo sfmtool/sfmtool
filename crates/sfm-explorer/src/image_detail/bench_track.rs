@@ -44,19 +44,11 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::ImageTable;
 
 use crate::bench::geometry::{self, PatchEdit};
+use crate::bench::verdict_color;
 use sfmtool_core::bench::Edge;
 use sfmtool_core::EditedReconstruction;
 
 use super::ImageDetailResponse;
-
-/// The bench's colours, one per verdict, in a hue no feature overlay uses.
-///
-/// The overlays draw the reconstruction in greens, greys and the colormaps; the
-/// bench is violet throughout, so what is committed and what is being
-/// considered are never confused at a glance.
-pub(super) const IN_COLOR: Color32 = Color32::from_rgb(255, 92, 246);
-pub(super) const CANDIDATE_COLOR: Color32 = Color32::from_rgb(170, 140, 255);
-pub(super) const OUT_COLOR: Color32 = Color32::from_rgb(130, 104, 150);
 
 /// Stroke width of the bench's outlines. Thicker than a feature ellipse's, so
 /// the layer reads as being on top of the overlay rather than part of it.
@@ -409,7 +401,7 @@ impl Layer {
                         radius,
                         to_panel,
                     ),
-                    color_of(observation.verdict).gamma_multiply(0.7),
+                    verdict_color(observation.verdict).gamma_multiply(0.7),
                 ));
             }
             let corners = parallelogram(
@@ -535,7 +527,7 @@ impl Layer {
             ));
         }
         for outline in &self.outlines {
-            let stroke = Stroke::new(STROKE_WIDTH, color_of(outline.verdict));
+            let stroke = Stroke::new(STROKE_WIDTH, verdict_color(outline.verdict));
             let (runs, closed) = outline.runs();
             for run in runs {
                 if run.len() < 2 {
@@ -549,7 +541,7 @@ impl Layer {
             }
         }
         for sighting in &self.sightings {
-            let color = color_of(sighting.verdict);
+            let color = verdict_color(sighting.verdict);
             painter.circle_filled(sighting.at, KEYPOINT_RADIUS, color);
             // The projection offset, drawn rather than tabulated, and drawn
             // for every observation whatever its verdict: where this image's
@@ -584,7 +576,7 @@ impl Layer {
                     draw_turn_glyph(
                         painter,
                         at + away * TURN_GLYPH_RADIUS,
-                        color_of(outline.verdict),
+                        verdict_color(outline.verdict),
                     );
                 }
             }
@@ -873,13 +865,4 @@ fn draw_turn_glyph(painter: &egui::Painter, at: Pos2, color: Color32) {
     let head = TURN_GLYPH_RADIUS * 0.34;
     painter.line_segment([tip, tip - tangent * head + outward * head * 0.6], stroke);
     painter.line_segment([tip, tip - tangent * head - outward * head * 0.6], stroke);
-}
-
-/// The colour one verdict is drawn in.
-fn color_of(verdict: Verdict) -> Color32 {
-    match verdict {
-        Verdict::In => IN_COLOR,
-        Verdict::Candidate => CANDIDATE_COLOR,
-        Verdict::Out => OUT_COLOR,
-    }
 }

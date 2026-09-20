@@ -249,6 +249,28 @@ impl SceneRenderer {
             self.track_ray_bind_group = Some(bind_group);
         }
 
+        // Recreate the bench track bind group (references hw depth texture)
+        if let (Some(layout), Some(uniform_buf)) = (
+            &self.bench_track_bind_group_layout,
+            &self.bench_track_uniform_buffer,
+        ) {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bench track bind group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&hw_depth_view),
+                    },
+                ],
+            });
+            self.bench_track_bind_group = Some(bind_group);
+        }
+
         self.splat_color_view = Some(splat_color_view);
         self.linear_depth_view = Some(linear_depth_view);
         self.linear_depth_texture = Some(linear_depth);
