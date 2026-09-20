@@ -171,6 +171,12 @@ pub struct SceneGraphResponse {
     /// long one, so `AppState::start_retriangulate_all_points` sends it to a
     /// worker after the frame.
     pub retriangulate_all_points: Option<ReconId>,
+    /// `Prune Covered Observations` chosen from a reconstruction's context
+    /// menu: retire every observation a finer tracked one covers, as the node's
+    /// next version. A bulk edit, and a long one, so
+    /// `AppState::start_prune_covered_observations` sends it to a worker after
+    /// the frame.
+    pub prune_covered_observations: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// A Bench row was clicked: make that item the active one of its kind. The

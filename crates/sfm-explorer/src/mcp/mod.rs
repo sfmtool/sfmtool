@@ -220,6 +220,11 @@ pub(crate) enum Command {
     RetriangulateAllPoints {
         reconstruction_label: String,
     },
+    /// Retire every observation of one node a finer tracked one covers.
+    PruneCoveredObservations {
+        reconstruction_label: String,
+        options: sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions,
+    },
     DeleteCameraImage {
         reconstruction_label: String,
         camera_image: CameraImageSel,
@@ -974,6 +979,10 @@ pub(crate) fn apply_with_window(
         Command::RetriangulateAllPoints {
             reconstruction_label,
         } => edit::retriangulate_all_points(state, &reconstruction_label),
+        Command::PruneCoveredObservations {
+            reconstruction_label,
+            options,
+        } => edit::prune_covered_observations(state, &reconstruction_label, &options),
         Command::DeleteCameraImage {
             reconstruction_label,
             camera_image,
@@ -1710,6 +1719,7 @@ impl Command {
             Command::DeletePoint { .. } => "delete_point",
             Command::RetriangulatePoint { .. } => "retriangulate_point",
             Command::RetriangulateAllPoints { .. } => "retriangulate_all_points",
+            Command::PruneCoveredObservations { .. } => "prune_covered_observations",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImage { .. } => "resect_camera_image",
@@ -1906,6 +1916,7 @@ impl Command {
             | Command::DeletePoint { .. }
             | Command::RetriangulatePoint { .. }
             | Command::RetriangulateAllPoints { .. }
+            | Command::PruneCoveredObservations { .. }
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImage { .. }

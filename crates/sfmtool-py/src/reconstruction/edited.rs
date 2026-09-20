@@ -31,6 +31,9 @@ use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointMap, PointRecord, RecordObservation, RowMap,
 };
 use sfmtool_core::reconstruction::move_camera::move_camera as core_move_camera;
+use sfmtool_core::reconstruction::prune_covered::{
+    prune_covered_observations as core_prune_covered, PruneCoveredOptions,
+};
 use sfmtool_core::{Point3D, RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::sfmr_reconstruction::PySfmrReconstruction;
@@ -622,6 +625,122 @@ impl PyEditedReconstruction {
             },
             d.unbind(),
         ))
+    }
+
+    /// Retire every observation of this version that a finer tracked one
+    /// covers, and give back the value that is left.
+    ///
+    /// Per observation the rule reads two lengths off one projection of the
+    /// point's patch frame into the observing camera (see
+    /// ``specs/core/reconstruction/prune-covered-observations.md``). The
+    /// **radius** is the mean of the projected frame's two column norms, and
+    /// the **footprint** containment is asked within is ``footprint_fraction``
+    /// of it. An observation is retired where another observation in the same
+    /// image, on another point, sits inside that footprint with a radius at
+    /// least ``ratio`` times smaller; the coarse side goes, never the fine one.
+    /// A point the value ranges or holds is never retired and still covers, and
+    /// a point left under ``min_observations`` is dropped with its survivors.
+    ///
+    /// Nothing is re-solved: no point, camera or lens moves, and a surviving
+    /// point keeps its position, frame, bitmap, colour and constraint. A
+    /// **bulk** edit, so the value that comes back is a whole new base with an
+    /// empty overlay, and this object is not changed. A prune that retires
+    /// nothing gives this version back as it stands, with ``changed`` false.
+    ///
+    /// Args:
+    ///     footprint_fraction: The fraction of an observation's projected
+    ///         radius its footprint is (default 0.5). A patch embedded at
+    ///         patch size 11 spans 5.5 feature sizes, and a keypoint's support
+    ///         is stated at 2.5 of them, so the faithful value on such a file
+    ///         is ``2.5 / 5.5 = 0.4545``.
+    ///     ratio: How many times finer the covering observation has to be
+    ///         (default 2.0, one octave).
+    ///     min_fine_radius_px: A covering observation whose projected radius is
+    ///         below this says nothing (default 1.0): a feature that projects
+    ///         to a fraction of a pixel is a collapsed measurement.
+    ///     min_observations: Surviving observations a point needs to be kept
+    ///         (default 2).
+    ///
+    /// Returns:
+    ///     ``(EditedReconstruction, report)``. The report carries ``changed``,
+    ///     ``map`` (a ``PointMap``), ``points_before``, ``points_after``,
+    ///     ``observations_before``, ``observations_after``,
+    ///     ``degenerate_rows``, ``protected_rows``, ``protected_rows_spared``,
+    ///     ``census`` (the rule's own counts) and ``bands``, a list of
+    ///     ``{"band", "lower_px", "upper_px", "rows", "rows_retired",
+    ///     "points_dropped"}`` coarsest first. Raises ``ValueError`` with the
+    ///     reason when the prune is refused.
+    // This is a Python docstring (rendered by `help()`), not Rust prose: its
+    // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
+    // indented code blocks, which rustdoc then tries to parse as Rust.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
+    #[pyo3(signature = (
+        *,
+        footprint_fraction=0.5,
+        ratio=2.0,
+        min_fine_radius_px=1.0,
+        min_observations=2,
+    ))]
+    fn prune_covered_observations(
+        &self,
+        py: Python<'_>,
+        footprint_fraction: f64,
+        ratio: f64,
+        min_fine_radius_px: f64,
+        min_observations: usize,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let options = PruneCoveredOptions {
+            footprint_fraction,
+            ratio,
+            min_fine_radius_px,
+            min_observations,
+        };
+        let (next, map, report) = py
+            .detach(|| core_prune_covered(&self.inner, &options, &Progress::none()))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let census = PyDict::new(py);
+        census.set_item("rows", report.census.rows)?;
+        census.set_item("pairs_contained", report.census.pairs_contained)?;
+        census.set_item("pairs_finer", report.census.pairs_finer)?;
+        census.set_item("rows_flagged", report.census.rows_flagged)?;
+        census.set_item("rows_spared", report.census.rows_spared)?;
+        census.set_item("rows_removed", report.census.rows_removed)?;
+        census.set_item(
+            "owners_dropped_all_covered",
+            report.census.owners_dropped_all_covered,
+        )?;
+        census.set_item(
+            "owners_dropped_by_sweep",
+            report.census.owners_dropped_by_sweep,
+        )?;
+        census.set_item("owners_kept", report.census.owners_kept)?;
+
+        let bands = PyList::empty(py);
+        for band in &report.bands {
+            let b = PyDict::new(py);
+            b.set_item("band", band.band)?;
+            b.set_item("lower_px", band.lower_px)?;
+            b.set_item("upper_px", band.upper_px)?;
+            b.set_item("rows", band.rows)?;
+            b.set_item("rows_retired", band.rows_retired)?;
+            b.set_item("points_dropped", band.points_dropped)?;
+            bands.append(b)?;
+        }
+
+        let d = PyDict::new(py);
+        d.set_item("changed", report.changed)?;
+        d.set_item("map", PyPointMap::wrap(map))?;
+        d.set_item("points_before", report.points_before)?;
+        d.set_item("points_after", report.points_after)?;
+        d.set_item("observations_before", report.observations_before)?;
+        d.set_item("observations_after", report.observations_after)?;
+        d.set_item("degenerate_rows", report.degenerate_rows)?;
+        d.set_item("protected_rows", report.protected_rows)?;
+        d.set_item("protected_rows_spared", report.protected_rows_spared)?;
+        d.set_item("census", census)?;
+        d.set_item("bands", bands)?;
+        Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 
     /// Bundle-adjust this version, and give back the answer as its successor.

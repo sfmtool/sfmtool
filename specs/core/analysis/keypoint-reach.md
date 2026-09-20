@@ -64,11 +64,17 @@ scheduling.
 
 ## What consumes it
 
-Nothing in the pipeline, today. The enumeration's only callers are its own
-tests (`spatial/keypoint_reach/tests.rs`) and the Python binding below, through
-`tests/rust_bindings/test_keypoint_reach_rust_bindings.py`. It was extracted
-from two rules that ask this question, and both still expand the neighbourhood
-for themselves in NumPy; see [Open questions](#open-questions).
+**Retiring coarse observations a finer feature covers**
+([covered-by-finer.md](covered-by-finer.md)) sets the reach to the row's drawn
+footprint, keeps the pairs at least one radius band apart, and retires the
+coarse side. It reads the pair stream directly and adds its own tests over it,
+which is the calling pattern this module is shaped for.
+
+The other rule extracted from was **reconciling points that rest on one
+measurement**, which would set the reach to a fraction of the row's refined unit
+scale, keep the pairs whose radii agree, and join their points into one tangle.
+It still expands the neighbourhood for itself in NumPy; see
+[Open questions](#open-questions).
 
 ## Binding
 
@@ -103,20 +109,12 @@ the documented "asks nothing" value, not an error.
 
 ## Open questions
 
-**Whether the two rules this was extracted from should migrate onto it.** Both
-ask the same question of the same rows and differ only in what they then test,
-which is why the enumeration was stated once:
-
-- *Retiring coarse observations a finer feature covers* would set the reach to
-  the row's drawn footprint, keep the pairs at least one radius band apart, and
-  retire the coarse side.
-- *Reconciling points that rest on one measurement* would set the reach to a
-  fraction of the row's refined unit scale, keep the pairs whose radii agree,
-  and join their points into one tangle.
-
-Each verdict would be an exact function of the pair set, so the enumeration
-would carry its determinism. What a migration has to establish, and what nothing
-asserts today, is that each rule's mask comes out byte for byte identical to
-what its NumPy expansion produces now — including on the members the
-reconciliation's tolerance was drawn from. Until that parity is measured neither
-rule is a consumer of this module.
+**Whether the same-measurement reconciliation should migrate onto it.** It asks
+this question of these rows and differs only in what it then tests, which is why
+the enumeration was stated once. Its verdict would be an exact function of the
+pair set, so the enumeration would carry its determinism. What a migration has to
+establish, and what nothing asserts today, is that the rule's mask comes out byte
+for byte identical to what its NumPy expansion produces now — including on the
+members the reconciliation's tolerance was drawn from. That is the parity the
+covering rule's own binding test establishes for its half of the pair
+([covered-by-finer.md](covered-by-finer.md) § "Testing").

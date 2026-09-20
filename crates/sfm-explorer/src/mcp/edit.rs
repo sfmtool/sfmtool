@@ -193,6 +193,36 @@ pub(super) fn retriangulate_all_points(state: &mut AppState, label: &str) -> sup
     }))
 }
 
+/// `prune_covered_observations`: start the prune, and answer with its version
+/// or with a handle, whichever the clock reaches first.
+///
+/// It replies the way the other background operations do: a reconstruction of
+/// any size spends real time projecting every patch frame into every image that
+/// sees it, so a large node outlives [`REPLY_DIRECTLY_WITHIN`] and answers with
+/// a [`BackgroundReply`] the frame resolves. A prune that retires nothing
+/// pushes no version, and the Action Log row says so.
+pub(super) fn prune_covered_observations(
+    state: &mut AppState,
+    label: &str,
+    options: &sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions,
+) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_prune_covered_observations(id, options) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        node: id,
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
 pub(super) fn delete_camera_image(
     state: &mut AppState,
     label: &str,

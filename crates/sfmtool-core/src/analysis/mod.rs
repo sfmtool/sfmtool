@@ -4,15 +4,17 @@
 //! Reconstruction analysis: alignment between reconstructions, points-at-infinity
 //! discovery, covisibility / frustum-intersection image-pair graphs, image-space
 //! observation adjacency between points and the surfel normals fitted over it,
-//! per-image occupancy grids over the observations' footprints, per-point
-//! triangulation inspection, the cluster match census, the per-cluster feature
-//! radius and the coarsest-N cut over it, and the join that names the selection
-//! clusters a member left behind.
+//! per-image occupancy grids over the observations' footprints, the retirement
+//! of a coarse observation a finer one covers, per-point triangulation
+//! inspection, the cluster match census, the per-cluster feature radius and the
+//! coarsest-N cut over it, and the join that names the selection clusters a
+//! member left behind.
 
 pub mod adjacency_surfel_normals;
 pub mod alignment;
 pub mod cluster_census;
 pub mod cluster_radii;
+pub mod covered_by_finer;
 pub mod image_pair_graph;
 pub mod infinity;
 pub mod observation_adjacency;

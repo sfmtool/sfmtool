@@ -21,6 +21,7 @@ _EXPECTED_FUNCTIONS = (
     "estimate_adjacency_surfel_normals",
     "cluster_census",
     "keypoint_pairs_within_reach",
+    "covered_by_finer",
 )
 
 _EXPECTED_CLASSES = ("ObservationCoverage",)

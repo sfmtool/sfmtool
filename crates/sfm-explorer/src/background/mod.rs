@@ -118,6 +118,19 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// One node's coarse observations retired where a finer tracked one covers
+    /// them (`specs/gui/edits/prune-covered-observations.md`).
+    ///
+    /// Cancellable because
+    /// `sfmtool_core::reconstruction::prune_covered_observations` polls the
+    /// flag between its stages and hands back `PruneCoveredError::Cancelled`
+    /// rather than a value some of whose tracks were shortened.
+    pub(crate) const PRUNE_COVERED_OBSERVATIONS: Operation = Operation {
+        name: "Prune covered observations",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
     ///
     /// Cancellable: the reading polls the flag on either side of the decode,
@@ -180,10 +193,11 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 8] = [
+    pub(crate) const ALL: [Operation; 9] = [
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
+        Operation::PRUNE_COVERED_OBSERVATIONS,
         Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
@@ -316,6 +330,14 @@ pub(crate) enum Finished {
         /// The Action Log sentence, up to the serials.
         text: String,
     },
+    /// The kernel ran to its end and found nothing to change.
+    ///
+    /// Not a refusal and not a version: an edit whose answer is "there was
+    /// nothing here to do" has run successfully, and pushing a version that
+    /// changes nothing would put a row in the history a reader cannot tell from
+    /// one that did something. So the sentence is recorded and the document is
+    /// left alone.
+    NoChange(String),
     /// The operation was asked to stop, and did.
     Cancelled,
     /// The kernel refused, in its own words.
@@ -712,6 +734,9 @@ impl AppState {
                     }
                 }
             }
+            // Nothing to install and nothing to push, so the row is the whole
+            // of it: the node's caches still describe the value it holds.
+            Finished::NoChange(text) => Ok(text),
             // No elapsed in the sentence: the entry is timed from `started`
             // like the successful one, so the cost column already says how
             // long it ran, and two spellings of one number can only disagree.

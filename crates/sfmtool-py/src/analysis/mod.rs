@@ -5,9 +5,10 @@
 //! RANSAC alignment, point correspondence, batch triangulation, epipolar curves,
 //! image-pair graph construction, image-space observation adjacency and the
 //! surfel normals fitted over it, per-image observation coverage grids, the
-//! per-image keypoint reach enumeration, the cluster match census, the
-//! per-cluster feature radius and the coarsest-N cut over it, and the join that
-//! names the selection clusters a member left behind.
+//! per-image keypoint reach enumeration and the rule that retires a coarse
+//! observation a finer one covers, the cluster match census, the per-cluster
+//! feature radius and the coarsest-N cut over it, and the join that names the
+//! selection clusters a member left behind.
 
 use pyo3::prelude::*;
 
@@ -15,6 +16,7 @@ pub mod adjacency_surfel_normals;
 pub mod cluster_census;
 pub mod cluster_radii;
 pub mod core;
+pub mod covered_by_finer;
 pub mod epipolar;
 pub mod image_pair_graph;
 pub mod keypoint_reach;
@@ -29,6 +31,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     epipolar::register(m)?;
     image_pair_graph::register(m)?;
     keypoint_reach::register(m)?;
+    covered_by_finer::register(m)?;
     observation_adjacency::register(m)?;
     observation_coverage::register(m)?;
     source_clusters::register(m)?;

@@ -54,6 +54,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     show_tint_menu(ui, node, out);
     ui.separator();
     show_retriangulate_entry(ui, node, out);
+    show_prune_covered_entry(ui, node, out);
     show_convert_entry(ui, node, out);
     ui.separator();
     if ui.button("Close").clicked() {
@@ -94,6 +95,40 @@ fn show_retriangulate_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
         .clicked()
     {
         out.response.retriangulate_all_points = Some(node.id);
+        ui.close();
+    }
+}
+
+/// What the entry that retires a node's covered observations is called, in the
+/// menu and in the tests that aim at it.
+pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations";
+
+/// `Prune Covered Observations`: every observation of the node a finer tracked
+/// one covers, handed over to the feature that supersedes it.
+///
+/// Sits directly under [`show_retriangulate_entry`] because the two are the
+/// pair a reviewer reaches for together: one re-reads what each track says, the
+/// other decides which tracks should still be saying it. Greyed rather than
+/// hidden when it cannot run, on `AppState`'s own sentence.
+fn show_prune_covered_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = crate::state::edits::prune_covered_refusal(node, out.busy_refusal(node.id));
+    let entry = ui
+        .add_enabled(
+            refusal.is_none(),
+            egui::Button::new(PRUNE_COVERED_OBSERVATIONS),
+        )
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Retire every observation a finer tracked one covers in the same image, and drop \
+             the points left with fewer than two, as one version. Moves nothing and re-solves \
+             nothing. Pinned points are spared. Runs on a worker thread and can be cancelled; \
+             Undo (Ctrl+Z) puts the observations back.",
+        );
+    if out
+        .hit(row_id(node.id, "prune_covered_observations"), entry)
+        .clicked()
+    {
+        out.response.prune_covered_observations = Some(node.id);
         ui.close();
     }
 }

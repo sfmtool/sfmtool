@@ -1582,6 +1582,37 @@ impl RowMap {
         })
     }
 
+    /// The map a whole-value edit that **only drops points** performed, stated
+    /// by the edit rather than read back off its two values.
+    ///
+    /// `point_count` is how many points the edit was given and `removed` the
+    /// indexes it dropped, in any order and with repeats allowed. Every
+    /// surviving point moves down by how many dropped indexes sit below it,
+    /// which is the whole of what such an edit does.
+    ///
+    /// [`RowMap::by_scan`] answers the same question for an edit that cannot
+    /// say what it did, and pays for it: it identifies a point by the images
+    /// that see it, so on a value whose points are all seen by the same images
+    /// it cannot tell a dropped point from the one after it. An edit that
+    /// **knows** its answer says so here instead of having it guessed.
+    pub fn by_removal(point_count: u32, removed: &[u32]) -> Self {
+        let mut holes: Vec<u32> = removed
+            .iter()
+            .copied()
+            .filter(|&index| index < point_count)
+            .collect();
+        holes.sort_unstable();
+        holes.dedup();
+        RowMap {
+            base_count: point_count,
+            holes,
+            replaced: Vec::new(),
+            by_edited: Vec::new(),
+            by_new: Vec::new(),
+            scan: None,
+        }
+    }
+
     /// Where `edited` landed, or `None` when that index named no live point.
     pub fn forward(&self, edited: u32) -> Option<u32> {
         if let Some(scan) = &self.scan {

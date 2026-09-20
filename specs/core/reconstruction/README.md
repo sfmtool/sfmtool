@@ -10,4 +10,5 @@ Operations on reconstruction data itself. Implemented in
 | [bundle-adjust.md](bundle-adjust.md) | Bundle-adjusting a whole reconstruction: what goes into the shared-camera kernel, the constraints and representations it honours, the points it leaves unsupported and deletes, and the patch frames it rescales with their depth. |
 | [batch-triangulation-api.md](batch-triangulation-api.md) | Batch triangulation carrying per-point observability diagnostics, and the classifier over them. |
 | [triangulation-rules.md](triangulation-rules.md) | Reading every point of a track set from its observations at one geometry, with the per-track rules (floor, cheirality, bar, few) held once for every caller, and the reconstruction-level re-triangulation over them that honours a value's own point constraints. |
+| [prune-covered-observations.md](prune-covered-observations.md) | Retiring every observation a finer tracked one covers in the same image, and dropping the points left with too few: a subtraction over the value, with nothing re-solved. |
 | [point-correspondence.md](point-correspondence.md) | Finding the same 3D point across two reconstructions, and merging their tracks. |

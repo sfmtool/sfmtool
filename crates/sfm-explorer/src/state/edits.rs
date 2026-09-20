@@ -33,6 +33,9 @@ use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress_note;
+use sfmtool_core::reconstruction::prune_covered::{
+    prune_covered_observations, PruneCoveredError, PruneCoveredOptions, PruneCoveredReport,
+};
 use sfmtool_core::reconstruction::triangulation::{
     retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
     RetriangulateWhich,
@@ -135,6 +138,72 @@ pub(crate) fn retriangulate_refusal(
             "Retriangulation reads one shared camera, and these images are taken through {n}."
         )),
     }
+}
+
+/// Why `node`'s covered observations cannot be pruned, or `None` when they can.
+///
+/// The three reasons a caller can see without reading a single footprint, and
+/// they are the core operation's own refusals ([`PruneCoveredError`]) asked
+/// before the gesture rather than after it: the points carry no patch frame to
+/// read a footprint off, the observations carry no pixel for one to sit at, and
+/// no image carries a pose to project through.
+///
+/// A free function over the node and the busy sentence for the reason
+/// [`retriangulate_refusal`] is one, and `busy` comes first for the same reason:
+/// an operation already running on the node is the reason that will still be
+/// true a moment later.
+pub(crate) fn prune_covered_refusal(
+    node: &crate::scene::SceneNode,
+    busy: Option<&str>,
+) -> Option<String> {
+    if let Some(why) = busy {
+        return Some(why.to_string());
+    }
+    let edited = node.history.current();
+    if !edited.has_patch_frames() {
+        return Some(
+            "This reconstruction's points carry no patch frame, and an observation's \
+             footprint is that frame projected into the image that saw it."
+                .to_string(),
+        );
+    }
+    if !edited.has_keypoints() {
+        return Some(
+            "This reconstruction's observations are .sift feature indexes with no inline \
+             keypoints, and a footprint needs a pixel to sit at."
+                .to_string(),
+        );
+    }
+    (edited.posed_lens_count() == 0)
+        .then(|| "No image of this reconstruction carries a pose.".to_string())
+}
+
+/// What one prune did, as the Action Log says it.
+fn prune_covered_summary(report: &PruneCoveredReport) -> String {
+    if !report.changed {
+        return "no effect, no observation is covered by a finer one".to_string();
+    }
+    let mut text = format!(
+        "{} of {} observations retired",
+        report.census.rows_removed, report.observations_before
+    );
+    let dropped = report.points_before - report.points_after;
+    if dropped > 0 {
+        text.push_str(&format!(", {dropped} points dropped"));
+    }
+    if report.protected_rows_spared > 0 {
+        text.push_str(&format!(
+            ", {} pinned rows spared",
+            report.protected_rows_spared
+        ));
+    }
+    if report.degenerate_rows > 0 {
+        text.push_str(&format!(
+            ", {} rows without a usable footprint",
+            report.degenerate_rows
+        ));
+    }
+    text
 }
 
 /// What one retriangulation did, as the Action Log says it.
@@ -541,6 +610,114 @@ impl AppState {
                 // `RetriangulateWhich::All` folds the overlay in, so the value
                 // that comes back is a base with nothing over it, and taking it
                 // out of the version is a move rather than a materialisation.
+                value: Arc::unwrap_or_clone(next.base),
+                map,
+                version_label,
+                text,
+            }
+        }))
+    }
+
+    /// Why pruning `id`'s covered observations is refused right now, or `None`.
+    ///
+    /// [`prune_covered_refusal`]'s question asked of a node this state holds,
+    /// which is the form the wire and the job want; the Scene tree's menu asks
+    /// the free function directly, because the walk that draws it has the node
+    /// and not the state.
+    pub(crate) fn prune_covered_refusal(&self, id: ReconId) -> Option<String> {
+        let busy = self.busy_refusal(id);
+        prune_covered_refusal(self.node(id)?, busy.as_deref())
+    }
+
+    /// Start a prune of `id`'s covered observations on a worker thread.
+    ///
+    /// A bulk edit: the retired observations and the points left under the bar
+    /// are taken out, so the next version is a whole new base and the surviving
+    /// points are renumbered. The caller drops its panel-local caches for the
+    /// node afterwards, which the frame that installs the version does off
+    /// `Polled::installed`.
+    ///
+    /// Returns as soon as the worker is running, and **nothing is logged
+    /// here**: the entry is the outcome's, written by
+    /// [`AppState::poll_background_task`] on the frame the answer lands, from
+    /// the instant the operation started and in the name of whoever asked for
+    /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
+    /// edits log theirs.
+    pub fn start_prune_covered_observations(
+        &mut self,
+        id: ReconId,
+        options: &PruneCoveredOptions,
+    ) -> Result<(), String> {
+        let outcome = match self.prune_covered_observations_job(id, options) {
+            Ok(job) => self.start_background_task(Operation::PRUNE_COVERED_OBSERVATIONS, id, job),
+            Err(message) => Err(message),
+        };
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Edit, message.clone());
+        }
+        outcome
+    }
+
+    /// The prune itself, as a function of the
+    /// [`Progress`](sfmtool_core::progress::Progress) it reports through.
+    ///
+    /// The closure owns what it reads, the way the retriangulation's does: the
+    /// overlay fold, the rule and the write are pure functions of the value at
+    /// the cursor, so what crosses to the worker is a clone of
+    /// [`EditedReconstruction`] whose `base` is the very `Arc` the node goes on
+    /// drawing, and the options.
+    pub(crate) fn prune_covered_observations_job(
+        &self,
+        id: ReconId,
+        options: &PruneCoveredOptions,
+    ) -> Result<Job, String> {
+        let label = self
+            .node(id)
+            .map(|node| node.label.clone())
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        // The gate is the menu entry's own, so the entry and the edit cannot
+        // disagree about when the prune can run.
+        if let Some(why) = self.prune_covered_refusal(id) {
+            return Err(format!(
+                "Prune covered observations in {label} refused: {why}"
+            ));
+        }
+        let edited = self
+            .node(id)
+            .expect("just resolved")
+            .history
+            .current()
+            .clone();
+        let options = *options;
+        Ok(Box::new(move |progress| {
+            let refuse =
+                |why: String| format!("Prune covered observations in {label} refused: {why}");
+
+            // The core operation's own four stages nest directly under the
+            // operation's, since this `Progress` is at the top of it, and the
+            // overlay fold it does is one of them.
+            let (next, map, report) = match prune_covered_observations(&edited, &options, progress)
+            {
+                Ok(pruned) => pruned,
+                // The one error that is not a refusal: the operation was asked
+                // to stop and did, which the log words as a cancellation rather
+                // than as a failure of the rule.
+                Err(PruneCoveredError::Cancelled) => return Finished::Cancelled,
+                Err(e) => return Finished::Failed(refuse(e.to_string())),
+            };
+
+            let version_label = format!("Pruned covered observations in {label}");
+            let text = format!("{version_label}: {}", prune_covered_summary(&report));
+            if !report.changed {
+                // A prune that retires nothing has run and found nothing to do.
+                // A version for it would be a row in the history nobody can
+                // tell from one that changed the value.
+                return Finished::NoChange(text);
+            }
+            Finished::Produced {
+                // The prune folds the overlay in, so the value that comes back
+                // is a base with nothing over it, and taking it out of the
+                // version is a move rather than a materialisation.
                 value: Arc::unwrap_or_clone(next.base),
                 map,
                 version_label,

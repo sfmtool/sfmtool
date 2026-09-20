@@ -292,7 +292,8 @@ fixed-height for virtualization.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors),
-  `Retriangulate All Points`, `Convert to Embedded Patches`, `Close`.
+  `Retriangulate All Points`, `Prune Covered Observations`,
+  `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Retriangulate All Points`** re-solves every point of the node from its own
@@ -307,6 +308,21 @@ fixed-height for virtualization.
   `state::edits::retriangulate_refusal`, which the wire's
   `retriangulate_all_points` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer.
+- **`Prune Covered Observations`** retires every observation of the node a
+  finer tracked one covers in the same photograph, and drops the points left
+  with fewer than two, as the node's next version and on a worker thread
+  ([background-tasks.md](background-tasks.md),
+  [edits/prune-covered-observations.md](edits/prune-covered-observations.md)).
+  It re-solves nothing and moves nothing; the surviving points are renumbered,
+  so the panel caches for the node are dropped when the version lands. It sits
+  directly under `Retriangulate All Points`, because the two are the pair a
+  reviewer reaches for together. It is **live only on a node whose points carry
+  a patch frame, whose observations carry a pixel, that has a posed image, and
+  that nothing is running on**, and greyed with the reason otherwise. The gate
+  is `state::edits::prune_covered_refusal`, which the wire's
+  `prune_covered_observations` and the operation itself also ask, so the greyed
+  entry and a call that asks anyway give one answer. A prune that finds nothing
+  covered pushes no version and says so in the Action Log.
 - **`Convert to Embedded Patches`** is the one entry on this menu that edits the
   reconstruction. It runs the minimal `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread

@@ -3543,6 +3543,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
+            "prune_covered_observations",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
             "delete_camera_image",
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
@@ -3888,15 +3892,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, forty-nine writes, the one that writes a file, and the
-    // one that hands back a picture.
-    assert_eq!(catalog.len(), 65, "the catalog has grown or shrunk");
+    // Fifteen reads, fifty writes, the one that writes a file, and the one
+    // that hands back a picture.
+    assert_eq!(catalog.len(), 66, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        49
+        50
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4582,6 +4586,81 @@ fn retriangulate_all_points_defers_and_comes_back_with_a_version() {
     assert_eq!(reply["label"], json!("Retriangulated run_a"), "{reply}");
     let report = reply["report"].as_str().expect("a report");
     assert!(report.contains("points moved"), "{report}");
+}
+
+/// The prune goes to a worker, and the version it comes back with is the
+/// node's next one.
+#[test]
+fn prune_covered_observations_defers_and_comes_back_with_a_version() {
+    let (mut state, mut viewer) = editable();
+    // The fixture's points carry no patch frame, so the node the wire acts on
+    // is the one that does.
+    state.scene.clear();
+    state.append_node(crate::scene_graph::tests::prunable_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command =
+        tools::parse("prune_covered_observations", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the prune must defer"),
+    };
+    assert_eq!(pending.operation_name, "Prune covered observations");
+    state.finish_background_task();
+
+    let reply = match super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(
+        reply["label"],
+        json!("Pruned covered observations in run_a"),
+        "{reply}"
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("observations retired"), "{report}");
+}
+
+/// The three thresholds cross the wire, and a call that names none takes the
+/// operation's own defaults.
+#[test]
+fn prune_covered_observations_carries_its_thresholds() {
+    let defaults = sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default();
+    let bare = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    match tools::parse("prune_covered_observations", Some(&bare)).expect("a well-formed call") {
+        Command::PruneCoveredObservations { options, .. } => assert_eq!(options, defaults),
+        other => panic!("parsed to {other:?}"),
+    }
+
+    let named = json!({
+        "reconstruction_label": "run_a",
+        "footprint_fraction": 0.4545,
+        "ratio": 3.0,
+        "min_fine_radius_px": 0.0,
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    match tools::parse("prune_covered_observations", Some(&named)).expect("a well-formed call") {
+        Command::PruneCoveredObservations { options, .. } => {
+            assert_eq!(options.footprint_fraction, 0.4545);
+            assert_eq!(options.ratio, 3.0);
+            assert_eq!(options.min_fine_radius_px, 0.0);
+            assert_eq!(options.min_observations, defaults.min_observations);
+        }
+        other => panic!("parsed to {other:?}"),
+    }
 }
 
 /// An edit the state refuses pushes no version, answers in the state's words,

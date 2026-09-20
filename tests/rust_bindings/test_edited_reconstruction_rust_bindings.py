@@ -402,6 +402,133 @@ class TestMoveCamera:
             )
 
 
+class TestPruneCoveredObservations:
+    """The bulk edit: a coarse observation handed over to the finer feature."""
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        return EditedReconstruction(recon.to_embedded_patches())
+
+    def test_a_value_with_no_patch_frames_is_refused(self, base):
+        # The stored reconstruction is sift_files, whose points carry no patch
+        # frame for a footprint to be read off.
+        plain = EditedReconstruction(base)
+        if plain.columns["patch_frames"]:
+            pytest.skip("this reconstruction carries patch frames")
+        with pytest.raises(ValueError, match="patch frame"):
+            plain.prune_covered_observations()
+
+    def test_an_unusable_footprint_fraction_is_refused(self, embedded):
+        with pytest.raises(ValueError, match="footprint fraction"):
+            embedded.prune_covered_observations(footprint_fraction=0.0)
+
+    def test_the_report_accounts_for_every_row(self, embedded):
+        before = embedded.materialize()[0]
+        _after, report = embedded.prune_covered_observations()
+
+        census = report["census"]
+        assert census["rows"] == before.observation_count
+        assert report["observations_before"] == before.observation_count
+        assert report["points_before"] == before.point_count
+        assert (
+            report["observations_before"] - report["observations_after"]
+            == census["rows_removed"]
+        )
+        assert (
+            report["points_before"] - report["points_after"]
+            == census["owners_dropped_all_covered"] + census["owners_dropped_by_sweep"]
+        )
+        assert census["pairs_finer"] <= census["pairs_contained"]
+        assert census["rows_flagged"] <= census["rows_removed"]
+        # The bands account for every row that projected to a radius, and the
+        # retirements inside them are the rule's own.
+        rows = sum(band["rows"] for band in report["bands"])
+        assert rows == census["rows"] - report["degenerate_rows"]
+        assert (
+            sum(band["rows_retired"] for band in report["bands"])
+            == census["rows_flagged"]
+        )
+        assert [band["band"] for band in report["bands"]] == sorted(
+            band["band"] for band in report["bands"]
+        )
+
+    def test_a_prune_that_retires_nothing_hands_the_value_back(self, embedded):
+        # A footprint of a hundredth of the projected radius reaches nothing.
+        after, report = embedded.prune_covered_observations(footprint_fraction=0.01)
+        assert report["changed"] is False
+        assert report["census"]["rows_removed"] == 0
+        assert report["points_after"] == report["points_before"]
+        assert after.point_count == embedded.point_count
+
+    def test_a_prune_that_bites_shortens_tracks_and_moves_no_point(self, embedded):
+        before = embedded.materialize()[0]
+        # Wide enough that the capture's own features cover one another.
+        after, report = embedded.prune_covered_observations(footprint_fraction=4.0)
+        assert report["changed"] is True
+        assert report["census"]["rows_removed"] > 0
+
+        value = after.materialize()[0]
+        assert value.observation_count == report["observations_after"]
+        assert value.point_count == report["points_after"]
+        assert value.image_count == before.image_count
+        assert value.image_names == before.image_names
+        # A bulk edit: a whole new base with no overlay on it.
+        assert after.deleted_count == 0
+        # Every surviving point kept its position, and the map says where it
+        # went; nothing was re-solved.
+        point_map = report["map"]
+        survivors = [
+            (old, point_map.forward(old))
+            for old in range(before.point_count)
+            if point_map.forward(old) is not None
+        ]
+        assert len(survivors) == value.point_count
+        old_rows = np.array([old for old, _ in survivors])
+        new_rows = np.array([new for _, new in survivors])
+        np.testing.assert_array_equal(
+            value.positions[new_rows], before.positions[old_rows]
+        )
+        # The survivors kept their order, which is the whole of what a prune
+        # does to the indexing.
+        np.testing.assert_array_equal(new_rows, np.arange(len(new_rows)))
+        # This object is untouched.
+        assert embedded.materialize()[0].observation_count == before.observation_count
+
+    def test_held_points_keep_every_observation(self, embedded):
+        """A point the value holds is never retired, and still covers."""
+        before = embedded.materialize()[0]
+        free, _report = embedded.prune_covered_observations(footprint_fraction=4.0)
+        assert _report["changed"] is True
+        assert _report["protected_rows"] == 0, "nothing is pinned yet"
+
+        # Hold the ten longest tracks, which are the ones with the most rows to
+        # lose, and prune the same way again.
+        longest = np.argsort(before.observation_counts)[-10:]
+        constraints = np.zeros(before.point_count, dtype=np.uint8)
+        constraints[longest] = 2  # held
+        pinned = EditedReconstruction(
+            before.clone_with_changes(
+                point_constraints=constraints,
+                constraint_distances=np.full(before.point_count, np.nan),
+                constraint_reference_images=np.full(
+                    before.point_count, 0xFFFFFFFF, dtype=np.uint32
+                ),
+            )
+        )
+        _value, report = pinned.prune_covered_observations(footprint_fraction=4.0)
+
+        expected = int(before.observation_counts[longest].sum())
+        assert report["protected_rows"] == expected
+        assert report["census"]["rows_spared"] == report["protected_rows_spared"]
+        assert report["protected_rows_spared"] > 0, (
+            "pinning the longest tracks spared nothing, so the case is untested"
+        )
+        # Sparing can only keep rows, never retire more.
+        assert report["census"]["rows_flagged"] < _report["census"]["rows_flagged"]
+        assert free.point_count <= _value.point_count
+
+
 def _rotation_matrix(wxyz):
     """The rotation matrix of a WXYZ quaternion, spelled out rather than imported."""
     w, x, y, z = (float(c) for c in wxyz)

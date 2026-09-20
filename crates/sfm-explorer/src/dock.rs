@@ -1005,6 +1005,12 @@ impl TabContext<'_> {
         if let Some(id) = response.retriangulate_all_points {
             let _ = self.state.start_retriangulate_all_points(id);
         }
+        if let Some(id) = response.prune_covered_observations {
+            let _ = self.state.start_prune_covered_observations(
+                id,
+                &sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default(),
+            );
+        }
         if let Some(id) = response.close_node {
             // Closing a node is a step away from a camera held in hand on it,
             // and it happens before the question below: an answer that arrives

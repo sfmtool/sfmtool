@@ -743,6 +743,34 @@ fn a_scan_of_a_materialisation_agrees_with_the_map_it_returned() {
     );
 }
 
+/// A removal map is exact in both directions: a dropped index resolves to
+/// nothing, and a survivor moves down by the holes below it.
+#[test]
+fn a_removal_map_moves_the_survivors_down_by_the_holes_below_them() {
+    let map = RowMap::by_removal(6, &[3, 0, 3]);
+    let want = [None, Some(0), Some(1), None, Some(2), Some(3)];
+    for (old, wanted) in want.iter().enumerate() {
+        assert_eq!(map.forward(old as u32), *wanted, "point {old}");
+        if let Some(new) = wanted {
+            assert_eq!(map.inverse(*new), Some(old as u32));
+        }
+    }
+    // Nothing was created, so every row of the answer has a source.
+    assert_eq!(map.inverse_dense(4), [1, 2, 4, 5]);
+    // An index past the point count named no point to begin with.
+    assert_eq!(map.forward(6), None);
+}
+
+/// A removal map that removes nothing is the identity.
+#[test]
+fn a_removal_map_of_nothing_is_the_identity() {
+    let map = RowMap::by_removal(3, &[]);
+    for p in 0..3 {
+        assert_eq!(map.forward(p), Some(p));
+        assert_eq!(map.inverse(p), Some(p));
+    }
+}
+
 #[test]
 fn a_scan_refuses_an_image_map_of_the_wrong_length() {
     let before = fixture(8);

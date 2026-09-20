@@ -2655,6 +2655,31 @@ pub(crate) fn resectable_node(path: &str) -> SceneNode {
     SceneNode::from_path(std::path::Path::new(path), recon)
 }
 
+/// [`resectable_node`] with a square patch frame per point, which is what an
+/// observation's footprint is read off.
+///
+/// The extent is a twentieth of a world unit against a demo scene a few units
+/// across, so a point's frame projects to a handful of pixels: small enough
+/// that the rule has something to compare and large enough that it is not a
+/// collapsed measurement.
+pub(crate) fn prunable_node(path: &str) -> SceneNode {
+    let mut node = resectable_node(path);
+    let recon = node.recon_mut();
+    let n = recon.point_set.points.len();
+    let mut u = ndarray::Array2::<f32>::zeros((n, 3));
+    let mut v = ndarray::Array2::<f32>::zeros((n, 3));
+    for p in 0..n {
+        // Every other point an octave wider, so half the population has
+        // something finer to be covered by.
+        let half = if p % 2 == 0 { 0.05 } else { 0.0125 };
+        u[[p, 0]] = half;
+        v[[p, 1]] = half;
+    }
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
+    node
+}
+
 /// A state holding one resectable node, with its image list expanded and the
 /// panel settled, ready to be right-clicked.
 fn resectable_scene() -> AppState {
@@ -2977,6 +3002,104 @@ fn the_retriangulate_entry_is_greyed_while_the_node_is_busy() {
     );
     assert_eq!(
         response.retriangulate_all_points, None,
+        "the entry was live on a busy node"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}
+
+/// `Prune Covered Observations` is live on a node that carries a patch frame
+/// per point, sits directly under `Retriangulate All Points`, and reports the
+/// node it was opened on.
+#[test]
+fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let above = panel
+        .hit_rect(row_id(id, "retriangulate_all_points"))
+        .expect("the retriangulation entry");
+    let entry = panel
+        .hit_rect(row_id(id, "prune_covered_observations"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reconstruction row's menu offered no {}",
+                super::menus::PRUNE_COVERED_OBSERVATIONS
+            )
+        });
+    assert!(
+        entry.top() >= above.bottom() - 1.0,
+        "the prune entry is not directly under the retriangulation"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "prune_covered_observations"),
+    );
+    assert_eq!(response.prune_covered_observations, Some(id));
+}
+
+/// On a node whose points carry no patch frame it is drawn and dead: there is
+/// no footprint to read.
+#[test]
+fn the_prune_entry_is_greyed_without_patch_frames() {
+    let mut state = resectable_scene();
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel
+            .hit_rect(row_id(id, "prune_covered_observations"))
+            .is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "prune_covered_observations"),
+    );
+    assert_eq!(
+        response.prune_covered_observations, None,
+        "a node with no patch frame offered to be pruned"
+    );
+}
+
+/// And dead while an operation is running on that node, which is the state's
+/// own refusal rather than a second rule.
+#[test]
+fn the_prune_entry_is_greyed_while_the_node_is_busy() {
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::PRUNE_COVERED_OBSERVATIONS,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "prune_covered_observations"),
+    );
+    assert_eq!(
+        response.prune_covered_observations, None,
         "the entry was live on a busy node"
     );
 

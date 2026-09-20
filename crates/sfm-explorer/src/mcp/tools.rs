@@ -17,6 +17,7 @@
 //! drift.
 
 use serde_json::{json, Map, Value};
+use sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions;
 
 use super::{
     CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
@@ -853,6 +854,63 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           stops it. Needs a pixel per observation and one shared camera.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
+            name: "prune_covered_observations",
+            description: "Retire every observation of one reconstruction that a finer tracked \
+                          observation covers in the same image, and drop the points left with \
+                          fewer than two. Each observation's footprint is its point's patch frame \
+                          projected into the image that saw it; an observation goes when another \
+                          one, on another point, sits inside that footprint with a radius at \
+                          least ratio times smaller. The coarse side is the one retired, never \
+                          the fine one. Nothing is re-solved and nothing moves: a surviving point \
+                          keeps its position, frame, bitmap, colour and constraint, and only its \
+                          observation list is shorter. Points the reconstruction holds or ranges \
+                          are never retired, though they still cover. A bulk edit giving the node \
+                          a whole new base, so the surviving points are renumbered and point \
+                          indexes read before the call no longer mean what they meant. A prune \
+                          that retires nothing pushes no version and says so. Runs on a worker \
+                          thread, so one still going after 200 ms replies with running: true and \
+                          an operation_id instead of the version; cancel_background_task stops \
+                          it. Needs a patch frame per point and a pixel per observation.",
+            kind: Write,
+            schema: object(
+                &[
+                    (
+                        "footprint_fraction",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "What fraction of an observation's projected patch radius its \
+                                 footprint is. Defaults to 0.5. A patch embedded at patch size 11 \
+                                 spans 5.5 feature sizes and a keypoint's support is stated at \
+                                 2.5 of them, so 0.4545 is the faithful value on such a file.",
+                        }),
+                    ),
+                    (
+                        "ratio",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "How many times finer the covering observation has to be. \
+                                 Defaults to 2.0, which is one octave; the comparison is \
+                                 non-strict.",
+                        }),
+                    ),
+                    (
+                        "min_fine_radius_px",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "A covering observation whose projected radius is below this says \
+                                 nothing, because a feature that projects to a fraction of a \
+                                 pixel is a collapsed measurement rather than finer evidence. \
+                                 Defaults to 1.0; 0 turns the floor off.",
+                        }),
+                    ),
+                ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
         },
         ToolSpec {
             name: "delete_camera_image",
@@ -2314,6 +2372,28 @@ pub(crate) fn parse(
             args.reject_unknown(&["reconstruction_label"])?;
             Command::RetriangulateAllPoints {
                 reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "prune_covered_observations" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "footprint_fraction",
+                "ratio",
+                "min_fine_radius_px",
+            ])?;
+            let defaults = PruneCoveredOptions::default();
+            Command::PruneCoveredObservations {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                options: PruneCoveredOptions {
+                    footprint_fraction: args
+                        .optional_f64("footprint_fraction")?
+                        .unwrap_or(defaults.footprint_fraction),
+                    ratio: args.optional_f64("ratio")?.unwrap_or(defaults.ratio),
+                    min_fine_radius_px: args
+                        .optional_f64("min_fine_radius_px")?
+                        .unwrap_or(defaults.min_fine_radius_px),
+                    min_observations: defaults.min_observations,
+                },
             }
         }
         "get_bench" => {

@@ -460,6 +460,26 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        // The prune, over the retriangulation's fixture with a patch frame per
+        // point: an observation's footprint is that frame projected into the
+        // image that saw it.
+        "Prune covered observations" => {
+            let mut state = AppState::new();
+            state.append_node(crate::scene_graph::tests::prunable_node("/runs/run_a.sfmr"));
+            let id = state.scene[0].id;
+            let job = state
+                .prune_covered_observations_job(
+                    id,
+                    &sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default(),
+                )
+                .expect("the fixture carries frames, pixels and poses");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The three steps that read photographs, over the bench fixture: a
         // point on the bench and a textured photograph cached for every image.
         "Evaluate track" | "Fit track" | "Set track stage" => {

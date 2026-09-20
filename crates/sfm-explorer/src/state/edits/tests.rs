@@ -1644,6 +1644,128 @@ fn a_reconstruction_with_no_pixels_is_refused_in_the_menu_s_own_words() {
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
+// ── Prune covered observations: the bulk edit over the footprints ──────
+
+/// A state holding one node a prune can run on: the resectable node with a
+/// patch frame per point.
+fn prunable_state() -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::prunable_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    (state, id)
+}
+
+fn prune_options() -> sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions {
+    sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default()
+}
+
+#[test]
+fn pruning_covered_observations_pushes_one_version_with_a_new_base() {
+    let (mut state, id) = prunable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let observations = state.scene[0].edited().observation_count();
+
+    state
+        .start_prune_covered_observations(id, &prune_options())
+        .expect("the fixture carries frames, pixels and poses");
+    state.finish_background_task();
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert!(
+        node.edited().observation_count() < observations,
+        "the prune retired nothing on a fixture built to be covered"
+    );
+    assert_eq!(
+        node.history.current_version().label,
+        "Pruned covered observations in run_a"
+    );
+    let entry = newest(&state);
+    assert!(
+        entry
+            .text
+            .starts_with("Pruned covered observations in run_a: "),
+        "{}",
+        entry.text
+    );
+    assert!(
+        entry.text.contains("observations retired"),
+        "{}",
+        entry.text
+    );
+}
+
+/// A prune that finds nothing covered pushes no version and says so, rather
+/// than leaving a row in the history nobody can tell from one that did
+/// something.
+#[test]
+fn a_prune_that_retires_nothing_pushes_no_version() {
+    let (mut state, id) = prunable_state();
+    // A footprint of a fiftieth of the projected radius reaches nothing.
+    let options = sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions {
+        footprint_fraction: 0.02,
+        ..prune_options()
+    };
+    state
+        .start_prune_covered_observations(id, &options)
+        .expect("the fixture carries frames, pixels and poses");
+    state.finish_background_task();
+
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert!(
+        entry.text.contains("no effect, no observation is covered"),
+        "{}",
+        entry.text
+    );
+}
+
+#[test]
+fn a_cancelled_prune_pushes_no_version() {
+    let (mut state, id) = prunable_state();
+    let observations = state.scene[0].edited().observation_count();
+    state
+        .start_prune_covered_observations(id, &prune_options())
+        .expect("the fixture carries frames, pixels and poses");
+    state.cancel_background_task();
+    state.finish_background_task();
+
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert_eq!(state.scene[0].edited().observation_count(), observations);
+    let entry = newest(&state);
+    assert!(entry.failed, "{}", entry.text);
+    assert!(
+        entry
+            .text
+            .contains("Prune covered observations of run_a cancelled"),
+        "{}",
+        entry.text
+    );
+}
+
+#[test]
+fn a_reconstruction_with_no_patch_frames_is_refused_in_the_menu_s_own_words() {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    let why = state
+        .prune_covered_refusal(id)
+        .expect("the fixture carries no patch frame");
+    assert!(why.contains("no patch frame"), "{why}");
+    let refused = state
+        .start_prune_covered_observations(id, &prune_options())
+        .expect_err("with no frame there is no footprint");
+    assert!(refused.contains(&why), "{refused}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
 // ── Where a step's photographs come from ────────────────────────────────
 
 /// A cached photograph is already a pyramid, so a step over nothing but cached

@@ -12,6 +12,7 @@ mod embed;
 pub mod filter;
 pub mod move_camera;
 pub mod point_correspondence;
+pub mod prune_covered;
 pub mod triangulation;
 
 pub use bundle_adjust::{
@@ -19,6 +20,11 @@ pub use bundle_adjust::{
 };
 
 pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, ReprojectionSample};
+
+pub use prune_covered::{
+    prune_covered_observations, PruneCoveredBand, PruneCoveredError, PruneCoveredOptions,
+    PruneCoveredReport,
+};
 
 pub use triangulation::retriangulate::{
     retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,

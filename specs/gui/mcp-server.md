@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Sixty-five tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- forty-nine
+Sixty-six tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -140,6 +140,7 @@ write, and one writes a file.
 | `delete_point` | write | Delete one 3D point and its track |
 | `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lens the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
+| `prune_covered_observations` | write | Retire every observation a finer tracked one covers, and drop the points left with fewer than two, on a worker thread |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
@@ -173,7 +174,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the forty-nine writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the fifty writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2063,6 +2064,44 @@ pixel to cast a ray through, and one whose posed images are taken through more
 than one lens is refused rather than silently solved through one of them. A
 point the value holds at a fixed coordinate is refused by name.
 
+### `prune_covered_observations`
+
+The structure's coarse evidence handed over to the finer features that supersede
+it: every observation another one covers in the same photograph is retired, and
+the points left standing on fewer than two go with them
+([prune-covered-observations.md](edits/prune-covered-observations.md)).
+
+```jsonc
+// prune_covered_observations { "reconstruction_label": "seoul_bull" }
+// prune_covered_observations { "reconstruction_label": "seoul_bull",
+//                              "footprint_fraction": 0.4545,
+//                              "ratio": 2.0,
+//                              "min_fine_radius_px": 0.0 }
+```
+
+Nothing is re-solved and nothing moves: a surviving point keeps its position,
+frame, bitmap, colour and constraint, and only its observation list is shorter.
+It is a **bulk edit**, so the surviving points are renumbered and a point index
+an agent read before the call no longer means what it meant. It answers the two
+ways `bundle_adjust` does, with `"operation": "Prune covered observations"`, and
+polls the cancel flag between its stages.
+
+The three thresholds are the operation's own, and a call that names none takes
+its defaults: `footprint_fraction` is what fraction of an observation's
+projected patch radius its footprint is, `ratio` how many times finer the
+covering observation has to be, and `min_fine_radius_px` the floor below which a
+covering observation says nothing. The fourth, how many observations a point
+needs to survive, is not on the wire: two is what the format's own writer
+requires.
+
+A prune that retires nothing **pushes no version** and reports that it had no
+effect, which is the difference between an operation that ran and found nothing
+and one that was refused. A refusal is in `AppState`'s own words, which are the
+words the greyed `Prune Covered Observations` entry in the Scene tree carries: a
+reconstruction whose points carry no patch frame has no footprint to read, one
+whose observations carry no pixel has nowhere for a footprint to sit, and one no
+image of which carries a pose projects nothing.
+
 ### The bench family
 
 Twenty-three tools that read and work the **bench** beside a node
@@ -3108,7 +3147,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-five tools**, fifteen of them reads and one of them
+- **The catalog is sixty-six tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
