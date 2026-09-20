@@ -407,27 +407,35 @@ impl<S: KdfScalar> KdfFile<S> {
         })
     }
 
+    /// Number of corpus features and valid feature IDs.
     pub fn len(&self) -> usize {
         self.metadata.feature_count as usize
     }
+    /// Whether the corpus contains no features.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Number of scalar coordinates in each descriptor.
     pub fn dim(&self) -> usize {
         self.metadata.dimension as usize
     }
+    /// Number of trees in the forest.
     pub fn tree_count(&self) -> usize {
         self.metadata.trees.len()
     }
+    /// Wire-format scalar name (`"uint8"` or `"float32"`).
     pub fn scalar_type(&self) -> &str {
         &self.metadata.scalar_type
     }
+    /// Whether the file embeds SIFT centers and affine shapes.
     pub fn has_feature_geometry(&self) -> bool {
         self.geometry_corpus.is_some()
     }
+    /// Configured maximum feature count accepted by [`Self::leaf`].
     pub fn options_max_leaf_features(&self) -> usize {
         self.max_leaf_features
     }
+    /// Root address for a tree, or `None` for an empty tree or invalid tree index.
     pub fn root(&self, tree: usize) -> Option<NodeAddress> {
         self.metadata.trees.get(tree)?.root.map(|v| NodeAddress {
             chunk: v[0],
@@ -525,6 +533,7 @@ impl<S: KdfScalar> KdfFile<S> {
         Ok(decoded.clone())
     }
 
+    /// Snapshot the handle's cache and lazy-read counters and gauges.
     pub fn io_stats(&self) -> KdfIoStats {
         self.cache.stats()
     }

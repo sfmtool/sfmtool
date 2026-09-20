@@ -980,6 +980,10 @@ format crates, and both docs say so**
 > `LazyQueryStats` fork are untouched and remain open._
 
 **`sfmtool-kdf-format` is 63% undocumented at its public surface**
+> _Status (2026-09-19): Done — documented the current public KDF options,
+> source/geometry/tree types, decoded types, I/O statistics, verification counts,
+> and previously bare `KdfFile` accessors. The cache items cited below are now
+> crate-private and have concise internal contracts._
 - Location: `crates/sfmtool-kdf-format/src/types.rs` (**100 of 129** public items
   undocumented, 78%); crate total **121/193 (63%)**; also `cache.rs:18,25,33,99,281`
   and ten `KdfFile` accessors at `read.rs:410–431,528,822`

@@ -14,22 +14,33 @@ use crate::{DecodedTreeChunk, FeatureGeometry, FeatureOrigin, KdfError, KdfIoSta
 type KeyMap<V> = HashMap<CacheKey, V, Xxh3DefaultBuilder>;
 type KeySet = HashSet<CacheKey, Xxh3DefaultBuilder>;
 
+/// Identity of one independently cached decoded item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CacheKey {
+    /// `(tree index, chunk index)`.
     Tree(u32, u32),
+    /// Descriptor block index.
     Descriptor(u32),
+    /// Geometry block index.
     Geometry(u32),
+    /// Origin block index.
     Origin(u32),
 }
 
+/// Decoded payload retained by the shared cache.
 pub(crate) enum Cached<S: KdfScalar> {
+    /// One tree topology chunk.
     Tree(DecodedTreeChunk<S>),
+    /// Row-major descriptor scalars for one corpus block.
     Descriptor(Vec<S>),
+    /// Image-space SIFT geometry rows for one corpus block.
     Geometry(Vec<FeatureGeometry>),
+    /// Source-image mappings for one origin block.
     Origin(Vec<FeatureOrigin>),
 }
 
 impl<S: KdfScalar> Cached<S> {
+    /// Decoded bytes charged against cache residency.
     pub(crate) fn bytes(&self) -> usize {
         match self {
             Self::Tree(v) => v.decoded_bytes,
@@ -96,6 +107,7 @@ struct Shard<S: KdfScalar> {
     capacity: usize,
 }
 
+/// Sharded decoded-item cache with a global concurrent-decode budget.
 pub(crate) struct Cache<S: KdfScalar> {
     /// A power-of-two number of shards, so selection is a mask.
     shards: Vec<Shard<S>>,
@@ -278,6 +290,11 @@ impl<S: KdfScalar> Cache<S> {
         }
     }
 
+    /// Pin a resident item or load, validate, admit, and pin it once.
+    ///
+    /// Concurrent requests for the same key wait for the elected loader. The
+    /// declared decoded size is reserved before `load` runs and must equal the
+    /// resulting payload's cache charge.
     pub(crate) fn get_or_load<F>(
         self: &Arc<Self>,
         key: CacheKey,
