@@ -510,38 +510,64 @@ Linux — names the feature explicitly.
 
 **One locator resolution is one full snapshot of the app's accessibility
 subtree**, and that is what the suite is written around. `wait_attached`,
-`press`, `toggle`, `elements` and `count` each walk the whole tree — on Windows
-a single `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per
-*operation*, not per launch, and it is the platform's rather than the viewer's:
-roughly half a second on a developer's machine against roughly seventeen on a
-GitHub-hosted Windows runner, where a launch, attach and teardown together cost
-3.8s. (Only a `Locator` method resolves; a `press` on an `Element` a lookup has
-already handed back invokes what it holds and queries nothing.) Two habits
-follow. Setup goes through the **command line** rather than the accessibility
-API: `--demo` appends the node File > Load Demo Data… makes, at the dialog's
-default point count and with the same `None` path, after any files named on the
-line. And an assertion that something is *absent* is a single
-`Locator::count()` rather than a short-budget `wait_attached`, which polls a
-whole snapshot every 100ms until its budget runs out. A one-shot absence check
-is only sound after a positive lookup in the same test has established that the
-tree is published, so each such assertion names the lookup it depends on.
-Exactly one test drives each route a shortcut replaces —
+`press`, `toggle` and `elements` each walk the whole tree — on Windows a single
+`FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation*, not per
+launch, and it is the platform's rather than the viewer's: roughly half a second
+on a developer's machine against roughly seventeen on a GitHub-hosted Windows
+runner, where a launch, attach and teardown together cost 3.8s. (Only a
+`Locator` method resolves; a `press` on an `Element` a lookup has already handed
+back invokes what it holds and queries nothing.) Two habits follow. Setup goes
+through the **command line** rather than the accessibility API: `--demo` appends
+the node File > Load Demo Data… makes, at the dialog's default point count and
+with the same `None` path, after any files named on the line. Exactly one test
+drives each route a shortcut replaces —
 `the_scene_panel_lists_the_loaded_reconstruction` presses through the menu and
 the dialog, then asserts on what arrived — so the route stays covered.
+
+**A run of consecutive read-only assertions costs one snapshot, not one each.**
+`wait_all` takes a list of expectations — each a role and an exact name, either
+`Expect::present` or `Expect::absent` — joins their clauses into a single
+comma-separated selector *group*, and polls it: `Locator::elements` resolves the
+whole group in one walk, and every expectation is then decided against the
+`ElementData` already in hand, which is a field read rather than a cross-process
+call. It returns the first tick on which they all hold, and hands back the
+snapshot, so a caller that wants an element's `states.checked` takes it from
+there. The polling is what makes the substitution honest: a bare `elements`
+resolves once and returns, so it would trade the cost for flakiness on a runner
+where a widget routinely lands a poll or two after the query that wants it. The
+five assertions in `the_menu_bar_holds_file_edit_go_and_panels` are one
+operation; across the suite the collapse takes `ops` from 38 to 24.
+
+Assertions of **absence** ride in those groups rather than being asked
+separately, and that is what makes them sound. An absence means nothing against
+a tree that has not been published yet — an empty tree satisfies every absence
+trivially — so it needs corroboration that the tree is really there. Grouped
+with the expectations that supply the corroboration, it is read off the very
+snapshot that proved them, so there is no ordering between the two left for a
+reader to respect or a later edit to break.
+
+**A snapshot is never reused across an interaction.** egui republishes its
+accessibility tree every frame, and xa11y's `Element` actions invoke the handle
+they captured rather than re-resolving the selector, so a press, a toggle or a
+synthetic click leaves every handle in an earlier snapshot stale —
+`UIA_E_ELEMENTNOTAVAILABLE` on Windows. Only *consecutive* read-only assertions
+collapse; the assertions after an interaction take a fresh snapshot, which is
+why `toggle_hud_layer_checkbox` is still three operations and
+`a_real_right_click_opens_the_reconstruction_rows_context_menu` is two.
 
 **The suite reports what it costs, in every log.** As each test's `Guard`
 drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
 
 ```text
-UIPROBE test=file_menu_items launch_ms=680 ops=4 op_ms=2959 total_ms=3724
-UIPROBE TOTAL tests=19 launch_ms=16917 ops=38 op_ms=21909 total_ms=42384 mean_launch_ms=890 mean_op_ms=576
+UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 total_ms=2951
+UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 total_ms=44699 mean_launch_ms=892 mean_op_ms=956
 ```
 
 `launch_ms` is the process spawn, GPU init and window registration up to the
 first successful attach; `ops` is how many locator resolutions ran under that
-guard, counted by a thin wrapper over the five `Locator` methods the suite
-calls (`Element` actions resolve nothing and are not counted); `op_ms` is the
+guard, counted by a thin wrapper over the `Locator` methods the suite calls
+(`Element` actions resolve nothing and are not counted); `op_ms` is the
 time inside them; `total_ms` is the guard's whole life, teardown included. The
 split is the point, because the two costs have different causes and different
 fixes. `launch_ms` is work no change to the tests can make cheaper, so
@@ -559,7 +585,7 @@ runs above all.
 
 **A cross-process call can fail because the tree moved, not because the suite
 was wrong, and the two are guarded differently.** The read-only probes —
-`wait_attached`, `wait_until`, `count` — retry a bounded number of times when
+`wait_attached`, `wait_until`, `wait_all` — retry a bounded number of times when
 the platform returns a specifically *transient* HRESULT (`UIA_E_TIMEOUT`,
 `UIA_E_ELEMENTNOTAVAILABLE`), which is free because resolving a locator twice
 changes nothing. Only those codes: a selector that names something the app does

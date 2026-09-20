@@ -8,8 +8,8 @@
 //!
 //! **One locator resolution is one full snapshot of the app's accessibility
 //! subtree**, and that is what shapes this file. `wait_attached`, `press`,
-//! `toggle`, `elements` and `count` each walk the whole tree — on Windows a
-//! single `FindAllBuildCache(TreeScope_Subtree)` — so their cost is per
+//! `toggle` and `elements` each walk the whole tree — on Windows a single
+//! `FindAllBuildCache(TreeScope_Subtree)` — so their cost is per
 //! *operation*, not per launch, and it is the platform's, not the viewer's:
 //! around 0.5s on a developer's machine and around 17s on a GitHub-hosted
 //! Windows runner, against 3.8s for a launch, attach and teardown there.
@@ -18,12 +18,19 @@
 //! accessibility API — `--demo` in place of driving File > Load Demo Data… and
 //! its dialog, which is three `Locator` calls and more snapshots than that,
 //! since the menu item and the dialog's button each appear a poll or two after
-//! the press that makes them. And an assertion that something is *absent* uses
-//! `Locator::count`, exactly one resolution, rather than a short-budget
-//! `wait_attached`, which polls a whole snapshot every 100ms for its budget.
-//! (Only a `Locator` method resolves; a `press` on an `Element` a lookup
-//! already handed back invokes what it holds.) Exactly one test still drives
-//! each route a shortcut replaces, and says so.
+//! the press that makes them. And a run of consecutive read-only assertions is
+//! asked as *one* snapshot rather than one apiece: [`Probed::wait_all`] polls a
+//! comma-separated selector group, which resolves in a single walk, and then
+//! answers every one of the caller's expectations off the elements it was
+//! handed — in memory, for nothing. Assertions of *absence* ride along:
+//! something the group names and the snapshot does not hold is absent in the
+//! same observation that proved the rest present. (Only a `Locator` method
+//! resolves; a `press` on an `Element` a lookup already handed back invokes
+//! what it holds.) What a snapshot must never outlive is an **interaction**:
+//! egui rebuilds its accessibility tree every frame, so a press or a toggle
+//! leaves every handle in one stale, and the assertions after it need a fresh
+//! one. Exactly one test still drives each route a shortcut replaces, and says
+//! so.
 //!
 //! Because that is where the cost is, **the suite reports its own**: every
 //! test prints a `UIPROBE` line as its [`Guard`] drops, which is how a reader
@@ -279,9 +286,103 @@ impl Probe {
     fn toggle(&self) -> xa11y::Result<()> {
         measured(|| self.0.toggle())
     }
+}
 
-    fn count(&self) -> xa11y::Result<usize> {
-        measured(|| retrying_transient("count", || self.0.count()))
+/// One thing a snapshot is asked to say: that a node of this role, under this
+/// exact name, is in the tree — or, for [`Self::absent`], that none is.
+///
+/// Role and name rather than a free-form selector because this type has to do
+/// two things with the same statement and they must not drift apart: produce
+/// the clause that goes into the group [`Probed::wait_all`] resolves, and
+/// decide, in memory, whether an element that came back satisfies it. Writing
+/// the match by hand against a selector written separately would be two
+/// spellings of one rule. Every selector the collapsed clusters use is
+/// `role[name="…"]`, so that is the whole shape offered; a site that needs
+/// more — a prefix match, a state filter — keeps its own [`Probe`] call.
+#[derive(Clone, Copy)]
+struct Expect<'a> {
+    role: &'a str,
+    name: &'a str,
+    /// What the snapshot must say: `true` that the node is there, `false` that
+    /// it is not.
+    present: bool,
+}
+
+impl<'a> Expect<'a> {
+    /// A node that must be in the tree.
+    fn present(role: &'a str, name: &'a str) -> Self {
+        Expect {
+            role,
+            name,
+            present: true,
+        }
+    }
+
+    /// A node that must *not* be in the tree.
+    ///
+    /// Sound in a [`Probed::wait_all`] group and nowhere cheaper, because an
+    /// absence only means something once the tree is known to be published: an
+    /// empty tree satisfies every absence trivially. Grouped with the
+    /// expectations that prove the tree is there, it is read off the very
+    /// snapshot that proved it, so there is no ordering left to respect.
+    fn absent(role: &'a str, name: &'a str) -> Self {
+        Expect {
+            role,
+            name,
+            present: false,
+        }
+    }
+
+    /// This expectation as one clause of a selector group.
+    fn clause(&self) -> String {
+        format!(r#"{}[name="{}"]"#, self.role, self.name)
+    }
+
+    /// Whether `data` is the node this names — the in-memory twin of what the
+    /// clause above asks the platform, which for a `role[name="…"]` selector is
+    /// an exact, case-sensitive name against a normalized role.
+    fn matches(&self, data: &ElementData) -> bool {
+        data.role.to_snake_case() == self.role && data.name.as_deref() == Some(self.name)
+    }
+
+    /// How a failure names this expectation, given what the snapshot said.
+    fn unmet(&self) -> String {
+        let clause = self.clause();
+        if self.present {
+            format!("{clause} never appeared")
+        } else {
+            format!("{clause} is still there")
+        }
+    }
+}
+
+/// The elements one whole-subtree snapshot handed back, kept so a caller can
+/// read an element it has already paid for.
+///
+/// Every `Element` in here carries its own already-populated `ElementData`, so
+/// [`Self::first`] and the `data()` behind it are field reads rather than
+/// cross-process calls: a snapshot answers arbitrarily many questions for the
+/// price of the one resolution that made it.
+///
+/// **It goes stale the moment the app is touched.** egui republishes its
+/// accessibility tree every frame, so a press, a toggle or a synthetic click
+/// invalidates every handle here — see [`Probe::press_revealing`], which is
+/// where that failure mode is spelled out. Read a snapshot before the next
+/// interaction or take a fresh one after it.
+struct Snapshot(Vec<Element>);
+
+impl Snapshot {
+    /// The first element matching `expect`.
+    ///
+    /// Infallible for an expectation the [`Probed::wait_all`] that produced
+    /// this snapshot returned successfully on — that is exactly what it waited
+    /// to be true — so a miss here is a caller asking about something it never
+    /// asked for, and panics saying so.
+    fn first(&self, expect: &Expect<'_>) -> &Element {
+        self.0
+            .iter()
+            .find(|element| expect.matches(element.data()))
+            .unwrap_or_else(|| panic!("{} is not in this snapshot", expect.clause()))
     }
 }
 
@@ -294,11 +395,102 @@ impl Probe {
 /// the suite would report zero operations while running the usual number.
 trait Probed {
     fn probe(&self, selector: &str) -> Probe;
+
+    fn wait_all(&self, expectations: &[Expect<'_>], timeout: Duration) -> xa11y::Result<Snapshot>;
 }
 
 impl Probed for App {
     fn probe(&self, selector: &str) -> Probe {
         Probe(self.locator(selector))
+    }
+
+    /// Wait until every one of `expectations` holds in a **single** snapshot,
+    /// and hand that snapshot back.
+    ///
+    /// This is the suite's main lever on its own cost. A cluster of consecutive
+    /// read-only assertions used to be one resolution each — one whole-subtree
+    /// walk per assertion, around 25s apiece on the Windows runner — even
+    /// though the tree they were asking about was the same tree. Here the
+    /// clauses are joined into one selector *group*, which `Locator::elements`
+    /// resolves in one walk, and each expectation is then decided against the
+    /// `ElementData` already in hand. A five-assertion cluster costs one
+    /// operation instead of five.
+    ///
+    /// The waiting is what makes the substitution honest. `elements` on its own
+    /// resolves once and returns, so swapping it in for a `wait_attached` would
+    /// trade the cost for flakiness on a slow runner, where a widget routinely
+    /// lands a poll or two after the query that wants it. So this polls — one
+    /// whole snapshot per tick, every expectation checked against it — and
+    /// returns the first tick on which they all hold, which for a healthy app
+    /// is the first one.
+    ///
+    /// Counted as **one** op however many ticks that takes, and however many
+    /// times [`retrying_transient`] re-runs it: see [`measured`]. Retrying is
+    /// safe here for the reason it is safe for the other read-only probes and
+    /// for no press — resolving a group twice changes nothing.
+    ///
+    /// Panics rather than erroring on a list that names nothing to *find* —
+    /// an empty one, which would build an unparsable empty selector, or one
+    /// made only of [`Expect::absent`], which every tick of an empty tree
+    /// satisfies and which would therefore return before the app had drawn
+    /// anything. An absence is only an assertion in the company of the
+    /// presences that prove the tree is published.
+    fn wait_all(&self, expectations: &[Expect<'_>], timeout: Duration) -> xa11y::Result<Snapshot> {
+        assert!(
+            expectations.iter().any(|expect| expect.present),
+            "wait_all needs at least one node to wait *for*"
+        );
+        // One group, so one walk: `Locator::elements` parses the commas into
+        // clauses and resolves them together, returning every match in document
+        // order. The absent clauses belong in it as much as the present ones —
+        // they are how the snapshot is asked about the node that must not be
+        // there.
+        let group = expectations
+            .iter()
+            .map(|expect| expect.clause())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let locator = self.locator(&group);
+        measured(|| {
+            retrying_transient("wait_all", || {
+                let started = Instant::now();
+                loop {
+                    let found = locator.elements()?;
+                    let unmet: Vec<String> = expectations
+                        .iter()
+                        .filter(|expect| {
+                            expect.present
+                                != found.iter().any(|element| expect.matches(element.data()))
+                        })
+                        .map(Expect::unmet)
+                        .collect();
+                    if unmet.is_empty() {
+                        return Ok(Snapshot(found));
+                    }
+                    let elapsed = started.elapsed();
+                    if elapsed >= timeout {
+                        // The diagnosis carries both halves of the answer: what
+                        // the snapshot was missing, and what it did hold — the
+                        // near-miss list a single-selector timeout would have
+                        // had to go and build separately.
+                        return Err(xa11y::Error::Timeout {
+                            elapsed,
+                            diagnosis: Some(Box::new(
+                                xa11y::Diagnosis::new()
+                                    .condition("every expectation in one snapshot")
+                                    .selector(group.clone())
+                                    .last_observed(unmet.join("; "))
+                                    .candidates(found.iter().map(|element| {
+                                        let data = element.data();
+                                        format!("{} {:?}", data.role, data.name)
+                                    })),
+                            )),
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            })
+        })
     }
 }
 
@@ -437,8 +629,8 @@ impl Guard {
     /// Print this test's `UIPROBE` line, and the running `UIPROBE TOTAL`.
     ///
     /// ```text
-    /// UIPROBE test=file_menu_items launch_ms=886 ops=5 op_ms=3732 total_ms=4733
-    /// UIPROBE TOTAL tests=19 launch_ms=19559 ops=45 op_ms=29234 total_ms=53012 mean_launch_ms=1029 mean_op_ms=649
+    /// UIPROBE test=file_menu_items launch_ms=675 ops=2 op_ms=2176 total_ms=2951
+    /// UIPROBE TOTAL tests=19 launch_ms=16960 ops=24 op_ms=22964 total_ms=44699 mean_launch_ms=892 mean_op_ms=956
     /// ```
     ///
     /// `launch_ms` is the runner-speed yardstick: spawning a process, waiting
@@ -714,26 +906,24 @@ fn window_min_size() {
 fn the_menu_bar_holds_file_edit_go_and_panels() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-    for menu in ["File", "Edit", "Go", "Panels"] {
-        app.probe(&format!(r#"button[name="{menu}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("'{menu}' menu button not found"));
-    }
-    // `count`, not a short-budget `wait_attached`: one instantaneous resolution
-    // rather than a poll loop that snapshots the whole subtree every 100ms for
-    // its budget (see this file's module comment).
-    //
-    // **This depends on the loop above running first.** A single check for
-    // absence only means anything once the tree is known to be published, and
-    // the four menu buttons — painted in the same menu bar as a View menu would
-    // be — are what establishes that. Do not reorder these two.
-    assert_eq!(
-        app.probe(r#"button[name="View"]"#)
-            .count()
-            .expect("the tree is queryable"),
-        0,
-        "the View menu is still in the menu bar"
-    );
+    // Five assertions, one snapshot. The absence of a View menu is the reason
+    // they are grouped rather than merely the thing that makes it cheap: an
+    // absence means nothing against a tree that has not been published yet, so
+    // it needs corroboration that the menu bar is really there — and the four
+    // buttons painted in that same bar are exactly that corroboration. Read off
+    // one observation, the corroboration is structural: the snapshot that finds
+    // no View menu is by construction the snapshot that found the other four.
+    app.wait_all(
+        &[
+            Expect::present("button", "File"),
+            Expect::present("button", "Edit"),
+            Expect::present("button", "Go"),
+            Expect::present("button", "Panels"),
+            Expect::absent("button", "View"),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the menu bar does not hold exactly File, Edit, Go and Panels");
 }
 
 /// The empty-state placeholder text is shown before any file is loaded.
@@ -758,11 +948,17 @@ fn file_menu_items() {
         .press_revealing(&app.probe(r#"button[name="Open..."]"#), CONTENT_TIMEOUT)
         .expect("File menu item 'Open...' did not appear");
 
-    for item in ["Close All", "Load Demo Data...", "Quit"] {
-        app.probe(&format!(r#"button[name="{item}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
-    }
+    // The rest in one snapshot: the menu is open and nothing below touches it,
+    // so all three are questions about the same tree.
+    app.wait_all(
+        &[
+            Expect::present("button", "Close All"),
+            Expect::present("button", "Load Demo Data..."),
+            Expect::present("button", "Quit"),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the File menu is missing an item");
 }
 
 /// The Edit menu opens, and its items are in the tree even when every one of
@@ -793,12 +989,16 @@ fn edit_menu_items() {
         .expect("Edit menu item 'Delete Image' did not appear");
 
     // Named without their shortcuts, for the reason `file_menu_items` gives:
-    // the shortcut is in the button's text and is spelled by the platform.
-    for item in ["Cancel Camera Move", "Bundle Adjust..."] {
-        app.probe(&format!(r#"button[name="{item}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"));
-    }
+    // the shortcut is in the button's text and is spelled by the platform. Both
+    // in one snapshot, the menu being open and untouched between them.
+    app.wait_all(
+        &[
+            Expect::present("button", "Cancel Camera Move"),
+            Expect::present("button", "Bundle Adjust..."),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the Edit menu is missing an item");
 }
 
 /// The File menu's two save items, and which of them applies to demo data.
@@ -890,15 +1090,19 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
     let _guard = Guard::demo();
     let app = attach(_guard.child());
 
-    for name in ["Points", "Camera Images", "Grid"] {
-        let el = app
-            .probe(&format!(r#"check_box[name="{name}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("HUD checkbox '{name}' did not appear"));
+    // One snapshot for all three, presence and checked state alike: nothing
+    // here presses anything, so the states are read off the same observation
+    // that found the boxes.
+    let layers = ["Points", "Camera Images", "Grid"].map(|name| Expect::present("check_box", name));
+    let hud = app
+        .wait_all(&layers, CONTENT_TIMEOUT)
+        .expect("a HUD layer checkbox did not appear");
+    for layer in &layers {
+        let checked = hud.first(layer).data().states.checked;
         assert!(
-            matches!(el.data().states.checked, Some(Toggled::On)),
-            "'{name}' should be checked by default (got {:?})",
-            el.data().states.checked,
+            matches!(checked, Some(Toggled::On)),
+            "'{}' should be checked by default (got {checked:?})",
+            layer.name,
         );
     }
 }
@@ -922,20 +1126,21 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
     let app = attach(_guard.child());
     load_demo_data(&app);
 
-    // The demo reconstruction is labeled "demo" and rings the scene with 8
-    // images, so both strings are fixed by the fixture.
-    for text in ["demo", "Camera Images (8)"] {
-        app.probe(&format!(r#"static_text[name="{text}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("Scene panel row '{text}' did not appear"));
-    }
-
-    // The row's solo toggle. Its own behaviour is headless (`scene_graph`
-    // tests); what only a real window can show is that a *third* glyph button
-    // squeezed onto the row is still laid out and still reachable.
-    app.probe(r#"button[name="S"]"#)
-        .wait_attached(CONTENT_TIMEOUT)
-        .expect("the reconstruction row's solo toggle did not appear");
+    // One snapshot of the panel the load produced. The demo reconstruction is
+    // labeled "demo" and rings the scene with 8 images, so both strings are
+    // fixed by the fixture. The third is the row's solo toggle: its own
+    // behaviour is headless (`scene_graph` tests), and what only a real window
+    // can show is that a *third* glyph button squeezed onto the row is still
+    // laid out and still reachable.
+    app.wait_all(
+        &[
+            Expect::present("static_text", "demo"),
+            Expect::present("static_text", "Camera Images (8)"),
+            Expect::present("button", "S"),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the Scene panel does not list the loaded reconstruction");
 }
 
 /// Toggling a HUD checkbox via accessibility updates its checked state.
@@ -1175,13 +1380,18 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     // Neither are the two submenus, `Align to ▸` and `Tint ▸`: a menu button
     // does not surface under the `button` role here, and their contents only
     // exist once the submenu is opened — both are covered headlessly instead.
-    for item in ["Select", "Zoom to Fit"] {
-        app.probe(&format!(r#"button[name="{item}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| {
-                panic!("context menu item '{item}' did not appear after a right-click")
-            });
-    }
+    //
+    // One snapshot, taken after the last click: the row lookup above cannot be
+    // folded in with these, because the clicks in between republish the tree
+    // and the menu does not exist until they have landed.
+    app.wait_all(
+        &[
+            Expect::present("button", "Select"),
+            Expect::present("button", "Zoom to Fit"),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the reconstruction row's context menu did not open on a right-click");
 }
 
 /// The default layout file, moved aside for the length of a test and put back
@@ -1252,23 +1462,22 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     );
     let app = attach(guard.child());
 
-    app.probe(r#"button[name="Latest"]"#)
-        .wait_attached(CONTENT_TIMEOUT)
-        .expect("the Action Log toolbar did not appear, so the layout was not loaded");
-    // `count`, not a short-budget `wait_attached`, for the reason
-    // `the_menu_bar_holds_file_edit_go_and_panels` gives: one resolution rather
-    // than a poll loop of whole-subtree snapshots.
-    //
-    // **This depends on the "Latest" lookup above running first.** That lookup
-    // is what establishes the dock has been built and its tree published; only
-    // then does finding no placeholder mean the 3D viewer is not docked, rather
-    // than that nothing is in the tree yet. Do not reorder these two.
-    assert_eq!(
-        app.probe(r#"static_text[name="No reconstruction loaded."]"#)
-            .count()
-            .expect("the tree is queryable"),
-        0,
-        "the 3D viewer is still docked, so the stock grid was used"
+    // Both halves of the verdict in one snapshot, for the reason
+    // `the_menu_bar_holds_file_edit_go_and_panels` gives at more length: the
+    // Action Log's toolbar is what establishes the dock has been built and its
+    // tree published, and only against a tree that is there does finding no
+    // placeholder mean the 3D viewer is not docked, rather than that nothing is
+    // in the tree yet. Asked together, the two cannot come apart.
+    app.wait_all(
+        &[
+            Expect::present("button", "Latest"),
+            Expect::absent("static_text", "No reconstruction loaded."),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect(
+        "the Action Log toolbar is absent or the 3D viewer is still docked, \
+         so the saved layout was not loaded",
     );
 }
 
@@ -1303,15 +1512,19 @@ fn the_edit_history_panel_lists_the_loaded_version() {
     let app = attach(guard.child());
 
     // The demo node is labeled "demo" and has been through no edit, so both
-    // strings are fixed by the fixture.
-    for text in [
-        "1 version",
-        "demo has not been edited; its one version is the file as it was opened.",
-    ] {
-        app.probe(&format!(r#"static_text[name="{text}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("Edit History panel text '{text}' did not appear"));
-    }
+    // strings are fixed by the fixture — and both are questions about the same
+    // untouched panel, so one snapshot answers them.
+    app.wait_all(
+        &[
+            Expect::present("static_text", "1 version"),
+            Expect::present(
+                "static_text",
+                "demo has not been edited; its one version is the file as it was opened.",
+            ),
+        ],
+        CONTENT_TIMEOUT,
+    )
+    .expect("the Edit History panel does not list the loaded version");
 }
 
 // --- The MCP screenshot, against a real frame ---
