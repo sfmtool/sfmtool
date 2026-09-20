@@ -306,7 +306,8 @@ pub(crate) fn exit_implicitly(
 
 /// The Move Camera keys, which are viewport keys held here because they need
 /// the state the viewport is not handed: `M` and `Enter` commit, `Escape`
-/// cancels, and `M` with no lock takes the camera in hand.
+/// cancels, and `M` with no lock takes the camera in hand. A `,` / `.` step
+/// ends a lock too, through [`exit_implicitly_on_image_step`] at the app level.
 ///
 /// Gated by the caller on egui's own keyboard arbitration, exactly as the
 /// viewport's other bindings are. Reports the node a commit pushed a version
@@ -316,12 +317,11 @@ pub(crate) fn handle_keys(
     viewer: &mut Viewer3D,
     state: &mut AppState,
 ) -> Option<crate::scene::ReconId> {
-    let (m, commits, escape, stepping) = ui.input(|i| {
+    let (m, commits, escape) = ui.input(|i| {
         (
             i.key_pressed(egui::Key::M),
             i.key_pressed(egui::Key::Enter),
             i.key_pressed(egui::Key::Escape),
-            i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::Period),
         )
     });
     // A lock whose node has been closed under it is dropped rather than acted
@@ -352,10 +352,6 @@ pub(crate) fn handle_keys(
     } else if escape {
         cancel(viewer, state);
         None
-    } else if stepping {
-        // The step itself happens inside the viewport, on this same frame and
-        // after this call: what the lock owes it is to be gone by then.
-        exit_implicitly(viewer, state)
     } else {
         None
     }
@@ -379,6 +375,24 @@ pub(crate) fn exit_implicitly_for(
         return exit_implicitly(viewer, state);
     }
     None
+}
+
+/// End a held lock when `,` or `.` is about to step the selection onto another
+/// image, which is a step away from the camera in hand.
+///
+/// Called at the app level, before the step itself, so that the commit reads
+/// the pose the viewport is still holding rather than the one the step is about
+/// to put there -- and so the rule holds whether or not the 3D Viewer is the tab
+/// in front.
+pub(crate) fn exit_implicitly_on_image_step(
+    ui: &egui::Ui,
+    viewer: &mut Viewer3D,
+    state: &mut AppState,
+) -> Option<crate::scene::ReconId> {
+    viewer.camera_lock.as_ref()?;
+    let stepping =
+        ui.input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::Period));
+    stepping.then(|| exit_implicitly(viewer, state)).flatten()
 }
 
 /// End a held lock when `[` or `]` is about to step the viewport onto another

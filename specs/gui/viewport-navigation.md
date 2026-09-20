@@ -386,7 +386,9 @@ image rendering, and `,`/`.` navigation between cameras.
 
 Outside camera view, `,`/`.` still step through images by moving the
 selected image back/forward (wrapping at the ends); the 3D viewport stays
-put and only the selection changes.
+put and only the selection changes. Those two keys are handled for the whole
+window rather than by the viewport, so they work whichever panel is in front;
+see [camera-views.md](camera-views.md#where-the-keys-are-handled).
 
 ## Rendering Details
 

@@ -130,8 +130,12 @@ impl Frame {
     }
 }
 
-/// Run one frame of `show_hud` + `Viewer3D::show`, wired the way `dock.rs`
-/// wires them.
+/// Run one frame of the app-level `,` / `.` step, `show_hud` and
+/// `Viewer3D::show`, wired the way `app.rs` and `dock.rs` wire them.
+///
+/// The step is in here because it is the one binding of the three that is no
+/// longer the viewport's own, and the keyboard arbitration it answers to is the
+/// arbitration this module is about.
 fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, frame: Frame) {
     let size = frame.viewport.unwrap_or(VIEWPORT);
     let input = egui::RawInput {
@@ -151,6 +155,9 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 .memory_mut(|m| m.request_focus(egui::Id::new("a_widget_being_typed_into")));
         }
         let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
+        if !ui.ctx().egui_wants_keyboard_input() {
+            viewer.handle_image_step(ui, state);
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
             // The node borrows only `state.scene`, so the rest of `AppState`
@@ -161,7 +168,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 node,
                 &state.scene,
                 state.solo,
-                &mut state.selected_image,
+                state.selected_image,
                 state.show_grid,
                 state.length_scale,
                 None,

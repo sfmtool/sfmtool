@@ -17,9 +17,76 @@ use crate::scene::{ImageRef, SceneNode};
 use crate::state::AppState;
 
 impl Viewer3D {
+    /// Handles `,` / `.` -- stepping the **selected image** back and forward
+    /// through the selected reconstruction's image table, wrapping at both
+    /// ends.
+    ///
+    /// In camera view the viewport comes along, switching which camera it looks
+    /// through; outside it only the selection moves and the viewport stays
+    /// where the reviewer left it. Camera view is viewport state that outlives
+    /// the 3D Viewer being on screen, so it follows the step whether or not
+    /// that panel is drawn this frame -- the same rule a selection change from
+    /// any other panel already obeys, and what keeps a hidden viewport from
+    /// coming back looking at an image the selection left behind.
+    ///
+    /// Called from `app::menu::shortcuts` rather than from
+    /// [`Viewer3D::show`]: the keys step a selection every panel shares, so a
+    /// handler inside the viewport's tab body would go quiet exactly when
+    /// another tab was in front of it. The caller gates it on egui's own
+    /// keyboard arbitration, so `,` typed into a text field is a comma.
+    ///
+    /// Stepping stays inside the selected reconstruction: an image or camera
+    /// view belonging to another node is not a position in this sequence, so it
+    /// reads as "nothing selected" and stepping starts from the top.
+    pub fn handle_image_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
+        let Some(recon_id) = state.selected_recon else {
+            return;
+        };
+        let forward = ui.input(|i| {
+            let back = i.key_pressed(egui::Key::Comma);
+            let fwd = i.key_pressed(egui::Key::Period);
+            // Both in one frame cancel out rather than picking a winner, as
+            // they do for `[` / `]`.
+            (fwd != back).then_some(fwd)
+        });
+        let Some(forward) = forward else {
+            return;
+        };
+        let Some(node) = crate::scene::node_by_id(&state.scene, recon_id) else {
+            return;
+        };
+        let n = node.recon().image_table.images.len();
+        if n == 0 {
+            return;
+        }
+        // The camera being looked through outranks the selection: in camera
+        // view the sequence position is where the viewport is.
+        let current = self
+            .camera_view
+            .as_ref()
+            .map(|view| view.image)
+            .or(state.selected_image)
+            .and_then(|image| image.index_in(recon_id));
+        let index = match (current, forward) {
+            (None, _) => 0,
+            (Some(c), true) if c + 1 >= n => 0,
+            (Some(c), true) => c + 1,
+            (Some(0), false) => n - 1,
+            (Some(c), false) => c - 1,
+        };
+        let image = ImageRef::new(recon_id, index);
+        if self.camera_view.is_some() {
+            self.switch_camera_view(image, node);
+        }
+        // After the node's borrow: the setter needs the state mutably, and it
+        // is the setter rather than the field because it is what keeps the
+        // selected camera in step.
+        state.select_image(Some(image));
+    }
+
     /// Handles `[` / `]` — stepping the **selected reconstruction** back and
-    /// forward in tree order, the reconstruction analogue of `,` / `.` for
-    /// images (which is why it lives here beside them).
+    /// forward in tree order, the reconstruction analogue of
+    /// [`Viewer3D::handle_image_step`].
     ///
     /// When an image is selected, stepping carries the selection to the
     /// **same-named image** in the new reconstruction if one exists — and, in
@@ -479,18 +546,22 @@ impl Viewer3D {
         ui.ctx().request_repaint(); // continuous animation while flying
     }
 
-    /// Handles keyboard shortcuts (Z zoom-to-fit/camera view, comma/period navigate, Home reset).
+    /// Handles the viewport's own keyboard shortcuts: Z (zoom-to-fit / camera
+    /// view) and Home (level horizon / view reset).
+    ///
+    /// `,` / `.` are not here: they step the image selection wherever the
+    /// window is pointed, so they are handled at the app level by
+    /// [`Viewer3D::handle_image_step`].
     pub(super) fn handle_keyboard(
         &mut self,
         ui: &egui::Ui,
         rect: Rect,
         node: &SceneNode,
-        selected_image: &mut Option<ImageRef>,
+        selected_image: Option<ImageRef>,
         log: &mut crate::action_log::ActionLog,
     ) {
         use crate::action_log::Kind;
 
-        let reconstruction = node.recon();
         let recon_id = node.id;
         ui.input(|i| {
             let current_time = i.time;
@@ -508,47 +579,6 @@ impl Viewer3D {
                     if framed {
                         log.record(Kind::View, format!("Framed {}", node.label));
                     }
-                }
-            }
-            // ,/. navigate to previous/next image. In camera view mode this
-            // also switches which camera we're viewing through; otherwise the
-            // viewport stays put and only the selection changes.
-            //
-            // Stepping stays inside `recon_id`: an image or camera view
-            // belonging to another node is not a position in this sequence, so
-            // it reads as "nothing selected" and stepping starts from the top.
-            if !reconstruction.image_table.images.is_empty() {
-                let n = reconstruction.image_table.images.len();
-                let in_camera_view = self.camera_view.is_some();
-                let cur = self
-                    .camera_view
-                    .as_ref()
-                    .map(|cv| cv.image)
-                    .or(*selected_image)
-                    .and_then(|image| image.index_in(recon_id));
-                if i.key_pressed(egui::Key::Comma) {
-                    let prev = match cur {
-                        None => 0,
-                        Some(0) => n - 1,
-                        Some(c) => c - 1,
-                    };
-                    let prev = ImageRef::new(recon_id, prev);
-                    if in_camera_view {
-                        self.switch_camera_view(prev, node);
-                    }
-                    *selected_image = Some(prev);
-                }
-                if i.key_pressed(egui::Key::Period) {
-                    let next = match cur {
-                        None => 0,
-                        Some(c) if c + 1 >= n => 0,
-                        Some(c) => c + 1,
-                    };
-                    let next = ImageRef::new(recon_id, next);
-                    if in_camera_view {
-                        self.switch_camera_view(next, node);
-                    }
-                    *selected_image = Some(next);
                 }
             }
             if i.key_pressed(egui::Key::Home) {

@@ -855,17 +855,17 @@ frame, with `derived`, `header`, `parameters`, `extrinsics`, `format` and
 `projection_plot` under it.
 
 A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Camera Intrinsics"**,
-defaulting into the same top-right tab group as Image Detail and Point Track,
-as the non-active tab. It is a detail view of a selection like both of its
-neighbours, and like both it is fully re-dockable.
+defaulting into the same top-right tab group as Point Track, as the non-active
+tab. It is a detail view of a selection like its neighbour, and like it is fully
+re-dockable.
 
 **Empty state.** `No camera selected` centred, with a line beneath:
 `Select a camera under Camera Intrinsics in the Scene panel, or select an
 image.` — the second half being the discoverable route, since most users will
 reach intrinsics through an image rather than the other way round. With no file
-loaded at all the panel says `No reconstruction loaded`, which is what its three
-dock neighbours say and is a truer answer than pointing at a tree with nothing
-in it.
+loaded at all the panel says `No reconstruction loaded`, which is what its dock
+neighbours say and is a truer answer than pointing at a tree with nothing in
+it.
 
 **Populated state**, top to bottom:
 

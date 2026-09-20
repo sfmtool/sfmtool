@@ -2520,6 +2520,14 @@ fn lay_out(state: &mut AppState, panel: Tab, rect: egui::Rect) {
         .viewport = rect;
 }
 
+/// Bring `panel` to the front of its node without a log entry, so a test whose
+/// subject is the *first* entry still starts from an empty log.
+fn raise(state: &mut AppState, panel: Tab) {
+    state.action_log.mute();
+    state.show_panel(panel);
+    state.action_log.unmute();
+}
+
 /// A 320 × 180 point body at (100, 40), which at the fixture's scale factor of
 /// 1.5 is 480 × 270 physical pixels at (150, 60).
 fn body() -> egui::Rect {
@@ -2544,6 +2552,9 @@ fn a_screenshot_with_no_panel_photographs_the_window() {
 #[test]
 fn a_screenshot_of_a_panel_defers_with_the_tab_and_names_it() {
     let (mut state, mut viewer) = quiet_scene();
+    // Behind the viewport in the stock grid, and a picture wants the tab in
+    // front.
+    raise(&mut state, Tab::ImageDetail);
     lay_out(&mut state, Tab::ImageDetail, body());
     let (source, caption) = deferred_screenshot(
         &mut state,
@@ -2597,9 +2608,9 @@ fn a_panel_that_is_not_drawn_is_refused_naming_show_panel() {
     let behind = refused(
         &mut state,
         &mut viewer,
-        screenshot(Some(Tab::PointTrackDetail), true, None),
+        screenshot(Some(Tab::IntrinsicsDetail), true, None),
     );
-    assert!(behind.0.contains("Image Detail"), "{behind}");
+    assert!(behind.0.contains("Point Track"), "{behind}");
     assert!(behind.0.contains("show_panel"), "{behind}");
 
     // An unknown name is the panel vocabulary's own refusal, listing all seven.
@@ -2623,9 +2634,9 @@ fn show_panel_then_a_screenshot_of_it_is_accepted_in_one_batch() {
         &mut NoWindow,
         vec![
             Command::ShowPanel {
-                panel: Tab::PointTrackDetail,
+                panel: Tab::IntrinsicsDetail,
             },
-            screenshot(Some(Tab::PointTrackDetail), true, None),
+            screenshot(Some(Tab::IntrinsicsDetail), true, None),
         ],
     )
     .outcomes;
@@ -2668,6 +2679,7 @@ fn hud_false_reads_the_render_target_and_is_refused_elsewhere() {
     }
 
     // `hud: true` is accepted anywhere and changes nothing.
+    raise(&mut state, Tab::ImageDetail);
     let (with_hud, _) = deferred_screenshot(
         &mut state,
         &mut viewer,
@@ -2755,7 +2767,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             tab.wire_name()
         );
     }
-    // The default layout has two multi-tab nodes, so four of the nine sit
+    // The default layout has three multi-tab nodes, so half of the ten sit
     // behind a sibling rather than in front of it.
     let active: Vec<&str> = Tab::ALL
         .iter()
@@ -2769,7 +2781,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             "background_task",
             "viewer_3d",
             "image_browser",
-            "image_detail"
+            "point_track"
         ]
     );
 }

@@ -1453,8 +1453,8 @@ Where the window is, and which panels are where. No arguments.
     "scene":             { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
-    "image_detail":      { "open": true,  "active": true },
-    "point_track":       { "open": true,  "active": false },
+    "image_detail":      { "open": true,  "active": false },
+    "point_track":       { "open": true,  "active": true },
     "camera_intrinsics": { "open": true,  "active": false },
     "action_log":        { "open": true,  "active": false },
     "edit_history":      { "open": true,  "active": false }

@@ -24,9 +24,9 @@ root, and everything below describes the arrangement to its right.
 ┌───────┬──────────────────────────┬──────────────┐
 │  File                            │  (menu bar)  │
 ├───────┼──────────────────────────┼──────────────┤
+│       │[3D Viewer][Image Detail] │ [Point Track]│
 │       │                          │              │
-│       │                          │    Image     │
-│ Scene │        3D Viewer         │    Detail    │
+│ Scene │        3D Viewer         │  Point Track │
 │       │                          │              │
 ├───────┤                          │              │
 │Backgr.├──────────────────────────┴──────────────┤
@@ -41,9 +41,14 @@ root, and everything below describes the arrangement to its right.
   operation running off the GUI thread is doing, and what the last one cost
   ([background-tasks.md](background-tasks.md)).
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
-  frustums, navigation.
-- **Image Detail**: top-right, ~1/3 width, sharing a tab group with Point Track
-  and Camera Intrinsics. Full-resolution image of the selected camera.
+  frustums, navigation. It is the active member of its tab group.
+- **Image Detail**: behind the 3D Viewer in that same group, one click away.
+  Full-resolution image of the selected camera. The two are the large pictures
+  of one selection and each wants the width, so they take turns in the middle
+  rather than halving it.
+- **Point Track**: top-right, ~1/3 width, sharing a tab group with Camera
+  Intrinsics and Track Edit, and the active member of it. The column beside the
+  pictures is where the tables about the selection go.
 - **Image Browser**: bottom strip, full width, ~20% of the height.
   Horizontally-scrollable strip of 128×128 thumbnails. It shares its tab group
   with the **Action Log** ([action-log.md](action-log.md)) and the **Edit
@@ -77,8 +82,10 @@ All four panels share `AppState::selected_image` as the central image selection 
   browser highlights the corresponding thumbnail and scrolls it into view. The detail pane
   loads the full-resolution image.
 - **Image Detail → others**: The detail pane is display-only (no selection input — it
-  shows whatever is selected). `,`/`.` keys on the 3D viewport step the selection
-  back/forward (wrapping at the ends) even when not in camera view mode.
+  shows whatever is selected). The `,`/`.` keys step the selection back/forward
+  (wrapping at the ends) even when not in camera view mode; they are handled for
+  the whole window rather than by one panel, so they work whichever tab is in
+  front ([camera-views.md](camera-views.md#navigating-between-cameras)).
 - **Deselect**: Clicking background in the 3D viewer clears `selected_image` and the
   detail pane shows "No image selected." Re-clicking an already-selected thumbnail keeps
   it selected (no toggle-off) — thumbnail clicks always set the selection to that image.

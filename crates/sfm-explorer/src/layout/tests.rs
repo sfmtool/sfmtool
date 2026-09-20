@@ -43,12 +43,12 @@ const DEFAULT_JSON: &str = r#"{
           "split": "left_right",
           "fraction": 0.67,
           "first": {
-            "tabs": ["viewer_3d"],
+            "tabs": ["viewer_3d", "image_detail"],
             "active": "viewer_3d"
           },
           "second": {
-            "tabs": ["image_detail", "point_track", "camera_intrinsics", "track_edit"],
-            "active": "image_detail"
+            "tabs": ["point_track", "camera_intrinsics", "track_edit"],
+            "active": "point_track"
           }
         },
         "second": {
@@ -147,6 +147,36 @@ fn the_action_log_shares_the_bottom_node_with_the_image_browser() {
         Tab::ImageBrowser,
         "the bottom node does not open on the image strip"
     );
+}
+
+/// Image Detail rides behind the viewport, and the right-hand column holds the
+/// two panels that read out numbers about the selection.
+///
+/// The two big pictures of one selection share a node so that each gets the
+/// full width of the middle and flipping between them is one click; the
+/// narrower column beside them is where a table belongs.
+#[test]
+fn the_viewport_opens_with_image_detail_behind_it_and_the_tables_beside_it() {
+    let leaves = main_leaves(&Layout::default());
+    let middle = leaves
+        .iter()
+        .find(|(tabs, _)| tabs.contains(&Tab::Viewer3D))
+        .expect("no leaf holds the 3D Viewer");
+    assert_eq!(middle.0, vec![Tab::Viewer3D, Tab::ImageDetail]);
+    assert_eq!(
+        middle.1,
+        Tab::Viewer3D,
+        "the viewer does not open on the 3D view"
+    );
+    let right = leaves
+        .iter()
+        .find(|(tabs, _)| tabs.contains(&Tab::PointTrackDetail))
+        .expect("no leaf holds the Point Track panel");
+    assert_eq!(
+        right.0,
+        vec![Tab::PointTrackDetail, Tab::IntrinsicsDetail, Tab::TrackEdit]
+    );
+    assert_eq!(right.1, Tab::PointTrackDetail);
 }
 
 /// The left column is a top-bottom split, not a second set of tabs: the tree
@@ -313,7 +343,7 @@ fn from_wire_name_is_exact() {
 fn showing_an_open_panel_only_changes_the_active_tab() {
     let mut state = state();
     let before = state.layout();
-    state.show_panel(Tab::PointTrackDetail);
+    state.show_panel(Tab::IntrinsicsDetail);
     let after = state.layout();
     assert_ne!(before, after, "the active tab did not move");
     assert_eq!(
@@ -329,12 +359,12 @@ fn showing_an_open_panel_only_changes_the_active_tab() {
     );
     let leaf = main_leaves(&after)
         .into_iter()
-        .find(|(tabs, _)| tabs.contains(&Tab::PointTrackDetail))
-        .expect("the Point Track panel is gone");
-    assert_eq!(leaf.1, Tab::PointTrackDetail);
+        .find(|(tabs, _)| tabs.contains(&Tab::IntrinsicsDetail))
+        .expect("the Camera Intrinsics panel is gone");
+    assert_eq!(leaf.1, Tab::IntrinsicsDetail);
     assert_eq!(
         layout_entries(&state),
-        [(false, "Raised Point Track panel".into())]
+        [(false, "Raised Camera Intrinsics panel".into())]
     );
 }
 
@@ -342,8 +372,12 @@ fn showing_an_open_panel_only_changes_the_active_tab() {
 #[test]
 fn a_panel_goes_home_to_a_group_mate() {
     for (tab, mate) in [
-        (Tab::PointTrackDetail, Tab::ImageDetail),
-        (Tab::IntrinsicsDetail, Tab::ImageDetail),
+        (Tab::PointTrackDetail, Tab::IntrinsicsDetail),
+        (Tab::IntrinsicsDetail, Tab::PointTrackDetail),
+        // The viewport and Image Detail share a node in the default layout, so
+        // either of them re-opened goes back behind the other.
+        (Tab::ImageDetail, Tab::Viewer3D),
+        (Tab::Viewer3D, Tab::ImageDetail),
         (Tab::ActionLog, Tab::ImageBrowser),
         (Tab::ImageBrowser, Tab::ActionLog),
         // Not a multi-tab node of the default layout, and a group-mate anyway:
@@ -410,10 +444,12 @@ fn a_panel_with_no_group_mate_splits_the_root() {
     }
 }
 
-/// The 3D Viewer has no home edge: it joins the root's first leaf.
+/// The 3D Viewer has no home edge: with its group-mate gone too, it joins the
+/// root's first leaf.
 #[test]
 fn the_viewer_joins_the_first_leaf() {
     let mut state = state();
+    state.hide_panel(Tab::ImageDetail);
     state.hide_panel(Tab::Viewer3D);
     state.show_panel(Tab::Viewer3D);
     let leaves = main_leaves(&state.layout());

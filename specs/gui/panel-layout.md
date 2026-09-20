@@ -113,15 +113,14 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    `Go ▸ Go to Point`'s raise of the Point Track panel and the MCP
    `show_panel` tool.)
 2. **A default group-mate is open:** push it into that node, behind the
-   current tabs, then make it active. There are three groups. Two of them are
-   the multi-tab nodes of the default layout (Image Detail / Point Track /
-   Camera Intrinsics / Track Edit, and Image Browser / Action Log / Edit
-   History), and a
-   panel from either goes home to whichever of its group-mates is still there.
-   The third, Scene / Background Task, is a top-bottom split rather than one
-   node, and is a group anyway: a Background Task panel re-opened belongs beside
-   the tree,
-   where rule 3 would give it a second left column of its own.
+   current tabs, then make it active. There are four groups. Three of them are
+   the multi-tab nodes of the default layout (3D Viewer / Image Detail, Point
+   Track / Camera Intrinsics / Track Edit, and Image Browser / Action Log /
+   Edit History), and a panel from any of them goes home to whichever of its
+   group-mates is still there. The fourth, Scene / Background Task, is a
+   top-bottom split rather than one node, and is a group anyway: a Background
+   Task panel re-opened belongs beside the tree, where rule 3 would give it a
+   second left column of its own.
 3. **Otherwise, split the main surface's root** along the panel's home edge,
    at its home fraction, and put the panel in the new node:
 
@@ -214,12 +213,12 @@ observed a window (a headless `AppState`):
           "split": "left_right",
           "fraction": 0.67,
           "first": {
-            "tabs": ["viewer_3d"],
+            "tabs": ["viewer_3d", "image_detail"],
             "active": "viewer_3d"
           },
           "second": {
-            "tabs": ["image_detail", "point_track", "camera_intrinsics", "track_edit"],
-            "active": "image_detail"
+            "tabs": ["point_track", "camera_intrinsics", "track_edit"],
+            "active": "point_track"
           }
         },
         "second": {

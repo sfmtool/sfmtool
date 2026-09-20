@@ -234,10 +234,11 @@ The viewer uses an `egui_dock`-based dockable, tabbed interface with four
 panels. Panels can be re-docked, reordered, and resized:
 
 - **3D Viewer** — Top-left (~67% width). Point cloud, frustums, navigation.
-- **Image Detail** — Top-right (~33% width). Full-resolution image of the
-  selected camera, with a 7-mode overlay toolbar (features, reproj error,
-  track length, max track angle, depth reliability, condition number, none).
-- **Point Track Detail** — Tabbed beside Image Detail. Per-observation
+- **Image Detail** — Tabbed behind the 3D Viewer, so it opens at the same width.
+  Full-resolution image of the selected camera, with a 7-mode overlay toolbar
+  (features, reproj error, track length, max track angle, depth reliability,
+  condition number, none).
+- **Point Track Detail** — Top-right (~33% width). Per-observation
   diagnostics for the selected 3D point: per-image reprojection error, ray
   angle, thumbnails, copy-`pt3d_<hash>_<index>` and the Go to Point button that
   takes one back.

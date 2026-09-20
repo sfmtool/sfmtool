@@ -114,8 +114,8 @@ carries its consensus bitmap.
 ## Placement
 
 A tab, `Tab::TrackEdit`, titled **Track Edit**, whose home is the top-right node
-beside Image Detail, Point Track and Camera Intrinsics, as the last tab of that
-leaf ([`panel-layout.md`](panel-layout.md) § "Home positions"). It is a panel
+beside Point Track and Camera Intrinsics, as the last tab of that leaf
+([`panel-layout.md`](panel-layout.md) § "Home positions"). It is a panel
 like any other: closeable, ticked in the Panels menu, saved in the layout file
 under the name `track_edit`.
 

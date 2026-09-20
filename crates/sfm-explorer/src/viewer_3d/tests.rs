@@ -65,7 +65,7 @@ fn run_frame(
                 node,
                 &state.scene,
                 state.solo,
-                &mut state.selected_image,
+                state.selected_image,
                 state.show_grid,
                 state.length_scale,
                 None,

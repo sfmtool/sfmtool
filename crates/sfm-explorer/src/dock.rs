@@ -154,8 +154,8 @@ impl TabContext<'_> {
         if !ui.ctx().egui_wants_keyboard_input() {
             // The Move Camera keys go first, and for the same reason `[` / `]`
             // are here: they need the state the viewport is not handed. A
-            // `,` / `.` step reaches the viewport's own handler below on this
-            // same frame, by which time the lock has committed and gone.
+            // `,` / `.` step has already happened by now, at the app level,
+            // and released any lock it found held.
             if let Some(moved) = crate::camera_lock::handle_keys(ui, self.viewer_3d, self.state) {
                 self.forget_recon(moved);
             }
@@ -189,18 +189,12 @@ impl TabContext<'_> {
         // overlap.
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            // The viewport's own bindings (`,` / `.`) move the image
-            // selection, and they move it in a scratch copy: applying
-            // it afterwards through `select_image` is what keeps the
-            // selected camera in step, which a `&mut` straight into the
-            // field could not.
-            let mut selection = self.state.selected_image;
             self.viewer_3d.show(
                 ui,
                 node,
                 &self.state.scene,
                 self.state.solo,
-                &mut selection,
+                self.state.selected_image,
                 self.state.show_grid,
                 self.state.length_scale,
                 status.as_deref(),
@@ -214,9 +208,6 @@ impl TabContext<'_> {
                 busy.as_deref(),
                 &mut self.state.action_log,
             );
-            if selection != self.state.selected_image {
-                self.state.select_image(selection);
-            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {

@@ -726,6 +726,26 @@ Outside camera view mode, `,`/`.` still step through images — they move
 viewport is left alone. This lets you scrub through the image browser /
 image detail panel without the viewport jumping around.
 
+#### Where the keys are handled
+
+`Viewer3D::handle_image_step`, called from `app::menu::shortcuts` at the top of
+the frame, before the dock is drawn. They are the window's keys rather than the
+viewport's: the selection they step is shared by every panel, and the stock
+layout keeps the 3D Viewer and Image Detail in one node, so a handler living in
+the viewport's tab body would fall silent for as long as the photograph was the
+tab in front. The caller gates them on `egui_wants_keyboard_input`, like every
+other accelerator, so a comma typed into a text field or a `DragValue` is a
+comma.
+
+Being app-level, the step does not ask which tab is drawn. Camera view is
+viewport state that outlives its panel being on screen, so it follows the step
+whether or not the 3D Viewer is visible: a hidden viewport comes back looking
+through the image the selection now names, rather than through one the reviewer
+left several steps ago. A camera held in hand is committed first, by
+`camera_lock::exit_implicitly_on_image_step` -- before the step, so the commit
+reads the pose the viewport is still holding
+([edits/move-camera.md](edits/move-camera.md)).
+
 ### Exiting camera view
 
 Camera view exits when navigation moves the camera center — orbiting, panning,

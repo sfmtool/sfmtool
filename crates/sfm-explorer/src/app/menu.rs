@@ -373,6 +373,31 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
             edit_outcome(app_state, Some(outcome));
         }
     }
+
+    // `,` / `.` step the image selection. App-level rather than inside the 3D
+    // Viewer's tab body, because the selection they step is the whole window's:
+    // a handler down there would go quiet whenever another tab was in front of
+    // the viewport, which the stock layout makes a click away. Under the same
+    // arbitration as everything above, so a comma typed into Go to Point or a
+    // `DragValue` is a comma.
+    if !root_ui.ctx().egui_wants_keyboard_input() {
+        // A step away from a camera held in hand commits it, and it has to
+        // happen before the step so the commit reads the pose the viewport is
+        // still holding.
+        if let Some(moved) =
+            crate::camera_lock::exit_implicitly_on_image_step(root_ui, viewer_3d, app_state)
+        {
+            forget_selected(
+                Some(moved),
+                image_browser,
+                image_detail,
+                point_track_detail,
+                intrinsics_detail,
+                track_edit,
+            );
+        }
+        viewer_3d.handle_image_step(root_ui, app_state);
+    }
 }
 
 // ── The Edit menu's shortcuts and its two shared helpers ─────────────────

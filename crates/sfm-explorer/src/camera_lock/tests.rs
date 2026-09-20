@@ -485,15 +485,32 @@ fn enter_commits_and_escape_cancels() {
     );
 }
 
+/// The step is handled at the app level, so the lock's answer to it is too --
+/// and it has to come before the step, while the viewport still holds the pose
+/// the hand put there.
 #[test]
 fn stepping_to_the_next_image_commits_first() {
     let (mut state, mut viewer, id) = plain();
     press(&mut viewer, &mut state, eframe::egui::Key::M);
     viewer.camera.nodal_pan(45.0, 10.0);
-    assert_eq!(
-        press(&mut viewer, &mut state, eframe::egui::Key::Period),
-        Some(id)
-    );
+
+    let ctx = eframe::egui::Context::default();
+    let input = eframe::egui::RawInput {
+        events: vec![eframe::egui::Event::Key {
+            key: eframe::egui::Key::Period,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: eframe::egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let mut moved = None;
+    crate::test_support::run_frame_headless(&ctx, input, |ui| {
+        moved = exit_implicitly_on_image_step(ui, &mut viewer, &mut state);
+        viewer.handle_image_step(ui, &mut state);
+    });
+    assert_eq!(moved, Some(id));
     assert!(viewer.camera_lock.is_none());
     assert_eq!(state.scene[0].history.versions().len(), 2);
 }

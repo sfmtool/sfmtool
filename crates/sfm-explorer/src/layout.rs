@@ -173,20 +173,16 @@ pub(crate) enum Home {
 ///
 /// A panel opened from the menu goes home to whichever of its group-mates is
 /// still on screen (rule 2), which is what keeps the Point Track panel behind
-/// Image Detail rather than beside it.
+/// Camera Intrinsics rather than beside it.
 ///
-/// Two of these are the multi-tab nodes of the default layout. The third is
+/// Three of these are the multi-tab nodes of the default layout. The fourth is
 /// not: Scene and Background are a top-bottom split there, and are group-mates
 /// anyway, because a Background panel re-opened beside the tree is the thing
 /// asked for and a third left column would not be.
-const GROUPS: [&[Tab]; 3] = [
+const GROUPS: [&[Tab]; 4] = [
     &[Tab::SceneGraph, Tab::BackgroundTask],
-    &[
-        Tab::ImageDetail,
-        Tab::PointTrackDetail,
-        Tab::IntrinsicsDetail,
-        Tab::TrackEdit,
-    ],
+    &[Tab::Viewer3D, Tab::ImageDetail],
+    &[Tab::PointTrackDetail, Tab::IntrinsicsDetail, Tab::TrackEdit],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
@@ -286,20 +282,26 @@ impl Default for Layout {
     /// The stock ten-panel grid:
     ///
     /// ```text
-    /// ┌────────┬──────────────────┬───────────────┐
-    /// │ Scene  │    3D Viewer     │ Image Detail  │
-    /// ├────────┼──────────────────┴───────────────┤
-    /// │Backgr. │ Image Browser │ Action Log │ Edit History │
-    /// └────────┴──────────────────────────────────┘
+    /// ┌────────┬─────────────────────────┬───────────────┐
+    /// │ Scene  │[3D Viewer][Image Detail]│ [Point Track] │
+    /// ├────────┼─────────────────────────┴───────────────┤
+    /// │Backgr. │[Image Browser][Action Log][Edit History]│
+    /// └────────┴─────────────────────────────────────────┘
     /// ```
     ///
     /// The left column takes a narrow left split of the root, narrow because
     /// the tree is a list of short labels and everything else in the window
     /// wants the width, and splits top to bottom, the tree keeping the larger
-    /// share and the Background panel taking the rest. Two nodes hold more than
-    /// one tab, and in both the first is the active one: the bottom node opens
-    /// on the Image Browser with the Action Log and the Edit History behind it,
-    /// and the right-hand node on Image Detail.
+    /// share and the Background panel taking the rest. Three nodes hold more
+    /// than one tab, and in all three the first is the active one: the bottom
+    /// node opens on the Image Browser with the Action Log and the Edit History
+    /// behind it, the middle node on the 3D Viewer with Image Detail behind it,
+    /// and the right-hand node on Point Track.
+    ///
+    /// The viewport and Image Detail share a node because they are the two
+    /// large pictures of the same selection and each wants the width: flipping
+    /// between the scene and the photograph is one click, and neither is
+    /// squeezed into half of the middle while the other is being read.
     ///
     /// `Layout::default().to_dock()` is what the viewer starts with, and what
     /// Panels ▸ Reset Layout restores.
@@ -320,9 +322,8 @@ impl Default for Layout {
                     first: Box::new(LayoutNode::Split {
                         split: SplitDirection::LeftRight,
                         fraction: 0.67,
-                        first: Box::new(LayoutNode::leaf(&[Tab::Viewer3D])),
+                        first: Box::new(LayoutNode::leaf(&[Tab::Viewer3D, Tab::ImageDetail])),
                         second: Box::new(LayoutNode::leaf(&[
-                            Tab::ImageDetail,
                             Tab::PointTrackDetail,
                             Tab::IntrinsicsDetail,
                             Tab::TrackEdit,

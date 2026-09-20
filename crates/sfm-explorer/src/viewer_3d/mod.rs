@@ -380,10 +380,10 @@ impl Viewer3D {
         // The soloed node, if any — the stats line counts what is drawn, and
         // a solo is half of what decides that.
         solo: Option<ReconId>,
-        // The image selection, as a scratch copy `dock.rs` puts back through
-        // `AppState::select_image` — the setter is what keeps the selected
-        // camera in step, so the field itself is never handed out `&mut`.
-        selected_image: &mut Option<ImageRef>,
+        // The image selection, which `Z` looks through and the overlays draw.
+        // Read-only: nothing the viewport draws moves it, and the keys that do
+        // move it go through `AppState::select_image` at the app level.
+        selected_image: Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,
         status_message: Option<&str>,
@@ -398,7 +398,7 @@ impl Viewer3D {
         // what the point menu greys its entries with. Read before the node is
         // borrowed out of the scene, because the answer is the whole state's.
         busy: Option<&str>,
-        // The viewport's own keyboard bindings — `Z`, `Home`, `,` / `.` — are
+        // The viewport's own keyboard bindings — `Z` and `Home` — are
         // discrete commands, so they record what they did. Taken as a separate
         // `&mut` rather than through `AppState` because `node` and `scene`
         // above are borrowed out of the same state for the whole call.

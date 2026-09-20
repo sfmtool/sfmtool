@@ -102,7 +102,7 @@ default share of
 
 ```
 ┌────────┬──────────────────┬───────────────┐
-│ Scene  │    3D Viewer     │ Image Detail  │
+│ Scene  │    3D Viewer     │  Point Track  │
 ├────────┼──────────────────┴───────────────┤
 │Backgr. │  Image Browser │ Action Log      │
 └────────┴──────────────────────────────────┘

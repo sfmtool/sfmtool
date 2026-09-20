@@ -33,16 +33,17 @@ Image Detail panel's "image inspector" role.
 
 ### Panel Position in Dock Layout
 
-The Point Track Detail panel is an `egui_dock` tab alongside Image Detail in
-the top-right split, defaulting to the non-active tab:
+The Point Track Detail panel is an `egui_dock` tab in the top-right split, the
+active one of the three there, with Image Detail one node to its left behind the
+viewport:
 
 ```
 +----------------------------------+--------------+
 |  File  View                      |  (menu bar)  |
 +----------------------------------+--------------+
-|                                  | [Image Detail|
-|                                  |  Point Track]|
-|           3D Viewer              |              |
+|[3D Viewer][Image Detail]         | [Point Track]|
+|                                  |              |
+|           3D Viewer              |  Point Track |
 |                                  |              |
 |                                  |              |
 +----------------------------------+--------------+
@@ -51,10 +52,10 @@ the top-right split, defaulting to the non-active tab:
 +------------------------------------------------+
 ```
 
-Since we use `egui_dock`, the user can redock this panel anywhere. Tabbing it
-with Image Detail is the natural default because both panels display detailed
-information about a selection, and the user typically wants to see either the
-full image or the point track, not both simultaneously.
+Since we use `egui_dock`, the user can redock this panel anywhere. The narrow
+right-hand column is the natural default because the panel is a table of rows
+about a selection rather than a picture of one, and it reads beside the picture
+rather than instead of it.
 
 ### What the Panel Shows
 

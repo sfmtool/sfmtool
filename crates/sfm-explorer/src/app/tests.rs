@@ -5,7 +5,7 @@
 //! the state, asked the way the frame asks them.
 
 use super::{selected_point_source, track_ray_source};
-use crate::scene::PointRef;
+use crate::scene::{ImageRef, PointRef};
 use crate::state::edits::tests as edits;
 use crate::state::AppState;
 
@@ -236,4 +236,153 @@ fn a_single_click_on_a_point_only_selects_it() {
 
     assert_eq!(state.selected_point, Some(point));
     assert!(state.scene[0].history.current_bench().entries().is_empty());
+}
+
+// ── The `,` / `.` image-step keys ───────────────────────────────────────
+
+/// A demo node, selected, with the panel structs a frame's shortcuts need.
+///
+/// `Parts` owns them so a test can hand `menu::shortcuts` the same `UiParts`
+/// the frame builds.
+struct Parts {
+    state: AppState,
+    viewer_3d: crate::viewer_3d::Viewer3D,
+    image_browser: crate::image_browser::ImageBrowser,
+    image_detail: crate::image_detail::ImageDetail,
+    point_track_detail: crate::point_track_detail::PointTrackDetail,
+    intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail,
+    track_edit: crate::track_edit::TrackEdit,
+}
+
+impl Parts {
+    fn new() -> Self {
+        let mut state = AppState::new();
+        state.append_node(crate::scene::SceneNode::demo(
+            sfmtool_core::SfmrReconstruction::demo(8),
+        ));
+        Parts {
+            state,
+            viewer_3d: crate::viewer_3d::Viewer3D::new(),
+            image_browser: crate::image_browser::ImageBrowser::new(),
+            image_detail: crate::image_detail::ImageDetail::new(),
+            point_track_detail: crate::point_track_detail::PointTrackDetail::new(),
+            intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail::new(),
+            track_edit: crate::track_edit::TrackEdit::new(),
+        }
+    }
+
+    fn recon(&self) -> crate::scene::ReconId {
+        self.state
+            .selected_recon
+            .expect("the demo node is selected")
+    }
+
+    /// Run one frame's worth of accelerators with `key` pressed, the way
+    /// `App::run_egui_pass` runs them: at the top of the frame, before the dock
+    /// is drawn.
+    ///
+    /// `typing` puts the keyboard where a text field would, which is the state
+    /// `egui_wants_keyboard_input` reports and every accelerator is gated on.
+    fn press(&mut self, key: egui::Key, typing: bool) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let Parts {
+            state,
+            viewer_3d,
+            image_browser,
+            image_detail,
+            point_track_detail,
+            intrinsics_detail,
+            track_edit,
+        } = self;
+        crate::test_support::run_frame_headless(&ctx, input, |ui| {
+            if typing {
+                ui.ctx()
+                    .memory_mut(|m| m.request_focus(egui::Id::new("a_text_field")));
+            }
+            let mut parts = super::UiParts {
+                app_state: state,
+                viewer_3d,
+                image_browser,
+                image_detail,
+                point_track_detail,
+                intrinsics_detail,
+                track_edit,
+            };
+            super::menu::shortcuts(ui, &mut parts);
+        });
+    }
+}
+
+/// The plain case: the stock layout, the 3D Viewer in front, `.` forward and
+/// `,` back, wrapping at both ends.
+#[test]
+fn the_step_keys_walk_the_image_table_and_wrap() {
+    let mut parts = Parts::new();
+    let id = parts.recon();
+    let n = parts.state.scene[0].recon().image_table.images.len();
+    assert!(n >= 3, "the fixture has {n} images");
+    parts.state.select_image(Some(ImageRef::new(id, 0)));
+
+    parts.press(egui::Key::Period, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, 1)));
+    parts.press(egui::Key::Comma, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, 0)));
+    // Back off the front wraps to the end, and forward off the end to the
+    // front.
+    parts.press(egui::Key::Comma, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, n - 1)));
+    parts.press(egui::Key::Period, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, 0)));
+}
+
+/// The bug this exists for: the keys used to be handled inside the 3D Viewer's
+/// tab body, so they went silent whenever another tab was in front of it -- and
+/// the stock layout puts Image Detail one click away in that very node.
+#[test]
+fn the_step_keys_work_with_image_detail_in_front_of_the_viewport() {
+    let mut parts = Parts::new();
+    let id = parts.recon();
+    parts.state.select_image(Some(ImageRef::new(id, 0)));
+    // Image Detail and the 3D Viewer share a node in the stock layout, so
+    // raising one hides the other.
+    parts.state.show_panel(crate::dock::Tab::ImageDetail);
+    assert!(
+        !parts.state.panel_is_in_front(crate::dock::Tab::Viewer3D),
+        "the viewport is still the tab in front"
+    );
+
+    parts.press(egui::Key::Period, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, 1)));
+    parts.press(egui::Key::Comma, false);
+    assert_eq!(parts.state.selected_image, Some(ImageRef::new(id, 0)));
+}
+
+/// Typed into a text field, a comma is a comma.
+#[test]
+fn the_step_keys_do_nothing_while_a_text_field_holds_the_keyboard() {
+    let mut parts = Parts::new();
+    let id = parts.recon();
+    parts.state.select_image(Some(ImageRef::new(id, 0)));
+
+    parts.press(egui::Key::Period, true);
+    parts.press(egui::Key::Comma, true);
+    assert_eq!(
+        parts.state.selected_image,
+        Some(ImageRef::new(id, 0)),
+        "a typed key stepped the selection"
+    );
 }
