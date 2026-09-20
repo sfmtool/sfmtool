@@ -16,6 +16,7 @@ use sfmtool_core::features::feature_match::descriptor::descriptor_distance_l2_sq
 use sfmtool_core::features::kdforest::{
     KdForestParams, KdForestU8, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
+use sfmtool_core::progress::Progress;
 use std::hint::black_box;
 
 const DIM: usize = 128;
@@ -43,7 +44,12 @@ fn bench_build(c: &mut Criterion) {
             ..KdForestParams::balanced()
         };
         group.bench_with_input(BenchmarkId::from_parameter(t), &t, |b, _| {
-            b.iter(|| black_box(KdForestU8::build(&points, n, DIM, params)));
+            b.iter(|| {
+                black_box(
+                    KdForestU8::build(&points, n, DIM, params, &Progress::none())
+                        .expect("nothing asked it to stop"),
+                )
+            });
         });
     }
     group.finish();
@@ -53,7 +59,14 @@ fn bench_query(c: &mut Criterion) {
     let n = 20_000;
     let points = descriptors(n, 1);
     let queries = descriptors(2_000, 2);
-    let forest = KdForestU8::build(&points, n, DIM, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        DIM,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     let mut group = c.benchmark_group("kdforest_query_batch_2k");
     for &budget in &[32usize, 128, 512, 2048] {
@@ -72,7 +85,14 @@ fn bench_vs_bruteforce(c: &mut Criterion) {
     let n = 5_000;
     let points = descriptors(n, 1);
     let queries = descriptors(500, 2);
-    let forest = KdForestU8::build(&points, n, DIM, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        DIM,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     // Both find the single nearest neighbor so the comparison is equal work.
     let mut group = c.benchmark_group("kdforest_match_500_queries");
@@ -104,11 +124,18 @@ fn bench_persistent(c: &mut Criterion) {
     let n = 20_000;
     let points = descriptors(n, 21);
     let queries = descriptors(256, 22);
-    let forest = KdForestU8::build(&points, n, DIM, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        DIM,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("corpus.kdf");
     forest
-        .write_kdf(&path, None, &KdfWriteOptions::default())
+        .write_kdf(&path, None, &KdfWriteOptions::default(), &Progress::none())
         .unwrap();
     let paths = [("corpus_64k", path)];
     let workers: usize = std::env::var("KDF_BENCH_WORKERS")

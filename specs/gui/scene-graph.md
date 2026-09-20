@@ -291,6 +291,13 @@ fixed-height for virtualization.
   landed on a glyph — leaving the name the one part of the row that answered
   nothing. The accent bar's width is reserved on every row whether it is
   painted or not, so the name does not shift as the selection moves.
+- **Hover text: the `.sfmr` the node came from**, spelled in full, on that
+  row-wide target so it comes up over the name as well as over the gap. The
+  label is the file's stem and the window title is its name, and neither says
+  which directory, the question that arises the moment two runs of one capture
+  are loaded together. A node that came from no file says
+  *"This reconstruction came from no file."*, the vocabulary `File > Save`'s own
+  refusal uses ([saving.md](saving.md)).
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors),
@@ -465,8 +472,12 @@ this reconstruction: the descriptor count when it is current, `stale` in the
 warning colour when it is not, `none` dimmed when there is no file, and
 `building...` while the build runs. No eye and no children — nothing here is
 drawn in the viewport and there is nothing under it to list — and clicking it
-selects nothing. Its hover text carries the path, the counts, and the sentence
-naming the first discrepancy when it is stale. Its context menu carries
+selects nothing. It is **one click target spanning the row** with its texts
+drawn non-interactive on top, exactly as the reconstruction row is, so the menu
+and the hover come up over the name and not only over the status text. Its hover
+text carries the file, the counts, and the sentence naming the first discrepancy
+when it is stale; with no index open it says so and names where a build would
+write one. Its context menu carries
 `Build SIFT Index` (reading `Rebuild SIFT Index` when one is open), `Open...`
 and `Close Index`, each greyed with its own sentence while the node is busy.
 `Open...` reports the gesture and nothing else, and `dock.rs` puts up the file
@@ -1136,11 +1147,18 @@ bundle from `retain_nodes` on the next frame.
   disabled without feature indexes).
 - **The SIFT Index row**, through the same whole frames: it says `none`, counts
   a current index's descriptors and reads `stale`; its menu carries the build,
-  the open and the close, and the close reports the node; the reconstruction
-  row's menu carries the build **above** `Convert to Embedded Patches`, asserted
-  on where the two entries were drawn; and an unsaved node's build entry is dead
-  under the *Save ‹label› first* sentence. What the states themselves mean is
-  tested in [sift-index.md](sift-index.md)'s own module.
+  the open and the close, and the close reports the node; a right-click on the
+  row's **name** opens that menu and hovering the name raises each of the three
+  hover texts, both aimed at the left end of the row rather than at its centre,
+  which is where a label that sensed its own clicks would swallow them; the
+  reconstruction row's menu carries the build **above**
+  `Convert to Embedded Patches`, asserted on where the two entries were drawn;
+  and an unsaved node's build entry is dead under the *Save ‹label› first*
+  sentence. What the states themselves mean is tested in
+  [sift-index.md](sift-index.md)'s own module.
+- **The reconstruction row's hover** names the node's file, and says the node
+  came from none where it has no path; both hover the **name**, the part of the
+  row the tooltip has to reach.
 - **Upload tests** on the `noop` wgpu backend
   (`scene_renderer/upload/tests.rs` pattern): two-node upload produces two
   bundles; close releases one; pick bases are contiguous, non-overlapping,

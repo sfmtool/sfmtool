@@ -87,7 +87,8 @@ fn single_leaf_search_is_exact() {
         max_leaf_checks: n,
         seed: 7,
     };
-    let forest = KdForestU8::build(&points, n, dim, params);
+    let forest = KdForestU8::build(&points, n, dim, params, &Progress::none())
+        .expect("nothing asked it to stop");
 
     let queries = random_u8(50, dim, 99);
     for q in queries.chunks(dim) {
@@ -113,7 +114,8 @@ fn deep_tree_full_budget_high_recall() {
         max_leaf_checks: n,
         seed: 7,
     };
-    let forest = KdForestU8::build(&points, n, dim, params);
+    let forest = KdForestU8::build(&points, n, dim, params, &Progress::none())
+        .expect("nothing asked it to stop");
     let queries = random_u8(50, dim, 99);
     assert!(recall_at_1(&forest, &points, dim, &queries, n) >= 0.95);
 }
@@ -133,7 +135,8 @@ fn many_trees_full_budget_high_recall() {
         max_leaf_checks: n,
         seed: 3,
     };
-    let forest = KdForestU8::build(&points, n, dim, params);
+    let forest = KdForestU8::build(&points, n, dim, params, &Progress::none())
+        .expect("nothing asked it to stop");
     let queries = random_u8(40, dim, 555);
     assert!(recall_at_1(&forest, &points, dim, &queries, n) >= 0.95);
 }
@@ -148,7 +151,8 @@ fn reported_distance_matches_brute_force() {
         leaf_size: n,
         ..KdForestParams::balanced()
     };
-    let forest = KdForestU8::build(&points, n, dim, params);
+    let forest = KdForestU8::build(&points, n, dim, params, &Progress::none())
+        .expect("nothing asked it to stop");
     let q = &points[10 * dim..11 * dim]; // a query equal to an indexed point
     let nbrs = forest.search(q, 1, n, None);
     assert_eq!(nbrs[0].index, 10);
@@ -170,8 +174,22 @@ fn determinism_same_seed() {
     let points = random_u8(n, dim, 2024);
     let queries = random_u8(60, dim, 4040);
 
-    let f1 = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
-    let f2 = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    let f1 = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
+    let f2 = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     let r1 = f1.search_batch(&queries, 60, 3, 100, None);
     let r2 = f2.search_batch(&queries, 60, 3, 100, None);
@@ -184,7 +202,14 @@ fn precision_monotone_in_budget() {
     let dim = 32;
     let n = 500;
     let points = random_u8(n, dim, 314);
-    let forest = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     let nq = 120;
     let queries = random_u8(nq, dim, 271);
@@ -226,7 +251,14 @@ fn max_dist_cutoff_respected() {
         points.extend(std::iter::repeat_n(200u8, dim));
     }
     let n = points.len() / dim;
-    let forest = KdForestU8::build(&points, n, dim, KdForestParams::accurate());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::accurate(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     let query = vec![0u8; dim];
     // Radius that only reaches the near cluster (dist to near ~ sqrt(8)).
@@ -242,7 +274,14 @@ fn max_dist_cutoff_respected() {
 fn fewer_than_k_padding() {
     let dim = 4;
     let points: Vec<u8> = vec![0, 0, 0, 0, 5, 5, 5, 5];
-    let forest = KdForestU8::build(&points, 2, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        2,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     // Ask for more neighbors than exist.
     let nbrs = forest.search(&[0, 0, 0, 0], 5, 100, None);
     assert_eq!(nbrs.len(), 2);
@@ -272,7 +311,14 @@ fn duplicate_coordinates_build_and_query() {
             });
         }
     }
-    let forest = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let queries = random_u8(30, dim, 21);
     // Construction must terminate despite the duplicate-heavy median splits, and
     // a full budget still recovers the great majority of true neighbors.
@@ -282,12 +328,14 @@ fn duplicate_coordinates_build_and_query() {
 #[test]
 fn empty_and_zero_k() {
     let dim = 4;
-    let forest = KdForestU8::build(&[], 0, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(&[], 0, dim, KdForestParams::balanced(), &Progress::none())
+        .expect("nothing asked it to stop");
     assert!(forest.is_empty());
     assert!(forest.search(&[0, 0, 0, 0], 1, 10, None).is_empty());
 
     let pts = vec![1u8, 2, 3, 4];
-    let f2 = KdForestU8::build(&pts, 1, dim, KdForestParams::balanced());
+    let f2 = KdForestU8::build(&pts, 1, dim, KdForestParams::balanced(), &Progress::none())
+        .expect("nothing asked it to stop");
     assert!(f2.search(&[1, 2, 3, 4], 0, 10, None).is_empty());
 }
 
@@ -296,7 +344,14 @@ fn calibration_finds_a_budget() {
     let dim = 32;
     let n = 600;
     let points = random_u8(n, dim, 4242);
-    let forest = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
 
     let nq = 80;
     let sample = random_u8(nq, dim, 1357);
@@ -326,7 +381,14 @@ fn f32_forest_basic() {
         0.0, 10.0, 0.0, //
         0.5, 0.5, 0.0, //
     ];
-    let forest = KdForestF32::build(&points, 4, dim, KdForestParams::accurate());
+    let forest = KdForestF32::build(
+        &points,
+        4,
+        dim,
+        KdForestParams::accurate(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let nbrs = forest.search(&[0.1, 0.1, 0.0], 2, 64, None);
     assert_eq!(nbrs[0].index, 0);
     assert_eq!(nbrs[1].index, 3);
@@ -353,7 +415,8 @@ fn f32_single_leaf_is_exact() {
         leaf_size: n,
         ..KdForestParams::balanced()
     };
-    let forest = KdForestF32::build(&points, n, dim, params);
+    let forest = KdForestF32::build(&points, n, dim, params, &Progress::none())
+        .expect("nothing asked it to stop");
     let queries = random_f32(40, dim, 7);
     for q in queries.chunks(dim) {
         let exact = (0..n)
@@ -382,7 +445,14 @@ fn f32_max_dist_cutoff() {
         points.extend([100.0f32; 4]);
     }
     let n = points.len() / dim;
-    let forest = KdForestF32::build(&points, n, dim, KdForestParams::accurate());
+    let forest = KdForestF32::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::accurate(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let nbrs = forest.search(&[0.0, 0.0, 0.0, 0.0], 20, n, Some(1.0));
     assert!(!nbrs.is_empty());
     for nb in &nbrs {
@@ -395,7 +465,14 @@ fn f32_max_dist_cutoff() {
 fn with_distances_padding() {
     let dim = 4;
     let points: Vec<u8> = vec![0, 0, 0, 0, 9, 9, 9, 9];
-    let forest = KdForestU8::build(&points, 2, dim, KdForestParams::balanced());
+    let forest = KdForestU8::build(
+        &points,
+        2,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let (idx, dist) = forest.search_batch_with_distances(&[0, 0, 0, 0], 1, 3, 100, None);
     assert_eq!(idx.len(), 3);
     assert_eq!(dist.len(), 3);
@@ -423,7 +500,7 @@ fn fractions_of_a_build(
             seen.lock().unwrap().push(of_whole);
         }
     };
-    let forest = KdForestU8::build_reporting(points, n, dim, params, &Progress::to(&sink))
+    let forest = KdForestU8::build(points, n, dim, params, &Progress::to(&sink))
         .expect("nothing asked it to stop");
     (seen.into_inner().unwrap(), forest)
 }
@@ -465,7 +542,14 @@ fn a_reporting_build_climbs_to_the_end_and_builds_the_same_forest() {
 
     // Same parameters and the same seed, so the two forests are the same
     // forest: every tree's leaf order and every leaf boundary.
-    let silent = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    let silent = KdForestU8::build(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     assert_eq!(reported.num_trees(), silent.num_trees());
     for tree in 0..silent.num_trees() {
         assert_eq!(reported.tree_leaves(tree), silent.tree_leaves(tree));
@@ -488,7 +572,7 @@ fn a_build_that_is_asked_to_stop_hands_back_nothing() {
     let n = 4_000;
     let points = random_u8(n, dim, 79);
     let flag = AtomicBool::new(true);
-    let stopped = KdForestU8::build_reporting(
+    let stopped = KdForestU8::build(
         &points,
         n,
         dim,
@@ -500,7 +584,7 @@ fn a_build_that_is_asked_to_stop_hands_back_nothing() {
     // And the same flag unset builds the forest, so what stopped it was the
     // flag rather than the arguments.
     flag.store(false, Ordering::Relaxed);
-    let forest = KdForestU8::build_reporting(
+    let forest = KdForestU8::build(
         &points,
         n,
         dim,

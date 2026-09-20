@@ -403,7 +403,14 @@ the other format crates under [crates/](../../crates/) and depends on
 validation, indexed chunk reading, writing and full verification, with no
 dependency on `sfmtool-core`; a write reports how far along it is, and is
 cancelled, through the `sfmtool-progress` parameter both crates share, which
-depends on nothing but `std` for exactly this reason. Core owns forest construction and queries, in
+depends on nothing but `std` for exactly this reason. One write entry point
+takes that parameter, rather than a silent one and a reporting one, and a caller
+with nothing to report through passes the progress that reports nothing. A write
+refuses a destination that already holds a file unless it is told that one may
+be replaced, and either way the archive is streamed into a temporary sibling in
+the destination's own directory and renamed over the destination once it is
+whole, so a write that fails or is cancelled leaves what was there untouched and
+nothing of its own beside it. Core owns forest construction and queries, in
 [`features/kdforest/persistent.rs`](../../crates/sfmtool-core/src/features/kdforest/persistent.rs).
 The `uint8` half of both is bound for Python on the `sfmtool.spatial`
 submodule, in

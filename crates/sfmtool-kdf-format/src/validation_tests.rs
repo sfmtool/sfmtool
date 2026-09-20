@@ -9,6 +9,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use sfmtool_archive_io::format_hash;
+use sfmtool_progress::Progress;
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::write::SimpleFileOptions;
 
@@ -81,7 +82,14 @@ fn write_tiny_u8(dir: &Path, name: &str, trees: usize) -> PathBuf {
         target_descriptor_block_bytes: 2,
         ..Default::default()
     };
-    write_kdf(&path, &tiny_u8(&vectors, trees), None, &options).unwrap();
+    write_kdf(
+        &path,
+        &tiny_u8(&vectors, trees),
+        None,
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
     path
 }
 
@@ -493,6 +501,7 @@ fn nonfinite_f32_splits_and_vectors_are_rejected() {
             target_descriptor_block_bytes: 8,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
 
@@ -683,6 +692,7 @@ fn write_sourced(dir: &Path) -> PathBuf {
             target_descriptor_block_bytes: 128,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
     path
@@ -772,6 +782,7 @@ fn unvisited_chunks_stay_unread_and_warm_chunks_cost_no_io() {
             target_descriptor_block_bytes: 2,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
     let file = KdfFile::<u8>::open(&path, roomy()).unwrap();

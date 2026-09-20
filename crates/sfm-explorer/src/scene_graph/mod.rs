@@ -540,6 +540,9 @@ pub(super) struct SiftIndexRow {
     build_refusal: Option<String>,
     /// Why closing would do nothing, or `None` when there is one to close.
     close_refusal: Option<String>,
+    /// The sentence a node with nowhere to put an index is told, which is also
+    /// the whole of what its hover can say: there is no path to name.
+    save_first: Option<String>,
     /// Whether the build is the operation running right now.
     building: bool,
 }
@@ -562,6 +565,7 @@ impl SiftIndexRow {
             close_refusal: index
                 .is_none()
                 .then(|| "No SIFT index is open beside this reconstruction.".to_string()),
+            save_first: state.sift_index_home_refusal(id),
             building: state.building_sift_index(id),
         }
     }
@@ -580,11 +584,23 @@ impl SiftIndexRow {
     }
 
     /// The whole of what hovering the row says.
+    ///
+    /// The path first, because the one question a row of three words cannot
+    /// answer is *which file*. It is the file that is open, or -- when none is
+    /// -- where a build would put one, said in words that do not read as a
+    /// file that is there. A node with nowhere to put one has no path to name
+    /// at all, so it gets the sentence its menu entries are greyed with.
     fn hover(&self) -> String {
-        let mut text = self
-            .path
-            .clone()
-            .unwrap_or_else(|| "This reconstruction has not been saved.".to_string());
+        let mut text = match (&self.path, self.state) {
+            (Some(path), crate::sift_index::SiftIndexState::None) => {
+                format!("No SIFT index file is there.\nA build writes {path}")
+            }
+            (Some(path), _) => path.clone(),
+            (None, _) => self
+                .save_first
+                .clone()
+                .unwrap_or_else(|| "This reconstruction came from no file.".to_string()),
+        };
         if let Some((descriptors, images)) = self.counts {
             text.push_str(&format!(
                 "\n{} descriptors of {} images",
@@ -644,7 +660,13 @@ fn show_sift_index_row(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput
             .on_hover_text(index.hover());
         crate::context_menu::on_secondary_click(&row)
             .show(|ui| sift_index_menu(ui, node, index, out));
-        ui.label("SIFT Index");
+        // `selectable(false)` on both texts, for the reason the reconstruction
+        // row's carry it: egui's default `selectable_labels` gives a bare label
+        // `Sense::click_and_drag()` so its text can be dragged out, and being
+        // drawn *after* the row it wins every pointer hit that lands on it --
+        // which left the name the one part of the row with no menu and no
+        // hover.
+        ui.add(egui::Label::new("SIFT Index").selectable(false));
         let status = egui::RichText::new(index.status()).small();
         let status = match index.state {
             crate::sift_index::SiftIndexState::Stale => status.color(ui.visuals().warn_fg_color),
@@ -653,6 +675,19 @@ fn show_sift_index_row(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput
         };
         ui.add(egui::Label::new(status).selectable(false));
     });
+}
+
+/// What hovering a reconstruction row says: the `.sfmr` it came from, spelled
+/// in full.
+///
+/// A node that came from no file says so in the vocabulary the `File > Save`
+/// item's own refusal uses (`specs/gui/saving.md`), rather than naming a path
+/// it does not have.
+fn node_hover(node: &SceneNode) -> String {
+    match &node.path {
+        Some(path) => path.display().to_string(),
+        None => "This reconstruction came from no file.".to_string(),
+    }
 }
 
 /// `[👁] [S] [🖱] ▪ label   1.2M pts · 243 imgs · 2 cams` — the reconstruction
@@ -738,7 +773,14 @@ fn show_node_header(
         row_id(node.id, "node_label"),
         egui::Sense::click(),
     );
-    let row = out.hit(row_id(node.id, "node_label"), row);
+    // The file the node is attached to, on the target that spans the row, so it
+    // comes up over the name as well as over the gap. The label says the stem
+    // and the window title says the file name, and neither says which directory
+    // -- which is the question that arises the moment two runs of one capture
+    // are loaded together.
+    let row = out
+        .hit(row_id(node.id, "node_label"), row)
+        .on_hover_text(node_hover(node));
     if row.clicked() {
         out.response.select_recon = Some(node.id);
     }

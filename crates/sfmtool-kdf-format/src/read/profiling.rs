@@ -1,6 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use sfmtool_progress::Progress;
+
 use super::*;
 
 #[cfg(windows)]
@@ -45,6 +47,7 @@ fn chunk_shapes_cannot_understate_admission_bytes() {
             target_descriptor_block_bytes: 4,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
     let file = KdfFile::<u8>::open(&path, LazyKdForestOptions::default()).unwrap();

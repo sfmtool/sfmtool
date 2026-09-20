@@ -43,7 +43,9 @@ fn shared_reads_preserve_ties_and_reject_invalid_schedules() {
             leaf_size: 8,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ties.kdf");
     let order: Vec<u32> = (0..32).rev().collect();
@@ -56,6 +58,7 @@ fn shared_reads_preserve_ties_and_reject_invalid_schedules() {
                 ..Default::default()
             },
             Some(&order),
+            &Progress::none(),
         )
         .unwrap();
     let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).unwrap();
@@ -95,7 +98,9 @@ fn u8_file_queries_match_eager_results_and_checks() {
             seed: 77,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let queries: Vec<u8> = (0..11 * dim).map(|i| ((i * 19 + 3) % 255) as u8).collect();
     {
         let dir = tempfile::tempdir().unwrap();
@@ -109,7 +114,9 @@ fn u8_file_queries_match_eager_results_and_checks() {
                     target_chunk_bytes: 240,
                     compression_level: 1,
                     origin_block_rows: 4,
+                    ..Default::default()
                 },
+                &Progress::none(),
             )
             .unwrap();
         let lazy = LazyKdForestU8::open(&path, options()).unwrap();
@@ -182,7 +189,9 @@ fn a_forest_reloaded_from_a_file_answers_identically() {
             seed: 5,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let queries: Vec<u8> = (0..9 * dim).map(|i| ((i * 17 + 5) % 255) as u8).collect();
 
     {
@@ -197,7 +206,9 @@ fn a_forest_reloaded_from_a_file_answers_identically() {
                     target_chunk_bytes: 300,
                     compression_level: 1,
                     origin_block_rows: 8,
+                    ..Default::default()
                 },
+                &Progress::none(),
             )
             .unwrap();
         let reloaded = KdForest::<u8>::read_kdf(&path, LazyKdForestOptions::default()).unwrap();
@@ -239,7 +250,9 @@ fn f32_signed_zero_and_cutoff_match_eager() {
             leaf_size: 1,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("float.kdf");
@@ -252,7 +265,9 @@ fn f32_signed_zero_and_cutoff_match_eager() {
                     target_chunk_bytes: 100,
                     compression_level: 1,
                     origin_block_rows: 4,
+                    ..Default::default()
                 },
+                &Progress::none(),
             )
             .unwrap();
         let lazy = LazyKdForestF32::open(&path, options()).unwrap();
@@ -284,7 +299,9 @@ fn concurrent_small_cache_eviction_completes_with_parity() {
             seed: 8,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("eviction.kdf");
     forest
@@ -296,7 +313,9 @@ fn concurrent_small_cache_eviction_completes_with_parity() {
                 target_chunk_bytes: 300,
                 compression_level: 1,
                 origin_block_rows: 4,
+                ..Default::default()
             },
+            &Progress::none(),
         )
         .unwrap();
     let lazy = std::sync::Arc::new(

@@ -12,6 +12,7 @@ use crate::features::kdforest::{
     KdForestParams, KdForestU8, KdfSiftSources, KdfWorkspaceContents, KdfWorkspaceMetadata,
     KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
+use crate::progress::Progress;
 
 const DIM: usize = 128;
 /// Features in the planted patch, and so the inlier count the fit must reach.
@@ -287,7 +288,9 @@ fn forest(corpus: &Corpus) -> KdForestU8 {
             seed: 3,
             ..KdForestParams::balanced()
         },
+        &Progress::none(),
     )
+    .expect("nothing asked it to stop")
 }
 
 fn resident(corpus: &Corpus) -> ResidentSources {
@@ -904,6 +907,7 @@ fn the_two_forests_answer_identically() {
                 target_chunk_bytes: 512,
                 ..Default::default()
             },
+            &Progress::none(),
         )
         .unwrap();
     let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).unwrap();

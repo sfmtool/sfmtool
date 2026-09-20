@@ -32,6 +32,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 
 use crate::features::kdforest::{KdForestParams, KdForestU8};
+use crate::progress::Progress;
 
 /// Env-gated stage timing for the matcher. Enabled by setting
 /// `SFMTOOL_CLUSTER_TIMING`; one cached bool check plus a few `Instant::now()`
@@ -187,7 +188,8 @@ pub fn background_floor_clusters(
     };
     let timing = *CLUSTER_TIMING;
     let t = std::time::Instant::now();
-    let forest = KdForestU8::build(&corpus, n, dim, params.forest);
+    let forest = KdForestU8::build(&corpus, n, dim, params.forest, &Progress::none())
+        .expect("nothing asked it to stop");
     let t_build = t.elapsed();
     let t = std::time::Instant::now();
     // Self-join batch: process the queries in the forest's descriptor-space

@@ -330,6 +330,36 @@ fn right_click_at(
     run_frame(panel, ctx, state, Vec::new());
 }
 
+/// Every string painted with the pointer resting at `pos`, the tooltip it
+/// raises included.
+///
+/// Two frames, because egui puts a tooltip up only once the pointer has stopped
+/// moving and the frame carrying the move is the frame it was still moving in.
+/// The delays go to zero first: a headless frame has no wall clock to pass, and
+/// what is under test is which sentence comes up rather than how long a reader
+/// waits for it.
+fn hover_texts_at(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    pos: egui::Pos2,
+) -> Vec<String> {
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            panel.show(ui, state);
+        });
+    })
+}
+
 /// Whether a reconstruction row's context menu is on screen: its entries lay
 /// their own rects out only on the frames the menu is actually shown.
 fn context_menu_open(panel: &SceneGraphPanel, node: crate::scene::ReconId) -> bool {
@@ -1057,6 +1087,53 @@ fn the_context_menu_opens_on_the_reconstructions_name() {
     assert!(
         context_menu_open(&panel, b),
         "right-clicking the reconstruction's name opened no menu"
+    );
+}
+
+/// Hovering the name says which file the node came from, in full. The label is
+/// the stem alone, so a second run of the same capture loaded from another
+/// directory reads identically until the hover says otherwise.
+#[test]
+fn hovering_the_reconstructions_name_names_its_file() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let path = state
+        .node(id)
+        .expect("loaded")
+        .path
+        .clone()
+        .expect("a file");
+    let (mut panel, ctx) = settled(&mut state);
+
+    let row = panel.hit_rect(row_id(id, "node_label")).expect("the row");
+    let on_the_name = egui::pos2(row.left() + 12.0, row.center().y);
+    let hovered = hover_texts_at(&mut panel, &ctx, &mut state, on_the_name);
+
+    let expected = path.display().to_string();
+    assert!(
+        hovered.contains(&expected),
+        "{expected:?} was not the tooltip: {hovered:?}"
+    );
+}
+
+/// A node that came from no file says so rather than naming a path it has not
+/// got.
+#[test]
+fn hovering_an_unsaved_reconstructions_name_says_it_came_from_no_file() {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let row = panel.hit_rect(row_id(id, "node_label")).expect("the row");
+    let on_the_name = egui::pos2(row.left() + 12.0, row.center().y);
+    let hovered = hover_texts_at(&mut panel, &ctx, &mut state, on_the_name);
+
+    assert!(
+        hovered
+            .iter()
+            .any(|t| t == "This reconstruction came from no file."),
+        "the hover did not say the node has no file: {hovered:?}"
     );
 }
 
@@ -3249,6 +3326,98 @@ fn the_reconstruction_row_s_menu_offers_the_build_above_the_conversion() {
 
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_index"));
     assert_eq!(response.build_sift_index, Some(id));
+}
+
+/// A point over the row's `SIFT Index` label rather than over its status text.
+/// The label is drawn from the row's left edge and the status follows it, so
+/// the left end is the part a reader aims at and the part that answered nothing
+/// while the label sensed its own clicks.
+fn on_the_index_label(panel: &SceneGraphPanel, id: crate::scene::ReconId) -> egui::Pos2 {
+    let row = panel
+        .hit_rect(row_id(id, "sift_index"))
+        .expect("the SIFT Index row was not drawn");
+    egui::pos2(row.left() + 12.0, row.center().y)
+}
+
+/// The menu opens on the row's name, not only on the status text beside it.
+#[test]
+fn the_sift_index_row_s_menu_opens_on_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = indexed(dir.path());
+    let (mut panel, ctx) = settled(&mut state);
+
+    let on_the_name = on_the_index_label(&panel, id);
+    right_click_at(&mut panel, &ctx, &mut state, on_the_name);
+    assert!(
+        panel.hit_rect(row_id(id, "build_sift_index")).is_some(),
+        "right-clicking the row's name opened no menu"
+    );
+}
+
+/// Hovering the name says which `.kdf` is open and how much is in it, over
+/// the name rather than over the status text the label used to leave it to.
+#[test]
+fn hovering_the_sift_index_row_names_the_file_and_counts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = indexed(dir.path());
+    let index = state.sift_index(id).expect("built");
+    let path = index.path.display().to_string();
+    let expected = format!(
+        "{path}\n{} descriptors of {} images",
+        index.feature_count(),
+        index.images
+    );
+    let (mut panel, ctx) = settled(&mut state);
+
+    let on_the_name = on_the_index_label(&panel, id);
+    let hovered = hover_texts_at(&mut panel, &ctx, &mut state, on_the_name);
+    assert!(
+        hovered.contains(&expected),
+        "{expected:?} was not the tooltip: {hovered:?}"
+    );
+}
+
+/// With no index there, the hover says so and then says where a build would
+/// put one: a bare path would read as a file that is sitting there.
+#[test]
+fn hovering_a_node_with_no_index_says_where_a_build_would_write() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let path = state
+        .sift_index_path(id)
+        .expect("a saved node has an index path")
+        .display()
+        .to_string();
+    let (mut panel, ctx) = settled(&mut state);
+
+    let on_the_name = on_the_index_label(&panel, id);
+    let hovered = hover_texts_at(&mut panel, &ctx, &mut state, on_the_name);
+    let expected = format!("No SIFT index file is there.\nA build writes {path}");
+    assert!(
+        hovered.contains(&expected),
+        "{expected:?} was not the tooltip: {hovered:?}"
+    );
+}
+
+/// A node with nowhere to put one has no path to name, so the hover is the
+/// sentence its menu entries are greyed with.
+#[test]
+fn hovering_an_unsaved_node_s_sift_index_row_says_to_save_first() {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let on_the_name = on_the_index_label(&panel, id);
+    let hovered = hover_texts_at(&mut panel, &ctx, &mut state, on_the_name);
+    assert!(
+        hovered
+            .iter()
+            .any(|t| t.starts_with("Save demo first: the SIFT index is written beside")),
+        "the hover did not say to save the node first: {hovered:?}"
+    );
 }
 
 /// A node that has never been saved has nowhere to put an index, and both

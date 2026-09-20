@@ -34,6 +34,7 @@ use sfmtool_core::features::kdforest::{
     kdf_summary, FeatureOrigin, KdfError, KdfSiftSources, KdfWorkspaceContents,
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
+use sfmtool_core::progress::Progress;
 
 use super::constellation_query::{DEFAULTS, DEFAULT_REFIT, DEFAULT_REFIT_SIGMA};
 use super::kdforest::extract_u8_2d;
@@ -801,6 +802,7 @@ fn write_kdf(
             sources.as_ref(),
             &options,
             descriptor_order.as_deref(),
+            &Progress::none(),
         )
     })
     .map_err(to_py_err)

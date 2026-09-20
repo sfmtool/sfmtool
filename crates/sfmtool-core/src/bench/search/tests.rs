@@ -218,11 +218,18 @@ fn index(corpus: &Corpus) -> (tempfile::TempDir, LazyKdForestU8) {
             seed: 3,
             ..KdForestParams::balanced()
         },
-    );
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.kdf");
     forest
-        .write_kdf(&path, Some(&corpus.sources), &KdfWriteOptions::default())
+        .write_kdf(
+            &path,
+            Some(&corpus.sources),
+            &KdfWriteOptions::default(),
+            &Progress::none(),
+        )
         .unwrap();
     let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).unwrap();
     (dir, lazy)

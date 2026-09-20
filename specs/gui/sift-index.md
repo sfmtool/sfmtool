@@ -96,13 +96,22 @@ that is a file beside it rather than something the node holds.
   SIFT Index   none                      dimmed
 ```
 
-- Hover text: the index path; when one is open, the descriptor and image
-  counts; when stale, the sentence naming the first discrepancy (*"‹file›
+- Hover text: the file that is open, then its descriptor and image counts, then
+  -- when it is stale -- the sentence naming the first discrepancy (*"‹file›
   indexes 15 images and this reconstruction has 13."*, *"The features of
-  ‹image› were extracted again after this index was built."*).
+  ‹image› were extracted again after this index was built."*). With no index
+  open it is *"No SIFT index file is there."* and, under it, *"A build writes
+  ‹path›"*: the path alone would read as a file that is sitting there. A node
+  with nowhere to put one has no path to name, so it gets the same *"Save
+  ‹label› first"* sentence its menu entries are greyed with.
 - The row selects nothing and has no children, and carries no eye: nothing here
   is drawn in the viewport. It follows the tree's other conventions -- fixed
-  height, an explicit id, one click target across the row.
+  height, an explicit id, one click target across the row. **The row's texts are
+  drawn non-interactive on top of that target**, as the reconstruction row's
+  are: egui gives a bare label `Sense::click_and_drag()` so its text can be
+  selected, and a label drawn after the row wins every pointer hit that lands on
+  it, which leaves the name the one part of the row with no menu and no hover
+  ([`scene-graph.md`](scene-graph.md) § "Tree rows").
 - Its context menu carries *Build SIFT Index* (reading *Rebuild SIFT Index*
   when one is open), *Open...*, and *Close Index* (live only when one is open).
   Each is greyed with its own sentence while the node is busy.
@@ -166,14 +175,18 @@ of them are four steps that all land at the end. The same three places are where
 the build reads the cancel flag, so *Cancel* stops it within a block rather than
 at the end of a phase ([`background-tasks.md`](background-tasks.md)).
 
-**A build writes beside its target and renames over it at the end.** The file it
-streams into is the target's name with `.building` on it, in the target's own
-directory, which makes the last step a rename rather than a copy across
-filesystems; the rename replaces what is there. Until that instant the index
-that is open stays exactly as it was, so a rebuild that is cancelled ten seconds
-in, or that fails on its last block, leaves the working index standing rather
-than replacing it with nothing. A cancelled or failed build removes what it was
-writing into.
+**A build writes straight at the index path and replaces what is there.** The
+writer is asked for that replacement by name
+([`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)):
+a rebuild is the person asking for *this* index rather than for a second one.
+The archive still goes into the writer's own temporary sibling in the target's
+directory and is renamed over the target once it is whole, which makes the last
+step a rename rather than a copy across filesystems, and until that instant the
+index that is open stays exactly as it was. So a rebuild that is cancelled ten
+seconds in, or that fails on its last block, leaves the working index standing
+rather than replacing it with nothing, and leaves nothing of its own beside it.
+The viewer keeps no temporary name of its own: a second layer of it would put
+two files where the writer already guarantees one.
 
 The corpus it writes carries **one image-table row per image of the node**, in
 the node's own order, including images with no `.sift` file -- an image with no
@@ -313,14 +326,18 @@ the search. Two more drive the build's job directly, over a `Progress` that
 records what it reports: the fractions climbing past the read's share and past
 the write's, so a bar that only moved through the read would fail; and a
 cancelled rebuild leaving the index that is there byte for byte as it was, with
-no `.building` file beside it.
+no temporary file beside it.
 
 The Scene tree row's three texts and its menu are in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs),
 through whole headless frames: the row saying `none`, counting a current
 index's descriptors and reading `stale`; its menu carrying the build, the open
-and the close; the reconstruction row's menu carrying the build above *Convert
-to Embedded Patches*; and an unsaved node's build entry greyed.
+and the close, and opening from a right-click on the row's **name** rather than
+only on the status text beside it; the three hovers, aimed at the name for the
+same reason -- the file and its counts, the build's destination on a node with
+no index, and the save-first sentence on one with nowhere to put one; the
+reconstruction row's menu carrying the build above *Convert to Embedded
+Patches*; and an unsaved node's build entry greyed.
 
 The search entry's three labels are in
 [track_edit/tests.rs](../../crates/sfm-explorer/src/track_edit/tests.rs), with

@@ -37,17 +37,6 @@ pub(crate) mod tests;
 /// What a reconstruction's index file is called, after the `.sfmr`'s own stem.
 pub(crate) const INDEX_FILE_SUFFIX: &str = "-sift-index.kdf";
 
-/// What a build writes into, in the target's own directory, until it has a
-/// whole index to rename over the target.
-///
-/// A rebuild over an index that is open and good has to leave that index
-/// standing until there is something better: a build that is cancelled ten
-/// seconds in, or that fails on the last block, would otherwise have replaced
-/// a working index with nothing. Beside the target rather than in a temporary
-/// directory, because the last step is then a rename rather than a copy across
-/// filesystems.
-const BUILDING_FILE_SUFFIX: &str = ".building";
-
 /// One node's open SIFT index, and what the node makes of it.
 #[derive(Clone)]
 pub(crate) struct SiftIndex {
@@ -664,7 +653,7 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
     let count = origins.len();
     let forest = {
         let phase = forest_share.phase("build forest");
-        match KdForestU8::build_reporting(
+        match KdForestU8::build(
             &descriptors,
             count,
             dimension,
@@ -691,31 +680,22 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
                 return Finished::Failed(format!("Cannot create {}: {e}", parent.display()));
             }
         }
-        // Written beside the target under a name of its own and renamed over it
-        // at the end, so a rebuild that is cancelled or that fails leaves the
-        // index that is there standing. The writer refuses an existing
-        // destination, so a file one of those left behind is cleared first.
-        let building = building_path(&path);
-        let _ = std::fs::remove_file(&building);
-        let written = forest.write_kdf_reporting(
-            &building,
-            Some(&sources),
-            &KdfWriteOptions::default(),
-            &phase,
-        );
+        // Straight at the index path, replacing what is there: a rebuild is the
+        // person asking for this index rather than for a second one. The writer
+        // streams into a temporary sibling and renames over the target at the
+        // end, so the index that is open stays exactly as it was until that
+        // instant -- a rebuild cancelled ten seconds in, or failing on its last
+        // block, leaves the working index standing and nothing beside it.
+        let options = KdfWriteOptions {
+            replace_existing: true,
+            ..KdfWriteOptions::default()
+        };
+        let written = forest.write_kdf(&path, Some(&sources), &options, &phase);
         if let Err(e) = written {
-            let _ = std::fs::remove_file(&building);
             return match e {
                 KdfError::Cancelled(_) => Finished::Cancelled,
                 e => Finished::Failed(format!("Cannot write {}: {e}", path.display())),
             };
-        }
-        // A rebuild replaces what is there: the person asked for this index
-        // rather than for a second one, and `rename` replaces the target on
-        // both Unix and Windows.
-        if let Err(e) = std::fs::rename(&building, &path) {
-            let _ = std::fs::remove_file(&building);
-            return Finished::Failed(format!("Cannot write {}: {e}", path.display()));
         }
     }
 
@@ -736,13 +716,6 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         path,
         forest: Arc::new(opened),
     }
-}
-
-/// Where a build writes while it is building `path`.
-fn building_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(BUILDING_FILE_SUFFIX);
-    PathBuf::from(name)
 }
 
 /// The workspace the `.kdf` records, taken from the reconstruction's own.

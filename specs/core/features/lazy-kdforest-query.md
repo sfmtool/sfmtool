@@ -33,6 +33,7 @@ pub struct KdfWriteOptions {
     pub target_chunk_bytes: usize, // provisional: 1 MiB
     pub compression_level: i32,    // provisional: 3
     pub origin_block_rows: usize,  // provisional: 131072 (two u32 columns = 1 MiB)
+    pub replace_existing: bool,    // default: false, so a destination that exists is refused
 }
 pub struct LazyKdForestOptions {
     pub max_address_map_bytes: usize, // provisional: 256 MiB
@@ -50,21 +51,12 @@ pub type LazyKdForestF32 = LazyKdForest<f32>;
 
 impl<S: KdfScalar> KdForest<S> {
     pub fn write_kdf(&self, path: &Path, sources: Option<&KdfSiftSources>,
-                     options: &KdfWriteOptions)
+                     options: &KdfWriteOptions, progress: &Progress<'_>)
         -> Result<(), KdfError>;
     pub fn write_kdf_ordered(&self, path: &Path, sources: Option<&KdfSiftSources>,
                              options: &KdfWriteOptions,
-                             descriptor_order: Option<&[u32]>)
-        -> Result<(), KdfError>;
-    /// The two above, saying where they have got to and stopping when asked.
-    pub fn write_kdf_reporting(&self, path: &Path, sources: Option<&KdfSiftSources>,
-                               options: &KdfWriteOptions, progress: &Progress<'_>)
-        -> Result<(), KdfError>;
-    pub fn write_kdf_ordered_reporting(&self, path: &Path,
-                                       sources: Option<&KdfSiftSources>,
-                                       options: &KdfWriteOptions,
-                                       descriptor_order: Option<&[u32]>,
-                                       progress: &Progress<'_>)
+                             descriptor_order: Option<&[u32]>,
+                             progress: &Progress<'_>)
         -> Result<(), KdfError>;
 }
 impl<S: KdfScalar> LazyKdForest<S> {
@@ -99,14 +91,15 @@ read counters of `KdfIoStats` for the whole file, which is how a test asserts
 that opening reads no chunk payload and that a warm hit causes no read.
 
 A write of a few million descriptors is several hundred megabytes through zstd,
-which is seconds of work, so the reporting pair carries a `Progress`
+which is seconds of work, so both carry a `Progress`
 ([`../../gui/operation-progress.md`](../../gui/operation-progress.md)) down into
-the format crate's own `write_kdf_reporting`. It moves the fraction by where the
+the format crate's own `write_kdf`; a caller with nothing to report through
+passes `Progress::none()`, which is why there is one entry point per ordering
+rather than a reporting sibling beside each. It moves the fraction by where the
 write's time goes rather than by how many bytes are behind it, and reads the
 cancel flag between batches of blocks; a cancelled write is
 `KdfError::Cancelled` and no file, since the archive is streamed into a
-temporary sibling and renamed over the destination only once it is whole. The
-plain pair is the reporting pair passed `Progress::none()`.
+temporary sibling and renamed over the destination only once it is whole.
 
 `KdfScalar` is a sealed bridge for the existing u8/f32 scalar implementations,
 not an invitation to persist arbitrary user metrics. `Neighbor` retains original
@@ -123,10 +116,11 @@ use sfmtool_core::features::kdforest::{
     KdForestU8, KdForestParams, KdfWriteOptions,
     LazyKdForestU8, LazyKdForestOptions,
 };
+use sfmtool_core::progress::Progress;
 let features = vec![0u8, 0, 10, 10, 1, 1];
-let forest = KdForestU8::build(&features, 3, 2, KdForestParams::balanced());
+let forest = KdForestU8::build(&features, 3, 2, KdForestParams::balanced(), &Progress::none())?;
 let options = KdfWriteOptions::default();
-forest.write_kdf("example.kdf".as_ref(), None, &options)?;
+forest.write_kdf("example.kdf".as_ref(), None, &options, &Progress::none())?;
 let lazy = LazyKdForestU8::open("example.kdf".as_ref(), Default::default())?;
 let neighbors = lazy.search(&[0, 0], 2, 128, None)?;
 assert_eq!(neighbors[0].index, 0);
@@ -145,8 +139,13 @@ pub fn verify_sift_sources(path: &Path, options: LazyKdForestOptions)
 
 `verify_kdf` checks the self-contained archive. `verify_sift_sources` is the
 explicit, separate audit against the live workspace recorded in its provenance.
-Writing uses a sibling temporary file and publishes only a completed archive;
-it fails if the destination exists. Streaming construction from an out-of-memory
+Writing uses a sibling temporary file and publishes only a completed archive; it
+fails if the destination exists, unless `KdfWriteOptions::replace_existing` says
+it may be replaced, in which case the same rename puts the new archive over the
+old one and the old one stands until that instant. Replacing is how an index is
+rebuilt in place over the file a reader still holds open
+([`../../gui/sift-index.md`](../../gui/sift-index.md)).
+Streaming construction from an out-of-memory
 input corpus is out of scope: export requires an already-built forest.
 
 ### Source references

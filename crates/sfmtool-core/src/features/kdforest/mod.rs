@@ -26,6 +26,7 @@
 //! # Example
 //! ```
 //! use sfmtool_core::features::kdforest::{KdForestU8, KdForestParams};
+//! use sfmtool_core::progress::Progress;
 //!
 //! // Three 4-D u8 points, row-major.
 //! let points: Vec<u8> = vec![
@@ -33,7 +34,8 @@
 //!     10, 10, 10, 10,
 //!     0, 1, 0, 1,
 //! ];
-//! let forest = KdForestU8::build(&points, 3, 4, KdForestParams::balanced());
+//! let forest = KdForestU8::build(&points, 3, 4, KdForestParams::balanced(), &Progress::none())
+//!     .expect("nothing asked it to stop");
 //! let nbrs = forest.search(&[0, 0, 0, 0], 1, 64, None);
 //! assert_eq!(nbrs[0].index, 0);
 //! ```
@@ -157,24 +159,18 @@ impl<S: ForestScalar> KdForest<S> {
     ///
     /// For floating-point scalars, coordinates must be finite — `NaN`/infinity
     /// would corrupt the distance ordering (see [`OrdF32`]).
-    #[must_use]
-    pub fn build(points: &[S], n_points: usize, dim: usize, params: KdForestParams) -> Self {
-        Self::build_reporting(points, n_points, dim, params, &Progress::none())
-            .expect("a build that is never asked to stop cannot be cancelled")
-    }
-
-    /// [`build`](Self::build), saying where it has got to and stopping when it
-    /// is asked to.
     ///
     /// A forest over a few million descriptors is seconds of work, which is
-    /// long enough that a caller drawing a bar needs to hear from it. What it
-    /// reports is a fraction of its own range, counted in **points placed in a
-    /// leaf** across every tree: the trees are built in parallel, so per-tree
-    /// reporting would be a handful of steps that all land at the end, while
-    /// points placed moves evenly from the first leaf to the last.
-    ///
-    /// The forest is exactly [`build`](Self::build)'s for the same arguments:
-    /// the counter changes nothing about which points a split sends where.
+    /// long enough that a caller drawing a bar needs to hear from it, so
+    /// `progress` is a parameter rather than an entry point of its own; a
+    /// caller with nothing to report through passes [`Progress::none`], and a
+    /// build behind one of those can never be cancelled. What it reports is a
+    /// fraction of its own range, counted in **points placed in a leaf** across
+    /// every tree: the trees are built in parallel, so per-tree reporting would
+    /// be a handful of steps that all land at the end, while points placed
+    /// moves evenly from the first leaf to the last. The forest is the same one
+    /// either way -- the counter changes nothing about which points a split
+    /// sends where.
     ///
     /// # Errors
     ///
@@ -188,11 +184,11 @@ impl<S: ForestScalar> KdForest<S> {
     ///
     /// let points: Vec<u8> = vec![0, 0, 0, 0, 10, 10, 10, 10, 0, 1, 0, 1];
     /// let forest =
-    ///     KdForestU8::build_reporting(&points, 3, 4, KdForestParams::balanced(), &Progress::none())
+    ///     KdForestU8::build(&points, 3, 4, KdForestParams::balanced(), &Progress::none())
     ///         .expect("nothing asked it to stop");
     /// assert_eq!(forest.len(), 3);
     /// ```
-    pub fn build_reporting(
+    pub fn build(
         points: &[S],
         n_points: usize,
         dim: usize,

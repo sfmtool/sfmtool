@@ -13,7 +13,7 @@ use zip::ZipWriter;
 use crate::types::*;
 
 /// How the write's wall time divides, as the shares
-/// [`write_kdf_reporting`] gives its six stages: validation, tree packing, the
+/// [`write_kdf`] gives its six stages: validation, tree packing, the
 /// heading (metadata, image table, origins and the corpus row map), the
 /// descriptor block loop, the geometry block loop, and the packed tree chunks
 /// the content hash closes.
@@ -56,37 +56,34 @@ impl<S: KdfScalar> PackedChunk<S> {
     }
 }
 
-/// Write one immutable persistent forest. The destination must not exist.
-pub fn write_kdf<S: KdfScalar>(
-    path: &Path,
-    data: &KdfForestData<'_, S>,
-    sources: Option<&KdfSiftSources>,
-    options: &KdfWriteOptions,
-) -> Result<(), KdfError> {
-    write_kdf_reporting(path, data, sources, options, &Progress::none())
-}
-
-/// [`write_kdf`], saying where it has got to and stopping when it is asked to.
+/// Write one immutable persistent forest, saying where it has got to and
+/// stopping when it is asked to.
+///
+/// The destination must not exist unless
+/// [`KdfWriteOptions::replace_existing`] says it may be replaced.
 ///
 /// A corpus of a few million descriptors is several hundred megabytes through
 /// zstd, which is seconds of work and long enough that a caller drawing a bar
-/// needs to hear from it. What it reports is a fraction of its own range,
+/// needs to hear from it, so the `progress` is a parameter rather than an
+/// entry point of its own; a caller with nothing to report through passes
+/// [`Progress::none`]. What it reports is a fraction of its own range,
 /// weighted by where a write's time goes rather than by how many bytes are
 /// behind it (`STAGE_SHARES`); what it hears back is
 /// [`Progress::is_cancelled`], read between batches of blocks rather than per
 /// block.
 ///
-/// A cancelled write is [`KdfError::Cancelled`] and **no file**: the whole
-/// archive is streamed into a temporary sibling and renamed over `path` only
-/// once it is complete, so a write that stops leaves whatever was at `path`
-/// exactly as it was.
+/// A cancelled write is [`KdfError::Cancelled`] and **leaves `path` as it
+/// found it**: nothing where there was nothing, and the file that was there
+/// when one was. The whole archive is streamed into a temporary sibling and
+/// renamed over `path` only once it is complete, and the sibling is removed on
+/// every other exit.
 ///
 /// ```no_run
-/// use sfmtool_kdf_format::{write_kdf_reporting, KdfForestData, KdfWriteOptions};
+/// use sfmtool_kdf_format::{write_kdf, KdfForestData, KdfWriteOptions};
 /// use sfmtool_progress::Progress;
 ///
 /// # fn example(data: &KdfForestData<'_, u8>) -> Result<(), sfmtool_kdf_format::KdfError> {
-/// write_kdf_reporting(
+/// write_kdf(
 ///     "corpus.kdf".as_ref(),
 ///     data,
 ///     None,
@@ -95,14 +92,14 @@ pub fn write_kdf<S: KdfScalar>(
 /// )
 /// # }
 /// ```
-pub fn write_kdf_reporting<S: KdfScalar>(
+pub fn write_kdf<S: KdfScalar>(
     path: &Path,
     data: &KdfForestData<'_, S>,
     sources: Option<&KdfSiftSources>,
     options: &KdfWriteOptions,
     progress: &Progress<'_>,
 ) -> Result<(), KdfError> {
-    if path.exists() {
+    if !options.replace_existing && path.exists() {
         return Err(KdfError::InvalidFormat(format!(
             "destination already exists: {}",
             path.display()

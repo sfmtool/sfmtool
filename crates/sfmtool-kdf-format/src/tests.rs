@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+use sfmtool_progress::Progress;
+
 use crate::*;
 
 fn tiny_u8<'a>(vectors: &'a [u8]) -> KdfForestData<'a, u8> {
@@ -57,7 +59,7 @@ fn round_trip_descriptor_corpus() {
     {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tiny.kdf");
-        write_kdf(&path, &tiny_u8(&vectors), None, &options).unwrap();
+        write_kdf(&path, &tiny_u8(&vectors), None, &options, &Progress::none()).unwrap();
         let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
         assert_eq!(file.len(), 3);
         let root = file.root(0).unwrap();
@@ -127,7 +129,7 @@ fn source_origins_are_lazy_and_keep_requested_order() {
     data.dimension = 128;
     let descriptor_order = [2, 0, 1];
     data.descriptor_order = Some(&descriptor_order);
-    write_kdf(&path, &data, Some(&sources), &options).unwrap();
+    write_kdf(&path, &data, Some(&sources), &options, &Progress::none()).unwrap();
     let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
     assert_eq!(file.io_stats().read_calls, 0);
     assert_eq!(file.descriptor_block_shape(), (2, 2));
@@ -167,8 +169,8 @@ fn rejects_existing_destination_and_invalid_row_map_budget() {
         target_descriptor_block_bytes: 2,
         ..Default::default()
     };
-    write_kdf(&path, &tiny_u8(&vectors), None, &options).unwrap();
-    assert!(write_kdf(&path, &tiny_u8(&vectors), None, &options).is_err());
+    write_kdf(&path, &tiny_u8(&vectors), None, &options, &Progress::none()).unwrap();
+    assert!(write_kdf(&path, &tiny_u8(&vectors), None, &options, &Progress::none()).is_err());
     let options = LazyKdForestOptions {
         max_address_map_bytes: 4,
         ..roomy()
@@ -196,6 +198,7 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
             target_descriptor_block_bytes: 2,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
     let mut input = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
@@ -252,6 +255,7 @@ fn summary_decoded_sizes_are_uncompressed_lengths() {
             target_descriptor_block_bytes: 2,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
 
@@ -314,6 +318,7 @@ fn summary_accounts_for_the_corpus_and_row_map() {
             target_descriptor_block_bytes: 2,
             ..Default::default()
         },
+        &Progress::none(),
     )
     .unwrap();
 
@@ -358,7 +363,7 @@ fn an_explicit_descriptor_order_is_stored_and_changes_no_answer() {
             .join(format!("{}.kdf", order.map_or(0, |o| o[0] + 1)));
         let mut data = tiny_u8(&vectors);
         data.descriptor_order = order;
-        write_kdf(&path, &data, None, &options).unwrap();
+        write_kdf(&path, &data, None, &options, &Progress::none()).unwrap();
         let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
         // Feature IDs, not rows: the same ID must give the same vector whatever
         // row it was stored in.
@@ -400,6 +405,7 @@ fn a_malformed_descriptor_order_is_refused() {
                 target_descriptor_block_bytes: 2,
                 ..Default::default()
             },
+            &Progress::none(),
         )
         .expect_err("must reject")
         .to_string();
@@ -460,7 +466,7 @@ fn sift_shaped(vectors: &[u8]) -> KdfForestData<'_, u8> {
 /// when nobody is listening.
 #[test]
 fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
-    use sfmtool_progress::{Event, Progress};
+    use sfmtool_progress::Event;
     use std::sync::Mutex;
 
     let mut vectors = vec![0u8; 3 * 128];
@@ -475,7 +481,14 @@ fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
     let dir = tempfile::tempdir().unwrap();
 
     let quiet = dir.path().join("quiet.kdf");
-    write_kdf(&quiet, &sift_shaped(&vectors), Some(&sources), &options).unwrap();
+    write_kdf(
+        &quiet,
+        &sift_shaped(&vectors),
+        Some(&sources),
+        &options,
+        &Progress::none(),
+    )
+    .unwrap();
 
     let seen = Mutex::new(Vec::new());
     let sink = |event: Event<'_>| {
@@ -484,7 +497,7 @@ fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
         }
     };
     let loud = dir.path().join("loud.kdf");
-    write_kdf_reporting(
+    write_kdf(
         &loud,
         &sift_shaped(&vectors),
         Some(&sources),
@@ -519,7 +532,6 @@ fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
 /// A write that is asked to stop stops, and leaves no file where it was going.
 #[test]
 fn a_write_that_is_asked_to_stop_leaves_nothing_behind() {
-    use sfmtool_progress::Progress;
     use std::sync::atomic::AtomicBool;
 
     let mut vectors = vec![0u8; 3 * 128];
@@ -528,7 +540,7 @@ fn a_write_that_is_asked_to_stop_leaves_nothing_behind() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("stopped.kdf");
     let flag = AtomicBool::new(true);
-    let stopped = write_kdf_reporting(
+    let stopped = write_kdf(
         &path,
         &sift_shaped(&vectors),
         Some(&sources),
@@ -542,4 +554,75 @@ fn a_write_that_is_asked_to_stop_leaves_nothing_behind() {
     assert!(!path.exists(), "a cancelled write left a file");
     // Nor a temporary one beside it: the whole directory is as it was.
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+/// A write that may replace puts its corpus where the old one was, and leaves
+/// one file behind rather than a temporary sibling as well.
+#[test]
+fn a_replacing_write_puts_its_corpus_where_the_old_one_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny.kdf");
+    let options = KdfWriteOptions {
+        target_descriptor_block_bytes: 2,
+        replace_existing: true,
+        ..Default::default()
+    };
+    let first = [0u8, 0, 1, 1, 9, 9];
+    write_kdf(&path, &tiny_u8(&first), None, &options, &Progress::none()).unwrap();
+
+    let second = [3u8, 3, 4, 4, 5, 5];
+    write_kdf(&path, &tiny_u8(&second), None, &options, &Progress::none()).unwrap();
+
+    let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
+    assert_eq!(
+        file.vector(2).unwrap(),
+        [5, 5],
+        "the corpus that was there is still there"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "the replacing write left something beside the file it wrote"
+    );
+}
+
+/// A replacing write that is asked to stop leaves the file it was going to
+/// replace byte for byte as it was, and nothing of its own beside it.
+#[test]
+fn a_cancelled_replacing_write_leaves_the_file_that_is_there() {
+    use std::sync::atomic::AtomicBool;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny.kdf");
+    let options = KdfWriteOptions {
+        target_descriptor_block_bytes: 2,
+        replace_existing: true,
+        ..Default::default()
+    };
+    let vectors = [0u8, 0, 1, 1, 9, 9];
+    write_kdf(&path, &tiny_u8(&vectors), None, &options, &Progress::none()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    let flag = AtomicBool::new(true);
+    let stopped = write_kdf(
+        &path,
+        &tiny_u8(&[3, 3, 4, 4, 5, 5]),
+        None,
+        &options,
+        &Progress::none().cancelled_by(&flag),
+    );
+    assert!(
+        matches!(stopped, Err(KdfError::Cancelled(_))),
+        "{stopped:?}"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a cancelled replacing write replaced the file anyway"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "a cancelled replacing write left a temporary file behind"
+    );
 }

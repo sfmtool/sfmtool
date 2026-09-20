@@ -133,6 +133,16 @@ pub struct KdfWriteOptions {
     /// Must be in `1..=u32::MAX`; defaults to 131,072 rows. This has no effect
     /// for a generic corpus without [`KdfSiftSources`].
     pub origin_block_rows: usize,
+    /// Whether a file already at the destination is replaced. Defaults to
+    /// `false`, which refuses one.
+    ///
+    /// Replacing costs nothing extra and loses nothing: the archive is streamed
+    /// into a temporary sibling either way and renamed over the destination only
+    /// once it is whole, so the file that is there stays exactly as it was until
+    /// that instant and survives a write that fails or is cancelled. What the
+    /// default buys is the caller who did not mean to write over a corpus at
+    /// all, which is why rebuilding an index in place asks for it by name.
+    pub replace_existing: bool,
 }
 
 impl Default for KdfWriteOptions {
@@ -142,6 +152,7 @@ impl Default for KdfWriteOptions {
             target_chunk_bytes: 1 << 20,
             compression_level: 3,
             origin_block_rows: 131_072,
+            replace_existing: false,
         }
     }
 }

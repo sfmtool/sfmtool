@@ -181,11 +181,11 @@ impl Operation {
     /// `.sfmr` ([`crate::sift_index`]).
     ///
     /// Cancellable in all three of its phases: the read polls the flag between
-    /// images, `KdForestU8::build_reporting` polls it as each leaf is placed,
-    /// and `sfmtool_kdf_format::write_kdf_reporting` polls it between batches
-    /// of blocks and hands back `KdfError::Cancelled`. The index that was
-    /// there is left standing, because a build writes beside the target and
-    /// renames over it only once it has a whole file.
+    /// images, `KdForestU8::build` polls it as each leaf is placed, and
+    /// `sfmtool_kdf_format::write_kdf` polls it between batches of blocks and
+    /// hands back `KdfError::Cancelled`. The index that was there is left
+    /// standing, because the write streams into a temporary sibling and renames
+    /// over the target only once it has a whole file.
     pub(crate) const BUILD_SIFT_INDEX: Operation = Operation {
         name: "Build SIFT index",
         cancellable: true,

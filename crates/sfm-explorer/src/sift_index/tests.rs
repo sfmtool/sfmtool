@@ -786,11 +786,17 @@ fn a_cancelled_rebuild_leaves_the_index_that_is_there() {
         before,
         "a cancelled rebuild replaced the index it was rebuilding"
     );
-    // And no half-written file under the name a build writes into.
+    // And nothing half-written beside it: the write's temporary sibling is
+    // removed on every exit that is not the rename.
     let leftovers: Vec<PathBuf> = std::fs::read_dir(dir.path())
         .expect("the directory")
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|entry| entry.extension().is_some_and(|e| e == "building"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(".tmp"))
+        })
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 

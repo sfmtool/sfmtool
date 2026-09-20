@@ -15,6 +15,7 @@ use numpy::{PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
 use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
+use sfmtool_core::progress::Progress;
 
 use super::constellation_query::{DEFAULTS, DEFAULT_REFIT, DEFAULT_REFIT_SIGMA};
 
@@ -142,7 +143,10 @@ impl PyKdForest {
 
         let data: Cow<[u8]> = to_contiguous!(descriptors);
 
-        let inner = py.detach(|| KdForestU8::build(&data, n, dim, params));
+        let inner = py.detach(|| {
+            KdForestU8::build(&data, n, dim, params, &Progress::none())
+                .expect("nothing asked it to stop")
+        });
         Ok(Self { inner })
     }
 
