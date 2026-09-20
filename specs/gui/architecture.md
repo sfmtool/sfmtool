@@ -561,8 +561,9 @@ alternated to rule out ordering: process-rooted, a one-clause `elements` call
 takes ~0.22s and the five-clause group
 `the_menu_bar_holds_file_edit_go_and_panels` asks takes ~0.88s — a 4.0x clause
 multiplier; window-rooted, ~0.10s and ~0.10s, a multiplier of 1.0. Across the
-suite that takes `op_ms` from ~11.9s to ~4.9s on that machine, and the whole
-`ui-test-windows` job was ~1,075s of locator resolution before it.
+suite that takes `op_ms` from ~11.9s to ~4.9s on that machine; on the
+`ui-test-windows` runner, where the same suite spends the bulk of its wall
+clock inside these resolutions, from ~1,075s to ~536s.
 
 Scoping to the window loses nothing to look at: the viewer runs a single egui
 viewport, so its menus and popups are painted inside that one HWND rather than
@@ -583,8 +584,9 @@ filtered to this pid, then, per window, re-acquiring it from its HWND — which
 is where AccessKit's UIA provider gets activated — a cache build and a property
 read, every one a cross-process call on a machine that charges hundreds of
 milliseconds for one. `App::by_pid`, which answers with `FindFirstBuildCache`
-and no re-acquisition, costs 10ms against those 68; on a GitHub-hosted Windows
-runner the gap is ~0.2s against ~10s.
+and no re-acquisition, costs 10ms against those 68. The same call is around
+~0.2s on that machine when it is the first one after a launch, and around 10s
+on a GitHub-hosted Windows runner.
 
 So it is **deferred to first use** rather than resolved at attach. Five of the
 suite's nineteen launches never root a search — the four MCP tests drive the
@@ -593,7 +595,8 @@ node — and those pay nothing. The rest pay once, and it is reported as its own
 `window_ms` field rather than folded into `launch_ms` or `op_ms`; see "the
 suite reports what it costs" below.
 
-That descent has one consequence the suite respects: it matches only
+The generic descent macOS and Linux take has one consequence the suite
+respects: it matches only
 *descendants* of its root, never the root itself, while a UIA subtree query is
 scoped inclusively. So a window-rooted `window` selector matches on Windows and
 not on the other two, and `window_min_size` — the one test that asks about the
