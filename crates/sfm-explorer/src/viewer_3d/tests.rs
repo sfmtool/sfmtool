@@ -1504,6 +1504,10 @@ fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
 /// arrowhead is still in front of the camera to be pressed at all.
 const CLOSE_STANDOFF: f64 = 3.0;
 
+/// The standoff is only the regression it claims to be from inside the lever,
+/// and both are constants, so the claim is settled when this compiles.
+const _: () = assert!(CLOSE_STANDOFF < geometry::AIM_LEVER);
+
 /// The press is taken from **inside** the aim's own lever, where the patch
 /// nearly fills the window.
 ///
@@ -1519,10 +1523,6 @@ fn an_arrowhead_close_to_the_eye_takes_the_press_rather_than_orbiting() {
     let mut staged = staged();
     let track = staged.track();
     let was = frame_of(&track);
-    assert!(
-        CLOSE_STANDOFF < geometry::AIM_LEVER,
-        "this test is only the regression it claims to be from inside the lever",
-    );
     look_off_normal(&mut staged.viewer, &was, 10.0, CLOSE_STANDOFF);
     staged.settle(&track);
 
