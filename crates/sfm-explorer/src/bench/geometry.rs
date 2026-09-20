@@ -730,17 +730,27 @@ pub(crate) fn turn_about(
 /// gestures are each other's cure, so between them the handle is always live.
 pub(crate) const AIM_ANGLE_DEG: f64 = 45.0;
 
-/// How far from the centre the aim's plane stands, in the frame's own
-/// half-lengths.
+/// The aim's lever arm, in the frame's own half-lengths: the normal is answered
+/// as `4h` along the old one plus the pointer's travel, so `4h` of travel is 45
+/// degrees.
 ///
 /// Twice the arrow's own [`NORMAL_LENGTH`](crate::viewer_3d::bench_track::NORMAL_LENGTH),
 /// stated in terms of it rather than as a second literal, because the two are
-/// facts about one handle: the pointer crosses `4h` of that plane for the 45
-/// degrees of tilt the arrowhead is drawn `2h` out for, so the aim is **half as
-/// sensitive as the figure looks** and a small correction is a small motion --
+/// facts about one handle: the travel is read on the plane through the centre,
+/// which is also the plane the arrow is drawn out of, so `4h` of travel is
+/// **twice the arrow's own drawn length whatever the zoom** and the aim is half
+/// as sensitive as the figure looks. A small correction is a small motion,
 /// which is what the handle is for, a normal being read off a surface a few
 /// degrees at a time.
-pub(crate) const AIM_PLANE_LENGTH: f64 = 2.0 * crate::viewer_3d::bench_track::NORMAL_LENGTH;
+///
+/// It is a lever and **not** a distance the plane stands at. Standing the plane
+/// off by it would put the plane behind the eye whenever the camera came within
+/// `4h` of a patch facing it -- which is exactly the view the aim is for -- and
+/// the press would fall through to the viewport's navigation. It would also tie
+/// the handle's sensitivity to the eye's distance, since what a pixel of pointer
+/// is worth on a plane depends on how far that plane is; read on the centre's
+/// own plane, the gesture is the same gesture at every zoom.
+pub(crate) const AIM_LEVER: f64 = 2.0 * crate::viewer_3d::bench_track::NORMAL_LENGTH;
 
 /// Which of the arrowhead's two gestures a press makes, and what it is fixed
 /// to.
@@ -750,8 +760,8 @@ pub(crate) const AIM_PLANE_LENGTH: f64 = 2.0 * crate::viewer_3d::bench_track::NO
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Tilt {
     /// The normal lies near the line of sight, so the pointer's ray is met with
-    /// the plane square to it at [`AIM_PLANE_LENGTH`] half-lengths out and the
-    /// direction from the centre to that meeting is the new normal outright.
+    /// the plane through the centre square to that normal, and the travel
+    /// across it since the press swings the normal off by [`AIM_LEVER`].
     Aim,
     /// The normal lies across the line of sight, so the pointer turns it about
     /// this one axis: the unit vector of the frame's **own plane** nearest the
@@ -783,15 +793,23 @@ pub(crate) fn tilt_gesture(frame: &OrientedPatch, eye: Point3<f64>) -> Option<Ti
 /// Where the pointer's ray meets the geometry `tilt` reads it against.
 ///
 /// The counterpart of [`plane_point`] and [`normal_line_point`] for the
-/// arrowhead: the plane square to the normal at [`AIM_PLANE_LENGTH`]
-/// half-lengths for an aim, and the plane through the centre square to the
-/// swing's axis -- the plane the arrowhead travels in, and, the axis pointing at
-/// the eye as nearly as the frame allows, the plane most nearly facing the
-/// window -- for a swing.
+/// arrowhead. Both gestures read a plane **through the centre**, and which one
+/// is the whole of what tells them apart: square to the normal for an aim, and
+/// square to the swing's axis -- the plane the arrowhead travels in, and, the
+/// axis pointing at the eye as nearly as the frame allows, the plane most
+/// nearly facing the window -- for a swing.
 ///
-/// The frame is the one the press was taken against, so the aim's plane is
-/// fixed for the whole drag and the gesture is a single map from the window
-/// onto the sphere of normals rather than a thing that moves as it is used.
+/// Neither plane can fall behind the eye, both passing through a centre that is
+/// in front of it whenever the figure is on screen at all, and neither can be
+/// caught edge-on: an aim's plane is square to the normal and the aim is chosen
+/// only where the normal lies within [`AIM_ANGLE_DEG`] of the view, and a
+/// swing's axis is the one most nearly pointing at the eye. So the arrowhead
+/// answers from every view it is drawn in, which is what it means for it to
+/// take no degenerate-view refusal.
+///
+/// The frame is the one the press was taken against, so the plane is fixed for
+/// the whole drag and the gesture is a single map from the window onto the
+/// sphere of normals rather than a thing that moves as it is used.
 pub(crate) fn tilt_point(
     frame: &OrientedPatch,
     tilt: Tilt,
@@ -799,31 +817,27 @@ pub(crate) fn tilt_point(
     direction: Vector3<f64>,
 ) -> Option<Point3<f64>> {
     let ray = unit(direction)?;
-    match tilt {
-        Tilt::Aim => {
-            let normal = frame.normal();
-            let at = frame.center + normal * (AIM_PLANE_LENGTH * frame.half_extent[0]);
-            ray_plane(origin, ray, at, normal)
-        }
-        Tilt::Swing(axis) => ray_plane(origin, ray, frame.center, axis),
-    }
+    let square_to = match tilt {
+        Tilt::Aim => frame.normal(),
+        Tilt::Swing(axis) => axis,
+    };
+    ray_plane(origin, ray, frame.center, square_to)
 }
 
 /// The outward normal a drag of the arrowhead names, from the two places
 /// [`tilt_point`] read for it.
 ///
-/// **Aiming** answers with the direction from the centre to the plane's own
-/// middle carried by however far the pointer has travelled across the plane
-/// since the press. The press's own offset is kept for the reason the centre
-/// dot's is: the arrowhead is drawn at the arrow's length and read at twice it,
-/// so a press that took the head is not standing on the place the plane's middle
-/// projects to, and reading the meeting outright would jump the normal over
-/// before the pointer had moved at all. The travel is in-plane and the middle is
-/// [`AIM_PLANE_LENGTH`] half-lengths out along the normal, so the answer keeps
-/// that whole component along the normal: the direction from a point to a point
-/// of a plane can never reach the plane's own direction, and one gesture
-/// therefore turns the normal by less than 90 degrees and cannot push it through
-/// the frame at all.
+/// **Aiming** answers with the old normal on a lever of [`AIM_LEVER`]
+/// half-lengths, swung by however far the pointer has travelled across the
+/// plane since the press: `unit(4h n + travel)`. It is the **travel** and not
+/// the meeting itself that is read, for the reason the centre dot's press is
+/// kept: a press that took the arrowhead is not standing where the centre is,
+/// and reading the meeting outright would jump the normal over before the
+/// pointer had moved at all. The travel lies in the plane and so is square to
+/// `n`, which leaves the whole `4h` standing along the old normal: the sum of a
+/// fixed vector and one square to it can never turn through a right angle, so
+/// one gesture turns the normal by less than 90 degrees and cannot push it
+/// through the frame at all.
 ///
 /// **Swinging** answers with the normal turned about the axis by the angle the
 /// pointer swept about the centre, which is the corner's reading with the swing
@@ -837,7 +851,7 @@ pub(crate) fn tilt_normal(
     to: Point3<f64>,
 ) -> Option<Vector3<f64>> {
     match tilt {
-        Tilt::Aim => unit(frame.normal() * (AIM_PLANE_LENGTH * frame.half_extent[0]) + (to - from)),
+        Tilt::Aim => unit(frame.normal() * (AIM_LEVER * frame.half_extent[0]) + (to - from)),
         Tilt::Swing(axis) => {
             let angle = turn_about(frame.center, axis, from, to)?;
             Some(Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle) * frame.normal())

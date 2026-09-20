@@ -1499,6 +1499,59 @@ fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
     );
 }
 
+/// How near the patch this test stands the eye, in half-lengths: inside
+/// [`geometry::AIM_LEVER`], and outside [`bench_track::NORMAL_LENGTH`] so the
+/// arrowhead is still in front of the camera to be pressed at all.
+const CLOSE_STANDOFF: f64 = 3.0;
+
+/// The press is taken from **inside** the aim's own lever, where the patch
+/// nearly fills the window.
+///
+/// The regression for a plane stood `AIM_LEVER` half-lengths out along the
+/// normal: toward an eye that close it lay *behind* the camera, so the ray met
+/// nothing, no drag was taken, and the press fell through to the viewport's
+/// orbit -- while the hit test and the cursor, which read no plane, went on
+/// showing the arrowhead as live. A handle that shows its cursor and then
+/// navigates is worse than one that refuses, so what is asserted is the whole
+/// path: the press is taken, it tilts, and the scene does not turn under it.
+#[test]
+fn an_arrowhead_close_to_the_eye_takes_the_press_rather_than_orbiting() {
+    let mut staged = staged();
+    let track = staged.track();
+    let was = frame_of(&track);
+    assert!(
+        CLOSE_STANDOFF < geometry::AIM_LEVER,
+        "this test is only the regression it claims to be from inside the lever",
+    );
+    look_off_normal(&mut staged.viewer, &was, 10.0, CLOSE_STANDOFF);
+    staged.settle(&track);
+
+    let head = arrowhead(&staged);
+    let dragged = gesture(
+        &mut staged,
+        &track,
+        false,
+        head,
+        &[egui::vec2(0.0, 25.0)],
+        false,
+    );
+    assert_eq!(
+        dragged.orbited, 0.0,
+        "the press fell through to the viewport's navigation",
+    );
+    let PatchEdit::Tilt { normal } = edit_of(&dragged) else {
+        panic!("the press did not take the arrowhead");
+    };
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &PatchEdit::Tilt { normal })
+        .expect("a finite direction");
+    assert!(
+        (frame_of(&staged.track()).normal() - was.normal()).norm() > 1e-3,
+        "the patch did not turn",
+    );
+}
+
 /// Escape abandons the gesture, and a drag that ends where it started asks for
 /// the normal the patch already faces, which the step reads as no turn.
 #[test]

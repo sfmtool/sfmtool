@@ -232,26 +232,27 @@ fn the_arrowhead_aims_within_forty_five_degrees_of_the_view_and_swings_outside_i
     assert_eq!(tilt_gesture(&frame, frame.center), None);
 }
 
-/// The aim is a map of the window onto the sphere of normals, read off a plane
-/// standing [`AIM_PLANE_LENGTH`] half-lengths out. Two things follow from that
-/// distance, and they are the whole of why it is the distance it is.
+/// The aim is a map of the window onto the sphere of normals, read off the
+/// plane through the **centre** square to the normal and levered by
+/// [`AIM_LEVER`] half-lengths. Two things follow from that lever, and they are
+/// the whole of why it is the length it is.
 #[test]
 fn an_aim_turns_forty_five_degrees_in_four_half_lengths_and_never_reaches_ninety() {
     let frame = flat();
     let half = frame.half_extent[0];
-    let stand = AIM_PLANE_LENGTH * half;
+    let lever = AIM_LEVER * half;
     let eye = frame.center + frame.normal() * 20.0;
-    let on_plane = |across: f64| frame.center + frame.normal() * stand + frame.u_axis * across;
+    let on_plane = |across: f64| frame.center + frame.u_axis * across;
 
-    // The meeting is the plane's own point, and the plane is where the constant
-    // says it is.
+    // The meeting is the plane's own point, and that plane runs through the
+    // centre rather than standing off it.
     let (origin, direction) = ray_to(eye, on_plane(1.5));
     let at = tilt_point(&frame, Tilt::Aim, origin, direction).expect("the ray meets the plane");
     assert!((at - on_plane(1.5)).norm() < 1e-9);
 
     // The press's own place on that plane, which every answer is measured from:
-    // a press on the arrowhead is not standing on the plane's middle, the head
-    // being drawn at half the distance the plane stands at.
+    // a press on the arrowhead is not standing where the centre is, the head
+    // being drawn out along the normal.
     let (origin, direction) = ray_to(eye, on_plane(0.7));
     let press = tilt_point(&frame, Tilt::Aim, origin, direction).expect("the plane");
     let aimed = |across: f64| {
@@ -264,21 +265,62 @@ fn an_aim_turns_forty_five_degrees_in_four_half_lengths_and_never_reaches_ninety
     // A drag that ends where it started names the normal the patch already has.
     assert!((aimed(0.7) - frame.normal()).norm() < 1e-9);
 
-    // `AIM_PLANE_LENGTH` half-lengths across that plane is 45 degrees, which is
-    // the arrow's own length twice over: the handle is half as sensitive as the
-    // figure looks.
-    let tilted = aimed(0.7 + stand);
+    // `AIM_LEVER` half-lengths of travel is 45 degrees, which is the arrow's own
+    // drawn length twice over: the handle is half as sensitive as the figure
+    // looks.
+    let tilted = aimed(0.7 + lever);
     assert!((degrees(tilted) - 45.0).abs() < 1e-9, "{}", degrees(tilted));
 
-    // And no aim reaches 90 however far the pointer goes: the direction from a
-    // point to a point of a plane can never reach the plane's own direction, so
-    // one gesture cannot push the normal through the frame.
+    // And no aim reaches 90 however far the pointer goes: the travel is square
+    // to the lever, so the sum can never turn through a right angle, and one
+    // gesture cannot push the normal through the frame.
     for across in [10.0, 1e3, 1e9] {
         let far = aimed(0.7 + across * half);
         assert!(
             degrees(far) < 90.0 && far.dot(&frame.normal()) > 0.0,
             "an aim {across} half-lengths out reached {} degrees",
             degrees(far),
+        );
+    }
+}
+
+/// The aim answers from **inside** the lever's own length, which a plane
+/// standing `AIM_LEVER` half-lengths out could not.
+///
+/// The patch facing the eye is the aim's own view, and it is also the view a
+/// person zooms into to work on a normal, so an eye a half-length or two off
+/// the surface is the ordinary case rather than a corner of one. A plane stood
+/// off by the lever would sit *behind* such an eye -- the standoff being
+/// measured toward it -- and the press would read nothing and fall through to
+/// the viewport's navigation, with the arrowhead's own cursor still showing.
+/// Reading the centre's own plane, there is no such distance.
+#[test]
+fn an_aim_answers_from_closer_in_than_its_own_lever() {
+    let frame = flat();
+    let half = frame.half_extent[0];
+    let degrees = |n: Vector3<f64>| n.dot(&frame.normal()).clamp(-1.0, 1.0).acos().to_degrees();
+
+    // Nearer than the lever, at it, and comfortably past it: the same gesture
+    // and the same answer, the reading having no distance in it at all.
+    for standoff in [0.5, 1.0, AIM_LEVER - 0.5, AIM_LEVER, AIM_LEVER + 0.5, 50.0] {
+        let eye = frame.center + frame.normal() * (standoff * half);
+        assert_eq!(
+            tilt_gesture(&frame, eye),
+            Some(Tilt::Aim),
+            "a patch facing the eye at {standoff} half-lengths is the aim's view",
+        );
+        let at = |across: f64| {
+            let (origin, direction) = ray_to(eye, frame.center + frame.u_axis * across);
+            tilt_point(&frame, Tilt::Aim, origin, direction)
+                .unwrap_or_else(|| panic!("an eye {standoff} half-lengths out read no point"))
+        };
+        // The press is off the centre, as a press on the drawn arrowhead is.
+        let turned = tilt_normal(&frame, Tilt::Aim, at(0.3), at(0.3 + AIM_LEVER * half))
+            .expect("a direction");
+        assert!(
+            (degrees(turned) - 45.0).abs() < 1e-9,
+            "at {standoff} half-lengths the same travel turned {} degrees",
+            degrees(turned),
         );
     }
 }

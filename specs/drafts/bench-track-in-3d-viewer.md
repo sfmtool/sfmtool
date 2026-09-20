@@ -210,7 +210,7 @@ degenerate-view tests read the same on either side of it.
 | Edge | the frame's plane | the offset along that edge's axis is `p`; new half-length `(p + h) / 2`, centre moved `h' - h` along it, far edge held |
 | Corner | the frame's plane | the angle swept about `n` from the press point to the pointer, both read about `c` |
 | Normal segment | the line `c + t n` | the point of that line nearest the ray; the centre moves by that point's `t` less the press's own, along `n` |
-| Arrowhead, aiming | the plane square to `n` through `c + 4h n` | the new normal is the unit vector from `c` to `c + 4h n` carried by the pointer's travel across that plane since the press |
+| Arrowhead, aiming | the plane through `c` square to `n` | the new normal is `4h n` carried by the pointer's travel across that plane since the press, normalized |
 | Arrowhead, swinging | the plane through `c` square to the swing axis `a` | the angle swept about `a` from the press's point to the pointer's turns the normal about `a` |
 
 **The degenerate views are refused at the press.** Three handles read the
@@ -232,7 +232,9 @@ is at its best.
 The arrowhead needs no refusal of its own, because its two gestures are each
 other's cure: the aim reads a plane that is square to the view exactly when the
 normal points along it, and the swing reads an axis that is well determined
-exactly when it does not.
+exactly when it does not. Both planes run through `c`, so neither can fall
+behind an eye that is looking at the figure at all, and the arrowhead answers
+from every view it is drawn in.
 
 **The arrowhead's two gestures.** Which one a press makes is decided by where
 the normal points. With `e` the unit vector from `c` to the eye, the arrowhead
@@ -243,24 +245,40 @@ press decides the handle, so a gesture does not change character halfway
 through.
 
 **Aiming**, when the normal lies near the line of sight. The pointer's ray is met
-with the plane square to `n` through `c + 4h n`, twice the arrow's own length
-out, and the new normal is the unit vector from `c` to `c + 4h n` displaced by
-however far the pointer has travelled across that plane since the press. The
-plane is the one fixed at the press, `n` being the normal the arrowhead had then,
-so the gesture is a single map from the window onto the sphere of normals rather
-than a thing that moves as it is used. The press's own offset is kept for the
-reason the centre dot's is: the arrowhead is *drawn* at `2h` and *read* at `4h`,
-so a press that took the head is not standing where the plane's middle projects,
-and reading the meeting outright would turn the normal over before the pointer
-had moved at all -- which a drag that ends where it started is not allowed to do.
-Two properties follow from the distance. The
-pointer crosses `4h` of that plane for 45 degrees of tilt while the arrowhead is
-drawn at `2h`, so the aim is **half as sensitive as the figure looks** and a
-small correction is a small motion, which is what the handle is for: a normal is
-read off a surface a few degrees at a time. And the travel being in-plane, the
-answer keeps the whole `4h` along `n`; the direction from `c` to a point
-of a plane can never reach the plane's own direction, so one gesture turns the
+with the plane through `c` square to `n`, and the new normal is `4h n` -- the old
+normal on a lever twice the arrow's own length -- displaced by however far the
+pointer has travelled across that plane since the press, normalized. The plane
+and the lever are the ones fixed at the press, `n` being the normal the arrowhead
+had then, so the gesture is a single map from the window onto the sphere of
+normals rather than a thing that moves as it is used. The press's own place is
+kept for the reason the centre dot's is: a press that took the arrowhead is not
+standing where `c` projects, the head being drawn out along the normal, and
+reading the meeting outright would turn the normal over before the pointer had
+moved at all -- which a drag that ends where it started is not allowed to do.
+
+Two properties follow from the lever. `4h` of travel is 45 degrees of tilt while
+the arrowhead is drawn `2h` out, and the travel is read on the very plane the
+arrow stands out of, so `4h` is **twice the arrow's own drawn length whatever the
+zoom**: the aim is half as sensitive as the figure looks, at every distance, and
+a small correction is a small motion, which is what the handle is for -- a normal
+is read off a surface a few degrees at a time. And the travel being square to
+`n`, the answer keeps the whole `4h` along it; the sum of a fixed vector and one
+square to it can never turn through a right angle, so one gesture turns the
 normal by less than 90 degrees and cannot push it through the frame at all.
+
+**The lever is not a distance the plane stands at**, and that distinction is the
+whole of why the plane runs through `c`. Standing the plane `4h` out along `n`
+gives the same arithmetic wherever the eye is far off, and fails where it is not:
+the standoff is measured *toward* an eye the aim was chosen for, so an eye within
+`4h` of a patch facing it has the plane behind it, the ray meets nothing, and the
+press falls through to the viewport's navigation with the arrowhead's cursor
+still showing. That view -- close in on a patch that faces you -- is not a corner
+case but the one a person zooms to when they mean to work on a normal. Reading
+`c`'s own plane also takes the eye's distance out of the gesture entirely: what a
+pixel of pointer is worth on a plane depends on how far off that plane is, so a
+plane standing at a fixed offset makes the handle's sensitivity a function of the
+zoom, while `c`'s own plane and the patch project alike and the ratio between
+them is the same at every zoom.
 
 **Swinging**, when the normal lies across the line of sight. The normal turns
 about one axis `a`, which is **in the frame's own plane**: the unit vector there
@@ -475,9 +493,11 @@ Each is one PR, and each leaves the viewer whole.
    component along it); the centre and the half-length are unchanged; a tilt
    asked past an observation stops 80 degrees from it and says which, while a
    track already past that for one observation can still be tilted; a pointer
-   `4h` across the aim's plane is 45 degrees and no aim reaches 90; a swing
-   leaves the normal square to its axis and the axis in the frame's plane; the
-   gesture is chosen at the press and does not change while the button is down.
+   travelling `4h` across the aim's plane is 45 degrees and no aim reaches 90;
+   an aim answers from an eye closer in than its own lever, where a plane stood
+   off by that lever would sit behind the camera; a swing leaves the normal
+   square to its axis and the axis in the frame's plane; the gesture is chosen
+   at the press and does not change while the button is down.
 5. **The names.** The steps and the wire tools are named for the shape of the
    arithmetic rather than for what a person does with them, and they collide:
    `translate_frame`, `translate_frame_to`, `offset_frame` and
@@ -517,6 +537,13 @@ the tools into [`../gui/bench.md`](../gui/bench.md) § "The wire" and
   did not ask for; and a sphere of the arrow's own radius turns 90 degrees in the
   length of the arrow, which is far too fast for a handle whose job is a few
   degrees at a time.
-- The aim's plane stands at `4h`, twice the arrow's length, so the gesture is
-  half as sensitive as the figure looks. It is a number to look at on screen and
-  adjust, as the arrow's own `2h` is.
+- The aim's `4h` is a **lever** and not a distance its plane stands at: the
+  plane runs through `c`, and the old normal is carried on `4h` of lever, so the
+  gesture is half as sensitive as the figure looks. It is a number to look at on
+  screen and adjust, as the arrow's own `2h` is. Standing the plane off by the
+  lever instead reads the same wherever the eye is far away and fails where it
+  is not, the standoff being measured toward an eye the aim was chosen for: from
+  inside `4h` the plane lies behind the camera and the press falls through to
+  navigation while the cursor still says otherwise. Reading `c`'s own plane also
+  takes the eye's distance out of the sensitivity, which a standoff puts into
+  it.

@@ -67,8 +67,8 @@ const PLANE_LIFT: f64 = 1e-3;
 /// which is long enough to be grabbed and short enough not to cross the scene.
 ///
 /// Visible to [`crate::bench::geometry`], which states the arrowhead's aiming
-/// plane in terms of it: the arrow a person sees and the distance their pointer
-/// is read at are two facts about one handle, and a second literal could drift
+/// lever in terms of it: the arrow a person sees and the travel their pointer
+/// turns it by are two facts about one handle, and a second literal could drift
 /// from this one silently.
 pub(crate) const NORMAL_LENGTH: f64 = 2.0;
 
