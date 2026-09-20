@@ -1222,6 +1222,10 @@ twelve ways**
   were presumably deferred for import cost.
 
 **`_commands/solve.py` carries solver orchestration below its Click declaration**
+> _Status (2026-09-19): Done — moved `_run_sequential_overlap_sfm` and `_run_sfm`
+> to `src/sfmtool/_solve_driver.py`; the Click callback imports the driver lazily and
+> retains its existing behavior and error boundaries._
+
 > _Carried forward with the **framing corrected**. The file measurement holds; the "28
 > of 29" claim does not survive re-measurement and is dropped._
 - Location: `src/sfmtool/_commands/solve.py` (508 → **526**); the `solve` Click command
