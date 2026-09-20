@@ -169,14 +169,23 @@ states what differs:
 - **Reach**: nine panel pixels for the dot, a corner, the arrowhead and a
   circle; eight from an edge or from the normal's segment. Where reaches
   overlap the order is arrowhead, corner, dot, circle, edge, normal segment.
-- **Cursors**: `Move` on the dot and `Grabbing` while it is held, the
-  on-screen-orientation resize cursor on an edge, `Alias` on a corner, as in
-  Image Detail; a circle selects rather than moves, so it takes `PointingHand`.
-  The normal's segment takes the resize cursor along its own on-screen
-  direction. The arrowhead takes `Grab`, and `Grabbing` while held. The arc
-  glyph Image Detail draws beside a hovered corner has no counterpart here:
-  every mark of this figure is scene geometry drawn by the pass, and a hint that
-  follows the pointer is not.
+- **Cursors**: `Move` on the dot and `Grabbing` while it is held, and a circle
+  selects rather than moves, so it takes `PointingHand`. The normal's segment
+  takes the resize cursor along its own on-screen direction. The arrowhead takes
+  `Grab`, and `Grabbing` while held.
+
+  An edge and a corner both take the resize cursor their on-screen orientation
+  names, and the difference between them is the direction: an edge is dragged
+  **across** itself, so its cursor is the perpendicular of the edge; a corner
+  travels **along** the arc it turns on, so its cursor is the perpendicular of
+  its own radius from the centre, which is that arc's tangent. Running the
+  pointer down an edge and onto the corner turns the cursor by the difference
+  between the two gestures, which is what says one resizes and the other
+  rotates. There is no rotation cursor to give a corner instead: egui's set is
+  the CSS one, and neither has ever had such a thing. The arc glyph Image Detail
+  draws beside a hovered corner has no counterpart here, every mark of this
+  figure being scene geometry drawn by the pass where a hint that follows the
+  pointer is not.
 
 **The pointer is a ray of the viewer's camera**, where in Image Detail it is a
 ray of a reconstruction camera. Everything else about reading it is the same

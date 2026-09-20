@@ -639,6 +639,36 @@ fn gesture(
     }
 }
 
+/// The resize cursor that points **across** `direction`, worked out here rather
+/// than called out of the viewport so a test says what it wants independently of
+/// what the code does.
+fn cursor_across(direction: egui::Vec2) -> egui::CursorIcon {
+    let angle = direction
+        .y
+        .atan2(direction.x)
+        .to_degrees()
+        .rem_euclid(180.0);
+    match angle {
+        a if a < 22.5 || a >= 157.5 => egui::CursorIcon::ResizeVertical,
+        a if a < 67.5 => egui::CursorIcon::ResizeNeSw,
+        a if a < 112.5 => egui::CursorIcon::ResizeHorizontal,
+        _ => egui::CursorIcon::ResizeNwSe,
+    }
+}
+
+/// The axis one resize cursor lies along, as a panel direction.
+fn cursor_axis(cursor: egui::CursorIcon) -> egui::Vec2 {
+    match cursor {
+        egui::CursorIcon::ResizeVertical => egui::vec2(0.0, 1.0),
+        egui::CursorIcon::ResizeHorizontal => egui::vec2(1.0, 0.0),
+        // The raster's `y` runs downward, so north-west to south-east is `x`
+        // and `y` growing together.
+        egui::CursorIcon::ResizeNwSe => egui::vec2(1.0, 1.0).normalized(),
+        egui::CursorIcon::ResizeNeSw => egui::vec2(1.0, -1.0).normalized(),
+        other => panic!("{other:?} is not a resize cursor"),
+    }
+}
+
 /// The edit a gesture asked for, or a panic naming what it asked for instead.
 fn edit_of(dragged: &Dragged) -> PatchEdit {
     match &dragged.gesture {
@@ -735,7 +765,11 @@ fn a_corner_dragged_onto_its_neighbour_is_a_quarter_turn_and_one_version() {
     let step = corner(&staged, 3) - press;
 
     let dragged = gesture(&mut staged, &track, false, press, &[step], false);
-    assert_eq!(dragged.cursor, egui::CursorIcon::Alias, "a corner turns");
+    assert_eq!(
+        dragged.cursor,
+        cursor_across(corner(&staged, 2) - dot(&staged)),
+        "a corner's cursor lies along the arc it turns on",
+    );
     let PatchEdit::Rotate { angle_rad } = edit_of(&dragged) else {
         panic!("the press did not take a corner");
     };
@@ -1029,4 +1063,52 @@ fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_sp
         (spun.u_axis - was.u_axis).norm() > 1e-3,
         "the square did not spin",
     );
+}
+
+/// A corner's cursor lies **along** the arc it turns on and an edge's lies
+/// **across** the edge, so running the pointer down an edge and onto the corner
+/// turns the cursor by the difference between the two gestures.
+///
+/// There is no rotation cursor in egui's set to give a corner, so the direction
+/// is the whole of what says a corner turns. It is checked against the figure's
+/// own geometry on screen rather than against the call the viewport makes: what
+/// is claimed is a fact about the picture.
+#[test]
+fn a_corner_turns_the_cursor_along_its_arc_where_an_edge_lies_across_itself() {
+    let mut staged = staged();
+    let track = staged.track();
+    let centre = dot(&staged);
+
+    // Within the 22.5-degree quantization a resize cursor has, two directions
+    // count as square to each other when their cosine is under sin 22.5.
+    let square_to = |cursor: egui::CursorIcon, direction: egui::Vec2| {
+        cursor_axis(cursor).dot(direction.normalized()).abs() < 22.5_f32.to_radians().sin()
+    };
+
+    for k in 0..4 {
+        let at = corner(&staged, k);
+        let radius = at - centre;
+        let cursor = gesture(&mut staged, &track, false, at, &[], false).cursor;
+        assert!(
+            square_to(cursor, radius),
+            "corner {k} stands {radius:?} off the centre, so it travels across that; \
+             the cursor was {cursor:?}, which lies {:?}",
+            cursor_axis(cursor),
+        );
+
+        // And the edge running out of that same corner, which is dragged across
+        // itself: the two cursors differ, which is the switch a person sees.
+        let along = corner(&staged, (k + 1) % 4) - at;
+        let midpoint = edge_mid(&staged, k);
+        let on_edge = gesture(&mut staged, &track, false, midpoint, &[], false).cursor;
+        assert!(
+            square_to(on_edge, along),
+            "edge {k} runs {along:?} and is moved across itself, not {on_edge:?}",
+        );
+        assert_ne!(
+            cursor, on_edge,
+            "a square's corner and the edge leaving it are 45 degrees apart, \
+             so the cursor has to change between them",
+        );
+    }
 }

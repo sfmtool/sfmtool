@@ -640,22 +640,52 @@ impl Handles {
     }
 
     /// The cursor `handle` asks for, with the square's own orientation **on
-    /// screen** deciding which resize cursor an edge takes, as it does in the
-    /// Image Detail panel.
+    /// screen** deciding which resize cursor an edge or a corner takes.
     ///
-    /// A corner turns, and egui has no cursor for that, so it takes
-    /// [`CursorIcon::Alias`]; a circle selects rather than moves, so it takes
-    /// the pointing hand every other selectable mark in this window takes.
+    /// There is no rotation cursor to give a corner: egui's set is the CSS one
+    /// and neither has ever had such a thing, so what a corner takes is the
+    /// resize cursor lying along the way it **travels** -- the tangent of the
+    /// circle it turns on, which is the perpendicular of its own radius from the
+    /// centre. Since [`resize_cursor`] answers with the perpendicular of what it
+    /// is handed, handing it the radius is what asks for the tangent. Running
+    /// the pointer along an edge and onto the corner then turns the cursor from
+    /// across the edge to along the arc, which is the difference between the two
+    /// gestures. A circle selects rather than moves, so it takes the pointing
+    /// hand every other selectable mark in this window takes.
     pub(crate) fn cursor(&self, handle: Handle) -> CursorIcon {
         match handle {
             Handle::Dot => CursorIcon::Move,
-            Handle::Corner(_) => CursorIcon::Alias,
             Handle::Circle { .. } => CursorIcon::PointingHand,
+            Handle::Corner(k) => self
+                .corners
+                .get(k)
+                .copied()
+                .flatten()
+                .zip(self.centre())
+                .map(|(corner, centre)| resize_cursor(corner - centre))
+                .unwrap_or(CursorIcon::Move),
             Handle::Edge(edge) => (0..4)
                 .find(|k| geometry::edge_of(*k) == edge)
                 .and_then(|k| Some(resize_cursor(self.corners[(k + 1) % 4]? - self.corners[k]?)))
                 .unwrap_or(CursorIcon::Move),
         }
+    }
+
+    /// The figure's centre on screen: the dot, or the mean of the corners that
+    /// projected when it did not.
+    ///
+    /// A corner's radius is measured from here. The fallback matters because the
+    /// dot is one point and can be the one behind the eye, while a corner the
+    /// pointer is on has to have projected to be under it.
+    fn centre(&self) -> Option<Pos2> {
+        if let Some(dot) = self.dot {
+            return Some(dot);
+        }
+        let placed: Vec<Pos2> = self.corners.iter().flatten().copied().collect();
+        let sum = placed
+            .iter()
+            .fold(egui::Vec2::ZERO, |sum, at| sum + at.to_vec2());
+        (!placed.is_empty()).then(|| (sum / placed.len() as f32).to_pos2())
     }
 }
 
