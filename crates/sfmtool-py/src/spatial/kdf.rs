@@ -46,10 +46,16 @@ use super::kdforest::extract_u8_2d;
 /// source file is a `FileNotFoundError`. Collapsing all of them into one
 /// exception type would make a benchmark sweep unable to tell "this cache
 /// budget is too small" (retry smaller) from "this file is corrupt" (stop).
+///
+/// A cancelled write is the one variant nothing here can produce: these
+/// bindings attach no cancel flag to the writes they call. It is mapped all the
+/// same, rather than folded into a group it does not belong to, so that
+/// attaching one later says the right thing in Python.
 pub(crate) fn to_py_err(err: KdfError) -> PyErr {
     let message = err.to_string();
     match err {
         KdfError::Io(e) => PyErr::from(e),
+        KdfError::Cancelled(_) => pyo3::exceptions::PyInterruptedError::new_err(message),
         KdfError::MissingSource(path) => pyo3::exceptions::PyFileNotFoundError::new_err(format!(
             "SIFT source is missing: {}",
             path.display()

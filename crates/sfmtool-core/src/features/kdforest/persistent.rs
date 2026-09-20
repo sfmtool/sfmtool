@@ -27,6 +27,7 @@ use super::{KdForest, Neighbor};
 use crate::features::kdforest::{
     KdfError, KdfImageTable, KdfIoStats, KdfSiftSources, KdfWriteOptions, LazyKdForestOptions,
 };
+use crate::progress::Progress;
 
 /// Per-query counters used by parity tests and performance instrumentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -50,6 +51,30 @@ where
         self.write_kdf_ordered(path, sources, options, None)
     }
 
+    /// [`write_kdf`](Self::write_kdf), saying where it has got to and stopping
+    /// when it is asked to.
+    ///
+    /// The whole of what it adds is the `progress` the format's writer already
+    /// takes: a corpus of a few million descriptors is several hundred
+    /// megabytes through zstd, and the fraction it reports follows where that
+    /// time goes rather than how many bytes are behind it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the write failed with, and `KdfError::Cancelled` when the flag
+    /// on `progress` is set. A cancelled write leaves no file: the archive is
+    /// streamed into a temporary sibling and renamed over `path` only once it
+    /// is complete.
+    pub fn write_kdf_reporting(
+        &self,
+        path: &Path,
+        sources: Option<&KdfSiftSources>,
+        options: &KdfWriteOptions,
+        progress: &Progress<'_>,
+    ) -> Result<(), KdfError> {
+        self.write_kdf_ordered_reporting(path, sources, options, None, progress)
+    }
+
     /// [`write_kdf`](Self::write_kdf) with an explicit corpus order.
     ///
     /// `descriptor_order[r]` is the feature stored at row `r`. `None` keeps tree
@@ -62,6 +87,29 @@ where
         sources: Option<&KdfSiftSources>,
         options: &KdfWriteOptions,
         descriptor_order: Option<&[u32]>,
+    ) -> Result<(), KdfError> {
+        self.write_kdf_ordered_reporting(
+            path,
+            sources,
+            options,
+            descriptor_order,
+            &Progress::none(),
+        )
+    }
+
+    /// [`write_kdf_ordered`](Self::write_kdf_ordered), reporting and
+    /// cancellable, which is the one entry point the other three delegate to.
+    ///
+    /// # Errors
+    ///
+    /// As [`write_kdf_reporting`](Self::write_kdf_reporting).
+    pub fn write_kdf_ordered_reporting(
+        &self,
+        path: &Path,
+        sources: Option<&KdfSiftSources>,
+        options: &KdfWriteOptions,
+        descriptor_order: Option<&[u32]>,
+        progress: &Progress<'_>,
     ) -> Result<(), KdfError> {
         let trees = self
             .trees
@@ -108,7 +156,7 @@ where
             })),
             descriptor_order,
         };
-        sfmtool_kdf_format::write_kdf(path, &data, sources, options)
+        sfmtool_kdf_format::write_kdf_reporting(path, &data, sources, options, progress)
     }
 }
 

@@ -52,6 +52,20 @@ impl<S: KdfScalar> KdForest<S> {
     pub fn write_kdf(&self, path: &Path, sources: Option<&KdfSiftSources>,
                      options: &KdfWriteOptions)
         -> Result<(), KdfError>;
+    pub fn write_kdf_ordered(&self, path: &Path, sources: Option<&KdfSiftSources>,
+                             options: &KdfWriteOptions,
+                             descriptor_order: Option<&[u32]>)
+        -> Result<(), KdfError>;
+    /// The two above, saying where they have got to and stopping when asked.
+    pub fn write_kdf_reporting(&self, path: &Path, sources: Option<&KdfSiftSources>,
+                               options: &KdfWriteOptions, progress: &Progress<'_>)
+        -> Result<(), KdfError>;
+    pub fn write_kdf_ordered_reporting(&self, path: &Path,
+                                       sources: Option<&KdfSiftSources>,
+                                       options: &KdfWriteOptions,
+                                       descriptor_order: Option<&[u32]>,
+                                       progress: &Progress<'_>)
+        -> Result<(), KdfError>;
 }
 impl<S: KdfScalar> LazyKdForest<S> {
     pub fn open(path: &Path, options: LazyKdForestOptions)
@@ -83,6 +97,16 @@ matching neighbor IDs alone would not catch a file-backed traversal that visits
 a different set of leaves and happens to agree. `io_stats` reports the cache and
 read counters of `KdfIoStats` for the whole file, which is how a test asserts
 that opening reads no chunk payload and that a warm hit causes no read.
+
+A write of a few million descriptors is several hundred megabytes through zstd,
+which is seconds of work, so the reporting pair carries a `Progress`
+([`../../gui/operation-progress.md`](../../gui/operation-progress.md)) down into
+the format crate's own `write_kdf_reporting`. It moves the fraction by where the
+write's time goes rather than by how many bytes are behind it, and reads the
+cancel flag between batches of blocks; a cancelled write is
+`KdfError::Cancelled` and no file, since the archive is streamed into a
+temporary sibling and renamed over the destination only once it is whole. The
+plain pair is the reporting pair passed `Progress::none()`.
 
 `KdfScalar` is a sealed bridge for the existing u8/f32 scalar implementations,
 not an invitation to persist arbitrary user metrics. `Neighbor` retains original

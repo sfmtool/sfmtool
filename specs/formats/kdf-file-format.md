@@ -401,7 +401,9 @@ The [`sfmtool-kdf-format`](../../crates/sfmtool-kdf-format/) crate sits alongsid
 the other format crates under [crates/](../../crates/) and depends on
 `sfmtool-archive-io` for container primitives. It owns encoding, structural
 validation, indexed chunk reading, writing and full verification, with no
-dependency on `sfmtool-core`. Core owns forest construction and queries, in
+dependency on `sfmtool-core`; a write reports how far along it is, and is
+cancelled, through the `sfmtool-progress` parameter both crates share, which
+depends on nothing but `std` for exactly this reason. Core owns forest construction and queries, in
 [`features/kdforest/persistent.rs`](../../crates/sfmtool-core/src/features/kdforest/persistent.rs).
 The `uint8` half of both is bound for Python on the `sfmtool.spatial`
 submodule, in

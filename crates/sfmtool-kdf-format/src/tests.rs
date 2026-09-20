@@ -406,3 +406,140 @@ fn a_malformed_descriptor_order_is_refused() {
         assert!(err.contains(want), "order={order:?} gave {err:?}");
     }
 }
+
+// ── Reporting and cancellation ──────────────────────────────────────────
+
+/// A corpus with SIFT sources, which is the shape a write reports every stage
+/// of: it carries the image table, the origins and the geometry blocks a
+/// generic corpus has none of.
+fn sourced() -> KdfSiftSources {
+    KdfSiftSources {
+        workspace: KdfWorkspaceMetadata {
+            absolute_path: "x".into(),
+            relative_path: ".".into(),
+            contents: KdfWorkspaceContents {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+                feature_prefix_dir: "features/sift".into(),
+            },
+        },
+        image_names: vec!["a.jpg".into(), "b.jpg".into()],
+        feature_tool_hashes: vec![[1; 16], [2; 16]],
+        sift_content_hashes: vec![[3; 16], [4; 16]],
+        origins: vec![
+            FeatureOrigin {
+                image_index: 0,
+                image_feature_index: 4,
+            },
+            FeatureOrigin {
+                image_index: 1,
+                image_feature_index: 7,
+            },
+            FeatureOrigin {
+                image_index: 0,
+                image_feature_index: 8,
+            },
+        ],
+        geometry: vec![
+            [[10.0, 11.0], [1.0, 0.0], [0.0, 1.0]],
+            [[20.0, 21.0], [2.0, 0.0], [0.0, 2.0]],
+            [[30.0, 31.0], [3.0, 0.0], [0.0, 3.0]],
+        ],
+    }
+}
+
+/// The 128-D uint8 corpus SIFT sources require, as the writer sees it.
+fn sift_shaped(vectors: &[u8]) -> KdfForestData<'_, u8> {
+    let mut data = tiny_u8(vectors);
+    data.dimension = 128;
+    data
+}
+
+/// The write says where it has got to, and writes the same bytes it writes
+/// when nobody is listening.
+#[test]
+fn a_reporting_write_climbs_to_the_end_and_writes_the_same_file() {
+    use sfmtool_progress::{Event, Progress};
+    use std::sync::Mutex;
+
+    let mut vectors = vec![0u8; 3 * 128];
+    vectors[128] = 1;
+    vectors[256] = 9;
+    let sources = sourced();
+    let options = KdfWriteOptions {
+        origin_block_rows: 2,
+        target_descriptor_block_bytes: 256,
+        ..Default::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+
+    let quiet = dir.path().join("quiet.kdf");
+    write_kdf(&quiet, &sift_shaped(&vectors), Some(&sources), &options).unwrap();
+
+    let seen = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Fraction { of_whole } = event {
+            seen.lock().unwrap().push(of_whole);
+        }
+    };
+    let loud = dir.path().join("loud.kdf");
+    write_kdf_reporting(
+        &loud,
+        &sift_shaped(&vectors),
+        Some(&sources),
+        &options,
+        &Progress::to(&sink),
+    )
+    .unwrap();
+
+    let fractions = seen.into_inner().unwrap();
+    assert!(!fractions.is_empty(), "a write that said nothing");
+    assert!(
+        fractions.windows(2).all(|w| w[1] >= w[0]),
+        "the fractions ran backwards: {fractions:?}"
+    );
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    assert_eq!(
+        fractions.last().copied(),
+        Some(1.0),
+        "a finished write ends at its end"
+    );
+    // Reporting is not part of the file: the two archives are the same bytes.
+    assert_eq!(
+        std::fs::read(&quiet).unwrap(),
+        std::fs::read(&loud).unwrap(),
+        "the reporting write wrote different bytes"
+    );
+}
+
+/// A write that is asked to stop stops, and leaves no file where it was going.
+#[test]
+fn a_write_that_is_asked_to_stop_leaves_nothing_behind() {
+    use sfmtool_progress::Progress;
+    use std::sync::atomic::AtomicBool;
+
+    let mut vectors = vec![0u8; 3 * 128];
+    vectors[128] = 1;
+    let sources = sourced();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stopped.kdf");
+    let flag = AtomicBool::new(true);
+    let stopped = write_kdf_reporting(
+        &path,
+        &sift_shaped(&vectors),
+        Some(&sources),
+        &KdfWriteOptions::default(),
+        &Progress::none().cancelled_by(&flag),
+    );
+    assert!(
+        matches!(stopped, Err(KdfError::Cancelled(_))),
+        "{stopped:?}"
+    );
+    assert!(!path.exists(), "a cancelled write left a file");
+    // Nor a temporary one beside it: the whole directory is as it was.
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}

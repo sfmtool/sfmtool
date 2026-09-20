@@ -404,3 +404,109 @@ fn with_distances_padding() {
     assert_eq!(idx[2], u32::MAX);
     assert_eq!(dist[2], f32::INFINITY);
 }
+
+// ── Reporting and cancellation ──────────────────────────────────────────
+
+/// Every fraction a build of `params` reported, in the order it reported them.
+fn fractions_of_a_build(
+    points: &[u8],
+    n: usize,
+    dim: usize,
+    params: KdForestParams,
+) -> (Vec<f32>, KdForestU8) {
+    use crate::progress::{Event, Progress};
+    use std::sync::Mutex;
+
+    let seen = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Fraction { of_whole } = event {
+            seen.lock().unwrap().push(of_whole);
+        }
+    };
+    let forest = KdForestU8::build_reporting(points, n, dim, params, &Progress::to(&sink))
+        .expect("nothing asked it to stop");
+    (seen.into_inner().unwrap(), forest)
+}
+
+/// The reporting build says where it has got to, and builds the very forest
+/// the silent one does.
+#[test]
+fn a_reporting_build_climbs_to_the_end_and_builds_the_same_forest() {
+    let dim = 16;
+    let n = 4_000;
+    let points = random_u8(n, dim, 77);
+    let (fractions, reported) = fractions_of_a_build(&points, n, dim, KdForestParams::balanced());
+
+    assert!(!fractions.is_empty(), "a build that said nothing");
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    assert_eq!(
+        fractions.last().copied(),
+        Some(1.0),
+        "a finished build ends at its end"
+    );
+
+    // The counter is shared across trees, so the count itself never falls; what
+    // can arrive out of order is the *report*, because a `T > 1` build makes
+    // them from rayon's workers. One tree is one thread, and there the order
+    // the sink sees is the order the leaves were placed in.
+    let one_tree = KdForestParams {
+        num_trees: 1,
+        ..KdForestParams::balanced()
+    };
+    let (ordered, _) = fractions_of_a_build(&points, n, dim, one_tree);
+    assert!(
+        ordered.windows(2).all(|w| w[1] >= w[0]),
+        "the fractions ran backwards: {ordered:?}"
+    );
+    assert_eq!(ordered.last().copied(), Some(1.0));
+
+    // Same parameters and the same seed, so the two forests are the same
+    // forest: every tree's leaf order and every leaf boundary.
+    let silent = KdForestU8::build(&points, n, dim, KdForestParams::balanced());
+    assert_eq!(reported.num_trees(), silent.num_trees());
+    for tree in 0..silent.num_trees() {
+        assert_eq!(reported.tree_leaves(tree), silent.tree_leaves(tree));
+    }
+    let queries = random_u8(40, dim, 78);
+    assert_eq!(
+        reported.search_batch(&queries, 40, 3, 100, None),
+        silent.search_batch(&queries, 40, 3, 100, None),
+    );
+}
+
+/// A build that is asked to stop stops, and hands back nothing: a forest
+/// missing the trees that had not finished is not a forest.
+#[test]
+fn a_build_that_is_asked_to_stop_hands_back_nothing() {
+    use crate::progress::{Cancelled, Progress};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dim = 16;
+    let n = 4_000;
+    let points = random_u8(n, dim, 79);
+    let flag = AtomicBool::new(true);
+    let stopped = KdForestU8::build_reporting(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none().cancelled_by(&flag),
+    );
+    assert_eq!(stopped.err(), Some(Cancelled));
+
+    // And the same flag unset builds the forest, so what stopped it was the
+    // flag rather than the arguments.
+    flag.store(false, Ordering::Relaxed);
+    let forest = KdForestU8::build_reporting(
+        &points,
+        n,
+        dim,
+        KdForestParams::balanced(),
+        &Progress::none().cancelled_by(&flag),
+    )
+    .expect("nothing is asking it to stop now");
+    assert_eq!(forest.len(), n);
+}

@@ -65,8 +65,10 @@ pub use sfmtool_kdf_format::{
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, Verification,
 };
 
-use build::{build_tree, Node, Tree};
+use build::{build_tree, BuildProgress, Node, Tree};
 use rayon::prelude::*;
+
+use crate::progress::{Cancelled, Progress};
 
 /// Print per-query search diagnostics to stderr when `SFMTOOL_KDFOREST_STATS=1`.
 ///
@@ -157,6 +159,46 @@ impl<S: ForestScalar> KdForest<S> {
     /// would corrupt the distance ordering (see [`OrdF32`]).
     #[must_use]
     pub fn build(points: &[S], n_points: usize, dim: usize, params: KdForestParams) -> Self {
+        Self::build_reporting(points, n_points, dim, params, &Progress::none())
+            .expect("a build that is never asked to stop cannot be cancelled")
+    }
+
+    /// [`build`](Self::build), saying where it has got to and stopping when it
+    /// is asked to.
+    ///
+    /// A forest over a few million descriptors is seconds of work, which is
+    /// long enough that a caller drawing a bar needs to hear from it. What it
+    /// reports is a fraction of its own range, counted in **points placed in a
+    /// leaf** across every tree: the trees are built in parallel, so per-tree
+    /// reporting would be a handful of steps that all land at the end, while
+    /// points placed moves evenly from the first leaf to the last.
+    ///
+    /// The forest is exactly [`build`](Self::build)'s for the same arguments:
+    /// the counter changes nothing about which points a split sends where.
+    ///
+    /// # Errors
+    ///
+    /// [`Cancelled`] when the flag on `progress` is set, read once per leaf.
+    /// Nothing is handed back then -- a forest missing the trees that had not
+    /// finished is not a forest.
+    ///
+    /// ```
+    /// use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
+    /// use sfmtool_core::progress::Progress;
+    ///
+    /// let points: Vec<u8> = vec![0, 0, 0, 0, 10, 10, 10, 10, 0, 1, 0, 1];
+    /// let forest =
+    ///     KdForestU8::build_reporting(&points, 3, 4, KdForestParams::balanced(), &Progress::none())
+    ///         .expect("nothing asked it to stop");
+    /// assert_eq!(forest.len(), 3);
+    /// ```
+    pub fn build_reporting(
+        points: &[S],
+        n_points: usize,
+        dim: usize,
+        params: KdForestParams,
+        progress: &Progress<'_>,
+    ) -> Result<Self, Cancelled> {
         assert_eq!(
             points.len(),
             n_points * dim,
@@ -178,6 +220,7 @@ impl<S: ForestScalar> KdForest<S> {
         );
         assert!(params.leaf_size > 0, "leaf_size must be positive");
 
+        let counter = BuildProgress::new(progress, params.num_trees, n_points);
         let trees: Vec<Tree<S>> = (0..params.num_trees)
             .into_par_iter()
             .map(|t| {
@@ -188,17 +231,19 @@ impl<S: ForestScalar> KdForest<S> {
                     ids,
                     &params,
                     params.seed.wrapping_add(t as u64),
+                    &counter,
                 )
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
+        progress.set_fraction(1.0);
 
-        Self {
+        Ok(Self {
             points: points.to_vec(),
             n_points,
             dim,
             trees,
             params,
-        }
+        })
     }
 
     /// Number of points in the forest.

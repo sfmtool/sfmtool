@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sfmtool_core::features::kdforest::{
-    KdForestParams, KdForestU8, KdfSiftSources, KdfWorkspaceContents, KdfWorkspaceMetadata,
-    KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
+    KdForestParams, KdForestU8, KdfError, KdfSiftSources, KdfWorkspaceContents,
+    KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{progress_note, SfmrReconstruction};
@@ -36,6 +36,17 @@ pub(crate) mod tests;
 
 /// What a reconstruction's index file is called, after the `.sfmr`'s own stem.
 pub(crate) const INDEX_FILE_SUFFIX: &str = "-sift-index.kdf";
+
+/// What a build writes into, in the target's own directory, until it has a
+/// whole index to rename over the target.
+///
+/// A rebuild over an index that is open and good has to leave that index
+/// standing until there is something better: a build that is cancelled ten
+/// seconds in, or that fails on the last block, would otherwise have replaced
+/// a working index with nothing. Beside the target rather than in a temporary
+/// directory, because the last step is then a rename rather than a copy across
+/// filesystems.
+const BUILDING_FILE_SUFFIX: &str = ".building";
 
 /// One node's open SIFT index, and what the node makes of it.
 #[derive(Clone)]
@@ -458,7 +469,7 @@ impl AppState {
     /// same number.
     ///
     /// `progress` names three phases: `read descriptors`, `build forest` and
-    /// `write index`.
+    /// `write index`, each reporting within its own share.
     pub(crate) fn start_build_sift_index(
         &mut self,
         id: ReconId,
@@ -472,6 +483,20 @@ impl AppState {
     }
 
     fn begin_build_sift_index(&mut self, id: ReconId, path: Option<PathBuf>) -> Result<(), String> {
+        let job = self.build_sift_index_job(id, path)?;
+        self.start_background_task(Operation::BUILD_SIFT_INDEX, id, job)
+    }
+
+    /// The work a build does, as a closure that owns everything it reads.
+    ///
+    /// Separated from starting it for the reason every other operation's job is:
+    /// the refusals and the plan are the state's to work out, and what crosses
+    /// to the worker is one closure holding no reference into the scene.
+    pub(crate) fn build_sift_index_job(
+        &self,
+        id: ReconId,
+        path: Option<PathBuf>,
+    ) -> Result<Job, String> {
         if let Some(why) = self.build_sift_index_refusal(id) {
             return Err(why);
         }
@@ -494,8 +519,7 @@ impl AppState {
                 .collect(),
             workspace: workspace_metadata(recon),
         };
-        let job: Job = Box::new(move |progress| build(plan, progress));
-        self.start_background_task(Operation::BUILD_SIFT_INDEX, id, job)
+        Ok(Box::new(move |progress| build(plan, progress)))
     }
 
     /// Install an index a background build produced.
@@ -568,13 +592,17 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
     let mut feature_tool_hashes = vec![[0u8; 16]; images];
     let mut sift_content_hashes = vec![[0u8; 16]; images];
     let mut dimension = 0usize;
-    // How the time divides on a 370-image, 3M-descriptor capture: the write
-    // is about half, and the read and the forest share the rest. Only the
-    // read reports within its share, so the bar steps at the other two.
+    // How the time divides on a 370-image, 3M-descriptor capture: the write is
+    // about half, and the read and the forest share the rest. Each reports
+    // within its own share -- the read per image, the forest per leaf, the
+    // write per batch of blocks -- so the bar moves through all three.
     let [read, forest_share, write] = progress.split([0.25, 0.25, 0.5]);
     {
         let mut phase = read.phase("read descriptors");
         for (index, (image, sift_path)) in sources.iter().enumerate() {
+            if phase.is_cancelled() {
+                return Finished::Cancelled;
+            }
             phase.set_fraction(index as f32 / sources.len() as f32);
             let data = match sfmtool_sift_format::read_sift_partial(sift_path, usize::MAX) {
                 Ok(data) => data,
@@ -635,8 +663,17 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
 
     let count = origins.len();
     let forest = {
-        let _phase = forest_share.phase("build forest");
-        KdForestU8::build(&descriptors, count, dimension, KdForestParams::default())
+        let phase = forest_share.phase("build forest");
+        match KdForestU8::build_reporting(
+            &descriptors,
+            count,
+            dimension,
+            KdForestParams::default(),
+            &phase,
+        ) {
+            Ok(forest) => forest,
+            Err(_) => return Finished::Cancelled,
+        }
     };
 
     let sources = KdfSiftSources {
@@ -648,16 +685,36 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         geometry,
     };
     {
-        let _phase = write.phase("write index");
+        let phase = write.phase("write index");
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return Finished::Failed(format!("Cannot create {}: {e}", parent.display()));
             }
         }
-        // A rebuild replaces what is there: the writer refuses an existing file,
-        // and the person asked for this index rather than for a second one.
-        let _ = std::fs::remove_file(&path);
-        if let Err(e) = forest.write_kdf(&path, Some(&sources), &KdfWriteOptions::default()) {
+        // Written beside the target under a name of its own and renamed over it
+        // at the end, so a rebuild that is cancelled or that fails leaves the
+        // index that is there standing. The writer refuses an existing
+        // destination, so a file one of those left behind is cleared first.
+        let building = building_path(&path);
+        let _ = std::fs::remove_file(&building);
+        let written = forest.write_kdf_reporting(
+            &building,
+            Some(&sources),
+            &KdfWriteOptions::default(),
+            &phase,
+        );
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&building);
+            return match e {
+                KdfError::Cancelled(_) => Finished::Cancelled,
+                e => Finished::Failed(format!("Cannot write {}: {e}", path.display())),
+            };
+        }
+        // A rebuild replaces what is there: the person asked for this index
+        // rather than for a second one, and `rename` replaces the target on
+        // both Unix and Windows.
+        if let Err(e) = std::fs::rename(&building, &path) {
+            let _ = std::fs::remove_file(&building);
             return Finished::Failed(format!("Cannot write {}: {e}", path.display()));
         }
     }
@@ -679,6 +736,13 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         path,
         forest: Arc::new(opened),
     }
+}
+
+/// Where a build writes while it is building `path`.
+fn building_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(BUILDING_FILE_SUFFIX);
+    PathBuf::from(name)
 }
 
 /// The workspace the `.kdf` records, taken from the reconstruction's own.

@@ -154,8 +154,26 @@ sentence would report this one instead
 *Build* is a background task over every `.sift` file the node's images resolve
 to, reporting the phases `read descriptors`, `build forest` and `write index`.
 It writes the node's index path, replacing what is there, and opens what it
-wrote. It is not cancellable: the forest build and the file write are each one
-call ([`background-tasks.md`](background-tasks.md)).
+wrote.
+
+**All three phases report, and all three stop.** The three are roughly a
+quarter, a quarter and a half of the time on a 370-image capture, and each moves
+the bar within its own share: the read per image, the forest per leaf placed
+across its trees, and the write per batch of blocks weighted by where the
+write's own time goes ([`../formats/kdf-file-format.md`](../formats/kdf-file-format.md)).
+Per leaf rather than per tree, because the trees are built in parallel and four
+of them are four steps that all land at the end. The same three places are where
+the build reads the cancel flag, so *Cancel* stops it within a block rather than
+at the end of a phase ([`background-tasks.md`](background-tasks.md)).
+
+**A build writes beside its target and renames over it at the end.** The file it
+streams into is the target's name with `.building` on it, in the target's own
+directory, which makes the last step a rename rather than a copy across
+filesystems; the rename replaces what is there. Until that instant the index
+that is open stays exactly as it was, so a rebuild that is cancelled ten seconds
+in, or that fails on its last block, leaves the working index standing rather
+than replacing it with nothing. A cancelled or failed build removes what it was
+writing into.
 
 The corpus it writes carries **one image-table row per image of the node**, in
 the node's own order, including images with no `.sift` file -- an image with no
@@ -229,6 +247,11 @@ impl AppState {
     pub(crate) fn start_build_sift_index(&mut self, id: ReconId, path: Option<PathBuf>)
         -> Result<(), String>;
 
+    /// The build's work on its own, owning everything it reads, for the
+    /// starter above and for a test that drives it directly.
+    pub(crate) fn build_sift_index_job(&self, id: ReconId, path: Option<PathBuf>)
+        -> Result<Job, String>;
+
     /// Why a search cannot query this node's index, or `None` when it can.
     pub(crate) fn sift_index_search_refusal(&self, id: ReconId) -> Option<String>;
     pub(crate) fn build_sift_index_refusal(&self, id: ReconId) -> Option<String>;
@@ -286,7 +309,11 @@ a re-extracted `.sift`, one that appeared, one that vanished -- with a superset
 index stale; a version that moves the image table re-deriving the state and one
 that does not leaving it alone; the look at an absent file being silent and
 remembered; and closing letting go of the forest, leaving the file and refusing
-the search.
+the search. Two more drive the build's job directly, over a `Progress` that
+records what it reports: the fractions climbing past the read's share and past
+the write's, so a bar that only moved through the read would fail; and a
+cancelled rebuild leaving the index that is there byte for byte as it was, with
+no `.building` file beside it.
 
 The Scene tree row's three texts and its menu are in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs),

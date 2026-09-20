@@ -18,7 +18,7 @@ pub use read::KdfFile;
 pub use summary::{kdf_summary, KdfSection, KdfSummary};
 pub use types::*;
 pub use verify::{verify_kdf, verify_sift_sources};
-pub use write::write_kdf;
+pub use write::{write_kdf, write_kdf_reporting};
 
 #[cfg(test)]
 mod tests;

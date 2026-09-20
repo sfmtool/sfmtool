@@ -304,6 +304,17 @@ Flat row-major arrays at the boundary, mirroring `spatial.rs`:
 
 - `KdForest::build(points: &[S], n_points: usize, dim: usize, params: KdForestParams) -> Self`
   (points length `n_points * dim`).
+- `KdForest::build_reporting(points, n_points, dim, params, progress: &Progress<'_>)
+  -> Result<Self, Cancelled>` -- the same build, saying where it has got to and
+  stopping when it is asked to
+  ([`../../gui/operation-progress.md`](../../gui/operation-progress.md)). The
+  unit it counts is a **point placed in a leaf**, across every tree: the trees
+  are built in parallel, so per-tree reporting would be `T` steps that all land
+  at the end, while points placed moves evenly from the first leaf to the last.
+  The counter is one relaxed `fetch_add` per leaf and it reports only when the
+  count crosses one of two hundred boundaries. A build that is cancelled hands
+  back nothing, because a forest missing the trees that had not finished is not
+  a forest; `build` is this passed `Progress::none()`, which cannot cancel.
 - `forest.search(query: &[S], k, max_leaf_checks, max_dist: Option<f32>) -> Vec<Neighbor>`
   — single query; `max_dist` is an optional Euclidean distance cutoff (`None` =
   unbounded), squared internally as in `spatial.rs`.

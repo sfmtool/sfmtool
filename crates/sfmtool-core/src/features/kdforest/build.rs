@@ -10,17 +10,74 @@
 //! across both sides so the partition halves the data regardless of duplicate
 //! coordinates. A per-tree seeded RNG (`StdRng`) makes builds reproducible.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rand::rngs::StdRng;
 use rand::RngExt;
 use rand::SeedableRng;
 
 use super::distance::ForestScalar;
 use super::KdForestParams;
+use crate::progress::{Cancelled, Progress};
 
 /// Upper bound on the per-node sample used to estimate coordinate variance.
 /// The top-`D` selection only needs the relative ordering of variances, so a
 /// bounded sample keeps construction close to `O(N log N)`.
 const VARIANCE_SAMPLE: usize = 100;
+
+/// How many reports a whole forest build makes, at most.
+///
+/// The unit of progress is a **point placed in a leaf**, of which a build makes
+/// `num_trees * n_points`; a report apiece would be millions of events. So the
+/// counter is shared and the report is made only by the leaf that carries the
+/// count across the next boundary.
+const REPORTS_PER_BUILD: u64 = 200;
+
+/// The one counter every tree of a build reports into.
+///
+/// Per tree would be the natural unit and is the wrong one here: the trees are
+/// built in parallel, so four of them over three seconds are four steps that
+/// all land at the end. Points placed is what moves evenly, and it is cheap at
+/// this granularity -- one relaxed `fetch_add` per leaf, which is one per
+/// `leaf_size` points rather than one per point.
+pub(super) struct BuildProgress<'p, 'a> {
+    progress: &'p Progress<'a>,
+    /// Points placed in a leaf so far, across every tree of the build.
+    placed: AtomicU64,
+    /// `num_trees * n_points`, which is what `placed` runs up to.
+    total: u64,
+    /// How many points pass between two reports.
+    step: u64,
+}
+
+impl<'p, 'a> BuildProgress<'p, 'a> {
+    /// The counter for a build of `num_trees` trees over `n_points` points.
+    pub(super) fn new(progress: &'p Progress<'a>, num_trees: usize, n_points: usize) -> Self {
+        let total = (num_trees as u64).saturating_mul(n_points as u64).max(1);
+        Self {
+            progress,
+            placed: AtomicU64::new(0),
+            total,
+            step: (total / REPORTS_PER_BUILD).max(1),
+        }
+    }
+
+    /// Count `len` points into a leaf, reporting when the count crosses a
+    /// boundary.
+    fn placed(&self, len: u64) {
+        let before = self.placed.fetch_add(len, Ordering::Relaxed);
+        let after = before + len;
+        if before / self.step != after / self.step {
+            self.progress.set_fraction(after as f32 / self.total as f32);
+        }
+    }
+
+    /// Whether the caller has asked the build to stop. One relaxed load, read
+    /// once per leaf.
+    fn is_cancelled(&self) -> bool {
+        self.progress.is_cancelled()
+    }
+}
 
 /// A node in a single kd-tree.
 ///
@@ -74,13 +131,18 @@ struct BuildScratch<S> {
 ///
 /// Each tree gets its own `StdRng` seeded from `base_seed + tree_index`, so
 /// builds are reproducible for a given seed regardless of thread count.
+///
+/// `progress` is the counter every tree of the build shares; it is read and
+/// written once per leaf, and a build that is asked to stop hands back
+/// [`Cancelled`] rather than a tree whose leaves cover some of the points.
 pub(super) fn build_tree<S: ForestScalar>(
     points: &[S],
     dim: usize,
     mut point_ids: Vec<u32>,
     params: &KdForestParams,
     seed: u64,
-) -> Tree<S> {
+    progress: &BuildProgress<'_, '_>,
+) -> Result<Tree<S>, Cancelled> {
     let mut nodes = Vec::new();
     let mut rng = StdRng::seed_from_u64(seed);
     let mut scratch = BuildScratch {
@@ -99,9 +161,10 @@ pub(super) fn build_tree<S: ForestScalar>(
             params,
             &mut rng,
             &mut scratch,
-        );
+            progress,
+        )?;
     }
-    Tree { nodes, point_ids }
+    Ok(Tree { nodes, point_ids })
 }
 
 /// Recursively build the subtree for `ids` (the slice of point ids belonging to
@@ -117,15 +180,24 @@ fn build_node<S: ForestScalar>(
     params: &KdForestParams,
     rng: &mut StdRng,
     scratch: &mut BuildScratch<S>,
-) -> u32 {
+    progress: &BuildProgress<'_, '_>,
+) -> Result<u32, Cancelled> {
     let n = ids.len();
     if n <= params.leaf_size {
+        // The leaf is where a build says where it has got to and hears whether
+        // it should stop: it is the one place the recursion retires points
+        // rather than passing them down, so the count it keeps is the work
+        // behind it.
+        if progress.is_cancelled() {
+            return Err(Cancelled);
+        }
+        progress.placed(n as u64);
         let idx = nodes.len() as u32;
         nodes.push(Node::Leaf {
             start: offset,
             len: n as u32,
         });
-        return idx;
+        return Ok(idx);
     }
 
     let variances = estimate_variances(points, dim, ids, rng, &mut scratch.sums);
@@ -145,7 +217,9 @@ fn build_node<S: ForestScalar>(
     });
 
     let (left_ids, right_ids) = ids.split_at_mut(left_count);
-    let left = build_node(nodes, points, dim, left_ids, offset, params, rng, scratch);
+    let left = build_node(
+        nodes, points, dim, left_ids, offset, params, rng, scratch, progress,
+    )?;
     let right = build_node(
         nodes,
         points,
@@ -155,7 +229,8 @@ fn build_node<S: ForestScalar>(
         params,
         rng,
         scratch,
-    );
+        progress,
+    )?;
 
     nodes[node_idx as usize] = Node::Internal {
         split_dim: split_dim as u16,
@@ -163,7 +238,7 @@ fn build_node<S: ForestScalar>(
         left,
         right,
     };
-    node_idx
+    Ok(node_idx)
 }
 
 /// Estimate per-dimension variance from a bounded random sample of `ids`.

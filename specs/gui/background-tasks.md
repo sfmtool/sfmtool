@@ -14,16 +14,16 @@ one, on one node, with an id of its own. One task runs at a time. The eight
 operations are the three whole-value edits -- `Bundle adjust`, `Convert to
 embedded patches` and `Retriangulate all points` -- and the five the bench runs
 -- `Evaluate track`, `Fit track`, `Set track stage`, `Search descriptors` and
-`Build SIFT index` ([bench.md](bench.md)). All but the last are
+`Build SIFT index` ([bench.md](bench.md)). Every one of them is
 **cancellable**: the four bench steps that read photographs poll the flag on
 either side of the decode and inside the kernels -- between the reading's rounds
 and between the views the localizer renders, which is where a widened search
 spends its time, and in front of the forest query and between the candidates for
 the search; the adjustment polls between its rounds and its iterations, the
-conversion between its three stages and the images of its `.sift` read, and the
-retriangulation between its own three. `Build SIFT index` is not: the
-forest build and the file write are each one call that never asks whether it
-should stop.
+conversion between its three stages and the images of its `.sift` read, the
+retriangulation between its own three, and the index build between the images it
+reads, as each leaf of the forest is placed, and between batches of the blocks
+it writes ([sift-index.md](sift-index.md)).
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.

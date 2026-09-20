@@ -11,14 +11,17 @@
 //! rather than only that one appeared.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use ndarray::{Array2, Array3};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use sfmtool_core::progress::{Event, Progress};
 
 use super::{index_path, SiftIndexState, INDEX_FILE_SUFFIX};
 use crate::action_log::Kind;
+use crate::background::Finished;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::tests::projected_embedded_demo;
 use crate::state::AppState;
@@ -697,4 +700,101 @@ fn closing_lets_go_of_the_index_and_leaves_the_file() {
     assert!(refused.contains("No SIFT index is open"), "{refused}");
     state.refresh_sift_index(id);
     assert_eq!(state.sift_index_state(id), SiftIndexState::None);
+}
+
+// ── What the build reports, and what a cancel leaves ────────────────────
+
+/// Every fraction `job` reported, and what it came back with.
+fn fractions_of(job: crate::background::Job, cancel: Option<&AtomicBool>) -> (Vec<f32>, Finished) {
+    let seen = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Fraction { of_whole } = event {
+            seen.lock().unwrap().push(of_whole);
+        }
+    };
+    let progress = Progress::to(&sink);
+    let progress = match cancel {
+        Some(flag) => progress.cancelled_by(flag),
+        None => progress,
+    };
+    let finished = job(&progress);
+    (seen.into_inner().unwrap(), finished)
+}
+
+/// The bar moves through all three phases. The read is the first quarter, so a
+/// fraction above it is the forest saying something, and one above a half is
+/// the write: a build that only reported its read would leave the bar standing
+/// still for the ten seconds that matter.
+#[test]
+fn a_build_reports_through_the_forest_and_the_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+    let job = state
+        .build_sift_index_job(id, None)
+        .expect("a node with .sift files can be indexed");
+
+    let (fractions, finished) = fractions_of(job, None);
+    assert!(
+        matches!(finished, Finished::SiftIndex { .. }),
+        "the build did not produce an index"
+    );
+    // Not asserted in order: the forest's reports come from rayon's workers,
+    // so two of them can reach one sink in the other order from the one they
+    // were computed in. Making the bar monotone is the collector's, which
+    // clamps to the greatest it has seen
+    // (`specs/gui/operation-progress.md`).
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    assert!(
+        fractions.iter().any(|f| *f > 0.25 && *f < 0.5),
+        "the forest build reported nothing: {fractions:?}"
+    );
+    assert!(
+        fractions.iter().any(|f| *f > 0.5 && *f < 1.0),
+        "the write reported nothing: {fractions:?}"
+    );
+    assert_eq!(
+        fractions.last().copied(),
+        Some(1.0),
+        "a finished build ends at its end"
+    );
+}
+
+/// A cancelled rebuild leaves the index that is there exactly as it was, and
+/// leaves nothing of its own beside it.
+#[test]
+fn a_cancelled_rebuild_leaves_the_index_that_is_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, _) = searchable(dir.path());
+    let path = index_of(dir.path());
+    let before = std::fs::read(&path).expect("the first build wrote it");
+
+    let job = state
+        .build_sift_index_job(id, None)
+        .expect("a node with .sift files can be indexed");
+    let flag = AtomicBool::new(true);
+    let (_, finished) = fractions_of(job, Some(&flag));
+    assert!(
+        matches!(finished, Finished::Cancelled),
+        "the build did not stop"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("still there"),
+        before,
+        "a cancelled rebuild replaced the index it was rebuilding"
+    );
+    // And no half-written file under the name a build writes into.
+    let leftovers: Vec<PathBuf> = std::fs::read_dir(dir.path())
+        .expect("the directory")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|entry| entry.extension().is_some_and(|e| e == "building"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+
+    // The node still has its index open, and it is still the good one.
+    state.refresh_sift_index(id);
+    assert_eq!(state.sift_index_state(id), SiftIndexState::Current);
 }

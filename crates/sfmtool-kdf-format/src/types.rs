@@ -47,6 +47,12 @@ pub enum KdfError {
     /// A SIFT file required by explicit source verification does not exist.
     #[error("source file is missing: {0}")]
     MissingSource(PathBuf),
+    /// The caller asked a write to stop, and it did, so nothing was written.
+    ///
+    /// Carried as a variant with a `From` so that `progress.check_cancel()?`
+    /// propagates out of a write by the same mechanism as every other failure.
+    #[error("{0}")]
+    Cancelled(#[from] sfmtool_progress::Cancelled),
 }
 
 impl From<sfmtool_archive_io::ArchiveIoError> for KdfError {

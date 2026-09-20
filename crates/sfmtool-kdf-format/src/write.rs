@@ -6,10 +6,41 @@ use std::io::{Seek, Write};
 use std::path::Path;
 
 use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
+use sfmtool_progress::Progress;
 use xxhash_rust::xxh3::{xxh3_128, Xxh3};
 use zip::ZipWriter;
 
 use crate::types::*;
+
+/// How the write's wall time divides, as the shares
+/// [`write_kdf_reporting`] gives its six stages: validation, tree packing, the
+/// heading (metadata, image table, origins and the corpus row map), the
+/// descriptor block loop, the geometry block loop, and the packed tree chunks
+/// the content hash closes.
+///
+/// Measured over a 400 k-descriptor, 128-D corpus of four trees with SIFT
+/// sources at the default options, which is the shape the viewer's SIFT index
+/// build writes: 16%, 1%, 5%, 41%, 15%, 15% and a 8% unreported tail, which the
+/// last share absorbs so the bar does not reach its end and stop there. The
+/// descriptor loop dominates because it is the only stage whose input is the
+/// whole corpus at its full width: 128 bytes a feature against the geometry
+/// loop's 24 and the row map's 4. Validation is a sixth of it because it reads
+/// every scalar once and sorts every tree's feature IDs.
+///
+/// A corpus written without [`KdfSiftSources`] carries no geometry and no
+/// origins, and its bar then stands still for those shares rather than
+/// reporting wrongly: the weights are a constant estimate of where the time
+/// goes, and one that is wrong makes the bar uneven rather than untrue.
+const STAGE_SHARES: [f32; 6] = [0.16, 0.02, 0.05, 0.41, 0.15, 0.21];
+
+/// How many block-loop iterations pass between two reports.
+///
+/// A default block is two KiB, so a capture has a couple of hundred thousand of
+/// them, and an event apiece would be a cross-thread wake per block. Two
+/// hundred reports over a stage is more than a bar can show.
+fn report_every(blocks: usize) -> usize {
+    (blocks / 200).max(1)
+}
 
 struct PackedChunk<S: KdfScalar> {
     logical_nodes: Vec<u32>,
@@ -32,20 +63,85 @@ pub fn write_kdf<S: KdfScalar>(
     sources: Option<&KdfSiftSources>,
     options: &KdfWriteOptions,
 ) -> Result<(), KdfError> {
+    write_kdf_reporting(path, data, sources, options, &Progress::none())
+}
+
+/// [`write_kdf`], saying where it has got to and stopping when it is asked to.
+///
+/// A corpus of a few million descriptors is several hundred megabytes through
+/// zstd, which is seconds of work and long enough that a caller drawing a bar
+/// needs to hear from it. What it reports is a fraction of its own range,
+/// weighted by where a write's time goes rather than by how many bytes are
+/// behind it (`STAGE_SHARES`); what it hears back is
+/// [`Progress::is_cancelled`], read between batches of blocks rather than per
+/// block.
+///
+/// A cancelled write is [`KdfError::Cancelled`] and **no file**: the whole
+/// archive is streamed into a temporary sibling and renamed over `path` only
+/// once it is complete, so a write that stops leaves whatever was at `path`
+/// exactly as it was.
+///
+/// ```no_run
+/// use sfmtool_kdf_format::{write_kdf_reporting, KdfForestData, KdfWriteOptions};
+/// use sfmtool_progress::Progress;
+///
+/// # fn example(data: &KdfForestData<'_, u8>) -> Result<(), sfmtool_kdf_format::KdfError> {
+/// write_kdf_reporting(
+///     "corpus.kdf".as_ref(),
+///     data,
+///     None,
+///     &KdfWriteOptions::default(),
+///     &Progress::none(),
+/// )
+/// # }
+/// ```
+pub fn write_kdf_reporting<S: KdfScalar>(
+    path: &Path,
+    data: &KdfForestData<'_, S>,
+    sources: Option<&KdfSiftSources>,
+    options: &KdfWriteOptions,
+    progress: &Progress<'_>,
+) -> Result<(), KdfError> {
     if path.exists() {
         return Err(KdfError::InvalidFormat(format!(
             "destination already exists: {}",
             path.display()
         )));
     }
-    validate_input(data, sources, options)?;
-    let packed: Vec<Vec<PackedChunk<S>>> = data
-        .trees
-        .iter()
-        .map(|t| pack_tree(t, options))
-        .collect::<Result<_, _>>()?;
+    let [checking, packing, heading, descriptors, geometry, chunks] = progress.split(STAGE_SHARES);
+    {
+        let _phase = checking.detail_phase("validate");
+        validate_input(data, sources, options)?;
+    }
+    checking.set_fraction(1.0);
+    checking.check_cancel()?;
+    let packed: Vec<Vec<PackedChunk<S>>> = {
+        let _phase = packing.detail_phase("pack trees");
+        data.trees
+            .iter()
+            .enumerate()
+            .map(|(ti, t)| {
+                let packed = pack_tree(t, options);
+                packing.set_fraction((ti + 1) as f32 / data.trees.len() as f32);
+                packed
+            })
+            .collect::<Result<_, _>>()?
+    };
+    packing.check_cancel()?;
     sfmtool_archive_io::write_atomically(path, |file| {
-        write_into(file, data, sources, options, &packed)
+        write_into(
+            file,
+            data,
+            sources,
+            options,
+            &packed,
+            Shares {
+                heading: &heading,
+                descriptors: &descriptors,
+                geometry: &geometry,
+                chunks: &chunks,
+            },
+        )
     })
 }
 
@@ -392,12 +488,25 @@ fn collect_preorder<S: KdfScalar>(tree: &KdfTree<S>, node: u32, out: &mut Vec<u3
     }
 }
 
+/// The range each of [`write_into`]'s four stages reports within, carved out of
+/// the caller's by [`STAGE_SHARES`].
+///
+/// One struct rather than four parameters, so the stage a range belongs to is
+/// named where it is used rather than counted off at the call.
+struct Shares<'p, 'a> {
+    heading: &'p Progress<'a>,
+    descriptors: &'p Progress<'a>,
+    geometry: &'p Progress<'a>,
+    chunks: &'p Progress<'a>,
+}
+
 fn write_into<W: Write + Seek, S: KdfScalar>(
     writer: W,
     data: &KdfForestData<'_, S>,
     sources: Option<&KdfSiftSources>,
     options: &KdfWriteOptions,
     packed: &[Vec<PackedChunk<S>>],
+    shares: Shares<'_, '_>,
 ) -> Result<(), KdfError> {
     let row_bytes = data
         .dimension
@@ -493,7 +602,11 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         ih.update(&names_raw);
         ih.update(sift_hash_raw);
         let images_digest = ih.digest128();
+        // The image table is written; the origins are the rest of the heading,
+        // bar the row map the next stage opens with.
+        shares.heading.set_fraction(0.2);
         let mut ods = Vec::new();
+        let origin_blocks = src.origins.len().div_ceil(options.origin_block_rows);
         for (b, rows) in src.origins.chunks(options.origin_block_rows).enumerate() {
             let image_indexes: Vec<u32> = rows.iter().map(|o| o.image_index).collect();
             let feature_indexes: Vec<u32> = rows.iter().map(|o| o.image_feature_index).collect();
@@ -518,7 +631,13 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             h.update(a);
             h.update(f);
             ods.push(h.digest128());
+            // A block is 131 072 rows, so a capture has a couple of dozen of
+            // them and each one is worth a report of its own.
+            shares
+                .heading
+                .set_fraction(0.2 + 0.6 * (b + 1) as f32 / origin_blocks as f32);
         }
+        shares.heading.check_cancel()?;
         section_digests.push(images_digest);
         for &digest in &ods {
             section_digests.push(digest);
@@ -568,6 +687,8 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         )?;
         let sd = xxh3_128(raw);
         section_digests.push(sd);
+        shares.heading.set_fraction(1.0);
+        shares.heading.check_cancel()?;
         // One container entry of independent per-block frames, plus the offsets
         // that address them. Each frame is still compressed and hashed exactly
         // as a standalone block entry was, so a block read decodes one frame and
@@ -590,7 +711,10 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         let mut compressor = zstd::bulk::Compressor::new(options.compression_level)?;
         let mut stored = 0u64;
         let mut offsets = vec![0u64];
-        for ids in order.chunks(q) {
+        let blocks = data.feature_count.div_ceil(q);
+        let every = report_every(blocks);
+        let descriptor_phase = shares.descriptors.detail_phase("descriptor blocks");
+        for (b, ids) in order.chunks(q).enumerate() {
             let mut block = Vec::with_capacity(ids.len() * data.dimension);
             for &id in ids {
                 let base = id as usize * data.dimension;
@@ -604,7 +728,18 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             let d = xxh3_128(raw);
             ds.push(d);
             section_digests.push(d);
+            // Between batches rather than between blocks: a block is two KiB of
+            // work, and the flag is worth reading once every couple of hundred
+            // of them.
+            if (b + 1) % every == 0 {
+                shares
+                    .descriptors
+                    .set_fraction((b + 1) as f32 / blocks as f32);
+                shares.descriptors.check_cancel()?;
+            }
         }
+        shares.descriptors.set_fraction(1.0);
+        drop(descriptor_phase);
         let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
         write_binary_entry(
             &mut zip,
@@ -622,7 +757,8 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             let mut gs = Vec::new();
             let mut stored = 0u64;
             let mut offsets = vec![0u64];
-            for ids in order.chunks(q) {
+            let geometry_phase = shares.geometry.detail_phase("geometry blocks");
+            for (b, ids) in order.chunks(q).enumerate() {
                 let block: Vec<FeatureGeometry> =
                     ids.iter().map(|&id| src.geometry[id as usize]).collect();
                 let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
@@ -633,7 +769,13 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 let digest = xxh3_128(raw);
                 gs.push(digest);
                 section_digests.push(digest);
+                if (b + 1) % every == 0 {
+                    shares.geometry.set_fraction((b + 1) as f32 / blocks as f32);
+                    shares.geometry.check_cancel()?;
+                }
             }
+            shares.geometry.set_fraction(1.0);
+            drop(geometry_phase);
             let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
             write_binary_entry(
                 &mut zip,
@@ -649,6 +791,9 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
     };
 
     let mut chunk_digests = Vec::new();
+    let total_chunks: usize = packed.iter().map(Vec::len).sum();
+    let mut written_chunks = 0usize;
+    let chunk_phase = shares.chunks.detail_phase("tree chunks");
     for (ti, chunks) in packed.iter().enumerate() {
         let mut td = Vec::new();
         for (ci, chunk) in chunks.iter().enumerate() {
@@ -701,9 +846,17 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             let d = xxh3_128(&payload);
             td.push(d);
             section_digests.push(d);
+            // A chunk is a megabyte of nodes, so there are hundreds of them
+            // rather than hundreds of thousands, and each is its own report.
+            written_chunks += 1;
+            shares
+                .chunks
+                .set_fraction(written_chunks as f32 / total_chunks as f32);
         }
+        shares.chunks.check_cancel()?;
         chunk_digests.push(td);
     }
+    drop(chunk_phase);
 
     let hashes = ContentHash {
         metadata_xxh128: format_hash(metadata_digest),
