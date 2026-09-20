@@ -96,12 +96,92 @@ fn begin_accounting() -> Instant {
 }
 
 /// Run one locator resolution, counting it and timing it.
+///
+/// **One call here is one `op`, however many platform attempts happen inside
+/// it.** That is what keeps `ops` a deterministic fingerprint of suite *shape*
+/// rather than of how a particular run went: a run that needed a retry reports
+/// the same `ops` as one that did not, and pays for it in `op_ms` where the
+/// time actually went. A retry that incremented `ops` would make the two
+/// indistinguishable from a real change to the tests — and it was exactly a
+/// stable `ops` that localized the `taking_a_camera_in_hand_reaches_a_real_window`
+/// failure to its third operation. Retries announce themselves on stdout
+/// instead; see [`retrying_transient`].
 fn measured<T>(op: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let out = op();
     OPS.fetch_add(1, Ordering::Relaxed);
     OP_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     out
+}
+
+// --- Transient platform failures ---
+//
+// The accessibility APIs are cross-process, and a call can fail because the
+// tree was being rebuilt underneath it rather than because the suite asked for
+// the wrong thing. Those two look identical to `expect`, so the ones that are
+// recoverable are named here and nothing else is retried: a genuine selector
+// mistake must still fail on its first attempt, loudly, instead of spending
+// three budgets discovering the same absence.
+
+/// `UIA_E_TIMEOUT` — the UI Automation layer gave up on a cross-process call.
+/// Says nothing about the app; the call can simply be made again.
+const UIA_E_TIMEOUT: u32 = 0x8013_1505;
+
+/// `UIA_E_ELEMENTNOTAVAILABLE` — the element went away mid-call, which for an
+/// egui app means the frame that owned that node has been replaced. The same
+/// "the tree moved under me" story as a timeout.
+const UIA_E_ELEMENTNOTAVAILABLE: u32 = 0x8004_0201;
+
+/// How many extra attempts a read-only probe gets. Bounded deliberately: a
+/// condition that survives three snapshots is not transient.
+const TRANSIENT_ATTEMPTS: u32 = 3;
+
+/// Whether an error is the platform losing its footing rather than the suite
+/// being wrong.
+///
+/// Compared on the low 32 bits because `code` is an `i64` carrying an HRESULT,
+/// and which of the two spellings of a high-bit-set HRESULT arrives -- the
+/// sign-extended `-2146233083` the failing run printed, or a raw
+/// `0x0000_0000_8013_1505` -- is a detail of how the backend widened it. Both
+/// truncate to the same `u32`.
+fn is_transient(error: &xa11y::Error) -> bool {
+    matches!(
+        error,
+        xa11y::Error::Platform { code, .. }
+            if matches!(*code as u32, UIA_E_TIMEOUT | UIA_E_ELEMENTNOTAVAILABLE)
+    )
+}
+
+/// Re-run a **side-effect-free** probe when the platform reports a transient
+/// failure.
+///
+/// Safe here precisely because the caller has none: resolving a locator twice
+/// costs two snapshots and changes nothing, so an attempt that died mid-call
+/// can simply be made again.
+///
+/// **This must not be extended to a press or a toggle,** and the asymmetry is
+/// the point rather than an oversight — see the note on
+/// [`Probe::press_revealing`]. A retry is announced on stdout so a run that
+/// needed one says so, and is *not* counted as a second `op`; see [`measured`].
+fn retrying_transient<T>(
+    what: &str,
+    mut attempt: impl FnMut() -> xa11y::Result<T>,
+) -> xa11y::Result<T> {
+    for tries in 1..TRANSIENT_ATTEMPTS {
+        match attempt() {
+            Err(error) if is_transient(&error) => {
+                println!(
+                    "UIPROBE RETRY op={what} attempt={} of {TRANSIENT_ATTEMPTS} after {error}",
+                    tries + 1
+                );
+                // The tree is mid-rebuild by assumption, so give the next frame
+                // a chance to land rather than racing the same one again.
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            outcome => return outcome,
+        }
+    }
+    attempt()
 }
 
 /// A [`Locator`] that reports what it costs, wrapping only the methods this
@@ -122,7 +202,7 @@ struct Probe(Locator);
 
 impl Probe {
     fn wait_attached(&self, timeout: Duration) -> xa11y::Result<Element> {
-        measured(|| self.0.wait_attached(timeout))
+        measured(|| retrying_transient("wait_attached", || self.0.wait_attached(timeout)))
     }
 
     fn wait_until(
@@ -130,19 +210,78 @@ impl Probe {
         predicate: impl Fn(Option<&ElementData>) -> bool,
         timeout: Duration,
     ) -> xa11y::Result<Option<Element>> {
-        measured(|| self.0.wait_until(predicate, timeout))
+        measured(|| retrying_transient("wait_until", || self.0.wait_until(&predicate, timeout)))
     }
 
-    fn press(&self) -> xa11y::Result<()> {
-        measured(|| self.0.press())
+    /// Press this element and confirm it revealed `revealed`, pressing once
+    /// more if it did not.
+    ///
+    /// **The only press this type offers, and the asymmetry with the read-only
+    /// probes above is the point rather than an oversight.** Those are wrapped
+    /// in [`retrying_transient`]; a press is not, and must not be. A transient
+    /// error says the *call* did not complete, not that the press did not land,
+    /// and every press this suite makes is a toggle: a menu button that did
+    /// open its menu closes it again on a second press. A blind retry therefore
+    /// turns a recovered timeout into a shut menu, and the test fails later and
+    /// less legibly than it would have here.
+    ///
+    /// So reliability comes from being *idempotent by observation* instead —
+    /// press, look for what the press was supposed to reveal, press again only
+    /// if it is absent. Because the outcome is read off the app rather than off
+    /// the return value, both halves of the ambiguity end the same way: if the
+    /// menu is open, this succeeded, whatever the press reported.
+    ///
+    /// That is what `taking_a_camera_in_hand_reaches_a_real_window` needed on
+    /// run 35477064462, where `UIA_E_TIMEOUT` came back from opening the Edit
+    /// menu a second time while the camera lock was held and the move banner
+    /// was repainting the tree every frame.
+    ///
+    /// Counted as **one** op, including any second press — see [`measured`].
+    ///
+    /// **Returns the element it confirmed, and callers are expected to use
+    /// it.** The confirmation is a full subtree snapshot — around 25 seconds on
+    /// the Windows runner — so handing it back is what keeps this guard free:
+    /// a caller that re-resolved the same selector afterwards would pay for the
+    /// same snapshot twice, which on the job this suite is trying to shrink is
+    /// the wrong trade. Every site that wants the revealed item immediately
+    /// therefore takes it from here rather than looking it up again, and the
+    /// guard costs those sites nothing at all.
+    fn press_revealing(&self, revealed: &Probe, timeout: Duration) -> xa11y::Result<Element> {
+        measured(|| {
+            let first = self.0.press();
+            if let Ok(element) = retrying_transient("press_revealing/confirm", || {
+                revealed.0.wait_attached(timeout)
+            }) {
+                // It opened. A transient error from the press was a report
+                // about the call, not about the app.
+                return Ok(element);
+            }
+            // It did not open, so a press that also failed is the better
+            // diagnosis than anything a second attempt would produce.
+            first?;
+            println!("UIPROBE RETRY op=press_revealing attempt=2 of 2 (nothing was revealed)");
+            self.0.press()?;
+            // The second press is not re-confirmed here: the caller's own next
+            // lookup is the confirmation, and it fails with the selector it
+            // actually wanted rather than with this one.
+            revealed.0.wait_attached(timeout)
+        })
     }
 
+    /// Flip this element's checked state.
+    ///
+    /// Not retried, for the reason spelled out on [`Self::press_revealing`] —
+    /// doubly so here, where a second toggle is *guaranteed* to undo the first
+    /// rather than merely likely to. There is no `press_revealing` equivalent
+    /// because a checkbox reveals nothing: callers confirm the new state with a
+    /// `wait_until` on `states.checked` instead, which already fails loudly if
+    /// the toggle did not land.
     fn toggle(&self) -> xa11y::Result<()> {
         measured(|| self.0.toggle())
     }
 
     fn count(&self) -> xa11y::Result<usize> {
-        measured(|| self.0.count())
+        measured(|| retrying_transient("count", || self.0.count()))
     }
 }
 
@@ -613,11 +752,13 @@ fn file_menu_items() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
 
+    // Opening the menu confirms `Open...` on the way, so that item is already
+    // proven present and the loop covers the rest.
     app.probe(r#"button[name="File"]"#)
-        .press()
-        .expect("press File menu button");
+        .press_revealing(&app.probe(r#"button[name="Open..."]"#), CONTENT_TIMEOUT)
+        .expect("File menu item 'Open...' did not appear");
 
-    for item in ["Open...", "Close All", "Load Demo Data...", "Quit"] {
+    for item in ["Close All", "Load Demo Data...", "Quit"] {
         app.probe(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
@@ -643,13 +784,17 @@ fn edit_menu_items() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
 
+    // Opening the menu confirms `Delete Image`, so the loop covers the rest.
     app.probe(r#"button[name="Edit"]"#)
-        .press()
-        .expect("press Edit menu button");
+        .press_revealing(
+            &app.probe(r#"button[name="Delete Image"]"#),
+            CONTENT_TIMEOUT,
+        )
+        .expect("Edit menu item 'Delete Image' did not appear");
 
     // Named without their shortcuts, for the reason `file_menu_items` gives:
     // the shortcut is in the button's text and is spelled by the platform.
-    for item in ["Delete Image", "Cancel Camera Move", "Bundle Adjust..."] {
+    for item in ["Cancel Camera Move", "Bundle Adjust..."] {
         app.probe(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"));
@@ -679,12 +824,10 @@ fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
     let _guard = Guard::demo();
     let app = attach(_guard.child());
 
+    // The menu opening confirms `Save As...`, which is this test's first
+    // assertion; only `Save` is left to look up.
     app.probe(r#"button[name="File"]"#)
-        .press()
-        .expect("press File menu button");
-
-    app.probe(r#"button[name^="Save As..."]"#)
-        .wait_attached(CONTENT_TIMEOUT)
+        .press_revealing(&app.probe(r#"button[name^="Save As..."]"#), CONTENT_TIMEOUT)
         .expect("File menu item 'Save As...' did not appear");
     app.probe(r#"button[name^="Save "]"#)
         .wait_attached(CONTENT_TIMEOUT)
@@ -702,10 +845,7 @@ fn quit_menu_item_exits_the_process() {
     let app = attach(guard.child());
 
     app.probe(r#"button[name="File"]"#)
-        .press()
-        .expect("press File menu button");
-    app.probe(r#"button[name="Quit"]"#)
-        .wait_attached(CONTENT_TIMEOUT)
+        .press_revealing(&app.probe(r#"button[name="Quit"]"#), CONTENT_TIMEOUT)
         .expect("Quit item did not appear")
         .press()
         .expect("press Quit");
@@ -726,10 +866,10 @@ fn quit_menu_item_exits_the_process() {
 /// asserts on what the menu route itself produces.
 fn load_demo_data(app: &App) {
     app.probe(r#"button[name="File"]"#)
-        .press()
-        .expect("press File menu button");
-    app.probe(r#"button[name="Load Demo Data..."]"#)
-        .wait_attached(CONTENT_TIMEOUT)
+        .press_revealing(
+            &app.probe(r#"button[name="Load Demo Data..."]"#),
+            CONTENT_TIMEOUT,
+        )
         .expect("Load Demo Data item did not appear")
         .press()
         .expect("press Load Demo Data");
@@ -1609,11 +1749,19 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
     );
 
     // The menu button toggles, so one opening is one place to look: reopening
-    // it to find a second item would close it instead.
-    let open_edit_menu = || {
+    // it to find a second item would close it instead. That is also why the
+    // press is confirmed against the item the caller is about to want rather
+    // than retried on failure -- `Probe::press_revealing` carries the whole
+    // argument, and this is the call site that made it necessary.
+    // Hands back the item it confirmed, so the caller does not resolve the same
+    // selector a second time -- one snapshot per menu opening rather than two.
+    let open_edit_menu = |expected: &str| {
         app.probe(r#"button[name="Edit"]"#)
-            .press()
-            .expect("press Edit menu button");
+            .press_revealing(
+                &app.probe(&format!(r#"button[name^="{expected}"]"#)),
+                CONTENT_TIMEOUT,
+            )
+            .unwrap_or_else(|_| panic!("Edit menu item '{expected}' did not appear"))
     };
     // Matched on a name *prefix*, for the reason `edit_menu_items` gives: both
     // spellings of the Move Camera item carry the `M` shortcut in the button's
@@ -1653,16 +1801,18 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
         }
     };
 
-    open_edit_menu();
-    edit_item("Move Camera")
+    open_edit_menu("Move Camera")
         .press()
         .expect("press Edit menu item 'Move Camera'");
     wait_for_line("Moving the camera of image_000.jpg");
 
     // One opening for both: with a lock held the same entry commits rather
-    // than takes, and the entry beside it gives the camera back.
-    open_edit_menu();
-    edit_item("Commit Camera Move");
+    // than takes, and the entry beside it gives the camera back. Opening on
+    // `Commit Camera Move` is therefore this half's first assertion -- that the
+    // held lock changed what the entry says -- and the element it hands back is
+    // deliberately dropped, because the item this test goes on to press is the
+    // one beside it.
+    open_edit_menu("Commit Camera Move");
     edit_item("Cancel Camera Move")
         .press()
         .expect("press Edit menu item 'Cancel Camera Move'");

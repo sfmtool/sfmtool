@@ -532,8 +532,8 @@ drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
 
 ```text
-UIPROBE test=file_menu_items launch_ms=886 ops=5 op_ms=3732 total_ms=4733
-UIPROBE TOTAL tests=19 launch_ms=19559 ops=45 op_ms=29234 total_ms=53012 mean_launch_ms=1029 mean_op_ms=649
+UIPROBE test=file_menu_items launch_ms=680 ops=4 op_ms=2959 total_ms=3724
+UIPROBE TOTAL tests=19 launch_ms=16917 ops=38 op_ms=21909 total_ms=42384 mean_launch_ms=890 mean_op_ms=576
 ```
 
 `launch_ms` is the process spawn, GPU init and window registration up to the
@@ -554,6 +554,40 @@ guard, which is sound only because `UI_TEST_LOCK` keeps exactly one guard
 alive at a time. All three invocations of the suite pass `--nocapture`, since
 libtest discards a passing test's stdout and these lines are wanted on green
 runs above all.
+
+**A cross-process call can fail because the tree moved, not because the suite
+was wrong, and the two are guarded differently.** The read-only probes —
+`wait_attached`, `wait_until`, `count` — retry a bounded number of times when
+the platform returns a specifically *transient* HRESULT (`UIA_E_TIMEOUT`,
+`UIA_E_ELEMENTNOTAVAILABLE`), which is free because resolving a locator twice
+changes nothing. Only those codes: a selector that names something the app does
+not have must still fail on its first attempt rather than spend three budgets
+rediscovering the same absence.
+
+A **press is never retried that way**, and the asymmetry is load-bearing. A
+transient error says the call did not complete, not that the press did not
+land, and every press the suite makes is a toggle — a menu button that did open
+its menu closes it again on a second press, so a blind retry converts a
+recovered timeout into a shut menu and a later, more confusing failure. Presses
+are made reliable by being *idempotent by observation* instead: `press_revealing`
+presses, looks for the item the press was supposed to reveal, and presses again
+only if it is absent, so a press that worked while reporting `UIA_E_TIMEOUT`
+succeeds. Every menu this suite opens goes through it. A checkbox has no
+equivalent because it reveals nothing; its callers confirm `states.checked` with
+a `wait_until`, which already fails loudly if the toggle did not land.
+
+**That confirmation is returned, not discarded, and this is what makes the guard
+free.** Confirming costs a full subtree snapshot — ~25s on the Windows runner —
+so `press_revealing` hands the element back and every call site that wants the
+revealed item takes it from there instead of resolving the same selector again.
+A menu opening is therefore one snapshot rather than two, and the sites that
+used to open a menu and then look up the item they had just proven present now
+do strictly less work than before the guard existed.
+
+Retries do not disturb the accounting. One wrapper call is one `op` however many
+platform attempts happen inside it, so `ops` stays a deterministic fingerprint
+of suite *shape* and the retry time lands in `op_ms` where it was spent. A run
+that needed a retry says so with a `UIPROBE RETRY` line instead.
 
 **Whatever a test puts outside its own process is the lock's business too.** The
 `Guard` that holds the mutex owns the viewer process *and* anything the test
