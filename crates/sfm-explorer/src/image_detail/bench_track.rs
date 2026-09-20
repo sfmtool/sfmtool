@@ -44,7 +44,7 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::ImageTable;
 
 use crate::bench::geometry::{self, PatchEdit};
-use crate::bench::verdict_color;
+use crate::bench::{distance_to_segment, resize_cursor, verdict_color};
 use sfmtool_core::bench::Edge;
 use sfmtool_core::EditedReconstruction;
 
@@ -249,20 +249,6 @@ impl Outline {
                 r.union(Rect::from_pos(*point))
             }))
         })
-    }
-
-    /// Which edge of the patch's square the `k`th edge of the boundary is.
-    ///
-    /// The boundary walks the corners `(-1, -1)`, `(1, -1)`, `(1, 1)`,
-    /// `(-1, 1)`, so its first edge runs along `t = -1` and its third along
-    /// `t = +1`; the other two are `s = ±1`.
-    fn edge_of(k: usize) -> Edge {
-        match k {
-            0 => Edge::MinusV,
-            1 => Edge::PlusU,
-            2 => Edge::PlusV,
-            _ => Edge::MinusU,
-        }
     }
 }
 
@@ -478,7 +464,7 @@ impl Layer {
                         distance,
                         Handle::Edge {
                             observation: outline.observation,
-                            edge: Outline::edge_of(edge),
+                            edge: geometry::edge_of(edge),
                         },
                     );
                 }
@@ -503,7 +489,7 @@ impl Layer {
                 .iter()
                 .find(|outline| outline.observation == observation)
                 .and_then(|outline| {
-                    let k = (0..4).find(|k| Outline::edge_of(*k) == edge)?;
+                    let k = (0..4).find(|k| geometry::edge_of(*k) == edge)?;
                     let points = outline.edge(k);
                     let (first, last) = (points.first()?, points.last()?);
                     Some(resize_cursor(*last - *first))
@@ -808,37 +794,6 @@ fn distance_to_polyline(points: &[Pos2], pos: Pos2) -> Option<f32> {
         .fold(None, |best: Option<f32>, d| {
             Some(best.map_or(d, |best| best.min(d)))
         })
-}
-
-/// The distance from `pos` to the segment `a`-`b`.
-fn distance_to_segment(a: Pos2, b: Pos2, pos: Pos2) -> f32 {
-    let along = b - a;
-    let length_sq = along.length_sq();
-    if length_sq <= f32::EPSILON {
-        return (pos - a).length();
-    }
-    let t = ((pos - a).dot(along) / length_sq).clamp(0.0, 1.0);
-    (pos - (a + along * t)).length()
-}
-
-/// The resize cursor an edge running in `direction` on screen asks for.
-///
-/// A near-horizontal edge is moved up and down, so it takes the vertical
-/// resize cursor; a near-vertical one takes the horizontal. In between, the
-/// diagonal whose slope the edge has: the raster's `y` runs downward, so an
-/// edge sloping down to the right runs north-west to south-east.
-fn resize_cursor(direction: Vec2) -> CursorIcon {
-    if direction.length_sq() <= f32::EPSILON {
-        return CursorIcon::Move;
-    }
-    let mut angle = direction.y.atan2(direction.x).to_degrees();
-    angle = angle.rem_euclid(180.0);
-    match angle {
-        a if a < 22.5 || a >= 157.5 => CursorIcon::ResizeVertical,
-        a if a < 67.5 => CursorIcon::ResizeNwSe,
-        a if a < 112.5 => CursorIcon::ResizeHorizontal,
-        _ => CursorIcon::ResizeNeSw,
-    }
 }
 
 /// A small arc with an arrowhead, drawn beside a hovered corner to say that

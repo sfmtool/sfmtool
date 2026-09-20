@@ -191,22 +191,29 @@ impl TabContext<'_> {
         // the Image Detail panel's own bench value is read out.
         let active = self.state.selected_recon.and_then(|id| {
             let bench = self.state.bench(id)?;
-            bench
-                .track(crate::bench::active_track_label(bench)?)
-                .cloned()
+            let label = crate::bench::active_track_label(bench)?.to_string();
+            let track = bench.track(&label).cloned()?;
+            // The row Track Edit has selected, which the figure draws larger:
+            // read here because the panel is a sibling field of the state the
+            // viewport borrows.
+            let selected = self.track_edit.selected_row(id, &label);
+            Some((label, track, selected))
         });
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            let bench = active
-                .as_ref()
-                .map(|track| crate::viewer_3d::bench_track::BenchTrack {
+            let bench = active.as_ref().map(|(_, track, selected)| {
+                crate::viewer_3d::bench_track::BenchTrack {
+                    node: node.id,
                     track,
                     edited: node.edited(),
                     transform: &node.transform,
-                });
+                    selected: *selected,
+                    busy: busy.is_some(),
+                }
+            });
             self.viewer_3d.show(
                 ui,
                 node,
@@ -227,6 +234,11 @@ impl TabContext<'_> {
                 bench,
                 &mut self.state.action_log,
             );
+            // A gesture over the bench figure's handles: the patch slid,
+            // resized or turned, or one of its marks clicked. Applied here
+            // rather than in the viewport because both halves need the state
+            // mutably, and it is borrowed out of for the whole of that call.
+            self.apply_bench_gesture(active.as_ref().map(|(label, _, _)| label.as_str()));
         } else {
             // Nothing selected is nothing on a bench: the figure would
             // otherwise hang in the scene after the node that held it closed.
@@ -246,6 +258,36 @@ impl TabContext<'_> {
                     ui.label("or File > Load Demo Data to see sample data.");
                 });
             });
+        }
+    }
+
+    /// Carry out what a drag or a click over the 3D viewer's bench figure asked
+    /// for, on the track called `label`.
+    ///
+    /// One version per drag, through `AppState::edit_bench_patch` -- the call
+    /// the wire's patch tools and the Image Detail panel's handles all make, so
+    /// a gesture out in the world and one over a photograph are the same step
+    /// with the same sentence. A click on a mark selects that row in Track Edit,
+    /// as clicking a mark there does: the mark and the row are one observation.
+    fn apply_bench_gesture(&mut self, label: Option<&str>) {
+        use crate::viewer_3d::bench_track::BenchGesture;
+        let Some(gesture) = self.viewer_3d.bench_gesture.take() else {
+            return;
+        };
+        let (Some(id), Some(label)) = (self.state.selected_recon, label) else {
+            return;
+        };
+        match gesture {
+            BenchGesture::Edit(edit) => {
+                if let Err(why) = self.state.edit_bench_patch(id, label, &edit) {
+                    self.state
+                        .action_log
+                        .fail(crate::action_log::Kind::Bench, why);
+                }
+            }
+            BenchGesture::SelectRow(observation) => {
+                self.track_edit.select_row(id, label, observation);
+            }
         }
     }
 

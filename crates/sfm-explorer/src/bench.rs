@@ -73,6 +73,43 @@ pub(crate) const CANDIDATE_COLOR: egui::Color32 = egui::Color32::from_rgb(170, 1
 /// [`IN_COLOR`]'s companion for an observation judged out.
 pub(crate) const OUT_COLOR: egui::Color32 = egui::Color32::from_rgb(130, 104, 150);
 
+/// The distance from `pos` to the segment `a`-`b`, in panel px.
+///
+/// Here rather than in either panel because both bench layers measure an edge's
+/// reach with it: the Image Detail layer against the projected boundary's
+/// polyline, and the 3D viewer's against the square's four chords.
+pub(crate) fn distance_to_segment(a: egui::Pos2, b: egui::Pos2, pos: egui::Pos2) -> f32 {
+    let along = b - a;
+    let length_sq = along.length_sq();
+    if length_sq <= f32::EPSILON {
+        return (pos - a).length();
+    }
+    let t = ((pos - a).dot(along) / length_sq).clamp(0.0, 1.0);
+    (pos - (a + along * t)).length()
+}
+
+/// The resize cursor an edge running in `direction` on screen asks for.
+///
+/// A near-horizontal edge is moved up and down, so it takes the vertical resize
+/// cursor; a near-vertical one takes the horizontal. In between, the diagonal
+/// whose slope the edge has: the raster's `y` runs downward, so an edge sloping
+/// down to the right runs north-west to south-east. Shared by both bench
+/// layers, because what names the cursor is where the edge is on the screen and
+/// not which panel drew it.
+pub(crate) fn resize_cursor(direction: egui::Vec2) -> egui::CursorIcon {
+    if direction.length_sq() <= f32::EPSILON {
+        return egui::CursorIcon::Move;
+    }
+    let mut angle = direction.y.atan2(direction.x).to_degrees();
+    angle = angle.rem_euclid(180.0);
+    match angle {
+        a if a < 22.5 || a >= 157.5 => egui::CursorIcon::ResizeVertical,
+        a if a < 67.5 => egui::CursorIcon::ResizeNwSe,
+        a if a < 112.5 => egui::CursorIcon::ResizeHorizontal,
+        _ => egui::CursorIcon::ResizeNeSw,
+    }
+}
+
 /// The colour one verdict is drawn in, wherever it is drawn.
 pub(crate) fn verdict_color(verdict: Verdict) -> egui::Color32 {
     match verdict {
@@ -542,6 +579,15 @@ impl AppState {
                     clamp_note(report.clamped_from, report.pixel)
                 )
             }
+            // The same sentence a pixel slide writes, minus the clamp note: a
+            // place in the world was not brought inside any photograph.
+            geometry::EditReport::SlidTo(report) => {
+                let centre = report.center;
+                format!(
+                    "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3})",
+                    report.moved, centre.x, centre.y, centre.z
+                )
+            }
             geometry::EditReport::Moved(report) => {
                 let name = self.image_name(ImageRef::new(id, report.image as usize));
                 let moved = report
@@ -576,7 +622,10 @@ impl AppState {
     /// In the pixels of the sighting the resize was named at, because a world
     /// half-length says nothing to someone looking at a photograph; in world
     /// units only when the gesture named no sighting or the patch does not
-    /// project into its image. `at` is an **observation** index, not an image:
+    /// project into its image. A resize in the **3D viewer** names none: the
+    /// square dragged there is the surfel itself, in the world, so the world
+    /// half-length is the honest number and no photograph is picked to stand
+    /// in for it. `at` is an **observation** index, not an image:
     /// the size a person reads off an outline is the size of the outline drawn
     /// at that sighting, which is the surfel re-anchored on it.
     fn frame_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {

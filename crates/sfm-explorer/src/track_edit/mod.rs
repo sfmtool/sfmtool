@@ -230,6 +230,23 @@ impl TrackEdit {
         self.selected_rows = vec![observation];
     }
 
+    /// The one observation row selected on `label`'s track of `id`, when
+    /// exactly one is.
+    ///
+    /// What the 3D viewer's bench layer draws larger, so a row picked here can
+    /// be found out in the world and a mark picked there can be seen to be this
+    /// row. A multi-row selection names no single mark, so it names none.
+    pub(crate) fn selected_row(&self, id: ReconId, label: &str) -> Option<usize> {
+        let (of, item) = self.selection_of.as_ref()?;
+        if *of != id || item != label {
+            return None;
+        }
+        match self.selected_rows.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
     /// Drop everything cached for a reconstruction that has left the scene.
     pub fn forget_recon(&mut self, id: ReconId) {
         self.tiles.clear();

@@ -20,15 +20,18 @@
 //! left for this module is the two readings the core steps do not take as
 //! inputs: the turn a corner drag swept, and the size a sentence reports.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use sfmtool_core::bench::{
     self, Edge, EditableTrack, MoveObservationReport, Observation, ResizeReport, RotateFrameReport,
-    ShapeReport, TrackEditError, TranslateFrameReport,
+    ShapeReport, TrackEditError, TranslateFrameReport, TranslateToReport,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{EditedReconstruction, ImageTable};
+
+#[cfg(test)]
+mod tests;
 
 /// An in-plane offset this small names no direction, so no turn can be read off
 /// it.
@@ -69,6 +72,23 @@ pub(crate) enum PatchEdit {
         /// Where its midpoint should land, in that image's own px.
         pixel: [f64; 2],
     },
+    /// Slide the track-stage surfel across its own plane until its centre sits
+    /// at this place. Every sighting follows.
+    ///
+    /// The 3D viewport's centre-dot drag, where there is no photograph to name
+    /// a pixel of and the square a person takes hold of is the surfel itself.
+    SlideTo {
+        /// Where, in the reconstruction's own coordinates.
+        point: [f64; 3],
+    },
+    /// Put one edge of the surfel's square at this place, with the opposite
+    /// edge left where it is. The 3D viewport's edge drag.
+    ResizeFromEdgeTo {
+        /// Which edge was grabbed.
+        edge: Edge,
+        /// Where it should lie, in the reconstruction's own coordinates.
+        point: [f64; 3],
+    },
     /// Turn the track-stage surfel by this many radians about its normal.
     Rotate {
         /// The turn, positive about the outward normal.
@@ -89,6 +109,8 @@ pub(crate) enum PatchEdit {
 pub(crate) enum EditReport {
     /// The surfel slid across its plane, every sighting following.
     Translated(TranslateFrameReport),
+    /// The same slide, named as a place in the world rather than as a pixel.
+    SlidTo(TranslateToReport),
     /// One sighting placed by hand.
     Moved(MoveObservationReport),
     /// The patch resized by one of its edges.
@@ -121,6 +143,7 @@ impl EditReport {
     pub(crate) fn changed(&self) -> bool {
         match self {
             EditReport::Translated(report) => report.changed,
+            EditReport::SlidTo(report) => report.changed,
             EditReport::Moved(report) => report.changed,
             EditReport::Resized(report) => report.changed,
             EditReport::Rotated(report) => report.changed,
@@ -140,7 +163,7 @@ impl EditReport {
             EditReport::Translated(report) => Some(report.pixel),
             EditReport::Moved(report) => Some(report.pixel),
             EditReport::Resized(report) => report.pixel,
-            EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+            EditReport::SlidTo(_) | EditReport::Rotated(_) | EditReport::Turned { .. } => None,
         }
     }
 
@@ -151,7 +174,7 @@ impl EditReport {
             EditReport::Translated(report) => report.clamped_from,
             EditReport::Moved(report) => report.clamped_from,
             EditReport::Resized(report) => report.clamped_from,
-            EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+            EditReport::SlidTo(_) | EditReport::Rotated(_) | EditReport::Turned { .. } => None,
         }
     }
 
@@ -163,7 +186,7 @@ impl EditReport {
     /// which gesture it was without a version to read it off.
     pub(crate) fn no_effect_sentence(&self, label: &str) -> String {
         match self {
-            EditReport::Translated(_) => {
+            EditReport::Translated(_) | EditReport::SlidTo(_) => {
                 format!("Moved {label}: no effect, the patch already sits there")
             }
             EditReport::Moved(report) => format!(
@@ -210,6 +233,15 @@ pub(crate) fn apply(
             pixel,
         } => {
             let (next, report) = bench::resize_from_edge(track, edited, observation, edge, pixel)?;
+            Ok((next, EditReport::Resized(report)))
+        }
+        PatchEdit::SlideTo { point } => {
+            let (next, report) = bench::translate_frame_to(track, edited, Point3::from(point))?;
+            Ok((next, EditReport::SlidTo(report)))
+        }
+        PatchEdit::ResizeFromEdgeTo { edge, point } => {
+            let (next, report) =
+                bench::resize_from_edge_to(track, edited, edge, Point3::from(point))?;
             Ok((next, EditReport::Resized(report)))
         }
         PatchEdit::Rotate { angle_rad } => {
@@ -371,6 +403,133 @@ pub(crate) fn pixel_turn_between(position: [f64; 2], from: [f64; 2], to: [f64; 2
         return None;
     }
     Some(wrapped(now.1.atan2(now.0) - start.1.atan2(start.0)))
+}
+
+/// Which edge of the patch's square the `k`th edge of its boundary is.
+///
+/// The boundary walks the corners `(-1, -1)`, `(1, -1)`, `(1, 1)`, `(-1, 1)`,
+/// so its first edge runs along `t = -1` and its third along `t = +1`; the other
+/// two are `s = ±1`. Here rather than in either layer, because both draw the
+/// square in that order and a pointer on the `k`th edge has to name the same
+/// edge to the same core step whichever panel it is in.
+pub(crate) fn edge_of(k: usize) -> Edge {
+    match k {
+        0 => Edge::MinusV,
+        1 => Edge::PlusU,
+        2 => Edge::PlusV,
+        _ => Edge::MinusU,
+    }
+}
+
+// ---- Reading a pointer of the 3D viewport against a patch ------------------
+
+/// How square-on the frame's plane has to be seen before a pointer can be read
+/// against it, in degrees.
+///
+/// Three of the viewport's handles -- the dot, an edge and a corner -- name a
+/// point of that plane, and a plane seen edge-on turns a pixel of pointer motion
+/// into an unbounded distance along it. Under this angle they take no press at
+/// all, which is a refusal the person can see (the figure is a line) rather than
+/// a patch flung across the reconstruction.
+pub(crate) const MIN_PLANE_ANGLE_DEG: f64 = 5.0;
+
+/// How far from a direction patch's bearing a pointer may point and still name a
+/// place on its tangent plane, in degrees.
+///
+/// The tangent plane is never edge-on, the viewer being in effect at the
+/// sphere's centre, so this is the one refusal a track at infinity has: at a
+/// right angle to the bearing `r . d` goes to zero and the tangent point runs
+/// off to infinity.
+pub(crate) const MAX_BEARING_ANGLE_DEG: f64 = 85.0;
+
+/// A ray direction this short names no direction.
+const MIN_DIRECTION: f64 = 1e-12;
+
+/// Where the ray from `origin` along `direction` meets the frame, in the
+/// frame's own coordinates.
+///
+/// The counterpart of `OrientedPatch::keypoint_plane_offset` for a pointer that
+/// is already a ray rather than a pixel of a photograph, and the one place the
+/// 3D viewport's three plane handles read the pointer.
+///
+/// For a finite frame this is the ray's meeting with the plane the square lies
+/// in, in front of the eye. For a **direction patch** (`w == 0`) the origin
+/// drops out -- a direction has no parallax, and the viewer is in effect at the
+/// sphere's centre -- so what meets the tangent plane is the ray's direction
+/// alone, at `r / (r . d)`, which is the same reading an observation's keypoint
+/// gets. `None` when the ray runs along the plane, meets it behind the eye, or
+/// points more than [`MAX_BEARING_ANGLE_DEG`] from the bearing.
+pub(crate) fn plane_point(
+    frame: &OrientedPatch,
+    origin: Point3<f64>,
+    direction: Vector3<f64>,
+) -> Option<Point3<f64>> {
+    let length = direction.norm();
+    if !length.is_finite() || length < MIN_DIRECTION {
+        return None;
+    }
+    let ray = direction / length;
+    if frame.w == 0.0 {
+        let bearing = frame.center.coords.normalize();
+        let along = ray.dot(&bearing);
+        if along <= MAX_BEARING_ANGLE_DEG.to_radians().cos() {
+            return None;
+        }
+        return Some(Point3::from(ray / ray.dot(&frame.center.coords)));
+    }
+    let normal = frame.normal();
+    let denominator = ray.dot(&normal);
+    if denominator.abs() < MIN_DIRECTION {
+        return None;
+    }
+    let distance = (frame.center - origin).dot(&normal) / denominator;
+    (distance > 0.0 && distance.is_finite()).then(|| origin + ray * distance)
+}
+
+/// Whether the frame's plane is too near edge-on from `eye` for a pointer to be
+/// read against it: the angle between the view ray through the centre and the
+/// plane is under [`MIN_PLANE_ANGLE_DEG`].
+///
+/// Never true for a **direction patch**, whose tangent plane faces the eye by
+/// construction: the bearing is read rotation-only, so the viewer stands at the
+/// centre of the sphere it is tangent to.
+pub(crate) fn plane_is_edge_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool {
+    if frame.w == 0.0 {
+        return false;
+    }
+    let view = frame.center - eye;
+    let length = view.norm();
+    if !length.is_finite() || length < MIN_DIRECTION {
+        return true;
+    }
+    // The sine of the angle between the ray and the plane is its cosine against
+    // the normal, so this is that angle without an `asin`.
+    (view.dot(&frame.normal()) / length).abs() < MIN_PLANE_ANGLE_DEG.to_radians().sin()
+}
+
+/// The turn, in radians about the patch's outward normal, that carries the
+/// in-plane direction of `from` onto that of `to`, both read about the frame's
+/// centre.
+///
+/// The 3D viewport's corner drag, and the counterpart of [`turn_between`] for a
+/// pointer that is already a point of the patch's plane rather than a pixel.
+/// `None` when either place is the centre itself, where no direction is named.
+pub(crate) fn turn_on_plane(
+    frame: &OrientedPatch,
+    from: Point3<f64>,
+    to: Point3<f64>,
+) -> Option<f64> {
+    let start = on_axes(frame, from)?;
+    let now = on_axes(frame, to)?;
+    Some(wrapped(now.1.atan2(now.0) - start.1.atan2(start.0)))
+}
+
+/// One place's offset from the frame's centre, on the frame's own axes, or
+/// `None` when it names no direction in the plane.
+fn on_axes(frame: &OrientedPatch, point: Point3<f64>) -> Option<(f64, f64)> {
+    let offset = point - frame.center;
+    let pair = (offset.dot(&frame.u_axis), offset.dot(&frame.v_axis));
+    (pair.0.hypot(pair.1) > MIN_OFFSET).then_some(pair)
 }
 
 /// How wide the patch is in this image's own pixels: how far the projection of

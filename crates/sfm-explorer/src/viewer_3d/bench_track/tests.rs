@@ -38,15 +38,25 @@ pub(crate) fn figure_of(
     id: crate::scene::ReconId,
     track: &EditableTrack,
 ) -> Option<Figure> {
+    figure(&bench_of(state, id, track), EYE)
+}
+
+/// The value the dock hands the viewport for `track` on `id`'s node, with no
+/// row selected and nothing holding the node.
+pub(crate) fn bench_of<'a>(
+    state: &'a AppState,
+    id: crate::scene::ReconId,
+    track: &'a EditableTrack,
+) -> BenchTrack<'a> {
     let node = state.node(id).expect("a loaded node");
-    figure(
-        &BenchTrack {
-            track,
-            edited: node.edited(),
-            transform: &node.transform,
-        },
-        EYE,
-    )
+    BenchTrack {
+        node: id,
+        track,
+        edited: node.edited(),
+        transform: &node.transform,
+        selected: None,
+        busy: false,
+    }
 }
 
 /// The staged track, as a value to edit before asking for its figure.

@@ -456,6 +456,45 @@ impl ViewportCamera {
         Some(Pos2::new(screen_x, screen_y))
     }
 
+    /// Where a homogeneous world point lands in `rect`, or `None` when it is
+    /// behind the eye.
+    ///
+    /// `w` is `1.0` for a place and `0.0` for a direction, and it decides the
+    /// projection: a direction is projected **rotation-only**, with the camera's
+    /// translation left out, so it has no parallax and keeps its place on the
+    /// sky as the viewer moves. That is how the point cloud draws a point at
+    /// infinity and how the bench figure's pass draws a track at infinity, so a
+    /// hit test run on the CPU has to read them the same way.
+    ///
+    /// It is the same matrices the rest of the viewport projects through, and
+    /// the rotation-only reading needs nothing added to them: the view matrix's
+    /// translation lives in its fourth column, which a `w` of zero multiplies
+    /// away.
+    pub fn project_homogeneous(&self, xyz: Vector3<f64>, w: f64, rect: Rect) -> Option<Pos2> {
+        let aspect = rect.width() as f64 / rect.height() as f64;
+        let mvp = self.projection_matrix(aspect) * self.view_matrix();
+        let clip = mvp * Vector4::new(xyz.x, xyz.y, xyz.z, w);
+        // The camera looks down its own -Z, so `clip.w`, which is `-z_view`, is
+        // positive only in front of it.
+        if clip.w.is_nan() || clip.w <= 0.0 {
+            return None;
+        }
+        Some(Pos2::new(
+            rect.center().x + (clip.x / clip.w) as f32 * rect.width() * 0.5,
+            rect.center().y - (clip.y / clip.w) as f32 * rect.height() * 0.5,
+        ))
+    }
+
+    /// The ray the pointer casts from the eye through `pos`, as `(origin,
+    /// direction)` in world coordinates.
+    ///
+    /// The direction is not normalized: what reads it meets it with a plane or a
+    /// sphere, and both of those divide it out.
+    pub fn ray_through(&self, pos: Pos2, rect: Rect) -> (Point3<f64>, Vector3<f64>) {
+        let origin = self.position();
+        (origin, self.unproject(pos.x, pos.y, 1.0, rect) - origin)
+    }
+
     /// Unprojects a screen pixel position and linear depth to world space.
     ///
     /// Given a screen pixel `(sx, sy)` within `rect` and a positive linear

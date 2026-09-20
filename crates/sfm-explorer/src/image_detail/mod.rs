@@ -121,26 +121,6 @@ pub struct ImageDetail {
     point_gesture: Option<PointGesture>,
 }
 
-/// Whether a mouse button other than the primary one is down.
-///
-/// Windows routes every button through `WM_POINTER*` and reports them all as
-/// egui's Primary (`EnableMouseInPointer`), so egui alone cannot say which
-/// button a press was. The bench layer has to know, because a secondary press
-/// is this panel's right-drag zoom and its context menu, and neither of those
-/// is a handle being grabbed. Elsewhere there is nothing to disambiguate.
-fn other_mouse_button_down() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let state = crate::platform::windows::mouse_button_state();
-        state & (crate::platform::windows::BUTTON_MIDDLE | crate::platform::windows::BUTTON_RIGHT)
-            != 0
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
 /// A feature to draw on the image detail panel.
 struct DisplayFeature {
     /// Feature position in image pixel coordinates (x, y).
@@ -407,7 +387,7 @@ impl ImageDetail {
         // geometry this frame starts from -- which is the geometry the person
         // pressed on, since nothing has panned yet -- and from that moment the
         // pan is suppressed.
-        if self.bench_drag.is_none() && pressed && !other_mouse_button_down() {
+        if self.bench_drag.is_none() && pressed && !crate::platform::other_mouse_button_down() {
             if let Some((press, handle)) = pointer
                 .filter(|_| interact_response.contains_pointer())
                 .and_then(|press| layer.hit(press).map(|handle| (press, handle)))

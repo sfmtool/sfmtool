@@ -2685,6 +2685,267 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
     );
 }
 
+// ---- The world-point forms the 3D viewer names ----------------------------
+
+/// The same track with its surfel turned into a bearing along its own
+/// direction, and every sighting's keypoint put back on the bearing's own
+/// projection so the outline is the frame.
+///
+/// What the three handles of a track at infinity are driven against: the centre
+/// is a unit direction, the corners are directions too, and every step has to
+/// renormalize without moving any of them.
+fn as_bearing(track: &EditableTrack, edited: &EditedReconstruction) -> EditableTrack {
+    let mut track = track.clone();
+    {
+        let payload = match &mut track.stage {
+            Stage::Track(payload) => payload,
+            Stage::Cluster(_) => unreachable!("a track from a point is at the track stage"),
+        };
+        let frame = payload.frame.as_mut().expect("a stored patch");
+        let direction = frame.center.coords.normalize();
+        *frame = OrientedPatch::from_infinity_direction(
+            Point3::from(direction),
+            Vector3::new(0.0, 1.0, 0.0),
+            [0.02, 0.02],
+        );
+        payload.position = None;
+    }
+    let frame = frame_of(&track);
+    for observation in &mut track.observations {
+        let (camera, pose) = view(edited, observation.image as usize);
+        let centre = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+        observation.track.as_mut().expect("a track slot").keypoint =
+            Some([centre[0] as f32, centre[1] as f32]);
+    }
+    track
+}
+
+/// The place named is projected onto the plane before anything moves, so a
+/// point off the plane slides the patch to the place directly under it and the
+/// patch never leaves the plane it is in.
+#[test]
+fn a_slide_to_a_place_lands_the_centre_on_the_plane_under_it() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let was = frame_of(&track);
+    let offsets = projection_offsets(&track, &edited);
+
+    // Off the plane on purpose: the normal component is what the step drops.
+    let wanted = was.u_axis * 0.05 + was.v_axis * (-0.03);
+    let point = was.center + wanted + was.normal() * 0.4;
+
+    let (next, report) = translate_frame_to(&track, &edited, point).expect("a place on the plane");
+    assert!(report.changed);
+    let frame = frame_of(&next);
+    assert_eq!(frame.u_axis, was.u_axis);
+    assert_eq!(frame.v_axis, was.v_axis);
+    assert_eq!(frame.half_extent, was.half_extent);
+    let moved = frame.center - was.center;
+    assert!(
+        (moved - wanted).norm() < 1e-12,
+        "the centre should have moved by the in-plane part alone, it moved by {moved:?}",
+    );
+    assert!((report.moved - wanted.norm()).abs() < 1e-12);
+    assert_eq!(report.center, frame.center);
+    assert_eq!(report.placed, next.observations.len());
+    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+    // Every sighting kept its own offset from where the centre projects, which
+    // is what the tile is cut on, and none of them was ruled on.
+    for (offset, now) in offsets.iter().zip(projection_offsets(&next, &edited)) {
+        assert!(
+            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
+            "a slide scrambled a sighting's offset: {offset:?} became {now:?}",
+        );
+    }
+    assert!(next.observations.iter().all(|o| !o.pinned));
+
+    // The place it already sits at is not a move.
+    let (again, report) = translate_frame_to(&next, &edited, frame.center).expect("the same place");
+    assert!(!report.changed);
+    assert_eq!(frame_of(&again).center, frame.center);
+}
+
+/// **One implementation of each edit.** The pixel form is the unprojection in
+/// front of the world-point form, so a pointer and the place it names have to
+/// leave the patch in the same position -- the pixel form acting on the outline
+/// re-anchored on one sighting, and the world-point form on the surfel itself.
+#[test]
+fn a_pixel_gesture_is_the_place_gesture_the_pointer_named() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let frame = frame_of(&track);
+
+    let dragged = 1;
+    let (camera, pose) = view(&edited, track.observations[dragged].image as usize);
+    let outline = outline_of(&track, &edited, dragged);
+    let target = corner_pixel(&outline, &camera, &pose, 0.7, 0.4);
+    // The place that pixel names, read from the outline's centre and carried to
+    // the surfel's: the one reduction both steps make.
+    let offset = outline
+        .keypoint_plane_offset(&camera, &pose, target)
+        .expect("the fixture's ray meets the plane");
+    let point = frame.center + offset;
+
+    let (by_pixel, _) = translate_frame(&track, &edited, dragged, target).expect("a usable drag");
+    let (by_place, _) = translate_frame_to(&track, &edited, point).expect("a place on the plane");
+    assert!(
+        (frame_of(&by_pixel).center - frame_of(&by_place).center).norm() < 1e-12,
+        "the pixel and the place it names slid the patch to two different centres",
+    );
+
+    let edge = corner_pixel(&outline, &camera, &pose, 2.3, 0.0);
+    let offset = outline
+        .keypoint_plane_offset(&camera, &pose, edge)
+        .expect("the fixture's ray meets the plane");
+    let (by_pixel, pixel_report) =
+        resize_from_edge(&track, &edited, dragged, Edge::PlusU, edge).expect("a usable drag");
+    let (by_place, place_report) =
+        resize_from_edge_to(&track, &edited, Edge::PlusU, frame.center + offset)
+            .expect("a place on the plane");
+    assert!((pixel_report.half - place_report.half).abs() < 1e-12);
+    assert!(
+        (frame_of(&by_pixel).center - frame_of(&by_place).center).norm() < 1e-12,
+        "the pixel and the place it names resized the patch about two different centres",
+    );
+    // The gesture's report says which sighting it was named in; the place's has
+    // no photograph to name.
+    assert_eq!(pixel_report.observation, Some(dragged));
+    assert_eq!(place_report.observation, None);
+    assert_eq!(place_report.pixel, None);
+}
+
+/// The far edge is held whoever names the near one: with the dragged edge at
+/// `+h` and the far one at `-h`, a place naming the offset `p` gives `(p + h) /
+/// 2` and moves the centre by `h' - h` along that axis.
+#[test]
+fn a_resize_to_a_place_puts_that_edge_there_and_holds_the_far_one() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let was = frame_of(&track);
+    let far_before = was.to_world(-1.0, 0.0);
+    // Two and a bit half-lengths out along `+u`, and off the plane again, which
+    // the axis dot product drops on its own.
+    let point = was.to_world(2.3, 0.0) + was.normal() * 0.4;
+
+    let (next, report) =
+        resize_from_edge_to(&track, &edited, Edge::PlusU, point).expect("a usable place");
+    assert!(report.changed);
+    assert_eq!(report.observation, None);
+    assert_eq!(report.image, None);
+    let after = frame_of(&next);
+    assert_eq!(
+        after.half_extent[0], after.half_extent[1],
+        "a patch frame is square, so a resize is one scale"
+    );
+    assert!((report.half - (2.3 + 1.0) / 2.0 * was.half_extent[0]).abs() < 1e-12);
+    let moved = after.center - was.center;
+    assert!((moved - was.u_axis * (report.half - report.was)).norm() < 1e-12);
+    assert!(
+        (after.to_world(1.0, 0.0) - (was.center + was.u_axis * (2.3 * was.half_extent[0]))).norm()
+            < 1e-12,
+        "the dragged edge did not land on the place it was given",
+    );
+    assert!(
+        (after.to_world(-1.0, 0.0) - far_before).norm() < 1e-12,
+        "the far edge moved",
+    );
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+    assert!(next.observations.iter().all(|o| !o.pinned));
+
+    // The size it already has is not a resize.
+    let (_, report) = resize_from_edge_to(&next, &edited, Edge::PlusU, after.to_world(1.0, 0.0))
+        .expect("the edge's own place");
+    assert!(!report.changed);
+}
+
+/// A bearing's centre is a unit direction and its half-extents are stated
+/// against one, so both world-point steps renormalize and the corners stay the
+/// directions they were.
+#[test]
+fn the_place_forms_carry_a_bearing_on_the_unit_sphere() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = as_bearing(&track_of(&bench, &label), &edited);
+    let was = frame_of(&track);
+    let (camera, pose) = view(&edited, track.observations[0].image as usize);
+
+    // The slide: a tangent place, which the step takes back onto the sphere.
+    let point = was.center + was.u_axis * (0.7 * was.half_extent[0]);
+    let (slid, report) = translate_frame_to(&track, &edited, point).expect("a tangent place");
+    assert!(report.changed);
+    let frame = frame_of(&slid);
+    assert_eq!(frame.w, 0.0, "a bearing stays a bearing");
+    assert!((frame.center.coords.norm() - 1.0).abs() < 1e-12);
+    assert!(
+        (frame.center.coords.normalize() - point.coords.normalize()).norm() < 1e-12,
+        "the bearing did not move onto the tangent place that was named",
+    );
+
+    // The resize: the far edge is held on the sky too, which is what the
+    // renormalization has to leave alone.
+    let far_before = corner_pixel(&was, &camera, &pose, -1.0, 0.0);
+    let (bigger, report) =
+        resize_from_edge_to(&track, &edited, Edge::PlusU, was.to_world(1.8, 0.0))
+            .expect("a tangent place");
+    assert!(report.changed);
+    let frame = frame_of(&bigger);
+    assert_eq!(frame.w, 0.0);
+    assert!((frame.center.coords.norm() - 1.0).abs() < 1e-12);
+    assert_eq!(frame.half_extent[0], frame.half_extent[1]);
+    let far_after = corner_pixel(&frame, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < 1e-6 && (far_after[1] - far_before[1]).abs() < 1e-6,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+    let dragged = corner_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let wanted = corner_pixel(&was, &camera, &pose, 1.8, 0.0);
+    assert!(
+        (dragged[0] - wanted[0]).abs() < 1e-6 && (dragged[1] - wanted[1]).abs() < 1e-6,
+        "the dragged edge should land on {wanted:?}, it landed on {dragged:?}",
+    );
+}
+
+/// The two refusals a place can earn: one that is not a point of the world, and
+/// a track with no world geometry to name a place on.
+#[test]
+fn a_place_that_is_not_one_and_a_cluster_are_both_refused() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let nowhere = Point3::new(0.0, f64::NAN, 0.0);
+
+    assert!(matches!(
+        translate_frame_to(&track, &edited, nowhere),
+        Err(TrackEditError::BadPlace(_))
+    ));
+    assert!(matches!(
+        resize_from_edge_to(&track, &edited, Edge::PlusU, nowhere),
+        Err(TrackEditError::BadPlace(_))
+    ));
+
+    let (bench, made) =
+        create_cluster(&Bench::new(), &pixel_seed(0, scene_pixel(&edited))).expect("a usable seed");
+    let cluster = track_of(&bench, &made.label);
+    let somewhere = frame_of(&track).center;
+    assert!(matches!(
+        translate_frame_to(&cluster, &edited, somewhere),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+    assert!(matches!(
+        resize_from_edge_to(&cluster, &edited, Edge::PlusU, somewhere),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+}
+
 #[test]
 fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_old_square() {
     let scene = Scene::new();

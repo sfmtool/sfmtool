@@ -10,8 +10,10 @@ use eframe::egui::{self, Rect};
 use nalgebra::Vector3;
 
 use super::{
-    Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED, TRACKPAD_ZOOM_SPEED,
+    bench_track, Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED,
+    TRACKPAD_ZOOM_SPEED,
 };
+use crate::bench::geometry;
 use crate::platform::GestureEvent;
 use crate::scene::{ImageRef, SceneNode};
 use crate::state::AppState;
@@ -181,14 +183,169 @@ impl Viewer3D {
         }
     }
 
+    /// Run the bench figure's handles for this frame: pick a drag up at the
+    /// press, follow it, cancel it or finish it, set the cursor, and say whether
+    /// the pointer's gesture is the bench's.
+    ///
+    /// Called before [`Viewer3D::handle_drag`] so the orbit, the pan and the
+    /// zoom are suppressed from the **press** onward rather than from the moment
+    /// egui would call the gesture a drag. The hit test is against the figure
+    /// the last frame built, which is the figure on screen and so the one the
+    /// person pressed on: the eye has not moved yet, and it will not move while
+    /// the button is down over a handle.
+    pub(super) fn update_bench_drag(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        rect: Rect,
+        bench: Option<&bench_track::BenchTrack<'_>>,
+    ) -> bool {
+        // A gesture that outlives the node it was editing, or the track it was
+        // editing, is dropped: its handle names something that is not up. So is
+        // one a background task caught, which is what "no handle takes a press"
+        // means once a press has already happened.
+        let live = bench.filter(|bench| !bench.busy);
+        if live.is_none_or(|bench| self.bench_drag.is_some_and(|drag| drag.node != bench.node)) {
+            self.bench_drag = None;
+        }
+        let Some(bench) = live else {
+            return false;
+        };
+        let (Some(frame), Some(figure)) = (
+            bench_track::frame_of(bench.track),
+            self.bench_figure.as_ref(),
+        ) else {
+            self.bench_drag = None;
+            return false;
+        };
+        let handles = bench_track::Handles::project(figure, &self.camera, rect);
+        // The node's similarity, which the figure went out through and a pointer
+        // has to come back through: the core steps act in the reconstruction's
+        // own coordinates and the figure is drawn in the world's.
+        let Ok(into_recon) = bench.transform.inverse() else {
+            self.bench_drag = None;
+            return false;
+        };
+        // A plane seen edge-on turns a pixel of pointer motion into an unbounded
+        // distance along it, so none of the handles that read it takes a press
+        // and the cursor stays the viewport's own.
+        if geometry::plane_is_edge_on(frame, into_recon.apply_to_point(&self.camera.position())) {
+            self.bench_drag = None;
+            return false;
+        }
+
+        let (pressed, down, pointer, modifiers) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.interact_pos().or(i.pointer.hover_pos()),
+                i.modifiers,
+            )
+        });
+        // Only an unmodified primary press is tested: Alt, Ctrl and Shift drags
+        // and the middle and secondary buttons are navigation's, and they stay
+        // navigation's.
+        let plain = !(modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.shift)
+            && !crate::platform::other_mouse_button_down();
+        if self.bench_drag.is_none() && pressed && plain {
+            let taken = pointer
+                .filter(|_| response.contains_pointer())
+                .and_then(|press| Some((press, handles.hit(press)?)))
+                .and_then(|(press, handle)| {
+                    let at = self.bench_plane_point(rect, frame, &into_recon, press)?;
+                    Some(bench_track::Drag::new(bench.node, handle, at, press))
+                });
+            if let Some(drag) = taken {
+                // An easing camera would otherwise move under the gesture, and
+                // the drag is a statement about where the pointer is on the
+                // figure as it stands.
+                self.cancel_transition();
+                self.bench_drag = Some(drag);
+            }
+        }
+        if let Some(pos) = response
+            .interact_pointer_pos()
+            .or(pointer)
+            .filter(|_| self.bench_drag.is_some())
+        {
+            let at = self.bench_plane_point(rect, frame, &into_recon, pos);
+            // Escape abandons the gesture. The drag is kept until the button
+            // comes up so the viewport does not start orbiting halfway through.
+            let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if let Some(drag) = &mut self.bench_drag {
+                drag.follow(pos, at);
+                drag.cancelled |= cancelled;
+            }
+        }
+        // The button coming up ends it, whether or not egui ever called it a
+        // drag: a press that never moved is a **click**, which on an
+        // observation's circle selects that row and anywhere else does nothing.
+        let mut ended = false;
+        if !down {
+            if let Some(drag) = self.bench_drag.take() {
+                ended = true;
+                self.bench_gesture = if drag.moved {
+                    drag.edit(frame).map(bench_track::BenchGesture::Edit)
+                } else if let bench_track::Handle::Circle { observation } = drag.handle {
+                    (!drag.cancelled).then_some(bench_track::BenchGesture::SelectRow(observation))
+                } else {
+                    None
+                };
+            }
+        }
+
+        let hovered = self.bench_drag.map(|drag| drag.handle).or_else(|| {
+            ui.input(|i| i.pointer.hover_pos())
+                .filter(|_| response.contains_pointer())
+                .and_then(|pos| handles.hit(pos))
+        });
+        if let Some(handle) = hovered {
+            ui.ctx().set_cursor_icon(match self.bench_drag {
+                Some(drag) if !drag.cancelled && drag.handle == bench_track::Handle::Dot => {
+                    egui::CursorIcon::Grabbing
+                }
+                _ => handles.cursor(handle),
+            });
+        }
+        self.bench_drag.is_some() || ended
+    }
+
+    /// Where the pointer at `pos` meets the frame's plane, in the
+    /// reconstruction's own coordinates.
+    ///
+    /// The viewport's own ray, taken back through the node's similarity: the
+    /// figure is drawn in the world and the steps act in the reconstruction.
+    fn bench_plane_point(
+        &self,
+        rect: Rect,
+        frame: &sfmtool_core::patch::cloud::OrientedPatch,
+        into_recon: &sfmtool_core::Se3Transform,
+        pos: egui::Pos2,
+    ) -> Option<nalgebra::Point3<f64>> {
+        let (origin, direction) = self.camera.ray_through(pos, rect);
+        geometry::plane_point(
+            frame,
+            into_recon.apply_to_point(&origin),
+            into_recon.rotation.to_rotation_matrix() * direction,
+        )
+    }
+
     /// Handles mouse drag interactions (orbit, pan, zoom, nodal pan).
+    ///
+    /// `bench_owns_pointer` is the one thing that stops it: a gesture that began
+    /// on one of the bench figure's handles is an edit of the track, and the
+    /// pointer can only mean one of the two.
     pub(super) fn handle_drag(
         &mut self,
         ui: &egui::Ui,
         response: &egui::Response,
         rect: Rect,
         fly_keys_held: bool,
+        bench_owns_pointer: bool,
     ) {
+        if bench_owns_pointer {
+            return;
+        }
         let any_button_dragging = ui.input(|i| {
             let pointer = &i.pointer;
             pointer.is_moving() && pointer.any_down() && response.hovered()

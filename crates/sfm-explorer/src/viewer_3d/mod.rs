@@ -237,6 +237,20 @@ pub struct Viewer3D {
     /// eye is this panel's. `app.rs` uploads it and the pass draws it, on the
     /// frame-behind cadence every other camera-derived value already runs on.
     pub(crate) bench_figure: Option<bench_track::Figure>,
+    /// The bench figure's handle the pointer has hold of, while it has one.
+    ///
+    /// Held here rather than derived each frame for the reason the Image Detail
+    /// panel's is: a drag is a gesture and not a state of the pointer -- what is
+    /// being dragged was decided when the button went down, and the pointer
+    /// wanders off the handle the moment it starts moving.
+    pub(crate) bench_drag: Option<bench_track::Drag>,
+    /// What a gesture over the bench figure asked of the app, drained by
+    /// `dock.rs` after the frame.
+    ///
+    /// Held here rather than carried out in the viewport for the reason the
+    /// point menu's gesture is: both need the state mutably, and the state is
+    /// borrowed out of for the whole of this call.
+    pub(crate) bench_gesture: Option<bench_track::BenchGesture>,
     /// Where each of the point menu's entries was drawn on the frame just
     /// past, empty on a frame with no menu up.
     ///
@@ -299,6 +313,8 @@ impl Viewer3D {
             menu_point: None,
             point_menu: None,
             bench_figure: None,
+            bench_drag: None,
+            bench_gesture: None,
             menu_entry_rects: Vec::new(),
         }
     }
@@ -486,6 +502,13 @@ impl Viewer3D {
             self.view_initialized = true;
         }
 
+        // --- The bench figure's handles, before the viewport's own input ---
+        //
+        // A drag that began on a handle is an edit of the track and must not
+        // also orbit, pan or zoom: the pointer can only mean one of the two, and
+        // what it means was decided where the button went down.
+        let bench_owns_pointer = self.update_bench_drag(ui, &response, rect, bench.as_ref());
+
         // Handle all input.
         //
         // Drag and click need no explicit HUD guard: the HUD is an `egui::Area`
@@ -493,7 +516,7 @@ impl Viewer3D {
         // top-most layer under the pointer, so `response.dragged()`,
         // `clicked()` and `hovered()` are all false while the pointer is over
         // it. Verified against egui 0.34 in `hud/tests.rs`.
-        self.handle_drag(ui, &response, rect, fly_keys_held);
+        self.handle_drag(ui, &response, rect, fly_keys_held, bench_owns_pointer);
 
         // Scroll, pinch and platform gestures cannot rely on that. They gate on
         // `platform::pointer_in_rect`, a raw geometric containment test that on
@@ -514,7 +537,12 @@ impl Viewer3D {
         if keyboard_free {
             self.handle_keyboard(ui, rect, node, selected_image, log);
         }
-        self.handle_click(ui, &response, rect);
+        // The figure is on top, so a click one of its marks catches does not
+        // also reach the points under it: two selections from one click would
+        // be two answers to one gesture.
+        if !bench_owns_pointer {
+            self.handle_click(ui, &response, rect);
+        }
         self.show_point_menu(&response, hover_pick, busy);
 
         // Record mouse position in texture pixels for GPU depth readback
@@ -562,8 +590,27 @@ impl Viewer3D {
         // The bench's active track, as the scene geometry the next frame's
         // upload draws. After the camera has been moved by this frame's input,
         // because the arrowhead is squared to the eye.
+        //
+        // While a handle is held what is drawn is the **preview**: the track the
+        // release would push, through the same function the release goes
+        // through, so there is one answer rather than a drawn guess and a
+        // pushed result.
         let eye = self.camera.position();
-        self.bench_figure = bench.and_then(|bench| bench_track::figure(&bench, eye));
+        let drag = self.bench_drag;
+        self.bench_figure = bench.and_then(|bench| {
+            let previewed = drag
+                .filter(|drag| drag.node == bench.node)
+                .and_then(|drag| drag.edit(bench_track::frame_of(bench.track)?))
+                .and_then(|edit| {
+                    crate::bench::geometry::apply(bench.track, bench.edited, &edit).ok()
+                })
+                .map(|(next, _)| next);
+            let shown = bench_track::BenchTrack {
+                track: previewed.as_ref().unwrap_or(bench.track),
+                ..bench
+            };
+            bench_track::figure(&shown, eye)
+        });
 
         // The lock banner, over the scene and under nothing: it is what the
         // viewport is in the middle of.

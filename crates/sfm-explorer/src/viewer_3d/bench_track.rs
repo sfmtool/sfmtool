@@ -20,14 +20,29 @@
 //! turns it into instances and draws it after the EDL pass, depth-aware, so
 //! where the frame cuts through the point cloud the part in front reads at full
 //! strength and the part behind is drawn through, dimmed.
+//!
+//! **What it draws, it edits.** The handles
+//! ([`Handles`](crate::viewer_3d::bench_track::Handles)) project the very figure
+//! the pass drew back through the viewport's camera, so the square a person
+//! takes hold of is the square they can see: the dot slides it across its plane,
+//! an edge resizes it with the far edge held, a corner turns it about its
+//! normal, and an observation's circle selects that row in Track Edit. The
+//! pointer is read as a **ray of the viewport's camera** met with the patch's
+//! own geometry ([`crate::bench::geometry`]), which is the same idea the Image
+//! Detail panel reads a pixel by, and the edit it names is handed to the same
+//! core step.
 
-use egui::Color32;
+use egui::{Color32, CursorIcon, Pos2, Rect};
 use nalgebra::{Point3, Vector3};
-use sfmtool_core::bench::{EditableTrack, Stage};
+use sfmtool_core::bench::{Edge, EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{EditedReconstruction, Se3Transform};
 
-use crate::bench::{geometry, verdict_color};
+use crate::bench::geometry::{self, PatchEdit};
+use crate::bench::{distance_to_segment, resize_cursor, verdict_color};
+use crate::scene::ReconId;
+
+use super::ViewportCamera;
 
 /// Segments in the centre disc and in each mark's hollow circle.
 const CIRCLE_SEGMENTS: usize = 24;
@@ -61,6 +76,30 @@ const BARB_SIDE: f64 = 0.1;
 /// behind it sits at the floor.
 const FOG_DISTANCE: f64 = 4.0;
 
+/// How much larger the circle of the observation selected in Track Edit is
+/// drawn.
+///
+/// The one thing the figure says about the selection, and the other half of the
+/// click that sets it: a row picked in the panel can then be found in the world,
+/// and a mark picked in the world can be seen to be that row.
+const SELECTED_CIRCLE_SCALE: f64 = 1.6;
+
+/// How far from the dot, a corner or an observation's circle the pointer still
+/// grabs it, in panel px.
+///
+/// Generous against the marks they draw, for the reason the Image Detail
+/// layer's reach is: a handle missed by two pixels orbits the scene instead,
+/// which the person then has to undo by eye, while one caught a little early is
+/// released without motion and does nothing.
+const HANDLE_HIT_RADIUS: f32 = 9.0;
+
+/// How far from an edge of the square the pointer still grabs it, in panel px.
+///
+/// Narrower than a corner's reach, and tested after the corners, so the corner
+/// where two edges meet turns rather than resizing whichever edge won the
+/// distance.
+const EDGE_HIT_WIDTH: f32 = 8.0;
+
 /// The four `(s, t)` corners of the frame's square, in the order
 /// [`OrientedPatch::boundary`] walks them, so consecutive pairs are its edges.
 const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
@@ -71,7 +110,11 @@ const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 
 /// does not ([`crate::image_detail::BenchMenu`]): the panel is handed `&mut`
 /// into the state further down the same call, so what it needs is read out
 /// beside the selection and passed in.
+#[derive(Clone, Copy)]
 pub(crate) struct BenchTrack<'a> {
+    /// The node whose bench it is. A gesture that outlives a change of selected
+    /// node is dropped: its handle names a frame that is no longer up.
+    pub(crate) node: ReconId,
     /// The active track, which is the one item of the bench this layer draws.
     pub(crate) track: &'a EditableTrack,
     /// The node's value at its cursor, for the cameras and poses the marks
@@ -81,6 +124,13 @@ pub(crate) struct BenchTrack<'a> {
     /// coordinates and put through this, because the pass draws from one shared
     /// buffer with no per-recon `model` matrix of its own.
     pub(crate) transform: &'a Se3Transform,
+    /// The observation row selected in Track Edit, whose circle is drawn
+    /// [`SELECTED_CIRCLE_SCALE`] larger.
+    pub(crate) selected: Option<usize>,
+    /// Whether a background task holds the node. The layer still draws -- what
+    /// is being worked on does not stop being worth seeing -- and no handle
+    /// takes a press.
+    pub(crate) busy: bool,
 }
 
 /// One straight edge of the figure: two homogeneous world endpoints and the
@@ -120,6 +170,10 @@ pub(crate) struct DiscVertex {
 /// seeing.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Mark {
+    /// Which observation it is, by its position in the track's list -- which is
+    /// not this mark's own position, an observation whose ray misses the frame
+    /// drawing none. It is the row a click on the circle selects.
+    pub(crate) observation: usize,
     /// Centre to `q_i`.
     pub(crate) segment: Stroke,
     /// The hollow circle at `q_i`, in the frame's plane.
@@ -130,8 +184,15 @@ pub(crate) struct Mark {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Figure {
     /// The square, four edges in `(s, t)` boundary order, in the `in` colour
-    /// whatever any observation's verdict is.
+    /// whatever any observation's verdict is. Edge `k` runs from corner `k` to
+    /// corner `k + 1`, so `frame[k].a` is corner `k`.
     pub(crate) frame: [Stroke; 4],
+    /// Where the frame's centre is, on [`Stroke`]'s `(xyz, w)` convention.
+    ///
+    /// The disc is drawn around it and every mark's segment runs from it, so it
+    /// is in the figure twice over already; it is named once here because the
+    /// hit test wants the dot itself rather than a vertex of the fan.
+    pub(crate) centre: [f32; 4],
     /// The filled centre disc, as `CIRCLE_SEGMENTS` triangles fanned from the
     /// centre. In the frame's plane, so it foreshortens with the frame and goes
     /// to a line when the frame is edge-on -- which is what says it is part of
@@ -218,17 +279,24 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
         .track
         .observations
         .iter()
-        .filter_map(|observation| {
-            let site = observation.site()?;
-            let (camera, pose) = geometry::view_of(image_table, observation.image as usize)?;
+        .enumerate()
+        .filter_map(|(observation, sighting)| {
+            let site = sighting.site()?;
+            let (camera, pose) = geometry::view_of(image_table, sighting.image as usize)?;
             // The one unprojection, core's own: the keypoint's ray meets the
             // frame's plane and what it named is read off that meeting. A ray
             // that cannot meet the plane in front of its camera -- including a
             // bearing pointing away from a direction patch -- says so here.
             let offset = frame.keypoint_plane_offset(&camera, &pose, site)?;
             let q = frame.center.coords + offset;
-            let color = rgba(verdict_color(observation.verdict));
+            let color = rgba(verdict_color(sighting.verdict));
+            let radius = if bench.selected == Some(observation) {
+                radius * SELECTED_CIRCLE_SCALE
+            } else {
+                radius
+            };
             Some(Mark {
+                observation,
                 segment: Stroke {
                     a: centre,
                     b: place(q),
@@ -241,11 +309,24 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
 
     Some(Figure {
         frame: frame_edges,
+        centre,
         disc,
         normal,
         marks,
         fog_distance: (FOG_DISTANCE * half * bench.transform.scale) as f32,
     })
+}
+
+/// The track's surfel, or `None` when there is nothing to take hold of: a
+/// cluster-stage item, or a track nothing has given a frame.
+///
+/// The frame is in the **reconstruction's own** coordinates, which is where the
+/// core steps act and where a pointer has to be brought back to.
+pub(crate) fn frame_of(track: &EditableTrack) -> Option<&OrientedPatch> {
+    match &track.stage {
+        Stage::Track(payload) => payload.frame.as_ref(),
+        Stage::Cluster(_) => None,
+    }
 }
 
 /// The centre disc, as a triangle fan about the frame's centre laid out as a
@@ -347,6 +428,235 @@ fn arrow(
             color,
         },
     ]
+}
+
+// ---- The handles -----------------------------------------------------------
+
+/// What the pointer has hold of in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Handle {
+    /// The centre dot: dragging it slides the surfel across its own plane.
+    Dot,
+    /// One edge of the square: dragging it resizes the patch, holding the
+    /// opposite edge still.
+    Edge(Edge),
+    /// One corner: dragging it turns the patch about its outward normal.
+    Corner(usize),
+    /// One observation's circle. It edits nothing -- where a photograph sees the
+    /// patch's content is that photograph's answer and not a thing to drag --
+    /// but a click on it selects that row in Track Edit, as clicking a mark in
+    /// the Image Detail panel does.
+    Circle {
+        /// The observation, by its position in the track's list.
+        observation: usize,
+    },
+}
+
+/// What a gesture over the figure asks of the app, once the button comes up.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum BenchGesture {
+    /// A drag finished: apply this edit, through the call the wire's patch
+    /// tools make, as one version and one Action Log row.
+    Edit(PatchEdit),
+    /// A circle was clicked: select that observation's row in Track Edit.
+    SelectRow(usize),
+}
+
+/// A handle being dragged, and where the pointer has taken it.
+///
+/// Both ends are **places on the patch's own plane**, in the reconstruction's
+/// coordinates, rather than pixels of the window: what the gesture means is a
+/// statement about the patch, so it does not depend on where the figure happened
+/// to be drawn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Drag {
+    /// The node whose bench it edits. A drag that outlives a change of selected
+    /// node is dropped.
+    pub(crate) node: ReconId,
+    /// What is being dragged.
+    pub(crate) handle: Handle,
+    /// Where the press met the plane.
+    from: Point3<f64>,
+    /// Where the pointer meets it now.
+    to: Point3<f64>,
+    /// Where the press landed in the panel.
+    ///
+    /// A press is taken as a handle before egui would call it a drag, so this is
+    /// what tells the two apart at the release: a press that never moved is a
+    /// click, which selects the row under it and edits nothing.
+    press: Pos2,
+    /// Whether the pointer has left the press at all.
+    pub(crate) moved: bool,
+    /// Set by Escape: the gesture is abandoned, so nothing is previewed and
+    /// nothing is pushed, but the viewport still does not orbit until the button
+    /// comes up.
+    pub(crate) cancelled: bool,
+}
+
+impl Drag {
+    /// A gesture just taken at `press`, which met the plane at `at`.
+    pub(crate) fn new(node: ReconId, handle: Handle, at: Point3<f64>, press: Pos2) -> Self {
+        Self {
+            node,
+            handle,
+            from: at,
+            to: at,
+            press,
+            moved: false,
+            cancelled: false,
+        }
+    }
+
+    /// Follow the pointer: it is at `pos` in the panel and, when the ray still
+    /// meets the plane, at `at` on it.
+    pub(crate) fn follow(&mut self, pos: Pos2, at: Option<Point3<f64>>) {
+        self.moved |= pos != self.press;
+        if let Some(at) = at {
+            self.to = at;
+        }
+    }
+
+    /// What this drag would do to the track, in the form the core steps take.
+    ///
+    /// The two places it carries are already in the patch's own terms, so the
+    /// only reading left here is the turn, which is a statement about two of
+    /// them and has no other home. `None` when the gesture names nothing the
+    /// patch can be given: a cancelled drag, a circle, or a turn read about the
+    /// centre itself.
+    pub(crate) fn edit(&self, frame: &OrientedPatch) -> Option<PatchEdit> {
+        if self.cancelled {
+            return None;
+        }
+        let place = |p: Point3<f64>| [p.x, p.y, p.z];
+        match self.handle {
+            // The press's own offset from the centre is kept, so a dot grabbed
+            // a little off centre does not jump under the pointer.
+            Handle::Dot => Some(PatchEdit::SlideTo {
+                point: place(frame.center + (self.to - self.from)),
+            }),
+            Handle::Edge(edge) => Some(PatchEdit::ResizeFromEdgeTo {
+                edge,
+                point: place(self.to),
+            }),
+            Handle::Corner(_) => geometry::turn_on_plane(frame, self.from, self.to)
+                .map(|angle_rad| PatchEdit::Rotate { angle_rad }),
+            Handle::Circle { .. } => None,
+        }
+    }
+}
+
+/// The figure's handles in panel coordinates: what the pointer can take hold of
+/// on the frame it is looking at.
+///
+/// Built from the [`Figure`] the pass drew and the camera it was drawn through,
+/// so the hit test is against the picture on screen rather than against a second
+/// projection written to be aimed at. It needs no pick-buffer entry, and
+/// occlusion does not enter into it: a handle drawn through the point cloud is
+/// grabbed like any other, the figure's depth-aware blend being about what is
+/// seen and this about where the pointer is.
+pub(crate) struct Handles {
+    /// The centre dot, when it projected.
+    dot: Option<Pos2>,
+    /// The four corners in [`CORNERS`] order, `None` for one behind the eye.
+    corners: [Option<Pos2>; 4],
+    /// One per mark that projected: which observation it is, and where.
+    circles: Vec<(usize, Pos2)>,
+}
+
+impl Handles {
+    /// The figure as `camera` drew it in `rect`.
+    pub(crate) fn project(figure: &Figure, camera: &ViewportCamera, rect: Rect) -> Self {
+        let at = |p: [f32; 4]| {
+            camera.project_homogeneous(
+                Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])),
+                f64::from(p[3]),
+                rect,
+            )
+        };
+        Handles {
+            dot: at(figure.centre),
+            corners: std::array::from_fn(|k| at(figure.frame[k].a)),
+            circles: figure
+                .marks
+                .iter()
+                .filter_map(|mark| Some((mark.observation, at(mark.segment.b)?)))
+                .collect(),
+        }
+    }
+
+    /// The handle under `pos`, or `None` when the pointer is on none of them.
+    ///
+    /// Corners, then the dot, then the circles, then the edges. The dot and the
+    /// circles sit inside the square they mark and a corner is where two edges
+    /// meet, so a nearest-thing search over all four at once would make the
+    /// smaller handles unreachable.
+    pub(crate) fn hit(&self, pos: Pos2) -> Option<Handle> {
+        let nearest = |best: Option<(f32, Handle)>, distance: f32, handle: Handle| match best {
+            Some((d, _)) if d <= distance => best,
+            _ => Some((distance, handle)),
+        };
+        let mut found = None;
+        for (k, corner) in self.corners.iter().enumerate() {
+            let Some(at) = corner else { continue };
+            let distance = (*at - pos).length();
+            if distance <= HANDLE_HIT_RADIUS {
+                found = nearest(found, distance, Handle::Corner(k));
+            }
+        }
+        if let Some((_, handle)) = found {
+            return Some(handle);
+        }
+        if self
+            .dot
+            .is_some_and(|at| (at - pos).length() <= HANDLE_HIT_RADIUS)
+        {
+            return Some(Handle::Dot);
+        }
+        for (observation, at) in &self.circles {
+            let distance = (*at - pos).length();
+            if distance <= HANDLE_HIT_RADIUS {
+                found = nearest(
+                    found,
+                    distance,
+                    Handle::Circle {
+                        observation: *observation,
+                    },
+                );
+            }
+        }
+        if let Some((_, handle)) = found {
+            return Some(handle);
+        }
+        for k in 0..4 {
+            let (Some(a), Some(b)) = (self.corners[k], self.corners[(k + 1) % 4]) else {
+                continue;
+            };
+            let distance = distance_to_segment(a, b, pos);
+            if distance <= EDGE_HIT_WIDTH {
+                found = nearest(found, distance, Handle::Edge(geometry::edge_of(k)));
+            }
+        }
+        found.map(|(_, handle)| handle)
+    }
+
+    /// The cursor `handle` asks for, with the square's own orientation **on
+    /// screen** deciding which resize cursor an edge takes, as it does in the
+    /// Image Detail panel.
+    ///
+    /// A corner turns, and egui has no cursor for that, so it takes
+    /// [`CursorIcon::Alias`]; a circle selects rather than moves, so it takes
+    /// the pointing hand every other selectable mark in this window takes.
+    pub(crate) fn cursor(&self, handle: Handle) -> CursorIcon {
+        match handle {
+            Handle::Dot => CursorIcon::Move,
+            Handle::Corner(_) => CursorIcon::Alias,
+            Handle::Circle { .. } => CursorIcon::PointingHand,
+            Handle::Edge(edge) => (0..4)
+                .find(|k| geometry::edge_of(*k) == edge)
+                .and_then(|k| Some(resize_cursor(self.corners[(k + 1) % 4]? - self.corners[k]?)))
+                .unwrap_or(CursorIcon::Move),
+        }
+    }
 }
 
 /// One of the bench's violets as the pass takes it.

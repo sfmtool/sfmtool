@@ -1,24 +1,33 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the viewport's point context menu.
+//! Headless tests for the viewport's point context menu and for the bench
+//! figure's handles.
 //!
 //! egui needs no GPU to lay out a frame, so these drive the real thing:
 //! `Viewer3D::show` through `Context::run_ui`, with the pick the GPU would have
 //! reported handed in as the parameter `dock.rs` hands it in as. What they
-//! assert is what the menu *decides* -- whether it opened, on which point, and
-//! which entry was chosen -- rather than anything about pixels.
+//! assert is what the viewport *decides* -- whether the menu opened and on
+//! which point, which handle a press took and what the release asked for --
+//! rather than anything about pixels.
 //!
 //! egui resolves clicks against the widget rects registered on the *previous*
 //! pass, so every gesture here is several frames and only the state the last
-//! one left behind is trusted.
+//! one left behind is trusted. The handle gestures aim at the figure the last
+//! frame built, projected back through the camera it was drawn with, which is
+//! the very picture a person would have pressed on.
 
 use eframe::egui;
-use sfmtool_core::SfmrReconstruction;
+use nalgebra::{Point3, Vector3};
+use sfmtool_core::bench::{EditableTrack, Stage};
+use sfmtool_core::patch::cloud::OrientedPatch;
+use sfmtool_core::{Camera, SfmrReconstruction};
 
+use super::bench_track::{self, BenchGesture};
 use super::{Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
+use crate::bench::geometry::PatchEdit;
 use crate::platform::ScrollInput;
-use crate::scene::{PointRef, SceneNode};
+use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::scene_renderer::PickTarget;
 use crate::state::edits::PointGesture;
 use crate::state::AppState;
@@ -48,6 +57,38 @@ fn run_frame(
     pick: Option<PickTarget>,
     busy: Option<&str>,
 ) {
+    let mut nowhere = egui::Rect::NOTHING;
+    run_bench_frame(
+        viewer,
+        ctx,
+        state,
+        events,
+        pointer,
+        pick,
+        busy,
+        None,
+        &mut nowhere,
+    );
+}
+
+/// One frame with the node's bench handed in as well, and the rect the viewport
+/// occupied reported back.
+///
+/// The rect is what a test projects the figure through to aim at a handle: the
+/// viewport takes `ui.available_size()` at the cursor, so this is the very rect
+/// `show` allocated.
+#[allow(clippy::too_many_arguments)]
+fn run_bench_frame(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    events: Vec<egui::Event>,
+    pointer: egui::Pos2,
+    pick: Option<PickTarget>,
+    busy: Option<&str>,
+    bench: Option<(&EditableTrack, Option<usize>, bool)>,
+    rect: &mut egui::Rect,
+) -> egui::CursorIcon {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
         events,
@@ -56,10 +97,19 @@ fn run_frame(
     // `platform::pointer_in_rect` does not read egui's pointer, so the test has
     // to place it where the window would have.
     crate::platform::set_test_pointer_pos(Some(pointer));
-    crate::test_support::run_frame_headless(ctx, input, |ui| {
+    let mut output = ctx.run_ui(input, |ui| {
         let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
         egui::CentralPanel::default().show(ui, |ui| {
             let node = &state.scene[0];
+            *rect = ui.available_rect_before_wrap();
+            let bench = bench.map(|(track, selected, busy)| bench_track::BenchTrack {
+                node: node.id,
+                track,
+                edited: node.edited(),
+                transform: &node.transform,
+                selected,
+                busy,
+            });
             viewer.show(
                 ui,
                 node,
@@ -77,11 +127,13 @@ fn run_frame(
                 None,
                 pick,
                 busy,
-                None,
+                bench,
                 &mut state.action_log,
             );
         });
     });
+    output.textures_delta.clear();
+    output.platform_output.cursor_icon
 }
 
 /// Move the pointer there and settle, so the viewport's own rect is registered.
@@ -337,4 +389,644 @@ fn a_busy_node_greys_both_entries() {
         EDIT_ON_BENCH_LABEL,
     );
     assert_eq!(viewer.point_menu, None, "a greyed entry cannot be chosen");
+}
+
+// ---- The bench figure's handles --------------------------------------------
+
+/// How many half-lengths the eye stands off the patch: far enough that the whole
+/// figure is on screen, near enough that the square is a couple of hundred panel
+/// pixels across and its handles are well apart.
+const STANDOFF: f64 = 12.0;
+
+/// The tangent half-length a track at infinity is given here, which at the
+/// viewport's own field of view puts its square about a hundred panel pixels
+/// from its centre.
+const BEARING_HALF: f64 = 0.1;
+
+/// Somewhere in the viewport well clear of the figure, which is drawn about the
+/// middle.
+const EMPTY: egui::Pos2 = egui::pos2(120.0, 700.0);
+
+/// The staged bench track, and a viewer looking square at its patch with two
+/// frames already drawn -- the second against the first's figure, which is what
+/// a press is hit-tested against.
+struct Staged {
+    viewer: Viewer3D,
+    ctx: egui::Context,
+    state: AppState,
+    id: ReconId,
+    label: String,
+    /// The rect the viewport occupied, for projecting the figure back onto it.
+    rect: egui::Rect,
+}
+
+impl Staged {
+    /// The track as the bench now holds it.
+    fn track(&self) -> EditableTrack {
+        (**self
+            .state
+            .bench_track(self.id, &self.label)
+            .expect("a track"))
+        .clone()
+    }
+
+    /// Settle the view on `track` again, so the figure a press is aimed at is
+    /// the one this track draws.
+    fn settle(&mut self, track: &EditableTrack) {
+        for _ in 0..2 {
+            run_bench_frame(
+                &mut self.viewer,
+                &self.ctx,
+                &mut self.state,
+                Vec::new(),
+                EMPTY,
+                None,
+                None,
+                Some((track, None, false)),
+                &mut self.rect,
+            );
+        }
+    }
+
+    /// The version labels the node holds, oldest first.
+    fn versions(&self) -> Vec<String> {
+        self.state
+            .node(self.id)
+            .expect("loaded")
+            .history
+            .versions()
+            .iter()
+            .map(|version| version.label.clone())
+            .collect()
+    }
+}
+
+/// A viewer with the staged track on its bench, looking square at the patch.
+fn staged() -> Staged {
+    let (state, id, label) = bench_track::tests::staged();
+    let mut staged = Staged {
+        viewer: Viewer3D::new(),
+        ctx: egui::Context::default(),
+        state,
+        id,
+        label,
+        rect: egui::Rect::NOTHING,
+    };
+    let track = staged.track();
+    look_square_at(&mut staged.viewer, &frame_of(&track));
+    staged.settle(&track);
+    staged
+}
+
+/// The track's surfel, as an owned value.
+fn frame_of(track: &EditableTrack) -> OrientedPatch {
+    track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a track from a point carries the stored patch")
+}
+
+/// Point the viewport square at the patch, [`STANDOFF`] half-lengths off it.
+///
+/// The frame's own `v` is the viewport's up, so the square's `u` runs along the
+/// panel's `x` and a drag along the screen is a drag along an axis of the patch.
+fn look_square_at(viewer: &mut Viewer3D, frame: &OrientedPatch) {
+    let eye = frame.center + frame.normal() * (frame.half_extent[0] * STANDOFF);
+    viewer.camera.world_up = frame.v_axis;
+    viewer.camera.camera = Camera::look_at(eye, frame.center, frame.v_axis);
+    viewer.view_initialized = true;
+}
+
+/// Point it along the patch's own `u` instead, which is the view in which the
+/// plane is edge-on and a pixel of pointer motion is an unbounded distance
+/// along it.
+fn look_edge_on(viewer: &mut Viewer3D, frame: &OrientedPatch) {
+    let eye = frame.center + frame.u_axis * (frame.half_extent[0] * STANDOFF);
+    viewer.camera.world_up = frame.v_axis;
+    viewer.camera.camera = Camera::look_at(eye, frame.center, frame.v_axis);
+    viewer.view_initialized = true;
+}
+
+/// The figure the last frame built, which is the one on screen.
+fn figure(viewer: &Viewer3D) -> &bench_track::Figure {
+    viewer.bench_figure.as_ref().expect("a figure was built")
+}
+
+/// Where a `(xyz, w)` endpoint of the figure lands in the panel.
+fn on_panel(staged: &Staged, at: [f32; 4]) -> egui::Pos2 {
+    staged
+        .viewer
+        .camera
+        .project_homogeneous(
+            Vector3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2])),
+            f64::from(at[3]),
+            staged.rect,
+        )
+        .expect("the figure is in front of the eye")
+}
+
+/// The centre dot, in panel px.
+fn dot(staged: &Staged) -> egui::Pos2 {
+    on_panel(staged, figure(&staged.viewer).centre)
+}
+
+/// Corner `k` of the square, in panel px.
+fn corner(staged: &Staged, k: usize) -> egui::Pos2 {
+    on_panel(staged, figure(&staged.viewer).frame[k].a)
+}
+
+/// The midpoint of edge `k`, which runs from corner `k` to corner `k + 1`.
+fn edge_mid(staged: &Staged, k: usize) -> egui::Pos2 {
+    let (a, b) = (corner(staged, k), corner(staged, (k + 1) % 4));
+    a + (b - a) * 0.5
+}
+
+/// Where observation `observation`'s circle sits, in panel px.
+fn circle(staged: &Staged, observation: usize) -> egui::Pos2 {
+    let mark = figure(&staged.viewer)
+        .marks
+        .iter()
+        .find(|mark| mark.observation == observation)
+        .expect("that observation draws a mark");
+    on_panel(staged, mark.segment.b)
+}
+
+/// What one gesture over the bench figure produced.
+struct Dragged {
+    /// What the release asked of the app, if the press had hold of a handle.
+    gesture: Option<BenchGesture>,
+    /// The cursor the viewport asked for while the pointer hovered the handle,
+    /// before any button went down.
+    cursor: egui::CursorIcon,
+    /// How far the **eye** moved over the gesture, in world units. Zero is the
+    /// claim a handle drag makes: the scene holds still for the whole of it.
+    orbited: f64,
+}
+
+/// Drive one press-move-release over the figure and report what it produced.
+///
+/// `steps` are pointer positions after the press, as offsets from it in panel
+/// px, so a test can put one below egui's own drag threshold and the next above
+/// it. That distinction is the whole of what the press-decides-the-handle rule
+/// is about: the viewport orbits on the first pixels of motion egui calls a
+/// drag, and a handle taken only then would already have lost the gesture.
+#[allow(clippy::too_many_arguments)]
+fn gesture(
+    staged: &mut Staged,
+    track: &EditableTrack,
+    busy: bool,
+    press: egui::Pos2,
+    steps: &[egui::Vec2],
+    escape: bool,
+) -> Dragged {
+    let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let escape_key = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let last = steps.last().map_or(press, |step| press + *step);
+    let mut frames: Vec<Vec<egui::Event>> = vec![
+        vec![egui::Event::PointerMoved(press)],
+        vec![egui::Event::PointerMoved(press), button(press, true)],
+    ];
+    for step in steps {
+        frames.push(vec![egui::Event::PointerMoved(press + *step)]);
+    }
+    frames.push(if escape {
+        vec![egui::Event::PointerMoved(last), escape_key]
+    } else {
+        vec![egui::Event::PointerMoved(last)]
+    });
+    frames.push(vec![egui::Event::PointerMoved(last), button(last, false)]);
+
+    let was = staged.viewer.camera.position();
+    staged.viewer.bench_gesture = None;
+    let mut cursor = egui::CursorIcon::Default;
+    for (index, events) in frames.into_iter().enumerate() {
+        let pointer = match events.first() {
+            Some(egui::Event::PointerMoved(pos)) => *pos,
+            _ => press,
+        };
+        let output = run_bench_frame(
+            &mut staged.viewer,
+            &staged.ctx,
+            &mut staged.state,
+            events,
+            pointer,
+            None,
+            None,
+            Some((track, None, busy)),
+            &mut staged.rect,
+        );
+        // The hover frame, before any button is down: what the viewport asks
+        // for there is the cursor a person sees over the handle.
+        if index == 0 {
+            cursor = output;
+        }
+    }
+    Dragged {
+        gesture: staged.viewer.bench_gesture.take(),
+        cursor,
+        orbited: (staged.viewer.camera.position() - was).norm(),
+    }
+}
+
+/// The edit a gesture asked for, or a panic naming what it asked for instead.
+fn edit_of(dragged: &Dragged) -> PatchEdit {
+    match &dragged.gesture {
+        Some(BenchGesture::Edit(edit)) => *edit,
+        other => panic!("the gesture named something else: {other:?}"),
+    }
+}
+
+#[test]
+fn a_press_on_an_edge_resizes_and_orbits_nothing_while_the_same_motion_off_it_orbits() {
+    let mut staged = staged();
+    let track = staged.track();
+    // Two panel pixels, then thirty: the first is under egui's drag threshold
+    // and is exactly what would otherwise be spent orbiting the scene.
+    let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
+    let edge = edge_mid(&staged, 1);
+
+    let dragged = gesture(&mut staged, &track, false, edge, &steps, false);
+    assert_eq!(
+        dragged.orbited, 0.0,
+        "the scene orbited under a handle drag",
+    );
+    assert!(
+        matches!(
+            edit_of(&dragged),
+            PatchEdit::ResizeFromEdgeTo {
+                edge: sfmtool_core::bench::Edge::PlusU,
+                ..
+            }
+        ),
+        "the press did not take the `+u` edge",
+    );
+
+    // The same motion from empty viewport is the orbit it always was.
+    let dragged = gesture(&mut staged, &track, false, EMPTY, &steps, false);
+    assert!(dragged.gesture.is_none(), "empty viewport edited the track");
+    assert!(
+        dragged.orbited > 0.0,
+        "a press off the handles should still orbit",
+    );
+}
+
+#[test]
+fn an_edge_dragged_lands_under_the_release_point_with_the_far_edge_held() {
+    let mut staged = staged();
+    let track = staged.track();
+    let press = edge_mid(&staged, 1);
+    let far_before = edge_mid(&staged, 3);
+    // Out along the square's own `+u`, which the view puts along the panel's x.
+    let step = egui::vec2((press.x - dot(&staged).x) * 0.8, 0.0);
+
+    let dragged = gesture(&mut staged, &track, false, press, &[step], false);
+    let edit = edit_of(&dragged);
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit)
+        .expect("a place the ray reaches");
+    let labels = staged.versions();
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    let sentence = labels.last().expect("a version");
+    assert!(
+        sentence.starts_with(&format!("Resized {} to a half-length of", staged.label)),
+        "the version's label does not name the resize in world units: {sentence}",
+    );
+
+    // Redraw and read the square back off the figure: the dragged edge is under
+    // the release point and the far one has not moved.
+    let resized = staged.track();
+    staged.settle(&resized);
+    let landed = edge_mid(&staged, 1);
+    let wanted = press + step;
+    assert!(
+        (landed - wanted).length() < 1.0,
+        "the dragged edge should land on {wanted:?}, it landed on {landed:?}",
+    );
+    let far_after = edge_mid(&staged, 3);
+    assert!(
+        (far_after - far_before).length() < 1.0,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+    let after = frame_of(&resized);
+    assert_eq!(
+        after.half_extent[0], after.half_extent[1],
+        "a patch frame is square"
+    );
+}
+
+#[test]
+fn a_corner_dragged_onto_its_neighbour_is_a_quarter_turn_and_one_version() {
+    let mut staged = staged();
+    let track = staged.track();
+    let press = corner(&staged, 2);
+    let step = corner(&staged, 3) - press;
+
+    let dragged = gesture(&mut staged, &track, false, press, &[step], false);
+    assert_eq!(dragged.cursor, egui::CursorIcon::Alias, "a corner turns");
+    let PatchEdit::Rotate { angle_rad } = edit_of(&dragged) else {
+        panic!("the press did not take a corner");
+    };
+    assert!(
+        (angle_rad.to_degrees().abs() - 90.0).abs() < 0.5,
+        "a corner dragged onto its neighbour is a quarter turn, not {}",
+        angle_rad.to_degrees(),
+    );
+
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&dragged))
+        .expect("a finite angle");
+    let labels = staged.versions();
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Rotated {} by ", staged.label)),
+        "{:?}",
+        labels.last(),
+    );
+    let was = frame_of(&track);
+    let turned = frame_of(&staged.track());
+    assert_eq!(turned.center, was.center, "a turn moves the surfel nowhere");
+    assert!((turned.normal() - was.normal()).norm() < 1e-12);
+}
+
+#[test]
+fn a_dot_drag_is_one_version_whose_label_names_the_move() {
+    let mut staged = staged();
+    let track = staged.track();
+    let press = dot(&staged);
+
+    let dragged = gesture(
+        &mut staged,
+        &track,
+        false,
+        press,
+        &[egui::vec2(24.0, -16.0)],
+        false,
+    );
+    assert_eq!(dragged.cursor, egui::CursorIcon::Move, "the dot slides it");
+    assert!(matches!(edit_of(&dragged), PatchEdit::SlideTo { .. }));
+
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&dragged))
+        .expect("a place the ray reaches");
+    let labels = staged.versions();
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Moved {} by ", staged.label)),
+        "{:?}",
+        labels.last(),
+    );
+    // In the patch's own plane, with the axes and the size untouched.
+    let was = frame_of(&track);
+    let now = frame_of(&staged.track());
+    assert_eq!(now.half_extent, was.half_extent);
+    assert!((now.normal() - was.normal()).norm() < 1e-12);
+    let offset = now.center - was.center;
+    assert!(offset.norm() > 0.0, "the patch did not move");
+    assert!(
+        offset.dot(&was.normal()).abs() < 1e-12,
+        "the patch left its own plane: {offset:?}",
+    );
+}
+
+#[test]
+fn escape_leaves_no_edit_and_a_drag_that_ends_where_it_started_pushes_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    let press = dot(&staged);
+
+    let cancelled = gesture(
+        &mut staged,
+        &track,
+        false,
+        press,
+        &[egui::vec2(24.0, -16.0)],
+        true,
+    );
+    assert!(
+        cancelled.gesture.is_none(),
+        "escape left a gesture behind: {:?}",
+        cancelled.gesture,
+    );
+
+    // And a gesture that ends where it began is a step that changes nothing,
+    // which pushes no version -- the way a verdict an observation already holds
+    // does.
+    let steps = [egui::vec2(24.0, -16.0), egui::vec2(0.0, 0.0)];
+    let still = gesture(&mut staged, &track, false, press, &steps, false);
+    let before = staged.versions().len();
+    staged
+        .state
+        .edit_bench_patch(staged.id, &staged.label, &edit_of(&still))
+        .expect("the place it already sits at");
+    assert_eq!(
+        staged.versions().len(),
+        before,
+        "a drag that ended where it started pushed a version",
+    );
+}
+
+#[test]
+fn an_edge_on_view_takes_no_press_and_a_busy_node_takes_none_either() {
+    let mut staged = staged();
+    let track = staged.track();
+    let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
+
+    // Busy first, while the view is still square on and the press would
+    // otherwise land on the dot.
+    let press = dot(&staged);
+    let held = gesture(&mut staged, &track, true, press, &steps, false);
+    assert!(
+        held.gesture.is_none(),
+        "a handle took a press while a task held the node: {:?}",
+        held.gesture,
+    );
+    assert!(held.orbited > 0.0, "the viewport should navigate instead");
+
+    // Then edge-on, where a pixel of pointer motion is an unbounded distance
+    // along the plane.
+    look_edge_on(&mut staged.viewer, &frame_of(&track));
+    staged.settle(&track);
+    let press = dot(&staged);
+    let flat = gesture(&mut staged, &track, false, press, &steps, false);
+    assert!(
+        flat.gesture.is_none(),
+        "a handle took a press on an edge-on plane: {:?}",
+        flat.gesture,
+    );
+    assert!(flat.orbited > 0.0, "the viewport should navigate instead");
+    assert_eq!(
+        flat.cursor,
+        egui::CursorIcon::Default,
+        "an edge-on plane offers no handle, so it offers no cursor",
+    );
+}
+
+#[test]
+fn a_click_on_an_observations_circle_selects_its_row() {
+    let mut staged = staged();
+    // The fixture's keypoints are their point's exact projections, so every
+    // mark sits on the centre dot. Move one off it, which is what a mark says
+    // when the photograph and the geometry disagree.
+    let track = staged.track();
+    let site = track.observations[0].site().expect("a sighting");
+    staged
+        .state
+        .edit_bench_patch(
+            staged.id,
+            &staged.label,
+            &PatchEdit::Move {
+                observation: 0,
+                pixel: [site[0] + 12.0, site[1] + 9.0],
+            },
+        )
+        .expect("a pixel on the sensor");
+    let track = staged.track();
+    staged.settle(&track);
+
+    let at = circle(&staged, 0);
+    assert!(
+        (at - dot(&staged)).length() > 12.0,
+        "the fixture's mark should be well clear of the centre dot",
+    );
+    let clicked = gesture(&mut staged, &track, false, at, &[], false);
+    assert_eq!(clicked.cursor, egui::CursorIcon::PointingHand);
+    assert_eq!(clicked.gesture, Some(BenchGesture::SelectRow(0)));
+    // And the click never reached the points under it.
+    assert!(
+        staged.viewer.pending_click.is_none(),
+        "a click the figure caught also asked for a pick",
+    );
+}
+
+/// The staged track taken to the sky, with a proper tangent frame about the
+/// bearing the first observation looks along -- so its rays still meet the
+/// tangent plane and the figure is the one a track at infinity draws.
+fn as_bearing(state: &AppState, id: ReconId, track: &EditableTrack) -> EditableTrack {
+    let seen_from = state
+        .node(id)
+        .expect("a loaded node")
+        .edited()
+        .base
+        .image_table
+        .images[track.observations[0].image as usize]
+        .camera_center();
+    let mut track = track.clone();
+    let Stage::Track(payload) = &mut track.stage else {
+        unreachable!("the staged track is at the track stage");
+    };
+    payload.at_infinity = true;
+    payload.position = None;
+    let frame = payload.frame.as_mut().expect("a surfel");
+    let direction = (frame.center - seen_from).normalize();
+    // The world axis the bearing leans on least, so the tangent frame it builds
+    // is well conditioned.
+    let up = [Vector3::x(), Vector3::y(), Vector3::z()]
+        .into_iter()
+        .min_by(|a, b| direction.dot(a).abs().total_cmp(&direction.dot(b).abs()))
+        .expect("three axes");
+    *frame = OrientedPatch::from_infinity_direction(
+        Point3::from(direction),
+        up,
+        [BEARING_HALF, BEARING_HALF],
+    );
+    track
+}
+
+/// The three handles of a track at infinity work through the same steps: the
+/// dot moves the bearing, an edge changes the tangent half-length, and a corner
+/// spins the square about the bearing.
+#[test]
+fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_spin() {
+    let mut staged = staged();
+    let track = as_bearing(&staged.state, staged.id, &staged.track());
+    let was = frame_of(&track);
+    // Looking along the bearing: a direction is projected rotation-only, so
+    // where the eye stands does not enter into it.
+    staged.viewer.camera.world_up = was.v_axis;
+    staged.viewer.camera.camera = Camera::look_at(
+        Point3::origin(),
+        Point3::from(was.center.coords),
+        was.v_axis,
+    );
+    staged.viewer.view_initialized = true;
+    staged.settle(&track);
+
+    let edited = staged
+        .state
+        .node(staged.id)
+        .expect("a loaded node")
+        .edited()
+        .clone();
+    let applied = |edit: &PatchEdit| {
+        crate::bench::geometry::apply(&track, &edited, edit)
+            .expect("the step takes a bearing")
+            .0
+    };
+
+    // The dot: the bearing moves and comes back onto the unit sphere.
+    let press = dot(&staged);
+    let dragged = gesture(
+        &mut staged,
+        &track,
+        false,
+        press,
+        &[egui::vec2(30.0, 0.0)],
+        false,
+    );
+    let slid = frame_of(&applied(&edit_of(&dragged)));
+    assert_eq!(slid.w, 0.0, "a bearing stays a bearing");
+    assert!((slid.center.coords.norm() - 1.0).abs() < 1e-12);
+    assert!(
+        (slid.center - was.center).norm() > 1e-6,
+        "the bearing did not move",
+    );
+
+    // An edge: the tangent half-length changes and the square stays square.
+    let press = edge_mid(&staged, 1);
+    let step = egui::vec2((press.x - dot(&staged).x) * 0.6, 0.0);
+    let dragged = gesture(&mut staged, &track, false, press, &[step], false);
+    let bigger = frame_of(&applied(&edit_of(&dragged)));
+    assert_eq!(bigger.w, 0.0);
+    assert_eq!(bigger.half_extent[0], bigger.half_extent[1]);
+    assert!(
+        bigger.half_extent[0] > was.half_extent[0] * 1.1,
+        "the tangent half-length did not grow: {} from {}",
+        bigger.half_extent[0],
+        was.half_extent[0],
+    );
+
+    // A corner: the square spins about the bearing, which moves nowhere.
+    let press = corner(&staged, 2);
+    let step = corner(&staged, 3) - press;
+    let dragged = gesture(&mut staged, &track, false, press, &[step], false);
+    let spun = frame_of(&applied(&edit_of(&dragged)));
+    assert_eq!(spun.center, was.center, "a turn moves the bearing nowhere");
+    assert_eq!(spun.half_extent, was.half_extent);
+    assert!(
+        (spun.u_axis - was.u_axis).norm() > 1e-3,
+        "the square did not spin",
+    );
 }

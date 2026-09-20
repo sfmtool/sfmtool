@@ -189,6 +189,25 @@ pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
     }
 }
 
+/// Whether a mouse button other than the primary one is down.
+///
+/// Windows routes every button through `WM_POINTER*` and reports them all as
+/// egui's Primary (`EnableMouseInPointer`), so egui alone cannot say which
+/// button a press was. The two bench layers have to know, because a secondary
+/// press is a panel's right-drag and its context menu and a middle press is its
+/// pan, and none of those is a handle being grabbed. Elsewhere there is nothing
+/// to disambiguate.
+pub fn other_mouse_button_down() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::mouse_button_state() & (windows::BUTTON_MIDDLE | windows::BUTTON_RIGHT) != 0
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 // Test-only override of the platform pointer position, in logical points.
 // On Windows the real source is a pair of statics fed by the window's pointer
 // messages, which no amount of synthesized egui input will move; making the

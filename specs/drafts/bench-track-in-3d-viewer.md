@@ -114,11 +114,14 @@ Detail.
 ### What the panel is told
 
 As with Image Detail, the viewer does not read the bench. The dock hands it one
-value per frame: the active node's id, the active track (an
-`Arc<EditableTrack>`), the `EditedReconstruction` at the cursor for the camera
-poses the marks need, the observation row selected in Track Edit, and whether a
+value per frame: the active node's id, the active track, the
+`EditedReconstruction` at the cursor for the camera poses the marks need, the
+node's similarity, the observation row selected in Track Edit, and whether a
 task holds the node. While a task holds the node the layer draws and no handle
-takes a press.
+takes a press. The selected row's circle is drawn 1.6 times the others', which
+is the other half of the click that sets it: a row picked in Track Edit can be
+found out in the world, and a mark picked in the world can be seen to be that
+row.
 
 ### A track at infinity
 
@@ -166,15 +169,22 @@ states what differs:
 - **Reach**: nine panel pixels for the dot, a corner, the arrowhead and a
   circle; eight from an edge or from the normal's segment. Where reaches
   overlap the order is arrowhead, corner, dot, circle, edge, normal segment.
-- **Cursors**: `Move` on the dot, the on-screen-orientation resize cursor on an
-  edge, `Alias` with the small arc on a corner, as in Image Detail. The normal's
-  segment takes the resize cursor along its own on-screen direction. The
-  arrowhead takes `Grab`, and `Grabbing` while held.
+- **Cursors**: `Move` on the dot and `Grabbing` while it is held, the
+  on-screen-orientation resize cursor on an edge, `Alias` on a corner, as in
+  Image Detail; a circle selects rather than moves, so it takes `PointingHand`.
+  The normal's segment takes the resize cursor along its own on-screen
+  direction. The arrowhead takes `Grab`, and `Grabbing` while held. The arc
+  glyph Image Detail draws beside a hovered corner has no counterpart here:
+  every mark of this figure is scene geometry drawn by the pass, and a hint that
+  follows the pointer is not.
 
 **The pointer is a ray of the viewer's camera**, where in Image Detail it is a
 ray of a reconstruction camera. Everything else about reading it is the same
 idea: the ray is met with the patch's own geometry, and the edit is stated in
-the patch's own terms.
+the patch's own terms. The ray is taken back through the node's similarity
+first, because the figure is drawn in the world and the core steps act in the
+reconstruction's own coordinates; a similarity preserves angles, so the
+degenerate-view tests read the same on either side of it.
 
 | Handle | The pointer ray is met with | The edit |
 |---|---|---|
@@ -260,14 +270,25 @@ Two things in `sfmtool_core::bench` change shape, and two steps are added.
 `resize_from_edge` take a pixel of an observation's image, unproject it onto the
 plane, and act. The part after the unprojection becomes the step, taking the
 point on the plane, and the pixel form becomes the unprojection in front of it.
-There is one implementation of each edit and both panels reach it.
+There is one implementation of each edit and both panels reach it. The
+unprojection is the same one for both: the pointer's offset is read from the
+**outline's** centre -- the surfel re-anchored on that sighting -- and carried to
+the surfel's own centre, and that is the place the step is handed.
+
+The slide's report is `TranslateToReport` rather than `TranslateFrameReport`:
+the latter names an observation, an image and a pixel, and a caller naming a
+place in the world has none of the three. `ResizeReport` already carries its
+three as `Option`, `resize_frame` naming no pixel either, so the resize reuses
+it with all three `None`. A place that is not a finite point is refused as
+`TrackEditError::BadPlace`, the way a pixel that is not one is refused as
+`BadPixel`.
 
 ```rust
 /// Slide the surfel until its centre sits at `point`, which is projected onto
 /// the frame's plane first. Every sighting follows.
 pub fn translate_frame_to(track: &EditableTrack, edited: &EditedReconstruction,
                           point: Point3<f64>)
-    -> Result<(EditableTrack, TranslateFrameReport), TrackEditError>;
+    -> Result<(EditableTrack, TranslateToReport), TrackEditError>;
 
 /// Put `edge` at `point`'s offset along that edge's axis, the far edge held.
 pub fn resize_from_edge_to(track: &EditableTrack, edited: &EditedReconstruction,
@@ -308,8 +329,18 @@ half-length, a tilt within a nanoradian.
 
 | Step | Version label |
 |---|---|
+| Slide to a place | `Moved pt3d_a1b2c3d4_1207 by 0.042 units to (1.204, -0.318, 4.006)` |
+| Resize to a place | `Resized pt3d_a1b2c3d4_1207 to a half-length of 0.0184` |
 | Offset along the normal | `Moved pt3d_a1b2c3d4_1207 by 0.042 units along its normal to (1.204, -0.318, 4.006)` |
 | Tilt | `Tilted pt3d_a1b2c3d4_1207 by 8.4 degrees` |
+
+The first two are the sentences the pixel forms already write, minus what a
+photograph gave them. A slide's loses the clamp note, no pixel having been
+brought inside a picture. A resize's reports the **world half-length**: the
+existing sentence names a size in the pixels of the sighting the gesture came
+through, and a gesture out in the world came through none, so it falls back to
+the world number the label already carries for a patch that does not project
+into its sighting's image.
 
 **The wire** gets a tool per new edit, each one `edit_bench_patch`, so a drag
 and a call are the same version with the same sentence:
