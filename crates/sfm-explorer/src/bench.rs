@@ -297,7 +297,7 @@ pub(crate) struct ObservationSite {
     pub(crate) pixel: [f64; 2],
     /// The affine shape read at it -- keypoint-frame units to this image's
     /// pixels -- where the cluster slot carries one. `None` for an observation
-    /// that has only a track-stage keypoint, whose shape is the surfel's.
+    /// that has only a track-stage keypoint, whose shape is the patch's.
     pub(crate) shape: Option<[[f64; 2]; 2]>,
 }
 
@@ -517,10 +517,10 @@ impl AppState {
     }
 
     /// Apply one hand edit of a track's geometry: a sighting placed, the
-    /// surfel resized or turned, or one cluster-stage sighting's shape set.
+    /// patch resized or turned, or one cluster-stage sighting's shape set.
     ///
     /// The one call behind every handle of the Image Detail panel's bench layer
-    /// and behind the wire's three patch tools, so a drag and a tool call are
+    /// and behind the wire's eight patch tools, so a drag and a tool call are
     /// the same version carrying the same sentence
     /// (`specs/gui/multi-panel-image-browser.md` § "The bench layer"). One version per
     /// gesture: a drag pushes nothing until it is released, and a release that
@@ -570,7 +570,7 @@ impl AppState {
         report: &geometry::EditReport,
     ) -> String {
         match report {
-            geometry::EditReport::Translated(report) => {
+            geometry::EditReport::TranslatedToPixel(report) => {
                 let centre = report.center;
                 format!(
                     "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3}){}",
@@ -581,23 +581,30 @@ impl AppState {
                     clamp_note(report.clamped_from, report.pixel)
                 )
             }
-            // The same sentence a pixel slide writes, minus the clamp note: a
-            // place in the world was not brought inside any photograph.
-            geometry::EditReport::SlidTo(report) => {
+            // One step moves the patch in two directions, and the sentence says
+            // which: a displacement along the normal is a statement about depth
+            // whose **sign** is half the answer -- a patch pushed away from the
+            // cameras and one pulled toward them say opposite things -- while a
+            // tangential one has nothing but its length to report. A mixed
+            // displacement names both parts, which is the only reading that
+            // works for either.
+            geometry::EditReport::Translated(report) => {
                 let centre = report.center;
+                let by = report.by;
+                let across = by.x.hypot(by.y);
+                let how = if across == 0.0 && by.z != 0.0 {
+                    format!("{:.3} units along its normal", by.z)
+                } else if by.z == 0.0 {
+                    format!("{:.3} units", report.moved)
+                } else {
+                    format!(
+                        "{across:.3} units across its plane and {:.3} along its normal",
+                        by.z
+                    )
+                };
                 format!(
-                    "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3})",
-                    report.moved, centre.x, centre.y, centre.z
-                )
-            }
-            // The signed distance rather than a length: an offset toward the
-            // cameras and one away from them are opposite answers about how far
-            // off the patch is, and the sentence has to tell them apart.
-            geometry::EditReport::Offset(report) => {
-                let centre = report.center;
-                format!(
-                    "Moved {label} by {:.3} units along its normal to ({:.3}, {:.3}, {:.3})",
-                    report.distance, centre.x, centre.y, centre.z
+                    "Moved {label} by {how} to ({:.3}, {:.3}, {:.3})",
+                    centre.x, centre.y, centre.z
                 )
             }
             // The turn actually made, and the observation that cut it short
@@ -618,7 +625,7 @@ impl AppState {
                     .unwrap_or_default();
                 format!("Tilted {label} by {:.1} degrees{stopped}", report.degrees)
             }
-            geometry::EditReport::Moved(report) => {
+            geometry::EditReport::Sighted(report) => {
                 let name = self.image_name(ImageRef::new(id, report.image as usize));
                 let moved = report
                     .moved_px
@@ -633,17 +640,24 @@ impl AppState {
                 )
             }
             geometry::EditReport::Resized(report) => {
-                let size = self.frame_size_phrase(id, next, report.observation);
+                let size = self.patch_size_phrase(id, next, report.observation);
                 let note = clamp_note(report.clamped_from, report.pixel.unwrap_or_default());
                 format!("Resized {label} to {size}{note}")
             }
-            geometry::EditReport::Rotated(report) => {
-                format!("Rotated {label} by {:.1} degrees", report.degrees)
+            geometry::EditReport::Spun(report) => {
+                format!("Spun {label} by {:.1} degrees", report.degrees)
             }
-            geometry::EditReport::Turned { report, degrees } => format!(
-                "Rotated observation {} of {label} by {degrees:.1} degrees",
+            geometry::EditReport::SpunShape { report, degrees } => format!(
+                "Spun observation {} of {label} by {degrees:.1} degrees",
                 report.observation
             ),
+            geometry::EditReport::Shaped(report) => {
+                let name = self.image_name(ImageRef::new(id, report.image as usize));
+                format!(
+                    "Shaped observation {} of {label} to {:.1} px in {name}",
+                    report.observation, report.half_px
+                )
+            }
         }
     }
 
@@ -653,12 +667,12 @@ impl AppState {
     /// half-length says nothing to someone looking at a photograph; in world
     /// units only when the gesture named no sighting or the patch does not
     /// project into its image. A resize in the **3D viewer** names none: the
-    /// square dragged there is the surfel itself, in the world, so the world
+    /// square dragged there is the patch itself, in the world, so the world
     /// half-length is the honest number and no photograph is picked to stand
     /// in for it. `at` is an **observation** index, not an image:
     /// the size a person reads off an outline is the size of the outline drawn
-    /// at that sighting, which is the surfel re-anchored on it.
-    fn frame_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {
+    /// at that sighting, which is the patch re-anchored on it.
+    fn patch_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {
         let px = at.and_then(|index| {
             let observation = track.observations.get(index)?;
             let image = observation.image as usize;
@@ -666,7 +680,7 @@ impl AppState {
             let (camera, pose) = geometry::view_of(&node.edited().base.image_table, image)?;
             let half = match track.stage_kind() {
                 StageKind::Track => {
-                    let frame = track.track()?.frame.as_ref()?;
+                    let frame = track.track()?.placement.as_ref()?;
                     let anchored = geometry::anchored_frame(frame, &camera, &pose, observation);
                     geometry::half_width_px(&anchored, &camera, &pose)?
                 }
@@ -683,7 +697,7 @@ impl AppState {
         px.unwrap_or_else(|| {
             track
                 .track()
-                .and_then(|payload| payload.frame.as_ref())
+                .and_then(|payload| payload.placement.as_ref())
                 .map(|frame| format!("a half-length of {:.4}", frame.half_extent[0]))
                 .unwrap_or_else(|| "its new size".to_string())
         })
@@ -1010,7 +1024,7 @@ impl AppState {
     /// Fit the track called `label` at the stage it is in, on a worker thread.
     ///
     /// The step that **moves** the track: at the track stage it localizes every
-    /// sighting against the surfel, re-triangulates the `in` ones, re-centres
+    /// sighting against the patch, re-triangulates the `in` ones, re-centres
     /// the frame and fuses the consensus, and then reads the result back so the
     /// numbers it leaves behind are the ones *Evaluate* would report.
     ///

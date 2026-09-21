@@ -6,7 +6,7 @@
 //! `specs/core/bench/editable-track.md` is the design. Where
 //! [`evaluate`](super::evaluate::evaluate()) reads a track and writes only what it
 //! read, [`fit`] is the modification: at the track stage it localizes every
-//! sighting against the surfel, refines each to sub-pixel, re-triangulates the
+//! sighting against the patch, refines each to sub-pixel, re-triangulates the
 //! `in` results, fuses the consensus bitmap and writes the keypoints, the
 //! position and the frame. It sets no verdict -- the thresholds propose and
 //! [`apply_thresholds`](super::steps::apply_thresholds) applies the proposal --
@@ -116,8 +116,8 @@ pub enum FitError {
     /// Fewer than two observations are `in`, so the track stage has no
     /// consensus to register against and nothing to triangulate.
     TooFewObservations(usize),
-    /// The track carries no patch frame, so there is no surfel the localizer
-    /// can register a view against.
+    /// The track carries no patch, so there is nothing the localizer can
+    /// register a view against.
     NoFrame,
     /// The `in` observations do not triangulate: the linear solve came back with
     /// a coordinate that is not a number.
@@ -267,7 +267,7 @@ impl std::fmt::Display for FitReport {
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
 /// index, exactly as every other photometric step of the bench takes them.
 ///
-/// **At the track stage** the surfel is registered into every view of every
+/// **At the track stage** the patch is registered into every view of every
 /// round by the two kernels the embed pass chains -- as the
 /// track carries it, bearing and all -- the `in` results are re-triangulated,
 /// the frame is placed at what they resolve to and the consensus bitmap is fused
@@ -350,11 +350,11 @@ pub fn fit(
         }
         Stage::Track(payload) => {
             // The frame goes in as the track carries it, bearing and all: a
-            // `w = 0` surfel is tangent to the direction sphere and registering
+            // `w = 0` patch is tangent to the direction sphere and registering
             // against it is what reads the photographs the track actually has.
             // Which representation the track leaves with is the
             // re-triangulation's to say, not the frame it arrived on.
-            let frame = payload.frame.clone().ok_or(FitError::NoFrame)?;
+            let frame = payload.placement.clone().ok_or(FitError::NoFrame)?;
             fit_track(track, edited, images, &frame, options, progress)
         }
     }
@@ -364,7 +364,7 @@ pub fn fit(
 /// alone.
 ///
 /// The half of [`fit`]'s validation that reads no photograph: whether the track
-/// stage has a surfel to register against, and whether enough observations are
+/// stage has a patch to register against, and whether enough observations are
 /// `in` for the consensus it registers against to exist. A caller that runs the
 /// fit somewhere expensive -- on a worker, after decoding a dozen images -- asks
 /// this first and refuses in front of the decode.
@@ -388,7 +388,7 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     let Stage::Track(payload) = &track.stage else {
         return Ok(());
     };
-    if payload.frame.is_none() {
+    if payload.placement.is_none() {
         return Err(FitError::NoFrame);
     }
     let ins = track.in_observations().len();
@@ -413,7 +413,7 @@ fn placement_scale(position: &Point3<f64>, images: &[ProjectedImage<'_>]) -> f64
     (position.coords - centroid).norm()
 }
 
-/// The surfel `classification` says the track now stands on, built from the one
+/// The patch `classification` says the track now stands on, built from the one
 /// it was fitted against.
 ///
 /// Four cases, and all four keep the patch the apparent size it had:
@@ -592,7 +592,7 @@ pub(super) fn fit_track(
     next.stage = Stage::Track(TrackPayload {
         position: Some(position),
         at_infinity: classification.at_infinity,
-        frame: Some(placed),
+        placement: Some(placed),
         color: color
             .or_else(|| previous.map(|p| p.color))
             .unwrap_or([0; 3]),

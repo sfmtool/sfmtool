@@ -13,11 +13,11 @@
 //!
 //! What it draws is the track's own geometry rather than a symbol for it:
 //!
-//! - At the **track stage** the surfel's square boundary is sampled and each
+//! - At the **track stage** the patch's square boundary is sampled and each
 //!   sample projected through the camera, so the outline is the curve a
 //!   distorting lens really maps that square to. Beside it, each observation's
 //!   keypoint and, for **every** observation and in that observation's own
-//!   verdict colour, the segment from the keypoint to the surfel's own
+//!   verdict colour, the segment from the keypoint to the patch's own
 //!   projection, which is the projection offset the *Proj. off* column
 //!   reports. Where a sighting sits on the projection the segment has no
 //!   length and is not seen, which is the answer as much as a long one is.
@@ -27,7 +27,7 @@
 //!   The two apart are how far the refinement moved and how much it turned.
 //!
 //! **What it draws, it edits.** At the track stage every handle edits the one
-//! surfel and each photograph shows where it lands: the dot slides it across
+//! patch and each photograph shows where it lands: the dot slides it across
 //! its own plane, an edge resizes it, a corner turns it. At the cluster stage
 //! there is no shared geometry, so each handle is that sighting's own -- the
 //! dot moves its seed and the outline is its own affine shape. Each drag
@@ -75,11 +75,11 @@ const EDGE_HIT_WIDTH: f32 = 8.0;
 /// Radius of the arc glyph drawn beside a hovered corner, in panel px.
 const TURN_GLYPH_RADIUS: f32 = 9.0;
 
-/// Samples per edge of the projected surfel boundary, before the size of the
+/// Samples per edge of the projected patch boundary, before the size of the
 /// projection is known.
 const BASE_SAMPLES: usize = 8;
 
-/// The most samples per edge, for a surfel that fills the panel.
+/// The most samples per edge, for a patch that fills the panel.
 const MAX_SAMPLES: usize = 64;
 
 /// The four `(s, t)` corners of a patch's square, in the order
@@ -168,7 +168,7 @@ pub(super) struct Layer {
     /// The outlines: one at the track stage, one per observation at the cluster
     /// stage.
     outlines: Vec<Outline>,
-    /// The surfel's own projection, which every observation's
+    /// The patch's own projection, which every observation's
     /// projection-offset segment runs to. `None` at the cluster stage and for
     /// a track nothing has triangulated.
     center: Option<Pos2>,
@@ -298,7 +298,12 @@ impl Layer {
         match &track.stage {
             Stage::Track(payload) => {
                 let view = geometry::view_of(image_table, img_idx);
-                layer.build_track_stage(&here, payload.frame.as_ref(), view.as_ref(), &to_panel);
+                layer.build_track_stage(
+                    &here,
+                    payload.placement.as_ref(),
+                    view.as_ref(),
+                    &to_panel,
+                );
             }
             // The cluster's own radius, which it carries from the moment it is
             // started: a seed draws at the size it was named before anything
@@ -309,11 +314,11 @@ impl Layer {
         Some(layer)
     }
 
-    /// The track stage: the surfel's outline once, anchored on the sighting the
+    /// The track stage: the patch's outline once, anchored on the sighting the
     /// strongest verdict names.
     ///
     /// One outline for the image rather than one per observation, because there
-    /// is one surfel: two candidates in a photograph are two readings of where
+    /// is one patch: two candidates in a photograph are two readings of where
     /// it lands, not two squares. Its colour is the strongest verdict among
     /// them, so an image the track is `in` reads as `in`. It is drawn through
     /// the frame re-anchored on that sighting, as the tile is rendered: the
@@ -531,7 +536,7 @@ impl Layer {
             painter.circle_filled(sighting.at, KEYPOINT_RADIUS, color);
             // The projection offset, drawn rather than tabulated, and drawn
             // for every observation whatever its verdict: where this image's
-            // feature sits relative to where the surfel says it should is the
+            // feature sits relative to where the patch says it should is the
             // question the layer exists to answer, and an observation already
             // judged in is exactly the one whose answer is worth seeing. A
             // sighting that sits on the projection draws a segment of no
@@ -595,7 +600,7 @@ impl Layer {
     ///
     /// Two of the three gestures are already in those terms: a dot drag and an
     /// edge drag both name a pixel, and the arithmetic behind the edge -- the
-    /// opposite edge held still -- is `sfmtool_core::bench::resize_from_edge`'s
+    /// opposite edge held still -- is `sfmtool_core::bench::resize_patch_to_pixel`'s
     /// rather than this panel's, so a tool call and a drag cannot resize
     /// differently. What is left here is the turn, which is a reading of two
     /// pointer positions against the patch and has no other home.
@@ -618,21 +623,21 @@ impl Layer {
         match drag.handle {
             // The dot means different things at the two stages, because the two
             // stages have different things to move: a track-stage track has one
-            // surfel and every sighting is a view of it, so dragging the mark
+            // patch and every sighting is a view of it, so dragging the mark
             // slides the **patch** and every sighting follows; a cluster has no
             // shared geometry at all, so the mark is that sighting's own seed
             // and nothing else moves.
             Handle::Keypoint { .. } => Some(match track.stage {
-                Stage::Track(_) => PatchEdit::Translate {
+                Stage::Track(_) => PatchEdit::TranslateToPixel {
                     observation,
                     pixel: drag.to,
                 },
-                Stage::Cluster(_) => PatchEdit::Move {
+                Stage::Cluster(_) => PatchEdit::Sight {
                     observation,
                     pixel: drag.to,
                 },
             }),
-            Handle::Edge { edge, .. } => Some(PatchEdit::ResizeFromEdge {
+            Handle::Edge { edge, .. } => Some(PatchEdit::ResizeToPixel {
                 observation,
                 edge,
                 pixel: drag.to,
@@ -641,17 +646,17 @@ impl Layer {
                 let sighting = track.observations.get(observation)?;
                 match &track.stage {
                     Stage::Track(payload) => {
-                        let frame = payload.frame.as_ref()?;
+                        let frame = payload.placement.as_ref()?;
                         let (camera, pose) = geometry::view_of(image_table, drag.image)?;
                         let anchored = geometry::anchored_frame(frame, &camera, &pose, sighting);
                         let angle_rad =
                             geometry::turn_between(&anchored, &camera, &pose, drag.from, drag.to)?;
-                        Some(PatchEdit::Rotate { angle_rad })
+                        Some(PatchEdit::Spin { angle_rad })
                     }
                     Stage::Cluster(_) => {
                         let angle_rad =
                             geometry::pixel_turn_between(sighting.site()?, drag.from, drag.to)?;
-                        Some(PatchEdit::RotateShape {
+                        Some(PatchEdit::SpinShape {
                             observation,
                             angle_rad,
                         })
@@ -730,7 +735,7 @@ pub(super) fn draw(
 }
 
 /// The four panel-space corners of the square `[-radius, radius]^2` mapped
-/// through `shape` at `position`, in the same `(s, t)` order the surfel's
+/// through `shape` at `position`, in the same `(s, t)` order the patch's
 /// boundary walks.
 fn parallelogram(
     position: [f64; 2],
@@ -750,7 +755,7 @@ fn parallelogram(
         .collect()
 }
 
-/// The surfel's boundary projected into the view, as one sample per boundary
+/// The patch's boundary projected into the view, as one sample per boundary
 /// point with `None` where it did not land, and how many samples each edge got.
 ///
 /// The density follows the size of the projection: the corners are projected

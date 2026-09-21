@@ -67,9 +67,12 @@ fn staged_track() -> (AppState, crate::scene::ReconId, EditableTrack) {
 }
 
 /// The track's frame, which every test here has one of.
-fn frame_of(track: &EditableTrack) -> &sfmtool_core::patch::cloud::OrientedPatch {
+fn placement_of(track: &EditableTrack) -> &sfmtool_core::patch::cloud::OrientedPatch {
     match &track.stage {
-        Stage::Track(payload) => payload.frame.as_ref().expect("a point carries its surfel"),
+        Stage::Track(payload) => payload
+            .placement
+            .as_ref()
+            .expect("a point carries its patch"),
         Stage::Cluster(_) => panic!("the staged track is at the track stage"),
     }
 }
@@ -125,7 +128,7 @@ fn every_endpoint_of_a_finite_figure_is_a_place() {
 #[test]
 fn a_track_at_infinity_draws_directions_and_no_normal() {
     let (state, id, mut track) = staged_track();
-    // The same surfel taken to the sky. Its bearing is the one the first
+    // The same patch taken to the sky. Its bearing is the one the first
     // observation looks along rather than the one the world origin does, so
     // that observation's ray meets the tangent plane in front of its camera and
     // the marks are drawn: a bearing every sighting points away from would
@@ -142,7 +145,7 @@ fn a_track_at_infinity_draws_directions_and_no_normal() {
         unreachable!("the staged track is at the track stage");
     };
     payload.at_infinity = true;
-    let frame = payload.frame.as_mut().expect("a surfel");
+    let frame = payload.placement.as_mut().expect("a patch");
     frame.center = Point3::from((frame.center - seen_from).normalize());
     frame.w = 0.0;
 
@@ -181,7 +184,7 @@ fn a_track_with_no_frame_draws_nothing() {
     let Stage::Track(payload) = &mut track.stage else {
         unreachable!("the staged track is at the track stage");
     };
-    payload.frame = None;
+    payload.placement = None;
 
     assert!(figure_of(&state, id, &track).is_none());
 }
@@ -205,7 +208,7 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
     let Stage::Track(payload) = &track.stage else {
         panic!("a track-stage track");
     };
-    let frame = payload.frame.as_ref().expect("a frame");
+    let frame = payload.placement.as_ref().expect("a frame");
     let lift = frame.normal() * (super::PLANE_LIFT * frame.half_extent[0]);
 
     for (observation, mark) in placed.iter().zip(&figure.marks) {
@@ -263,7 +266,7 @@ fn the_marks_carry_their_verdicts_while_the_frame_and_the_normal_stay_in() {
 #[test]
 fn the_fog_distance_is_four_half_lengths_of_the_frame() {
     let (state, id, track) = staged_track();
-    let half = frame_of(&track).half_extent[0];
+    let half = placement_of(&track).half_extent[0];
     let figure = figure_of(&state, id, &track).expect("a figure");
 
     // The demo node is unaligned, so the world half-length is the stored one.

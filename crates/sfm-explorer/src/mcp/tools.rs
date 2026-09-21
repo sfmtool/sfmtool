@@ -1162,33 +1162,53 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "move_bench_track",
-            description: "Slide a bench track's patch across its own plane until its centre sits \
-                          under a pixel — the dot drag on the Image Detail panel's bench layer. A \
-                          track-stage track has one surfel and every observation is a view of it, \
-                          so this moves the patch and not a sighting: the centre moves in-plane, \
-                          the half-vectors and the normal are kept, and every observation's \
-                          keypoint is carried along the plane by that same displacement -- \
-                          keeping its own offset from the centre's projection, which is what the \
-                          tiles are cut on -- so the outline moves in every image at once and the \
-                          sighting you aimed through lands on the pixel you named. Slide, turn and \
-                          resize together are how a patch is made to cover the piece of surface \
-                          you mean. Nothing is pinned: a translation says where the patch is, not \
-                          whether a sighting belongs to it. The observation names the image the \
-                          pixel is in. A cluster-stage track has no shared geometry — use \
-                          move_bench_track_observation there.",
+            name: "translate_bench_patch",
+            description: "Move a bench track's patch -- the dot drag on the Image Detail panel's \
+                          bench layer, and the dot and normal-segment drags in the 3D viewer. A \
+                          track-stage track has one patch and every observation is a view of it, \
+                          so this moves the patch and not a sighting: the centre moves, the axes \
+                          and the size are kept, and every observation's keypoint is carried by \
+                          that same displacement, keeping its own offset from the centre's \
+                          projection, which is what the tiles are cut on. Name where it goes in \
+                          exactly one of two ways. `by` is [u, v, n] on the patch's OWN \
+                          orthonormal axes, in the reconstruction's world units: u and v slide it \
+                          across its own plane, n moves it along its outward normal, and both \
+                          together are allowed. The n part is a statement no photograph can make \
+                          -- a sighting says which ray the patch lies along and nothing about how \
+                          far down it the surface is -- so it is where a patch's depth is settled, \
+                          and the sightings then move by DIFFERENT amounts in their photographs, \
+                          that spread being the parallax the old depth was wrong by. Or name an \
+                          `observation` and a `pixel`, and the centre lands under that pixel of \
+                          that observation's image. Nothing is pinned: where the patch is says \
+                          nothing about whether a sighting belongs to it. A track at infinity \
+                          refuses a `by` with an n part, its normal being its own bearing. A \
+                          cluster-stage track has no shared geometry -- use \
+                          sight_bench_observation there.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
                 &[
                     ("reconstruction_label", edited_label_schema()),
+                    (
+                        "by",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "minItems": 3,
+                            "maxItems": 3,
+                            "description":
+                                "[u, v, n] on the patch's own orthonormal axes, in the \
+                                 reconstruction's world units. Give this or the \
+                                 observation/pixel pair, not both.",
+                        }),
+                    ),
                     ("observation", observation_schema()),
                     ("pixel", pixel_schema()),
                 ],
             ),
         },
         ToolSpec {
-            name: "move_bench_track_observation",
+            name: "sight_bench_observation",
             description: "Put ONE observation's own sighting of a bench track at a pixel, by \
                           hand, leaving every other where it is. At the track stage this writes \
                           its keypoint, which is the pixel a commit writes; at the cluster stage \
@@ -1197,8 +1217,8 @@ fn build_catalog() -> Vec<ToolSpec> {
                           the new one, and the observation is pinned: a sighting you placed is \
                           one you have ruled on, so the thresholds leave its verdict alone. The \
                           panel's dot drag is this only at the cluster stage; at the track stage \
-                          it moves the whole patch (move_bench_track), because there the surfel \
-                          is the thing every sighting is a view of.",
+                          it moves the whole patch (translate_bench_patch), because there the \
+                          patch is the thing every sighting is a view of.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -1210,19 +1230,77 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "resize_bench_track",
-            description: "Resize a bench track's patch by putting one edge of its outline under \
-                          a pixel, with the opposite edge left where it is — the edge drag on the \
-                          Image Detail panel's bench layer. The pixel is unprojected onto the \
-                          patch's own plane, so the edge lands there exactly, through whatever \
-                          distortion the lens has. Patch frames are square, so a resize is one \
-                          scale and not two: the whole square grows or shrinks about the far \
-                          edge. The observation says whose outline is meant — the surfel \
-                          re-anchored on that sighting at the track stage, its own parallelogram \
-                          at the cluster stage — and the pixel is in that observation's image. At \
-                          the track stage the resize moves the centre, so every observation's \
-                          keypoint is carried along the plane by that displacement, as \
-                          move_bench_track's are; nothing is pinned.",
+            name: "shape_bench_observation",
+            description: "Give ONE cluster-stage sighting its affine shape outright: the 2x2 map \
+                          from the detector's canonical keypoint frame onto that image's pixels, \
+                          shear and all. The general form of the two gestures over a \
+                          parallelogram, where spin_bench_shape only turns it and \
+                          resize_bench_shape only scales it. A shape is a scale rather than a \
+                          size, so it is read over the cluster's own radius. The sighting is \
+                          re-seeded where it is already drawn and its refinement is dropped, that \
+                          having been an answer about the shape it was run at; the verdict is NOT \
+                          pinned, because a shape is not a ruling on whether the sighting \
+                          belongs. A track-stage track is refused: there the square is the \
+                          patch's.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    ("shape", affine_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "resize_bench_patch",
+            description: "Resize a bench track's patch. Name the size in exactly one of two \
+                          ways. `half_length` is a world half-length in the reconstruction's own \
+                          units, and `moved_edge` says what becomes of the sightings: named \
+                          (\"+u\", \"-u\", \"+v\", \"-v\"), that edge moves and the opposite one \
+                          is held, so the centre shifts and every sighting is carried with it; \
+                          omitted, both edges move about a held centre and no sighting is touched \
+                          at all. Or name an `observation`, an `edge` and a `pixel` -- the edge \
+                          drag on the Image Detail panel's bench layer -- and the pixel is \
+                          unprojected onto the patch's own plane, so the edge lands there exactly \
+                          through whatever distortion the lens has; the observation says whose \
+                          outline is meant, which is the patch re-anchored on that sighting. \
+                          A patch is square, so a resize is one scale and not two. Nothing \
+                          is pinned. A cluster-stage track is refused: use resize_bench_shape.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "half_length",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description":
+                                "The patch's new half-length along both axes, in the \
+                                 reconstruction's world units. Give this or the \
+                                 observation/edge/pixel triple, not both.",
+                        }),
+                    ),
+                    ("moved_edge", edge_schema()),
+                    ("observation", observation_schema()),
+                    ("edge", edge_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "resize_bench_shape",
+            description: "Resize ONE cluster-stage sighting's parallelogram by putting one edge \
+                          of it under a pixel, with the opposite edge left where it is -- the \
+                          edge drag on the Image Detail panel's bench layer at the cluster \
+                          stage. There is no shared geometry there, so the arithmetic runs in \
+                          that image's pixels: the shape is scaled by one scalar, which keeps \
+                          whatever anisotropy the detector read, and the sighting moves by half \
+                          the change along the dragged edge's own direction, which is what holds \
+                          the far edge still. Only that observation is touched. A track-stage \
+                          track is refused: its square is the patch's, so use resize_bench_patch.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -1235,38 +1313,7 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "offset_bench_track",
-            description: "Move a bench track's patch along its own outward normal -- the \
-                          normal-segment drag in the 3D viewer, and one of the two gestures no \
-                          photograph can make. A sighting says which ray the patch lies along \
-                          and nothing about how far down it the surface is, so this is where \
-                          the depth of a patch is settled: distance is a world length, positive \
-                          toward the face the patch shows and negative behind it. The plane \
-                          travels with the patch, so every observation keeps its own in-plane \
-                          offset and its keypoint becomes the projection of the patch where it \
-                          now stands -- a different move in every photograph, and that spread \
-                          is the parallax the old depth was wrong by. A sighting the moved patch \
-                          no longer projects into is left with no keypoint. Nothing is pinned, \
-                          and a track at infinity is refused: its normal is its own bearing.",
-            kind: Write,
-            schema: object(
-                &[("track", bench_track_schema())],
-                &[
-                    ("reconstruction_label", edited_label_schema()),
-                    (
-                        "distance",
-                        json!({
-                            "type": "number",
-                            "description":
-                                "How far to move, in the reconstruction's own world units, \
-                                 positive along the patch's outward normal.",
-                        }),
-                    ),
-                ],
-            ),
-        },
-        ToolSpec {
-            name: "tilt_bench_track",
+            name: "tilt_bench_patch",
             description: "Turn a bench track's patch to face a new outward normal -- the \
                           arrowhead drag in the 3D viewer, and the other gesture no photograph \
                           can make. A sighting says which ray the patch lies along and nothing \
@@ -1274,7 +1321,7 @@ fn build_catalog() -> Vec<ToolSpec> {
                           orientation of a patch is settled. The turn is the least rotation onto \
                           the normal named, about the axis square to the old normal and the new \
                           one, so no spin about the normal comes with it -- that is \
-                          rotate_bench_track's. The centre and the half-length do not move, and \
+                          spin_bench_patch's. The centre and the half-length do not move, and \
                           every observation keeps its own in-plane offset, its keypoint becoming \
                           the projection of that offset rebuilt on the turned axes; a sighting \
                           the turned patch no longer projects into is left with no keypoint. \
@@ -1305,14 +1352,41 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "rotate_bench_track",
-            description: "Turn a bench track's patch in its own plane — the corner drag on the \
-                          Image Detail panel's bench layer. At the track stage the surfel turns \
-                          about its own outward normal, keeping its place, its size and the face \
-                          it shows, so no observation need be named; at the cluster stage there \
-                          is no surfel, only one affine shape per sighting, so name the \
-                          observation whose shape should turn. Nothing moves: every sighting \
-                          stays where it is.",
+            name: "spin_bench_patch",
+            description: "Turn a bench track's patch about its own outward normal -- the corner \
+                          drag on the Image Detail panel's bench layer at the track stage. The \
+                          square turns in place, keeping its centre, its size and the face it \
+                          shows, so what changes is only which way up it sits and no sighting \
+                          moves at all. That is what makes it a different step from a tilt, \
+                          which turns the normal itself. A cluster-stage track is refused: it \
+                          has no patch to turn, only one affine shape per sighting, so use \
+                          spin_bench_shape.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "degrees",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "How far to turn, in degrees, positive about the patch's outward \
+                                 normal.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "spin_bench_shape",
+            description: "Turn ONE cluster-stage sighting's parallelogram in its own image's \
+                          pixels -- the corner drag on the Image Detail panel's bench layer at \
+                          the cluster stage. The shape spins about the sighting and keeps its \
+                          size and its shear; the sighting itself does not move, and its \
+                          refinement is dropped because that was an answer about the shape it \
+                          was run at. A track-stage track is refused: there one patch turns \
+                          about its own normal, so use spin_bench_patch.",
             kind: Write,
             schema: object(
                 &[
@@ -1326,9 +1400,8 @@ fn build_catalog() -> Vec<ToolSpec> {
                         json!({
                             "type": "number",
                             "description":
-                                "How far to turn, in degrees, positive about the patch's outward \
-                                 normal at the track stage and from +x toward +y of the image \
-                                 raster at the cluster stage.",
+                                "How far to turn, in degrees, positive from +x toward +y of the \
+                                 image raster.",
                         }),
                     ),
                 ],
@@ -1385,7 +1458,7 @@ fn build_catalog() -> Vec<ToolSpec> {
                         "max_shift_px",
                         threshold_schema(
                             "How far an observation may sit from its seed (cluster stage) or \
-                             from the surfel's projection (track stage), in source-image px.",
+                             from the patch's projection (track stage), in source-image px.",
                         ),
                     ),
                     (
@@ -1480,7 +1553,7 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "fit_bench_track",
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
-                          the track stage it localizes every sighting against the surfel, \
+                          the track stage it localizes every sighting against the patch, \
                           refines each to sub-pixel, re-triangulates the in ones, re-centres \
                           the frame there and re-fuses the consensus bitmap; at the cluster \
                           stage it is the refinement, which is what a reading is too. Nothing \
@@ -1502,7 +1575,7 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "set_bench_track_stage",
             description: "Move a bench track between its two representations. \"track\" \
-                          triangulates the in observations, fits a surfel to them and localizes \
+                          triangulates the in observations, fits a patch to them and localizes \
                           each keypoint against it, which is what a commit needs; \"cluster\" \
                           drops the geometry and leaves the patches registering onto one \
                           template, which is what questioning a wrong position looks like. Runs \
@@ -1847,6 +1920,26 @@ fn bench_track_schema() -> Value {
         "description":
             "Which track on the bench, by its label. Omit for the active track, which is what \
              the Track Edit panel is showing and what a create or an activate last made active.",
+    })
+}
+
+/// One sighting's affine shape: the detector's canonical keypoint frame mapped
+/// onto that image's pixels.
+fn affine_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 2,
+            "maxItems": 2,
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "description":
+            "The affine shape, as [[a11, a12], [a21, a22]]: the detector's canonical keypoint \
+             frame mapped onto this image's pixels, which is what a .sift feature's shape is. A \
+             shape is a scale rather than a size, so it is read over the cluster's own radius.",
     })
 }
 
@@ -2453,40 +2546,52 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.optional_string("item")?,
         },
-        "move_bench_track" => Command::MoveBenchTrack {
+        "translate_bench_patch" => Command::TranslateBenchPatch {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            to: translate_target(&args)?,
+        },
+        "sight_bench_observation" => Command::SightBenchObservation {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             observation: args.required_usize("observation")?,
             pixel: args.required_pixel_f64("pixel")?,
         },
-        "move_bench_track_observation" => Command::MoveBenchTrackObservation {
+        "shape_bench_observation" => Command::ShapeBenchObservation {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             observation: args.required_usize("observation")?,
-            pixel: args.required_pixel_f64("pixel")?,
+            shape: args
+                .optional_affine("shape")?
+                .ok_or_else(|| args.error("needs shape: a 2x2 affine.".to_string()))?,
         },
-        "resize_bench_track" => Command::ResizeBenchTrack {
+        "resize_bench_patch" => Command::ResizeBenchPatch {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            to: resize_target(&args)?,
+        },
+        "resize_bench_shape" => Command::ResizeBenchShape {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             observation: args.required_usize("observation")?,
             edge: args.edge("edge")?,
             pixel: args.required_pixel_f64("pixel")?,
         },
-        "offset_bench_track" => Command::OffsetBenchTrack {
-            reconstruction_label: args.required_string("reconstruction_label")?,
-            track: args.optional_string("track")?,
-            distance: args.required_f64("distance")?,
-        },
-        "tilt_bench_track" => Command::TiltBenchTrack {
+        "tilt_bench_patch" => Command::TiltBenchPatch {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             normal: args.required_vec3("normal")?,
         },
-        "rotate_bench_track" => Command::RotateBenchTrack {
+        "spin_bench_patch" => Command::SpinBenchPatch {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             degrees: args.required_f64("degrees")?,
-            observation: args.optional_usize("observation")?,
+        },
+        "spin_bench_shape" => Command::SpinBenchShape {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
+            degrees: args.required_f64("degrees")?,
         },
         "set_bench_track_verdict" => Command::SetBenchTrackVerdict {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -3038,6 +3143,18 @@ impl Args<'_> {
         word.parse().map_err(|why: String| self.error(why))
     }
 
+    /// [`Self::edge`] for the resize that may name none, where no edge means
+    /// both of them about a held centre.
+    fn optional_edge(&self, key: &str) -> Result<Option<sfmtool_core::bench::Edge>, ToolError> {
+        match self.optional_string(key)? {
+            None => Ok(None),
+            Some(word) => word
+                .parse()
+                .map(Some)
+                .map_err(|why: String| self.error(why)),
+        }
+    }
+
     /// A patch radius in pixels: positive, or absent for the viewer's own
     /// default.
     ///
@@ -3201,5 +3318,64 @@ fn describe(value: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
+    }
+}
+
+/// Which of `translate_bench_patch`'s two forms a call made, refusing one that
+/// made both or neither.
+///
+/// The refusal is here rather than in the schema because JSON Schema's `oneOf`
+/// would report "does not match the schema" and leave the caller to work out
+/// which half it got wrong; a sentence naming both spellings is what an agent
+/// can act on.
+fn translate_target(args: &Args<'_>) -> Result<super::TranslateTarget, ToolError> {
+    let by = args.optional_vec3("by")?;
+    let observation = args.optional_usize("observation")?;
+    let pixel = args.optional_numbers::<2>("pixel")?;
+    match (by, observation, pixel) {
+        (Some(by), None, None) => Ok(super::TranslateTarget::By(by)),
+        (None, Some(observation), Some(pixel)) => {
+            Ok(super::TranslateTarget::Pixel { observation, pixel })
+        }
+        (Some(_), _, _) => Err(args.error(
+            "was given by as well as an observation or a pixel -- a displacement on the patch's \
+             own axes and a pixel of one photograph are two ways to say where the patch goes, so \
+             give one."
+                .to_string(),
+        )),
+        _ => Err(args.error(
+            "needs either by, a displacement [u, v, n] on the patch's own axes in world units, \
+             or both observation and pixel."
+                .to_string(),
+        )),
+    }
+}
+
+/// Which of `resize_bench_patch`'s two forms a call made, for the reason
+/// [`translate_target`] is its own function.
+fn resize_target(args: &Args<'_>) -> Result<super::ResizeTarget, ToolError> {
+    let half_length = args.optional_f64("half_length")?;
+    let observation = args.optional_usize("observation")?;
+    let pixel = args.optional_numbers::<2>("pixel")?;
+    match (half_length, observation, pixel) {
+        (Some(half_length), None, None) => Ok(super::ResizeTarget::HalfLength {
+            half_length,
+            moved_edge: args.optional_edge("moved_edge")?,
+        }),
+        (None, Some(observation), Some(pixel)) => Ok(super::ResizeTarget::Pixel {
+            observation,
+            edge: args.edge("edge")?,
+            pixel,
+        }),
+        (Some(_), _, _) => Err(args.error(
+            "was given half_length as well as an observation or a pixel -- a world half-length \
+             and an edge under a pixel are two ways to say how large the patch is, so give one."
+                .to_string(),
+        )),
+        _ => Err(args.error(
+            "needs either half_length, a world half-length, or all three of observation, edge \
+             and pixel."
+                .to_string(),
+        )),
     }
 }

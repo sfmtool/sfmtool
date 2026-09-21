@@ -185,7 +185,7 @@ pub struct ImageDetailResponse {
     pub select_bench_row: Option<usize>,
     /// The edit a drag of one of the bench layer's handles just finished, in
     /// the form the core steps take. The dock applies it through
-    /// `AppState::edit_bench_patch`, which is the call the wire's three patch
+    /// `AppState::edit_bench_patch`, which is the call the wire's eight patch
     /// tools make: one version, one Action Log row, one undo.
     pub bench_edit: Option<crate::bench::PatchEdit>,
     /// What the panel ended this frame looking at, or `None` on a frame that

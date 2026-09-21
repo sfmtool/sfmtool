@@ -36,7 +36,8 @@ use sfmtool_core::bench::{
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
-    CameraImageSel, Deferred, JsonReply, Outcome, ThresholdChange, ToolError,
+    CameraImageSel, Deferred, JsonReply, Outcome, ResizeTarget, ThresholdChange, ToolError,
+    TranslateTarget,
 };
 use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
@@ -287,46 +288,65 @@ pub(super) fn add_bench_track_observation(
     Ok(reply)
 }
 
-/// `move_bench_track`: the patch slid across its own plane until its centre
-/// sits under a pixel.
+/// `translate_bench_patch`: the patch moved, by a displacement on its own axes
+/// or to a pixel.
 ///
-/// The wire's half of the dot drag at the **track** stage, where the dot means
-/// the patch and not the sighting: a track-stage track has one surfel and every
-/// observation is a view of it, so the centre moves and every keypoint becomes
-/// the projection of the new centre through its own camera. `observation` names
-/// the image the pixel is in, which is also the outline the pointer is read
-/// against.
-pub(super) fn move_bench_track(
+/// **One tool for the two ways to say where it goes**, because they are one
+/// step: a track-stage track has one patch and every observation is a view of
+/// it, so both forms move the patch and not a sighting, and every keypoint is
+/// carried by the same displacement, keeping its own offset from the centre's
+/// projection.
+///
+/// `by` is `[u, v, n]` on the patch's own orthonormal axes, in world units. Its
+/// tangential part slides the patch across its own plane, which a photograph can
+/// also say; its normal part is the one no photograph can, a sighting naming the
+/// ray the patch lies along and not how far down it the surface is. A track at
+/// infinity refuses a `by` with a normal part and carries a tangential one.
+///
+/// The pixel form names `observation` -- the image the pixel is in, and the
+/// outline the pointer is read against -- and lands the patch's centre under it.
+pub(super) fn translate_bench_patch(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
-    observation: usize,
-    pixel: [f64; 2],
+    to: &TranslateTarget,
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    let edit = PatchEdit::Translate { observation, pixel };
-    let (reply, edited) = patched(state, id, &item, &edit)?;
-    let mut reply = with_item(reply, &item);
-    insert(&mut reply, "observation", json!(observation));
-    insert_clamp(
-        &mut reply,
-        edited.pixel.or(Some(pixel)),
-        edited.clamped_from,
-    );
-    Ok(reply)
+    match *to {
+        TranslateTarget::By(by) => {
+            let edit = PatchEdit::Translate { by };
+            let (reply, _) = patched(state, id, &item, &edit)?;
+            let mut reply = with_item(reply, &item);
+            insert(&mut reply, "by", json!(by));
+            Ok(reply)
+        }
+        TranslateTarget::Pixel { observation, pixel } => {
+            let edit = PatchEdit::TranslateToPixel { observation, pixel };
+            let (reply, edited) = patched(state, id, &item, &edit)?;
+            let mut reply = with_item(reply, &item);
+            insert(&mut reply, "observation", json!(observation));
+            insert_clamp(
+                &mut reply,
+                edited.pixel.or(Some(pixel)),
+                edited.clamped_from,
+            );
+            Ok(reply)
+        }
+    }
 }
 
-/// `move_bench_track_observation`: one sighting put where the caller says.
+/// `sight_bench_observation`: one sighting put where the caller says.
 ///
 /// **One** sighting, which at the track stage is the step the panel's dot no
-/// longer makes: dragging the dot there moves the patch (`move_bench_track`),
-/// because a surfel every observation is a view of is the thing that gesture is
-/// about. This is what remains for a caller that really means one keypoint --
-/// the cluster stage's dot, where there is no shared geometry, and a script
-/// placing one sighting of a track-stage track by hand. Either way it writes
-/// that observation alone and pins it, because a sighting a person placed is one
-/// they have ruled on, and drops the measurements read at the old pixel.
-pub(super) fn move_bench_track_observation(
+/// longer makes: dragging the dot there moves the patch
+/// (`translate_bench_patch`), because a patch every observation is a view of is
+/// the thing that gesture is about. This is what remains for a caller that
+/// really means one keypoint -- the cluster stage's dot, where there is no
+/// shared geometry, and a script placing one sighting of a track-stage track by
+/// hand. Either way it writes that observation alone and pins it, because a
+/// sighting a person placed is one they have ruled on, and drops the
+/// measurements read at the old pixel.
+pub(super) fn sight_bench_observation(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
@@ -334,7 +354,7 @@ pub(super) fn move_bench_track_observation(
     pixel: [f64; 2],
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    let edit = PatchEdit::Move { observation, pixel };
+    let edit = PatchEdit::Sight { observation, pixel };
     let (reply, edited) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
@@ -346,20 +366,108 @@ pub(super) fn move_bench_track_observation(
     Ok(reply)
 }
 
-/// `resize_bench_track`: one edge of the patch put under a pixel, with the
-/// opposite edge left where it is.
+/// `shape_bench_observation`: one cluster sighting's affine shape, set outright.
 ///
-/// An edge and a pixel rather than a size, because that is what the gesture is
-/// and what makes the answer exact: the pixel is unprojected onto the patch's
-/// own plane, so the edge really lands there through whatever distortion the
-/// lens has. The observation says which sighting's outline is meant -- the
-/// surfel re-anchored on it at the track stage, its own parallelogram at the
-/// cluster stage -- and the pixel is in that observation's image.
+/// The general form of the two gestures over a parallelogram: where
+/// `spin_bench_shape` turns it and `resize_bench_shape` scales it, this states
+/// the whole 2x2 map from the detector's keypoint frame onto that image's
+/// pixels, shear and all. The sighting is re-seeded where it is already drawn
+/// and its refinement is dropped, that having been an answer about the shape it
+/// was run at. A track-stage track is refused: there the shape is the patch's,
+/// not the sighting's.
+pub(super) fn shape_bench_observation(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    shape: [[f64; 2]; 2],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::Shape { observation, shape };
+    let (reply, _) = patched(state, id, &item, &edit)?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "shape", json!(shape));
+    Ok(reply)
+}
+
+/// `resize_bench_patch`: the track-stage patch sized, by a world half-length or
+/// by putting one edge under a pixel.
 ///
-/// At the track stage a resize moves the centre, so **every** keypoint becomes
-/// the projection of the new centre, exactly as a translation's does; nothing is
-/// pinned.
-pub(super) fn resize_bench_track(
+/// `half_length` is in the reconstruction's own units and `moved_edge` says what
+/// becomes of the sightings: named, that edge moves and the far one is held, so
+/// the centre shifts and every sighting is carried with it; omitted, both edges
+/// move about a held centre and no sighting is touched.
+///
+/// The pixel form is the gesture, and it is what makes the answer exact: the
+/// pixel is unprojected onto the patch's own plane, so the edge really lands
+/// there through whatever distortion the lens has. The observation says whose
+/// outline is meant -- the patch re-anchored on that sighting -- and the pixel is
+/// in that observation's image.
+///
+/// A cluster-stage track is refused: there is no world geometry to give a world
+/// half-length to, and its parallelograms are `resize_bench_shape`'s.
+pub(super) fn resize_bench_patch(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    to: &ResizeTarget,
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    stage_must_be(state, id, &item, StageKind::Track, "resize_bench_shape")?;
+    match *to {
+        ResizeTarget::HalfLength {
+            half_length,
+            moved_edge,
+        } => {
+            let edit = PatchEdit::Resize {
+                half_length,
+                moved_edge,
+            };
+            let (reply, _) = patched(state, id, &item, &edit)?;
+            let mut reply = with_item(reply, &item);
+            insert(&mut reply, "half_length", json!(half_length));
+            insert(
+                &mut reply,
+                "moved_edge",
+                json!(moved_edge.map(|edge| edge.name())),
+            );
+            Ok(reply)
+        }
+        ResizeTarget::Pixel {
+            observation,
+            edge,
+            pixel,
+        } => {
+            let edit = PatchEdit::ResizeToPixel {
+                observation,
+                edge,
+                pixel,
+            };
+            let (reply, edited) = patched(state, id, &item, &edit)?;
+            let mut reply = with_item(reply, &item);
+            insert(&mut reply, "observation", json!(observation));
+            insert(&mut reply, "edge", json!(edge.name()));
+            insert_clamp(
+                &mut reply,
+                edited.pixel.or(Some(pixel)),
+                edited.clamped_from,
+            );
+            Ok(reply)
+        }
+    }
+}
+
+/// `resize_bench_shape`: one cluster sighting's parallelogram sized by an edge.
+///
+/// The cluster stage's own half of the edge drag. There is no shared geometry
+/// there, so the same arithmetic runs in that image's pixels: the shape is
+/// scaled by one scalar, which keeps whatever anisotropy the detector read, and
+/// the sighting moves by half the change along the dragged edge's own direction,
+/// which is what holds the far edge still. Only that observation is touched. A
+/// track-stage track is refused: its square is the patch's, and
+/// `resize_bench_patch` is the tool for it.
+pub(super) fn resize_bench_shape(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
@@ -368,7 +476,8 @@ pub(super) fn resize_bench_track(
     pixel: [f64; 2],
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    let edit = PatchEdit::ResizeFromEdge {
+    stage_must_be(state, id, &item, StageKind::Cluster, "resize_bench_patch")?;
+    let edit = PatchEdit::ResizeToPixel {
         observation,
         edge,
         pixel,
@@ -385,42 +494,18 @@ pub(super) fn resize_bench_track(
     Ok(reply)
 }
 
-/// `offset_bench_track`: the patch moved along its own outward normal.
+/// `tilt_bench_patch`: the patch turned to face a new outward normal.
 ///
-/// The wire's half of the 3D viewport's normal-segment drag, and the one patch
-/// tool that names no pixel: a photograph says which ray the patch lies along
-/// and nothing about how far down it the surface is, so the distance is a world
-/// length and the sign is which way. Every sighting keeps its own in-plane
-/// offset and each keypoint becomes the projection of the patch where it now
-/// stands, which is a different move in every photograph -- that spread is the
-/// parallax the depth was wrong by. A track at infinity is refused: its normal
-/// is its own bearing.
-pub(super) fn offset_bench_track(
-    state: &mut AppState,
-    label: &str,
-    named: Option<&str>,
-    distance: f64,
-) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
-    let edit = PatchEdit::Offset { distance };
-    let (reply, _) = patched(state, id, &item, &edit)?;
-    let mut reply = with_item(reply, &item);
-    insert(&mut reply, "distance", json!(distance));
-    Ok(reply)
-}
-
-/// `tilt_bench_track`: the patch turned to face a new outward normal.
-///
-/// The wire's half of the 3D viewport's arrowhead drag, and the second patch
-/// tool that names no pixel: a photograph says which ray the patch lies along
-/// and nothing about which way the surface under it faces. The turn is the
-/// least rotation onto `normal`, so no spin about the normal comes with it, and
-/// every sighting keeps the in-plane offset it was measured at, rebuilt on the
-/// turned axes. It stops `MAX_TILT_DEG` from any observation's camera, which is
-/// where a photograph would be looking along the surface rather than at it, and
-/// the sentence says which observation stopped it. A track at infinity is
-/// refused: its normal is its own bearing.
-pub(super) fn tilt_bench_track(
+/// The wire's half of the 3D viewport's arrowhead drag, and the second gesture
+/// no photograph can make: a sighting says which ray the patch lies along and
+/// nothing about which way the surface under it faces. The turn is the least
+/// rotation onto `normal`, so no spin about the normal comes with it, and every
+/// sighting keeps the in-plane offset it was measured at, rebuilt on the turned
+/// axes. It stops `MAX_TILT_DEG` from any observation's camera, which is where a
+/// photograph would be looking along the surface rather than at it, and the
+/// sentence says which observation stopped it. A track at infinity is refused:
+/// its normal is its own bearing.
+pub(super) fn tilt_bench_patch(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
@@ -434,44 +519,80 @@ pub(super) fn tilt_bench_track(
     Ok(reply)
 }
 
-/// `rotate_bench_track`: the patch turned in its own plane.
+/// `spin_bench_patch`: the track-stage patch turned about its own normal.
 ///
-/// What turns depends on the stage, which is why `observation` is optional: a
-/// track-stage track has **one** surfel and turning it is about its normal, so
-/// no sighting need be named; a cluster stage has no geometry at all, only one
-/// affine shape per sighting, so a turn there has to say which one.
-pub(super) fn rotate_bench_track(
+/// The square turns in place, keeping its centre, its size and the face it
+/// shows, so no sighting moves at all. A cluster-stage track is refused: it has
+/// no patch to turn, only one affine shape per sighting, which is
+/// `spin_bench_shape`'s.
+pub(super) fn spin_bench_patch(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
     degrees: f64,
-    observation: Option<usize>,
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    let stage = state
-        .bench_track(id, &item)
-        .map(|track| track.stage_kind())
-        .ok_or_else(|| ToolError::new(format!("Nothing on the bench is called {item}.")))?;
-    let angle_rad = degrees.to_radians();
-    let edit = match stage {
-        StageKind::Track => PatchEdit::Rotate { angle_rad },
-        StageKind::Cluster => PatchEdit::RotateShape {
-            observation: observation.ok_or_else(|| {
-                ToolError::new(
-                    "A cluster-stage track has one affine shape per sighting rather than a \
-                     surfel, so a turn of one needs an observation.",
-                )
-            })?,
-            angle_rad,
-        },
+    stage_must_be(state, id, &item, StageKind::Track, "spin_bench_shape")?;
+    let edit = PatchEdit::Spin {
+        angle_rad: degrees.to_radians(),
     };
     let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "degrees", json!(degrees));
-    if let Some(observation) = observation {
-        insert(&mut reply, "observation", json!(observation));
-    }
     Ok(reply)
+}
+
+/// `spin_bench_shape`: one cluster sighting's parallelogram turned in its own
+/// image's pixels.
+///
+/// Named for the part it acts on, which is why it is its own tool rather than an
+/// optional observation on the patch's spin: the two turn different things by
+/// different arithmetic, and a track-stage track is refused here as a cluster is
+/// refused there.
+pub(super) fn spin_bench_shape(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    degrees: f64,
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    stage_must_be(state, id, &item, StageKind::Cluster, "spin_bench_patch")?;
+    let edit = PatchEdit::SpinShape {
+        observation,
+        angle_rad: degrees.to_radians(),
+    };
+    let (reply, _) = patched(state, id, &item, &edit)?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "degrees", json!(degrees));
+    Ok(reply)
+}
+
+/// The refusal a tool that belongs to one stage owes an item in the other,
+/// naming the tool that does belong to it.
+///
+/// Ahead of the step rather than through it, because the pair of tools is the
+/// wire's own arrangement: core's cluster-stage edge resize is reached by the
+/// same call the track stage's is, so only this surface knows that the caller
+/// asked for the wrong one of two names.
+fn stage_must_be(
+    state: &AppState,
+    id: ReconId,
+    item: &str,
+    wanted: StageKind,
+    instead: &str,
+) -> Result<(), ToolError> {
+    let stage = state
+        .bench_track(id, item)
+        .map(|track| track.stage_kind())
+        .ok_or_else(|| ToolError::new(format!("Nothing on the bench is called {item}.")))?;
+    if stage == wanted {
+        return Ok(());
+    }
+    Err(ToolError::new(format!(
+        "{item} is at the {stage} stage and that is a {wanted}-stage tool; use {instead}."
+    )))
 }
 
 pub(super) fn set_bench_track_verdict(
@@ -891,9 +1012,9 @@ fn with_item(mut reply: Value, item: &str) -> Value {
 
 /// One patch edit, with what it did beside the version reply.
 ///
-/// The four patch tools all want the same two things out of the step -- the
-/// pixel it used and whether it had to bring that pixel inside the photograph --
-/// and the `AppState` method is the only place either is known.
+/// The patch tools that name a pixel all want the same two things out of the
+/// step -- the pixel it used and whether it had to bring that pixel inside the
+/// photograph -- and the `AppState` method is the only place either is known.
 fn patched(
     state: &mut AppState,
     id: ReconId,
@@ -946,7 +1067,7 @@ fn thresholds(bars: &Thresholds) -> Value {
 }
 
 /// What the stage the track is in carries, beside the observations: the
-/// template's cut at the cluster stage, the surfel at the track stage.
+/// template's cut at the cluster stage, the patch at the track stage.
 ///
 /// The template's samples and the consensus bitmap are reported as present or
 /// absent rather than sent: they are pictures, and this surface is not a data
@@ -964,9 +1085,9 @@ fn stage_data(track: &EditableTrack) -> Value {
         // null -- with `at_infinity` beside them for a reader that wants the
         // flag rather than the key.
         //
-        // The track's own flag, not its frame's `w`: a point put on the bench
-        // from a node with no patch frames carries no surfel at all, and a
-        // bearing it came from is still a bearing.
+        // The track's own flag, not its patch's `w`: a point put on the bench
+        // from a node that stores no patch frames carries no patch at all, and
+        // a bearing it came from is still a bearing.
         Stage::Track(payload) => {
             let at_infinity = payload.at_infinity;
             let coordinate = payload.position.map(|p| [p.x, p.y, p.z]);
@@ -977,7 +1098,7 @@ fn stage_data(track: &EditableTrack) -> Value {
                 "condition_number": payload.condition_number,
                 "color": payload.color,
                 "normal_confidence": payload.normal_confidence,
-                "frame_fitted": payload.frame.is_some(),
+                "frame_fitted": payload.placement.is_some(),
                 "bitmap_fused": payload.bitmap.is_some(),
             })
         }

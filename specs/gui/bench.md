@@ -45,20 +45,35 @@ SIFT index a search queries is in
 
 ```rust
 /// One hand edit of a track's geometry, in the form the core steps take.
+///
+/// Each word is said once along the path: the type already says this is an edit
+/// of a patch, so the variants are the verbs alone.
 pub(crate) enum PatchEdit {
-    /// Slide the track-stage surfel until its centre sits under this pixel of
+    /// Slide the track-stage patch until its centre sits under this pixel of
     /// that observation's image. Every sighting follows.
-    Translate { observation: usize, pixel: [f64; 2] },
+    TranslateToPixel { observation: usize, pixel: [f64; 2] },
+    /// Move the track-stage patch by this displacement on its own orthonormal
+    /// axes `[u, v, n]`, in world units. Every sighting follows.
+    Translate { by: [f64; 3] },
+    /// Resize the track-stage patch to this world half-length, holding the far
+    /// edge when `moved_edge` names one and the centre when it does not.
+    Resize { half_length: f64, moved_edge: Option<Edge> },
+    /// Put one edge of the outline drawn at this observation under this pixel,
+    /// with the opposite edge left where it is. The one size gesture that spans
+    /// both stages.
+    ResizeToPixel { observation: usize, edge: Edge, pixel: [f64; 2] },
+    /// Turn the track-stage patch about its normal.
+    Spin { angle_rad: f64 },
+    /// Turn one cluster-stage sighting's shape in its own image's pixels.
+    SpinShape { observation: usize, angle_rad: f64 },
+    /// Turn the track-stage patch about its centre until it faces this outward
+    /// normal, by the least rotation.
+    Tilt { normal: [f64; 3] },
     /// Put one observation's own sighting at this pixel, and leave every other
     /// where it is. The cluster stage's dot.
-    Move { observation: usize, pixel: [f64; 2] },
-    /// Put one edge of the outline drawn at this observation under this pixel,
-    /// with the opposite edge left where it is.
-    ResizeFromEdge { observation: usize, edge: Edge, pixel: [f64; 2] },
-    /// Turn the track-stage surfel about its normal.
-    Rotate { angle_rad: f64 },
-    /// Turn one cluster-stage sighting's shape in its own image's pixels.
-    RotateShape { observation: usize, angle_rad: f64 },
+    Sight { observation: usize, pixel: [f64; 2] },
+    /// Give one cluster-stage sighting this affine shape outright.
+    Shape { observation: usize, shape: [[f64; 2]; 2] },
 }
 
 /// Where a seed's position and shape come from.
@@ -127,7 +142,7 @@ impl AppState {
     /// One hand edit of the track's geometry: the patch slid, one edge of it
     /// put under a pixel, a turn, or one sighting placed. The one call behind
     /// every handle of the Image Detail panel's bench layer and behind the
-    /// wire's four patch tools. An edit that changed nothing pushes no version
+    /// wire's eight patch tools. An edit that changed nothing pushes no version
     /// and writes the row that says so.
     pub(crate) fn edit_bench_patch(&mut self, id: ReconId, label: &str,
                                    edit: &PatchEdit) -> Result<PatchEdited, String>;
@@ -345,7 +360,7 @@ alone: a row that has to be undone for nothing is worse than no row.
 **A size is reported in the pixels of the sighting it was named at.** A world
 half-length says nothing to someone looking at a photograph, so the resize's
 sentence states the patch's half-width in that observation's own image -- the
-surfel re-anchored on it, projected -- and falls back to the world number only
+patch re-anchored on it, projected -- and falls back to the world number only
 when the patch does not project there.
 
 **A fit's sentence says which representation the rays earned, and why.** The
@@ -482,7 +497,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-five MCP tools
+An agent gets the same bench a human does, through twenty-eight MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -518,21 +533,28 @@ panel means when it names no item.
 // set_bench_track_verdict      { "reconstruction_label": "bull", "observation": 3,
 //                                "verdict": "in" }
 //
-// The patch: the three handles the Image Detail panel's bench layer offers,
-// the two the 3D viewer adds, and the one that moves a single sighting rather
-// than the patch.
-// move_bench_track           { "reconstruction_label": "bull", "observation": 3,
+// The patch, named for the part each tool acts on: the patch itself, one
+// sighting, or a cluster sighting's parallelogram.
+// translate_bench_patch      { "reconstruction_label": "bull", "observation": 3,
 //                              "pixel": [1041.6, 1702.9] }
-// move_bench_track_observation { "reconstruction_label": "bull", "observation": 3,
-//                                "pixel": [1041.6, 1702.9] }
-// resize_bench_track           { "reconstruction_label": "bull", "observation": 3,
-//                                "edge": "+u", "pixel": [1049.0, 1702.9] }
-// offset_bench_track           { "reconstruction_label": "bull", "distance": 0.042 }
-// tilt_bench_track             { "reconstruction_label": "bull",
-//                                "normal": [0.1, -0.2, 0.97] }
-// rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3 }
-// rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3,
-//                                "observation": 3 }   // the cluster stage's
+// translate_bench_patch      { "reconstruction_label": "bull",
+//                              "by": [0.0, 0.0, 0.042] }   // along its normal
+// resize_bench_patch         { "reconstruction_label": "bull", "observation": 3,
+//                              "edge": "+u", "pixel": [1049.0, 1702.9] }
+// resize_bench_patch         { "reconstruction_label": "bull", "half_length": 0.0184 }
+// spin_bench_patch           { "reconstruction_label": "bull", "degrees": 12.3 }
+// tilt_bench_patch           { "reconstruction_label": "bull",
+//                              "normal": [0.1, -0.2, 0.97] }
+// sight_bench_observation    { "reconstruction_label": "bull", "observation": 3,
+//                              "pixel": [1041.6, 1702.9] }
+//
+// The cluster stage's own, over one sighting's parallelogram.
+// resize_bench_shape         { "reconstruction_label": "bull", "observation": 3,
+//                              "edge": "+u", "pixel": [1049.0, 1702.9] }
+// spin_bench_shape           { "reconstruction_label": "bull", "observation": 3,
+//                              "degrees": 12.3 }
+// shape_bench_observation    { "reconstruction_label": "bull", "observation": 3,
+//                              "shape": [[7.1, -0.4], [0.4, 7.1]] }
 // apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
 // evaluate_bench_track         { "reconstruction_label": "bull" }
 // fit_bench_track           { "reconstruction_label": "bull" }
@@ -589,34 +611,52 @@ row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`
 only for an observation nothing says the place of, which is the state core's
 `Unmeasured::NoSeed` names.
 
-**The patch tools are the panel's handles**, and each is one
+**The patch tools are the panels' handles**, and each is one
 `edit_bench_patch`, so a drag and a tool call are the same version carrying the
-same sentence. `move_bench_track` slides the patch, `resize_bench_track` names
-an `edge` and a `pixel` rather than a size -- because that is what the gesture
-is and what makes the answer exact: the pixel is unprojected onto the patch's
-own plane, so the edge lands there through whatever distortion the lens has, and
-the opposite edge is left where it was -- and `rotate_bench_track` turns it.
-Each names the `observation` whose outline is meant -- the surfel re-anchored on
-that sighting at the track stage, its own parallelogram at the cluster stage --
-except a turn at the track stage, where there is one surfel and no sighting need
-be named; a turn at the **cluster** stage has no surfel to turn and is refused
-without one.
+same sentence. Each is **named for the part it acts on** -- the patch, one
+sighting, or a cluster sighting's parallelogram -- and **four verbs carry them,
+no two of them synonyms**: `translate` moves the centre, `resize` changes the
+half-length, `spin` turns the square about its normal and `tilt` turns the
+normal itself.
 
-`offset_bench_track` and `tilt_bench_track` name no pixel and no observation,
-because no photograph can say what they say. The first moves the patch
-`distance` world units along its own outward normal, positive toward the face
+`translate_bench_patch` and `resize_bench_patch` each take **exactly one of two
+ways** to say what they want. A translation takes `by`, a displacement
+`[u, v, n]` on the patch's own orthonormal axes in world units, or an
+`observation` and a `pixel` its centre lands under. A resize takes a world
+`half_length` with an optional `moved_edge`, or an `observation`, an `edge` and
+a `pixel`. The pixel forms are the gestures, and they are what make the answer
+exact: the pixel is unprojected onto the patch's own plane, so the edge lands
+there through whatever distortion the lens has and the opposite edge is left
+where it was. A pixel form names the `observation` whose outline is meant, which
+is the patch re-anchored on that sighting. `spin_bench_patch` turns the patch
+about its own normal and names no sighting, there being one patch.
+
+**The cluster stage's own are tools of their own.** There is no shared geometry
+there, only one affine shape per sighting, so `resize_bench_shape` and
+`spin_bench_shape` take an `observation` and do that image's pixel arithmetic,
+and `shape_bench_observation` states the whole 2x2 `shape` outright. Each of
+them refuses a track-stage track and names the tool that belongs to it, and
+`resize_bench_patch` and `spin_bench_patch` refuse a cluster the same way. Two
+names rather than one with an optional observation, because a tool named for
+the part it acts on cannot act on two different parts.
+
+**The normal part of a `by`, and `tilt_bench_patch`, name no pixel**, because
+no photograph can say what they say. The `n` of a displacement moves the patch
+that many world units along its own outward normal, positive toward the face
 the patch shows: a sighting names the ray the patch lies along and not how far
-down it the surface is, so this is where a patch's depth is settled. The second
-turns the patch to face the outward `normal` named, by the least rotation and so
-with no spin about the normal, and stops 80 degrees from any observation's
-camera -- where that photograph would be looking along the surface rather than
-at it -- the sentence naming the image that stopped it: a sighting says nothing
-about which way the surface under it faces either. Each is settled by the tool
-or by the 3D viewer drag it shares a step with, the normal's segment and the
-arrowhead at the end of it. Both refuse a track at infinity, a direction patch's
-normal being its own bearing. `move_bench_track_observation` is the last of
-them, and the only one that moves a single sighting: the cluster stage's dot,
-and a script that means one keypoint.
+down it the surface is, so this is where a patch's depth is settled. A **mixed**
+`by` that moves the patch across its plane and along its normal at once is
+allowed. The tilt turns the patch to face the outward `normal` named, by the
+least rotation and so with no spin about the normal, and stops 80 degrees from
+any observation's camera -- where that photograph would be looking along the
+surface rather than at it -- the sentence naming the image that stopped it: a
+sighting says nothing about which way the surface under it faces either. Each is
+settled by the tool or by the 3D viewer drag it shares a step with, the normal's
+segment and the arrowhead at the end of it. A track at infinity refuses a `by`
+with a normal part and a tilt, a direction patch's normal being its own bearing,
+and carries a purely tangential `by` like any other.
+`sight_bench_observation` is the one that moves a single sighting: the cluster
+stage's dot, and a script that means one keypoint.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -720,8 +760,8 @@ finite numbers, and neither names a place on the photograph: `[-500, -500]` of a
 480 px frame is no column and no row, and a patch whose centre is slid until it
 meets that pixel's ray lands wherever the extrapolated ray happens to cross its
 plane, which is an arbitrary distance from where it stood. Every step
-that takes a pixel as a **gesture** -- `move_bench_track`,
-`move_bench_track_observation`, `resize_bench_track`,
+that takes a pixel as a **gesture** -- `translate_bench_patch`,
+`sight_bench_observation`, `resize_bench_patch`, `resize_bench_shape`,
 `add_bench_track_observation`'s seed and `create_bench_cluster`'s pixel -- takes
 the nearest pixel of `[0, width) x [0, height)` instead, and says that it did:
 the reply carries `clamped: true`, `clamped_from` and the `pixel` it used, and
@@ -798,7 +838,7 @@ label names it; a drag of an edge resizes so that the outline's dragged edge
 reprojects under the release point while the far edge holds; a drag of a corner
 onto its neighbour is a quarter turn and one version; Escape leaves no edit
 behind; and a drag that ends where it started pushes no version. The panel is
-zoomed in for them, because the demo's surfel is under three source pixels
+zoomed in for them, because the demo's patch is under three source pixels
 across and every handle would otherwise sit inside every other one's reach.
 
 The steps themselves are core's and are tested there, over a synthetic textured
@@ -837,5 +877,5 @@ still read.
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-five tools for the steps that exist
+  proposed in the same draft. The twenty-eight tools for the steps that exist
   are § "The wire".

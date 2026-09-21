@@ -26,12 +26,13 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, duplicate as core_duplicate, evaluate as core_evaluate,
-    fit as core_fit, resize_frame as core_resize_frame, resize_from_edge as core_resize_from_edge,
-    rotate_frame as core_rotate_frame, search_descriptors as core_search_descriptors,
-    set_observation_keypoint as core_set_observation_keypoint,
-    set_observation_shape as core_set_observation_shape, set_stage as core_set_stage,
-    set_verdict as core_set_verdict, split as core_split, translate_frame as core_translate_frame,
-    Bench, BenchItem, ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack,
+    fit as core_fit, resize_patch as core_resize_patch,
+    resize_patch_to_pixel as core_resize_patch_to_pixel,
+    search_descriptors as core_search_descriptors, set_stage as core_set_stage,
+    set_verdict as core_set_verdict, shape_observation as core_shape_observation,
+    sight_observation as core_sight_observation, spin_patch as core_spin_patch,
+    split as core_split, translate_patch_to_pixel as core_translate_patch_to_pixel, Bench,
+    BenchItem, ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack,
     EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation,
     ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport, StageKind,
     TrackClassification, Verdict, DEFAULT_RADIUS_PX,
@@ -260,7 +261,7 @@ impl PyEditableTrack {
     /// point.
     ///
     /// The track's own flag and not its frame's ``w``: a track put on the bench
-    /// from a reconstruction with no patch frames carries no surfel at all, and a
+    /// from a reconstruction with no patch frames carries no patch at all, and a
     /// bearing it came from is still a bearing. ``False`` at the cluster stage,
     /// which states no direction.
     #[getter]
@@ -294,7 +295,7 @@ impl PyEditableTrack {
         Some(PyArray1::from_vec(py, vec![p.x, p.y, p.z]))
     }
 
-    /// The track's surfel, or ``None`` at the cluster stage or before anything
+    /// The track's patch, or ``None`` at the cluster stage or before anything
     /// has fitted one.
     ///
     /// A dict of ``center``, ``u_halfvec``, ``v_halfvec`` and ``w`` -- the two
@@ -302,11 +303,11 @@ impl PyEditableTrack {
     /// `.sfmr` stores them, and ``w`` being ``1.0`` for a position and ``0.0``
     /// for a bearing, whose ``center`` is a unit direction. The patch covers
     /// ``center + s * u + t * v`` for ``(s, t)`` in ``[-1, 1]^2``, so this is
-    /// what :func:`resize_frame`, :func:`resize_from_edge` and
-    /// :func:`rotate_frame` are read back through.
+    /// what :func:`resize_patch`, :func:`resize_patch_to_pixel` and
+    /// :func:`spin_patch` are read back through.
     #[getter]
-    fn frame<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(frame) = self.inner.track().and_then(|p| p.frame.as_ref()) else {
+    fn placement<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(frame) = self.inner.track().and_then(|p| p.placement.as_ref()) else {
             return Ok(None);
         };
         let vector = |v: nalgebra::Vector3<f64>| PyArray1::from_vec(py, vec![v.x, v.y, v.z]);
@@ -661,11 +662,11 @@ fn set_verdict(
     ))
 }
 
-/// Slide the track's surfel across its own plane until its centre sits under
+/// Slide the track's patch across its own plane until its centre sits under
 /// ``pixel`` in ``observation``'s photograph.
 ///
 /// This moves the **patch**, not one sighting: a track-stage track has one
-/// surfel and every observation is a view of it, so the centre moves in-plane,
+/// patch and every observation is a view of it, so the centre moves in-plane,
 /// the half-vectors and the normal are kept, and every observation's keypoint
 /// becomes the projection of the new centre through its own camera. Nothing is
 /// pinned -- a translation says where the patch is, not whether a sighting
@@ -675,7 +676,7 @@ fn set_verdict(
 /// reason.
 ///
 /// The pointer is read against the outline as drawn: the frame re-anchored on
-/// that observation's own sighting. :func:`set_observation_keypoint` is the step
+/// that observation's own sighting. :func:`sight_observation` is the step
 /// for **one** keypoint.
 ///
 /// A pixel off the photograph names no place on it, so it is brought to the
@@ -688,7 +689,7 @@ fn set_verdict(
 /// ``pixel`` (where the centre now projects in it), ``center``, ``moved``,
 /// ``placed``, ``changed``, ``clamped`` and ``clamped_from``.
 #[pyfunction]
-fn translate_frame(
+fn translate_patch_to_pixel(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
@@ -696,7 +697,8 @@ fn translate_frame(
     pixel: [f64; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let (next, report) =
-        core_translate_frame(&track.inner, &edited.inner, observation, pixel).map_err(refused)?;
+        core_translate_patch_to_pixel(&track.inner, &edited.inner, observation, pixel)
+            .map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
     d.set_item("image", report.image)?;
@@ -727,7 +729,7 @@ fn translate_frame(
 /// dropped -- none of them says anything about the new one -- and the
 /// observation is pinned, so :func:`apply_thresholds` leaves its verdict alone.
 ///
-/// :func:`translate_frame` is the step that moves the **patch**, which is what
+/// :func:`translate_patch_to_pixel` is the step that moves the **patch**, which is what
 /// the viewer's dot drag means at the track stage.
 ///
 /// The pixel is brought inside the photograph, and a sighting put back within a
@@ -736,7 +738,7 @@ fn translate_frame(
 /// Returns ``(EditableTrack, report)``, the report carrying ``clamped`` and
 /// ``clamped_from`` beside the rest.
 #[pyfunction]
-fn set_observation_keypoint(
+fn sight_observation(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
@@ -744,8 +746,7 @@ fn set_observation_keypoint(
     pixel: [f64; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let (next, report) =
-        core_set_observation_keypoint(&track.inner, &edited.inner, observation, pixel)
-            .map_err(refused)?;
+        core_sight_observation(&track.inner, &edited.inner, observation, pixel).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
     d.set_item("image", report.image)?;
@@ -763,7 +764,7 @@ fn set_observation_keypoint(
     ))
 }
 
-/// Resize the track's surfel to ``half_length`` on both of its axes, about its
+/// Resize the track's patch to ``half_length`` on both of its axes, about its
 /// own centre.
 ///
 /// One scalar, because a patch frame is square: the stored half-vector pair has
@@ -773,14 +774,28 @@ fn set_observation_keypoint(
 /// every track measurement but the keypoints are dropped, because all of them
 /// were read over the square as it stood.
 ///
+/// ``moved_edge`` is ``"+u"``, ``"-u"``, ``"+v"``, ``"-v"`` or ``None``, and it
+/// is the discriminator for what becomes of the sightings: named, that edge
+/// moves and the far one is held, so the centre shifts and every sighting is
+/// carried with it; omitted, both edges move about a held centre and no sighting
+/// is touched.
+///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
-fn resize_frame(
+#[pyo3(signature = (track, edited, half_length, *, moved_edge = None))]
+fn resize_patch(
     py: Python<'_>,
     track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
     half_length: f64,
+    moved_edge: Option<&str>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let (next, report) = core_resize_frame(&track.inner, half_length).map_err(refused)?;
+    let moved_edge = match moved_edge {
+        None => None,
+        Some(word) => Some(word.parse::<Edge>().map_err(refused)?),
+    };
+    let (next, report) =
+        core_resize_patch(&track.inner, &edited.inner, half_length, moved_edge).map_err(refused)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),
@@ -794,7 +809,7 @@ fn resize_frame(
 ///
 /// ``edge`` is ``"+u"``, ``"-u"``, ``"+v"`` or ``"-v"``. At the track stage the
 /// pixel is unprojected onto the patch's own plane through that observation's
-/// camera, so the edge lands there exactly under any lens; the surfel takes the
+/// camera, so the edge lands there exactly under any lens; the patch takes the
 /// centre the outline had plus the edge's shift, the track's position follows
 /// it, and that observation's keypoint is set to the projection of the new
 /// centre and pinned. At the cluster stage the same arithmetic runs in that
@@ -802,7 +817,7 @@ fn resize_frame(
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
-fn resize_from_edge(
+fn resize_patch_to_pixel(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
@@ -812,7 +827,7 @@ fn resize_from_edge(
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let edge: Edge = edge.parse().map_err(refused)?;
     let (next, report) =
-        core_resize_from_edge(&track.inner, &edited.inner, observation, edge, pixel)
+        core_resize_patch_to_pixel(&track.inner, &edited.inner, observation, edge, pixel)
             .map_err(refused)?;
     Ok((
         PyEditableTrack {
@@ -822,7 +837,7 @@ fn resize_from_edge(
     ))
 }
 
-/// Turn the track's surfel by ``angle_rad`` about its own outward normal.
+/// Turn the track's patch by ``angle_rad`` about its own outward normal.
 ///
 /// Both axes are rotated by a rotation whose axis is the normal, so they keep
 /// their lengths and the patch keeps its plane and the face it shows: what
@@ -831,12 +846,12 @@ fn resize_from_edge(
 ///
 /// Returns ``(EditableTrack, report)`` with ``degrees`` and ``changed``.
 #[pyfunction]
-fn rotate_frame(
+fn spin_patch(
     py: Python<'_>,
     track: &PyEditableTrack,
     angle_rad: f64,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let (next, report) = core_rotate_frame(&track.inner, angle_rad).map_err(refused)?;
+    let (next, report) = core_spin_patch(&track.inner, angle_rad).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("degrees", report.degrees)?;
     d.set_item("changed", report.changed)?;
@@ -859,14 +874,14 @@ fn rotate_frame(
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
-fn set_observation_shape(
+fn shape_observation(
     py: Python<'_>,
     track: &PyEditableTrack,
     observation: usize,
     shape: [[f64; 2]; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let (next, report) =
-        core_set_observation_shape(&track.inner, observation, shape).map_err(refused)?;
+        core_shape_observation(&track.inner, observation, shape).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
     d.set_item("image", report.image)?;
@@ -1204,7 +1219,7 @@ fn evaluate(
 
 /// Fit `track` at the stage it is in: the step that **moves** it.
 ///
-/// At the **track stage** the surfel is localized into every view, refined to
+/// At the **track stage** the patch is localized into every view, refined to
 /// sub-pixel, the ``in`` results are re-triangulated, the frame is placed at
 /// what they resolve to and the consensus bitmap is fused over them; the
 /// keypoints, the coordinate, the frame and the bitmap are written. At the
@@ -1668,12 +1683,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_cluster, m)?)?;
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
-    m.add_function(wrap_pyfunction!(translate_frame, m)?)?;
-    m.add_function(wrap_pyfunction!(set_observation_keypoint, m)?)?;
-    m.add_function(wrap_pyfunction!(resize_frame, m)?)?;
-    m.add_function(wrap_pyfunction!(resize_from_edge, m)?)?;
-    m.add_function(wrap_pyfunction!(rotate_frame, m)?)?;
-    m.add_function(wrap_pyfunction!(set_observation_shape, m)?)?;
+    m.add_function(wrap_pyfunction!(translate_patch_to_pixel, m)?)?;
+    m.add_function(wrap_pyfunction!(sight_observation, m)?)?;
+    m.add_function(wrap_pyfunction!(resize_patch, m)?)?;
+    m.add_function(wrap_pyfunction!(resize_patch_to_pixel, m)?)?;
+    m.add_function(wrap_pyfunction!(spin_patch, m)?)?;
+    m.add_function(wrap_pyfunction!(shape_observation, m)?)?;
     m.add_function(wrap_pyfunction!(apply_thresholds, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate, m)?)?;
     m.add_function(wrap_pyfunction!(fit, m)?)?;

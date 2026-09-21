@@ -334,7 +334,7 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
     );
 }
 
-/// Every row draws its own rendered tile, at both stages: the surfel seen from
+/// Every row draws its own rendered tile, at both stages: the patch seen from
 /// that observation at the track stage, and the kernel's own grid at the
 /// cluster stage.
 #[test]
@@ -361,7 +361,7 @@ fn every_row_draws_a_tile_at_either_stage() {
 /// A candidate a descriptor search has just added carries no keypoint -- only
 /// the seed the index's warp gave it -- and its tile is cut around **that**,
 /// which is the whole of what says whether the search found the right surface.
-/// Before this, the row drew the surfel wherever the bare projection of the
+/// Before this, the row drew the patch wherever the bare projection of the
 /// point happened to land in a photograph nothing had yet tied it to.
 #[test]
 fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
@@ -405,12 +405,12 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let recon = node.recon();
     let drawn = super::tile::image(recon, &track, candidate, &src).expect("a tile");
 
-    // The surfel cut around where the observation sits, which is the same
+    // The patch cut around where the observation sits, which is the same
     // picture the row draws once a reading has written that pixel as its
     // keypoint: where an observation is, is one question however it is
     // answered.
     let frame = match &track.stage {
-        Stage::Track(payload) => payload.frame.clone().expect("a fitted surfel"),
+        Stage::Track(payload) => payload.placement.clone().expect("a fitted patch"),
         Stage::Cluster(_) => panic!("a track put on from a point is at the track stage"),
     };
     let sfmr_image = &recon.image_table.images[row.image as usize];
@@ -976,7 +976,7 @@ fn bearing_track() -> sfmtool_core::bench::EditableTrack {
         // The track's own flag is what the header reads; the frame's `w` agrees
         // with it wherever a frame exists.
         at_infinity: true,
-        frame: Some(OrientedPatch::from_infinity_direction(
+        placement: Some(OrientedPatch::from_infinity_direction(
             direction,
             nalgebra::Vector3::y(),
             [0.03, 0.03],
@@ -996,7 +996,7 @@ fn position_track() -> sfmtool_core::bench::EditableTrack {
     let mut track = bearing_track();
     track.stage = Stage::Track(TrackPayload {
         position: Some(center),
-        frame: Some(OrientedPatch::from_center_normal(
+        placement: Some(OrientedPatch::from_center_normal(
             center,
             nalgebra::Vector3::z(),
             nalgebra::Vector3::y(),
@@ -1083,7 +1083,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     );
 }
 
-/// A track-stage track standing on a bearing with **no surfel**: the payload a
+/// A track-stage track standing on a bearing with **no patch**: the payload a
 /// `w = 0` point of a node with no patch frames arrives on the bench as, which
 /// is every row of a `sift_files` value.
 fn frameless_bearing_track() -> sfmtool_core::bench::EditableTrack {
@@ -1094,18 +1094,18 @@ fn frameless_bearing_track() -> sfmtool_core::bench::EditableTrack {
     track.stage = Stage::Track(TrackPayload {
         position: Some(direction),
         at_infinity: true,
-        frame: None,
+        placement: None,
         ..TrackPayload::default()
     });
     track
 }
 
-/// The header reads the **track's** flag and not its surfel's `w`, so a bearing
-/// that carries no surfel still reads as a bearing. Reading the frame printed
+/// The header reads the **track's** flag and not its patch's `w`, so a bearing
+/// that carries no patch still reads as a bearing. Reading the patch printed
 /// `Position (0.778, -0.611, -0.146)` for a unit direction, which is a place one
 /// unit from the world origin and the one thing that row is not.
 #[test]
-fn a_bearing_with_no_surfel_still_reads_as_a_bearing() {
+fn a_bearing_with_no_patch_still_reads_as_a_bearing() {
     let said = header_text(&frameless_bearing_track());
     assert!(
         said.contains("Bearing (0.778, -0.611, -0.146)"),
@@ -1130,9 +1130,9 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     ] {
         let why = refusal
             .as_deref()
-            .unwrap_or_else(|| panic!("{what} should be greyed on a track with no surfel"));
+            .unwrap_or_else(|| panic!("{what} should be greyed on a track with no patch"));
         assert!(
-            why.contains("no patch frame") || why.contains("no surfel"),
+            why.contains("no patch"),
             "{what} is greyed with {why:?}, which does not name what is missing"
         );
     }

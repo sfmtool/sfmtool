@@ -996,7 +996,7 @@ fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
     let site = track.observations[0].site().expect("a sighting");
 
     let before = versions(&state, id);
-    let out = crate::bench::PatchEdit::Translate {
+    let out = crate::bench::PatchEdit::TranslateToPixel {
         observation: 0,
         pixel: [site[0] + 4.0, site[1] - 3.0],
     };
@@ -1006,7 +1006,7 @@ fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
     assert!(edited.changed, "the drag out moved the patch");
     assert_eq!(versions(&state, id), before + 1);
 
-    let back = crate::bench::PatchEdit::Translate {
+    let back = crate::bench::PatchEdit::TranslateToPixel {
         observation: 0,
         pixel: site,
     };

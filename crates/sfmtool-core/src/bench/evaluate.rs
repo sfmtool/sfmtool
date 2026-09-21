@@ -193,8 +193,8 @@ pub enum EvaluateError {
         /// The image it named.
         image: u32,
     },
-    /// The track carries no patch frame, so there is no surfel any view can be
-    /// read against.
+    /// The track carries no patch, so there is nothing any view can be read
+    /// against.
     NoFrame,
     /// One round's per-view tiles would take more memory than
     /// [`EvaluateOptions::max_cache_bytes`] allows.
@@ -306,7 +306,7 @@ pub struct EvaluateReport {
     /// made against, rather than anything this step computed. A unit bearing
     /// direction when [`Self::at_infinity`], and a world point otherwise.
     pub position: Option<Point3<f64>>,
-    /// At the track stage, whether the track's surfel is a bearing (`w == 0`).
+    /// At the track stage, whether the track's patch is a bearing (`w == 0`).
     ///
     /// Beside the position because three numbers are not self-describing: the
     /// same triple is a place or a direction depending on this, and printing a
@@ -364,7 +364,7 @@ impl std::fmt::Display for EvaluateReport {
 /// the one in `options`, so the square the round registers is the square the
 /// seeds were written against. No pose is read.
 ///
-/// **At the track stage** the track's surfel is read in every view, at the pixel
+/// **At the track stage** the track's patch is read in every view, at the pixel
 /// that view's observation already sits at: one round of the localizer scores
 /// each against the leave-one-out consensus of the round's others and finds the
 /// correlation peak within [`EvaluateOptions::search_px`] of it. What lands in
@@ -423,7 +423,7 @@ pub fn evaluate(
 /// alone.
 ///
 /// The half of [`evaluate`]'s validation that reads no photograph: whether the
-/// track stage has a surfel to read against. A caller that runs the evaluation
+/// track stage has a patch to read against. A caller that runs the evaluation
 /// somewhere expensive -- on a worker, after decoding a dozen images -- asks
 /// this first and refuses in front of the decode, which is a refusal the person
 /// who asked for it sees immediately rather than a task that fails a second
@@ -454,7 +454,7 @@ pub fn evaluate(
 pub fn evaluate_preconditions(track: &EditableTrack) -> Result<(), EvaluateError> {
     match &track.stage {
         Stage::Cluster(_) => Ok(()),
-        Stage::Track(payload) if payload.frame.is_none() => Err(EvaluateError::NoFrame),
+        Stage::Track(payload) if payload.placement.is_none() => Err(EvaluateError::NoFrame),
         Stage::Track(_) => Ok(()),
     }
 }
@@ -877,7 +877,7 @@ struct Reading {
     seed_shift_px: f64,
 }
 
-/// Read every observation of `track` against the surfel it carries, and write
+/// Read every observation of `track` against the patch it carries, and write
 /// what each one says about itself into its track-stage slot.
 fn evaluate_track(
     track: &EditableTrack,
@@ -886,7 +886,7 @@ fn evaluate_track(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
-    let frame = payload.frame.clone().ok_or(EvaluateError::NoFrame)?;
+    let frame = payload.placement.clone().ok_or(EvaluateError::NoFrame)?;
     check_observation_views(track, images)?;
 
     let plan = plan_rounds(
@@ -957,7 +957,7 @@ fn evaluate_track(
             measurement.ray_angle_deg = None;
             measurement.localizability = None;
             if let Some(pixel) = seed_of(observation) {
-                // The offset is measured from the **surfel's** projection,
+                // The offset is measured from the **patch's** projection,
                 // because that is the anchor the localizer renders its tile
                 // about and the point the seed offset above was clipped
                 // against; the reprojection error below is against the
@@ -972,7 +972,7 @@ fn evaluate_track(
                     measurement.ray_angle_deg = finite(angle);
                 }
                 measurement.localizability =
-                    surfel_tile_localizability(&frame, view, pixel, resolution, window);
+                    patch_tile_localizability(&frame, view, pixel, resolution, window);
             }
             if measurement.zncc.is_some() {
                 measured += 1;
@@ -1193,10 +1193,10 @@ pub(super) fn observation_metrics(
     (error, cos.acos().to_degrees())
 }
 
-/// The localizability of what one view shows of the surfel at its keypoint:
+/// The localizability of what one view shows of the patch at its keypoint:
 /// the tile rendered through the keypoint-anchored frame, scored by the same
 /// kernel the consensus is scored by.
-pub(super) fn surfel_tile_localizability(
+pub(super) fn patch_tile_localizability(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: [f64; 2],

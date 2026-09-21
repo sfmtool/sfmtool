@@ -5,8 +5,8 @@
 //!
 //! `specs/core/bench/editable-track.md` is the design. [`set_stage`] is the one
 //! operation, in both directions: **up** from a set of image patches to a
-//! surfel at a position, which triangulates, frames and then fits; and
-//! **down** from the surfel back to the patches, which projects the frame
+//! patch at a position, which triangulates, frames and then fits; and
+//! **down** from the patch back to the patches, which projects the frame
 //! through each observation's camera and throws the 3D away on purpose.
 //!
 //! Setting the stage a track is already at changes nothing and says so, so a
@@ -127,7 +127,7 @@ impl std::fmt::Display for StageReport {
 /// observation's affine shape, projected back through its camera at the
 /// triangulated depth, with the mean viewing direction as the normal; and the
 /// track-stage fit then localizes and refines every `in` and
-/// `candidate` observation against that surfel, re-triangulates the `in`
+/// `candidate` observation against that patch, re-triangulates the `in`
 /// results and fuses the consensus. The cluster-stage measurements are
 /// dropped: they describe a registration against a reference and a template
 /// the track no longer has.
@@ -272,7 +272,7 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
             let payload = track
                 .track()
                 .expect("the stages differ, so this one is the track stage");
-            if payload.frame.is_none() {
+            if payload.placement.is_none() {
                 return Err(StageError::NoFrame);
             }
             if payload.position.is_none() {
@@ -331,7 +331,7 @@ fn upgrade(
         options.residual_margin,
     );
 
-    // 2. The surfel: the reference observation's own shape, unprojected onto
+    // 2. The patch: the reference observation's own shape, unprojected onto
     //    the plane at the depth it stands, turned to face the views that see it.
     //    For a bearing there is no depth, so the shape is unprojected at unit
     //    distance -- where a fronto-parallel half-axis *is* the tangent of the
@@ -477,7 +477,7 @@ fn downgrade(
     // The frame and the position are [`set_stage_preconditions`]'s, checked
     // before the caller spent anything on the views.
     let payload = track.track().expect("the caller checked the stage");
-    let frame = payload.frame.as_ref().ok_or(StageError::NoFrame)?;
+    let frame = payload.placement.as_ref().ok_or(StageError::NoFrame)?;
     let position = payload.position.ok_or(StageError::NoPosition)?;
     let point = Point3D {
         position,
@@ -499,12 +499,12 @@ fn downgrade(
     // cluster seed is a keypoint-frame shape read over `[-radius, radius]`, so
     // each column is divided by the radius the new cluster takes. Without that
     // the patch would arrive at the cluster stage `radius` times the size the
-    // surfel really has, and the next evaluation would register that square.
+    // patch really has, and the next evaluation would register that square.
     //
     // And it is read in the cluster stage's **chirality**
     // ([`flipped_chirality`]): a patch-frame shape is negative-determinant
     // where a keypoint-frame shape is positive, so a seed taken straight from
-    // the projection is the surfel mirrored, and the cluster stage rasters it
+    // the projection is the patch mirrored, and the cluster stage rasters it
     // that way round.
     let cluster = ClusterPayload::default();
     let mut next = track.clone();

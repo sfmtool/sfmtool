@@ -212,7 +212,7 @@ impl Viewer3D {
             return false;
         };
         let (Some(frame), Some(figure)) = (
-            bench_track::frame_of(bench.track),
+            bench_track::placement_of(bench.track),
             self.bench_figure.as_ref(),
         ) else {
             self.bench_drag = None;

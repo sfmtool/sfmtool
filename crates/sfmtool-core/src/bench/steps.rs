@@ -63,10 +63,10 @@ const NO_EFFECT_RAD: f64 = 1e-9;
 /// them has no axis.
 const MIN_DIRECTION: f64 = 1e-12;
 
-/// How far from an observation's line of sight the surfel's outward normal may
+/// How far from an observation's line of sight the patch's outward normal may
 /// be turned, in degrees.
 ///
-/// The bar [`tilt_frame`] stops at, and the number the sentence a stopped tilt
+/// The bar [`tilt_patch`] stops at, and the number the sentence a stopped tilt
 /// writes names, so the rule and what is said about it are one value. Past it a
 /// photograph sees the patch so obliquely that its tile is a smear of a few
 /// pixels stretched over the square, and the correlation that tile is scored by
@@ -198,14 +198,14 @@ pub fn create_track(
         })
         .collect::<Vec<_>>();
 
-    let frame = match (view.patch_u_halfvec(), view.patch_v_halfvec()) {
+    let patch = match (view.patch_u_halfvec(), view.patch_v_halfvec()) {
         (Some(u), Some(v)) => {
             let u = Vector3::new(f64::from(u[0]), f64::from(u[1]), f64::from(u[2]));
             let v = Vector3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
             let (hu, hv) = (u.norm(), v.norm());
             (hu > 0.0 && hv > 0.0).then(|| {
                 let mut patch = OrientedPatch::new(stored.position, u / hu, v / hv, [hu, hv]);
-                // A bearing's frame is tangent to the direction sphere and its
+                // A bearing's patch is tangent to the direction sphere and its
                 // corners are directions, so the renderer has to be told which
                 // kind it is; the two stored half-vectors are the same either
                 // way.
@@ -222,7 +222,7 @@ pub fn create_track(
         // node with no patch frames has no frame to read one from, and its
         // bearings are still bearings.
         at_infinity: stored.is_at_infinity(),
-        frame,
+        placement: patch,
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),
@@ -470,10 +470,10 @@ pub enum TrackEditError {
     },
     /// The seed is not a finite pair of coordinates.
     BadPixel([f64; 2]),
-    /// The place named is not a finite point of the world, or is one a direction
-    /// patch's bearing cannot be renormalized from.
+    /// The moved centre is not a finite point of the world, or is one a
+    /// direction patch's bearing cannot be renormalized from.
     BadPlace([f64; 3]),
-    /// The step belongs to the other stage: the surfel's own size and turn are
+    /// The step belongs to the other stage: the patch's own size and turn are
     /// the track stage's, and one sighting's affine shape is the cluster
     /// stage's.
     WrongStage {
@@ -482,14 +482,15 @@ pub enum TrackEditError {
         /// The stage the track is in.
         is: StageKind,
     },
-    /// The track is at the track stage and carries no surfel to resize or turn.
+    /// The track is at the track stage and carries no patch to resize or turn.
     NoFrame,
     /// The half-length asked for is not a positive finite length.
     BadSize(f64),
     /// The turn asked for is not a finite angle.
     BadAngle(f64),
-    /// The offset asked for is not a finite distance.
-    BadDistance(f64),
+    /// The displacement asked for is not a finite one, on the patch's own axes
+    /// `[u, v, n]`.
+    BadDisplacement([f64; 3]),
     /// The outward normal asked for is not a finite direction, or is too short
     /// to name one.
     BadNormal([f64; 3]),
@@ -544,12 +545,12 @@ impl std::fmt::Display for TrackEditError {
                 write!(f, "that is a {wanted}-stage step and this track is a {is}")
             }
             TrackEditError::NoFrame => {
-                write!(f, "this track has no surfel yet; fit it first")
+                write!(f, "this track has no patch yet; fit it first")
             }
             TrackEditError::BadSize(size) => write!(f, "{size} is not a size"),
             TrackEditError::BadAngle(angle) => write!(f, "{angle} is not an angle"),
-            TrackEditError::BadDistance(distance) => {
-                write!(f, "{distance} is not a distance")
+            TrackEditError::BadDisplacement(by) => {
+                write!(f, "({}, {}, {}) is not a displacement", by[0], by[1], by[2])
             }
             TrackEditError::BadNormal(n) => {
                 write!(f, "({}, {}, {}) is not a direction", n[0], n[1], n[2])
@@ -825,7 +826,7 @@ impl std::str::FromStr for Edge {
 
 /// What one hand-placed sighting did.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MoveObservationReport {
+pub struct SightReport {
     /// The observation that was moved.
     pub observation: usize,
     /// The image it is in.
@@ -864,19 +865,19 @@ pub struct MoveObservationReport {
 ///   large it is; what the refinement found around the old pixel is not an
 ///   answer about the new one.
 ///
-/// Nothing else on the track moves: the surfel keeps its place, its size and
+/// Nothing else on the track moves: the patch keeps its place, its size and
 /// its turn, and every other sighting keeps its own.
 ///
 /// **The observation is pinned either way**, at both stages: a sighting a
 /// person placed is a sighting they have ruled on, and
 /// [`apply_thresholds`] leaves a pinned observation's verdict where it is
 /// rather than painting over a placement by hand.
-pub fn set_observation_keypoint(
+pub fn sight_observation(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     observation: usize,
     pixel: [f64; 2],
-) -> Result<(EditableTrack, MoveObservationReport), TrackEditError> {
+) -> Result<(EditableTrack, SightReport), TrackEditError> {
     if !pixel.iter().all(|c| c.is_finite()) {
         return Err(TrackEditError::BadPixel(pixel));
     }
@@ -906,7 +907,7 @@ pub fn set_observation_keypoint(
     let moved_px = was.map(|was| (pixel[0] - was[0]).hypot(pixel[1] - was[1]));
     Ok((
         next,
-        MoveObservationReport {
+        SightReport {
             observation,
             image,
             was,
@@ -922,7 +923,7 @@ pub fn set_observation_keypoint(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResizeReport {
     /// The observation whose outline was dragged, for
-    /// [`resize_from_edge`]; the resize is of the one patch either way, and
+    /// [`resize_patch_to_pixel`]; the resize is of the one patch either way, and
     /// this says which sighting's view of it the size was named in.
     pub observation: Option<usize>,
     /// The image that observation is in.
@@ -936,10 +937,10 @@ pub struct ResizeReport {
     /// the one the patch already had is the size it already had.
     pub changed: bool,
     /// The pixel the dragged edge's midpoint was put under, after the clamp.
-    /// `None` for [`resize_frame`], which names a size and no pixel.
+    /// `None` for [`resize_patch`], which names a size and no pixel.
     pub pixel: Option<[f64; 2]>,
     /// The pixel that was asked for, when it sat off the photograph and was
-    /// brought inside it. Always `None` for [`resize_frame`], which names a size
+    /// brought inside it. Always `None` for [`resize_patch`], which names a size
     /// and no pixel.
     pub clamped_from: Option<[f64; 2]>,
 }
@@ -959,58 +960,131 @@ fn same_length(value: f64, was: f64) -> bool {
     (value - was).abs() <= NO_EFFECT_FRACTION * scale
 }
 
-/// Resize the track's surfel to `half_length` along **both** of its axes, about
-/// its own centre.
+/// Resize the track's patch to `half_length` along **both** of its axes,
+/// holding the centre when `moved_edge` is `None` and the far edge when it
+/// names one.
 ///
-/// One scalar rather than two, because a patch frame is square: the half-vector
-/// pair a `.sfmr` stores and every kernel that renders a tile reads has
+/// One scalar rather than two, because a patch is square: the half-vector pair
+/// a `.sfmr` stores and every kernel that renders a tile reads has
 /// `|u| == |v|`, and the grid the tile is sampled on is square with it
 /// (`specs/core/patch/patch-cloud.md`). A resize that moved one axis alone
 /// would make the patch a rectangle sampled as a square, which is a stretched
 /// template rather than a larger one.
 ///
-/// The centre, the axes' directions and the normal are untouched, so the patch
-/// still sits on the same plane facing the same way and every edge moves: this
-/// is the form a caller that knows the size it wants asks for. The gesture --
-/// one edge dragged, the opposite one left where it is -- is
-/// [`resize_from_edge`].
+/// **`moved_edge` says what becomes of the sightings**, which is why it is a
+/// parameter of the step rather than a convenience left to the caller:
+///
+/// - `None` moves **both** edges about a held centre. Nothing on the patch
+///   moves but its size, so no sighting is touched at all: this is the form a
+///   caller that knows the size it wants asks for.
+/// - `Some(edge)` moves that edge and holds the **opposite** one, which is the
+///   gesture -- a person pulling an edge expects the other three where the
+///   geometry puts them, not the far edge running away. The centre therefore
+///   moves by `half_length - was` along that edge's own direction, and every
+///   sighting is carried along the plane by that same displacement, keeping its
+///   own in-plane offset, exactly as a translation's are. Nothing is pinned. A
+///   **bearing** (`w == 0`) is handled by renormalizing the moved centre and
+///   dividing the half-length by the same factor, which leaves every corner the
+///   same direction and so holds the far edge there too.
 ///
 /// **What the resize invalidates is cleared.** The consensus bitmap is the
-/// observations fused over the old square, so a frame of another size no longer
+/// observations fused over the old square, so a patch of another size no longer
 /// has a picture; and every track measurement but its keypoint was read over
 /// that square, so what is kept is where each sighting sits and what is dropped
 /// is every number about it. An [`evaluate`](super::evaluate::evaluate)
 /// restores them, and the next [`fit`](super::fit::fit) fuses a new bitmap at
-/// the size the frame now has.
-pub fn resize_frame(
+/// the size the patch now has.
+///
+/// A cluster is refused: there is no world geometry to give a world half-length
+/// to. [`resize_patch_to_pixel`] is the form that spans both stages.
+pub fn resize_patch(
     track: &EditableTrack,
+    edited: &EditedReconstruction,
     half_length: f64,
+    moved_edge: Option<Edge>,
 ) -> Result<(EditableTrack, ResizeReport), TrackEditError> {
     if !half_length.is_finite() || half_length <= 0.0 {
         return Err(TrackEditError::BadSize(half_length));
     }
-    let frame = frame_of(track)?;
-    let was = frame.half_extent[0];
-    let mut next = track.clone();
-    let changed = !(same_length(half_length, frame.half_extent[0])
-        && same_length(half_length, frame.half_extent[1]));
-    if changed {
-        let (position, frame, bitmap) = track_payload_mut(&mut next);
-        frame.half_extent = [half_length, half_length];
-        let _ = position;
-        *bitmap = None;
-        keep_keypoints_only(&mut next);
+    let patch = placement_of(track)?;
+    let was = patch.half_extent[0];
+    let unchanged = ResizeReport {
+        observation: None,
+        image: None,
+        half: was,
+        was,
+        changed: false,
+        pixel: None,
+        clamped_from: None,
+    };
+    if same_length(half_length, patch.half_extent[0])
+        && same_length(half_length, patch.half_extent[1])
+    {
+        return Ok((track.clone(), unchanged));
     }
+
+    let Some(edge) = moved_edge else {
+        // Both edges move about a held centre, so no point of the patch's plane
+        // goes anywhere and there is no sighting to carry.
+        let mut next = track.clone();
+        {
+            let (_, patch, bitmap) = track_payload_mut(&mut next);
+            patch.half_extent = [half_length, half_length];
+            *bitmap = None;
+        }
+        keep_keypoints_only(&mut next);
+        return Ok((
+            next,
+            ResizeReport {
+                half: half_length,
+                changed: true,
+                ..unchanged
+            },
+        ));
+    };
+
+    let direction = match edge.axis() {
+        Axis::U => patch.u_axis,
+        Axis::V => patch.v_axis,
+    } * edge.sign();
+    let displacement = direction * (half_length - was);
+    let mut center = patch.center + displacement;
+    // A direction patch's centre is a unit bearing and its half-extents are
+    // stated against one, so the moved centre is renormalized and the
+    // half-length divided by the same factor. Scaling a bearing and its tangent
+    // frame together leaves every corner the same direction, which is what keeps
+    // the far edge exactly where it was.
+    let scale = if patch.w == 0.0 {
+        let norm = center.coords.norm();
+        if norm <= 1e-12 {
+            return Err(TrackEditError::BadSize(half_length));
+        }
+        center = Point3::from(center.coords / norm);
+        norm
+    } else {
+        1.0
+    };
+    let half = half_length / scale;
+
+    let mut next = track.clone();
+    {
+        let (position, patch, bitmap) = track_payload_mut(&mut next);
+        patch.center = center;
+        patch.half_extent = [half, half];
+        // The track's coordinate is the patch's centre in both representations:
+        // a world point at `w = 1`, and the unit bearing itself at `w = 0`.
+        // Letting the two drift apart would commit a direction the outline has
+        // already left.
+        *position = Some(center);
+        *bitmap = None;
+    }
+    carry_keypoints(&mut next, edited, patch, displacement);
     Ok((
         next,
         ResizeReport {
-            observation: None,
-            image: None,
-            half: half_length,
-            was,
-            changed,
-            pixel: None,
-            clamped_from: None,
+            half,
+            changed: true,
+            ..unchanged
         },
     ))
 }
@@ -1028,18 +1102,22 @@ pub fn resize_frame(
 /// `h' - h` along that direction: the far edge stays at `-h` and the dragged
 /// one lands on `p`.
 ///
+/// **The one step that spans both stages**, because a pixel is meaningful at
+/// either where a world half-length is not: a cluster has no geometry to state
+/// a world size against, and an edge under a pointer is a size all the same.
+///
 /// **What the outline shows is what is resized.** At the track stage the
-/// outline is the surfel re-anchored on `observation`'s own sighting
+/// outline is the patch re-anchored on `observation`'s own sighting
 /// (`OrientedPatch::anchored_at_keypoint`), which is where a person sees the
-/// patch in that photograph, so that is the frame the pointer is read against
-/// and the frame the resize writes back. The surfel therefore takes the centre
-/// the outline had, plus the edge's shift, and the track's position follows it;
-/// `observation`'s keypoint is carried along the plane by the centre's own
-/// displacement, keeping its in-plane offset, so the dot and the outline move
-/// together and the far edge really does hold still on screen. Every other
-/// sighting is carried by the same displacement and keeps its own offset too,
-/// and all of them lose the measurements the move and the resize invalidate, as
-/// they do for [`resize_frame`]. Nothing is pinned.
+/// patch in that photograph, so that is the square the pointer is read against.
+/// The offset of the meeting along the dragged edge's axis, read from the
+/// patch's own centre, is the half-length [`resize_patch`] is then handed with
+/// this edge as its `moved_edge`, so the patch takes the centre the outline had
+/// plus the edge's shift and the track's position follows it; `observation`'s
+/// keypoint is carried along the plane by the centre's own displacement,
+/// keeping its in-plane offset, so the dot and the outline move together and the
+/// far edge really does hold still on screen. Every other sighting is carried by
+/// the same displacement and keeps its own offset too. Nothing is pinned.
 ///
 /// At the **cluster stage** there is no geometry, so the same arithmetic runs
 /// in that image's pixels: the sighting's affine shape is scaled by one scalar,
@@ -1047,7 +1125,7 @@ pub fn resize_frame(
 /// the sighting moves by half the change along the dragged edge's own
 /// direction, which is what holds the far edge of the parallelogram still. Only
 /// that observation is touched.
-pub fn resize_from_edge(
+pub fn resize_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     observation: usize,
@@ -1065,10 +1143,20 @@ pub fn resize_from_edge(
     let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
     match &track.stage {
         Stage::Track(_) => {
-            let frame = frame_of(track)?;
+            let patch = placement_of(track)?;
             let (camera, cam_from_world) = view_of(edited, image)?;
-            let point = pointer_place(frame, &camera, &cam_from_world, site, pixel, observation)?;
-            let (next, mut report) = resize_from_edge_to(track, edited, edge, point)?;
+            let offset = pointer_offset(patch, &camera, &cam_from_world, site, pixel, observation)?;
+            let direction = match edge.axis() {
+                Axis::U => patch.u_axis,
+                Axis::V => patch.v_axis,
+            } * edge.sign();
+            // With the dragged edge at `+h` from the centre and the far one at
+            // `-h`, a pointer naming the offset `p` along the dragged direction
+            // puts the far edge back at `-h` and the dragged one on `p` exactly
+            // when the new half-length is `(p + h) / 2`.
+            let was = patch.half_extent[0];
+            let half_length = (offset.dot(&direction) + was) / 2.0;
+            let (next, mut report) = resize_patch(track, edited, half_length, Some(edge))?;
             // The step itself knows nothing of photographs; what the gesture
             // adds is which sighting it was named in and where on it.
             report.observation = Some(observation);
@@ -1149,105 +1237,9 @@ pub fn resize_from_edge(
     }
 }
 
-/// Resize the patch by putting `edge` at `point`'s offset along that edge's own
-/// axis, with the **opposite edge left where it is**.
-///
-/// The edit itself. [`resize_from_edge`] reaches it by turning its pixel into a
-/// point of the plane first, and the 3D viewer's edge drag names one directly:
-/// there is no photograph out there, and the square a person takes hold of is
-/// the surfel itself at its centre rather than the outline re-anchored on one
-/// sighting. So the offset is read from the **surfel's** centre -- `p =
-/// (point - c) . direction`, which drops any component off the plane, since the
-/// axis lies in it -- and the rest is the arithmetic that holds the far edge:
-/// the new half-length is `(p + h) / 2` and the centre moves by `h' - h` along
-/// that direction.
-///
-/// Everything after the size is [`resize_from_edge`]'s: the track's position
-/// follows the centre, every sighting is carried along the plane by the same
-/// displacement and keeps its own in-plane offset, the bitmap and the
-/// measurements go, and nothing is pinned. A **bearing** (`w == 0`) is handled
-/// by renormalizing the moved centre and dividing the half-length by the same
-/// factor, which leaves every corner the same direction and so holds the far
-/// edge there too.
-///
-/// A cluster is refused: there is no world geometry to put an edge at.
-pub fn resize_from_edge_to(
-    track: &EditableTrack,
-    edited: &EditedReconstruction,
-    edge: Edge,
-    point: Point3<f64>,
-) -> Result<(EditableTrack, ResizeReport), TrackEditError> {
-    let place = [point.x, point.y, point.z];
-    if !place.iter().all(|c| c.is_finite()) {
-        return Err(TrackEditError::BadPlace(place));
-    }
-    let frame = frame_of(track)?;
-    let direction = match edge.axis() {
-        Axis::U => frame.u_axis,
-        Axis::V => frame.v_axis,
-    } * edge.sign();
-    let was = frame.half_extent[0];
-    let half = ((point - frame.center).dot(&direction) + was) / 2.0;
-    if !half.is_finite() || half <= 0.0 {
-        return Err(TrackEditError::BadSize(half));
-    }
-    let unchanged = ResizeReport {
-        observation: None,
-        image: None,
-        half: was,
-        was,
-        changed: false,
-        pixel: None,
-        clamped_from: None,
-    };
-    if same_length(half, was) {
-        return Ok((track.clone(), unchanged));
-    }
-    let displacement = direction * (half - was);
-    let mut center = frame.center + displacement;
-    // A direction patch's centre is a unit bearing and its half-extents are
-    // stated against one, so the moved centre is renormalized and the
-    // half-length divided by the same factor. Scaling a bearing and its tangent
-    // frame together leaves every corner the same direction, which is what keeps
-    // the far edge exactly where it was.
-    let scale = if frame.w == 0.0 {
-        let norm = center.coords.norm();
-        if norm <= 1e-12 {
-            return Err(TrackEditError::BadSize(half));
-        }
-        center = Point3::from(center.coords / norm);
-        norm
-    } else {
-        1.0
-    };
-    let half = half / scale;
-
-    let mut next = track.clone();
-    {
-        let (position, frame, bitmap) = track_payload_mut(&mut next);
-        frame.center = center;
-        frame.half_extent = [half, half];
-        // The track's coordinate is the frame's centre in both representations:
-        // a world point at `w = 1`, and the unit bearing itself at `w = 0`.
-        // Letting the two drift apart would commit a direction the outline has
-        // already left.
-        *position = Some(center);
-        *bitmap = None;
-    }
-    carry_keypoints(&mut next, edited, frame, displacement);
-    Ok((
-        next,
-        ResizeReport {
-            half,
-            changed: true,
-            ..unchanged
-        },
-    ))
-}
-
-/// What one translation of the surfel did.
+/// What one translation of the patch did.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TranslateFrameReport {
+pub struct TranslateToPixelReport {
     /// The observation whose image the pointer named.
     pub observation: usize,
     /// That image.
@@ -1270,12 +1262,12 @@ pub struct TranslateFrameReport {
     pub clamped_from: Option<[f64; 2]>,
 }
 
-/// Slide the surfel across its own plane until its centre sits under `pixel` in
+/// Slide the patch across its own plane until its centre sits under `pixel` in
 /// `observation`'s photograph.
 ///
 /// **This moves the patch, not one sighting.** A track-stage track has one
-/// surfel and every observation is a view of it, so dragging the mark in one
-/// photograph is a statement about where that surfel is: the centre moves, the
+/// patch and every observation is a view of it, so dragging the mark in one
+/// photograph is a statement about where that patch is: the centre moves, the
 /// half-vectors and the normal are kept, and **every** observation's keypoint
 /// moves by the same displacement along the plane, so the outline moves in
 /// every image at once. That is what makes the gesture worth having -- a patch
@@ -1303,12 +1295,12 @@ pub struct TranslateFrameReport {
 /// and [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection) as
 /// its reason, which is the truth about it: the patch is no longer in that
 /// photograph.
-pub fn translate_frame(
+pub fn translate_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     observation: usize,
     pixel: [f64; 2],
-) -> Result<(EditableTrack, TranslateFrameReport), TrackEditError> {
+) -> Result<(EditableTrack, TranslateToPixelReport), TrackEditError> {
     if !pixel.iter().all(|c| c.is_finite()) {
         return Err(TrackEditError::BadPixel(pixel));
     }
@@ -1317,11 +1309,14 @@ pub fn translate_frame(
     let site = current
         .site()
         .ok_or(TrackEditError::NoPlace { observation })?;
-    let frame = frame_of(track)?;
+    let patch = placement_of(track)?;
     let (camera, cam_from_world) = view_of(edited, image)?;
     let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
-    let point = pointer_place(frame, &camera, &cam_from_world, site, pixel, observation)?;
-    let (next, slid) = translate_frame_to(track, edited, point)?;
+    let offset = pointer_offset(patch, &camera, &cam_from_world, site, pixel, observation)?;
+    // The offset lies in the plane by construction, so reading it on the two
+    // in-plane axes is the whole of it and the normal part is zero outright.
+    let by = Vector3::new(offset.dot(&patch.u_axis), offset.dot(&patch.v_axis), 0.0);
+    let (next, slid) = translate_patch(track, edited, by)?;
     // Where the dragged sighting now sits, which is the pointer: its own plane
     // point plus the displacement is, by construction, the plane point under
     // the pixel.
@@ -1332,7 +1327,7 @@ pub fn translate_frame(
     };
     Ok((
         next,
-        TranslateFrameReport {
+        TranslateToPixelReport {
             observation,
             image,
             pixel: landed,
@@ -1345,13 +1340,22 @@ pub fn translate_frame(
     ))
 }
 
-/// What one slide of the surfel to a place did.
+/// What one translation of the patch did.
 ///
-/// [`TranslateFrameReport`] without the photograph: a caller that names a point
-/// of the world names no image and no pixel, so there is nothing to say about
-/// either and nothing to have been brought inside a frame.
+/// [`TranslateToPixelReport`] without the photograph: a caller that names a
+/// displacement names no image and no pixel, so there is nothing to say about
+/// either and nothing to have been brought inside a picture.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TranslateToReport {
+pub struct TranslateReport {
+    /// The displacement asked for, on the patch's own axes `[u, v, n]`, in
+    /// world units.
+    ///
+    /// Reported as it was asked rather than as the unsigned length [`Self::moved`]
+    /// is, because the **sign** of the normal part carries meaning: a patch
+    /// pushed away from the cameras and one pulled toward them are opposite
+    /// answers about how far off it is, and a sentence about the step has to be
+    /// able to tell them apart.
+    pub by: Vector3<f64>,
     /// Where the centre now stands. A unit bearing for a direction patch.
     pub center: Point3<f64>,
     /// How far it moved, in world units.
@@ -1365,226 +1369,141 @@ pub struct TranslateToReport {
     pub changed: bool,
 }
 
-/// Slide the surfel across its own plane until its centre sits at `point`.
+/// Move the patch by `by`, read on its **own orthonormal axes** `[u, v, n]` in
+/// world units.
 ///
-/// The edit itself. [`translate_frame`] reaches it by turning its pixel into a
-/// point of the plane first, and the 3D viewer's centre-dot drag names one
-/// directly: there is no photograph out there, and the square a person takes
-/// hold of is the surfel itself at its centre rather than the outline
-/// re-anchored on one sighting.
+/// The edit itself, and one step for the two directions a patch can be moved in.
+/// [`translate_patch_to_pixel`] reaches it by turning its pixel into an in-plane
+/// offset first; the 3D viewer's centre-dot drag names a tangential `by` and its
+/// normal-segment drag a normal one. The two were the same five lines with a
+/// different displacement -- one taking the tangential part of a vector and the
+/// other the normal part -- so they are one step, and a **mixed** `by` is
+/// allowed rather than refused: the carry below already takes an arbitrary
+/// displacement, so the general translation costs no code where refusing it
+/// would cost a variant, a guard and a test.
 ///
-/// `point` is taken onto the plane along the normal before anything moves, so a
-/// caller whose ray-plane meeting sits a rounding off the plane still names a
-/// place on it and the patch never leaves the plane it is in. Everything after
-/// that is [`translate_frame`]'s: the axes, the normal and the size are
-/// untouched, **every** observation's keypoint is carried along the plane by the
-/// same displacement and keeps its own in-plane offset, a sighting the moved
-/// centre no longer projects into is left with no keypoint and
-/// [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection), the
-/// bitmap and the measurements go, and nothing is pinned. A direction patch's
-/// moved bearing is renormalized, which leaves every corner the direction it
-/// was.
-pub fn translate_frame_to(
+/// `u` and `v` are unit vectors and `half_extent` is stated separately, so `by`
+/// is in the world's own units and not in half-lengths: it is the unit every
+/// other length in this module is already in.
+///
+/// **What every sighting keeps is its in-plane offset `(a_i, b_i)`.** With
+/// `c' = c + by.x u + by.y v + by.z n`, each observation's keypoint becomes the
+/// projection of `c' + a_i u + b_i v`: a keypoint is where that photograph sees
+/// the patch's *content*, and that offset is what the tile is cut on, so
+/// resetting every keypoint to the centre's projection would scramble the
+/// correlation the next reading scores. Along the plane the sightings all move
+/// by the same amount in their photographs and the one a drag came through lands
+/// under the pointer; along the normal the plane travels with the patch and they
+/// move by *different* amounts, and that spread is the parallax the old depth was
+/// wrong by. A sighting the moved patch no longer projects into is left with no
+/// keypoint and
+/// [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection), which is
+/// the truth about it.
+///
+/// The axes, the normal and the size are untouched. The bitmap and the
+/// measurements go, as they do for a resize, and **nothing is pinned**: where the
+/// patch is says nothing about whether a sighting belongs to it.
+///
+/// Two refusals, each attached to the part of `by` that earns it. A **bearing**
+/// (`w == 0`) has its moved centre renormalized, which leaves every corner the
+/// direction it was, so a tangential `by` is carried like any other; a `by` with
+/// a **normal** part is refused as [`TrackEditError::AtInfinity`], a direction
+/// patch's normal being its own bearing, so there is no line standing off it to
+/// move along. A `by` that is not finite is refused as
+/// [`TrackEditError::BadDisplacement`], the way a pixel that is not one is
+/// refused as [`TrackEditError::BadPixel`].
+pub fn translate_patch(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    point: Point3<f64>,
-) -> Result<(EditableTrack, TranslateToReport), TrackEditError> {
-    let place = [point.x, point.y, point.z];
-    if !place.iter().all(|c| c.is_finite()) {
-        return Err(TrackEditError::BadPlace(place));
+    by: Vector3<f64>,
+) -> Result<(EditableTrack, TranslateReport), TrackEditError> {
+    let named = [by.x, by.y, by.z];
+    if !named.iter().all(|c| c.is_finite()) {
+        return Err(TrackEditError::BadDisplacement(named));
     }
-    let frame = frame_of(track)?;
-    let was = frame.center;
+    let patch = placement_of(track)?;
+    if patch.w == 0.0 && by.z != 0.0 {
+        return Err(TrackEditError::AtInfinity);
+    }
+    let was = patch.center;
     // The whole patch moves by this, which is what makes the gesture a
-    // translation: the centre is carried by the drag and so is every sighting,
-    // rather than the surfel being re-seated onto one observation.
-    let displacement = in_plane_offset(frame, point);
-    // A drag released where it started, or a place naming where the centre
-    // already stands, is a statement of where the patch is and not a move of it.
-    // Judged against the patch's own half-length, because that is the unit the
-    // displacement is in.
-    let moved = displacement.norm();
-    if moved == 0.0 || moved <= NO_EFFECT_FRACTION * frame.half_extent[0].abs() {
-        return Ok((
-            track.clone(),
-            TranslateToReport {
-                center: was,
-                moved: 0.0,
-                placed: 0,
-                changed: false,
-            },
-        ));
+    // translation: the centre is carried and so is every sighting, rather than
+    // the patch being re-seated onto one observation.
+    let displacement = patch.u_axis * by.x + patch.v_axis * by.y + patch.normal() * by.z;
+    // A drag released where it started, or a call naming no motion at all, is a
+    // statement of where the patch is and not a move of it. Judged against the
+    // patch's own half-length, because that is the unit the displacement is in;
+    // the axes being orthonormal, `by`'s own length is the displacement's.
+    let asked = by.norm();
+    let unchanged = TranslateReport {
+        by,
+        center: was,
+        moved: 0.0,
+        placed: 0,
+        changed: false,
+    };
+    if asked == 0.0 || asked <= NO_EFFECT_FRACTION * patch.half_extent[0].abs() {
+        return Ok((track.clone(), unchanged));
     }
-    let mut center = frame.center + displacement;
+    let mut center = was + displacement;
     // A direction patch's centre is a unit bearing, which is what rendering and
     // the half-extents are stated against; the corner directions are unchanged
     // by the renormalization, so the patch keeps its size.
-    if frame.w == 0.0 {
+    if patch.w == 0.0 {
         let norm = center.coords.norm();
         if norm <= 1e-12 {
-            return Err(TrackEditError::BadPlace(place));
+            return Err(TrackEditError::BadPlace([center.x, center.y, center.z]));
         }
         center = Point3::from(center.coords / norm);
     }
 
     let mut next = track.clone();
     {
-        let (position, frame, bitmap) = track_payload_mut(&mut next);
-        frame.center = center;
+        let (position, moved, bitmap) = track_payload_mut(&mut next);
+        moved.center = center;
         // The coordinate is the centre in both representations: a world point at
         // `w = 1`, the unit bearing at `w = 0`.
         *position = Some(center);
         *bitmap = None;
     }
-    let placed = carry_keypoints(&mut next, edited, frame, displacement);
+    let placed = carry_keypoints(&mut next, edited, patch, displacement);
     Ok((
         next,
-        TranslateToReport {
+        TranslateReport {
             center,
             moved: (center - was).norm(),
             placed,
             changed: true,
+            ..unchanged
         },
     ))
 }
 
-/// The place of the frame's own plane a pointer named, measured from the
-/// **surfel's** centre.
+/// The in-plane offset from the patch's own centre that a pointer named,
+/// measured on the outline as drawn.
 ///
-/// The one reduction of a pixel gesture to the world-point step behind it, which
-/// both [`translate_frame`] and [`resize_from_edge`] make. The outline a person
-/// drags is the surfel re-anchored on that sighting
+/// The one reduction of a pixel gesture to the step behind it, which both
+/// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] make. The outline a
+/// person drags is the patch re-anchored on that sighting
 /// (`OrientedPatch::anchored_at_keypoint`), so the pointer's offset is read from
 /// *that* centre -- where the photograph sees the patch's content -- and then
-/// carried to the surfel's own centre. Both steps want exactly that out of it: a
+/// carried to the patch's own centre. Both steps want exactly that out of it: a
 /// slide moves the centre by the offset, and a resize reads the offset along the
 /// dragged edge's axis.
-fn pointer_place(
-    frame: &OrientedPatch,
+fn pointer_offset(
+    patch: &OrientedPatch,
     camera: &crate::camera::CameraIntrinsics,
     cam_from_world: &crate::geometry::RigidTransform,
     site: [f64; 2],
     pixel: [f64; 2],
     observation: usize,
-) -> Result<Point3<f64>, TrackEditError> {
-    let anchored = frame
+) -> Result<Vector3<f64>, TrackEditError> {
+    let anchored = patch
         .anchored_at_keypoint(camera, cam_from_world, site)
         .ok_or(TrackEditError::NoProjection { observation })?;
-    let offset = anchored
+    anchored
         .keypoint_plane_offset(camera, cam_from_world, pixel)
-        .ok_or(TrackEditError::NoProjection { observation })?;
-    Ok(frame.center + offset)
-}
-
-/// The displacement from the frame's centre to `point`, in the frame's plane.
-///
-/// The component along the normal is dropped, so a place a little off the plane
-/// -- which is what any ray-plane meeting is, to its last bits -- names the
-/// place of the plane directly under it, and a slide is in-plane by
-/// construction whoever named the point.
-fn in_plane_offset(frame: &OrientedPatch, point: Point3<f64>) -> Vector3<f64> {
-    let delta = point - frame.center;
-    let normal = frame.normal();
-    delta - normal * delta.dot(&normal)
-}
-
-/// What one offset of the surfel along its normal did.
-///
-/// [`TranslateToReport`]'s companion for the one gesture whose **sign** carries
-/// meaning: an offset is a statement about depth, and a patch pushed away from
-/// the cameras and one pulled toward them are opposite answers. So the distance
-/// asked for is reported as it was asked, rather than as the unsigned length a
-/// slide reports -- there is nothing else for its magnitude to be, the whole
-/// displacement lying along the normal with no in-plane part to drop.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OffsetFrameReport {
-    /// How far along the outward normal the caller asked to go, signed:
-    /// positive toward the face the patch shows, negative behind it. Reported
-    /// whether or not it came to anything, so a no-effect sentence can name
-    /// what was asked for.
-    pub distance: f64,
-    /// Where the centre now stands.
-    pub center: Point3<f64>,
-    /// How many sightings the moved centre projects into, and so how many
-    /// keypoints were written. Zero for a step that changed nothing.
-    pub placed: usize,
-    /// Whether anything changed: an offset of less than `NO_EFFECT_FRACTION` of
-    /// the patch's own half-length leaves the patch where it was.
-    pub changed: bool,
-}
-
-/// Move the surfel `distance` world units along its outward normal.
-///
-/// The one edit no photograph can name, and the 3D viewer's normal-segment
-/// drag: a sighting says which ray the patch lies along and says nothing about
-/// how far down it the surface is, so depth is settled out in the world where
-/// the frame can be seen against the geometry around it.
-///
-/// **What every sighting keeps is its in-plane offset `(a_i, b_i)`**, exactly as
-/// a slide's do. With `c' = c + distance * n`, each observation's keypoint
-/// becomes the projection of `c' + a_i u + b_i v`: the patch's own plane travels
-/// with it, and where each photograph sees the patch's content against where the
-/// geometry puts its middle is carried rather than recomputed. Unlike a slide,
-/// the sightings move in the photographs by *different* amounts, which is the
-/// whole of the gesture -- that spread is the parallax the depth is wrong by.
-/// A sighting the moved patch no longer projects into is left with no keypoint
-/// and [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection).
-///
-/// The axes, the half-length and the plane's orientation are untouched. The
-/// bitmap and the measurements go, as they do for a slide, and nothing is
-/// pinned: how far away the patch is says nothing about whether a sighting
-/// belongs to it.
-///
-/// A **track at infinity** is refused as [`TrackEditError::AtInfinity`]: a
-/// direction patch's normal is its own bearing, so there is no line standing off
-/// the frame to move along.
-pub fn offset_frame(
-    track: &EditableTrack,
-    edited: &EditedReconstruction,
-    distance: f64,
-) -> Result<(EditableTrack, OffsetFrameReport), TrackEditError> {
-    if !distance.is_finite() {
-        return Err(TrackEditError::BadDistance(distance));
-    }
-    let frame = frame_of(track)?;
-    if frame.w == 0.0 {
-        return Err(TrackEditError::AtInfinity);
-    }
-    let was = frame.center;
-    // Judged against the patch's own half-length, because that is the unit the
-    // distance is in -- the same bar a slide's displacement is held to.
-    if distance.abs() <= NO_EFFECT_FRACTION * frame.half_extent[0].abs() {
-        return Ok((
-            track.clone(),
-            OffsetFrameReport {
-                distance,
-                center: was,
-                placed: 0,
-                changed: false,
-            },
-        ));
-    }
-    let displacement = frame.normal() * distance;
-    let center = was + displacement;
-
-    let mut next = track.clone();
-    {
-        let (position, moved, bitmap) = track_payload_mut(&mut next);
-        moved.center = center;
-        // The coordinate is the centre, as it is for every step that moves it.
-        *position = Some(center);
-        *bitmap = None;
-    }
-    let placed = carry_keypoints(&mut next, edited, frame, displacement);
-    Ok((
-        next,
-        OffsetFrameReport {
-            distance,
-            center,
-            placed,
-            changed: true,
-        },
-    ))
+        .ok_or(TrackEditError::NoProjection { observation })
 }
 
 /// The observation a tilt stopped [`MAX_TILT_DEG`] short of.
@@ -1596,22 +1515,22 @@ pub struct TiltStop {
     pub image: u32,
 }
 
-/// What one tilt of the surfel did.
+/// What one tilt of the patch did.
 ///
-/// [`OffsetFrameReport`]'s companion for the other gesture no photograph can
+/// [`TranslateReport`]'s companion for the other gesture no photograph can
 /// name. What was asked for and what happened are separate fields here, because
 /// the two part company whenever an observation's own view of the patch cuts
 /// the turn short, and a caller has to be able to say so.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TiltFrameReport {
-    /// How far the surfel turned, in degrees, and never negative: a rotation's
+pub struct TiltReport {
+    /// How far the patch turned, in degrees, and never negative: a rotation's
     /// angle is read about its own axis, and the axis is chosen by the turn.
     pub degrees: f64,
     /// The outward normal the caller asked for, as a unit vector. Reported
     /// whether or not it was reached, so a stopped tilt can name what it was
     /// aimed at and a no-effect sentence what was meant.
     pub asked: Vector3<f64>,
-    /// The outward normal the surfel now shows.
+    /// The outward normal the patch now shows.
     pub normal: Vector3<f64>,
     /// The observation whose [`MAX_TILT_DEG`] cap stopped the turn short, or
     /// `None` for a turn that reached `asked`.
@@ -1624,11 +1543,11 @@ pub struct TiltFrameReport {
     /// keypoints were written. Zero for a step that changed nothing.
     pub placed: usize,
     /// Whether anything changed: a turn under `NO_EFFECT_RAD` is no turn, the
-    /// same bar in the same unit [`rotate_frame`] holds a spin to.
+    /// same bar in the same unit [`spin_patch`] holds a spin to.
     pub changed: bool,
 }
 
-/// Turn the surfel about its centre, by the least rotation, toward the outward
+/// Turn the patch about its centre, by the least rotation, toward the outward
 /// normal `normal`, stopping [`MAX_TILT_DEG`] from any observation's camera.
 ///
 /// The second edit no photograph can name, and the 3D viewer's arrowhead drag:
@@ -1641,7 +1560,7 @@ pub struct TiltFrameReport {
 /// angle of the arc walked rather than the rotation's own reading of itself.
 /// `u` and `v` are both carried
 /// by it, so a tilt adds no spin about the normal: spin is
-/// [`rotate_frame`]'s. Where the two normals are collinear there is no such
+/// [`spin_patch`]'s. Where the two normals are collinear there is no such
 /// rotation to speak of -- at zero none is needed, and at a half turn every
 /// rotation about an axis in the frame's plane is equally least -- and the
 /// frame's own `u` is taken as the direction the arc leaves in, which holds `v`
@@ -1674,18 +1593,18 @@ pub struct TiltFrameReport {
 /// A **track at infinity** is refused as [`TrackEditError::AtInfinity`], a
 /// direction patch's normal being its own bearing; a `normal` that is not a
 /// finite direction is refused as [`TrackEditError::BadNormal`].
-pub fn tilt_frame(
+pub fn tilt_patch(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     normal: Vector3<f64>,
-) -> Result<(EditableTrack, TiltFrameReport), TrackEditError> {
+) -> Result<(EditableTrack, TiltReport), TrackEditError> {
     let named = [normal.x, normal.y, normal.z];
     let length = normal.norm();
     if !named.iter().all(|c| c.is_finite()) || length < MIN_DIRECTION {
         return Err(TrackEditError::BadNormal(named));
     }
     let asked = normal / length;
-    let frame = frame_of(track)?;
+    let frame = placement_of(track)?;
     if frame.w == 0.0 {
         return Err(TrackEditError::AtInfinity);
     }
@@ -1713,7 +1632,7 @@ pub fn tilt_frame(
     };
     let (phi, stopped) = tilt_stop(track, edited, frame.center, was, perp, theta);
 
-    let unchanged = TiltFrameReport {
+    let unchanged = TiltReport {
         degrees: phi.to_degrees(),
         asked,
         normal: was,
@@ -1758,7 +1677,7 @@ pub fn tilt_frame(
     });
     Ok((
         next,
-        TiltFrameReport {
+        TiltReport {
             normal: u.cross(&v).normalize(),
             placed,
             changed: true,
@@ -1821,16 +1740,16 @@ fn tilt_stop(
     (reach, stopped)
 }
 
-/// What one turn of the surfel did.
+/// What one turn of the patch did.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RotateFrameReport {
+pub struct SpinReport {
     /// How far it turned, in degrees, positive about the outward normal.
     pub degrees: f64,
     /// Whether anything changed: a turn under `NO_EFFECT_RAD` is no turn.
     pub changed: bool,
 }
 
-/// Turn the track's surfel by `angle_rad` about its own outward normal.
+/// Turn the track's patch by `angle_rad` about its own outward normal.
 ///
 /// The axes are rotated as a pair, by a rotation whose axis **is** the frame's
 /// normal, so both keep their lengths, the frame keeps its handedness and the
@@ -1843,14 +1762,14 @@ pub struct RotateFrameReport {
 /// bitmap and the track measurements are dropped for the reason a resize drops
 /// them -- both were read over the square as it stood, and the square has
 /// turned under them.
-pub fn rotate_frame(
+pub fn spin_patch(
     track: &EditableTrack,
     angle_rad: f64,
-) -> Result<(EditableTrack, RotateFrameReport), TrackEditError> {
+) -> Result<(EditableTrack, SpinReport), TrackEditError> {
     if !angle_rad.is_finite() {
         return Err(TrackEditError::BadAngle(angle_rad));
     }
-    frame_of(track)?;
+    placement_of(track)?;
     let mut next = track.clone();
     let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
@@ -1864,7 +1783,7 @@ pub fn rotate_frame(
     }
     Ok((
         next,
-        RotateFrameReport {
+        SpinReport {
             degrees: angle_rad.to_degrees(),
             changed,
         },
@@ -1917,7 +1836,7 @@ fn same_shape(shape: [[f64; 2]; 2], was: [[f64; 2]; 2]) -> bool {
 /// keypoint frame mapped onto this image's pixels, read over the square
 /// `[-r, r]^2` at the cluster's [`ClusterPayload::radius`]. What sets one by
 /// hand is a corner drag, which turns the parallelogram about the sighting;
-/// the edge drag, which scales it and moves it, is [`resize_from_edge`],
+/// the edge drag, which scales it and moves it, is [`resize_patch_to_pixel`],
 /// because holding the far edge still is arithmetic the caller should not have
 /// to repeat.
 ///
@@ -1927,7 +1846,7 @@ fn same_shape(shape: [[f64; 2]; 2], was: [[f64; 2]; 2]) -> bool {
 /// shape. The verdict is **not** pinned: a size or a turn is not a ruling on
 /// whether the sighting belongs, which is what a pin protects from the
 /// painting.
-pub fn set_observation_shape(
+pub fn shape_observation(
     track: &EditableTrack,
     observation: usize,
     shape: [[f64; 2]; 2],
@@ -2034,11 +1953,11 @@ fn observation_at(
         })
 }
 
-/// The track-stage surfel, or the refusal a track-stage step owes a cluster or
+/// The track-stage patch, or the refusal a track-stage step owes a cluster or
 /// a track nothing has triangulated.
-fn frame_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
+fn placement_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
     match &track.stage {
-        Stage::Track(payload) => payload.frame.as_ref().ok_or(TrackEditError::NoFrame),
+        Stage::Track(payload) => payload.placement.as_ref().ok_or(TrackEditError::NoFrame),
         Stage::Cluster(_) => Err(TrackEditError::WrongStage {
             wanted: StageKind::Track,
             is: StageKind::Cluster,
@@ -2046,8 +1965,8 @@ fn frame_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
     }
 }
 
-/// The position, the surfel and the bitmap of a track whose payload has already
-/// been read as a track stage carrying a frame.
+/// The position, the patch and the bitmap of a track whose payload has already
+/// been read as a track stage carrying a patch.
 fn track_payload_mut(
     track: &mut EditableTrack,
 ) -> (
@@ -2060,19 +1979,21 @@ fn track_payload_mut(
     };
     let TrackPayload {
         position,
-        frame,
+        placement,
         bitmap,
         ..
     } = payload;
     (
         position,
-        frame.as_mut().expect("the frame was read before the clone"),
+        placement
+            .as_mut()
+            .expect("the patch was read before the clone"),
         bitmap,
     )
 }
 
 /// Carry every sighting by `displacement`: [`place_keypoints`] for the three
-/// steps that move the surfel rigidly without turning it.
+/// steps that move the patch rigidly without turning it.
 ///
 /// Every in-plane offset survives such a move exactly, and the sighting a drag
 /// came through lands under the pointer, because its plane point plus the
@@ -2089,7 +2010,7 @@ fn carry_keypoints(
 /// Put every sighting where `place` takes its own plane point, and drop every
 /// measurement read before the patch moved.
 ///
-/// The rule every step that moves the surfel shares, and **not** a reprojection
+/// The rule every step that moves the patch shares, and **not** a reprojection
 /// of the centre: a keypoint is where that photograph sees the patch's
 /// *content*, and the gap between it and the centre's projection is that
 /// observation's own in-plane offset -- the thing the tile is cut on and the
@@ -2163,7 +2084,7 @@ fn place_keypoints(
 
 /// Drop every track measurement but the keypoint it was read at.
 ///
-/// What a change to the surfel invalidates, stated once: the ZNCC, both
+/// What a change to the patch invalidates, stated once: the ZNCC, both
 /// distances, the reprojection residual, the localizability and the reason were
 /// all read over the square as it stood and against the position it stood at,
 /// and neither holds after the patch has been resized, moved or turned. Where
@@ -2408,7 +2329,7 @@ pub struct DuplicateReport {
 /// has been slid, turned and sized until it covers one piece of surface is most
 /// of the work of covering the piece next to it, so the copy carries everything
 /// that describes the geometry and the judgements made about it: the stage and
-/// all of its data (the surfel, the consensus bitmap, the cluster's template and
+/// all of its data (the patch, the consensus bitmap, the cluster's template and
 /// radius), every observation with its keypoint, its seed, its shape, its
 /// verdict and its pin, and the thresholds. The measurements come too -- they
 /// were read against this geometry and still describe it, and the moment the

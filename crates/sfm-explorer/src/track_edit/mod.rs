@@ -394,7 +394,7 @@ impl TrackEdit {
                 ui,
                 "Fit",
                 refusals.fit,
-                "Localize every sighting against the surfel, re-triangulate the \
+                "Localize every sighting against the patch, re-triangulate the \
                  in ones and re-fuse: this one moves the track",
             ) {
                 response.fit = Some(self.search_px);
@@ -608,7 +608,7 @@ impl TrackEdit {
     /// asked for it since the track moved.
     ///
     /// `None` is a real answer and is cached as one: an observation with no
-    /// surfel behind it yet, or in a photograph the node's cache has not
+    /// patch behind it yet, or in a photograph the node's cache has not
     /// decoded, has no tile, and re-attempting the warp every frame would be
     /// the cost the cache exists to avoid.
     fn ensure_tile(
@@ -706,9 +706,9 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
             // which they are looking at. "at infinity" is the Point Track Detail
             // panel's own word for the same row.
             //
-            // The track's own flag and not its frame's `w`: a point put on the
-            // bench from a node with no patch frames carries no surfel to read a
-            // `w` off, and a bearing it came from is still a bearing.
+            // The track's own flag and not its patch's `w`: a point put on the
+            // bench from a node that stores no patch frames has no patch to read
+            // a `w` off, and a bearing it came from is still a bearing.
             let at_infinity = payload.at_infinity;
             ui.weak(match payload.position {
                 Some(position) => format!(

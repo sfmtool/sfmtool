@@ -13,7 +13,7 @@
 //! far down it the surface is or which way it faces.
 //!
 //! The arithmetic that turns a pointer into a patch is core's
-//! (`sfmtool_core::bench::resize_from_edge`,
+//! (`sfmtool_core::bench::resize_patch_to_pixel`,
 //! `OrientedPatch::keypoint_plane_offset`): a pixel is a ray, the ray meets the
 //! patch's own plane, and what the pointer named is read off that meeting.
 //! Nothing here approximates the projection -- an edge put under the pointer
@@ -24,9 +24,8 @@
 
 use nalgebra::{Point3, Rotation3, Unit, Vector3};
 use sfmtool_core::bench::{
-    self, Edge, EditableTrack, MoveObservationReport, Observation, OffsetFrameReport, ResizeReport,
-    RotateFrameReport, ShapeReport, TiltFrameReport, TrackEditError, TranslateFrameReport,
-    TranslateToReport,
+    self, Edge, EditableTrack, Observation, ResizeReport, ShapeReport, SightReport, SpinReport,
+    TiltReport, TrackEditError, TranslateReport, TranslateToPixelReport,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -43,33 +42,50 @@ const MIN_OFFSET: f64 = 1e-12;
 /// One hand edit of a track's geometry.
 ///
 /// What a drag of a bench handle in either panel produces and what each of the
-/// wire's patch tools names, in the form the core steps take: a pixel of one
-/// image or a place in the world for the gestures that name one, an angle for
-/// the two that turn something in a plane, a signed length for the one that
-/// settles a depth, and a direction for the one that settles which way the
-/// surface faces.
+/// wire's patch tools names, in the form the core steps take: a displacement on
+/// the patch's own axes or a pixel of one image for the gestures that move it, a
+/// world half-length or a pixel for the ones that size it, an angle for the two
+/// that turn something in a plane, and a direction for the one that settles
+/// which way the surface faces.
+///
+/// **Each word is said once along the path.** The enclosing type already says
+/// this is an edit of a patch, so the variants are the verbs alone; only the
+/// wire, whose namespace is flat, spells `translate_bench_patch` out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PatchEdit {
-    /// Slide the track-stage surfel across its own plane until its centre sits
+    /// Slide the track-stage patch across its own plane until its centre sits
     /// under this pixel of that observation's image. Every sighting follows.
-    Translate {
+    TranslateToPixel {
         /// The observation whose image the pixel is in.
         observation: usize,
         /// Where, in that image's own px.
         pixel: [f64; 2],
     },
-    /// Put one observation's own sighting at this pixel of its own image, and
-    /// leave every other where it is. The cluster stage's dot, where there is
-    /// no shared geometry to move.
-    Move {
-        /// The observation, by its position in the track's list.
-        observation: usize,
-        /// Where, in that image's own px.
-        pixel: [f64; 2],
+    /// Move the track-stage patch by this displacement on its own orthonormal
+    /// axes `[u, v, n]`, in world units. Every sighting follows.
+    ///
+    /// The 3D viewport's centre-dot drag names a tangential displacement and its
+    /// normal-segment drag a normal one; the normal part is the one thing no
+    /// photograph can name, a sighting saying which ray the patch lies along and
+    /// nothing about how far down it the surface is.
+    Translate {
+        /// `[u, v, n]`, in the reconstruction's own units.
+        by: [f64; 3],
+    },
+    /// Resize the track-stage patch to this world half-length, holding the far
+    /// edge when `moved_edge` names one and the centre when it does not.
+    Resize {
+        /// The new half-length, in the reconstruction's own units.
+        half_length: f64,
+        /// Which edge moves, or `None` for both about a held centre.
+        moved_edge: Option<Edge>,
     },
     /// Put one edge of the outline drawn at this observation under this pixel,
     /// with the opposite edge left where it is.
-    ResizeFromEdge {
+    ///
+    /// The one size gesture that spans both stages, a pixel being meaningful at
+    /// either where a world half-length is not.
+    ResizeToPixel {
         /// The observation whose sighting the outline is drawn at.
         observation: usize,
         /// Which edge was grabbed.
@@ -77,36 +93,22 @@ pub(crate) enum PatchEdit {
         /// Where its midpoint should land, in that image's own px.
         pixel: [f64; 2],
     },
-    /// Slide the track-stage surfel across its own plane until its centre sits
-    /// at this place. Every sighting follows.
-    ///
-    /// The 3D viewport's centre-dot drag, where there is no photograph to name
-    /// a pixel of and the square a person takes hold of is the surfel itself.
-    SlideTo {
-        /// Where, in the reconstruction's own coordinates.
-        point: [f64; 3],
+    /// Turn the track-stage patch by this many radians about its own normal.
+    Spin {
+        /// The turn, positive about the outward normal.
+        angle_rad: f64,
     },
-    /// Put one edge of the surfel's square at this place, with the opposite
-    /// edge left where it is. The 3D viewport's edge drag.
-    ResizeFromEdgeTo {
-        /// Which edge was grabbed.
-        edge: Edge,
-        /// Where it should lie, in the reconstruction's own coordinates.
-        point: [f64; 3],
+    /// Turn one cluster-stage sighting's shape by this many radians in its own
+    /// image's pixels.
+    SpinShape {
+        /// The observation, by its position in the track's list.
+        observation: usize,
+        /// The turn, positive from `+x` toward `+y` of the image raster.
+        angle_rad: f64,
     },
-    /// Move the track-stage surfel this many world units along its outward
-    /// normal, positive toward the face it shows.
-    ///
-    /// The 3D viewport's normal-segment drag, and one of the two edits no
-    /// photograph can name: a sighting says which ray the patch lies along and
-    /// nothing about how far down it the surface is.
-    Offset {
-        /// How far, in the reconstruction's own units.
-        distance: f64,
-    },
-    /// Turn the track-stage surfel about its centre until it faces this
-    /// outward normal, by the least rotation and no further than the
-    /// observations can still see it.
+    /// Turn the track-stage patch about its centre until it faces this outward
+    /// normal, by the least rotation and no further than the observations can
+    /// still see it.
     ///
     /// The 3D viewport's arrowhead drag, and the other edit no photograph can
     /// name: a sighting says which ray the patch lies along and nothing about
@@ -116,51 +118,54 @@ pub(crate) enum PatchEdit {
         /// Any non-zero length: the step reads the direction.
         normal: [f64; 3],
     },
-    /// Turn the track-stage surfel by this many radians about its normal.
-    Rotate {
-        /// The turn, positive about the outward normal.
-        angle_rad: f64,
-    },
-    /// Turn one cluster-stage sighting's shape by this many radians in its own
-    /// image's pixels.
-    RotateShape {
+    /// Put one observation's own sighting at this pixel of its own image, and
+    /// leave every other where it is. The cluster stage's dot, where there is
+    /// no shared geometry to move.
+    Sight {
         /// The observation, by its position in the track's list.
         observation: usize,
-        /// The turn, positive from `+x` toward `+y` of the image raster.
-        angle_rad: f64,
+        /// Where, in that image's own px.
+        pixel: [f64; 2],
+    },
+    /// Give one cluster-stage sighting this affine shape outright.
+    Shape {
+        /// The observation, by its position in the track's list.
+        observation: usize,
+        /// Keypoint-frame units to that image's pixels.
+        shape: [[f64; 2]; 2],
     },
 }
 
 /// What one [`PatchEdit`] did, as the core step's own report.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EditReport {
-    /// The surfel slid across its plane, every sighting following.
-    Translated(TranslateFrameReport),
-    /// The same slide, named as a place in the world rather than as a pixel.
-    SlidTo(TranslateToReport),
-    /// One sighting placed by hand.
-    Moved(MoveObservationReport),
-    /// The surfel moved along its own normal, every sighting following.
-    Offset(OffsetFrameReport),
-    /// The surfel turned to face a new normal, every sighting rebuilt on the
-    /// turned axes.
-    Tilted(TiltFrameReport),
-    /// The patch resized by one of its edges.
+    /// The patch slid across its plane to a pixel, every sighting following.
+    TranslatedToPixel(TranslateToPixelReport),
+    /// The patch moved on its own axes, every sighting following.
+    Translated(TranslateReport),
+    /// The patch resized, by one of its edges or about its centre.
     Resized(ResizeReport),
-    /// The surfel turned.
-    Rotated(RotateFrameReport),
-    /// One sighting's shape turned.
-    Turned {
+    /// The patch turned about its own normal.
+    Spun(SpinReport),
+    /// One cluster sighting's shape turned.
+    SpunShape {
         /// The step's own report.
         report: ShapeReport,
         /// How far it turned, in degrees.
         degrees: f64,
     },
+    /// The patch turned to face a new normal, every sighting rebuilt on the
+    /// turned axes.
+    Tilted(TiltReport),
+    /// One sighting placed by hand.
+    Sighted(SightReport),
+    /// One cluster sighting's shape set by hand.
+    Shaped(ShapeReport),
 }
 
 /// Below this many degrees a cluster-stage turn is no turn: the same tolerance
-/// core judges a surfel's turn by ([`bench::rotate_frame`]), read in the unit
-/// this report carries.
+/// core judges a patch's turn by ([`bench::spin_patch`]), read in the unit this
+/// report carries.
 const NO_EFFECT_DEG: f64 = 1e-9_f64.to_degrees();
 
 impl EditReport {
@@ -174,14 +179,14 @@ impl EditReport {
     /// move (`specs/gui/bench.md` section "The wire").
     pub(crate) fn changed(&self) -> bool {
         match self {
+            EditReport::TranslatedToPixel(report) => report.changed,
             EditReport::Translated(report) => report.changed,
-            EditReport::SlidTo(report) => report.changed,
-            EditReport::Offset(report) => report.changed,
             EditReport::Tilted(report) => report.changed,
-            EditReport::Moved(report) => report.changed,
+            EditReport::Sighted(report) => report.changed,
             EditReport::Resized(report) => report.changed,
-            EditReport::Rotated(report) => report.changed,
-            EditReport::Turned { report, degrees } => {
+            EditReport::Spun(report) => report.changed,
+            EditReport::Shaped(report) => report.changed,
+            EditReport::SpunShape { report, degrees } => {
                 report.changed && degrees.abs() > NO_EFFECT_DEG
             }
         }
@@ -194,14 +199,14 @@ impl EditReport {
     /// patch went rather than where it was aimed.
     pub(crate) fn pixel(&self) -> Option<[f64; 2]> {
         match self {
-            EditReport::Translated(report) => Some(report.pixel),
-            EditReport::Moved(report) => Some(report.pixel),
+            EditReport::TranslatedToPixel(report) => Some(report.pixel),
+            EditReport::Sighted(report) => Some(report.pixel),
             EditReport::Resized(report) => report.pixel,
-            EditReport::SlidTo(_)
-            | EditReport::Offset(_)
+            EditReport::Translated(_)
             | EditReport::Tilted(_)
-            | EditReport::Rotated(_)
-            | EditReport::Turned { .. } => None,
+            | EditReport::Spun(_)
+            | EditReport::Shaped(_)
+            | EditReport::SpunShape { .. } => None,
         }
     }
 
@@ -209,14 +214,14 @@ impl EditReport {
     /// brought it inside.
     pub(crate) fn clamped_from(&self) -> Option<[f64; 2]> {
         match self {
-            EditReport::Translated(report) => report.clamped_from,
-            EditReport::Moved(report) => report.clamped_from,
+            EditReport::TranslatedToPixel(report) => report.clamped_from,
+            EditReport::Sighted(report) => report.clamped_from,
             EditReport::Resized(report) => report.clamped_from,
-            EditReport::SlidTo(_)
-            | EditReport::Offset(_)
+            EditReport::Translated(_)
             | EditReport::Tilted(_)
-            | EditReport::Rotated(_)
-            | EditReport::Turned { .. } => None,
+            | EditReport::Spun(_)
+            | EditReport::Shaped(_)
+            | EditReport::SpunShape { .. } => None,
         }
     }
 
@@ -228,15 +233,21 @@ impl EditReport {
     /// which gesture it was without a version to read it off.
     pub(crate) fn no_effect_sentence(&self, label: &str) -> String {
         match self {
-            EditReport::Translated(_) | EditReport::SlidTo(_) => {
+            EditReport::TranslatedToPixel(_) => {
                 format!("Moved {label}: no effect, the patch already sits there")
             }
-            // Its own sentence, because a reader of the Action Log should be
-            // able to tell an offset from a slide without a version to read it
-            // off: the two gestures move the patch in different directions and
-            // one of them is not in the plane.
-            EditReport::Offset(_) => {
-                format!("Moved {label} along its normal: no effect, the patch already stands there")
+            // One step moves the patch in two directions, and a reader of the
+            // Action Log should be able to tell them apart without a version to
+            // read it off: a displacement along the normal is a statement about
+            // depth, which is not a thing any photograph could have said.
+            EditReport::Translated(report) => {
+                if report.by.x == 0.0 && report.by.y == 0.0 && report.by.z != 0.0 {
+                    format!(
+                        "Moved {label} along its normal: no effect, the patch already stands there"
+                    )
+                } else {
+                    format!("Moved {label}: no effect, the patch already sits there")
+                }
             }
             // Two different nothings, and a reader should be able to tell them
             // apart: a tilt held against the cap of an observation that is
@@ -249,16 +260,20 @@ impl EditReport {
                 ),
                 None => format!("Tilted {label}: no effect, no turn was asked for"),
             },
-            EditReport::Moved(report) => format!(
+            EditReport::Sighted(report) => format!(
                 "Moved observation {} of {label}: no effect, the sighting already sits there",
                 report.observation
             ),
             EditReport::Resized(_) => {
                 format!("Resized {label}: no effect, the patch is already that size")
             }
-            EditReport::Rotated(_) => format!("Rotated {label}: no effect, no turn was asked for"),
-            EditReport::Turned { report, .. } => format!(
-                "Rotated observation {} of {label}: no effect, no turn was asked for",
+            EditReport::Spun(_) => format!("Spun {label}: no effect, no turn was asked for"),
+            EditReport::SpunShape { report, .. } => format!(
+                "Spun observation {} of {label}: no effect, no turn was asked for",
+                report.observation
+            ),
+            EditReport::Shaped(report) => format!(
+                "Shaped observation {} of {label}: no effect, the sighting already has that shape",
                 report.observation
             ),
         }
@@ -278,45 +293,48 @@ pub(crate) fn apply(
     edit: &PatchEdit,
 ) -> Result<(EditableTrack, EditReport), TrackEditError> {
     match *edit {
-        PatchEdit::Translate { observation, pixel } => {
-            let (next, report) = bench::translate_frame(track, edited, observation, pixel)?;
+        PatchEdit::TranslateToPixel { observation, pixel } => {
+            let (next, report) =
+                bench::translate_patch_to_pixel(track, edited, observation, pixel)?;
+            Ok((next, EditReport::TranslatedToPixel(report)))
+        }
+        PatchEdit::Translate { by } => {
+            let (next, report) = bench::translate_patch(track, edited, Vector3::from(by))?;
             Ok((next, EditReport::Translated(report)))
         }
-        PatchEdit::Move { observation, pixel } => {
-            let (next, report) =
-                bench::set_observation_keypoint(track, edited, observation, pixel)?;
-            Ok((next, EditReport::Moved(report)))
+        PatchEdit::Resize {
+            half_length,
+            moved_edge,
+        } => {
+            let (next, report) = bench::resize_patch(track, edited, half_length, moved_edge)?;
+            Ok((next, EditReport::Resized(report)))
         }
-        PatchEdit::ResizeFromEdge {
+        PatchEdit::ResizeToPixel {
             observation,
             edge,
             pixel,
         } => {
-            let (next, report) = bench::resize_from_edge(track, edited, observation, edge, pixel)?;
-            Ok((next, EditReport::Resized(report)))
-        }
-        PatchEdit::SlideTo { point } => {
-            let (next, report) = bench::translate_frame_to(track, edited, Point3::from(point))?;
-            Ok((next, EditReport::SlidTo(report)))
-        }
-        PatchEdit::ResizeFromEdgeTo { edge, point } => {
             let (next, report) =
-                bench::resize_from_edge_to(track, edited, edge, Point3::from(point))?;
+                bench::resize_patch_to_pixel(track, edited, observation, edge, pixel)?;
             Ok((next, EditReport::Resized(report)))
         }
-        PatchEdit::Offset { distance } => {
-            let (next, report) = bench::offset_frame(track, edited, distance)?;
-            Ok((next, EditReport::Offset(report)))
+        PatchEdit::Spin { angle_rad } => {
+            let (next, report) = bench::spin_patch(track, angle_rad)?;
+            Ok((next, EditReport::Spun(report)))
         }
         PatchEdit::Tilt { normal } => {
-            let (next, report) = bench::tilt_frame(track, edited, Vector3::from(normal))?;
+            let (next, report) = bench::tilt_patch(track, edited, Vector3::from(normal))?;
             Ok((next, EditReport::Tilted(report)))
         }
-        PatchEdit::Rotate { angle_rad } => {
-            let (next, report) = bench::rotate_frame(track, angle_rad)?;
-            Ok((next, EditReport::Rotated(report)))
+        PatchEdit::Sight { observation, pixel } => {
+            let (next, report) = bench::sight_observation(track, edited, observation, pixel)?;
+            Ok((next, EditReport::Sighted(report)))
         }
-        PatchEdit::RotateShape {
+        PatchEdit::Shape { observation, shape } => {
+            let (next, report) = bench::shape_observation(track, observation, shape)?;
+            Ok((next, EditReport::Shaped(report)))
+        }
+        PatchEdit::SpinShape {
             observation,
             angle_rad,
         } => {
@@ -324,10 +342,10 @@ pub(crate) fn apply(
                 return Err(TrackEditError::BadAngle(angle_rad));
             }
             let shape = turned_shape(track, observation, angle_rad)?;
-            let (next, report) = bench::set_observation_shape(track, observation, shape)?;
+            let (next, report) = bench::shape_observation(track, observation, shape)?;
             Ok((
                 next,
-                EditReport::Turned {
+                EditReport::SpunShape {
                     report,
                     degrees: angle_rad.to_degrees(),
                 },
@@ -403,13 +421,13 @@ pub(crate) fn project(
     camera.ray_to_pixel([pc.x, pc.y, pc.z]).map(|(u, v)| [u, v])
 }
 
-/// The track's surfel re-anchored on where `observation` sits in its
-/// photograph, or the surfel itself when the ray cannot meet it.
+/// The track's patch re-anchored on where `observation` sits in its
+/// photograph, or the patch itself when the ray cannot meet it.
 ///
 /// The frame the Image Detail layer outlines, so it is the frame a drag of that
 /// outline is read against: a pointer is judged against the square a person can
 /// see, not against the one the 3D position alone would draw. The same frame
-/// `resize_from_edge` reads and writes.
+/// `resize_patch_to_pixel` reads and writes.
 pub(crate) fn anchored_frame(
     frame: &OrientedPatch,
     camera: &CameraIntrinsics,

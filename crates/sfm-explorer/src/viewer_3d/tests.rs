@@ -473,16 +473,16 @@ fn staged() -> Staged {
         rect: egui::Rect::NOTHING,
     };
     let track = staged.track();
-    look_square_at(&mut staged.viewer, &frame_of(&track));
+    look_square_at(&mut staged.viewer, &placement_of(&track));
     staged.settle(&track);
     staged
 }
 
-/// The track's surfel, as an owned value.
-fn frame_of(track: &EditableTrack) -> OrientedPatch {
+/// The track's patch, as an owned value.
+fn placement_of(track: &EditableTrack) -> OrientedPatch {
     track
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a track from a point carries the stored patch")
 }
 
@@ -720,8 +720,8 @@ fn a_press_on_an_edge_resizes_and_orbits_nothing_while_the_same_motion_off_it_or
     assert!(
         matches!(
             edit_of(&dragged),
-            PatchEdit::ResizeFromEdgeTo {
-                edge: sfmtool_core::bench::Edge::PlusU,
+            PatchEdit::Resize {
+                moved_edge: Some(sfmtool_core::bench::Edge::PlusU),
                 ..
             }
         ),
@@ -776,7 +776,7 @@ fn an_edge_dragged_lands_under_the_release_point_with_the_far_edge_held() {
         (far_after - far_before).length() < 1.0,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
-    let after = frame_of(&resized);
+    let after = placement_of(&resized);
     assert_eq!(
         after.half_extent[0], after.half_extent[1],
         "a patch frame is square"
@@ -796,7 +796,7 @@ fn a_corner_dragged_onto_its_neighbour_is_a_quarter_turn_and_one_version() {
         cursor_across(corner(&staged, 2) - dot(&staged)),
         "a corner's cursor lies along the arc it turns on",
     );
-    let PatchEdit::Rotate { angle_rad } = edit_of(&dragged) else {
+    let PatchEdit::Spin { angle_rad } = edit_of(&dragged) else {
         panic!("the press did not take a corner");
     };
     assert!(
@@ -816,13 +816,13 @@ fn a_corner_dragged_onto_its_neighbour_is_a_quarter_turn_and_one_version() {
         labels
             .last()
             .expect("a version")
-            .starts_with(&format!("Rotated {} by ", staged.label)),
+            .starts_with(&format!("Spun {} by ", staged.label)),
         "{:?}",
         labels.last(),
     );
-    let was = frame_of(&track);
-    let turned = frame_of(&staged.track());
-    assert_eq!(turned.center, was.center, "a turn moves the surfel nowhere");
+    let was = placement_of(&track);
+    let turned = placement_of(&staged.track());
+    assert_eq!(turned.center, was.center, "a turn moves the patch nowhere");
     assert!((turned.normal() - was.normal()).norm() < 1e-12);
 }
 
@@ -839,7 +839,12 @@ const DOT_LEAN_DEG: f64 = 15.0;
 /// Lean the view off the normal by [`DOT_LEAN_DEG`] and check the head really
 /// has come clear of the dot, so a test that means the dot presses the dot.
 fn look_past_the_arrowhead(staged: &mut Staged, track: &EditableTrack) {
-    look_off_normal(&mut staged.viewer, &frame_of(track), DOT_LEAN_DEG, STANDOFF);
+    look_off_normal(
+        &mut staged.viewer,
+        &placement_of(track),
+        DOT_LEAN_DEG,
+        STANDOFF,
+    );
     staged.settle(track);
     let (_, tip) = normal_segment(staged);
     assert!(
@@ -864,7 +869,12 @@ fn a_dot_drag_is_one_version_whose_label_names_the_move() {
         false,
     );
     assert_eq!(dragged.cursor, egui::CursorIcon::Move, "the dot slides it");
-    assert!(matches!(edit_of(&dragged), PatchEdit::SlideTo { .. }));
+    // The dot's own constraint: the travel is read on `u` and `v` alone, so
+    // the displacement has no component along the normal at all.
+    let PatchEdit::Translate { by } = edit_of(&dragged) else {
+        panic!("the press did not take the dot");
+    };
+    assert_eq!(by[2], 0.0, "the dot drifted the patch off its own plane");
 
     let before = staged.versions().len();
     staged
@@ -882,8 +892,8 @@ fn a_dot_drag_is_one_version_whose_label_names_the_move() {
         labels.last(),
     );
     // In the patch's own plane, with the axes and the size untouched.
-    let was = frame_of(&track);
-    let now = frame_of(&staged.track());
+    let was = placement_of(&track);
+    let now = placement_of(&staged.track());
     assert_eq!(now.half_extent, was.half_extent);
     assert!((now.normal() - was.normal()).norm() < 1e-12);
     let offset = now.center - was.center;
@@ -951,7 +961,7 @@ fn an_edge_on_view_takes_no_press_and_a_busy_node_takes_none_either() {
 
     // Then edge-on, where a pixel of pointer motion is an unbounded distance
     // along the plane.
-    look_edge_on(&mut staged.viewer, &frame_of(&track));
+    look_edge_on(&mut staged.viewer, &placement_of(&track));
     staged.settle(&track);
     let press = dot(&staged);
     let flat = gesture(&mut staged, &track, false, press, &steps, false);
@@ -981,7 +991,7 @@ fn a_click_on_an_observations_circle_selects_its_row() {
         .edit_bench_patch(
             staged.id,
             &staged.label,
-            &PatchEdit::Move {
+            &PatchEdit::Sight {
                 observation: 0,
                 pixel: [site[0] + 12.0, site[1] + 9.0],
             },
@@ -1023,7 +1033,7 @@ fn as_bearing(state: &AppState, id: ReconId, track: &EditableTrack) -> EditableT
     };
     payload.at_infinity = true;
     payload.position = None;
-    let frame = payload.frame.as_mut().expect("a surfel");
+    let frame = payload.placement.as_mut().expect("a patch");
     let direction = (frame.center - seen_from).normalize();
     // The world axis the bearing leans on least, so the tangent frame it builds
     // is well conditioned.
@@ -1046,7 +1056,7 @@ fn as_bearing(state: &AppState, id: ReconId, track: &EditableTrack) -> EditableT
 fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_spin() {
     let mut staged = staged();
     let track = as_bearing(&staged.state, staged.id, &staged.track());
-    let was = frame_of(&track);
+    let was = placement_of(&track);
     // Looking along the bearing: a direction is projected rotation-only, so
     // where the eye stands does not enter into it.
     staged.viewer.camera.world_up = was.v_axis;
@@ -1080,7 +1090,7 @@ fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_sp
         &[egui::vec2(30.0, 0.0)],
         false,
     );
-    let slid = frame_of(&applied(&edit_of(&dragged)));
+    let slid = placement_of(&applied(&edit_of(&dragged)));
     assert_eq!(slid.w, 0.0, "a bearing stays a bearing");
     assert!((slid.center.coords.norm() - 1.0).abs() < 1e-12);
     assert!(
@@ -1092,7 +1102,7 @@ fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_sp
     let press = edge_mid(&staged, 1);
     let step = egui::vec2((press.x - dot(&staged).x) * 0.6, 0.0);
     let dragged = gesture(&mut staged, &track, false, press, &[step], false);
-    let bigger = frame_of(&applied(&edit_of(&dragged)));
+    let bigger = placement_of(&applied(&edit_of(&dragged)));
     assert_eq!(bigger.w, 0.0);
     assert_eq!(bigger.half_extent[0], bigger.half_extent[1]);
     assert!(
@@ -1106,7 +1116,7 @@ fn the_three_handles_of_a_track_at_infinity_move_the_bearing_the_size_and_the_sp
     let press = corner(&staged, 2);
     let step = corner(&staged, 3) - press;
     let dragged = gesture(&mut staged, &track, false, press, &[step], false);
-    let spun = frame_of(&applied(&edit_of(&dragged)));
+    let spun = placement_of(&applied(&edit_of(&dragged)));
     assert_eq!(spun.center, was.center, "a turn moves the bearing nowhere");
     assert_eq!(spun.half_extent, was.half_extent);
     assert!(
@@ -1187,7 +1197,7 @@ fn off_normal_eye(frame: &OrientedPatch) -> Point3<f64> {
 fn a_normal_drag_moves_the_patch_along_its_normal_and_orbits_nothing() {
     let mut staged = staged();
     let track = staged.track();
-    let was = frame_of(&track);
+    let was = placement_of(&track);
     look_off_normal(&mut staged.viewer, &was, OFF_NORMAL_DEG, STANDOFF);
     staged.settle(&track);
 
@@ -1205,10 +1215,15 @@ fn a_normal_drag_moves_the_patch_along_its_normal_and_orbits_nothing() {
         dragged.orbited, 0.0,
         "the scene orbited under a handle drag",
     );
-    let PatchEdit::Offset { distance } = edit_of(&dragged) else {
+    let PatchEdit::Translate { by } = edit_of(&dragged) else {
         panic!("the press did not take the normal's segment");
     };
-    assert!(distance.abs() > 0.0, "the drag asked for no distance");
+    assert_eq!(
+        [by[0], by[1]],
+        [0.0, 0.0],
+        "the normal's segment moved the patch across its own plane",
+    );
+    assert!(by[2].abs() > 0.0, "the drag asked for no distance");
 
     let before = staged.versions().len();
     staged
@@ -1226,7 +1241,7 @@ fn a_normal_drag_moves_the_patch_along_its_normal_and_orbits_nothing() {
 
     // The patch moved along its normal and nowhere else, keeping its axes and
     // its size.
-    let now = frame_of(&staged.track());
+    let now = placement_of(&staged.track());
     assert_eq!(now.half_extent, was.half_extent);
     assert!((now.normal() - was.normal()).norm() < 1e-12);
     let moved = now.center - was.center;
@@ -1270,7 +1285,7 @@ fn escape_leaves_no_offset_and_a_normal_drag_that_ends_where_it_started_pushes_n
     let track = staged.track();
     look_off_normal(
         &mut staged.viewer,
-        &frame_of(&track),
+        &placement_of(&track),
         OFF_NORMAL_DEG,
         STANDOFF,
     );
@@ -1318,7 +1333,7 @@ fn a_view_down_the_normal_refuses_the_segment_where_the_plane_handles_are_at_the
     // long: what refuses it is the angle and not its size on screen.
     look_off_normal(
         &mut staged.viewer,
-        &frame_of(&track),
+        &placement_of(&track),
         crate::bench::geometry::MIN_PLANE_ANGLE_DEG - 1.0,
         3.0,
     );
@@ -1353,7 +1368,7 @@ fn a_view_down_the_normal_refuses_the_segment_where_the_plane_handles_are_at_the
     let centre = dot(&staged);
     let slid = gesture(&mut staged, &track, false, centre, &steps, false);
     assert!(
-        matches!(edit_of(&slid), PatchEdit::SlideTo { .. }),
+        matches!(edit_of(&slid), PatchEdit::Translate { .. }),
         "the plane handles should be at their best in this view",
     );
     assert_eq!(slid.orbited, 0.0);
@@ -1369,7 +1384,7 @@ fn a_view_down_the_normal_refuses_the_segment_where_the_plane_handles_are_at_the
 fn the_normal_segments_cursor_lies_along_it_where_an_edges_lies_across_itself() {
     let mut staged = staged();
     let track = staged.track();
-    let frame = frame_of(&track);
+    let frame = placement_of(&track);
     let eye = off_normal_eye(&frame);
     let forward = (frame.center - eye).normalize();
     // The patch's `v` taken into the image plane, which is the unrolled up, and
@@ -1441,7 +1456,7 @@ fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
 fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
     let mut staged = staged();
     let track = staged.track();
-    let was = frame_of(&track);
+    let was = placement_of(&track);
     look_off_normal(&mut staged.viewer, &was, AIMING_DEG, STANDOFF);
     staged.settle(&track);
 
@@ -1482,7 +1497,7 @@ fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
     // The square turned about its own centre and nowhere else: the centre and
     // the size are where they were, and the normal is not.
     let tilted = staged.track();
-    let now = frame_of(&tilted);
+    let now = placement_of(&tilted);
     assert_eq!(now.center, was.center);
     assert_eq!(now.half_extent, was.half_extent);
     assert!(
@@ -1522,7 +1537,7 @@ const _: () = assert!(CLOSE_STANDOFF < geometry::AIM_LEVER);
 fn an_arrowhead_close_to_the_eye_takes_the_press_rather_than_orbiting() {
     let mut staged = staged();
     let track = staged.track();
-    let was = frame_of(&track);
+    let was = placement_of(&track);
     look_off_normal(&mut staged.viewer, &was, 10.0, CLOSE_STANDOFF);
     staged.settle(&track);
 
@@ -1547,7 +1562,7 @@ fn an_arrowhead_close_to_the_eye_takes_the_press_rather_than_orbiting() {
         .edit_bench_patch(staged.id, &staged.label, &PatchEdit::Tilt { normal })
         .expect("a finite direction");
     assert!(
-        (frame_of(&staged.track()).normal() - was.normal()).norm() > 1e-3,
+        (placement_of(&staged.track()).normal() - was.normal()).norm() > 1e-3,
         "the patch did not turn",
     );
 }
@@ -1558,7 +1573,12 @@ fn an_arrowhead_close_to_the_eye_takes_the_press_rather_than_orbiting() {
 fn escape_leaves_no_tilt_and_an_arrowhead_drag_that_ends_where_it_started_pushes_nothing() {
     let mut staged = staged();
     let track = staged.track();
-    look_off_normal(&mut staged.viewer, &frame_of(&track), AIMING_DEG, STANDOFF);
+    look_off_normal(
+        &mut staged.viewer,
+        &placement_of(&track),
+        AIMING_DEG,
+        STANDOFF,
+    );
     staged.settle(&track);
 
     let head = arrowhead(&staged);
@@ -1623,7 +1643,7 @@ fn bench_frame(
 fn the_arrowheads_gesture_is_chosen_at_the_press_and_does_not_change_under_it() {
     let mut staged = staged();
     let track = staged.track();
-    let frame = frame_of(&track);
+    let frame = placement_of(&track);
     look_off_normal(&mut staged.viewer, &frame, AIMING_DEG, STANDOFF);
     staged.settle(&track);
 
@@ -1691,7 +1711,7 @@ fn the_arrowheads_gesture_is_chosen_at_the_press_and_does_not_change_under_it() 
     let eye = staged.viewer.camera.position();
     assert!(
         matches!(
-            geometry::tilt_gesture(&frame_of(&staged.track()), eye),
+            geometry::tilt_gesture(&placement_of(&staged.track()), eye),
             Some(geometry::Tilt::Swing(_)),
         ),
         "the drag should have carried the normal past the bar it was chosen by",
@@ -1706,7 +1726,7 @@ fn the_arrowheads_gesture_is_chosen_at_the_press_and_does_not_change_under_it() 
 fn the_arrowheads_cursor_is_the_gesture_it_is_about_to_make() {
     let mut staged = staged();
     let track = staged.track();
-    let frame = frame_of(&track);
+    let frame = placement_of(&track);
 
     // Near the line of sight, where the aim is free in two directions at once.
     look_off_normal(&mut staged.viewer, &frame, AIMING_DEG, STANDOFF);

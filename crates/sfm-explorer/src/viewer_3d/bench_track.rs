@@ -8,9 +8,9 @@
 //! as a square in the world, its outward normal standing off it, and one mark
 //! per observation saying where that photograph sees the patch's content
 //! against where the frame's middle is. One difference from Image Detail is
-//! deliberate -- there the outline is the surfel **re-anchored on that image's
+//! deliberate -- there the outline is the patch **re-anchored on that image's
 //! keypoint**, because the panel shows where the sighting is in that
-//! photograph; here there is no photograph and the frame drawn is the surfel
+//! photograph; here there is no photograph and the frame drawn is the patch
 //! itself, at its centre.
 //!
 //! What this module produces is a
@@ -39,7 +39,7 @@
 
 use egui::{Color32, CursorIcon, Pos2, Rect};
 use nalgebra::{Point3, Vector3};
-use sfmtool_core::bench::{Edge, EditableTrack, Stage};
+use sfmtool_core::bench::{Axis, Edge, EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{EditedReconstruction, Se3Transform};
 
@@ -243,11 +243,11 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     let Stage::Track(payload) = &bench.track.stage else {
         return None;
     };
-    let frame = payload.frame.as_ref()?;
-    // The frame's own `w` rather than the payload's `at_infinity`: what is
-    // drawn is the surfel, and core keeps the two equal wherever both exist.
+    let frame = payload.placement.as_ref()?;
+    // The patch's own `w` rather than the payload's `at_infinity`: what is
+    // drawn is the patch, and core keeps the two equal wherever both exist.
     let at_infinity = frame.w == 0.0;
-    // Patch frames are square, so one half-length says the whole of the size.
+    // A patch is square, so one half-length says the whole of the size.
     let half = frame.half_extent[0];
     if !half.is_finite() || half <= 0.0 {
         return None;
@@ -329,14 +329,14 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     })
 }
 
-/// The track's surfel, or `None` when there is nothing to take hold of: a
+/// The track's patch, or `None` when there is nothing to take hold of: a
 /// cluster-stage item, or a track nothing has given a frame.
 ///
 /// The frame is in the **reconstruction's own** coordinates, which is where the
 /// core steps act and where a pointer has to be brought back to.
-pub(crate) fn frame_of(track: &EditableTrack) -> Option<&OrientedPatch> {
+pub(crate) fn placement_of(track: &EditableTrack) -> Option<&OrientedPatch> {
     match &track.stage {
-        Stage::Track(payload) => payload.frame.as_ref(),
+        Stage::Track(payload) => payload.placement.as_ref(),
         Stage::Cluster(_) => None,
     }
 }
@@ -452,7 +452,7 @@ fn arrow(
 /// has since moved.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Handle {
-    /// The centre dot: dragging it slides the surfel across its own plane.
+    /// The centre dot: dragging it slides the patch across its own plane.
     Dot,
     /// One edge of the square: dragging it resizes the patch, holding the
     /// opposite edge still.
@@ -549,33 +549,55 @@ impl Drag {
     /// What this drag would do to the track, in the form the core steps take.
     ///
     /// The two places it carries are already in the patch's own terms, so the
-    /// only reading left here is the turn, which is a statement about two of
-    /// them and has no other home. `None` when the gesture names nothing the
-    /// patch can be given: a cancelled drag, a circle, or a turn read about the
-    /// centre itself.
+    /// readings left here are the two a place alone does not state: the turn a
+    /// corner swept, and the half-length an edge's place names. `None` when the
+    /// gesture names nothing the patch can be given: a cancelled drag, a circle,
+    /// or a turn read about the centre itself.
     pub(crate) fn edit(&self, frame: &OrientedPatch) -> Option<PatchEdit> {
         if self.cancelled {
             return None;
         }
-        let place = |p: Point3<f64>| [p.x, p.y, p.z];
         match self.handle {
             // The press's own offset from the centre is kept, so a dot grabbed
             // a little off centre does not jump under the pointer.
-            Handle::Dot => Some(PatchEdit::SlideTo {
-                point: place(frame.center + (self.to - self.from)),
-            }),
-            Handle::Edge(edge) => Some(PatchEdit::ResizeFromEdgeTo {
-                edge,
-                point: place(self.to),
-            }),
+            //
+            // **The `n` component is set to zero here**, which is where that
+            // constraint belongs: the two places are meetings of a ray with the
+            // patch's plane and so lie in it only to their last bits, and the
+            // dot is the handle that means "across the plane and nowhere else".
+            // Reading the travel on `u` and `v` alone says so outright, rather
+            // than leaving the step to project a displacement it was never told
+            // was meant to be tangential.
+            Handle::Dot => {
+                let travel = self.to - self.from;
+                Some(PatchEdit::Translate {
+                    by: [travel.dot(&frame.u_axis), travel.dot(&frame.v_axis), 0.0],
+                })
+            }
+            // With the dragged edge at `+h` from the centre and the far one at
+            // `-h`, the half-length that puts the edge under the pointer and
+            // holds the far one is `(p + h) / 2`, `p` being the place's offset
+            // along that edge's own axis. Reading it on the axis drops whatever
+            // component off the plane the meeting had.
+            Handle::Edge(edge) => {
+                let direction = match edge.axis() {
+                    Axis::U => frame.u_axis,
+                    Axis::V => frame.v_axis,
+                } * edge.sign();
+                let along = (self.to - frame.center).dot(&direction);
+                Some(PatchEdit::Resize {
+                    half_length: (along + frame.half_extent[0]) / 2.0,
+                    moved_edge: Some(edge),
+                })
+            }
             Handle::Corner(_) => geometry::turn_on_plane(frame, self.from, self.to)
-                .map(|angle_rad| PatchEdit::Rotate { angle_rad }),
+                .map(|angle_rad| PatchEdit::Spin { angle_rad }),
             // Both ends are points of the normal's own line, so their
             // difference along it is the whole gesture -- and it is a
             // difference, so a segment grabbed at its tip does not jump the
             // patch out to where the tip was.
-            Handle::Normal => Some(PatchEdit::Offset {
-                distance: (self.to - self.from).dot(&frame.normal()),
+            Handle::Normal => Some(PatchEdit::Translate {
+                by: [0.0, 0.0, (self.to - self.from).dot(&frame.normal())],
             }),
             // Both gestures state their answer as a normal, so the core step
             // knows nothing of which one named it.

@@ -3630,7 +3630,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "move_bench_track",
+            "translate_bench_patch",
             json!({
                 "reconstruction_label": "alpha",
                 "observation": 0,
@@ -3638,7 +3638,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "move_bench_track_observation",
+            "sight_bench_observation",
             json!({
                 "reconstruction_label": "alpha",
                 "observation": 0,
@@ -3646,7 +3646,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "resize_bench_track",
+            "shape_bench_observation",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "shape": [[7.1, -0.4], [0.4, 7.1]],
+            }),
+        ),
+        (
+            "resize_bench_patch",
             json!({
                 "reconstruction_label": "alpha",
                 "observation": 0,
@@ -3655,16 +3663,29 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "offset_bench_track",
-            json!({ "reconstruction_label": "alpha", "distance": 0.042 }),
+            "resize_bench_shape",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "edge": "+u",
+                "pixel": [150.0, 197.5],
+            }),
         ),
         (
-            "tilt_bench_track",
+            "tilt_bench_patch",
             json!({ "reconstruction_label": "alpha", "normal": [0.1, -0.2, 0.97] }),
         ),
         (
-            "rotate_bench_track",
+            "spin_bench_patch",
             json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
+        ),
+        (
+            "spin_bench_shape",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "degrees": 12.5,
+            }),
         ),
         (
             "set_bench_track_verdict",
@@ -3981,15 +4002,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-four writes, the one that writes a file, and the
+    // Fifteen reads, fifty-six writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 70, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 72, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        54
+        56
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -6360,7 +6381,7 @@ fn a_duplicate_carries_the_patch_and_commits_as_a_creation() {
 /// a pixel with the far one held, and a turn in the patch's own plane. Each is
 /// one version, and what they write is what the exactness claim says it is --
 /// including that at the track stage a move of the centre carries **every**
-/// sighting with it, because the surfel is the thing they are all views of.
+/// sighting with it, because the patch is the thing they are all views of.
 #[test]
 fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let (mut state, mut viewer) = benchable();
@@ -6385,7 +6406,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let moved = call(
         &mut state,
         &mut viewer,
-        "move_bench_track",
+        "translate_bench_patch",
         json!({
             "reconstruction_label": "run_a",
             "observation": 0,
@@ -6428,7 +6449,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
             .expect("the track is on the bench");
         let frame = track
             .track()
-            .and_then(|payload| payload.frame.clone())
+            .and_then(|payload| payload.placement.clone())
             .expect("a frame");
         for observation in &track.observations {
             let (camera, pose) = crate::bench::geometry::view_of(
@@ -6462,7 +6483,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
         .expect("the fixture's images have cameras");
         let frame = track
             .track()
-            .and_then(|payload| payload.frame.clone())
+            .and_then(|payload| payload.placement.clone())
             .expect("a track from a point carries the stored patch");
         let anchored = crate::bench::geometry::anchored_frame(&frame, &camera, &pose, sighting);
         (anchored, camera, pose)
@@ -6482,7 +6503,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let resized = call(
         &mut state,
         &mut viewer,
-        "resize_bench_track",
+        "resize_bench_patch",
         json!({
             "reconstruction_label": "run_a",
             "observation": 0,
@@ -6500,7 +6521,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     );
     assert_eq!(version_count(&state), before + 2);
 
-    // The claim, on the outline as it is **redrawn** -- the surfel re-anchored
+    // The claim, on the outline as it is **redrawn** -- the patch re-anchored
     // on the sighting whose edge was dragged, which is what a person sees:
     // that edge lands on the pixel the call named, the far edge has not moved,
     // and the frame is still square. A thousandth of a pixel, because the
@@ -6508,7 +6529,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let (redrawn, _, _) = outline(&state);
     let frame = state
         .bench_track(state.scene[0].id, &item)
-        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
         .expect("a frame");
     assert_eq!(frame.half_extent[0], frame.half_extent[1]);
     let landed = corner(&redrawn, &camera, &pose, 1.0, 0.0);
@@ -6525,24 +6546,21 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let turned = call(
         &mut state,
         &mut viewer,
-        "rotate_bench_track",
+        "spin_bench_patch",
         json!({ "reconstruction_label": "run_a", "degrees": 30.0 }),
     );
     assert_eq!(turned["degrees"], json!(30.0), "{turned}");
     assert_eq!(
         turned["label"].as_str().expect("a version label"),
-        format!("Rotated {item} by 30.0 degrees"),
+        format!("Spun {item} by 30.0 degrees"),
         "{turned}"
     );
     assert_eq!(version_count(&state), before + 3);
     let after = state
         .bench_track(state.scene[0].id, &item)
-        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
         .expect("a frame");
-    assert_eq!(
-        after.center, frame.center,
-        "a turn moves the surfel nowhere"
-    );
+    assert_eq!(after.center, frame.center, "a turn moves the patch nowhere");
     assert!((after.normal() - frame.normal()).norm() < 1e-12);
 
     // And the three are versions of one history, walked back one at a time.
@@ -6577,7 +6595,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let one = call(
         &mut state,
         &mut viewer,
-        "move_bench_track_observation",
+        "sight_bench_observation",
         json!({
             "reconstruction_label": "run_a",
             "observation": 0,
@@ -6601,18 +6619,18 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     assert_eq!(rows["observations"][1]["pinned"], json!(false), "{rows}");
 }
 
-/// The one patch tool that names no pixel: the depth of the patch, which no
-/// photograph can say. The version's sentence carries the signed distance and
-/// the place the centre reached.
+/// The translation's normal part, which no photograph can say: the depth of the
+/// patch. The version's sentence carries the signed distance and the place the
+/// centre reached.
 #[test]
-fn offsetting_a_bench_track_moves_it_along_its_normal_and_says_how_far() {
+fn translating_a_bench_patch_along_its_normal_says_how_far_and_which_way() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
     let frame = |state: &AppState| {
         state
             .bench_track(state.scene[0].id, &item)
-            .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+            .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
             .expect("a track from a point carries the stored patch")
     };
     let was = frame(&state);
@@ -6621,11 +6639,11 @@ fn offsetting_a_bench_track_moves_it_along_its_normal_and_says_how_far() {
     let moved = call(
         &mut state,
         &mut viewer,
-        "offset_bench_track",
-        json!({ "reconstruction_label": "run_a", "distance": distance }),
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "by": [0.0, 0.0, distance] }),
     );
     assert_eq!(moved["item"], json!(item), "{moved}");
-    assert_eq!(moved["distance"], json!(distance), "{moved}");
+    assert_eq!(moved["by"], json!([0.0, 0.0, distance]), "{moved}");
     assert_eq!(moved["changed"], json!(true), "{moved}");
     assert_eq!(version_count(&state), before + 1);
 
@@ -6658,18 +6676,23 @@ fn offsetting_a_bench_track_moves_it_along_its_normal_and_says_how_far() {
     let again = call(
         &mut state,
         &mut viewer,
-        "offset_bench_track",
-        json!({ "reconstruction_label": "run_a", "distance": distance }),
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "by": [0.0, 0.0, distance] }),
     );
     assert_eq!(again["changed"], json!(true), "{again}");
 
-    // Zero is the offset that changes nothing, and it says so in its own words
-    // rather than in a slide's.
+    // A displacement inside the patch's own tolerance changes nothing, and it
+    // says so in the normal's own words rather than in a slide's: the two
+    // gestures move the patch in different directions and a reader of the Action
+    // Log should be able to tell them apart without a version to read it off.
     let still = call(
         &mut state,
         &mut viewer,
-        "offset_bench_track",
-        json!({ "reconstruction_label": "run_a", "distance": 0.0 }),
+        "translate_bench_patch",
+        json!({
+            "reconstruction_label": "run_a",
+            "by": [0.0, 0.0, now.half_extent[0] * 1e-9],
+        }),
     );
     assert_eq!(still["changed"], json!(false), "{still}");
     let report = still["report"].as_str().expect("a sentence");
@@ -6680,47 +6703,81 @@ fn offsetting_a_bench_track_moves_it_along_its_normal_and_says_how_far() {
 }
 
 /// A track at infinity has no normal standing off it -- a direction patch's
-/// normal is its own bearing -- so the offset is refused in those words, and a
-/// distance JSON cannot carry is turned away at the parse. Neither pushes a
-/// version.
+/// normal is its own bearing -- so the **normal part** of a translation is
+/// refused in those words while a purely tangential one is carried; and a
+/// displacement JSON cannot carry is turned away at the parse. The refusals push
+/// nothing.
 #[test]
-fn offsetting_refuses_a_track_at_infinity_and_a_distance_that_is_not_one() {
+fn a_bearing_refuses_a_translation_along_its_normal_and_takes_a_tangential_one() {
     let (mut state, mut viewer) = benchable_with(bearing_demo());
-    on_the_bench(&mut state, &mut viewer);
+    let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
 
     let refused = refused_call(
         &mut state,
         &mut viewer,
-        "offset_bench_track",
-        json!({ "reconstruction_label": "run_a", "distance": 0.05 }),
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "by": [0.0, 0.0, 0.05] }),
     )
     .to_string();
     assert!(refused.contains("infinity"), "{refused}");
+    assert_eq!(version_count(&state), before, "a refusal pushes nothing");
 
     let refused = refused_call(
         &mut state,
         &mut viewer,
-        "offset_bench_track",
-        json!({ "reconstruction_label": "run_a", "distance": "a little" }),
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "by": "a little" }),
     )
     .to_string();
-    assert!(refused.contains("distance"), "{refused}");
+    assert!(refused.contains("by"), "{refused}");
     assert_eq!(version_count(&state), before, "a refusal pushes nothing");
+
+    // Neither of the two ways to name where it goes, and both of them: the pair
+    // is exclusive, and the sentence says which two spellings it is choosing
+    // between.
+    for arguments in [
+        json!({ "reconstruction_label": "run_a" }),
+        json!({
+            "reconstruction_label": "run_a", "by": [0.01, 0.0, 0.0],
+            "observation": 0, "pixel": [10.0, 10.0],
+        }),
+    ] {
+        let refused =
+            refused_call(&mut state, &mut viewer, "translate_bench_patch", arguments).to_string();
+        assert!(refused.contains("by"), "{refused}");
+    }
+    assert_eq!(version_count(&state), before, "a refusal pushes nothing");
+
+    // And the tangential part of the very same step is carried, the moved
+    // bearing renormalized onto the sphere.
+    let slid = call(
+        &mut state,
+        &mut viewer,
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "by": [0.02, -0.01, 0.0] }),
+    );
+    assert_eq!(slid["changed"], json!(true), "{slid}");
+    let patch = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
+        .expect("a bearing carries its tangent patch");
+    assert_eq!(patch.w, 0.0, "a bearing stays a bearing");
+    assert!((patch.center.coords.norm() - 1.0).abs() < 1e-12);
 }
 
 /// The other patch tool that names no pixel: which way the patch faces, which
 /// no photograph can say. The version's sentence carries the turn actually
 /// made.
 #[test]
-fn tilting_a_bench_track_turns_its_normal_and_says_how_far() {
+fn tilting_a_bench_patch_turns_its_normal_and_says_how_far() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
     let frame = |state: &AppState| {
         state
             .bench_track(state.scene[0].id, &item)
-            .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+            .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
             .expect("a track from a point carries the stored patch")
     };
     let was = frame(&state);
@@ -6733,7 +6790,7 @@ fn tilting_a_bench_track_turns_its_normal_and_says_how_far() {
     let tilted = call(
         &mut state,
         &mut viewer,
-        "tilt_bench_track",
+        "tilt_bench_patch",
         json!({ "reconstruction_label": "run_a", "normal": [asked.x, asked.y, asked.z] }),
     );
     assert_eq!(tilted["item"], json!(item), "{tilted}");
@@ -6767,7 +6824,7 @@ fn tilting_a_bench_track_turns_its_normal_and_says_how_far() {
     let still = call(
         &mut state,
         &mut viewer,
-        "tilt_bench_track",
+        "tilt_bench_patch",
         json!({
             "reconstruction_label": "run_a",
             "normal": [now.normal().x, now.normal().y, now.normal().z],
@@ -6790,7 +6847,7 @@ fn a_tilt_past_what_the_observations_can_see_stops_and_names_the_image() {
     let id = state.scene[0].id;
     let was = state
         .bench_track(id, &item)
-        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
         .expect("a track from a point carries the stored patch");
 
     // Square to the normal the patch has, which is further over than any
@@ -6799,7 +6856,7 @@ fn a_tilt_past_what_the_observations_can_see_stops_and_names_the_image() {
     let tilted = call(
         &mut state,
         &mut viewer,
-        "tilt_bench_track",
+        "tilt_bench_patch",
         json!({
             "reconstruction_label": "run_a",
             "normal": [across.x, across.y, across.z],
@@ -6830,7 +6887,7 @@ fn a_tilt_past_what_the_observations_can_see_stops_and_names_the_image() {
     // the direction named.
     let now = state
         .bench_track(id, &item)
-        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
         .expect("a patch");
     assert!(
         now.normal().dot(&across) < 0.9,
@@ -6842,7 +6899,7 @@ fn a_tilt_past_what_the_observations_can_see_stops_and_names_the_image() {
 /// patch's normal is its own bearing -- and a direction that is not one is
 /// turned away at the parse. Neither pushes a version.
 #[test]
-fn tilting_refuses_a_track_at_infinity_and_a_normal_that_is_not_one() {
+fn tilting_refuses_a_patch_at_infinity_and_a_normal_that_is_not_one() {
     let (mut state, mut viewer) = benchable_with(bearing_demo());
     on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
@@ -6850,7 +6907,7 @@ fn tilting_refuses_a_track_at_infinity_and_a_normal_that_is_not_one() {
     let refused = refused_call(
         &mut state,
         &mut viewer,
-        "tilt_bench_track",
+        "tilt_bench_patch",
         json!({ "reconstruction_label": "run_a", "normal": [0.0, 0.0, 1.0] }),
     )
     .to_string();
@@ -6860,7 +6917,7 @@ fn tilting_refuses_a_track_at_infinity_and_a_normal_that_is_not_one() {
         let refused = refused_call(
             &mut state,
             &mut viewer,
-            "tilt_bench_track",
+            "tilt_bench_patch",
             json!({ "reconstruction_label": "run_a", "normal": normal }),
         )
         .to_string();
@@ -6869,11 +6926,15 @@ fn tilting_refuses_a_track_at_infinity_and_a_normal_that_is_not_one() {
     assert_eq!(version_count(&state), before, "a refusal pushes nothing");
 }
 
-/// A turn at the cluster stage is one sighting's affine shape, so it has to
-/// name one; a turn of a surfel does not.
+/// A turn at the cluster stage is one sighting's affine shape and a turn at the
+/// track stage is the patch's own, so they are two tools, each refusing the
+/// other's stage and naming it.
 #[test]
-fn a_cluster_stage_turn_names_the_sighting_whose_shape_turns() {
+fn the_two_spins_each_refuse_the_other_stage_and_name_it() {
     let (mut state, mut viewer) = benchable();
+    // A track-stage track first, so the cluster made after it is the active one
+    // a call that names no track resolves to.
+    let track_stage = on_the_bench(&mut state, &mut viewer);
     let made = call(
         &mut state,
         &mut viewer,
@@ -6895,26 +6956,42 @@ fn a_cluster_stage_turn_names_the_sighting_whose_shape_turns() {
     let refused = refused_call(
         &mut state,
         &mut viewer,
-        "rotate_bench_track",
+        "spin_bench_patch",
         json!({ "reconstruction_label": "run_a", "degrees": 45.0 }),
     )
     .to_string();
-    assert!(refused.contains("observation"), "{refused}");
+    assert!(refused.contains("spin_bench_shape"), "{refused}");
+    // And the other way about, on a track-stage track.
+    let refused_there = refused_call(
+        &mut state,
+        &mut viewer,
+        "spin_bench_shape",
+        json!({
+            "reconstruction_label": "run_a", "track": track_stage,
+            "degrees": 45.0, "observation": 0,
+        }),
+    )
+    .to_string();
+    assert!(
+        refused_there.contains("spin_bench_patch"),
+        "{refused_there}"
+    );
     assert_eq!(version_count(&state), before, "a refusal pushes nothing");
 
     let turned = call(
         &mut state,
         &mut viewer,
-        "rotate_bench_track",
+        "spin_bench_shape",
         json!({
             "reconstruction_label": "run_a",
+            "track": item,
             "degrees": 90.0,
             "observation": 0,
         }),
     );
     assert_eq!(
         turned["label"].as_str().expect("a version label"),
-        format!("Rotated observation 0 of {item} by 90.0 degrees"),
+        format!("Spun observation 0 of {item} by 90.0 degrees"),
         "{turned}"
     );
     assert_eq!(version_count(&state), before + 1);
@@ -6931,6 +7008,105 @@ fn a_cluster_stage_turn_names_the_sighting_whose_shape_turns() {
             assert!((got - want).abs() < 1e-9, "{shape:?} is not {expected:?}");
         }
     }
+}
+
+/// The cluster stage's own two shape tools: an edge that scales the
+/// parallelogram and holds its far edge, and the 2x2 stated outright. Each is
+/// named for the part it acts on, so each refuses a track-stage track and names
+/// the tool that does belong to it.
+#[test]
+fn the_shape_tools_size_a_cluster_sighting_and_refuse_a_track_stage_track() {
+    let (mut state, mut viewer) = benchable();
+    let track_stage = on_the_bench(&mut state, &mut viewer);
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let item = made["item"].as_str().expect("the new item").to_string();
+    let before = version_count(&state);
+    let shape_of = |state: &AppState| {
+        state
+            .bench_track(state.scene[0].id, &item)
+            .and_then(|track| track.observations[0].shape())
+            .expect("a seeded sighting has a shape")
+    };
+    let was = shape_of(&state);
+
+    // The edge two px further out along `+u` than the parallelogram reaches,
+    // with the far edge held: the new half-width is half way between.
+    let radius = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.cluster().map(|payload| payload.radius))
+        .expect("a cluster carries its radius");
+    let half_px = sfmtool_core::bench::half_width_px(was, radius);
+    let resized = call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_shape",
+        json!({
+            "reconstruction_label": "run_a", "observation": 0, "edge": "+u",
+            "pixel": [120.0 + half_px + 2.0, 90.0],
+        }),
+    );
+    assert_eq!(resized["edge"], json!("+u"), "{resized}");
+    assert_eq!(resized["changed"], json!(true), "{resized}");
+    let grown = sfmtool_core::bench::half_width_px(shape_of(&state), radius);
+    assert!(
+        (grown - (half_px + 1.0)).abs() < 1e-6,
+        "the far edge did not hold: {half_px} became {grown}",
+    );
+
+    // And the whole 2x2 stated outright, shear and all, which is the general
+    // form the spin and the resize are two special cases of.
+    let asked = [[9.0, 1.5], [0.0, 9.0]];
+    let shaped = call(
+        &mut state,
+        &mut viewer,
+        "shape_bench_observation",
+        json!({
+            "reconstruction_label": "run_a", "observation": 0, "shape": asked,
+        }),
+    );
+    assert_eq!(shaped["shape"], json!(asked), "{shaped}");
+    assert_eq!(shape_of(&state), asked);
+    assert_eq!(version_count(&state), before + 2);
+
+    // Both belong to the cluster stage, and both say which tool a track-stage
+    // track wants instead.
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_shape",
+        json!({
+            "reconstruction_label": "run_a", "track": track_stage, "observation": 0,
+            "edge": "+u", "pixel": [120.0, 90.0],
+        }),
+    )
+    .to_string();
+    assert!(refused.contains("resize_bench_patch"), "{refused}");
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "shape_bench_observation",
+        json!({
+            "reconstruction_label": "run_a", "track": track_stage, "observation": 0,
+            "shape": asked,
+        }),
+    )
+    .to_string();
+    assert!(refused.contains("cluster"), "{refused}");
+    assert_eq!(
+        version_count(&state),
+        before + 2,
+        "a refusal pushes nothing"
+    );
 }
 
 /// Every observation says where it sits, whether or not anything has read it.
@@ -9242,7 +9418,7 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     let moved = call(
         &mut state,
         &mut viewer,
-        "move_bench_track",
+        "translate_bench_patch",
         json!({
             "reconstruction_label": "run_a", "track": item,
             "observation": 0, "pixel": [pixel[0], pixel[1]],
@@ -9260,7 +9436,7 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     let turned = call(
         &mut state,
         &mut viewer,
-        "rotate_bench_track",
+        "spin_bench_patch",
         json!({ "reconstruction_label": "run_a", "track": item, "degrees": 0.0 }),
     );
     assert_eq!(turned["changed"], json!(false), "{turned}");
@@ -9311,7 +9487,7 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     let first = call(
         &mut state,
         &mut viewer,
-        "resize_bench_track",
+        "resize_bench_patch",
         json!({
             "reconstruction_label": "run_a", "track": item,
             "observation": 0, "edge": "+u", "pixel": target,
@@ -9321,7 +9497,7 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     let again = call(
         &mut state,
         &mut viewer,
-        "resize_bench_track",
+        "resize_bench_patch",
         json!({
             "reconstruction_label": "run_a", "track": item,
             "observation": 0, "edge": "+u", "pixel": target,
@@ -9399,7 +9575,7 @@ fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
     let moved = call(
         &mut state,
         &mut viewer,
-        "move_bench_track",
+        "translate_bench_patch",
         json!({
             "reconstruction_label": "run_a", "track": item,
             "observation": 0, "pixel": [-500.0, -500.0],
@@ -9407,12 +9583,17 @@ fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
     );
     assert_eq!(moved["clamped"], json!(true), "{moved}");
     assert_eq!(moved["clamped_from"], json!([-500.0, -500.0]), "{moved}");
+    // `pixel` is where the moved centre now **projects**, not the clamp's own
+    // output: the clamped place is unprojected onto the patch's plane, the patch
+    // is carried there and the centre is projected back, and that round trip is
+    // good to the arithmetic's last bits rather than bit for bit. So a corner
+    // pixel comes back a rounding either side of the corner.
     let used = moved["pixel"].as_array().expect("the pixel it used");
     let camera = &state.scene[0].recon().image_table.cameras[0];
     for (value, extent) in used.iter().zip([camera.width, camera.height]) {
         let value = value.as_f64().expect("a number");
         assert!(
-            value >= 0.0 && value < f64::from(extent),
+            value >= -1e-6 && value < f64::from(extent),
             "the centre landed at {value}, off a {extent} px axis: {moved}"
         );
     }
@@ -9422,7 +9603,11 @@ fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
         "{report}"
     );
 
-    // A pixel on the photograph is left where it was named.
+    // A pixel on the photograph is left where it was named. Two px in on both
+    // axes, and not along the edge the clamp above put the sighting on: the
+    // number read back is a reprojection, so it sits a rounding either side of
+    // that edge and a pixel named along it would be clamped for the rounding
+    // rather than for anything the call said.
     let track = call(
         &mut state,
         &mut viewer,
@@ -9434,10 +9619,13 @@ fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
     let inside = call(
         &mut state,
         &mut viewer,
-        "move_bench_track_observation",
+        "sight_bench_observation",
         json!({
             "reconstruction_label": "run_a", "track": item, "observation": 0,
-            "pixel": [at[0].as_f64().expect("x") + 2.0, at[1].as_f64().expect("y")],
+            "pixel": [
+                at[0].as_f64().expect("x") + 2.0,
+                at[1].as_f64().expect("y") + 2.0,
+            ],
         }),
     );
     assert_eq!(inside["clamped"], json!(false), "{inside}");
@@ -9454,7 +9642,7 @@ fn frameless_bearing_demo() -> sfmtool_core::SfmrReconstruction {
     recon
 }
 
-/// The flag is the **track's** and not its surfel's `w`, so a bearing put on the
+/// The flag is the **track's** and not its patch's `w`, so a bearing put on the
 /// bench from a node with no patch frames publishes the bearing it is. Reading
 /// the frame answered `at_infinity: false` and put a unit direction under
 /// `position`, which is a place one unit from the world origin.

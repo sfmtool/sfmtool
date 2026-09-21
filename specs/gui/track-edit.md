@@ -160,7 +160,7 @@ points and bearings"), and the same three numbers under the wrong rule read as a
 point a metre from the world origin. So the line is `Bearing (x, y, z), at
 infinity` for a bearing and `Position (x, y, z)` otherwise -- *at infinity* being
 the word the Point Track Detail panel's own header uses for that row. Which it is
-comes from the track's own `at_infinity` and not from its surfel's `w`, so a
+comes from the track's own `at_infinity` and not from its patch's `w`, so a
 point put on the bench from a reconstruction with no patch frames reads as the
 bearing it is
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
@@ -178,9 +178,9 @@ refusal is the core step's own sentence, asked of the very track the button woul
 act on, so the button and the step cannot disagree. *Commit* asks the core
 commit; *Evaluate*, *Fit* and the *Stage* toggle ask `evaluate_preconditions`,
 `fit_preconditions` and `set_stage_preconditions`, which are the halves of those
-steps' validation that read no photograph. A track with no surfel therefore
+steps' validation that read no photograph. A track with no patch therefore
 greys *Evaluate*, *Fit* and *Stage: track -> cluster* with *"this track has no
-surfel yet; fit it first"* rather than offering three buttons whose only act
+patch yet; fit it first"* rather than offering three buttons whose only act
 would be to decode a dozen images and fail.
 
 **Commit leaves the point it wrote selected.** The write is
@@ -257,7 +257,7 @@ says which column each number is in.
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Verdict | a three-state control, clicked to cycle `in` / `out` / `candidate`; a dot marks a verdict set by hand | same |
-| Tile | the observation's own grid: the `R x R` samples the refinement kernel reads where it sits, at its shape | the surfel re-rendered from this observation, re-anchored where it sits -- the tile Point Track Detail draws |
+| Tile | the observation's own grid: the `R x R` samples the refinement kernel reads where it sits, at its shape | the patch re-rendered from this observation, re-anchored where it sits -- the tile Point Track Detail draws |
 | Img, Name | as Point Track Detail | as Point Track Detail |
 | ZNCC | against the reference template | leave-one-out against the consensus, at the correlation peak within *search px* of the observation |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
@@ -300,7 +300,7 @@ peak sat. Only a fit sets it, so a row that says it is a row the last fit held.
 picture that produced it is the thing a person can judge, which is the whole
 reason the bench exists. So each row draws what its stage registers, through
 the code that registers it rather than a second rendering of the same idea: at
-the track stage the surfel warped into this observation's view and re-anchored
+the track stage the patch warped into this observation's view and re-anchored
 where the observation sits, by the Point Track Detail panel's own warp, so a
 track on the bench and the point it came from cannot show one surface two ways;
 at the cluster stage the `R x R` grid the refinement kernel samples
@@ -310,7 +310,7 @@ and its shape, over the cluster's own radius
 § "The cluster stage's units") and on the template's resolution once one has
 been cut. The radius is the cluster's from the start, so the tile is the square
 the person asked for before an evaluation and the square the ZNCC beside it was
-measured over after one. A row with nothing to render -- no surfel yet, nothing
+measured over after one. A row with nothing to render -- no patch yet, nothing
 saying where the observation sits, or a photograph the node's cache has not
 decoded -- draws an empty frame of the same size, so the columns beside it never
 shift.
@@ -504,5 +504,7 @@ and the accessibility tree carries no stable node for a pixel inside an image.
   as is the coherence grid under the table.
 - **Keeping the index in step with the workspace.** *Build* is asked for; the
   viewer does not watch the `.sift` files and rebuild when they change.
-- **Editing the surfel's frame or normal by hand.** The frame is what the
-  kernels fit; a wrong frame is downgraded and refit.
+- **Editing the patch by hand in this panel.** The patch is what the kernels
+  fit, and a wrong one is downgraded and refit. The hand edits that do move it
+  are the two bench layers' handles and the wire's patch tools
+  ([`bench.md`](bench.md) § "The wire").

@@ -449,12 +449,12 @@ committed structure; the strokes are thicker than a feature ellipse's.
 What is drawn is the track's own geometry rather than a symbol for it, and
 differs by stage:
 
-- At the **track stage**, the surfel's square boundary sampled and each sample
+- At the **track stage**, the patch's square boundary sampled and each sample
   pushed through the camera's own forward projection, drawn as a closed
-  polyline. The frame is first re-anchored on this image's keypoint
+  polyline. The patch is first re-anchored on this image's keypoint
   (`OrientedPatch::anchored_at_keypoint`), as the tile in Track Edit is
   rendered, so the outline sits where the sighting is in this photograph; the
-  surfel's own projection is the hollow centre the offset segments run to. The outline is therefore the curve a distorting lens really maps
+  patch's own projection is the hollow centre the offset segments run to. The outline is therefore the curve a distorting lens really maps
   that square to, rather than the quadrilateral through its four corners:
   `OrientedPatch::boundary` supplies the samples
   ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)), eight per
@@ -464,7 +464,7 @@ differs by stage:
   than closed across a chord that means nothing. Beside it, each observation's
   own keypoint as a filled dot and, for **every** observation whatever its
   verdict, in that observation's own colour, the segment from that dot to the
-  surfel's own projection with a hollow circle at the projection: the gap is
+  patch's own projection with a hollow circle at the projection: the gap is
   the *Proj. off* column, drawn. Where the two coincide the segment has no
   length and is not seen, which needs no special casing and is the answer as
   much as a long segment is. It is drawn for a judged observation as well as a
@@ -492,8 +492,8 @@ does not also select a feature underneath.
 person is looking at is the geometry they take hold of, and there is no second
 picture of the patch to keep in step with the first.
 
-- **The dot moves the patch.** At the track stage a track has one surfel and
-  every observation is a view of it, so dragging a mark slides that surfel
+- **The dot moves the patch.** At the track stage a track has one patch and
+  every observation is a view of it, so dragging a mark slides that patch
   across its own plane until its centre sits under the pointer: the
   half-vectors and the normal are kept, and **every** observation's keypoint
   moves by the same displacement along the plane, keeping its own offset, so
@@ -512,7 +512,7 @@ picture of the patch to keep in step with the first.
   horizontal takes `ResizeVertical`, near vertical `ResizeHorizontal`, and
   oblique the diagonal its slope names.
 - **A corner turns it.** Dragging a corner rotates the patch in its own plane --
-  about the surfel's outward normal at the track stage, about the sighting at
+  about the patch's outward normal at the track stage, about the sighting at
   the cluster stage -- keeping its place and its size. egui has no cursor for a
   turn, so a corner takes `Alias` and a small arc is drawn beside the hovered
   corner to say what it does.
@@ -524,9 +524,9 @@ offset of that meeting on the patch's axes
 *reprojects onto the pointer*, through whatever distortion the lens has, and a
 turn is the angle swept on the patch's own surface rather than the foreshortened
 one swept on screen. The frame the pointer is read against is the one drawn: the
-surfel re-anchored on the observation whose outline it is.
+patch re-anchored on the observation whose outline it is.
 
-At the track stage the surfel is shared, so all three gestures change the
+At the track stage the patch is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
 resize -- also move the track's point and **carry every sighting along the
 plane by the same displacement**, which keeps each one's own offset from where
@@ -566,7 +566,7 @@ without motion and does nothing.
 **One version per drag.** While the pointer is down the layer draws from a
 transient copy -- the track the release would produce, built by the same core
 step -- and nothing is pushed. The release applies it through
-`AppState::edit_bench_patch`, which is the call the wire's three patch tools
+`AppState::edit_bench_patch`, which is the call the wire's eight patch tools
 make, so one gesture is one version, one Action Log row of kind `Bench`, and one
 Undo. A drag that ends where it started pushes nothing, the way a verdict an
 observation already holds does. **Escape abandons the drag**: the preview goes

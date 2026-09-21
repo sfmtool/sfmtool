@@ -348,7 +348,7 @@ impl Observation {
     ///
     /// The refined shape when there is one, else the seed's. `None` for an
     /// observation that has only a track-stage keypoint, whose shape is the
-    /// surfel's rather than its own.
+    /// patch's rather than its own.
     pub fn shape(&self) -> Option<[[f64; 2]; 2]> {
         let cluster = self.cluster.as_ref()?;
         Some(cluster.shape.unwrap_or(cluster.seed_shape))
@@ -428,18 +428,18 @@ pub struct TrackPayload {
     ///
     /// **The flag is the authority and the frame is not.** The same three
     /// numbers are a place or a unit direction depending on this one bit, and a
-    /// track can carry the bit with no surfel at all -- a point put on the bench
+    /// track can carry the bit with no patch at all -- a point put on the bench
     /// from a `sift_files` reconstruction has no patch frame to read a `w` off,
     /// and its bearings are still bearings. So everything that says which of the
     /// two it is holding -- the panel's word in front of the coordinate, the
     /// wire's choice of `direction` over `position`, the commit's `w` -- reads
-    /// this, and [`Self::frame`]'s own `w` is kept equal to it wherever both
+    /// this, and [`Self::placement`]'s own `w` is kept equal to it wherever both
     /// exist, for the renderer and the kernels that project corners.
     pub at_infinity: bool,
-    /// The surfel the localizer registers against. Its centre is
+    /// The patch the localizer registers against. Its centre is
     /// [`Self::position`] when both are present, and its `w` agrees with
     /// [`Self::at_infinity`].
-    pub frame: Option<OrientedPatch>,
+    pub placement: Option<OrientedPatch>,
     /// The `(R, R, C)` consensus bitmap the observations were fused into.
     pub bitmap: Option<Array3<u8>>,
     /// The colour the point carries, used when there is no bitmap to read one
@@ -458,7 +458,7 @@ pub enum Stage {
     /// A set of image patches that register onto one template, with no geometry
     /// behind them.
     Cluster(ClusterPayload),
-    /// A surfel at a position, with a keypoint per observation.
+    /// A patch at a position, with a keypoint per observation.
     Track(TrackPayload),
 }
 

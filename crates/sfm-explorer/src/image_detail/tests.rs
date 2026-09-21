@@ -960,7 +960,7 @@ fn double_clicking_off_a_feature_zooms_in_about_the_cursor() {
 
 /// A node of [`projected_embedded_demo`] and the bench track its point 2 makes:
 /// three observations, in images 0, 1 and 2, each at that point's exact
-/// projection, with the stored patch as the surfel's frame.
+/// projection, standing on the patch the reconstruction stores for it.
 fn bench_track_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
     use sfmtool_core::bench::{create_track, Bench, CreateTrackOptions};
 
@@ -1120,10 +1120,10 @@ fn to_panel(image: &sfmtool_core::camera::remap::ImageU8, pixel: [f64; 2]) -> eg
     )
 }
 
-/// The surfel's outline is drawn where the frame's corners really project, and
+/// The patch's outline is drawn where the frame's corners really project, and
 /// it is a sampled curve rather than the four corners joined up.
 #[test]
-fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
+fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
     use sfmtool_core::geometry::RigidTransform;
 
     let (node, track) = bench_track_fixture();
@@ -1148,7 +1148,7 @@ fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
     // The corners, projected here rather than through the layer's own code.
     let frame = track
         .track()
-        .and_then(|payload| payload.frame.as_ref())
+        .and_then(|payload| payload.placement.as_ref())
         .expect("a track from a point carries the stored patch as its frame");
     let table = &node.edited().base.image_table;
     let image = &table.images[0];
@@ -1195,7 +1195,7 @@ fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
 
 /// The projection offset is drawn for **every** observation, whatever its
 /// verdict, in that observation's own colour: it runs from the sighting's
-/// keypoint to where the surfel projects, which is the number the `Proj. off`
+/// keypoint to where the patch projects, which is the number the `Proj. off`
 /// column carries.
 #[test]
 fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
@@ -1203,11 +1203,11 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
     use sfmtool_core::geometry::RigidTransform;
 
     let (node, track) = bench_track_fixture();
-    // Where the surfel's centre lands in this image, projected here rather
+    // Where the patch's centre lands in this image, projected here rather
     // than through the layer's own code.
     let frame = track
         .track()
-        .and_then(|payload| payload.frame.as_ref())
+        .and_then(|payload| payload.placement.as_ref())
         .expect("a track from a point carries the stored patch as its frame");
     let table = &node.edited().base.image_table;
     let image = &table.images[0];
@@ -1225,7 +1225,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
         let p = pose.transform_point_homogeneous(frame.center.coords, frame.w);
         let (u, v) = camera
             .ray_to_pixel([p.x, p.y, p.z])
-            .expect("the demo's surfel is in front of the camera");
+            .expect("the demo's patch is in front of the camera");
         to_panel(&pixels(640, 480), [u, v])
     };
     let keypoint = track
@@ -1502,7 +1502,7 @@ fn a_look_at_a_pixel_a_rect_and_the_whole_photograph_all_land() {
 
 /// How far in the panel is zoomed for the handle tests.
 ///
-/// The demo's surfel is under three source pixels across, which at fit-to-panel
+/// The demo's patch is under three source pixels across, which at fit-to-panel
 /// is a two-pixel outline: every handle would sit inside every other one's
 /// reach, and a test that grabbed an edge would be asserting nothing. Zoomed,
 /// the outline is tens of panel pixels wide, which is the size a person
@@ -1709,7 +1709,7 @@ fn version_labels(state: &crate::state::AppState, id: crate::scene::ReconId) -> 
         .collect()
 }
 
-/// The surfel re-anchored on one sighting: the outline the layer draws there,
+/// The patch re-anchored on one sighting: the outline the layer draws there,
 /// and the geometry every handle of it is placed by.
 fn outline_at(
     node: &SceneNode,
@@ -1726,13 +1726,13 @@ fn outline_at(
         .expect("the fixture's images have cameras");
     let frame = track
         .track()
-        .and_then(|payload| payload.frame.as_ref())
+        .and_then(|payload| payload.placement.as_ref())
         .expect("a track from a point carries the stored patch");
     let anchored = crate::bench::geometry::anchored_frame(frame, &camera, &pose, sighting);
     (anchored, camera, pose)
 }
 
-/// Each sighting's offset from where the surfel's centre projects, in its own
+/// Each sighting's offset from where the patch's centre projects, in its own
 /// image's pixels.
 ///
 /// **What a move of the patch must not disturb**: the gap between where a
@@ -1745,7 +1745,7 @@ fn projection_offsets(
 ) -> Vec<[f64; 2]> {
     let frame = track
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a track from a point carries the stored patch");
     track
         .observations
@@ -1811,7 +1811,7 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
 }
 
 /// The dot at the track stage moves the **patch**, not one sighting: there is
-/// one surfel and every observation is a view of it, so the dot lands under the
+/// one patch and every observation is a view of it, so the dot lands under the
 /// pointer in the image it was dragged in and every other sighting goes to
 /// where the moved centre projects in its own photograph.
 #[test]
@@ -1829,7 +1829,7 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     // coordinate on the way in and the source pixel is read back out of it, so
     // the round trip is exact only to that type's precision, not to the drag's.
     assert!(
-        matches!(edit, crate::bench::PatchEdit::Translate { observation: 0, pixel }
+        matches!(edit, crate::bench::PatchEdit::TranslateToPixel { observation: 0, pixel }
             if (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
         "the drag named something else: {edit:?}",
     );
@@ -1857,11 +1857,11 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     // the offset lies in it.
     let before_frame = track
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a frame");
     let after_frame = moved
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a frame");
     assert!((after_frame.normal() - before_frame.normal()).norm() < 1e-12);
     assert_eq!(after_frame.half_extent, before_frame.half_extent);
@@ -1915,7 +1915,7 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
     assert!(
         matches!(
             edit,
-            crate::bench::PatchEdit::ResizeFromEdge {
+            crate::bench::PatchEdit::ResizeToPixel {
                 observation: 0,
                 edge: sfmtool_core::bench::Edge::PlusU,
                 ..
@@ -1942,7 +1942,7 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
     let after = on_bench(&state, id, &label);
     let resized = after
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a frame");
     assert_eq!(
         resized.half_extent[0], resized.half_extent[1],
@@ -1961,7 +1961,7 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         );
     }
     assert!(after.observations.iter().all(|o| !o.pinned));
-    // Against the outline as it is redrawn -- the surfel re-anchored on the
+    // Against the outline as it is redrawn -- the patch re-anchored on the
     // sighting the edge was dragged in, which is what the person sees.
     let (redrawn, _, _) = outline_at(&state.scene[0], &after, 0);
     let landed = patch_pixel(&redrawn, &camera, &pose, 1.0, 0.0);
@@ -1990,7 +1990,7 @@ fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
         .edit
         .expect("the corner was dragged");
-    let crate::bench::PatchEdit::Rotate { angle_rad } = edit else {
+    let crate::bench::PatchEdit::Spin { angle_rad } = edit else {
         panic!("the drag named something else: {edit:?}");
     };
     assert!(
@@ -2009,20 +2009,20 @@ fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
         labels
             .last()
             .expect("a version")
-            .starts_with(&format!("Rotated {label} by ")),
+            .starts_with(&format!("Spun {label} by ")),
         "the version's label does not name the turn: {:?}",
         labels.last(),
     );
     let was = track
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a frame");
     let turned = on_bench(&state, id, &label);
     let turned = turned
         .track()
-        .and_then(|payload| payload.frame.clone())
+        .and_then(|payload| payload.placement.clone())
         .expect("a frame");
-    assert_eq!(turned.center, was.center, "a turn moves the surfel nowhere");
+    assert_eq!(turned.center, was.center, "a turn moves the patch nowhere");
     assert!((turned.u_axis.norm() - was.u_axis.norm()).abs() < 1e-12);
     assert!((turned.normal() - was.normal()).norm() < 1e-12);
 }
@@ -2088,7 +2088,7 @@ fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
     assert!(
         matches!(
             edit,
-            crate::bench::PatchEdit::ResizeFromEdge {
+            crate::bench::PatchEdit::ResizeToPixel {
                 observation: 0,
                 edge: sfmtool_core::bench::Edge::PlusU,
                 ..

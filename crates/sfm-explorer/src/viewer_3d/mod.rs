@@ -600,7 +600,7 @@ impl Viewer3D {
         self.bench_figure = bench.and_then(|bench| {
             let previewed = drag
                 .filter(|drag| drag.node == bench.node)
-                .and_then(|drag| drag.edit(bench_track::frame_of(bench.track)?))
+                .and_then(|drag| drag.edit(bench_track::placement_of(bench.track)?))
                 .and_then(|edit| {
                     crate::bench::geometry::apply(bench.track, bench.edited, &edit).ok()
                 })

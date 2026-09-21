@@ -11,7 +11,7 @@
 //! Which picture it is follows the stage, because the two stages register
 //! different things:
 //!
-//! - At the **track stage** it is the surfel re-rendered from this
+//! - At the **track stage** it is the patch re-rendered from this
 //!   observation's own view, re-anchored where the observation sits -- the very
 //!   tile the Point Track Detail panel draws for a committed track, through
 //!   that panel's own renderer
@@ -52,7 +52,7 @@ pub(super) fn render(
 }
 
 /// The picture one row draws, or `None` when there is nothing to render: no
-/// surfel yet at the track stage, nothing saying where the observation sits, or
+/// patch yet at the track stage, nothing saying where the observation sits, or
 /// a degenerate shape at the cluster stage.
 ///
 /// Pure, so a headless test can ask what a row shows rather than only whether
@@ -71,7 +71,7 @@ pub(super) fn image(
     let img_idx = row.image as usize;
     match &track.stage {
         Stage::Track(payload) => {
-            let frame = payload.frame.as_ref()?;
+            let frame = payload.placement.as_ref()?;
             let image = recon.image_table.images.get(img_idx)?;
             let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
             Some(crate::point_track_detail::patch_color_image(

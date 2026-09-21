@@ -23,15 +23,15 @@ from sfmtool._sfmtool.bench import (
     duplicate,
     evaluate,
     fit,
-    resize_frame,
-    resize_from_edge,
-    rotate_frame,
-    set_observation_keypoint,
-    set_observation_shape,
+    resize_patch,
+    resize_patch_to_pixel,
     set_stage,
     set_verdict,
+    shape_observation,
+    sight_observation,
+    spin_patch,
     split,
-    translate_frame,
+    translate_patch_to_pixel,
 )
 from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
@@ -874,15 +874,17 @@ class TestPlacingSizingAndTurningByHand:
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         was = track.observation(0)["track"]["keypoint"]
-        before = track.frame
+        before = track.placement
 
-        moved, report = translate_frame(track, edited, 0, (was[0] + 6.0, was[1] - 4.0))
+        moved, report = translate_patch_to_pixel(
+            track, edited, 0, (was[0] + 6.0, was[1] - 4.0)
+        )
         assert report["changed"]
         assert report["observation"] == 0
         assert report["placed"] == moved.observation_count
         assert report["moved"] > 0.0
         # In-plane only: the axes, the size and the normal are untouched.
-        after = moved.frame
+        after = moved.placement
         for axis in ("u_halfvec", "v_halfvec"):
             np.testing.assert_allclose(after[axis], before[axis])
         offset = np.asarray(after["center"]) - np.asarray(before["center"])
@@ -902,7 +904,7 @@ class TestPlacingSizingAndTurningByHand:
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         was = track.observation(0)["track"]["keypoint"]
-        moved, report = set_observation_keypoint(
+        moved, report = sight_observation(
             track, edited, 0, (was[0] + 3.0, was[1] - 4.0)
         )
 
@@ -922,13 +924,13 @@ class TestPlacingSizingAndTurningByHand:
         self, edited, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
-        sized, report = resize_frame(track, 0.4)
+        sized, report = resize_patch(track, edited, 0.4)
 
         assert report["changed"] and report["half"] == 0.4
-        frame = sized.frame
+        frame = sized.placement
         assert np.linalg.norm(frame["u_halfvec"]) == pytest.approx(0.4, rel=1e-12)
         assert np.linalg.norm(frame["v_halfvec"]) == pytest.approx(0.4, rel=1e-12)
-        np.testing.assert_allclose(frame["center"], track.frame["center"])
+        np.testing.assert_allclose(frame["center"], track.placement["center"])
         # Every number read over the old square goes; where each sighting sits
         # does not.
         for before, after in zip(track.observations, sized.observations):
@@ -938,16 +940,16 @@ class TestPlacingSizingAndTurningByHand:
             assert "zncc" not in after["track"]
 
         with pytest.raises(ValueError, match="not a size"):
-            resize_frame(track, 0.0)
+            resize_patch(track, edited, 0.0)
 
     def test_a_turn_keeps_the_axes_the_plane_and_every_sighting(
         self, edited, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
-        turned, report = rotate_frame(track, np.pi / 3.0)
+        turned, report = spin_patch(track, np.pi / 3.0)
         assert report["degrees"] == pytest.approx(60.0)
 
-        before, after = track.frame, turned.frame
+        before, after = track.placement, turned.placement
         for axis in ("u_halfvec", "v_halfvec"):
             assert np.linalg.norm(after[axis]) == pytest.approx(
                 np.linalg.norm(before[axis]), rel=1e-12
@@ -971,7 +973,7 @@ class TestPlacingSizingAndTurningByHand:
         was = track.observation(0)["track"]["keypoint"]
         # A pixel out along the outline, which is what dragging the +u edge
         # hands the step.
-        resized, report = resize_from_edge(
+        resized, report = resize_patch_to_pixel(
             track, edited, 0, "+u", (was[0] + 40.0, was[1])
         )
 
@@ -979,7 +981,7 @@ class TestPlacingSizingAndTurningByHand:
         assert report["observation"] == 0
         assert report["image"] == track.observation(0)["image"]
         assert report["half"] > report["was"], "the edge was pulled outward"
-        frame = resized.frame
+        frame = resized.placement
         assert np.linalg.norm(frame["u_halfvec"]) == pytest.approx(
             np.linalg.norm(frame["v_halfvec"]), rel=1e-12
         )
@@ -995,7 +997,7 @@ class TestPlacingSizingAndTurningByHand:
         )
 
         with pytest.raises(ValueError, match="not an edge"):
-            resize_from_edge(track, edited, 0, "sideways", (was[0], was[1]))
+            resize_patch_to_pixel(track, edited, 0, "sideways", (was[0], was[1]))
 
     def test_a_cluster_sighting_takes_the_shape_it_is_given(
         self, edited, long_track_point
@@ -1006,7 +1008,7 @@ class TestPlacingSizingAndTurningByHand:
         # A quarter turn of the seed's own shape, handed over as the matrix.
         was = np.asarray(track.observation(0)["cluster"]["seed_shape"])
         turn = np.array([[0.0, -1.0], [1.0, 0.0]]) @ was
-        turned, shaped = set_observation_shape(track, 0, turn)
+        turned, shaped = shape_observation(track, 0, turn)
 
         assert shaped["changed"]
         np.testing.assert_allclose(shaped["shape"], turn)
@@ -1015,14 +1017,14 @@ class TestPlacingSizingAndTurningByHand:
         ), "radius * the first column's norm"
         assert not turned.observation(0)["pinned"], "a turn is not a verdict"
         with pytest.raises(ValueError, match="spans no area"):
-            set_observation_shape(track, 0, [[1.0, 2.0], [2.0, 4.0]])
+            shape_observation(track, 0, [[1.0, 2.0], [2.0, 4.0]])
 
         # And the two stages own different steps: a surfel is not a cluster's.
         _, at_track = create_track(Bench(), edited, long_track_point)
         with pytest.raises(ValueError, match="cluster-stage step"):
-            set_observation_shape(at_track, 0, turn)
+            shape_observation(at_track, 0, turn)
         with pytest.raises(ValueError, match="track-stage step"):
-            rotate_frame(track, 0.5)
+            spin_patch(track, 0.5)
 
 
 class TestDuplicating:
@@ -1047,7 +1049,9 @@ class TestDuplicating:
         assert copy.origin is None, "a copy has to create rather than replace"
         assert bench.track(label).origin is not None, "the original kept its origin"
         np.testing.assert_allclose(copy.position, track.position)
-        np.testing.assert_allclose(copy.frame["u_halfvec"], track.frame["u_halfvec"])
+        np.testing.assert_allclose(
+            copy.placement["u_halfvec"], track.placement["u_halfvec"]
+        )
         for index in range(copy.observation_count):
             was, now = track.observation(index), copy.observation(index)
             assert now["verdict"] == was["verdict"]
@@ -1110,8 +1114,8 @@ class TestFinitePointsAndBearings:
         direction = np.asarray(track.direction)
         assert direction.shape == (3,)
         np.testing.assert_allclose(np.linalg.norm(direction), 1.0, atol=1e-9)
-        assert track.frame["w"] == 0.0
-        np.testing.assert_allclose(track.frame["center"], direction)
+        assert track.placement["w"] == 0.0
+        np.testing.assert_allclose(track.placement["center"], direction)
 
     def test_a_bearing_commits_back_as_a_bearing(
         self, bearing_edited, long_track_point
@@ -1174,7 +1178,7 @@ class TestFinitePointsAndBearings:
         assert call["residual_margin"] == pytest.approx(0.0)
         assert "finite point would have" in call["text"]
         assert demoted.at_infinity
-        assert demoted.frame["w"] == 0.0
+        assert demoted.placement["w"] == 0.0
 
     def test_the_classification_knobs_are_keyword_arguments(
         self, edited, images, long_track_point
@@ -1223,7 +1227,7 @@ class TestNoEffectAndTheClamp:
         was = track.observation(0)["track"]["keypoint"]
 
         # The centre put back under the pixel it already projects to.
-        moved, report = translate_frame(track, edited, 0, (was[0], was[1]))
+        moved, report = translate_patch_to_pixel(track, edited, 0, (was[0], was[1]))
         assert not report["changed"]
         assert report["moved"] == 0.0
         assert not report["clamped"]
@@ -1234,13 +1238,11 @@ class TestNoEffectAndTheClamp:
         )
 
         # A turn under a nanoradian is no turn.
-        _, turn = rotate_frame(track, 1e-12)
+        _, turn = spin_patch(track, 1e-12)
         assert not turn["changed"]
 
         # A sighting put back within a thousandth of a pixel of where it sits.
-        _, placed = set_observation_keypoint(
-            track, edited, 0, (was[0] + 1e-6, was[1] - 1e-6)
-        )
+        _, placed = sight_observation(track, edited, 0, (was[0] + 1e-6, was[1] - 1e-6))
         assert not placed["changed"]
 
     def test_a_pixel_off_the_photograph_is_brought_inside_it(
@@ -1248,11 +1250,11 @@ class TestNoEffectAndTheClamp:
     ):
         _, track = create_track(Bench(), edited, long_track_point)
 
-        _, report = translate_frame(track, edited, 0, (-500.0, -500.0))
+        _, report = translate_patch_to_pixel(track, edited, 0, (-500.0, -500.0))
         assert report["clamped"]
         assert tuple(report["clamped_from"]) == (-500.0, -500.0)
 
-        _, report = set_observation_keypoint(track, edited, 0, (-500.0, -500.0))
+        _, report = sight_observation(track, edited, 0, (-500.0, -500.0))
         assert report["clamped"]
         assert tuple(report["clamped_from"]) == (-500.0, -500.0)
         assert tuple(report["pixel"]) == (0.0, 0.0)

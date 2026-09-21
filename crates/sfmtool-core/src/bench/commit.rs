@@ -255,7 +255,7 @@ pub fn commit(
         return Err(CommitError::TooFewObservations(kept.len()));
     }
     let position = payload.position.ok_or(CommitError::NoPosition)?;
-    if edited.has_patch_frames() && payload.frame.is_none() {
+    if edited.has_patch_frames() && payload.placement.is_none() {
         return Err(CommitError::NoFrame);
     }
     if edited.has_patch_bitmaps() && payload.bitmap.is_none() {
@@ -305,7 +305,7 @@ pub fn commit(
     }
 
     // ---- The point the record stands on ----
-    let frame = payload.frame.as_ref();
+    let frame = payload.placement.as_ref();
     // The track's own flag rather than the frame's `w`. A track put on the bench
     // from a `sift_files` reconstruction has no patch frame at all, and a bearing
     // it came from is still a bearing: reading the frame would commit it back as

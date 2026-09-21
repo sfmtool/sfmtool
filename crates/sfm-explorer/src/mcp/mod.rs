@@ -304,18 +304,60 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
         seed: crate::bench::Seed,
     },
-    /// Slide the track-stage surfel across its own plane until its centre sits
-    /// under a pixel. Every sighting follows.
-    MoveBenchTrack {
+    /// Move the track-stage patch, by a displacement on its own axes or to a
+    /// pixel of one photograph. Every sighting follows.
+    TranslateBenchPatch {
         reconstruction_label: String,
         track: Option<String>,
-        /// The observation whose image the pixel is in.
+        /// Exactly one of the two ways to name where it goes.
+        to: TranslateTarget,
+    },
+    /// Resize the track-stage patch, by a world half-length or to a pixel of
+    /// one photograph.
+    ResizeBenchPatch {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// Exactly one of the two ways to name the size.
+        to: ResizeTarget,
+    },
+    /// Put one edge of a cluster sighting's parallelogram under a pixel, with
+    /// the opposite edge left where it is.
+    ResizeBenchShape {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation whose parallelogram is being dragged.
         observation: usize,
-        /// Where, in that image's own px.
+        /// Which edge of its square.
+        edge: sfmtool_core::bench::Edge,
+        /// Where its midpoint should land, in that image's own px.
         pixel: [f64; 2],
     },
+    /// Turn the track-stage patch about its own outward normal.
+    SpinBenchPatch {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// How far, positive about the patch's outward normal.
+        degrees: f64,
+    },
+    /// Turn one cluster sighting's parallelogram in its own image's pixels.
+    SpinBenchShape {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation whose shape turns.
+        observation: usize,
+        /// How far, positive from `+x` toward `+y` of the image raster.
+        degrees: f64,
+    },
+    /// Turn the track-stage patch to face a new outward normal. Every
+    /// sighting is rebuilt on the turned axes.
+    TiltBenchPatch {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The outward normal wanted, in the reconstruction's own coordinates.
+        normal: [f64; 3],
+    },
     /// Put one observation's own sighting at a pixel, by hand.
-    MoveBenchTrackObservation {
+    SightBenchObservation {
         reconstruction_label: String,
         track: Option<String>,
         /// The observation's position in the track's list.
@@ -323,43 +365,14 @@ pub(crate) enum Command {
         /// Where, in that observation's own image's px.
         pixel: [f64; 2],
     },
-    /// Put one edge of the patch under a pixel, with the opposite edge left
-    /// where it is.
-    ResizeBenchTrack {
+    /// Give one cluster sighting its affine shape outright.
+    ShapeBenchObservation {
         reconstruction_label: String,
         track: Option<String>,
-        /// The observation whose outline is being dragged.
+        /// The observation's position in the track's list.
         observation: usize,
-        /// Which edge of the patch's square.
-        edge: sfmtool_core::bench::Edge,
-        /// Where its midpoint should land, in that image's own px.
-        pixel: [f64; 2],
-    },
-    /// Move the track-stage surfel along its own outward normal. Every
-    /// sighting follows.
-    OffsetBenchTrack {
-        reconstruction_label: String,
-        track: Option<String>,
-        /// How far, in world units, positive toward the face the patch shows.
-        distance: f64,
-    },
-    /// Turn the track-stage surfel to face a new outward normal. Every
-    /// sighting is rebuilt on the turned axes.
-    TiltBenchTrack {
-        reconstruction_label: String,
-        track: Option<String>,
-        /// The outward normal wanted, in the reconstruction's own coordinates.
-        normal: [f64; 3],
-    },
-    /// Turn the patch in its own plane.
-    RotateBenchTrack {
-        reconstruction_label: String,
-        track: Option<String>,
-        /// How far, positive about the patch's outward normal.
-        degrees: f64,
-        /// Which sighting's shape turns, at the cluster stage, where there is
-        /// no surfel to turn.
-        observation: Option<usize>,
+        /// Keypoint-frame units to that image's pixels.
+        shape: [[f64; 2]; 2],
     },
     SetBenchTrackVerdict {
         reconstruction_label: String,
@@ -636,6 +649,50 @@ impl ThresholdChange {
         }
         next
     }
+}
+
+/// How `translate_bench_patch` named where the patch goes.
+///
+/// One enum and not a bag of optional fields, because these are two *intents*
+/// and not two spellings of one: a displacement on the patch's own axes is a
+/// statement out in the world, where the normal part is a statement about depth
+/// no photograph could make, and a pixel is a statement in one photograph. A
+/// call carrying both would have no answer, so the wire takes exactly one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TranslateTarget {
+    /// `[u, v, n]` on the patch's own orthonormal axes, in world units.
+    By([f64; 3]),
+    /// A pixel of one observation's photograph, which the patch's centre lands
+    /// under.
+    Pixel {
+        /// The observation whose image the pixel is in.
+        observation: usize,
+        /// Where, in that image's own px.
+        pixel: [f64; 2],
+    },
+}
+
+/// How `resize_bench_patch` named the size, for the reason
+/// [`TranslateTarget`] is an enum.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ResizeTarget {
+    /// A world half-length, with the edge that moves or `None` for both about a
+    /// held centre.
+    HalfLength {
+        /// The new half-length, in the reconstruction's own units.
+        half_length: f64,
+        /// Which edge moves, the far one held.
+        moved_edge: Option<sfmtool_core::bench::Edge>,
+    },
+    /// One edge of the outline drawn at an observation, put under a pixel.
+    Pixel {
+        /// The observation whose outline is being dragged.
+        observation: usize,
+        /// Which edge of the patch's square.
+        edge: sfmtool_core::bench::Edge,
+        /// Where its midpoint should land, in that image's own px.
+        pixel: [f64; 2],
+    },
 }
 
 /// The five things `set_view` can be asked for.
@@ -1124,37 +1181,33 @@ pub(crate) fn apply_with_window(
             &camera_image,
             &seed,
         )),
-        Command::MoveBenchTrack {
+        Command::TranslateBenchPatch {
             reconstruction_label,
             track,
-            observation,
-            pixel,
-        } => done(bench::move_bench_track(
+            to,
+        } => done(bench::translate_bench_patch(
             state,
             &reconstruction_label,
             track.as_deref(),
-            observation,
-            pixel,
+            &to,
         )),
-        Command::MoveBenchTrackObservation {
+        Command::ResizeBenchPatch {
             reconstruction_label,
             track,
-            observation,
-            pixel,
-        } => done(bench::move_bench_track_observation(
+            to,
+        } => done(bench::resize_bench_patch(
             state,
             &reconstruction_label,
             track.as_deref(),
-            observation,
-            pixel,
+            &to,
         )),
-        Command::ResizeBenchTrack {
+        Command::ResizeBenchShape {
             reconstruction_label,
             track,
             observation,
             edge,
             pixel,
-        } => done(bench::resize_bench_track(
+        } => done(bench::resize_bench_shape(
             state,
             &reconstruction_label,
             track.as_deref(),
@@ -1162,37 +1215,61 @@ pub(crate) fn apply_with_window(
             edge,
             pixel,
         )),
-        Command::OffsetBenchTrack {
-            reconstruction_label,
-            track,
-            distance,
-        } => done(bench::offset_bench_track(
-            state,
-            &reconstruction_label,
-            track.as_deref(),
-            distance,
-        )),
-        Command::TiltBenchTrack {
-            reconstruction_label,
-            track,
-            normal,
-        } => done(bench::tilt_bench_track(
-            state,
-            &reconstruction_label,
-            track.as_deref(),
-            normal,
-        )),
-        Command::RotateBenchTrack {
+        Command::SpinBenchPatch {
             reconstruction_label,
             track,
             degrees,
-            observation,
-        } => done(bench::rotate_bench_track(
+        } => done(bench::spin_bench_patch(
             state,
             &reconstruction_label,
             track.as_deref(),
             degrees,
+        )),
+        Command::SpinBenchShape {
+            reconstruction_label,
+            track,
             observation,
+            degrees,
+        } => done(bench::spin_bench_shape(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            degrees,
+        )),
+        Command::TiltBenchPatch {
+            reconstruction_label,
+            track,
+            normal,
+        } => done(bench::tilt_bench_patch(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            normal,
+        )),
+        Command::SightBenchObservation {
+            reconstruction_label,
+            track,
+            observation,
+            pixel,
+        } => done(bench::sight_bench_observation(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            pixel,
+        )),
+        Command::ShapeBenchObservation {
+            reconstruction_label,
+            track,
+            observation,
+            shape,
+        } => done(bench::shape_bench_observation(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            shape,
         )),
         Command::SetBenchTrackVerdict {
             reconstruction_label,
@@ -1796,12 +1873,14 @@ impl Command {
             Command::DiscardBenchItem { .. } => "discard_bench_item",
             Command::DuplicateBenchItem { .. } => "duplicate_bench_item",
             Command::AddBenchTrackObservation { .. } => "add_bench_track_observation",
-            Command::MoveBenchTrack { .. } => "move_bench_track",
-            Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
-            Command::ResizeBenchTrack { .. } => "resize_bench_track",
-            Command::OffsetBenchTrack { .. } => "offset_bench_track",
-            Command::TiltBenchTrack { .. } => "tilt_bench_track",
-            Command::RotateBenchTrack { .. } => "rotate_bench_track",
+            Command::TranslateBenchPatch { .. } => "translate_bench_patch",
+            Command::ResizeBenchPatch { .. } => "resize_bench_patch",
+            Command::ResizeBenchShape { .. } => "resize_bench_shape",
+            Command::SpinBenchPatch { .. } => "spin_bench_patch",
+            Command::SpinBenchShape { .. } => "spin_bench_shape",
+            Command::TiltBenchPatch { .. } => "tilt_bench_patch",
+            Command::SightBenchObservation { .. } => "sight_bench_observation",
+            Command::ShapeBenchObservation { .. } => "shape_bench_observation",
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
             Command::SplitBenchTrack { .. } => "split_bench_track",
@@ -2001,12 +2080,14 @@ impl Command {
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }
             | Command::AddBenchTrackObservation { .. }
-            | Command::MoveBenchTrack { .. }
-            | Command::MoveBenchTrackObservation { .. }
-            | Command::ResizeBenchTrack { .. }
-            | Command::OffsetBenchTrack { .. }
-            | Command::TiltBenchTrack { .. }
-            | Command::RotateBenchTrack { .. }
+            | Command::TranslateBenchPatch { .. }
+            | Command::ResizeBenchPatch { .. }
+            | Command::ResizeBenchShape { .. }
+            | Command::SpinBenchPatch { .. }
+            | Command::SpinBenchShape { .. }
+            | Command::TiltBenchPatch { .. }
+            | Command::SightBenchObservation { .. }
+            | Command::ShapeBenchObservation { .. }
             | Command::SetBenchTrackVerdict { .. }
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }
