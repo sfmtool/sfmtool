@@ -132,8 +132,8 @@ same gate. It is where a person looks first.
 
 ## The search entry
 
-In the Track Edit panel a row's context menu offers *Search for matching
-features* when the node's index is current ([`track-edit.md`](track-edit.md)
+In the Track Edit panel a row's context menu offers *Find matches by SIFT
+query* when the node's index is current ([`track-edit.md`](track-edit.md)
 § "Right-clicking a row"). When it is not, the entry itself is the remedy:
 
 - `none`: the entry reads *Build SIFT Index to Search* and starts the build.

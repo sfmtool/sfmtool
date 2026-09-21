@@ -76,9 +76,12 @@ pub struct TrackEditResponse {
     /// the entry a row offers where the search would be when the node's index
     /// is absent or out of date.
     pub build_sift_index: bool,
-    /// A row's *Search for matching features*, carrying the observation it was
+    /// A row's *Find matches by SIFT query*, carrying the observation it was
     /// opened on.
     pub search_descriptors: Option<usize>,
+    /// A track-stage row's *Find matches by geometry*, carrying the
+    /// observation whose appearance is the explicit reference.
+    pub search_geometry: Option<usize>,
     /// A verdict control was clicked: the observation, and the verdict it
     /// cycled to.
     pub set_verdict: Option<(usize, Verdict)>,
@@ -660,7 +663,11 @@ pub(crate) const PUT_ON_BENCH_LABEL: &str = "Put selected point on bench";
 /// The observation row's context-menu entry, in one constant, as the Image
 /// Detail menu's entries are: the label is quoted in a refusal and read back by
 /// a test, and three spellings of one entry would drift.
-pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Search for matching features";
+pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
+
+/// The track-stage geometry search entry. It is separate from the SIFT label
+/// because it reads poses and photographs, and requires no descriptor index.
+pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
 
 /// What a row's menu calls the entry that builds the node its first SIFT
 /// index, in the menu and in the tests that aim at it.

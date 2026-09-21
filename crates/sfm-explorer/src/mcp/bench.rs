@@ -681,6 +681,25 @@ pub(super) fn search_bench_track_descriptors(
     }
 }
 
+/// `search_bench_track_geometry`: the photographs whose own view of the
+/// track's surfel matches it, each added as a candidate, on a worker thread.
+pub(super) fn search_bench_track_geometry(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+) -> Outcome {
+    let (id, item) = match target(state, label, named) {
+        Ok(target) => target,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    let since = state.action_log.revision();
+    match state.start_bench_geometry_search(id, &item, observation) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(()) => started(state, id, since),
+    }
+}
+
 /// `open_sift_index`: the `.kdf` a search queries, adopted for one node.
 ///
 /// Not an edit and not a version: the index is a file beside the node's `.sfmr`

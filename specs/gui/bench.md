@@ -381,15 +381,26 @@ cursor.
 
 A reading, a fit and a stage change run as **background tasks**
 ([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
-track` and `Set track stage`, beside `Search descriptors` and `Build SIFT
-index`, which read a `.kdf` and a capture's `.sift` files rather than
-photographs ([`sift-index.md`](sift-index.md)). All but
-the index build are **cancellable**: the kernels they run take the `Progress`
-for their phases and poll its flag as well -- between the reading's rounds and
-between the views the localizer renders, and in front of the forest query and
-between the candidates for the search -- so a cancelled step ends as a
-cancellation, pushing no version. The declaration is held to that by the
-background tests, which cancel each one over a fixture that can really run it.
+track` and `Set track stage`, beside `Geometry search`, which reads
+photographs too, and `Search descriptors` and `Build SIFT index`, which read a
+`.kdf` and a capture's `.sift` files rather than photographs
+([`sift-index.md`](sift-index.md)). All but the index build are
+**cancellable**: the kernels they run take the `Progress` for their phases and
+poll its flag as well -- between the reading's rounds, between the views the
+localizer or the geometry selector renders, in front of the forest query and
+between the candidates for the descriptor search, and between the candidates
+the geometry search appends -- so a cancelled step ends as a cancellation,
+pushing no version. The declaration is held to that by the background tests,
+which cancel each one over a fixture that can really run it.
+
+**The three are one family, and the geometry search is beside them rather than
+in it.** What names them is the split validation below: each publishes the half
+of its own refusal that reads no photograph, so a caller can refuse in front of
+the decode. The geometry search reads photographs and cancels the same way, but
+its refusals are the panel's and the wire's
+([`track-edit.md`](track-edit.md) § "Right-clicking a row"), not a published
+core precondition, because what it needs of a track -- the track stage, a
+fitted surfel, and a sighting to search from -- the viewer already holds.
 
 **What the track alone decides is decided before the task starts.** Core
 publishes the half of each step's own validation that reads no photograph --
@@ -535,6 +546,10 @@ panel means when it names no item.
 // build_sift_index                { "reconstruction_label": "bull" }
 // close_sift_index                { "reconstruction_label": "bull" }
 // search_bench_track_descriptors  { "reconstruction_label": "bull", "observation": 0 }
+//
+// The other search, which asks the reconstruction's geometry rather than an
+// index, and so needs no `.kdf`: track stage only.
+// search_bench_track_geometry     { "reconstruction_label": "bull", "observation": 0 }
 ```
 
 **The two reads have no panel gesture behind them**, because a panel shows what

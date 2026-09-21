@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Sixty-nine tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty-three
+Seventy tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty-four
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -170,6 +170,7 @@ write, and one writes a file.
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
+| `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it as a candidate, on a worker thread |
 | `open_sift_index` | write | Adopt a `.kdf` as one reconstruction's SIFT index |
 | `build_sift_index` | write | Index every `.sift` file of one reconstruction into a `.kdf` beside its `.sfmr`, and open it, on a worker thread |
 | `close_sift_index` | write | Let go of the SIFT index open beside one reconstruction |
@@ -177,7 +178,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the fifty-three writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the fifty-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2113,7 +2114,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Twenty-six tools that read and work the **bench** beside a node
+Twenty-seven tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2206,7 +2207,7 @@ a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Six of the twenty-six are the patch a track is**, and they are the wire's
+**Six of the twenty-seven are the patch a track is**, and they are the wire's
 half of the handles the Image Detail panel's bench layer offers
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). `move_bench_track` slides the patch across its own plane until its
@@ -2277,7 +2278,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the twenty-six are about the SIFT index**, which is the node's
+**Four of the twenty-seven are about the SIFT index**, which is the node's
 rather than any track's: `open_sift_index` adopts a `.kdf`, `build_sift_index`
 makes one out of the node's `.sift` files -- at a `path` of the caller's where
 it names one, refused when that path resolves outside the directory holding the
@@ -2303,6 +2304,20 @@ observation and seeds a candidate in each by the affine warp the index
 recovered. It names its `observation`, because the patch it searches from is one
 sighting's and not the track's; an image the track already names is left alone
 whatever its verdict, and how many those were is in the sentence it reports.
+
+**`search_bench_track_geometry` asks the same question of the reconstruction
+instead of the index.** It projects the track's surfel into every camera of the
+node, drops the ones that do not face it or hold it behind them, and scores each
+survivor's rendered patch against a reference fused from the named `observation`
+and the track's `in` sightings -- the per-point form of the view expansion `sfm
+embed-patches` runs ([../core/bench/editable-track.md](../core/bench/editable-track.md)
+§ "Searching by geometry"). The bar is the track's own `min_relative_zncc`, so
+`apply_bench_track_thresholds` moves what the next search admits. It needs the
+**track stage** and a fitted surfel, and is refused at the cluster stage, which
+carries no geometry to project; it reads no index, so it answers on a node that
+has none. Each admitted image arrives at the surfel's own projection with
+`sweep` provenance and no verdict, and an image the track already names is left
+alone, so repeating the call changes nothing.
 
 ## Addressing
 
@@ -2833,7 +2848,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Sixty-three tools are
+relaunch would call tools the new binary does not have. Seventy tools are
 cheap to re-fetch; a stale list is not cheap to debug. `cache_scope` is
 `private`: there are no authorization contexts to share a result across.
 
@@ -3192,7 +3207,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-nine tools**, fifteen of them reads and one of them
+- **The catalog is seventy tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

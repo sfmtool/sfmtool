@@ -52,6 +52,199 @@ fn edited_with_columns(scene: &Scene, world: Point3<f64>) -> EditedReconstructio
     EditedReconstruction::new(Arc::new(fixture_with_columns(scene, world, BITMAP_R)))
 }
 
+// ---- Geometry-guided candidate search ------------------------------------
+
+#[test]
+fn geometry_search_adds_projected_candidate_without_moving_existing_rows() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (_, track) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .map(|(bench, report)| {
+            let track = bench
+                .track(&report.label)
+                .expect("the created track")
+                .clone();
+            (bench, track)
+        })
+        .expect("the point goes on the bench");
+    let before = (*track).clone();
+    let views = scene.views();
+
+    let (grown, report) = search_geometry(
+        &track,
+        0,
+        &views,
+        &GeometrySearchOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the third image shows the same plane patch");
+
+    assert_eq!(report.observation, 0);
+    assert_eq!(report.reference_views, 2);
+    assert_eq!(report.added(), 1, "{report}");
+    assert_eq!(grown.observations.len(), before.observations.len() + 1);
+    assert_eq!(
+        grown.observations[..before.observations.len()],
+        before.observations,
+        "a search appends and never edits a row already on the table"
+    );
+    let added = grown.observations.last().expect("one candidate");
+    assert_eq!(added.image, 2);
+    assert_eq!(added.verdict, Verdict::Candidate);
+    assert!(!added.pinned);
+    assert_eq!(added.provenance, Provenance::Sweep);
+    assert!(
+        added.track.is_none(),
+        "the candidate has not been evaluated"
+    );
+    let expected = scene.project(2, WORLD);
+    let site = added.site().expect("the projection seeds the candidate");
+    assert!(
+        (site[0] - expected[0]).abs() < 1e-6,
+        "{site:?} vs {expected:?}"
+    );
+    assert!(
+        (site[1] - expected[1]).abs() < 1e-6,
+        "{site:?} vs {expected:?}"
+    );
+    let shape = added.shape().expect("the projected frame seeds a shape");
+    let det = shape[0][0] * shape[1][1] - shape[0][1] * shape[1][0];
+    assert!(
+        det > 0.0,
+        "a cluster/SIFT seed has positive chirality: {shape:?}"
+    );
+}
+
+#[test]
+fn geometry_search_is_idempotent_and_keeps_an_existing_verdict() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point goes on the bench");
+    let track = bench.track(&report.label).expect("the created track");
+    let views = scene.views();
+    let (once, _) = search_geometry(
+        track,
+        0,
+        &views,
+        &GeometrySearchOptions::default(),
+        &Progress::none(),
+    )
+    .expect("first search");
+    let mut decided = once.clone();
+    let added = decided.observations.len() - 1;
+    decided.observations[added].verdict = Verdict::Out;
+    decided.observations[added].pinned = true;
+
+    let (twice, second) = search_geometry(
+        &decided,
+        0,
+        &views,
+        &GeometrySearchOptions::default(),
+        &Progress::none(),
+    )
+    .expect("second search");
+    assert_eq!(twice, decided, "a held image is never added or overwritten");
+    assert_eq!(second.added(), 0);
+    assert_eq!(second.already_in_track(), 1, "{second}");
+}
+
+#[test]
+fn geometry_search_uses_the_selected_row_even_when_it_is_out() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point goes on the bench");
+    let mut track = (**bench.track(&report.label).expect("the track")).clone();
+    track.observations[0].verdict = Verdict::Out;
+    track.observations[1].verdict = Verdict::In;
+    let (_, report) = search_geometry(
+        &track,
+        0,
+        &scene.views(),
+        &GeometrySearchOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the selected out row still identifies the source appearance");
+    assert_eq!(
+        report.reference_views, 2,
+        "selected first, then the other accepted observation"
+    );
+}
+
+#[test]
+fn geometry_search_refuses_the_cluster_stage() {
+    let mut track = EditableTrack::empty_cluster();
+    track.observations.push(Observation::seeded(
+        0,
+        Provenance::Pixel,
+        [20.0, 30.0],
+        [[1.0, 0.0], [0.0, 1.0]],
+    ));
+    let error = search_geometry(
+        &track,
+        0,
+        &Scene::new().views(),
+        &GeometrySearchOptions::default(),
+        &Progress::none(),
+    )
+    .expect_err("clusters carry no surfel to project");
+    assert_eq!(
+        error,
+        GeometrySearchError::WrongStage {
+            is: StageKind::Cluster
+        }
+    );
+}
+
+#[test]
+fn geometry_search_reports_phases_and_cancels_without_a_partial_track() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    use crate::progress::Event;
+
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, report) = create_track(&Bench::new(), &edited, 0, &CreateTrackOptions::default())
+        .expect("the point goes on the bench");
+    let track = bench.track(&report.label).expect("the track");
+    let phases = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Enter { phase, .. } = event {
+            phases.lock().unwrap().push(phase);
+        }
+    };
+    search_geometry(
+        track,
+        0,
+        &scene.views(),
+        &GeometrySearchOptions::default(),
+        &Progress::to(&sink),
+    )
+    .expect("the reporting run succeeds");
+    let phases = phases.into_inner().unwrap();
+    for expected in ["build reference", "score views", "add candidates"] {
+        assert!(
+            phases.contains(&expected),
+            "missing {expected:?}: {phases:?}"
+        );
+    }
+
+    let cancel = AtomicBool::new(true);
+    let cancelled = Progress::none().cancelled_by(&cancel);
+    let error = search_geometry(
+        track,
+        0,
+        &scene.views(),
+        &GeometrySearchOptions::default(),
+        &cancelled,
+    )
+    .expect_err("the set flag stops before any result is returned");
+    assert_eq!(error, GeometrySearchError::Cancelled);
+    assert!(cancel.load(Ordering::Relaxed));
+}
+
 /// A bench holding the track put on from point `point`, and that track's label.
 fn bench_with_point(edited: &EditedReconstruction, point: u32) -> (Bench, String) {
     let (bench, report) =

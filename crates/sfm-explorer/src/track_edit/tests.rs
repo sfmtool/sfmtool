@@ -777,6 +777,10 @@ fn a_row_s_menu_offers_the_build_when_the_node_has_no_index() {
         !texts.iter().any(|t| t == super::SEARCH_DESCRIPTORS_LABEL),
         "the search is offered with no index to run it against: {texts:?}"
     );
+    assert!(
+        texts.iter().any(|t| t == super::SEARCH_GEOMETRY_LABEL),
+        "geometry search wrongly depends on the SIFT index: {texts:?}"
+    );
 }
 
 /// With a current index the entry is the search itself, live.
@@ -795,6 +799,43 @@ fn a_row_s_menu_offers_the_search_against_a_current_index() {
     assert!(
         !texts.iter().any(|t| t == super::REBUILD_INDEX_TO_SEARCH),
         "a current index is offered a rebuild: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == super::SEARCH_GEOMETRY_LABEL),
+        "the track-stage geometry entry is absent: {texts:?}"
+    );
+}
+
+#[test]
+fn geometry_search_is_track_stage_only_and_routes_its_own_response() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    let texts = row_menu(&mut panel, &ctx, &state);
+    assert!(
+        texts.iter().any(|t| t == super::SEARCH_GEOMETRY_LABEL),
+        "the geometry entry is absent at the track stage: {texts:?}"
+    );
+
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::SEARCH_GEOMETRY_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert_eq!(response.search_geometry, Some(0));
+    assert_eq!(
+        response.search_descriptors, None,
+        "the geometry entry was routed as a SIFT query"
+    );
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("the framed track downgrades");
+    state.finish_background_task();
+    let (mut panel, ctx) = settled(&state);
+    let texts = row_menu(&mut panel, &ctx, &state);
+    assert!(
+        !texts.iter().any(|t| t == super::SEARCH_GEOMETRY_LABEL),
+        "a cluster-stage row offers geometry search: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == super::BUILD_INDEX_TO_SEARCH),
+        "stage gating accidentally removed the SIFT/build action: {texts:?}"
     );
 }
 

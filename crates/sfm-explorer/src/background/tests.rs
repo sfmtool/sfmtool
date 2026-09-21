@@ -513,6 +513,19 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: Some(workspace),
             }
         }
+        "Geometry search" => {
+            let (mut state, id) = crate::bench::tests::state();
+            let label = crate::bench::tests::put_on_bench(&mut state, id);
+            let job = state
+                .bench_geometry_search_job(id, &label, 0)
+                .expect("the fixture has a framed track and decoded photographs");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The index build, over the same workspace fixture: it reads every
         // `.sift` file of the node and writes a `.kdf` beside its `.sfmr`.
         "Build SIFT index" => {

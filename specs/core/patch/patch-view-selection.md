@@ -104,6 +104,28 @@ render + `is_front_facing` for candidacy and the IRLS consensus + windowed ZNCC
 for the reference and scoring — the same machinery as normal refinement and
 keypoint localization.
 
+`select_patch_views` takes a `Progress` and answers
+`Result<ViewSelection, Cancelled>`. It reports `build reference` and `score
+views`, counts the views scored, and checks cancellation before and after
+reference construction and between views — where a selection over a capture's
+worth of images spends its time. A cancelled call returns `Cancelled` rather
+than a partial view set, so an interactive caller never installs half a
+selection.
+
+There is one entry point rather than a reporting one beside a plain one,
+because two would be two places for the gates to drift apart. A caller with no
+one watching passes `Progress::none()`, which reports nothing and never
+cancels: that is what `select_patch_cloud_views` hands each patch, since the
+batch's own reporting is its per-patch counter and its rayon fan-out would
+otherwise have dozens of threads writing phases over each other. The PyO3
+binding and the `embed-patches` pipeline go through that batch, so their
+behavior is unchanged.
+
+`projected_patch_frame` is the selector consumer's projection companion: it
+returns an admitted view's centre pixel and projected `u`/`v` half-frame under
+the same homogeneous finite/infinity convention. The bench geometry search
+uses it to seed a candidate without carrying a second projection convention.
+
 ### Affine candidate scoring (2026-07)
 
 The candidate gate score exists only to admit/reject — nothing downstream

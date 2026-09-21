@@ -444,6 +444,15 @@ and the row says which.
 
 ### From the view sweep
 
+**Built**, as a row's context-menu entry *Find matches by geometry* rather than
+the toolbar button proposed here, and without the keypoint-search switch: the
+search seeds each admitted image at the surfel's own projection and leaves the
+localization to the next Evaluate or Fit. Filed as
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Searching by geometry" and
+[`../gui/track-edit.md`](../gui/track-edit.md) § "Right-clicking a row". What
+is described below is the proposal it came from.
+
 At the track stage, **Sweep views** takes every image of the node that
 geometrically sees the surfel, the front-facing candidacy test of view
 selection, and scores each against the consensus of the `in` observations, with or
@@ -686,9 +695,13 @@ creates with all three seed forms, the three item tools, the two reads, and the
 eight steps on a track (`add_bench_track_observation`,
 `set_bench_track_verdict`, `apply_bench_track_thresholds`,
 `evaluate_bench_track`, `fit_bench_track`, `set_bench_track_stage`,
-`split_bench_track` and `commit_bench_track`). **Still proposed here** are the three whose core steps
-are not built: `search_bench_track_descriptors`, `sweep_bench_track_views` and
-`pull_into_bench_track`, which arrive with the steps below that build them.
+`split_bench_track` and `commit_bench_track`). The two searches are built too:
+`search_bench_track_descriptors` against the SIFT index, and the sweep as
+`search_bench_track_geometry`, filed in
+[`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family" and
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Searching by geometry". **Still proposed here** is `pull_into_bench_track`,
+which arrives with the step below that builds it.
 
 An agent gets the same bench a human does, through tools that are each one
 `AppState` call, on the GUI thread at the same point in the frame as every
@@ -1091,14 +1104,20 @@ covered by the existing layout test that walks every tab.
    [`../gui/sift-index.md`](../gui/sift-index.md) and
    [`../workspace/workspace.md`](../workspace/workspace.md) § "The SIFT Index",
    which settles where a reconstruction's `.kdf` lives.
-4. The view sweep with the keypoint-search switch.
+4. The view sweep, built as the geometry search: `bench::search_geometry` over
+   the patch-view selector, the *Find matches by geometry* row entry, and
+   `search_bench_track_geometry` on the wire. The keypoint-search switch is not
+   part of it. Filed as
+   [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+   § "Searching by geometry" and
+   [`../gui/track-edit.md`](../gui/track-edit.md).
 5. Pull-in from a point and from the bench, the coherence grid, and the merging
    commit. *Split off selected observations* arrived with step 2.
 6. **Done**, for the tools whose steps exist: the two creates, the three item
    tools, the two reads, the seven steps on a track, and the descriptor search
-   with the two index tools it needs. Filed as
+   with the two index tools it needs, and the geometry search. Filed as
    [`../gui/bench.md`](../gui/bench.md) § "The wire" and
    [`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family". What
-   remains of the wire is the two tools for the sweep and the pull-in, which
-   arrive with the steps above that build them.
+   remains of the wire is the pull-in tool, which arrives with the step above
+   that builds it.
 7. The `.matches` opener, if step 2's cluster stage earns it.

@@ -180,6 +180,19 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One track-stage bench surfel projected and photometrically vetted in
+    /// every image of its node (`specs/core/bench/editable-track.md` section
+    /// "Searching by geometry").
+    ///
+    /// Cancellable around image decoding, reference construction, and between
+    /// the views scored and candidates added. A stop returns no partially
+    /// grown track.
+    pub(crate) const BENCH_GEOMETRY_SEARCH: Operation = Operation {
+        name: "Geometry search",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
     /// A node's SIFT index built over its `.sift` files and written beside its
     /// `.sfmr` ([`crate::sift_index`]).
     ///
@@ -202,7 +215,7 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 9] = [
+    pub(crate) const ALL: [Operation; 10] = [
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
@@ -211,6 +224,7 @@ impl Operation {
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_SEARCH,
+        Operation::BENCH_GEOMETRY_SEARCH,
         Operation::BUILD_SIFT_INDEX,
     ];
 }

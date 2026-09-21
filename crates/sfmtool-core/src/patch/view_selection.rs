@@ -41,6 +41,7 @@ use crate::patch::normal_refine::{
     weighted_moments_pub, window_weights, znormalize_into_kept, ConsensusScratch, LevelContext,
     PatchWindow, ProjectedImage, Sampler, FLAT_NORM_SQ_EPS,
 };
+use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::SfmrReconstruction;
 use rayon::prelude::*;
 
@@ -764,6 +765,16 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
 /// keypoints gets; the admission rule, the gates and the returned fields are
 /// otherwise unchanged.
 ///
+/// # Progress
+///
+/// `progress` reports two phases, `build reference` and `score views`, counts
+/// the views scored, and is polled for cancellation before and after reference
+/// construction and between views — which is where a selection over a capture's
+/// worth of images spends its time. A cancelled call returns [`Cancelled`]
+/// rather than a partial view set, so a caller never installs half a selection.
+/// A batch caller with no one watching passes [`Progress::none`], which reports
+/// nothing and never cancels.
+///
 /// # Panics
 ///
 /// Panics if `track_keypoints` is given and is not parallel to `track_views`.
@@ -773,8 +784,46 @@ pub fn select_patch_views(
     track_views: &[u32],
     track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
-) -> ViewSelection {
-    prof::TOTAL.time(|| select_patch_views_impl(patch, views, track_views, track_keypoints, params))
+    progress: &Progress<'_>,
+) -> Result<ViewSelection, Cancelled> {
+    prof::TOTAL.time(|| {
+        select_patch_views_impl(patch, views, track_views, track_keypoints, params, progress)
+    })
+}
+
+/// Project a patch's centre and half-frame into one view.
+///
+/// The pixel is the projection of the patch anchor. The returned matrix has
+/// the projected `u` and `v` half-vectors as its columns, in the patch-frame
+/// convention used by `reconstruction::data::patch_affine_shape`.
+/// Translation is suppressed for a point at infinity through the patch's
+/// homogeneous weight. `None` means the centre or either half-axis tip lies
+/// outside the camera model's projectable domain.
+///
+/// This is public for consumers of a [`ViewSelection`] that need to turn an
+/// admitted view into a seed without reimplementing the projection convention.
+pub fn projected_patch_frame(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+) -> Option<([f64; 2], [[f64; 2]; 2])> {
+    let project = |xyz| {
+        let camera_point = view
+            .cam_from_world
+            .transform_point_homogeneous(xyz, patch.w);
+        view.camera
+            .ray_to_pixel([camera_point.x, camera_point.y, camera_point.z])
+            .map(|(x, y)| [x, y])
+    };
+    let center = project(patch.center.coords)?;
+    let u = project(patch.center.coords + patch.u_axis * patch.half_extent[0])?;
+    let v = project(patch.center.coords + patch.v_axis * patch.half_extent[1])?;
+    Some((
+        center,
+        [
+            [u[0] - center[0], v[0] - center[0]],
+            [u[1] - center[1], v[1] - center[1]],
+        ],
+    ))
 }
 
 /// Untimed body of [`select_patch_views`] (split so the enclosing
@@ -785,7 +834,9 @@ fn select_patch_views_impl(
     track_views: &[u32],
     track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
-) -> ViewSelection {
+    progress: &Progress<'_>,
+) -> Result<ViewSelection, Cancelled> {
+    progress.check_cancel()?;
     let resolution = params.resolution.max(2);
     let params = ViewSelectParams {
         resolution,
@@ -815,16 +866,20 @@ fn select_patch_views_impl(
     let is_track = seen; // the dedup set doubles as the membership test
 
     // Build the robust reference from the track views.
-    let reference = prof::REFERENCE.time(|| {
-        build_reference(
-            patch,
-            views,
-            &track_views,
-            track_kps.as_deref(),
-            &w_full,
-            &params,
-        )
-    });
+    let reference = {
+        let _phase = progress.phase("build reference");
+        prof::REFERENCE.time(|| {
+            build_reference(
+                patch,
+                views,
+                &track_views,
+                track_kps.as_deref(),
+                &w_full,
+                &params,
+            )
+        })
+    };
+    progress.check_cancel()?;
 
     let admit_verbatim = || ViewSelection {
         admitted: track_views.clone(),
@@ -836,7 +891,7 @@ fn select_patch_views_impl(
     let Some((reference, self_agreement)) = reference else {
         // No reference: admit the track views verbatim, no candidate vetting.
         prof::count(&prof::N_VERBATIM, 1);
-        return admit_verbatim();
+        return Ok(admit_verbatim());
     };
 
     // The reference's frozen support re-expressed as a one-view context, built
@@ -861,7 +916,11 @@ fn select_patch_views_impl(
     // per-view validity gate).
     let mut admitted: Vec<u32> = Vec::with_capacity(track_views.len());
     let mut scores: Vec<f64> = Vec::with_capacity(track_views.len());
+    let score_progress = progress.phase("score views");
+    let total_views = views.len() as u64;
+    let mut scored_views = 0u64;
     for (t, &ti) in track_views.iter().enumerate() {
+        score_progress.check_cancel()?;
         admitted.push(ti);
         // Anchored at this track view's own keypoint where one was supplied: the
         // recentred patch is what `normalized_stack` would render under
@@ -885,6 +944,8 @@ fn select_patch_views_impl(
                 })
                 .unwrap_or(f64::NAN),
         );
+        scored_views += 1;
+        score_progress.count(scored_views, Some(total_views), "view");
     }
 
     // Trust gate: only vet candidates when the track agrees with itself well
@@ -893,12 +954,12 @@ fn select_patch_views_impl(
     // report the measured self-agreement).
     if self_agreement < params.min_self_agreement {
         prof::count(&prof::N_VERBATIM, 1);
-        return ViewSelection {
+        return Ok(ViewSelection {
             admitted,
             scores,
             self_agreement,
             track_view_count: track_views.len(),
-        };
+        });
     }
 
     let bar = params.min_relative_zncc * self_agreement;
@@ -908,38 +969,45 @@ fn select_patch_views_impl(
     // coverage), admitted when its ZNCC clears the bar. The candidate loop is
     // sequential (plain iterator): the batch entry already parallelizes over
     // patches, so a nested rayon here would oversubscribe.
-    let mut extra: Vec<(u32, f64)> = (0..views.len() as u32)
-        .filter(|i| !is_track.contains(i))
-        .filter_map(|i| {
-            let view = &views[i as usize];
-            // Geometric visibility: the patch must face this camera *and* the point
-            // must be in front of it (cheirality — `is_front_facing` alone does not
-            // guarantee positive depth on wide-fisheye / equirect projection).
-            if !patch.is_front_facing(view.cam_from_world)
-                || !is_in_front(patch, view.camera, view.cam_from_world)
-            {
-                return None;
-            }
-            // Photometric vetting (also enforces in-frame coverage: a candidate
-            // whose render misses the reference support is unscoreable -> rejected).
-            prof::count(&prof::N_CANDIDATES, 1);
-            let zncc = prof::CAND_SCORE.time(|| {
-                candidate_zncc(
-                    patch,
-                    view,
-                    &reference,
-                    &single_ctx,
-                    &sqrt_weights,
-                    &params,
-                    &mut raw_scratch,
-                )
-            })?;
-            if zncc >= bar {
-                prof::count(&prof::N_ADMITTED, 1);
-            }
-            (zncc >= bar).then_some((i, zncc))
-        })
-        .collect();
+    let mut extra: Vec<(u32, f64)> = Vec::new();
+    for i in 0..views.len() as u32 {
+        if is_track.contains(&i) {
+            continue;
+        }
+        score_progress.check_cancel()?;
+        let view = &views[i as usize];
+        // Geometric visibility: the patch must face this camera *and* the point
+        // must be in front of it (cheirality — `is_front_facing` alone does not
+        // guarantee positive depth on wide-fisheye / equirect projection).
+        if !patch.is_front_facing(view.cam_from_world)
+            || !is_in_front(patch, view.camera, view.cam_from_world)
+        {
+            scored_views += 1;
+            score_progress.count(scored_views, Some(total_views), "view");
+            continue;
+        }
+        // Photometric vetting (also enforces in-frame coverage: a candidate
+        // whose render misses the reference support is unscoreable -> rejected).
+        prof::count(&prof::N_CANDIDATES, 1);
+        let zncc = prof::CAND_SCORE.time(|| {
+            candidate_zncc(
+                patch,
+                view,
+                &reference,
+                &single_ctx,
+                &sqrt_weights,
+                &params,
+                &mut raw_scratch,
+            )
+        });
+        scored_views += 1;
+        score_progress.count(scored_views, Some(total_views), "view");
+        let Some(zncc) = zncc else { continue };
+        if zncc >= bar {
+            prof::count(&prof::N_ADMITTED, 1);
+            extra.push((i, zncc));
+        }
+    }
     extra.sort_by_key(|&(i, _)| i);
 
     for (i, zncc) in extra {
@@ -947,12 +1015,12 @@ fn select_patch_views_impl(
         scores.push(zncc);
     }
 
-    ViewSelection {
+    Ok(ViewSelection {
         admitted,
         scores,
         self_agreement,
         track_view_count: track_views.len(),
-    }
+    })
 }
 
 /// Batch [`select_patch_views`] over a [`PatchCloud`], parallel across patches
@@ -1001,7 +1069,12 @@ pub fn select_patch_cloud_views(
         .zip(track_views.par_iter())
         .map(|((i, patch), tv)| {
             let kps = track_keypoints.map(|k| k[i].as_slice());
-            let out = select_patch_views(patch, views, tv, kps, params);
+            // The batch's own reporting is the counter below, one tick per
+            // patch: the per-patch phases would be dozens of threads writing
+            // over each other, and nothing here can be cancelled, so the
+            // selector is handed a progress that reports nothing.
+            let out = select_patch_views(patch, views, tv, kps, params, &Progress::none())
+                .expect("Progress::none never cancels");
             // Bump the shared work counter per patch for a Python progress poller.
             if let Some(c) = progress {
                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

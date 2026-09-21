@@ -10,16 +10,19 @@ it is not, and `get_background_task` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node, with an id of its own. One task runs at a time. The eight
-operations are the three whole-value edits -- `Bundle adjust`, `Convert to
-embedded patches` and `Retriangulate all points` -- and the five the bench runs
--- `Evaluate track`, `Fit track`, `Set track stage`, `Search descriptors` and
-`Build SIFT index` ([bench.md](bench.md)). Every one of them is
-**cancellable**: the four bench steps that read photographs poll the flag on
-either side of the decode and inside the kernels -- between the reading's rounds
-and between the views the localizer renders, which is where a widened search
-spends its time, and in front of the forest query and between the candidates for
-the search; the adjustment polls between its rounds and its iterations, the
+one, on one node, with an id of its own. One task runs at a time. The ten
+operations are the four whole-value edits -- `Bundle adjust`, `Convert to
+embedded patches`, `Retriangulate all points` and `Prune covered observations`
+-- and the six the bench runs -- `Evaluate track`, `Fit track`, `Set track
+stage`, `Search descriptors`, `Geometry search` and `Build SIFT index`
+([bench.md](bench.md)). Every one of them is **cancellable**: the bench steps
+that read photographs poll the flag on either side of the decode and inside the
+kernels -- between the reading's rounds and between the views the localizer or
+geometry selector renders, which is where their widened searches spend their
+time. The descriptor search polls in front of the forest query and between the
+candidates it found; the geometry search polls around reference construction,
+between scored views, and between appended candidates. The adjustment polls
+between its rounds and its iterations, the
 conversion between its three stages and the images of its `.sift` read, the
 retriangulation between its own three, and the index build between the images it
 reads, as each leaf of the forest is placed, and between batches of the blocks
@@ -373,9 +376,12 @@ it. It polls the flag at each of those same places, and a cancelled one is
 
 The bench's photometric steps fill in the phases and poll the same flag. A
 cancelled one ends as a cancellation rather than a failure of the kernel --
-`EvaluateError::Cancelled`, `FitError::Cancelled`, `SearchError::Cancelled` --
-and the job turns each into `Finished::Cancelled`, so the row says the operation
-stopped and no version is pushed.
+`EvaluateError::Cancelled`, `FitError::Cancelled`, `SearchError::Cancelled`,
+`GeometrySearchError::Cancelled` -- and the job turns each into
+`Finished::Cancelled`, so the row says the operation stopped and no version is
+pushed. Geometry search reports `decode images`, `build reference`, `score
+views`, and `add candidates`; its result is installed only after all four, so a
+cancelled search cannot leave a candidate prefix on the bench.
 
 ## Rust API
 
@@ -664,10 +670,10 @@ Panel, through `test_support::run_frame_headless`:
   one stops it and writes the cancelled entry. A declaration nothing checks is a
   declaration that rots. Each is started over a fixture that can really run it
   -- the adjustment over the resection node, the conversion over a `sift_files`
-  node with a `.sift` companion per image, the bench steps over a node with a
-  point on its bench and a photograph per image, the search over a workspace
-  with `.sift` files and a built `.kdf` -- so what is held to the claim is the
-  kernel rather than a stand-in for it.
+  node with a `.sift` companion per image, the bench steps including geometry
+  search over a node with a point on its bench and a photograph per image, the
+  descriptor search over a workspace with `.sift` files and a built `.kdf` --
+  so what is held to the claim is the kernel rather than a stand-in for it.
 
 `crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
 editing fixture's node, so the wire is read at an instant the test chose:

@@ -425,6 +425,15 @@ pub(crate) enum Command {
         /// query's own bar.
         min_inliers: Option<usize>,
     },
+    /// Project the track's surfel into every camera of the node and add each
+    /// photometrically admitted photograph as a candidate, on a worker.
+    SearchBenchTrackGeometry {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// Which observation supplies the reference appearance, by its
+        /// position in `get_bench_track`'s list.
+        observation: usize,
+    },
     /// Adopt a `.kdf` as the node's SIFT index.
     OpenSiftIndex {
         reconstruction_label: String,
@@ -1254,6 +1263,16 @@ pub(crate) fn apply_with_window(
             radius_px,
             min_inliers,
         ),
+        Command::SearchBenchTrackGeometry {
+            reconstruction_label,
+            track,
+            observation,
+        } => bench::search_bench_track_geometry(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+        ),
         Command::OpenSiftIndex {
             reconstruction_label,
             path,
@@ -1791,6 +1810,7 @@ impl Command {
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
+            Command::SearchBenchTrackGeometry { .. } => "search_bench_track_geometry",
             Command::OpenSiftIndex { .. } => "open_sift_index",
             Command::BuildSiftIndex { .. } => "build_sift_index",
             Command::CloseSiftIndex { .. } => "close_sift_index",
@@ -1994,6 +2014,7 @@ impl Command {
             | Command::FitBenchTrack { .. }
             | Command::SetBenchTrackStage { .. }
             | Command::SearchBenchTrackDescriptors { .. }
+            | Command::SearchBenchTrackGeometry { .. }
             // The three that are about the index rather than about a track:
             // nothing on the bench moves, and the row belongs beside the search
             // that will use them.

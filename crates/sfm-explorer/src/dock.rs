@@ -390,6 +390,11 @@ impl TabContext<'_> {
                 .state
                 .start_bench_descriptor_search(id, &label, observation, None, None);
         }
+        if let Some(observation) = response.search_geometry {
+            let _ = self
+                .state
+                .start_bench_geometry_search(id, &label, observation);
+        }
         if response.commit {
             match self.state.commit_bench_track(id, &label) {
                 Err(why) => self.state.action_log.fail(Kind::Edit, why),

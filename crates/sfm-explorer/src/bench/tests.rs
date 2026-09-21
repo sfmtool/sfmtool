@@ -875,6 +875,36 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
     );
 }
 
+#[test]
+fn a_geometry_search_needs_no_sift_index_and_routes_its_report() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    assert!(
+        state.sift_index(id).is_none(),
+        "the fixture unexpectedly has a descriptor index"
+    );
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    state
+        .start_bench_geometry_search(id, &label, 0)
+        .expect("a framed track and decoded photographs are enough");
+    assert!(state.background_task().is_some(), "the search ran inline");
+    state.finish_background_task();
+
+    assert_eq!(versions(&state, id), before + 1, "one report, one version");
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, Kind::Bench);
+    assert!(
+        rows[0].1.starts_with(&format!(
+            "{label}: Geometry search from observation 0 of 3:"
+        )),
+        "the geometry report is not distinguishable: {}",
+        rows[0].1
+    );
+}
+
 /// With no index open the gesture is refused in the caller's own hand, naming
 /// the row that would give the node one, and starts no task.
 #[test]

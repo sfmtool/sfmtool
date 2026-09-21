@@ -29,6 +29,9 @@ from),
 (the track stage's kernels and the pipeline an upgrade runs),
 [`../patch/patch-cloud.md`](../patch/patch-cloud.md) (the frame an upgrade
 builds and the shape a downgrade derives),
+[`../patch/patch-view-selection.md`](../patch/patch-view-selection.md) (the
+geometric and photometric gates the geometry search shares with the batch
+pipeline),
 [`../../formats/matches-file-format.md`](../../formats/matches-file-format.md)
 (the `member_status` legend a cluster measurement carries),
 [`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)
@@ -52,6 +55,8 @@ stage change in
 [bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), the
 descriptor search in
 [bench/search.rs](../../../crates/sfmtool-core/src/bench/search.rs), and the
+geometry search in
+[bench/geometry_search.rs](../../../crates/sfmtool-core/src/bench/geometry_search.rs), and the
 commit in [bench/commit.rs](../../../crates/sfmtool-core/src/bench/commit.rs),
 bound as `sfmtool._sfmtool.bench`.
 
@@ -396,6 +401,40 @@ pub enum SearchError {
     NoPlace { observation: usize },
     NoConstellation { radius_px: f32, keypoint_count: usize },
     Index(String),
+}
+
+// Grow a track-stage item from its reconstruction geometry and photographs.
+pub fn search_geometry(
+    track: &EditableTrack,
+    observation: usize,                  // the explicit reference appearance
+    views: &[ProjectedImage<'_>],         // one per reconstruction image
+    options: &GeometrySearchOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, GeometrySearchReport), GeometrySearchError>;
+
+pub struct GeometrySearchReport {
+    pub observation: usize,
+    pub observation_count: usize,
+    pub image: u32,
+    pub reference_views: usize,
+    pub self_agreement: f64,
+    pub matches: Vec<GeometryMatch>,      // ascending image order
+}
+
+pub struct GeometryMatch {
+    pub image: u32,
+    pub zncc: f64,
+    pub pixel: [f64; 2],                  // the surfel centre's projection
+    pub found: Found,
+}
+
+pub enum GeometrySearchError {
+    NoSuchObservation { observation: usize, observation_count: usize },
+    WrongStage { is: StageKind },
+    NoFrame,
+    NoPlace { observation: usize },
+    NoSuchImage { image: u32, view_count: usize },
+    Cancelled,
 }
 
 // The steps that read photographs, and the half of each one's validation that
@@ -1303,6 +1342,51 @@ written: it is what the report states a refusal against, and it is written into
 the query's own params so an image the search would discard is never fitted.
 `SearchOptions::constellation.min_inliers` is not read.
 
+### Searching by geometry
+
+`search_geometry` is the track-stage counterpart to `search_descriptors`: it
+asks which other cameras see the surfel the track already carries, using the
+same patch-view selection that `sfm embed-patches` runs per point. It projects
+the finite patch or direction patch (`w = 0`) into every supplied camera,
+requires the existing front-facing, cheirality and image-support gates, and
+admits a view only when its rendered patch clears the relative-ZNCC bar against
+a trustworthy reference appearance. The bar is the editable track's own
+`thresholds.min_relative_zncc`; changing the panel slider therefore changes the
+next geometry search by the same rule it changes a batch view selection.
+
+**The row names the appearance being searched from.** Its observation is first
+in the reference basis even when its verdict is `candidate` or `out`; the
+track's other `in` observations follow in observation order. Duplicate images
+are removed first-seen, so the selected row wins. Each basis render is anchored
+at that observation's own `site()`, while a candidate has no sighting yet and is
+scored at the surfel's projection. This is patch-view selection's anchored
+reference mode: the row gesture chooses real source appearance without giving
+up the robust consensus of the observations already accepted.
+
+**An admitted image arrives as a seed and no decision.** Its pixel is the
+surfel centre's projection. Its shape is the projected `u`/`v` half-frame,
+converted from the negative-determinant patch-frame convention into the
+positive-determinant cluster/SIFT convention and divided by the cluster radius,
+exactly as a track-to-cluster stage change seeds an observation. The row is a
+`candidate` with `Provenance::Sweep`, carries no evaluation, and the next
+Evaluate or Fit judges it. An image the track already names is reported and
+left byte-for-byte alone, including an `out` verdict or a pin; the source image
+and all other reference images are excluded by the selector itself. Repeating
+the same search is therefore idempotent.
+
+The operation accepts finite and infinity surfels because patch-view selection
+already renders and projects both homogeneous forms. It refuses a cluster-stage
+track, a track with no frame, a source observation with no site, or a reference
+image beyond the supplied view table rather than inferring geometry the track
+does not carry.
+
+The work reports `build reference`, `score views`, and `add candidates` through
+`Progress`. It polls before and after reference construction and between views
+and additions; cancellation returns no grown track, so a caller never installs
+a partial candidate list. Candidate and report order is deterministic: newly
+admitted views are in ascending image index, after the selector's reference
+basis.
+
 ### Evaluating
 
 `evaluate` fills the measurement slots of every observation at the stage the
@@ -1998,13 +2082,17 @@ photograph, and a radius holding no indexed keypoint.
 covers the same surface through the bindings, over the 17-image seoul_bull solve
 converted to `embedded_patches`.
 
+The geometry search is covered in
+[bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) over the
+textured-plane scene: a matching third view lands at the exact surfel
+projection with positive-chirality seed geometry; existing observations are
+unchanged; repeating the search leaves an `out`, pinned candidate untouched;
+an explicitly selected `out` row remains part of the reference basis; the
+cluster stage is refused; and the real call reports all three phases and stops
+on cancellation without returning a partial track.
+
 ## Non-goals
 
-- **The view sweep.** `search_descriptors` proposes candidates from a
-  descriptor index; the sweep over every image that geometrically sees the
-  surfel is a different search and is proposed in
-  [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
-  An evaluation scores the candidates either of them puts on the track.
 - **Building the descriptor index.** `search_descriptors` takes an open forest;
   making one out of a capture's `.sift` files is the viewer's
   ([`../../gui/track-edit.md`](../../gui/track-edit.md)) or a script's.

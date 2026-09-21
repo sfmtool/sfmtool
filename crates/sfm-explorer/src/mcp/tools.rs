@@ -1576,6 +1576,35 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "search_bench_track_geometry",
+            description: "Ask the reconstruction's GEOMETRY which other photographs see the \
+                          patch of a bench track, and add each as a candidate. This is the \
+                          per-point form of the view expansion sfm embed-patches runs: the \
+                          track's surfel is projected into every camera of the node, the ones \
+                          it does not face or that hold it behind them are dropped, and each \
+                          survivor's rendered patch is scored against a reference fused from \
+                          the named observation and the track's in observations. A view is \
+                          admitted when that score clears the track's own min_relative_zncc \
+                          bar, so apply_bench_track_thresholds moves what the next search \
+                          admits. A candidate arrives at the surfel's own projection, with the \
+                          projected patch shape and sweep provenance, carrying no verdict and \
+                          no measurement — evaluate_bench_track is what then scores it. An \
+                          image the track already has an observation in is left alone whatever \
+                          its verdict, so repeating the search changes nothing. Needs the TRACK \
+                          stage and a fitted surfel; a cluster-stage track has no geometry to \
+                          project and is refused. It reads no SIFT index, unlike \
+                          search_bench_track_descriptors. Runs on a worker thread and answers \
+                          as evaluate_bench_track does.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "open_sift_index",
             description: "Adopt a .kdf SIFT index for one reconstruction, which is what \
                           search_bench_track_descriptors queries. Omit path for the node's own, \
@@ -2505,6 +2534,11 @@ pub(crate) fn parse(
             observation: args.required_usize("observation")?,
             radius_px: args.optional_f64("radius_px")?,
             min_inliers: args.optional_usize("min_inliers")?,
+        },
+        "search_bench_track_geometry" => Command::SearchBenchTrackGeometry {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observation: args.required_usize("observation")?,
         },
         "open_sift_index" => Command::OpenSiftIndex {
             reconstruction_label: args.required_string("reconstruction_label")?,

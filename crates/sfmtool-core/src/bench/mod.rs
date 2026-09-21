@@ -20,6 +20,12 @@
 //! descriptor index which other photographs hold the patch around one
 //! observation and adds each as a candidate.
 //!
+//! [`search_geometry`] asks the same question of the reconstruction instead:
+//! it projects a track-stage surfel into every supplied view and adds each
+//! photometrically admitted photograph as a candidate. It reads photographs,
+//! but it is not one of the three below: it publishes no separate precondition
+//! half, because everything it needs of a track it checks as it starts.
+//!
 //! The three steps that read photographs are [`evaluate`](evaluate::evaluate),
 //! which fills a track's measurement slots at whichever stage it is in and
 //! moves nothing; [`fit`](fit::fit), which localizes, re-triangulates and
@@ -37,6 +43,7 @@ pub mod classify;
 pub mod commit;
 pub mod evaluate;
 pub mod fit;
+pub mod geometry_search;
 pub mod search;
 pub mod stage;
 pub mod steps;
@@ -58,6 +65,10 @@ pub use evaluate::{
     EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
 };
 pub use fit::{fit, fit_preconditions, FitError, FitOptions, FitReport};
+pub use geometry_search::{
+    search_geometry, GeometryMatch, GeometrySearchError, GeometrySearchOptions,
+    GeometrySearchReport,
+};
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,
     DEFAULT_RADIUS_PX,

@@ -168,6 +168,29 @@ fn params() -> ViewSelectParams {
     }
 }
 
+/// [`select_patch_views`] under a progress that reports nothing and never
+/// cancels, which is what every test in this module wants: what they are about
+/// is the selection, and a `Result` at each of them would be noise. The
+/// cancellation path has its own test.
+#[track_caller]
+fn select(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    track_views: &[u32],
+    track_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &ViewSelectParams,
+) -> ViewSelection {
+    select_patch_views(
+        patch,
+        views,
+        track_views,
+        track_keypoints,
+        params,
+        &Progress::none(),
+    )
+    .expect("Progress::none never cancels")
+}
+
 // --- Multi-channel (RGB) scene, for the A1 channel-alignment regression. ---
 
 /// Per-channel texture function for the RGB test scene (`None` = a flat channel).
@@ -269,7 +292,7 @@ fn admits_agreeing_views_keeps_track_rejects_disagreeing() {
     let patch = plane_patch();
     let track = vec![0u32, 1];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     // Track views are always present and come first.
     assert_eq!(&sel.admitted[..2], &[0, 1]);
@@ -328,7 +351,7 @@ fn infinity_point_admits_agreeing_views() {
     let patch = infinity_patch();
     let track = vec![0u32, 1];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     assert_eq!(&sel.admitted[..2], &[0, 1], "track views come first");
     assert!(
@@ -360,7 +383,7 @@ fn single_track_view_admits_verbatim_no_candidates() {
     let patch = plane_patch();
     let track = vec![0u32];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     assert_eq!(sel.admitted, vec![0]);
     assert!(sel.self_agreement.is_nan());
@@ -378,7 +401,7 @@ fn track_views_always_admitted_even_when_one_disagrees() {
     let patch = plane_patch();
     let track = vec![0u32, 1, 2];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     // All three track views are admitted.
     for t in [0u32, 1, 2] {
@@ -409,8 +432,7 @@ fn batch_matches_per_patch() {
     let batch = select_patch_cloud_views(&cloud, &views, &track_views, None, &params(), None);
     assert_eq!(batch.len(), 2);
     for (i, sel) in batch.iter().enumerate() {
-        let single =
-            select_patch_views(&cloud.patches[i], &views, &track_views[i], None, &params());
+        let single = select(&cloud.patches[i], &views, &track_views[i], None, &params());
         assert_eq!(sel.admitted, single.admitted);
     }
     // View 2 agrees and is geometrically visible, so the expanded set is a strict
@@ -432,7 +454,7 @@ fn duplicate_track_index_is_deduped() {
     // View 0 listed twice (e.g. two observations in the same rig image).
     let track = vec![0u32, 0, 1];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     // No duplicates in the admitted set.
     let mut uniq = sel.admitted.clone();
@@ -450,7 +472,7 @@ fn duplicate_track_index_is_deduped() {
 
     // The reference is not double-weighted: the dedup'd 2-view track agrees with
     // itself, so self-agreement matches the plain (non-duplicated) 2-view track.
-    let sel_plain = select_patch_views(&patch, &views, &[0u32, 1], None, &params());
+    let sel_plain = select(&patch, &views, &[0u32, 1], None, &params());
     assert!(
         (sel.self_agreement - sel_plain.self_agreement).abs() < 1e-9,
         "dedup self-agreement {} != plain {}",
@@ -488,7 +510,7 @@ fn a1_channel_alignment_no_cross_channel_artifact() {
     let patch = plane_patch();
     let track = vec![0u32, 1];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     // Reference's red channel survives; self-agreement is high.
     assert!(
@@ -523,7 +545,7 @@ fn no_candidates_admits_only_track() {
     let patch = plane_patch();
     let track = vec![0u32, 1];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
     assert_eq!(sel.admitted, vec![0, 1]);
     assert_eq!(sel.admitted.len(), sel.scores.len());
 }
@@ -550,7 +572,7 @@ fn below_min_self_agreement_admits_verbatim_no_expansion() {
         min_self_agreement: 0.95,
         ..params()
     };
-    let sel = select_patch_views(&patch, &views, &track, None, &p);
+    let sel = select(&patch, &views, &track, None, &p);
 
     // Track admitted verbatim, no candidate added.
     assert_eq!(sel.admitted, vec![0, 1]);
@@ -579,7 +601,7 @@ fn track_view_dropped_by_validity_gate_scores_nan() {
     let patch = plane_patch();
     let track = vec![0u32, 1, 2];
 
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     // All track views are admitted (unconditional), parallel to scores.
     assert_eq!(&sel.admitted[..3], &[0, 1, 2]);
@@ -638,7 +660,7 @@ fn behind_camera_candidate_rejected_by_cheirality() {
     });
 
     let track = vec![0u32, 1];
-    let sel = select_patch_views(&patch, &views, &track, None, &params());
+    let sel = select(&patch, &views, &track, None, &params());
 
     assert!(
         !sel.admitted.contains(&2),
@@ -949,7 +971,7 @@ fn affine_mip_selection_matches_exact_selection() {
     let patch = plane_patch();
     let track = [0u32, 1];
 
-    let fast = select_patch_views(&patch, &views, &track, None, &params());
+    let fast = select(&patch, &views, &track, None, &params());
     assert!(
         fast.admitted.len() > track.len(),
         "the fixture must admit at least one vetted candidate, got {:?}",
@@ -1108,8 +1130,8 @@ fn track_keypoints_at_the_projections_reproduce_the_unanchored_selection() {
         .map(|&i| Some(project_center(&patch, &views[i as usize])))
         .collect();
 
-    let plain = select_patch_views(&patch, &views, &track, None, &params());
-    let anchored = select_patch_views(&patch, &views, &track, Some(&kps), &params());
+    let plain = select(&patch, &views, &track, None, &params());
+    let anchored = select(&patch, &views, &track, Some(&kps), &params());
 
     assert_eq!(anchored.admitted, plain.admitted);
     assert_eq!(anchored.track_view_count, plain.track_view_count);
@@ -1148,9 +1170,9 @@ fn a_track_view_with_a_reprojection_residual_recovers_when_anchored() {
     assert!(residual > 1.0, "test setup: residual {residual} px");
 
     let track = vec![0u32, 1];
-    let plain = select_patch_views(&patch, &views, &track, None, &params());
+    let plain = select(&patch, &views, &track, None, &params());
     let kps = [None, Some(kp1)];
-    let anchored = select_patch_views(&patch, &views, &track, Some(&kps), &params());
+    let anchored = select(&patch, &views, &track, Some(&kps), &params());
 
     assert!(
         anchored.self_agreement > plain.self_agreement + 0.02,
@@ -1220,4 +1242,71 @@ fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
             "sift_files reconstruction has no inline keypoints"
         );
     }
+}
+
+/// The selector's own `Progress`: the two phases are entered, the views are
+/// counted, and a flag already set stops it with `Cancelled` rather than a
+/// short view set. This is the contract the bench's geometry search is
+/// cancellable through, held here at the selector rather than only through
+/// its caller.
+#[test]
+fn the_selector_reports_its_phases_and_cancels_instead_of_returning_a_partial_set() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    use crate::progress::Event;
+
+    let centers = [
+        [0.6, 0.0, 0.0],
+        [-0.6, 0.0, 0.0],
+        [0.0, 0.6, 0.0],
+        [0.0, -0.6, 0.0],
+    ];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, texture, occluder_texture];
+    let scene = Scene::new(&centers, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    let track = vec![0u32, 1];
+
+    let phases = Mutex::new(Vec::new());
+    let counted = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| match event {
+        Event::Enter { phase, .. } => phases.lock().unwrap().push(phase),
+        Event::Count { done, total, .. } => counted.lock().unwrap().push((done, total)),
+        _ => {}
+    };
+    let reported = select_patch_views(
+        &patch,
+        &views,
+        &track,
+        None,
+        &params(),
+        &Progress::to(&sink),
+    )
+    .expect("the reporting run succeeds");
+
+    let phases = phases.into_inner().unwrap();
+    for expected in ["build reference", "score views"] {
+        assert!(
+            phases.contains(&expected),
+            "missing {expected:?}: {phases:?}"
+        );
+    }
+    let counted = counted.into_inner().unwrap();
+    assert_eq!(
+        counted.last(),
+        Some(&(views.len() as u64, Some(views.len() as u64))),
+        "every view should be counted once: {counted:?}"
+    );
+
+    // Reporting changes nothing about what is selected.
+    let plain = select(&patch, &views, &track, None, &params());
+    assert_eq!(reported.admitted, plain.admitted);
+    assert_eq!(reported.track_view_count, plain.track_view_count);
+
+    let cancel = AtomicBool::new(true);
+    let cancelled = Progress::none().cancelled_by(&cancel);
+    select_patch_views(&patch, &views, &track, None, &params(), &cancelled)
+        .expect_err("the set flag stops it before any selection is returned");
+    assert!(cancel.load(Ordering::Relaxed));
 }

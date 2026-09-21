@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FitOptions, Observation, ObservationSeed, Provenance, SearchOptions, StageKind, Thresholds,
-    Verdict,
+    FitOptions, GeometrySearchOptions, Observation, ObservationSeed, Provenance, SearchOptions,
+    Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
@@ -1127,6 +1127,110 @@ impl AppState {
         outcome
     }
 
+    /// Search every camera from one observation's reference appearance and
+    /// the track-stage surfel, on a worker thread.
+    pub(crate) fn start_bench_geometry_search(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_geometry_search(id, label, observation);
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Bench, message.clone());
+        }
+        outcome
+    }
+
+    fn begin_bench_geometry_search(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<(), String> {
+        let job = self.bench_geometry_search_job(id, label, observation)?;
+        self.start_background_task(Operation::BENCH_GEOMETRY_SEARCH, id, job)
+    }
+
+    /// Why geometry search cannot run from this row, or `None` when it can.
+    pub(crate) fn bench_geometry_search_refusal(
+        &self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Option<String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Some(why);
+        }
+        let track = self.bench_track(id, label)?;
+        let Some(row) = track.observations.get(observation) else {
+            return Some(format!("{label} has no observation {observation}."));
+        };
+        let Stage::Track(payload) = &track.stage else {
+            return Some("Geometry search is available only at the track stage.".to_string());
+        };
+        if payload.frame.is_none() {
+            return Some("This track has no surfel yet; fit it first.".to_string());
+        }
+        if row.site().is_none() {
+            return Some(
+                "Nothing says where this observation sits, so it has no reference appearance."
+                    .to_string(),
+            );
+        }
+        None
+    }
+
+    /// The geometry search as a background job, owning the track, poses,
+    /// cameras, and every image source it reads.
+    pub(crate) fn bench_geometry_search_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<Job, String> {
+        if let Some(why) = self.bench_geometry_search_refusal(id, label, observation) {
+            return Err(why);
+        }
+        let (track, sources) = self.bench_geometry_search_inputs(id, label)?;
+        let label = label.to_string();
+        Ok(Box::new(move |progress| {
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
+            let decoded = match sources.decode(progress) {
+                Ok(decoded) => decoded,
+                Err(e) => {
+                    return Finished::Failed(format!(
+                        "Cannot find geometry matches for {label}: {e}"
+                    ))
+                }
+            };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
+            let views = decoded.views();
+            match bench::search_geometry(
+                &track,
+                observation,
+                &views,
+                &GeometrySearchOptions::default(),
+                progress,
+            ) {
+                Err(sfmtool_core::bench::GeometrySearchError::Cancelled) => Finished::Cancelled,
+                Err(e) => {
+                    Finished::Failed(format!("Cannot find geometry matches for {label}: {e}"))
+                }
+                Ok((grown, report)) => Finished::BenchTrack {
+                    version_label: report.to_string(),
+                    text: format!("{label}: {report}"),
+                    label,
+                    track: Box::new(grown),
+                },
+            }
+        }))
+    }
+
     /// The search up to the moment the worker has it.
     fn begin_bench_search(
         &mut self,
@@ -1465,6 +1569,30 @@ impl AppState {
         needed.dedup();
         let sources = self.view_sources_for(id, &needed)?;
         Ok((edited, track, sources))
+    }
+
+    /// The geometry search needs every image, unlike an evaluation whose
+    /// kernels visit only images the track already names.
+    fn bench_geometry_search_inputs(
+        &mut self,
+        id: ReconId,
+        label: &str,
+    ) -> Result<(EditableTrack, crate::state::edits::ViewSources), String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let node = self
+            .node(id)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let track = node
+            .history
+            .current_bench()
+            .track(label)
+            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+        let track = (**track).clone();
+        let needed: Vec<usize> = (0..node.recon().image_count()).collect();
+        let sources = self.view_sources_for(id, &needed)?;
+        Ok((track, sources))
     }
 
     /// Where `track`'s origin point sits in the version at `node`'s cursor, or

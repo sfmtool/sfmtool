@@ -330,6 +330,27 @@ impl TrackEdit {
                     }
                 }
             }
+            if stage == StageKind::Track {
+                let button = egui::Button::new(super::SEARCH_GEOMETRY_LABEL);
+                let clicked = match state.bench_geometry_search_refusal(id, &label, observation) {
+                    None => ui
+                        .add(button)
+                        .on_hover_text(
+                            "Project this track's surfel into the reconstruction's other cameras, \
+                             vet their patches against this observation and the accepted views, \
+                             and add each match as a candidate",
+                        )
+                        .clicked(),
+                    Some(why) => {
+                        ui.add_enabled(false, button).on_disabled_hover_text(why);
+                        false
+                    }
+                };
+                if clicked {
+                    response.search_geometry = Some(observation);
+                    ui.close();
+                }
+            }
         });
 
         if row_response.clicked() {

@@ -23,7 +23,7 @@ track as its bench layer),
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the value
 it shows and every step it calls), [`panel-layout.md`](panel-layout.md) (its tab
 and its home), [`background-tasks.md`](background-tasks.md) (where Evaluate, Fit,
-the stage change, the descriptor search and the index build run),
+the stage change, both searches and the index build run),
 [`sift-index.md`](sift-index.md) (the `.kdf` a search queries, where it lives
 and what makes one stale),
 [`../core/features/kdf-constellation-query.md`](../core/features/kdf-constellation-query.md)
@@ -68,7 +68,8 @@ pub struct TrackEditResponse {
     pub commit: bool,
     pub set_verdict: Option<(usize, Verdict)>,
     pub build_sift_index: bool,          // a row's Build/Rebuild SIFT Index to Search
-    pub search_descriptors: Option<usize>,  // a row's context menu, on that observation
+    pub search_descriptors: Option<usize>,  // Find matches by SIFT query
+    pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
     pub select_image: Option<usize>,
     pub hovered_image: Option<usize>,
     pub has_pointer: bool,
@@ -353,10 +354,10 @@ The verdict control is the one real widget in a row: the row rect is registered
 first and the control after it, so a click that lands on the control cycles the
 verdict and one anywhere else on the row selects the image.
 
-**Right-clicking a row** opens a context menu with one entry, and what that
-entry is depends on the node's SIFT index. With a current one it is *Search for
-matching features*, quoted from one constant as the Image Detail menu's entries
-are. It runs the descriptor search from **that** observation
+**Right-clicking a row** opens a context menu with the searches available at
+the track's stage. The SIFT action is *Find matches by SIFT query*, quoted from
+one constant as the Image Detail menu's entries are. With a current index it
+runs the descriptor search from **that** observation
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Searching the descriptor index") as a background task, pushes one version
 labelled by the report's own sentence and writes one Action Log row of kind
@@ -365,6 +366,24 @@ labelled by the report's own sentence and writes one Action Log row of kind
 toolbar one because what a search searches from is one sighting's patch, not the
 track's. It greys with the sentence saying what is missing, which on this side
 of the question is an image whose `.sift` file cannot be read.
+
+At the **track stage** the menu also carries *Find matches by geometry*. It
+projects the track's surfel into every camera through core's geometry search
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Searching by geometry"). The row is the explicit source appearance; the
+other `in` observations complete the anchored reference basis. The patch-view
+selector applies its existing front-facing, cheirality, coverage,
+self-agreement and relative-ZNCC gates, and each newly admitted image is
+appended as an untouched `candidate` with `sweep` provenance at the surfel's
+projection. Existing rows and verdicts never move. The action is absent, rather
+than greyed, at the cluster stage because a cluster carries no reconstruction
+geometry to project. It neither reads nor builds a SIFT index, so it remains
+available when the SIFT action is represented by its Build/Rebuild remedy.
+
+Both searches run as cancellable background tasks, push one version labelled
+by their distinguishable report sentence, and write one `Bench` Action Log row.
+The geometry search reports `decode images`, `build reference`, `score views`
+and `add candidates`; cancellation installs no candidate prefix.
 
 With no index beside the node, or one that is out of date, the entry is the
 remedy instead: it reads *Build SIFT Index to Search* or *Rebuild SIFT Index to
@@ -434,9 +453,11 @@ table drew is recorded unconditionally, in row order, so the assertions read the
 very table the app draws rather than a second computation of it. Covered: an
 empty bench offering the way in, naming the menu entry that is the other, and
 drawing no rows; the panel drawing no index row of its own; a row's context menu
-carrying the search entry against a current SIFT index and the build entry under
-either of its other two labels otherwise, with the build label asking for the
-build and for no search; a row per observation in
+carrying both exact search labels at the track stage, the SIFT entry against a
+current index and the build entry under either of its other two labels
+otherwise, with the build label asking for the build and for no search; the
+geometry response routing to its own field and the entry being absent at the
+cluster stage; a row per observation in
 index order; a verdict showing under the same observation index, pinned; the
 sliders painting the rows, leaving a pinned verdict where it is, and the
 painting matching what applying the bars then produces; the cells following the
@@ -479,8 +500,8 @@ and the accessibility tree carries no stable node for a pixel inside an image.
   defines; showing the cluster stage's template *and* each member warped onto
   it side by side is proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).
-- **The remaining searches.** *Sweep views* and the two pull-ins are proposed in
-  the same draft, as is the coherence grid under the table.
+- **The remaining searches.** The two pull-ins are proposed in the same draft,
+  as is the coherence grid under the table.
 - **Keeping the index in step with the workspace.** *Build* is asked for; the
   viewer does not watch the `.sift` files and rebuild when they change.
 - **Editing the surfel's frame or normal by hand.** The frame is what the

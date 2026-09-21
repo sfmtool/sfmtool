@@ -3703,6 +3703,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "observation": 0 }),
         ),
         (
+            "search_bench_track_geometry",
+            json!({ "reconstruction_label": "alpha", "observation": 0 }),
+        ),
+        (
             "open_sift_index",
             json!({ "reconstruction_label": "alpha" }),
         ),
@@ -3977,15 +3981,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-three writes, the one that writes a file, and the
+    // Fifteen reads, fifty-four writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 69, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 70, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        53
+        54
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -8952,6 +8956,90 @@ fn a_create_that_opens_the_default_index_still_reports_the_create() {
         .find(|entry| entry.text.starts_with("Opened the SIFT index"))
         .expect("the open wrote a row");
     assert_eq!(opened.actor, crate::action_log::Actor::Viewer);
+}
+
+/// The geometry search over the wire: it needs no SIFT index, reports under an
+/// operation name of its own, pushes one version for its own sentence, and is
+/// refused at the cluster stage in front of the worker rather than from inside
+/// it. That a view clearing the gates arrives as a `sweep` candidate at the
+/// surfel's projection is held by core, over a scene with real texture
+/// (`sfmtool-core/src/bench/tests.rs`); this fixture's cameras admit nothing,
+/// which is what makes it the honest test of the wire rather than of the
+/// kernel.
+#[test]
+fn search_bench_track_geometry_needs_no_index_and_reports_as_itself() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    )["observations"]
+        .as_array()
+        .expect("a list")
+        .len();
+
+    // No index is open on this node, and the search answers all the same --
+    // which is the difference between it and search_bench_track_descriptors.
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["sift_index"]["state"], json!("none"), "{bench}");
+
+    let versions = version_count(&state);
+    let searched = worked(
+        &mut state,
+        &mut viewer,
+        "search_bench_track_geometry",
+        json!({ "reconstruction_label": "run_a", "track": item, "observation": 0 }),
+    );
+    let report = searched["report"].as_str().expect("a report");
+    assert!(
+        report.contains(&format!("Geometry search from observation 0 of {before}")),
+        "the reply carries some other step's sentence: {searched}"
+    );
+    assert_eq!(version_count(&state), versions + 1, "{searched}");
+    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(task["operation"], json!("Geometry search"), "{task}");
+
+    // Nothing this fixture offers clears the gates, and a search that admits
+    // nothing moves no row it did not add.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let observations = track["observations"].as_array().expect("a list");
+    assert_eq!(observations.len(), before, "{track}");
+    for row in observations {
+        assert_eq!(row["provenance"]["kind"], json!("origin"), "{track}");
+    }
+
+    // A cluster carries no geometry to project, and the refusal says so in
+    // front of the worker rather than from inside it.
+    worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "track": item, "stage": "cluster" }),
+    );
+    let command = tools::parse(
+        "search_bench_track_geometry",
+        Some(
+            &json!({ "reconstruction_label": "run_a", "track": item, "observation": 0 })
+                .as_object()
+                .cloned()
+                .expect("an object"),
+        ),
+    )
+    .expect("a valid call");
+    let error = refused(&mut state, &mut viewer, command);
+    assert!(error.to_string().contains("track stage"), "{error}");
 }
 
 /// With no index, `get_bench` says so and still names where a build would put
