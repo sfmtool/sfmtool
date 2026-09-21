@@ -541,11 +541,13 @@ fn unit(direction: Vector3<f64>) -> Option<Vector3<f64>> {
 /// `at` square to `normal`, in front of the eye.
 ///
 /// The one ray-plane meeting the viewport's readings are built out of. Which
-/// plane is the whole of what tells them apart: the frame's own for the three
-/// handles that name a place on it, the one standing off along the normal for
-/// the arrowhead's aim, and the one the arrowhead travels in for its swing.
-/// `None` when the ray runs along the plane or meets it behind the eye, which
-/// is not the place a pointer named.
+/// plane is the whole of what tells them apart: the patch's own for the three
+/// handles that name a place on it, the one square to the normal for the
+/// arrowhead's aim, and the one the arrowhead travels in for its swing. Every
+/// one of them runs through the patch's centre, the aim's `AIM_LEVER` being a
+/// lever the old normal is carried on rather than a distance a plane stands
+/// off at. `None` when the ray runs along the plane or meets it behind the
+/// eye, which is not the place a pointer named.
 fn ray_plane(
     origin: Point3<f64>,
     ray: Vector3<f64>,

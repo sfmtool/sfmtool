@@ -260,9 +260,13 @@ The compass has three layers, all sharing the same rotation and scale:
 
 ### Depth-Aware Transparency
 
-The indicator is rendered *after* the EDL pass and samples the scene's linear
-depth texture to determine whether each fragment is in front of or behind
-scene geometry:
+The indicator is rendered *after* the EDL pass and samples the scene's hardware
+depth buffer to determine whether each fragment is in front of or behind
+scene geometry. It is the hardware buffer and not the linear depth attachment
+because a patch, a frustum and an image quad all write zero to the latter, so
+geometry that meets one of those has to be read against the buffer they do
+write ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) § "Depth against
+the scene"):
 
 | Depth Relationship | Color | Opacity | Description |
 |-------------------|-------|---------|-------------|
