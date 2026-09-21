@@ -188,7 +188,7 @@ fn geometry_search_refuses_the_cluster_stage() {
         &GeometrySearchOptions::default(),
         &Progress::none(),
     )
-    .expect_err("clusters carry no surfel to project");
+    .expect_err("clusters carry no patch to project");
     assert_eq!(
         error,
         GeometrySearchError::WrongStage {

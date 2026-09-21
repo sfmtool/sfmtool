@@ -409,7 +409,7 @@ pub struct GeometrySearchReport {
 pub struct GeometryMatch {
     pub image: u32,
     pub zncc: f64,
-    pub pixel: [f64; 2],                  // the surfel centre's projection
+    pub pixel: [f64; 2],                  // the patch centre's projection
     pub found: Found,
 }
 
@@ -1351,7 +1351,7 @@ the query's own params so an image the search would discard is never fitted.
 ### Searching by geometry
 
 `search_geometry` is the track-stage counterpart to `search_descriptors`: it
-asks which other cameras see the surfel the track already carries, using the
+asks which other cameras see the patch the track already carries, using the
 same patch-view selection that `sfm embed-patches` runs per point. It projects
 the finite patch or direction patch (`w = 0`) into every supplied camera,
 requires the existing front-facing, cheirality and image-support gates, and
@@ -1365,12 +1365,12 @@ in the reference basis even when its verdict is `candidate` or `out`; the
 track's other `in` observations follow in observation order. Duplicate images
 are removed first-seen, so the selected row wins. Each basis render is anchored
 at that observation's own `site()`, while a candidate has no sighting yet and is
-scored at the surfel's projection. This is patch-view selection's anchored
+scored at the patch's projection. This is patch-view selection's anchored
 reference mode: the row gesture chooses real source appearance without giving
 up the robust consensus of the observations already accepted.
 
 **An admitted image arrives as a seed and no decision.** Its pixel is the
-surfel centre's projection. Its shape is the projected `u`/`v` half-frame,
+patch centre's projection. Its shape is the projected `u`/`v` half-frame,
 converted from the negative-determinant patch-frame convention into the
 positive-determinant cluster/SIFT convention and divided by the cluster radius,
 exactly as a track-to-cluster stage change seeds an observation. The row is a
@@ -1380,7 +1380,7 @@ left byte-for-byte alone, including an `out` verdict or a pin; the source image
 and all other reference images are excluded by the selector itself. Repeating
 the same search is therefore idempotent.
 
-The operation accepts finite and infinity surfels because patch-view selection
+The operation accepts finite and infinity patches because patch-view selection
 already renders and projects both homogeneous forms. It refuses a cluster-stage
 track, a track with no frame, a source observation with no site, or a reference
 image beyond the supplied view table rather than inferring geometry the track
@@ -2090,7 +2090,7 @@ converted to `embedded_patches`.
 
 The geometry search is covered in
 [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) over the
-textured-plane scene: a matching third view lands at the exact surfel
+textured-plane scene: a matching third view lands at the exact patch
 projection with positive-chirality seed geometry; existing observations are
 unchanged; repeating the search leaves an `out`, pinned candidate untouched;
 an explicitly selected `out` row remains part of the reference basis; the

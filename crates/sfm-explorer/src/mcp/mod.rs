@@ -438,7 +438,7 @@ pub(crate) enum Command {
         /// query's own bar.
         min_inliers: Option<usize>,
     },
-    /// Project the track's surfel into every camera of the node and add each
+    /// Project the track's patch into every camera of the node and add each
     /// photometrically admitted photograph as a candidate, on a worker.
     SearchBenchTrackGeometry {
         reconstruction_label: String,

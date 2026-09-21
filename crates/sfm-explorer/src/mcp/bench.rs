@@ -803,7 +803,7 @@ pub(super) fn search_bench_track_descriptors(
 }
 
 /// `search_bench_track_geometry`: the photographs whose own view of the
-/// track's surfel matches it, each added as a candidate, on a worker thread.
+/// track's patch matches it, each added as a candidate, on a worker thread.
 pub(super) fn search_bench_track_geometry(
     state: &mut AppState,
     label: &str,

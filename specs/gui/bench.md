@@ -415,7 +415,7 @@ the decode. The geometry search reads photographs and cancels the same way, but
 its refusals are the panel's and the wire's
 ([`track-edit.md`](track-edit.md) § "Right-clicking a row"), not a published
 core precondition, because what it needs of a track -- the track stage, a
-fitted surfel, and a sighting to search from -- the viewer already holds.
+fitted patch, and a sighting to search from -- the viewer already holds.
 
 **What the track alone decides is decided before the task starts.** Core
 publishes the half of each step's own validation that reads no photograph --

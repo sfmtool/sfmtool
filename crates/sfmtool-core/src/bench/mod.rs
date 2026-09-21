@@ -21,7 +21,7 @@
 //! observation and adds each as a candidate.
 //!
 //! [`search_geometry`] asks the same question of the reconstruction instead:
-//! it projects a track-stage surfel into every supplied view and adds each
+//! it projects a track-stage patch into every supplied view and adds each
 //! photometrically admitted photograph as a candidate. It reads photographs,
 //! but it is not one of the three below: it publishes no separate precondition
 //! half, because everything it needs of a track it checks as it starts.

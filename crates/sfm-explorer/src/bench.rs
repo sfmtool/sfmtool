@@ -1142,7 +1142,7 @@ impl AppState {
     }
 
     /// Search every camera from one observation's reference appearance and
-    /// the track-stage surfel, on a worker thread.
+    /// the track-stage patch, on a worker thread.
     pub(crate) fn start_bench_geometry_search(
         &mut self,
         id: ReconId,
@@ -1183,8 +1183,8 @@ impl AppState {
         let Stage::Track(payload) = &track.stage else {
             return Some("Geometry search is available only at the track stage.".to_string());
         };
-        if payload.frame.is_none() {
-            return Some("This track has no surfel yet; fit it first.".to_string());
+        if payload.placement.is_none() {
+            return Some("This track has no patch yet; fit it first.".to_string());
         }
         if row.site().is_none() {
             return Some(

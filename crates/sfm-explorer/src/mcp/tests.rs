@@ -9138,7 +9138,7 @@ fn a_create_that_opens_the_default_index_still_reports_the_create() {
 /// operation name of its own, pushes one version for its own sentence, and is
 /// refused at the cluster stage in front of the worker rather than from inside
 /// it. That a view clearing the gates arrives as a `sweep` candidate at the
-/// surfel's projection is held by core, over a scene with real texture
+/// patch's projection is held by core, over a scene with real texture
 /// (`sfmtool-core/src/bench/tests.rs`); this fixture's cameras admit nothing,
 /// which is what makes it the honest test of the wire rather than of the
 /// kernel.

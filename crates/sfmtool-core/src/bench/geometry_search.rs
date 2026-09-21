@@ -4,7 +4,7 @@
 //! Geometry-guided candidate search for a track-stage bench item.
 //!
 //! This is the single-point form of the view expansion used by
-//! `sfm embed-patches`: project the track's surfel into every camera that can
+//! `sfm embed-patches`: project the track's patch into every camera that can
 //! see it, vet each projected appearance against a reference fused from the
 //! selected observation and the track's accepted observations, and append the
 //! admitted new images as candidates. Existing observations are reports, never
@@ -46,7 +46,7 @@ pub enum GeometrySearchError {
         /// The stage the track is in.
         is: StageKind,
     },
-    /// The track stage carries no surfel to project.
+    /// The track stage carries no patch to project.
     NoFrame,
     /// The searched observation has no pixel at which to anchor its reference
     /// appearance.
@@ -80,7 +80,7 @@ impl std::fmt::Display for GeometrySearchError {
                 f,
                 "geometry search needs the track stage, and this track is a {is}"
             ),
-            Self::NoFrame => write!(f, "this track has no surfel yet; fit it first"),
+            Self::NoFrame => write!(f, "this track has no patch yet; fit it first"),
             Self::NoPlace { observation } => write!(
                 f,
                 "nothing says where observation {observation} sits in its photograph, so there is no reference appearance"
@@ -109,7 +109,7 @@ pub struct GeometryMatch {
     pub image: u32,
     /// Windowed ZNCC to the reference appearance.
     pub zncc: f64,
-    /// Where the surfel's centre projects in the image.
+    /// Where the patch's centre projects in the image.
     pub pixel: [f64; 2],
     /// What the search did about it.
     pub found: Found,
@@ -174,7 +174,7 @@ impl std::fmt::Display for GeometrySearchReport {
     }
 }
 
-/// Project a track-stage surfel through all supplied views and append admitted
+/// Project a track-stage patch through all supplied views and append admitted
 /// images as candidate observations.
 ///
 /// `observation` chooses the source appearance: its image is first in the
@@ -185,10 +185,10 @@ impl std::fmt::Display for GeometrySearchReport {
 /// patch-view selection. Duplicate basis images are removed first-seen, so the
 /// selected observation wins.
 ///
-/// Finite surfels and direction surfels (`w == 0`) use
+/// Finite patches and direction patches (`w == 0`) use
 /// [`select_patch_views`]'s existing projection, front-facing,
 /// cheirality, support, self-agreement and relative-ZNCC gates. Every admitted
-/// view not already named by the track is appended at the surfel centre's
+/// view not already named by the track is appended at the patch centre's
 /// projection with the projected patch frame converted to the cluster seed
 /// convention. Existing observations, verdicts and measurements are never
 /// moved or overwritten.
@@ -218,7 +218,10 @@ pub fn search_geometry(
             })
         }
     };
-    let frame = payload.frame.as_ref().ok_or(GeometrySearchError::NoFrame)?;
+    let patch = payload
+        .placement
+        .as_ref()
+        .ok_or(GeometrySearchError::NoFrame)?;
     selected
         .site()
         .ok_or(GeometrySearchError::NoPlace { observation })?;
@@ -260,7 +263,7 @@ pub fn search_geometry(
         ..options.selection.clone()
     };
     let selection = select_patch_views(
-        frame,
+        patch,
         views,
         &reference_views,
         Some(&reference_pixels),
@@ -283,7 +286,7 @@ pub fn search_geometry(
             .enumerate()
         {
             candidate_progress.check_cancel()?;
-            let Some((pixel, patch_shape)) = projected_patch_frame(frame, &views[image as usize])
+            let Some((pixel, patch_shape)) = projected_patch_frame(patch, &views[image as usize])
             else {
                 continue;
             };

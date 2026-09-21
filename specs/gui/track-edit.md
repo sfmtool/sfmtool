@@ -368,13 +368,13 @@ track's. It greys with the sentence saying what is missing, which on this side
 of the question is an image whose `.sift` file cannot be read.
 
 At the **track stage** the menu also carries *Find matches by geometry*. It
-projects the track's surfel into every camera through core's geometry search
+projects the track's patch into every camera through core's geometry search
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Searching by geometry"). The row is the explicit source appearance; the
 other `in` observations complete the anchored reference basis. The patch-view
 selector applies its existing front-facing, cheirality, coverage,
 self-agreement and relative-ZNCC gates, and each newly admitted image is
-appended as an untouched `candidate` with `sweep` provenance at the surfel's
+appended as an untouched `candidate` with `sweep` provenance at the patch's
 projection. Existing rows and verdicts never move. The action is absent, rather
 than greyed, at the cluster stage because a cluster carries no reconstruction
 geometry to project. It neither reads nor builds a SIFT index, so it remains

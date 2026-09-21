@@ -1653,18 +1653,18 @@ fn build_catalog() -> Vec<ToolSpec> {
             description: "Ask the reconstruction's GEOMETRY which other photographs see the \
                           patch of a bench track, and add each as a candidate. This is the \
                           per-point form of the view expansion sfm embed-patches runs: the \
-                          track's surfel is projected into every camera of the node, the ones \
+                          track's patch is projected into every camera of the node, the ones \
                           it does not face or that hold it behind them are dropped, and each \
                           survivor's rendered patch is scored against a reference fused from \
                           the named observation and the track's in observations. A view is \
                           admitted when that score clears the track's own min_relative_zncc \
                           bar, so apply_bench_track_thresholds moves what the next search \
-                          admits. A candidate arrives at the surfel's own projection, with the \
+                          admits. A candidate arrives at the patch's own projection, with the \
                           projected patch shape and sweep provenance, carrying no verdict and \
                           no measurement — evaluate_bench_track is what then scores it. An \
                           image the track already has an observation in is left alone whatever \
                           its verdict, so repeating the search changes nothing. Needs the TRACK \
-                          stage and a fitted surfel; a cluster-stage track has no geometry to \
+                          stage and a fitted patch; a cluster-stage track has no geometry to \
                           project and is refused. It reads no SIFT index, unlike \
                           search_bench_track_descriptors. Runs on a worker thread and answers \
                           as evaluate_bench_track does.",

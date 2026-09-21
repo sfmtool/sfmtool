@@ -336,7 +336,7 @@ impl TrackEdit {
                     None => ui
                         .add(button)
                         .on_hover_text(
-                            "Project this track's surfel into the reconstruction's other cameras, \
+                            "Project this track's patch into the reconstruction's other cameras, \
                              vet their patches against this observation and the accepted views, \
                              and add each match as a candidate",
                         )
