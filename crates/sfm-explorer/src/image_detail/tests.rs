@@ -1801,10 +1801,31 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     // And the `+v` edge, which runs horizontally.
     let dragged = bench_drag(node, 0, &track, centre, along, along, false);
     assert_eq!(dragged.cursor, egui::CursorIcon::ResizeVertical);
-    // A corner turns, and egui has no cursor for that.
-    let corner = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
-    let dragged = bench_drag(node, 0, &track, centre, corner, corner, false);
-    assert_eq!(dragged.cursor, egui::CursorIcon::Alias);
+    // A corner spins the patch, so it takes the resize cursor along the arc it
+    // travels. On an all but axis-aligned outline its radius from the centre
+    // runs diagonally, and the tangent is the other diagonal: a corner down
+    // and to the right of the centre (the raster's `y` runs downward) travels
+    // north-east to south-west, and one up and to the right travels
+    // north-west to south-east. The outline is not square on screen, so the
+    // radius is not at 45 degrees; what matters is that it sits well inside
+    // the sector a diagonal cursor answers for, a slope between `tan 22.5°`
+    // and `tan 67.5°`.
+    for (s, t) in [(1.0, 1.0), (1.0, -1.0)] {
+        let corner = patch_pixel(&frame, &camera, &pose, s, t);
+        let radius = [corner[0] - centre[0], corner[1] - centre[1]];
+        let slope = (radius[1] / radius[0]).abs();
+        assert!(
+            (0.5..2.0).contains(&slope),
+            "the corner's radius is meant to run clearly diagonally: {radius:?}",
+        );
+        let tangent = if radius[0] * radius[1] > 0.0 {
+            egui::CursorIcon::ResizeNeSw
+        } else {
+            egui::CursorIcon::ResizeNwSe
+        };
+        let dragged = bench_drag(node, 0, &track, centre, corner, corner, false);
+        assert_eq!(dragged.cursor, tangent, "corner ({s}, {t})");
+    }
     // The sighting's own dot moves it.
     let dragged = bench_drag(node, 0, &track, centre, centre, centre, false);
     assert_eq!(dragged.cursor, egui::CursorIcon::Move);

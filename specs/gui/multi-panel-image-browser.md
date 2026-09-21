@@ -514,8 +514,10 @@ picture of the patch to keep in step with the first.
 - **A corner turns it.** Dragging a corner rotates the patch in its own plane --
   about the patch's outward normal at the track stage, about the sighting at
   the cluster stage -- keeping its place and its size. egui has no cursor for a
-  turn, so a corner takes `Alias` and a small arc is drawn beside the hovered
-  corner to say what it does.
+  rotation, so a corner takes the resize cursor lying along the way it travels:
+  the tangent of the circle it spins on, the perpendicular of its radius from
+  the sighting it spins about. Running the pointer along an edge and onto a
+  corner therefore turns the cursor from across the edge to along the arc.
 
 **The pointer is read against the patch, not against the screen.** A pixel is a
 ray, the ray meets the patch's own plane, and what the pointer named is the

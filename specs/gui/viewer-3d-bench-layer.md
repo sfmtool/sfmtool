@@ -266,9 +266,9 @@ free in two directions at once, and for a swing the corner's own reading, the
 resize cursor along the arc the head travels. Windows draws `AllScroll` and
 `Move` with the same glyph, both landing on `IDC_SIZEALL`, which is expected
 rather than a mistake; the distinction is for the code's own clarity and for the
-platforms that render the two apart. The small arc glyph Image Detail draws
-beside a hovered corner has no counterpart here, every mark of this figure being
-scene geometry drawn by the pass, where a hint that follows the pointer is not.
+platforms that render the two apart. Image Detail's outline reads its edges and
+corners the same way, so a corner under the pointer asks for the same cursor in
+either panel.
 
 **The pointer is a ray of the viewport's camera**, where in Image Detail it is a
 ray of a reconstruction camera. Everything else about reading it is the same

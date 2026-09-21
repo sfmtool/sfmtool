@@ -831,10 +831,10 @@ which drives real frames: a press on an edge followed by two panel pixels of
 motion -- under egui's own drag threshold -- and then thirty resizes the patch
 and **pans nothing**, which is what says the press and not the drag decides the
 handle, while the same motion from a press on empty photograph pans as it always
-did; hovering an edge asks for the resize cursor its
-orientation on screen names, a corner for `Alias` and a dot for `Move`; a drag
-of the dot publishes a move that `AppState` turns into exactly one version whose
-label names it; a drag of an edge resizes so that the outline's dragged edge
+did; hovering an edge asks for the resize cursor its orientation on screen
+names, a corner for the resize cursor along the arc it spins on, and a dot for
+`Move`; a drag of the dot publishes a move that `AppState` turns into exactly
+one version whose label names it; a drag of an edge resizes so that the outline's dragged edge
 reprojects under the release point while the far edge holds; a drag of a corner
 onto its neighbour is a quarter turn and one version; Escape leaves no edit
 behind; and a drag that ends where it started pushes no version. The panel is

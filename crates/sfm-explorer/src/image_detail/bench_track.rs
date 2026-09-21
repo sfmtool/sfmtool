@@ -72,9 +72,6 @@ const HANDLE_HIT_RADIUS: f32 = 9.0;
 /// distance.
 const EDGE_HIT_WIDTH: f32 = 8.0;
 
-/// Radius of the arc glyph drawn beside a hovered corner, in panel px.
-const TURN_GLYPH_RADIUS: f32 = 9.0;
-
 /// Samples per edge of the projected patch boundary, before the size of the
 /// projection is known.
 const BASE_SAMPLES: usize = 8;
@@ -483,12 +480,31 @@ impl Layer {
     ///
     /// An edge that looks horizontal is one you move up and down, so it takes
     /// the vertical resize cursor, and an oblique edge takes the diagonal whose
-    /// slope it has. A corner turns, and egui has no cursor for that, so it
-    /// takes [`CursorIcon::Alias`] and the arc glyph says the rest.
+    /// slope it has.
+    ///
+    /// A corner spins the patch, and egui's cursors are the CSS set, which has
+    /// never had one for a rotation. So a corner takes the resize cursor lying
+    /// along the way it **travels**: the tangent of the circle it spins on,
+    /// which is the perpendicular of its radius from the pivot. Because
+    /// [`resize_cursor`] answers with the perpendicular of whatever it is
+    /// handed, the radius is what it gets. Running the pointer along an edge
+    /// and onto the corner then turns the cursor from across the edge to along
+    /// the arc, and that turn is exactly the difference between the two
+    /// gestures.
     fn cursor(&self, handle: Handle) -> CursorIcon {
         match handle {
             Handle::Keypoint { .. } => CursorIcon::Move,
-            Handle::Corner { .. } => CursorIcon::Alias,
+            Handle::Corner {
+                observation,
+                corner,
+            } => self
+                .outlines
+                .iter()
+                .find(|outline| outline.observation == observation)
+                .and_then(|outline| outline.corner(corner))
+                .zip(self.pivot(observation))
+                .map(|(corner, pivot)| resize_cursor(corner - pivot))
+                .unwrap_or(CursorIcon::Move),
             Handle::Edge { observation, edge } => self
                 .outlines
                 .iter()
@@ -503,8 +519,23 @@ impl Layer {
         }
     }
 
+    /// Where the outline drawn at `observation` spins about, on screen.
+    ///
+    /// The sighting's own mark, because both stages spin about it: the track
+    /// stage turns the frame re-anchored on that sighting, whose centre lands
+    /// on it, and the cluster stage turns the shape about the sighting's
+    /// position. A sighting with no place to draw leaves the frame
+    /// un-anchored, and then the pivot is the patch's own projection.
+    fn pivot(&self, observation: usize) -> Option<Pos2> {
+        self.sightings
+            .iter()
+            .find(|sighting| sighting.observation == observation)
+            .map(|sighting| sighting.at)
+            .or(self.center)
+    }
+
     /// Paint the layer.
-    fn paint(&self, painter: &egui::Painter, hovered: Option<Handle>) {
+    fn paint(&self, painter: &egui::Painter) {
         for (seed, color) in &self.seeds {
             let mut closed = seed.clone();
             if let Some(first) = seed.first() {
@@ -544,32 +575,6 @@ impl Layer {
             if let Some(center) = self.center {
                 painter.line_segment([sighting.at, center], Stroke::new(1.5, color));
                 painter.circle_stroke(center, KEYPOINT_RADIUS * 0.75, Stroke::new(1.5, color));
-            }
-        }
-        // The one mark that is about the pointer rather than about the track:
-        // a corner says nothing about turning by looking like a corner, so
-        // while one is under the pointer it wears an arc.
-        if let Some(Handle::Corner {
-            observation,
-            corner,
-        }) = hovered
-        {
-            if let Some(outline) = self
-                .outlines
-                .iter()
-                .find(|outline| outline.observation == observation)
-            {
-                if let Some(at) = outline.corner(corner) {
-                    let away = outline
-                        .bounds()
-                        .map(|bounds| (at - bounds.center()).normalized())
-                        .unwrap_or(Vec2::new(1.0, 0.0));
-                    draw_turn_glyph(
-                        painter,
-                        at + away * TURN_GLYPH_RADIUS,
-                        verdict_color(outline.verdict),
-                    );
-                }
             }
         }
     }
@@ -701,7 +706,7 @@ pub(super) fn draw(
     let Some(layer) = Layer::build(image_table, img_idx, shown, image_rect, effective_scale) else {
         return;
     };
-    layer.paint(painter, hovered);
+    layer.paint(painter);
     if let Some(handle) = hovered {
         ui.ctx().set_cursor_icon(match drag {
             Some(drag) if !drag.cancelled => match drag.handle {
@@ -799,30 +804,4 @@ fn distance_to_polyline(points: &[Pos2], pos: Pos2) -> Option<f32> {
         .fold(None, |best: Option<f32>, d| {
             Some(best.map_or(d, |best| best.min(d)))
         })
-}
-
-/// A small arc with an arrowhead, drawn beside a hovered corner to say that
-/// dragging it turns the patch.
-fn draw_turn_glyph(painter: &egui::Painter, at: Pos2, color: Color32) {
-    const FROM: f32 = -0.6 * std::f32::consts::PI;
-    const TO: f32 = 0.85 * std::f32::consts::PI;
-    const STEPS: usize = 12;
-    let point = |angle: f32| {
-        Pos2::new(
-            at.x + TURN_GLYPH_RADIUS * 0.62 * angle.cos(),
-            at.y + TURN_GLYPH_RADIUS * 0.62 * angle.sin(),
-        )
-    };
-    let arc: Vec<Pos2> = (0..=STEPS)
-        .map(|i| point(FROM + (TO - FROM) * i as f32 / STEPS as f32))
-        .collect();
-    let stroke = Stroke::new(1.5, color);
-    painter.add(Shape::line(arc, stroke));
-    // The head, two short strokes off the arc's end along its tangent.
-    let tip = point(TO);
-    let tangent = Vec2::new(-TO.sin(), TO.cos());
-    let outward = (tip - at).normalized();
-    let head = TURN_GLYPH_RADIUS * 0.34;
-    painter.line_segment([tip, tip - tangent * head + outward * head * 0.6], stroke);
-    painter.line_segment([tip, tip - tangent * head - outward * head * 0.6], stroke);
 }
