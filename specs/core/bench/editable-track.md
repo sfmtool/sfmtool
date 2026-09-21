@@ -1036,7 +1036,9 @@ what the first wrote.
 Eight steps put a person's own hand on the track's geometry, and they are the
 steps behind the bench handles of both panels
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
-§ "The bench layer") and the wire's eight patch tools.
+§ "The bench layer";
+[`../../gui/viewer-3d-bench-layer.md`](../../gui/viewer-3d-bench-layer.md))
+and the wire's eight patch tools.
 
 **Four verbs, no two of them synonyms.** `translate` moves the centre, `resize`
 changes the half-length, `spin` turns the square about its normal and `tilt`

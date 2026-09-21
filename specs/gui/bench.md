@@ -869,12 +869,15 @@ still read.
 - **The remaining searches that propose observations.** The view
   sweep and the pull-in are proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).
-- **Drawing the bench in the 3D viewer and the Image Browser.** The preview
-  buffer and the thumbnail borders are proposed in the same draft. The Image
-  Detail panel does draw the active track, as its bench layer, and its marks are
-  the handles that place a sighting and size and turn the patch
+- **Drawing the bench in the Image Browser.** The thumbnail borders that would
+  mark the active track's `in` observations are proposed in the same draft. Both
+  of the panels that do draw the active track draw it as handles: the Image
+  Detail panel's bench layer marks it in each photograph that observes it, where
+  a mark places a sighting and sizes and turns the patch
   ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
-  layer").
+  layer"), and the 3D viewer draws the patch where it stands in the world, with
+  two further handles that move it along its normal and turn that normal
+  ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
   proposed in the same draft. The twenty-eight tools for the steps that exist

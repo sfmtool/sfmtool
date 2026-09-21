@@ -673,12 +673,15 @@ out from the rest:
   track cycles its verdict; clicking one of another track makes that track
   active. The layer draws under the panel's one hover tooltip, appending the
   observation's numbers and its item.
-- **The 3D Viewer** draws each track-stage track as one ghost point with its
-  frame quad and rays to its `in` observations' cameras, through a small preview
-  buffer of its own rather than the overlay's additions: the additions are
-  document state and the bench is not. A cluster-stage track draws nothing,
-  because there is nothing in 3D to draw. Clicking a ghost point makes its
-  track active.
+- **The 3D Viewer** is **built**, as the active track alone drawn where it
+  stands rather than every track as a ghost point through a preview buffer of
+  its own, and so without the click on a ghost point that would make its track
+  active. Filed as
+  [`../gui/viewer-3d-bench-layer.md`](../gui/viewer-3d-bench-layer.md): the
+  patch's square as depth-aware scene geometry, its normal with an arrowhead,
+  and one mark per observation, every one of them a handle and two of them
+  saying what no photograph can. A cluster-stage track draws nothing, because
+  there is nothing in 3D to draw.
 - **The Image Browser** borders the active track's `in` observations' thumbnails in
   the bench colour, beside the orange the selected point's track gets.
 - **The Point Track Detail panel** is unchanged in what it shows. Its one line
