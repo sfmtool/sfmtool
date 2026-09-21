@@ -498,18 +498,89 @@ Each is one PR, and each leaves the viewer whole.
    off by that lever would sit behind the camera; a swing leaves the normal
    square to its axis and the axis in the frame's plane; the gesture is chosen
    at the press and does not change while the button is down.
-5. **The names.** The steps and the wire tools are named for the shape of the
-   arithmetic rather than for what a person does with them, and they collide:
-   `translate_frame`, `translate_frame_to`, `offset_frame` and
-   `resize_from_edge_to` all move a centre, and `move_bench_track`,
-   `move_bench_track_observation` and `offset_bench_track` all read as the same
-   verb. One pass settles a vocabulary and renames the core steps, their reports,
-   the `PatchEdit` variants and the wire tools to it, rewriting the standing
-   specs in the same change. No behaviour moves, so the tests are the ones
-   already written, renamed with what they call. The old wire names are not kept
-   as aliases: an agent binds its tools when a session starts, so there is one
-   generation of callers to move, and a shim would make the ambiguous name
-   permanent.
+5. **The names.** One thing carries four of them -- `*_frame` in the core
+   steps, `PatchEdit` and `edit_bench_patch` in the viewer and the wire, "the
+   surfel" in the prose, and "patch frame" in one doc comment -- while
+   `translate_frame`, `translate_frame_to` and `offset_frame` all move a centre
+   and `move_bench_track`, `move_bench_track_observation` and
+   `offset_bench_track` all read as the same verb. One pass settles a
+   vocabulary and renames the core steps, their reports, the `PatchEdit`
+   variants and the wire tools to it, rewriting the standing specs in the same
+   change. The old wire names are not kept as aliases: an agent binds its tools
+   when a session starts, so there is one generation of callers to move, and a
+   shim would make the ambiguous name permanent.
+
+   **The noun is `patch`**, in the sense the PatchMatch family uses it: an
+   oriented square standing in the world, carrying the content the photographs
+   see there. That word already holds the geometry, so `frame` is not a third
+   noun the gestures need and leaves them entirely, staying only where the
+   geometry alone is meant -- the `OrientedPatch` type, and the payload's own
+   field, which becomes `placement`. `surfel` leaves the prose for `patch`, so
+   the code and the specs say one word.
+
+   **Each word is said once along the path**, the enclosing namespace carrying
+   what it already states. A core step sits in `sfmtool_core::bench` and takes
+   an `&EditableTrack`, so it is `tilt_patch`; a viewer edit sits in
+   `PatchEdit`, so it is `PatchEdit::Tilt`; only the wire, whose namespace is
+   flat, spells all three, as `tilt_bench_patch`. Nothing is called
+   `bench_track_frame`.
+
+   **A wire tool is named for the part it acts on**, which is what the old
+   names got wrong -- `move_bench_track_observation` moves an observation, not
+   a track. So `translate|resize|spin|tilt_bench_patch` act on the patch,
+   `sight|shape_bench_observation` on one sighting, `spin|resize_bench_shape`
+   on a cluster sighting's parallelogram, `commit|split|fit_bench_track` on the
+   track, and `duplicate_bench_item` on either kind.
+
+   **Four verbs, no two of them synonyms.** `translate` moves the centre,
+   `resize` changes the half-length, `spin` turns the square about its normal
+   and `tilt` turns the normal itself. `translate` and `offset` were synonyms
+   naming perpendicular motions, and `rotate` was the generic word for turning
+   standing beside a specific one; neither pair can be told apart by a reader
+   who does not already know the answer.
+
+   **`translate_patch` is one step**, taking `by` on the patch's own
+   orthonormal axes, `[u, v, n]`, in world units. `translate_frame_to` and
+   `offset_frame` are the same five lines with a different displacement -- one
+   takes the tangential part of a vector and the other the normal part, and
+   everything after is identical down to the no-effect bar -- so they become
+   one, and the silent truncation in `in_plane_offset` goes with them. A mixed
+   `by` is allowed rather than refused: `carry_keypoints` already takes an
+   arbitrary vector, so the general translation costs no code, where refusing
+   it would cost a variant, a guard and a test. The world units are the unit
+   every other length in the bench API is already in, and they leave the wire's
+   numbers meaning what they meant, so a ported call needs only its name
+   changed. `translate_patch_to_pixel` stays the adapter it already is, naming
+   the destination as a pixel of one photograph and clamping it into that
+   photograph; the on-plane guard `translate_frame_to` did for the 3D dot drag
+   moves to the dot handle, which sets `n` to zero outright, the constraint
+   being the handle's rather than the step's.
+
+   **`resize_patch` is one step** too, taking `moved_edge: Option<Edge>`:
+   `None` moves both edges about a held centre, `Some(e)` moves that edge with
+   the far one held. The parameter is the discriminator for what becomes of the
+   sightings rather than a convenience. `resize_patch_to_pixel` is its adapter,
+   and is the one that spans both stages, a pixel being meaningful at either
+   where a world half-length is not.
+
+   **`spin` and `tilt` do not unify**, though in axis-angle form they look like
+   one rotation about two axes. They do opposite things to the sightings, and
+   their natural parameters differ: a tilt names a target normal and takes the
+   least rotation onto it, a spin names an angle.
+
+   **A sighting follows the centre, and is rebuilt only when the plane turns
+   under it.** The track's position *is* the patch's centre, so every sighting
+   of that point is carried by the centre's own displacement and keeps its
+   in-plane offset `(a_i, b_i)`: that is a translation, and it is equally a
+   resize from an edge, which moves the centre because it holds the far one. A
+   spin and a resize about the centre move no point at all and so touch no
+   sighting -- a spin leaves every keypoint where it is and lets `(a_i, b_i)`
+   turn under it, which is what re-aligning the sampling square over a surface
+   that did not move means. A tilt moves no point either, but takes the plane
+   out from under them, so there is nothing to carry and the offsets are what
+   is kept, each point rebuilt as `c + a_i u' + b_i v'`. Saying this once is
+   most of why `spin` and `tilt` stay two steps: one rotation would have to
+   choose a single rule and would be wrong for the other axis.
 
 On step 4 landing this draft is converted: the panel half into
 `../gui/viewer-3d-bench-layer.md` or a section of the 3D viewer's spec, the four
