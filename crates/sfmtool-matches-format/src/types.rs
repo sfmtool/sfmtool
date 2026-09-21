@@ -56,24 +56,13 @@ impl From<ArchiveIoError> for MatchesError {
 }
 
 /// Workspace contents configuration (mirrors `.sfm-workspace.json`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceContents {
-    pub feature_tool: String,
-    pub feature_type: String,
-    pub feature_options: serde_json::Value,
-    pub feature_prefix_dir: String,
-}
+pub use sfmtool_archive_io::WorkspaceContents;
 
 /// Workspace metadata embedded in the `.matches` top-level metadata.
 ///
 /// Same structure as in `.sfmr` files — identifies the workspace and
 /// feature extraction configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMetadata {
-    pub absolute_path: String,
-    pub relative_path: String,
-    pub contents: WorkspaceContents,
-}
+pub use sfmtool_archive_io::WorkspaceMetadata;
 
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.

@@ -943,6 +943,10 @@ workspace that has a crate for exactly this**
 
 **`WorkspaceContents` and `WorkspaceMetadata` are declared byte-identically in two
 format crates, and both docs say so**
+> _Status (2026-09-20): Done — moved the canonical structs to
+> `sfmtool-archive-io` and re-exported them from both format crates, preserving
+> their existing public names and serialized representation._
+
 - Location: `crates/matches-format/src/types.rs:58–79` and
   `crates/sfmr-format/src/types.rs:109–125`
 - Problem: Both crates declare `pub struct WorkspaceContents { feature_tool,

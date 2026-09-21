@@ -13,6 +13,46 @@ use super::*;
 
 const LEVEL: i32 = 3;
 
+#[test]
+fn workspace_metadata_preserves_its_json_shape() {
+    let workspace = WorkspaceMetadata {
+        absolute_path: "/projects/example".to_string(),
+        relative_path: "../example".to_string(),
+        contents: WorkspaceContents {
+            feature_tool: "colmap".to_string(),
+            feature_type: "sift".to_string(),
+            feature_options: serde_json::json!({"max_num_features": 8192}),
+            feature_prefix_dir: "features/sift-colmap".to_string(),
+        },
+    };
+
+    let json = serde_json::to_string(&workspace).unwrap();
+    assert_eq!(
+        json,
+        r#"{"absolute_path":"/projects/example","relative_path":"../example","contents":{"feature_tool":"colmap","feature_type":"sift","feature_options":{"max_num_features":8192},"feature_prefix_dir":"features/sift-colmap"}}"#
+    );
+
+    let decoded: WorkspaceMetadata = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.absolute_path, workspace.absolute_path);
+    assert_eq!(decoded.relative_path, workspace.relative_path);
+    assert_eq!(
+        decoded.contents.feature_tool,
+        workspace.contents.feature_tool
+    );
+    assert_eq!(
+        decoded.contents.feature_type,
+        workspace.contents.feature_type
+    );
+    assert_eq!(
+        decoded.contents.feature_options,
+        workspace.contents.feature_options
+    );
+    assert_eq!(
+        decoded.contents.feature_prefix_dir,
+        workspace.contents.feature_prefix_dir
+    );
+}
+
 /// Build an in-memory archive with `f`, then hand back a reader over it.
 fn round_trip(
     f: impl FnOnce(&mut ZipWriter<Cursor<Vec<u8>>>) -> Result<(), ArchiveIoError>,

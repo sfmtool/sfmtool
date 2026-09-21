@@ -107,21 +107,10 @@ impl SfmrCamera {
 }
 
 /// Workspace contents configuration (mirrors `.sfm-workspace.json`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceContents {
-    pub feature_tool: String,
-    pub feature_type: String,
-    pub feature_options: serde_json::Value,
-    pub feature_prefix_dir: String,
-}
+pub use sfmtool_archive_io::WorkspaceContents;
 
 /// Workspace metadata embedded in the `.sfmr` top-level metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMetadata {
-    pub absolute_path: String,
-    pub relative_path: String,
-    pub contents: WorkspaceContents,
-}
+pub use sfmtool_archive_io::WorkspaceMetadata;
 
 /// What `written.json.zst` records about the act of writing the file, as
 /// against what the file says about the reconstruction.

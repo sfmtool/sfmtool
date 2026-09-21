@@ -23,9 +23,32 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::Xxh3;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
+
+/// Workspace contents configuration embedded in archive metadata.
+///
+/// This mirrors the feature-extraction fields in `.sfm-workspace.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceContents {
+    pub feature_tool: String,
+    pub feature_type: String,
+    pub feature_options: serde_json::Value,
+    pub feature_prefix_dir: String,
+}
+
+/// Workspace metadata embedded in an archive's top-level metadata.
+///
+/// The paths identify the workspace for relocatability, while [`WorkspaceContents`]
+/// records the feature extraction configuration used there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMetadata {
+    pub absolute_path: String,
+    pub relative_path: String,
+    pub contents: WorkspaceContents,
+}
 
 /// Accumulates a whole-file XXH128 digest from ordered section digests.
 ///
