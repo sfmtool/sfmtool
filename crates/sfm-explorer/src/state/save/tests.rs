@@ -123,7 +123,12 @@ fn a_save_stamps_the_provenance_it_hashed() {
 }
 
 #[test]
-fn a_save_records_the_lineage_of_the_base_it_came_from() {
+fn a_saved_file_records_no_lineage() {
+    // A save writes the rows it has and nothing about where they came from. The
+    // walk that used to compose a map per ancestor cost one pass over the whole
+    // ancestry per save, which is quadratic over a session, and it bought only
+    // an id minted in an *earlier* session: within this one the version graph
+    // already holds every map.
     let dir = temp_dir("lineage");
     let (mut state, id, path) = state_from_file(&dir);
     let ancestor = state.scene[0]
@@ -139,45 +144,28 @@ fn a_save_records_the_lineage_of_the_base_it_came_from() {
     state.save_node(id).expect("a writable path");
 
     let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
-    let entry = metadata
-        .lineage
-        .iter()
-        .find(|e| e.hash == ancestor)
-        .expect("the base the session started from");
-    assert_eq!(entry.kind, sfmtool_sfmr_format::LINEAGE_KIND_BASE);
-    // A deletion preserves order, so the map is the small encoding, and it says
-    // exactly which row went.
-    match &entry.map {
-        LineageMap::Monotone {
-            source_rows,
-            deleted,
-            created,
-        } => {
-            assert_eq!(*source_rows, 64);
-            assert_eq!(deleted, &vec![3]);
-            assert!(created.is_empty());
-        }
-        other => panic!("a deletion should compress: {other:?}"),
-    }
-    // Rows either side of the deletion land where the map says they do.
-    assert_eq!(entry.map.forward(2), Some(2));
-    assert_eq!(entry.map.forward(3), None);
-    assert_eq!(entry.map.forward(4), Some(3));
+    assert!(
+        metadata.lineage.is_empty(),
+        "a save wrote ancestry: {:?}",
+        metadata.lineage,
+    );
+    // Not even the base the session started from, which is the one entry the
+    // walk always produced.
+    assert!(!metadata.lineage.iter().any(|e| e.hash == ancestor));
 }
 
 #[test]
-fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
-    // The node's base already records where an *earlier* content's rows went:
-    // a monotone map whose only mentioned row is row 0, over 65 source rows. The
-    // save has to compose all 65 of them into the file it writes, not just the
-    // ones the map happens to name -- the rows a monotone map says nothing about
-    // are exactly the ones that came through unchanged, and they are the bulk of
-    // any real map. `source_rows` is what says where the domain ends; a
-    // composition that guessed it from the highest mentioned row would enumerate
-    // row 0 alone, find it deleted, and drop the whole ancestor.
+fn an_id_from_a_loaded_files_lineage_still_resolves_after_a_save() {
+    // Reading lineage stays: a file written elsewhere records where an earlier
+    // content's rows went, and that record is one of the three places an id is
+    // looked up in. A save of the node does not drop it, because the version it
+    // came in on is still a version of the graph; the walk from there to the
+    // cursor is the ordinary one.
     let dir = temp_dir("compose");
-    let (mut state, id, path) = state_from_file(&dir);
+    let (mut state, id, _) = state_from_file(&dir);
     let grandparent = "aaaabbbbccccddddeeeeffff00001111";
+    // Row 0 of the grandparent is gone and rows 1..=64 are rows 0..=63 of the
+    // base the node holds, so grandparent row 41 is base row 40.
     state.scene[0].recon_mut().metadata.lineage = vec![sfmtool_sfmr_format::LineageEntry {
         hash: grandparent.to_string(),
         kind: sfmtool_sfmr_format::LINEAGE_KIND_BASE.to_string(),
@@ -188,46 +176,29 @@ fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
         },
     }];
 
-    // An addition as well as a deletion, so the map the composition goes
-    // through both loses a row and gains one rather than being a pure shift.
-    let record = state.scene[0]
-        .edited()
-        .point(5)
-        .expect("a live point")
-        .to_record();
-    state.scene[0]
-        .history
-        .current_mut()
-        .add_point(record)
-        .expect("a well-formed record");
     state
         .delete_point(PointRef::new(id, 3))
         .expect("a live point");
     state.save_node(id).expect("a writable path");
 
-    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
-    let entry = metadata
-        .lineage
-        .iter()
-        .find(|e| e.hash == grandparent)
-        .expect("the ancestor its own base recorded");
-    assert_eq!(entry.map.source_rows(), 65);
-
-    // The far survivor: the ancestor's last row was row 63 of the node's base
-    // (row 0 having gone), and the save's deletion of row 3 moved it down one
-    // more. It is past every row the ancestor's own map mentions, which is the
-    // point of the test.
-    assert_eq!(entry.map.forward(64), Some(62));
-    // And what the ancestor map already said was gone is still gone.
-    assert_eq!(entry.map.forward(0), None);
+    // The deletion moved base row 40 down to 39, and the id minted two contents
+    // ago lands on it.
+    let node = &state.scene[0];
+    assert_eq!(crate::point_ids::resolve(node, grandparent, 41), Ok(39));
+    // What the loaded map said was already gone stays gone, and the refusal says
+    // so rather than pretending the hash is unknown.
+    let error = crate::point_ids::resolve(node, grandparent, 0).expect_err("row 0 went");
+    assert!(error.contains("is not in it"), "{error}");
 }
 
 #[test]
 fn an_id_from_before_a_save_still_resolves_after_it() {
-    // What the lineage is for. The id a point is *shown* under moves onto the
-    // file just written, since that is the file a reader now has; the id taken
-    // before the save keeps landing on the same point, because the save recorded
-    // where the earlier content's rows went.
+    // The property a save keeps without writing anything down. The id a point is
+    // *shown* under moves onto the file just written, since that is the file a
+    // reader now has; the id taken before the save keeps landing on the same
+    // point, because the version the save materialised from is still a version
+    // of this session's graph and the materialisation's row map is one more step
+    // along it.
     let dir = temp_dir("ids");
     let (mut state, id, _) = state_from_file(&dir);
     let before = crate::scene::point_id(&state.scene[0], 40);
@@ -307,10 +278,10 @@ fn a_save_writes_one_log_entry_naming_the_path_and_the_version() {
     );
 }
 
-/// What a save is made of when there is an overlay: the fold, the lineage walk
-/// inside it, the version it pushes, and the write.
+/// What a save is made of when there is an overlay: the fold, the version it
+/// pushes inside that, and the write.
 #[test]
-fn a_save_names_the_fold_the_lineage_and_the_write() {
+fn a_save_names_the_fold_and_the_write() {
     let dir = temp_dir("stages");
     let (mut state, id, _) = state_from_file(&dir);
     state
@@ -329,7 +300,6 @@ fn a_save_names_the_fold_the_lineage_and_the_write() {
         [
             ("save", 0, 1),
             ("materialise", 1, 1),
-            ("lineage", 2, 1),
             ("push version", 2, 1),
             ("write", 1, 1),
         ],
@@ -339,12 +309,6 @@ fn a_save_names_the_fold_the_lineage_and_the_write() {
     assert_eq!(
         phase_note(&entry.detail, "materialise"),
         Some("1 deleted, 0 added".to_string()),
-    );
-    let ancestors = state.scene[0].recon().metadata.lineage.len();
-    assert_eq!(
-        phase_note(&entry.detail, "lineage"),
-        Some(format!("{ancestors} ancestors")),
-        "the lineage walk did not say how many ancestors it composed",
     );
     assert_timed_from_the_work(&mut state.action_log);
 }
@@ -410,8 +374,10 @@ fn the_window_title_marks_the_first_node_while_it_is_dirty() {
 
 #[test]
 fn a_created_point_survives_the_save_and_keeps_its_id() {
-    // A point of no base: the file has to carry both the point and, in its
-    // lineage, the hash the point's id is minted against.
+    // A point of no base, so its id is minted against the hash of the edit that
+    // wrote it rather than against any content. The save folds it into rows of
+    // the file; the hash the id carries is held on the version that created it,
+    // which is where the id keeps resolving from.
     let dir = temp_dir("created_point");
     let path = dir.join("recon.sfmr");
     let mut state = AppState::new();
@@ -464,17 +430,17 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
         "the created point is still a bearing"
     );
 
-    // The id minted before the save still names it, through the lineage the
-    // written file records for the edit that created it.
+    // The id minted before the save still names it, through the creating edit's
+    // hash on the version graph and the maps from there to the cursor.
     let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
     let (hash, _) = rest.split_once('_').expect("hash and index");
     assert_eq!(crate::point_ids::resolve(node, hash, 0), Ok(row));
+    // The file itself says nothing about the edit: a reader of it sees the point
+    // as a row of the content it just read, under that content's own hash.
     let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
-    let entry = metadata
-        .lineage
-        .iter()
-        .find(|e| e.hash.starts_with(hash))
-        .expect("the point edit that created it");
-    assert_eq!(entry.kind, sfmtool_sfmr_format::LINEAGE_KIND_POINT_EDIT);
-    assert_eq!(entry.map.forward(0), Some(row));
+    assert!(
+        metadata.lineage.is_empty(),
+        "a save wrote ancestry: {:?}",
+        metadata.lineage,
+    );
 }

@@ -80,9 +80,9 @@ fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
 /// **The earliest content otherwise**, which is the case for a point created
 /// since the last save (named by the edit that created it), for a cursor on a
 /// branch the disk version is not an ancestor of, such as after an undo past a
-/// save, and for a disk version the budget has released. The lineage a save
-/// records keeps an earlier id resolving in every file written afterwards, so
-/// this is a weaker id than the disk one rather than a broken one.
+/// save, and for a disk version the budget has released. Such an id names
+/// content no file holds, so it is a weaker id than the disk one: this session
+/// resolves it from the version graph, and another session cannot.
 ///
 /// `None` when `index` names no live point of the value at the cursor, or when
 /// no content the point reaches can still be hashed.

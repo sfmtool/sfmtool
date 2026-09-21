@@ -62,8 +62,7 @@ whole of why it is described here. A reconstruction's metadata is inside the
 metadata section's digest and so inside its content hash, so a base stamped
 after its hash was taken would leave the session holding a hash the file on disk
 does not have -- and that hash is what a point id minted against the base
-carries. The same pass stamps the base's [lineage](#lineage) for the same
-reason.
+carries.
 
 The stamped base is then **pushed onto the node's history as an ordinary
 version**, labelled `Saved <label> to <file name>`, carrying the
@@ -160,11 +159,12 @@ the node inside the history budget, or the write itself failed.
 `crates/sfm-explorer/src/state/save/tests.rs` covers the save path headlessly:
 that a loaded node starts clean and an edit makes it dirty, and that a node from
 no file offers only Save As; that a save with an overlay
-materialises into a version the cursor sits on, stamps the provenance it hashed,
-and records the lineage of the base it came from; that a point id minted before
-a save still resolves after it, which is what the lineage is for, while the id
-the panels *show* moves onto the file just written; that a save with no overlay
-writes the value and mints nothing; that
+materialises into a version the cursor sits on and stamps the provenance it
+hashed; that the file it writes records no ancestry; that a point id minted
+before a save still resolves after it through the version graph, while the id
+the panels *show* moves onto the file just written, and that an id a loaded
+file's own recorded ancestry names keeps resolving across a save of the node;
+that a save with no overlay writes the value and mints nothing; that
 Save As writes elsewhere and re-points the node; that a save writes one log entry
 naming the path and the version; that a failed write is refused with a reason and
 changes nothing; and that the window title marks the first node while it is
@@ -182,21 +182,44 @@ that Escape cancels and leaves nothing pending.
   and it does so because a close is about a set.
 - Writing a version other than the one at the cursor. To save an earlier state,
   jump the cursor to it and save.
-- Persisting the history. A file holds the value, not the versions; what an
-  ancestor contributes to a saved file is its hash and its row mapping, in
-  [lineage](#lineage), and nothing else.
+- Persisting the history. A file holds the value, not the versions, and an
+  ancestor of that value contributes nothing to it.
+- Point ids that outlive the session that minted them. See
+  [what a saved file carries](#what-a-saved-file-carries).
 - Autosave, and a backup of the file being overwritten.
 
-## Lineage
+## What a saved file carries
 
-A saved file carries the hashes of the contents it came from, and the mapping
-from each of those onto its own rows, so a point id minted in an earlier session
-still names a point in the file written now. What the file holds, and how a
-reader uses it, is
-[the `.sfmr` format spec's lineage section](../formats/sfmr-file-format.md#lineage-version-9).
-A save composes that list over the node's whole ancestry, oldest ancestor first,
-one entry per hash: every earlier base of the session that still holds its
-value, every point edit that created points, and every entry of an earlier
-base's own lineage carried straight through, which is what reaches a file two
-saves ago. The base being written is not its own ancestor, so its own hash never
-appears, and an ancestor none of whose rows survive is left out.
+A saved file holds the reconstruction and the provenance stamped on it. It says
+nothing about where its rows came from: no ancestor hash, and no mapping from an
+earlier content onto its own rows.
+
+That is a choice about what a point id is worth outside the session that made
+it. Point identity is positional, a content hash and a row index in that content
+([goto-point.md](goto-point.md)), so a save mints a new hash and renumbers every
+row under it. Honouring an id taken against an earlier content therefore needs a
+recorded map from that content to the new rows, and every such map has to stay
+in the file for as long as the file exists. One entry per ancestor, forever: the
+table grows with the length of the session rather than with the size of the
+edit, and composing it walks the whole ancestry on every save.
+
+**An id stays stable within a session**, which is where ids are quoted, clicked
+and typed into Go to Point. An id minted before a save still names its point
+afterwards because the session's version graph holds the version the save
+materialised from, holds the hash of every point edit, and holds the
+materialisation's own row map as an ordinary step. `point_ids::resolve` finds
+the hash among those and walks to the cursor; a save is one more step on that
+walk, not a break in it.
+
+**An id does not carry into another session.** Quoting an id taken against a
+content the reopened file is not gets the usual refusal, that the node has never
+held content with that hash, because neither the file nor the fresh graph knows
+where that content's rows went.
+
+**Reading ancestry stays.** The `.sfmr` format keeps its optional `lineage` key,
+described in
+[the format spec's lineage section](../formats/sfmr-file-format.md#lineage-version-9),
+and a loaded file that carries one is searched for a hash like any other place
+an id can be found. So a file recording ancestry goes on resolving the ids that
+ancestry names, in this session and in any later one. What the viewer no longer
+does is write such a record into the files it saves.

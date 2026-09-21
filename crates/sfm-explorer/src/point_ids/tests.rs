@@ -207,8 +207,9 @@ fn a_save_moves_the_id_onto_the_file_that_was_just_written() {
         mint(&state.scene[0], 39).as_deref(),
         Some(format!("pt3d_{saved_hash}_39").as_str())
     );
-    // And the id taken before the save still resolves, through the lineage the
-    // save recorded.
+    // And the id taken before the save still resolves: the content it names is
+    // the base of a version this session still holds, and the maps from there to
+    // the cursor say where its row went.
     assert_eq!(resolve(&state.scene[0], &loaded_hash, 40), Ok(39));
 }
 

@@ -21,10 +21,11 @@
 //!   minted against it. The stamp therefore goes on the materialised value
 //!   before it becomes a version, and a value that needs no materialisation is
 //!   written exactly as it stands, provenance and all.
-//! - **Lineage is composed on the way out.** The file records where each
-//!   ancestor's rows went, so an id minted in this session, or in the session
-//!   that wrote the file this node was loaded from, still resolves against the
-//!   file just written. See [`lineage_for`].
+//! - **A save records no ancestry.** The file carries its own rows and its own
+//!   hash; where an earlier content's rows landed in it is not written down.
+//!   What keeps an id taken before the save naming the same point afterwards is
+//!   the session's version graph, which holds the map of every step including
+//!   the materialisation ([`crate::point_ids::resolve`] walks it).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -32,12 +33,10 @@ use std::time::Instant;
 
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
-use sfmtool_core::{
-    EditedReconstruction, LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT,
-};
+use sfmtool_core::EditedReconstruction;
 
 use crate::action_log::Kind;
-use crate::document::{PointMap, VersionSerial};
+use crate::document::PointMap;
 use crate::progress::Collector;
 use crate::scene::{ReconId, SceneNode};
 
@@ -195,9 +194,9 @@ impl AppState {
     /// Fold `index`'s overlay into a base of its own and push it as a version,
     /// when there is an overlay to fold.
     ///
-    /// The pushed value carries the provenance and the lineage the file will,
-    /// so its hash -- which is what every id minted afterwards is built on -- is
-    /// the hash of the file about to be written.
+    /// The pushed value carries the provenance the file will, so its hash, which
+    /// is what every id minted afterwards is built on, is the hash of the file
+    /// about to be written.
     ///
     /// `save` is the phase the save's stages sit under. The `materialise` row
     /// is recorded whichever branch is taken: a save with nothing to fold is a
@@ -222,15 +221,6 @@ impl AppState {
         base.metadata.operation = SAVE_OPERATION.to_string();
         base.metadata.tool = SAVE_TOOL.to_string();
         base.metadata.tool_version = env!("CARGO_PKG_VERSION").to_string();
-        base.metadata.lineage = {
-            // The stamp itself is four assignments; the walk that builds the
-            // lineage is the stage worth a row, because it composes a map per
-            // ancestor over the rows of the value being written.
-            let mut lineage = phase.phase("lineage");
-            let entries = lineage_for(node, &row_map);
-            progress_note!(lineage, "{} ancestors", entries.len());
-            entries
-        };
 
         let label = format!(
             "Saved {} to {}",
@@ -253,128 +243,5 @@ impl AppState {
         let id = self.scene[index].id;
         self.follow_selection_forward(id);
         Ok(())
-    }
-}
-
-/// The lineage the file about to be written records: where every ancestor's rows
-/// are in it.
-///
-/// `row_map` is the materialisation's own map, from the value at the cursor into
-/// the base being written; everything else is a walk over the version graph from
-/// an ancestor to the cursor, composed with it. Three kinds of ancestor
-/// contribute, and all three are what a Point ID can name:
-///
-/// - every earlier **base** of this session that still holds its value,
-/// - every **point edit** that created points, whose hash names points that are
-///   in no base at all,
-/// - and every entry of an earlier base's **own** lineage, which is how an id
-///   minted two files ago keeps resolving: the earlier file already composed its
-///   ancestors' maps into itself, so composing that with the walk to here is the
-///   whole chain in one step.
-///
-/// Entries come out oldest ancestor first, one per hash. The base being written
-/// is not its own ancestor, so its hash never appears.
-fn lineage_for(node: &SceneNode, row_map: &sfmtool_core::RowMap) -> Vec<LineageEntry> {
-    let history = &node.history;
-    let cursor = history.current_version().serial;
-    // Oldest first: the ancestry runs the other way.
-    let chain: Vec<VersionSerial> = history.ancestry(cursor).into_iter().rev().collect();
-    let mut entries: Vec<LineageEntry> = Vec::new();
-
-    for serial in chain {
-        // From this version's index space into the base being written.
-        let into_target = |index: u32| -> Option<u32> {
-            history
-                .follow(serial, cursor, index)
-                .ok()
-                .and_then(|at_cursor| row_map.forward(at_cursor))
-        };
-
-        if let Some(created) = history.created_by(serial) {
-            let rows: Vec<Option<u32>> = created.indexes.iter().map(|&i| into_target(i)).collect();
-            push_entry(&mut entries, &created.hash, LINEAGE_KIND_POINT_EDIT, rows);
-        }
-
-        let Some(value) = history
-            .versions()
-            .iter()
-            .find(|v| v.serial == serial)
-            .and_then(|v| v.value.as_ref())
-        else {
-            continue;
-        };
-        let base_rows: Vec<Option<u32>> = (0..value.base_point_count() as u32)
-            .map(into_target)
-            .collect();
-
-        // The ancestor's own recorded ancestors, composed straight through.
-        for entry in &value.base.metadata.lineage {
-            let rows: Vec<Option<u32>> = (0..entry.map.source_rows())
-                .map(|i| {
-                    entry
-                        .map
-                        .forward(i)
-                        .and_then(|row| base_rows.get(row as usize).copied().flatten())
-                })
-                .collect();
-            push_entry(&mut entries, &entry.hash, &entry.kind, rows);
-        }
-
-        if let Ok(hash) = value.base_content_hash() {
-            push_entry(
-                &mut entries,
-                &hash.content_xxh128,
-                LINEAGE_KIND_BASE,
-                base_rows,
-            );
-        }
-    }
-    entries
-}
-
-/// Add one entry, in the smaller of the two encodings, unless its hash is
-/// already recorded or nothing of it survives.
-fn push_entry(entries: &mut Vec<LineageEntry>, hash: &str, kind: &str, rows: Vec<Option<u32>>) {
-    if rows.iter().all(Option::is_none) || entries.iter().any(|e| e.hash == hash) {
-        return;
-    }
-    entries.push(LineageEntry {
-        hash: hash.to_string(),
-        kind: kind.to_string(),
-        map: compress(rows),
-    });
-}
-
-/// The stored form of a dense map: the monotone encoding when the map preserves
-/// order, and the dense one when it does not.
-///
-/// A materialisation preserves order, so the monotone form is what a save
-/// ordinarily writes and it costs the size of the edit rather than the size of
-/// the reconstruction. The dense form is the fallback for a step that reorders,
-/// which no edit does today and which the encoding must still be able to say.
-fn compress(rows: Vec<Option<u32>>) -> LineageMap {
-    let mut deleted: Vec<u32> = Vec::new();
-    let mut landed: Vec<u32> = Vec::new();
-    for (i, row) in rows.iter().enumerate() {
-        match row {
-            None => deleted.push(i as u32),
-            Some(row) => landed.push(*row),
-        }
-    }
-    if landed.windows(2).any(|w| w[0] >= w[1]) {
-        return LineageMap::Dense { rows };
-    }
-    // Every row of the target that no source row landed in, up to the last one
-    // that did: past that there is nothing to disambiguate.
-    let mut created: Vec<u32> = Vec::new();
-    let mut next = 0;
-    for &row in &landed {
-        created.extend(next..row);
-        next = row + 1;
-    }
-    LineageMap::Monotone {
-        source_rows: rows.len() as u32,
-        deleted,
-        created,
     }
 }

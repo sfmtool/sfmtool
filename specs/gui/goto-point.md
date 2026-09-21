@@ -227,12 +227,12 @@ The rule is **the version on disk first, and the earliest content otherwise**.
 Three things fall to the second rule: a point created since the last save, which
 is a row of no base at all; a cursor on a branch the disk version is not an
 ancestor of, such as after an undo past a save; and a disk version the budget has
-released. None of those is a broken ID, only a weaker one, because the lineage a
-save records keeps an earlier content's IDs resolving in every file written
-afterwards ([the format spec's Lineage
-section](../formats/sfmr-file-format.md#lineage-version-9)). That is also why
-preferring the disk version costs nothing: the earlier ID a user already wrote
-down goes on working after the save that moved the displayed ID off it.
+released. None of those is a broken ID, only a weaker one: this session resolves
+it from the version graph like any other, while a reader who has only the file
+cannot, since the content it names is not the content the file holds. That is
+what preferring the disk version buys, and it costs nothing, because an earlier
+ID a user already wrote down goes on working here after the save that moved the
+displayed ID off it.
 
 **Resolving** finds the hash first and walks second. The hash is looked for
 among, in order: the point edits' hashes, the bases of the versions that still

@@ -749,7 +749,7 @@ The operations:
 | Phase | Where | Seen at |
 |-------|-------|---------|
 | `open`, with `read`, `convert convention`, `derive` and `append node` under it | `AppState::load_file` over `SfmrReconstruction::load` | 143 ms of a 1.45 s dino open |
-| `save`, with `materialise` over `lineage` and `push version`, then `write` | `state::save` | |
+| `save`, with `materialise` over `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
 | the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection |
@@ -801,9 +801,9 @@ cache hit is every frame after the first, and a missing `.sift` companion is
 retried every frame, so its guard is cancelled in both cases rather than putting
 a row in every entry in the log.
 
-What a save stamps is four field assignments and not a stage; the work beside
-the fold is the lineage walk, which is why `lineage` sits under `materialise`
-where the code does it rather than beside it.
+What a save stamps is three field assignments and not a stage. The fold's own
+row is `materialise`, and `push version` sits under it rather than beside it,
+because the version being pushed is the fold's result.
 
 Detail adds, under those: the stages inside each kernel, the steps inside
 `uploads`, and the per-pass steps inside `scene render`.
