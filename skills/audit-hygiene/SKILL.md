@@ -55,13 +55,44 @@ prioritized list of structural fixes.
 
 ### C. Naming and convention consistency
 
+**Read [`specs/GLOSSARY.md`](../../specs/GLOSSARY.md) before running any check in
+this section, and treat it as authoritative.** Where it names a preferred word,
+that is the answer no matter which spelling the tree currently holds more of,
+and a file still on the old word is a finding rather than evidence. The tallies
+below are for splits the glossary has **not** ruled on.
+
+This matters because a majority is wrong often enough to be dangerous, in two
+ways the count itself cannot distinguish:
+
+- **A word can win by being written first.** In the bench, `surfel` outnumbered
+  `patch` 132 to a handful, and `patch` was the right answer -- it is the
+  PatchMatch term and it already carries the geometry, which is an argument a
+  tally cannot see. Converging on the majority would have deleted the correct
+  name.
+- **A migration reads exactly like drift.** The em-dash is still the majority
+  across `specs/` by roughly seven to one, while the files recent work has
+  rewritten carry none at all. A tally recommends putting them back. Note also
+  that what replaces an em-dash is a varied sentence rather than one substitute
+  character, so this split cannot be scored as a two-way spelling contest in the
+  first place: some conventions are not countable, and a tally that forces them
+  into a count will report something false with a number attached.
+
+So when a tally and the glossary disagree, the glossary wins; when a tally finds
+a split the glossary is silent on, the finding is *"decide this and record it"*,
+and the recommendation names the candidates and the argument for each rather
+than just the bigger pile. Add the ruling to the glossary as part of the fix.
+
 8. **Conventions that fork at a module boundary.** A convention held uniformly on
    both sides of a line but differing across it: `*Options` in one module vs
    `*Params` in its siblings; underscore-private file names in one subpackage and
    plain names in the next; SPDX headers on some test files and not others; error
    messages capitalized in one crate and lowercase in another. Each half looks
-   self-consistent from inside, which is why these survive review. State which
-   spelling is the house majority and recommend converging on it.
+   self-consistent from inside, which is why these survive review. Check the
+   glossary first; failing a ruling there, state the house majority, say which
+   side is newer, and recommend on the argument rather than the count alone.
+   A boundary the glossary declares **deliberate** -- `patch` in the bench and
+   `surfel` in the renderer -- is not a finding, and eroding it from either side
+   is.
 9. **Names in a parallel family that don't parallel.** Sibling commands, sibling
    transforms, sibling bindings methods: check that the family's entry point,
    suffix, and argument names follow one rule, and name the exceptions.
@@ -100,8 +131,10 @@ The finding is rationale where reference belongs, not length by itself.
    concerns.
 4. Dispatch `Agent` subagents in parallel over subtrees (e.g., one for
    `src/sfmtool/feature_match/`, one for `crates/sfmtool-core/`) to get focused
-   assessments. Give each one the convention majorities from step 2 so their
-   naming findings are comparable.
+   assessments. Give each one `specs/GLOSSARY.md` and the convention majorities
+   from step 2, in that order of authority, so their naming findings are
+   comparable and none of them recommends converging onto a word the glossary
+   has already retired.
 5. Consolidate findings, removing duplicates and ranking.
 
 ### Mechanical checks
@@ -124,7 +157,10 @@ worth more than a paragraph.
 5. **Convention tallies** — count both spellings of each candidate convention and
    report the split with locations of the minority: option-bag type suffixes,
    `indexes`/`indices`, verb prefixes on public functions, private-module naming,
-   license headers, error message capitalization, CLI flag shapes.
+   license headers, error message capitalization, CLI flag shapes. Report the
+   minority's **age** beside its size -- if the newer files hold it, the split is
+   a migration and the majority is the thing to fix. Check each split against
+   `specs/GLOSSARY.md` before recommending either way.
 6. **Public-name leak scan** — every name reachable from Python or the CLI,
    checked for implementation-detail suffixes and for a spelling that disagrees
    with its siblings.
@@ -132,6 +168,15 @@ worth more than a paragraph.
    file, and every area's `specs/README.md` index lists the specs actually
    present. Link rot only, no reading; whether the linked spec is *right* is
    `audit-specs`' call.
+8. **Glossary conformance** — for every entry in `specs/GLOSSARY.md`, count uses
+   of the preferred word and of what it replaced, **inside that entry's stated
+   scope only**. A word outside its scope is not a violation: the glossary's
+   boundaries are entries too, so `surfel` in the renderer is a pass and
+   `surfel` in the bench is a finding. Report the residue per file, and report
+   the entries that came back clean -- a retired word with a zero behind it is
+   how the glossary earns its keep. An entry whose residue is large and *newer*
+   than the ruling is the one case where the glossary itself is the suspect:
+   say so rather than filing a hundred findings.
 
 ## Output
 

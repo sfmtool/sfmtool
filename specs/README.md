@@ -14,6 +14,13 @@ paragraph reads for someone who has read no other spec, a caller can find out
 what to call without wading through a derivation, and a spec describes what the
 code *is* — write a change proposal in `drafts/` and convert it before filing.
 
+[GLOSSARY.md](GLOSSARY.md) holds the words this project has settled on, what
+each was chosen over and why. Read it before naming a function, a wire tool, a
+field or a user-facing string. A glossary entry outranks a count of which
+spelling is currently more common, which is the whole reason it is written down:
+a majority cannot tell a word that won on merit from one that won by being
+written first, nor a migration in progress from drift.
+
 Location encodes lifecycle, so a standing spec carries no `**Status:**` line: a
 draft in `drafts/` opens with `**Status:** Draft`, and everything else opens with
 its purpose paragraph. A part that is specified but unbuilt is a present-tense

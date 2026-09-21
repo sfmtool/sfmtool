@@ -97,7 +97,11 @@ deleting the lines.
   (the other subpackages have none). Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface.
 - `specs/` — design specs, indexed by `specs/README.md`. Read the relevant file
-  before making non-trivial changes and update it when behavior diverges. Each
+  before making non-trivial changes and update it when behavior diverges.
+  **`specs/GLOSSARY.md` holds the words this project has settled on** -- read it
+  before naming a function, a wire tool, a field or a user-facing string, and
+  add to it when a naming question is settled by argument. A glossary entry
+  outranks a count of which spelling is currently more common in the tree. Each
   area carries a `README.md` index — `cli/` (all commands, by category), each
   `core/` module subdir, `formats/`, `gui/`, `workspace/`. Add a row there when
   you add a spec. **Start a new spec from `specs/TEMPLATE.md`**, whose default
