@@ -2999,6 +2999,92 @@ fn the_convert_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_task();
 }
 
+/// `Bundle Adjust...` is live on a node with a pixel per observation and one
+/// posed lens, sits directly above `Retriangulate All Points`, and reports the
+/// node it was opened on rather than the selection.
+#[test]
+fn the_bundle_adjust_entry_is_live_on_an_adjustable_node() {
+    let mut state = resectable_scene();
+    state.append_node(resectable_node("/runs/run_b.sfmr"));
+    let selected = state.scene[0].id;
+    let id = state.scene[1].id;
+    state.selected_recon = Some(selected);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let entry = panel
+        .hit_rect(row_id(id, "bundle_adjust"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reconstruction row's menu offered no {}",
+                super::menus::BUNDLE_ADJUST
+            )
+        });
+    let below = panel
+        .hit_rect(row_id(id, "retriangulate_all_points"))
+        .expect("the retriangulation entry");
+    assert!(
+        below.top() >= entry.bottom() - 1.0,
+        "the bundle adjust entry is not directly above the retriangulation"
+    );
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "bundle_adjust"));
+    assert_eq!(
+        response.bundle_adjust,
+        Some(id),
+        "the entry reported the selection rather than the row it was opened on"
+    );
+}
+
+/// On a node whose observations are `.sift` feature indexes it is drawn and
+/// dead, on the edit's own gate: there is no pixel to reproject against.
+#[test]
+fn the_bundle_adjust_entry_is_greyed_without_inline_keypoints() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+    assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "bundle_adjust")).is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "bundle_adjust"));
+    assert_eq!(
+        response.bundle_adjust, None,
+        "a node with no pixel per observation offered to be adjusted"
+    );
+}
+
+/// And dead while an operation is running on that node.
+#[test]
+fn the_bundle_adjust_entry_is_greyed_while_the_node_is_busy() {
+    let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "bundle_adjust"));
+    assert_eq!(
+        response.bundle_adjust, None,
+        "the entry was live on a busy node"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}
+
 /// `Retriangulate All Points` is live on a node whose observations carry a
 /// pixel, and reports the node it was opened on.
 #[test]

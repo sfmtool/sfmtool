@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The small dialog the Edit menu's `Bundle Adjust...` opens, and the gate the
-//! menu entry itself reads.
+//! The small dialog that `Bundle Adjust...` on a reconstruction's Scene Graph
+//! context menu opens, and the gate the menu entry itself reads.
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes one decision
 //! from the user -- whether the shared focal is released -- and that is the

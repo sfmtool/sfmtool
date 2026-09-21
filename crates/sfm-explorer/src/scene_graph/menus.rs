@@ -6,12 +6,13 @@
 //!
 //! Three menus, one per row kind. The reconstruction row's
 //! ([`node_context_menu`]) carries the whole-node actions (select, zoom to fit,
-//! align, reset transform, tint, build the SIFT index, convert to embedded
-//! patches, close), the SIFT Index row's ([`sift_index_menu`]) carries the
-//! three ways to give a node an index or take one away, and the image row's
-//! ([`image_context_menu`]) carries the resection, the camera move and the
-//! image deletion. They are together because a menu is
-//! the one place in the panel where an item is *described* rather than drawn:
+//! align, reset transform, tint, bundle adjust, retriangulate, prune covered
+//! observations, build the SIFT index, convert to embedded patches, close), the
+//! SIFT Index row's ([`sift_index_menu`]) carries the three ways to give a node
+//! an index or take one away, and the image row's ([`image_context_menu`])
+//! carries the resection, the camera move and the image deletion. They are
+//! together because a menu is the one place in the panel where an item is
+//! *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
 //! refusal, and those three read as a set.
 //!
@@ -55,6 +56,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_tint_menu(ui, node, out);
     ui.separator();
+    show_bundle_adjust_entry(ui, node, out);
     show_retriangulate_entry(ui, node, out);
     show_prune_covered_entry(ui, node, out);
     // Above the conversion because it is where a person looks first: the
@@ -72,6 +74,39 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
 /// What the entry that converts a node's observations is called, in the menu
 /// and in the tests that aim at it.
 pub(crate) const CONVERT_TO_EMBEDDED_PATCHES: &str = "Convert to Embedded Patches";
+
+/// What the entry that refines every pose and point of a node is called, in the
+/// menu and in the tests that aim at it.
+pub(crate) const BUNDLE_ADJUST: &str = "Bundle Adjust...";
+
+/// `Bundle Adjust...`: every pose and point of the node refined against its
+/// observations, behind a dialog that asks whether the shared focal is
+/// released.
+///
+/// First of the whole-value edits because it is the widest of them: it moves
+/// the cameras as well as the points the entries under it re-read. Greyed
+/// rather than hidden when it cannot run, on the edit's own gate
+/// (`bundle_adjust_prompt::refusal`), so the entry and the edit cannot disagree
+/// about when the adjustment can run. A busy node is refused first, as it is on
+/// every sibling entry.
+fn show_bundle_adjust_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = out
+        .busy_refusal(node.id)
+        .map(str::to_string)
+        .or_else(|| crate::bundle_adjust_prompt::refusal(node.edited()));
+    let entry = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(BUNDLE_ADJUST))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Refine every pose and point of this reconstruction against its observations, as \
+             one version. Asks first whether the shared focal length is released. Runs on a \
+             worker thread and can be cancelled; Undo (Ctrl+Z) puts the geometry back.",
+        );
+    if out.hit(row_id(node.id, "bundle_adjust"), entry).clicked() {
+        out.response.bundle_adjust = Some(node.id);
+        ui.close();
+    }
+}
 
 /// What the entry that re-solves every point of a node is called, in the menu
 /// and in the tests that aim at it.

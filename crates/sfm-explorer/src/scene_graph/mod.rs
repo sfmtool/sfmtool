@@ -166,6 +166,11 @@ pub struct SceneGraphResponse {
     /// one, so `AppState::start_convert_to_embedded_patches` sends it to a
     /// worker after the frame.
     pub convert_to_embedded_patches: Option<ReconId>,
+    /// `Bundle Adjust...` chosen from a reconstruction's context menu: ask,
+    /// through `AppState::open_bundle_adjust`, whether the shared focal is
+    /// released, and on `Run` refine every pose and point of this node as its
+    /// next version.
+    pub bundle_adjust: Option<ReconId>,
     /// `Retriangulate All Points` chosen from a reconstruction's context menu:
     /// re-solve every point from its own observations at the poses and the lens
     /// the value already holds, as the node's next version. A bulk edit, and a

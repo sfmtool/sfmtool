@@ -300,7 +300,9 @@ is not in the accessibility tree either. Both are covered headlessly.
   cameras move as a unit through the rig's own transform, which is not this edit.
 - **A live bundle adjustment.** Nothing in the value but this image's pose and
   its observed tracks changes at commit; running the adjustment afterwards is
-  `Edit > Bundle Adjust...`, which is where the other cameras get to answer.
+  `Bundle Adjust...` on the reconstruction row's context menu
+  ([`bundle-adjust.md`](bundle-adjust.md)), which is where the other cameras
+  get to answer.
 - **Snapping or constraints** — to a ground plane, to another camera's height,
   along a rig baseline. The hand is free.
 - **Persisting the lock across sessions.** It ends with the frame that ends it.

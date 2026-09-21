@@ -179,7 +179,7 @@ viewer").
 ## The Edit menu and its shortcuts
 
 The menu bar's **Edit** menu, in
-[app.rs](../../crates/sfm-explorer/src/app.rs), holds the seven actions, each
+[app.rs](../../crates/sfm-explorer/src/app.rs), holds the six actions, each
 greyed with a hover text saying why when it does not apply:
 
 | Item | Shortcut | Enabled when |
@@ -190,7 +190,6 @@ greyed with a hover text saying why when it does not apply:
 | Delete Image | -- | an image is selected |
 | Move Camera | `M` | the viewport is looking through a posed image ([edits/move-camera.md](edits/move-camera.md)) |
 | Cancel Camera Move | `Esc` | a camera is being moved |
-| Bundle Adjust... | -- | a reconstruction is selected and can be adjusted ([edits/bundle-adjust.md](edits/bundle-adjust.md)) |
 
 `Move Camera` reads **Commit Camera Move** while a camera is in hand, because it
 is the same key and the same gesture from the other end: `M` takes the camera and
@@ -207,6 +206,12 @@ the Scene Graph panel, beside the two `Resect Image` entries, which is where a
 specific image is addressed. It asks for no confirmation: it is an edit with a history behind it,
 and undo is the answer to a mis-click. The resections beside it are edits like
 this one ([edits/resect-image.md](edits/resect-image.md)).
+
+The edits of a whole reconstruction are on the **reconstruction row's context
+menu** instead, and act on the row right-clicked rather than on the selection:
+`Bundle Adjust...` ([edits/bundle-adjust.md](edits/bundle-adjust.md)),
+`Retriangulate All Points`, `Prune Covered Observations` and
+`Convert to Embedded Patches` ([scene-graph.md](scene-graph.md)).
 
 ## The Edit History panel
 

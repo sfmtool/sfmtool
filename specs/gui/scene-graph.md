@@ -301,10 +301,23 @@ fixed-height for virtualization.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors),
-  `Retriangulate All Points`, `Prune Covered Observations`,
+  `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
   `Build SIFT Index`, `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
+- **`Bundle Adjust...`** refines every pose and point of the node against its
+  observations, as the node's next version and on a worker thread
+  ([edits/bundle-adjust.md](edits/bundle-adjust.md)). It acts on the node the
+  menu was opened on, not on the selection, and opens the dialog that asks
+  whether the shared focal is released before anything runs, so the panel
+  reports it as `SceneGraphResponse::bundle_adjust` and `dock.rs` answers with
+  `AppState::open_bundle_adjust`. It heads the whole-reconstruction edits
+  because it is the widest of them: it moves the cameras as well as the points
+  the entries under it re-read. It is **live only on a node whose observations
+  carry a pixel, whose posed images share one lens, and that nothing is running
+  on**, and greyed with the reason otherwise. Past the busy sentence, the gate
+  is `bundle_adjust_prompt::refusal`, which the operation itself also asks, so
+  the entry and the edit cannot disagree about when the adjustment can run.
 - **`Retriangulate All Points`** re-solves every point of the node from its own
   observations, at the poses and the lens the value already holds, as the node's
   next version and on a worker thread
@@ -344,8 +357,7 @@ fixed-height for virtualization.
   otherwise. The gate is `AppState::build_sift_index_refusal`, which the wire's
   `build_sift_index` and the operation itself also ask, so the greyed entry and
   a call that asks anyway give one answer.
-- **`Convert to Embedded Patches`** is the one entry on this menu that edits the
-  reconstruction. It runs the minimal `sift_files` → `embedded_patches`
+- **`Convert to Embedded Patches`** runs the minimal `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
   ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
   its mean viewing direction, each observation's `.sift` keypoint carried
@@ -1156,6 +1168,11 @@ bundle from `retain_nodes` on the next frame.
   and an unsaved node's build entry is dead under the *Save ‹label› first*
   sentence. What the states themselves mean is tested in
   [sift-index.md](sift-index.md)'s own module.
+- **The reconstruction row's `Bundle Adjust...`**, through the same whole
+  frames: live on an adjustable node, drawn **above**
+  `Retriangulate All Points`, and reporting the node the menu was opened on
+  while another node is selected; drawn and dead on a node with no inline keypoints and
+  on a busy one.
 - **The reconstruction row's hover** names the node's file, and says the node
   came from none where it has no path; both hover the **name**, the part of the
   row the tooltip has to reach.

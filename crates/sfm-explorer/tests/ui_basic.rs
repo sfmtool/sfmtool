@@ -1294,7 +1294,7 @@ fn file_menu_items() {
 /// them is greyed.
 ///
 /// With nothing loaded there is no node to undo in and nothing selected to
-/// delete or adjust, so every item is disabled -- which is the state this asserts
+/// delete or move, so every item is disabled -- which is the state this asserts
 /// they are nonetheless *present* in: an action that vanishes when it does not
 /// apply reads as unimplemented.
 ///
@@ -1317,14 +1317,10 @@ fn edit_menu_items() {
         )
         .expect("Edit menu item 'Delete Image' did not appear");
 
-    // Named without their shortcuts, for the reason `file_menu_items` gives:
-    // the shortcut is in the button's text and is spelled by the platform. Both
-    // in one snapshot, the menu being open and untouched between them.
+    // Named without its shortcut, for the reason `file_menu_items` gives: the
+    // shortcut is in the button's text and is spelled by the platform.
     app.wait_all(
-        &[
-            Expect::present("button", "Cancel Camera Move"),
-            Expect::present("button", "Bundle Adjust..."),
-        ],
+        &[Expect::present("button", "Cancel Camera Move")],
         CONTENT_TIMEOUT,
     )
     .expect("the Edit menu is missing an item");
@@ -1717,6 +1713,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
         &[
             Expect::present("button", "Select"),
             Expect::present("button", "Zoom to Fit"),
+            Expect::present("button", "Bundle Adjust..."),
         ],
         CONTENT_TIMEOUT,
     )

@@ -1,6 +1,6 @@
 # Bundle Adjust
 
-An action that refines the selected reconstruction as a whole: every pose and
+An action that refines one reconstruction as a whole: every pose and
 every point move together until they agree with the observations as well as they
 can. The result is a version of the node, so it is in the Edit History, it can be
 undone, and a save writes it.
@@ -38,11 +38,16 @@ sequence -- look, edit, re-solve, look again -- one sitting instead of three.
 
 ## Invocation
 
-The **Edit** menu, `Bundle Adjust...`, below the two delete entries and separated
-from them: those act on a selection, this acts on the whole node.
+`Bundle Adjust...` on the **reconstruction row's context menu** in the Scene
+Graph panel ([`../scene-graph.md`](../scene-graph.md)), first of the
+whole-reconstruction edits and directly above `Retriangulate All Points`. It
+acts on the node whose row was right-clicked, whatever the selection is: the
+edit is of the whole reconstruction, and the row is where one is addressed. The
+row reports the choice as `SceneGraphResponse::bundle_adjust`, and `dock.rs`
+answers it with `AppState::open_bundle_adjust`, which puts up the dialog below.
 
-It is **greyed**, with a hover explanation, when there is no selected
-reconstruction, and when the selected one cannot be adjusted:
+It is **greyed**, with a hover explanation, while an operation is running on
+that node, and when the node cannot be adjusted:
 
 - its observations are `.sift` feature indexes with no inline keypoints, so
   there is no pixel to reproject against;
@@ -166,10 +171,14 @@ Explorer (`sfm-explorer` lib tests, headless):
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (the focal held), the
   keys that run and cancel it, an ordinary frame answering nothing, and a second
   ask not stacking a second dialog.
+- `scene_graph/tests.rs`: the context-menu entry live on an adjustable node,
+  directly above `Retriangulate All Points`, reporting the node it was opened
+  on; and drawn but dead on a node with no inline keypoints and on a busy one.
 
-There is no windowed `ui_basic` test beyond the Edit menu's own, for the reason
-the edits beside it have none: what a windowed test could assert is that a
-button exists, and that is what the menu test already does.
+The one windowed `ui_basic` check is that the entry is present on the
+reconstruction row's context menu after a real right-click (Windows only), for
+the reason the edits beside it have no more: what a windowed test could assert
+is that a button exists.
 
 ---
 

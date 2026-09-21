@@ -248,26 +248,6 @@ pub(super) fn show(
                     crate::camera_lock::cancel(viewer_3d, app_state);
                     ui.close();
                 }
-                ui.separator();
-                // The gate is the edit's own, so the entry and the edit
-                // cannot disagree about when the adjustment can run.
-                let refusal = match target.and_then(|id| app_state.node(id)) {
-                    Some(node) => crate::bundle_adjust_prompt::refusal(node.edited()),
-                    None => Some("Select a reconstruction to adjust it".to_string()),
-                };
-                let adjust = ui
-                    .add_enabled(refusal.is_none(), egui::Button::new("Bundle Adjust..."))
-                    .on_disabled_hover_text(refusal.unwrap_or_default())
-                    .on_hover_text(
-                        "Refine every pose and point of the selected reconstruction \
-                                 against its observations, as one version of it.",
-                    );
-                if adjust.clicked() {
-                    if let Some(id) = target {
-                        app_state.open_bundle_adjust(id);
-                    }
-                    ui.close();
-                }
             });
             ui.menu_button("Go", |ui| {
                 if ui

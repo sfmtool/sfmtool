@@ -1042,6 +1042,11 @@ impl TabContext<'_> {
         if let Some(id) = response.reset_transform {
             self.state.reset_node_transform(id);
         }
+        // A question first rather than a worker: the dialog it opens starts
+        // the solve on `Run` (see `app/modals.rs`).
+        if let Some(id) = response.bundle_adjust {
+            self.state.open_bundle_adjust(id);
+        }
         // A bulk edit that goes to a worker: this returns as soon as the
         // operation is running, and the version it produces is pushed by the
         // frame that collects it, which drops the panel caches itself off
