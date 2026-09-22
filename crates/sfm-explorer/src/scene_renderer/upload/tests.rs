@@ -2689,40 +2689,25 @@ fn upload_thumbnails_builds_no_atlas_without_any_column() {
 }
 
 #[test]
-fn a_synthesized_column_fills_the_atlas_as_its_rows_finish() {
+fn a_built_column_fills_the_atlas_and_keeps_it() {
     use crate::display_thumbnails::tests::{temp_dir, workspace_with_photographs};
     use crate::display_thumbnails::DisplayThumbnails;
 
     let dir = temp_dir("atlas");
     let recon = workspace_with_photographs(&dir, &[]);
-    let display = DisplayThumbnails::synthesize(&recon, None).expect("photographs");
+    let display = DisplayThumbnails::build(&recon, &SILENT)
+        .expect("nothing cancels it")
+        .0
+        .expect("photographs");
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
 
+    // Every row is final when the node arrives, so the first upload writes
+    // every cell and there is nothing to come back for.
     assert_eq!(
         r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
         Uploaded::Built(DEMO_IMAGES as usize)
     );
-    let already = bundle(&r)
-        .uploaded_thumbnails
-        .as_ref()
-        .unwrap()
-        .final_cells();
-    display.wait();
-
-    // Every cell that held the placeholder is written once its row is final,
-    // and a second look with nothing new writes nothing.
-    let written = r.refresh_thumbnails(&queue, RECON, &recon);
-    assert_eq!(already + written, DEMO_IMAGES as usize);
-    assert_eq!(
-        bundle(&r)
-            .uploaded_thumbnails
-            .as_ref()
-            .unwrap()
-            .final_cells(),
-        DEMO_IMAGES as usize
-    );
-    assert_eq!(r.refresh_thumbnails(&queue, RECON, &recon), 0);
     // The same column and image list keep the atlas.
     assert_eq!(
         r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),

@@ -314,9 +314,15 @@ fn build_catalog() -> Vec<ToolSpec> {
             description: "Load an .sfmr file into the scene as a new reconstruction, and select \
                           it. Opening a path that is already open adds a second node for it, \
                           with a history of its own; `already_open` says whether that happened. \
-                          Read the returned `label` back rather \
-                          than assuming it — a colliding file stem is disambiguated as \
-                          \"name (2)\".",
+                          The open is a background task: it reads the file, builds every \
+                          thumbnail the file does not carry (from each image's .sift, else its \
+                          photograph) and renders every patch bitmap it does not carry, for \
+                          display only. One that finishes within 200 ms replies with the \
+                          reconstruction; one still going replies with running: true and an \
+                          operation_id to poll with get_background_task, and the node appears \
+                          when it lands. Refused while another background operation runs. \
+                          Read the returned `label` back rather than assuming it: a colliding \
+                          file stem is disambiguated as \"name (2)\".",
             kind: Write,
             schema: object(
                 &[],
@@ -794,18 +800,34 @@ fn build_catalog() -> Vec<ToolSpec> {
                           it, taking that file's name as its label, so read the reply's \
                           reconstruction_label back before the next call. The version written is \
                           the one at the cursor, and it becomes the version the history calls \
-                          clean.",
+                          clean. With minimal: true and a path, it instead writes a minimal copy \
+                          there, the file sfm xform --minimal writes: no thumbnails, no patch \
+                          bitmaps, no lineage and no absolute workspace path. The node keeps its \
+                          path, label and history, and is no cleaner than before; a minimal copy \
+                          over the node's own file is refused.",
             kind: Save,
             schema: object(
-                &[(
-                    "path",
-                    json!({
-                        "type": "string",
-                        "description":
-                            "Where to write it, as the viewer's process can see it. Omit to \
-                             write over the file the reconstruction came from.",
-                    }),
-                )],
+                &[
+                    (
+                        "path",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "Where to write it, as the viewer's process can see it. Omit \
+                                 to write over the file the reconstruction came from; \
+                                 required with minimal.",
+                        }),
+                    ),
+                    (
+                        "minimal",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "Write a minimal copy to path instead of saving the node. \
+                                 Default false.",
+                        }),
+                    ),
+                ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },
@@ -2484,6 +2506,7 @@ pub(crate) fn parse(
         "save_reconstruction" => Command::SaveReconstruction {
             reconstruction_label: args.required_string("reconstruction_label")?,
             path: args.optional_string("path")?.map(std::path::PathBuf::from),
+            minimal: args.optional_bool("minimal")?.unwrap_or(false),
         },
         "delete_point" => Command::DeletePoint {
             reconstruction_label: args.required_string("reconstruction_label")?,

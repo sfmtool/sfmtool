@@ -116,7 +116,8 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     multiple=True,
     help=(
         "Discard the per-image thumbnail column, keeping every row. Reads no "
-        "files. --add-thumbnails builds it back from the source photographs."
+        "files. --add-thumbnails builds it back from the .sift files or the "
+        "photographs."
     ),
 )
 @click.option(
@@ -133,11 +134,11 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     is_flag=True,
     multiple=True,
     help=(
-        "Build the thumbnail column from the source photographs, decoded and "
+        "Build the thumbnail column from each image's verified .sift copy, which "
+        "is already reduced, and otherwise from its source photograph, decoded and "
         "resized as the SIFT extractors do. An embedded_patches file checks each "
-        "photograph against its recorded image hash; a missing photograph falls "
-        "back to a verified .sift copy, and otherwise fails the step. A no-op "
-        "when thumbnails are present."
+        "photograph it reads against its recorded image hash; an image neither "
+        "source can supply fails the step. A no-op when thumbnails are present."
     ),
 )
 @click.option(
@@ -332,7 +333,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     Heavy columns:
       --drop-thumbnails                   Discard the per-image thumbnails
       --drop-patch-bitmaps                Discard the per-point patch bitmaps (frames kept)
-      --add-thumbnails                    Build thumbnails from the source photographs
+      --add-thumbnails                    Build thumbnails from the .sift files, else the photographs
       --add-patch-bitmaps [PARAMS]        Render patch bitmaps at the stored frames (reads source images)
       --minimal                           Drop both, and save minimal metadata (for a file that travels)
 

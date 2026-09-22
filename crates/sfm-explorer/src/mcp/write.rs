@@ -22,30 +22,44 @@ use crate::action_log::{interactive_text, tint_text, visibility_text, Kind, Laye
 use crate::scene::{NodeTint, TINT_PALETTE};
 use crate::state::AppState;
 
-pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) -> JsonReply {
+/// `open_reconstruction`: start the open, and answer with the reconstruction
+/// or with a handle, whichever the clock reaches first.
+///
+/// An open is a background task like an adjustment, and replies the way one
+/// does: a small file lands inside [`super::REPLY_DIRECTLY_WITHIN`] and answers
+/// with its reconstruction entry, and one that is still being read, or whose
+/// thumbnails and patch bitmaps are still being built, answers with a
+/// [`super::BackgroundReply`] handle. A refusal to begin, a path that is not a
+/// file or another operation running, is immediate, and the drain records it
+/// once as `open_reconstruction failed: ...`.
+pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) -> super::Outcome {
     let already_open = state
         .scene
         .iter()
         .any(|node| node.path.as_deref() == Some(path));
-    let before: Vec<crate::scene::ReconId> = state.scene.iter().map(|node| node.id).collect();
+    if let Err(message) = state.start_open(vec![path.to_path_buf()]) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the open just started");
+    super::Outcome::Deferred(super::Deferred::Background(super::BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::Opened { already_open },
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
 
-    // `load_file` always appends, so opening a path that is already open adds
-    // a second node for it. Its failure is *returned*, and becomes this tool's
-    // refusal -- which the drain then records once, as
-    // `open_reconstruction failed: …`.
-    state.load_file(path).map_err(ToolError::new)?;
-
-    // Whichever node is not in `before` is the one that arrived.
-    let node = state
-        .scene
-        .iter()
-        .find(|node| !before.contains(&node.id))
-        .ok_or_else(|| {
-            ToolError::new(format!(
-                "Loading {} produced no reconstruction.",
-                path.display()
-            ))
-        })?;
+/// What a landed open answers with: the reconstruction entry of the node it
+/// made, and whether its path was already open when the call was made.
+pub(super) fn opened_reply(
+    state: &AppState,
+    opened: Option<crate::scene::ReconId>,
+    already_open: bool,
+) -> JsonReply {
+    let node = opened.and_then(|id| state.node(id)).ok_or_else(|| {
+        ToolError::new("The open finished, but its reconstruction is no longer loaded.")
+    })?;
     let id = node.id;
     let mut entry = render::reconstruction(node, state.solo, super::bench::sift_index(state, id));
     entry

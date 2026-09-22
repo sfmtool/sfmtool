@@ -1,18 +1,20 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Display thumbnails: the file's own column shared, rows built from the
-//! photographs for a file without one, and none of it reaching a save.
+//! Display thumbnails: the file's own column shared, and for a file without
+//! one every row built at once, from the `.sift` first, the photograph second
+//! and the grey placeholder last.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use ndarray::Array4;
-use sfmtool_core::{SfmrReconstruction, THUMBNAIL_SIZE};
+use ndarray::{Array2, Array3, Array4};
+use sfmtool_core::progress::Progress;
+use sfmtool_core::{ObservationSource, SfmrReconstruction, THUMBNAIL_SIZE};
 
-use super::{row_for, DisplayThumbnails, PLACEHOLDER_GREY};
+use super::{row_for, BuiltFrom, DisplayThumbnails, PLACEHOLDER_GREY};
 use crate::scene::SceneNode;
-use crate::state::AppState;
 
 /// A directory of this test's own under the system temp dir, emptied first.
 pub(crate) fn temp_dir(name: &str) -> PathBuf {
@@ -29,6 +31,12 @@ pub(crate) fn colour_of(image: usize) -> [u8; 3] {
         200,
         (255 - image * 20 % 256) as u8,
     ]
+}
+
+/// The flat grey the `.sift` thumbnail of `image` is written as, which no
+/// photograph's colour matches.
+pub(crate) fn sift_grey_of(image: usize) -> u8 {
+    10 + image as u8
 }
 
 /// The demo reconstruction in workspace `dir`, with no thumbnails, and a flat
@@ -50,13 +58,71 @@ pub(crate) fn workspace_with_photographs(dir: &Path, missing: &[usize]) -> SfmrR
     recon
 }
 
-fn is_flat(row: ndarray::ArrayView3<'_, u8>, rgb: [u8; 3]) -> bool {
+/// Write a `.sift` beside each image in `images`, its thumbnail flat
+/// [`sift_grey_of`], and record its content hash in `recon`'s
+/// `sift_content_hashes` when `images` names it in `verified` too. A `.sift`
+/// whose hash is not recorded is one the reconstruction does not vouch for.
+pub(crate) fn write_sift_thumbnails(
+    recon: &mut SfmrReconstruction,
+    images: &[usize],
+    verified: &[usize],
+) {
+    for &image in images {
+        let path = recon.sift_path_for_image(image);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let data = sfmtool_sift_format::SiftData {
+            feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+            },
+            metadata: sfmtool_sift_format::SiftMetadata {
+                version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
+                image_name: recon.image_table.images[image].name.clone(),
+                image_file_xxh128: "0".repeat(32),
+                image_file_size: 1,
+                image_width: 96,
+                image_height: 54,
+                feature_count: 0,
+            },
+            content_hash: sfmtool_sift_format::SiftContentHash::default(),
+            positions_xy: Array2::zeros((0, 2)),
+            affine_shapes: Array3::zeros((0, 2, 2)),
+            descriptors: Array2::zeros((0, 128)),
+            thumbnail_y_x_rgb: Array3::from_elem(
+                (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+                sift_grey_of(image),
+            ),
+        };
+        sfmtool_sift_format::write_sift(&path, &data, 3).unwrap();
+        if !verified.contains(&image) {
+            continue;
+        }
+        let (_, _, hash) = sfmtool_sift_format::read_sift_metadata(&path).unwrap();
+        let digest = u128::from_str_radix(&hash.content_xxh128, 16).unwrap();
+        if let ObservationSource::SiftFiles {
+            sift_content_hashes,
+            ..
+        } = &mut recon.point_set.observations
+        {
+            sift_content_hashes[image] = digest.to_be_bytes();
+        }
+    }
+}
+
+pub(crate) fn is_flat(row: ndarray::ArrayView3<'_, u8>, rgb: [u8; 3]) -> bool {
     row.shape() == [THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3]
         && row
             .as_slice()
             .expect("a contiguous row")
             .chunks(3)
             .all(|p| p == rgb)
+}
+
+/// Build without a sink, which is what a caller that wants the rows and not
+/// the report does.
+fn build(recon: &SfmrReconstruction) -> (Option<Arc<DisplayThumbnails>>, BuiltFrom) {
+    DisplayThumbnails::build(recon, &Progress::none()).expect("nothing cancels it")
 }
 
 #[test]
@@ -71,91 +137,73 @@ fn a_file_with_thumbnails_shares_its_own_column() {
 
     let node = SceneNode::demo(recon);
     let display = node.display_thumbnails.as_ref().expect("the file's column");
-    assert!(!display.is_synthesized());
-    assert!(display.is_complete());
+    assert_eq!(display.len(), n);
     // Shared rather than copied: the row is a view into the table's own array.
-    let row = display.row("image_003.jpg").expect("a final row");
+    let row = display.row("image_003.jpg").expect("a row");
     assert_eq!(
         row.as_ptr(),
         column.index_axis(ndarray::Axis(0), 3).as_ptr()
     );
 }
 
+/// Each row comes from the first source that can supply it: a `.sift` the
+/// reconstruction vouches for, then the photograph, then the grey.
 #[test]
-fn a_node_opened_without_thumbnails_builds_rows_and_saves_none() {
-    let dir = temp_dir("builds");
-    let recon = workspace_with_photographs(&dir, &[]);
+fn a_row_comes_from_the_sift_first_the_photograph_second_and_the_grey_last() {
+    let dir = temp_dir("sources");
+    let mut recon = workspace_with_photographs(&dir, &[2, 5]);
+    // 0, 1 and 2 have a vouched-for .sift, 2 without its photograph; 3 has a
+    // .sift the reconstruction does not vouch for; 5 has neither.
+    write_sift_thumbnails(&mut recon, &[0, 1, 2, 3], &[0, 1, 2]);
     let n = recon.image_table.images.len();
-    let mut state = AppState::new();
-    let id = state.append_node(SceneNode::from_path(&dir.join("recon.sfmr"), recon));
 
-    let display = state.node(id).unwrap().display_thumbnails.clone();
-    let display = display.expect("photographs to build from");
-    assert!(display.is_synthesized());
-    display.wait();
-    assert_eq!(display.ready(), n);
-    for i in 0..n {
-        let row = display.row(&format!("images/photo_{i:02}.png")).unwrap();
-        assert!(
-            is_flat(row, colour_of(i)),
-            "row {i} is its photograph's resize"
-        );
+    let (display, from) = build(&recon);
+    let display = display.expect("rows to show");
+    assert_eq!(
+        from,
+        BuiltFrom {
+            sift: 3,
+            photographs: n - 4,
+            placeholders: 1,
+        }
+    );
+    let row = |i: usize| display.row(&format!("images/photo_{i:02}.png")).unwrap();
+    for i in [0, 1, 2] {
+        let g = sift_grey_of(i);
+        assert!(is_flat(row(i), [g, g, g]), "row {i} is its .sift copy");
     }
-
-    // The value never saw any of it.
-    let node = state.node(id).unwrap();
-    assert!(node.recon().image_table.thumbnails_y_x_rgb.is_none());
-
-    // One Action Log line when it finished, and only one.
-    state.report_display_thumbnails();
-    state.report_display_thumbnails();
-    let lines: Vec<String> = state
-        .action_log
-        .entries()
-        .map(|entry| entry.text.clone())
-        .filter(|text| text.contains("display thumbnail"))
-        .collect();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].starts_with(&format!("Built {n} display thumbnails")));
-
-    // And a save writes a file without thumbnails.
-    let out = dir.join("saved.sfmr");
-    state.save_node_as(id, &out).expect("a save");
-    let saved = sfmtool_sfmr_format::read_sfmr(&out).expect("a readable file");
-    assert!(saved.thumbnails_y_x_rgb.is_none());
+    assert!(
+        is_flat(row(3), colour_of(3)),
+        "an unvouched .sift is passed over"
+    );
+    assert!(
+        is_flat(row(4), colour_of(4)),
+        "row 4 is its photograph's resize"
+    );
+    assert!(is_flat(row(5), [PLACEHOLDER_GREY; 3]));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn a_photograph_that_cannot_be_read_gets_a_grey_row() {
-    let dir = temp_dir("unreadable");
-    let recon = workspace_with_photographs(&dir, &[2]);
-    let display = DisplayThumbnails::synthesize(&recon, None).expect("some photographs");
-    display.wait();
-
-    let grey = [PLACEHOLDER_GREY; 3];
-    assert!(is_flat(display.row("images/photo_02.png").unwrap(), grey));
-    assert!(is_flat(
-        display.row("images/photo_01.png").unwrap(),
-        colour_of(1)
-    ));
-    let line = display.take_finished_line("recon").expect("finished");
-    assert!(line.contains("1 could not be read"), "{line}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn a_node_whose_photographs_are_absent_has_no_display_column() {
+fn a_capture_with_nothing_to_build_from_has_no_display_column() {
     let dir = temp_dir("absent");
     let all: Vec<usize> = (0..8).collect();
     let recon = workspace_with_photographs(&dir, &all);
-    let mut state = AppState::new();
-    let id = state.append_node(SceneNode::from_path(&dir.join("recon.sfmr"), recon));
-
-    let node = state.node(id).unwrap();
-    assert!(node.display_thumbnails.is_none());
+    let (display, from) = build(&recon);
+    assert!(display.is_none());
+    assert_eq!(from.placeholders, recon.image_table.images.len());
     // Every panel falls back to its placeholder.
-    assert!(row_for(None, node.recon(), 0).is_none());
+    assert!(row_for(None, &recon, 0).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_build_that_is_cancelled_says_so() {
+    let dir = temp_dir("cancelled");
+    let recon = workspace_with_photographs(&dir, &[]);
+    let stop = AtomicBool::new(true);
+    let progress = Progress::none().cancelled_by(&stop);
+    assert!(DisplayThumbnails::build(&recon, &progress).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -163,15 +211,14 @@ fn a_node_whose_photographs_are_absent_has_no_display_column() {
 fn rows_follow_the_image_name_across_a_renumbering() {
     let dir = temp_dir("renumber");
     let recon = workspace_with_photographs(&dir, &[]);
-    let display = DisplayThumbnails::synthesize(&recon, None).expect("photographs");
-    display.wait();
+    let display = build(&recon).0.expect("photographs");
 
     // Delete Image renumbers the table: what was image 3 is image 2 now, and
     // the column built for the first version still draws it.
     let subset = recon
         .subset_by_image_indices(&[0, 1, 3, 4, 5, 6, 7], false)
         .unwrap();
-    let row = row_for(Some(&display), &subset, 2).expect("a final row");
+    let row = row_for(Some(&display), &subset, 2).expect("a row");
     assert!(is_flat(row, colour_of(3)));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -180,8 +227,7 @@ fn rows_follow_the_image_name_across_a_renumbering() {
 fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
     let dir = temp_dir("fallback");
     let recon = workspace_with_photographs(&dir, &[]);
-    let display = DisplayThumbnails::synthesize(&recon, None).expect("photographs");
-    display.wait();
+    let display = build(&recon).0.expect("photographs");
 
     let mut other = recon.clone();
     other.image_table.images[5].name = "elsewhere/new.png".into();

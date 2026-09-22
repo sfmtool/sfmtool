@@ -190,20 +190,21 @@ pub fn run() {
     #[cfg(not(feature = "mcp"))]
     start_mcp(&mut state, args.mcp_port, &proxy);
 
-    // Every path is loaded as its own scene node, in the order given — after
+    // Every path becomes its own scene node, in the order given, through one
+    // background open that the first frames drive to its end. It starts after
     // the endpoint has been brought up, so the Action Log reads in the order
     // the session happened and a file named on the command line sits under the
-    // session lines that explain where it came from.
-    for path in &args.paths {
-        if let Err(message) = state.load_file(path) {
-            state.action_log.fail(action_log::Kind::File, message);
-        }
+    // session lines that explain where it came from. The window comes up while
+    // the files are read, and the Background Task panel shows how far along
+    // the open is.
+    if !args.paths.is_empty() {
+        state.open_files(args.paths.clone());
     }
 
-    // `--demo`, after the files, so the generated node sits where it would if
-    // the human had opened their files and then used the menu. It goes through
+    // `--demo`, after starting the files, and made on the spot: it goes through
     // the same call the dialog's Load button makes, at the point count the
-    // dialog offers, so the node is indistinguishable from the menu's.
+    // dialog offers, so the node is indistinguishable from the menu's. The
+    // files land a few frames later and are appended after it.
     if args.demo {
         state.load_demo(state.demo_num_points);
     }

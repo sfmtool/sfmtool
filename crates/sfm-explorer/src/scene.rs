@@ -318,8 +318,8 @@ pub struct SceneNode {
     /// The thumbnails this node draws, or `None` when it has none to draw.
     ///
     /// The node's, not the value's: the file's own column when it carries
-    /// one, otherwise rows built from the photographs, keyed by image name so
-    /// one column serves every version. Never written into an `ImageTable`, so
+    /// one, otherwise the rows the open built from the `.sift` files and the
+    /// photographs, keyed by image name so one column serves every version. Never written into an `ImageTable`, so
     /// nothing drawn here can reach a save. See [`crate::display_thumbnails`].
     pub display_thumbnails: Option<Arc<DisplayThumbnails>>,
 }

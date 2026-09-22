@@ -352,6 +352,7 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
         }
         let mut task = real_task(operation);
         let versions = task.state.scene[0].history.versions().len();
+        let nodes = task.state.scene.len();
         let job = task.job.take().expect("the starter built one");
         cancel_before_it_runs(&mut task.state, task.id, operation, job);
         let entry = newest(&task.state);
@@ -365,6 +366,12 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
             task.state.scene[0].history.versions().len(),
             versions,
             "{} pushed a version after being cancelled",
+            operation.name,
+        );
+        assert_eq!(
+            task.state.scene.len(),
+            nodes,
+            "{} appended a node after being cancelled",
             operation.name,
         );
     }
@@ -418,6 +425,23 @@ struct RealTask {
 /// [`Operation::ALL`] honest.
 fn real_task(operation: Operation) -> RealTask {
     match operation.name {
+        // The open, over a saved file with photographs and patch frames: its
+        // job is the one File > Open starts, reading, building thumbnails and
+        // rendering bitmaps. It is started here on the fixture's node, which a
+        // real open does not lock; what is held to the claim is the job.
+        "Open" => {
+            let workspace = tempfile::tempdir().expect("a temporary directory");
+            let path = crate::state::open::tests::saved_with_photographs(workspace.path());
+            let mut state = AppState::new();
+            state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+            let id = state.scene[0].id;
+            RealTask {
+                state,
+                id,
+                job: Some(crate::state::open::open_job(vec![path])),
+                _workspace: Some(workspace),
+            }
+        }
         "Bundle adjust" => {
             let (state, id) = adjustable();
             let job = state

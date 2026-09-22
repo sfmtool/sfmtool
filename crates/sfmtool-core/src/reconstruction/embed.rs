@@ -255,7 +255,7 @@ impl SfmrReconstruction {
 /// `.sift` records `image_file_xxh128`) into 16 bytes, byte `i` from hex pair
 /// `[2i, 2i+2)` — the same `bytes.fromhex` convention the format's image hashes
 /// use. `None` if the string is not exactly 32 hex characters.
-fn decode_xxh128_hex(s: &str) -> Option<[u8; 16]> {
+pub(crate) fn decode_xxh128_hex(s: &str) -> Option<[u8; 16]> {
     if s.len() != 32 {
         return None;
     }

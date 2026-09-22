@@ -230,7 +230,7 @@ impl AppState {
     /// Whether the operation running on `id` is the index build.
     pub(crate) fn building_sift_index(&self, id: ReconId) -> bool {
         self.background_task().is_some_and(|task| {
-            task.node == id && task.operation.name == Operation::BUILD_SIFT_INDEX.name
+            task.node == Some(id) && task.operation.name == Operation::BUILD_SIFT_INDEX.name
         })
     }
 

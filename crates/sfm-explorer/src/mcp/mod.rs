@@ -205,6 +205,8 @@ pub(crate) enum Command {
     SaveReconstruction {
         reconstruction_label: String,
         path: Option<PathBuf>,
+        /// Write a minimal copy to `path` instead, leaving the node as it is.
+        minimal: bool,
     },
     DeletePoint {
         reconstruction_label: String,
@@ -878,12 +880,24 @@ pub(crate) struct BackgroundReply {
     pub(crate) operation_id: u64,
     /// What it is called, for the handle.
     pub(crate) operation_name: &'static str,
-    /// The node it is running on.
-    pub(crate) node: ReconId,
-    /// That node's label, for the handle.
+    /// What the call answers with once the operation has landed.
+    pub(crate) answer: Answer,
+    /// The label of the node it runs on, or the one an open's file suggests,
+    /// for the handle.
     pub(crate) label: String,
     /// When the call started it, which the window below is measured from.
     pub(crate) started: std::time::Instant,
+}
+
+/// What a call that started a background operation answers with once the
+/// operation has landed, the handle aside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answer {
+    /// The version the operation left on this node, as every edit answers.
+    Version(ReconId),
+    /// The reconstruction the open made, as `open_reconstruction` answers, with
+    /// whether the path was already open when the call was made.
+    Opened { already_open: bool },
 }
 
 /// How long a tool that starts a background operation waits for it before
@@ -995,7 +1009,7 @@ pub(crate) fn apply_with_window(
             &actors,
             detail,
         )),
-        Command::OpenReconstruction { path } => done(write::open_reconstruction(state, &path)),
+        Command::OpenReconstruction { path } => write::open_reconstruction(state, &path),
         Command::CloseReconstruction { target } => done(write::close_reconstruction(state, target)),
         Command::SelectReconstruction {
             reconstruction_label,
@@ -1067,10 +1081,12 @@ pub(crate) fn apply_with_window(
         Command::SaveReconstruction {
             reconstruction_label,
             path,
+            minimal,
         } => done(edit::save_reconstruction(
             state,
             &reconstruction_label,
             path.as_deref(),
+            minimal,
         )),
         Command::DeletePoint {
             reconstruction_label,

@@ -194,6 +194,7 @@ impl SfmrReconstruction {
                 // of the whole scene leaves their appearance unchanged, and the
                 // new value shares the old one's array.
                 patch_bitmaps_y_x_rgba: self.point_set.patch_bitmaps_y_x_rgba.clone(),
+                patch_bitmaps_for_display: self.point_set.patch_bitmaps_for_display,
                 has_normals: self.point_set.has_normals,
                 // Rotating a normal does not change how well-supported it is.
                 normal_confidence: self.point_set.normal_confidence.clone(),
@@ -515,6 +516,7 @@ impl SfmrReconstruction {
                 patch_u_halfvec_xyz: new_patch_u,
                 patch_v_halfvec_xyz: new_patch_v,
                 patch_bitmaps_y_x_rgba: new_patch_bitmaps,
+                patch_bitmaps_for_display: self.point_set.patch_bitmaps_for_display,
                 has_normals: self.point_set.has_normals,
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,
@@ -669,6 +671,7 @@ impl SfmrReconstruction {
                 patch_u_halfvec_xyz: new_patch_u,
                 patch_v_halfvec_xyz: new_patch_v,
                 patch_bitmaps_y_x_rgba: new_patch_bitmaps,
+                patch_bitmaps_for_display: self.point_set.patch_bitmaps_for_display,
                 has_normals: self.point_set.has_normals,
                 normal_confidence: new_normal_confidence,
                 point_constraints: new_point_constraints,

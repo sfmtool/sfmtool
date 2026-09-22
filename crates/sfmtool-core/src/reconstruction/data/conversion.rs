@@ -393,6 +393,7 @@ impl SfmrReconstruction {
                 patch_u_halfvec_xyz: data.patch_u_halfvec_xyz,
                 patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
                 patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba.map(Arc::new),
+                patch_bitmaps_for_display: false,
                 has_normals,
                 // Rides along as stored; the convention upgrade above leaves it
                 // alone because a confidence is frame-independent.
@@ -438,6 +439,10 @@ impl SfmrReconstruction {
     }
 
     /// Convert to the raw columnar I/O representation.
+    ///
+    /// A patch bitmap column marked
+    /// [`PointSet::patch_bitmaps_for_display`](super::PointSet::patch_bitmaps_for_display)
+    /// is left out, so neither a save nor [`Self::content_xxh128`] sees it.
     pub fn to_sfmr_data(&self) -> SfmrData {
         use ndarray::{Array1, Array2};
 
@@ -574,7 +579,13 @@ impl SfmrReconstruction {
             rig_frame_data: self.image_table.rig_frame_data.clone(),
             patch_u_halfvec_xyz: self.point_set.patch_u_halfvec_xyz.clone(),
             patch_v_halfvec_xyz: self.point_set.patch_v_halfvec_xyz.clone(),
-            patch_bitmaps_y_x_rgba: self.point_set.patch_bitmaps_y_x_rgba.as_deref().cloned(),
+            // A column rendered for display is not part of the reconstruction:
+            // no save writes it and no content hash covers it.
+            patch_bitmaps_y_x_rgba: if self.point_set.patch_bitmaps_for_display {
+                None
+            } else {
+                self.point_set.patch_bitmaps_y_x_rgba.as_deref().cloned()
+            },
             image_names,
             camera_indexes,
             quaternions_wxyz,

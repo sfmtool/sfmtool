@@ -1776,6 +1776,45 @@ fn open_reconstruction_on_an_unreadable_path_records_one_failed_entry() {
     );
 }
 
+/// An open goes to a worker like every other background operation, and the
+/// answer it comes back with is the reconstruction entry it always gave.
+#[test]
+fn open_reconstruction_defers_and_answers_with_the_reconstruction() {
+    let dir = temp_dir("open_defers");
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.join("scene.sfmr");
+    SfmrReconstruction::demo(16).save(&path).unwrap();
+    let (mut state, mut viewer) = quiet_scene();
+
+    let open = |state: &mut AppState, viewer: &mut Viewer3D| {
+        let map = json!({ "path": path.display().to_string() })
+            .as_object()
+            .cloned()
+            .expect("an object");
+        let command = tools::parse("open_reconstruction", Some(&map)).expect("a well-formed call");
+        let pending = match agent(state, viewer, command) {
+            Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+            Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+            _ => panic!("the open must defer"),
+        };
+        assert_eq!(pending.operation_name, "Open");
+        state.finish_background_task();
+        match super::edit::background_reply(state, &pending).expect("it finished") {
+            Ok(ToolOutput::Json(value)) => value,
+            Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+            Err(e) => panic!("expected success, got refusal: {e}"),
+        }
+    };
+    let reply = open(&mut state, &mut viewer);
+    assert_eq!(reply["label"], "scene", "{reply}");
+    assert_eq!(reply["already_open"], false);
+    // A second open of the same path is a second node, and says so.
+    let reply = open(&mut state, &mut viewer);
+    assert_eq!(reply["label"], "scene (2)", "{reply}");
+    assert_eq!(reply["already_open"], true);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── Reading the Action Log back ─────────────────────────────────────────
 
 /// A `get_action_log` command with every field spelled out.
@@ -4973,7 +5012,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     let pending = super::BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: std::time::Instant::now() - super::REPLY_DIRECTLY_WITHIN,
     };
@@ -5692,6 +5731,60 @@ fn saving_a_node_from_no_file_without_a_path_is_refused() {
     assert!(error.0.contains("came from no file"), "{error}");
 }
 
+/// `minimal: true` writes a copy where it is told and leaves the node where it
+/// was; it needs a path, and never goes over the node's own file.
+#[test]
+fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
+    let dir = temp_dir("save_minimal");
+    let own = dir.join("recon.sfmr");
+    let copy = dir.join("recon-minimal.sfmr");
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(&own, SfmrReconstruction::demo(64)));
+    let mut viewer = Viewer3D::new();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "recon", "point": 3 }),
+    );
+    let points = state.scene[0].point_count();
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({
+            "reconstruction_label": "recon",
+            "path": copy.display().to_string(),
+            "minimal": true,
+        }),
+    );
+    assert_eq!(reply["minimal"], true);
+    assert_eq!(reply["reconstruction_label"], "recon");
+    assert_eq!(reply["path"], copy.display().to_string());
+    let written = sfmtool_sfmr_format::read_sfmr(&copy).expect("a readable copy");
+    assert!(written.thumbnails_y_x_rgb.is_none());
+    assert!(written.metadata.lineage.is_empty());
+    assert!(written.metadata.workspace.absolute_path.is_empty());
+    assert_eq!(written.metadata.operation, "minimal");
+    assert_eq!(written.metadata.point_count as usize, points);
+    let node = &state.scene[0];
+    assert_eq!(node.path.as_deref(), Some(own.as_path()));
+    assert!(
+        state.is_dirty(node.id),
+        "a minimal copy saves nothing of the node"
+    );
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({ "reconstruction_label": "recon", "minimal": true }),
+    );
+    assert!(error.0.contains("pass path"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The editing tools name their reconstruction rather than defaulting to the
 /// selection, and an unknown label is refused naming what is loaded.
 #[test]
@@ -5850,6 +5943,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         Command::SaveReconstruction {
             reconstruction_label: "a".to_string(),
             path: None,
+            minimal: false,
         }
     );
 }

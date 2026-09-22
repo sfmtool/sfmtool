@@ -10,12 +10,15 @@ reproduce the file's columns for either observation source — including an
 frame.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from sfmtool._sfmtool.io import (
     POINT_CONSTRAINT_NAMES,
     read_sfmr,
+    read_sfmr_metadata,
     verify_sfmr,
     write_sfmr,
 )
@@ -508,3 +511,43 @@ class TestOptionalThumbnails:
     def test_patch_bitmap_resolution_reads_no_pixels(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         assert recon.patch_bitmap_resolution is None
+
+
+class TestMinimalSave:
+    """``save(minimal=True)`` writes the metadata half of a minimal file through
+    ``SfmrReconstruction::clear_minimal_metadata``, the definition the viewer's
+    Save As Minimal shares, after the stamp every ``operation`` save writes."""
+
+    def test_a_minimal_save_records_no_machine_and_no_history(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        workspace = Path(recon.workspace_dir)
+        out = tmp_path / "published" / "minimal.sfmr"
+        out.parent.mkdir()
+        recon.save(
+            out,
+            operation="xform",
+            tool_options={"transforms": ["Minimal"]},
+            minimal=True,
+        )
+        meta = read_sfmr_metadata(out)
+        assert meta["workspace"]["absolute_path"] == ""
+        assert "lineage" not in meta
+        assert meta["tool_options"] == {"transforms": ["Minimal"]}
+        assert meta["operation"] == "xform"
+        assert meta["tool"] == "sfmtool"
+        # The relative path is recomputed from where the file now is.
+        loaded = SfmrReconstruction.load(out)
+        assert Path(loaded.workspace_dir) == workspace
+
+    def test_an_ordinary_save_keeps_the_path_and_merges_the_options(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        inherited = dict(recon.metadata()["tool_options"])
+        out = tmp_path / "ordinary.sfmr"
+        recon.save(out, operation="xform", tool_options={"transforms": ["Nothing"]})
+        meta = read_sfmr_metadata(out)
+        assert meta["workspace"]["absolute_path"] == str(recon.workspace_dir)
+        assert meta["tool_options"] == {**inherited, "transforms": ["Nothing"]}

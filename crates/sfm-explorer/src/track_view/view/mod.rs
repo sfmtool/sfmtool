@@ -83,9 +83,8 @@ pub struct PointTrackView {
     inverse_depth_z: f32,
     /// Condition number of the triangulation's normal matrix; NaN when undefined.
     condition_number: f32,
-    /// Cached thumbnail textures keyed by image. Only final rows are cached: a
-    /// row still being built from its photograph is drawn as the placeholder
-    /// and asked for again on the next frame.
+    /// Cached thumbnail textures keyed by image. An image with no picture is
+    /// drawn as the placeholder and never cached.
     thumbnail_textures: HashMap<ImageRef, egui::TextureHandle>,
     /// The node's display column the rows are drawn from, as the last frame
     /// was handed it.

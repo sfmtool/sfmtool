@@ -12,8 +12,16 @@
 //! not bit for bit, so a caller that must reproduce stored rows exactly (such
 //! as `sfm xform --add-thumbnails`) uses the extractors' own OpenCV path
 //! instead. The viewer uses this one for display thumbnails.
+//!
+//! [`verified_sift_thumbnail`] reads the row an image's `.sift` already holds,
+//! checked against the reconstruction's record of that file. A caller filling
+//! in an absent column tries it before the photograph, since it is the same row
+//! already reduced.
 
-use crate::THUMBNAIL_SIZE;
+use ndarray::Array3;
+
+use super::embed::decode_xxh128_hex;
+use crate::{SfmrReconstruction, THUMBNAIL_SIZE};
 
 /// One output sample's source taps along one axis: `(source index, weight)`,
 /// the weights summing to one.
@@ -110,6 +118,57 @@ pub fn thumbnail_from_rgb(pixels: &[u8], width: usize, height: usize) -> Vec<u8>
     resize_area(pixels, width, height, 3, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
 }
 
+/// Image `index`'s thumbnail from its `.sift` file, when that file verifiably
+/// belongs to the image.
+///
+/// The `.sift` is the one [`SfmrReconstruction::sift_path_for_image`] names. In
+/// a `sift_files` reconstruction it belongs when its stored content hash is the
+/// image's `sift_content_hashes` entry; in an `embedded_patches` one, when its
+/// recorded `image_file_xxh128` is the image's `image_file_hashes` entry, the
+/// hash that says it was extracted from the photograph the reconstruction was
+/// built from. `None` when there is no such file, it cannot be read, or it does
+/// not match.
+///
+/// A `.sift` thumbnail is already the 128 x 128 row a reconstruction carries,
+/// made by the extractor from the photograph, so reading it is a decompression
+/// of 48 KiB where the photograph is a full decode and a resize. That is why a
+/// caller filling in a missing column tries it first and the photograph second.
+///
+/// # Example
+///
+/// ```no_run
+/// use sfmtool_core::progress::Progress;
+/// use sfmtool_core::reconstruction::thumbnail::verified_sift_thumbnail;
+/// use sfmtool_core::SfmrReconstruction;
+/// # fn run(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+/// let recon = SfmrReconstruction::load(path, &Progress::none())?;
+/// let found = (0..recon.image_count())
+///     .filter(|&i| verified_sift_thumbnail(&recon, i).is_some())
+///     .count();
+/// println!("{found} of {} thumbnails are in the .sift files", recon.image_count());
+/// # Ok(())
+/// # }
+/// ```
+pub fn verified_sift_thumbnail(recon: &SfmrReconstruction, index: usize) -> Option<Array3<u8>> {
+    if index >= recon.image_table.images.len() || recon.workspace_dir.as_os_str().is_empty() {
+        return None;
+    }
+    let path = recon.sift_path_for_image(index);
+    if !path.is_file() {
+        return None;
+    }
+    let (metadata, content_hash, thumbnail) =
+        sfmtool_sift_format::read_sift_thumbnail(&path).ok()?;
+    let belongs = if let Some(hashes) = recon.image_file_hashes() {
+        decode_xxh128_hex(&metadata.image_file_xxh128) == Some(*hashes.get(index)?)
+    } else if let Some(hashes) = recon.sift_content_hashes() {
+        decode_xxh128_hex(&content_hash.content_xxh128) == Some(*hashes.get(index)?)
+    } else {
+        false
+    };
+    belongs.then_some(thumbnail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +202,84 @@ mod tests {
     fn the_same_size_is_the_identity() {
         let pixels: Vec<u8> = (0..5 * 4 * 3).map(|i| (i * 37 % 256) as u8).collect();
         assert_eq!(resize_area(&pixels, 5, 4, 3, 5, 4), pixels);
+    }
+
+    /// A `.sift` for `name` under `workspace`, whose thumbnail is flat `value`,
+    /// recorded as extracted from a photograph hashing to `image_hash`.
+    fn write_sift_for(workspace: &std::path::Path, name: &str, value: u8, image_hash: &str) {
+        use ndarray::{Array2, Array3};
+        use sfmtool_sift_format::*;
+        let data = SiftData {
+            feature_tool_metadata: FeatureToolMetadata {
+                feature_tool: "sfmtool".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+            },
+            metadata: SiftMetadata {
+                version: 1,
+                image_name: name.into(),
+                image_file_xxh128: image_hash.into(),
+                image_file_size: 1,
+                image_width: 64,
+                image_height: 64,
+                feature_count: 0,
+            },
+            content_hash: SiftContentHash::default(),
+            positions_xy: Array2::zeros((0, 2)),
+            affine_shapes: Array3::zeros((0, 2, 2)),
+            descriptors: Array2::zeros((0, 128)),
+            thumbnail_y_x_rgb: Array3::from_elem((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3), value),
+        };
+        write_sift(&workspace.join(format!("{name}.sift")), &data, 3).unwrap();
+    }
+
+    #[test]
+    fn a_sift_thumbnail_is_read_only_when_its_hash_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recon = SfmrReconstruction::demo(12);
+        recon.workspace_dir = dir.path().to_path_buf();
+        let names: Vec<String> = recon
+            .image_table
+            .images
+            .iter()
+            .map(|image| image.name.clone())
+            .collect();
+        let image_hash = "00112233445566778899aabbccddeeff";
+        write_sift_for(dir.path(), &names[0], 40, image_hash);
+        write_sift_for(dir.path(), &names[1], 90, image_hash);
+
+        // A sift_files reconstruction names each .sift by its content hash:
+        // image 0's record matches its file, image 1's does not.
+        let stored = |name: &str| {
+            let path = dir.path().join(format!("{name}.sift"));
+            let (_, _, hash) = sfmtool_sift_format::read_sift_metadata(&path).unwrap();
+            decode_xxh128_hex(&hash.content_xxh128).unwrap()
+        };
+        let first = stored(&names[0]);
+        if let crate::ObservationSource::SiftFiles {
+            sift_content_hashes,
+            ..
+        } = &mut recon.point_set.observations
+        {
+            sift_content_hashes[0] = first;
+        }
+        let row = verified_sift_thumbnail(&recon, 0).expect("a matching .sift");
+        assert!(row.iter().all(|&b| b == 40));
+        assert!(verified_sift_thumbnail(&recon, 1).is_none(), "hash differs");
+        assert!(verified_sift_thumbnail(&recon, 2).is_none(), "no file");
+        assert!(verified_sift_thumbnail(&recon, 99).is_none(), "no image");
+
+        // An embedded_patches reconstruction names the photograph instead.
+        let mut embedded = recon.clone();
+        let n = embedded.image_table.images.len();
+        let mut hashes = vec![[0u8; 16]; n];
+        hashes[1] = decode_xxh128_hex(image_hash).unwrap();
+        embedded.point_set.observations = crate::ObservationSource::EmbeddedPatches {
+            keypoints_xy: ndarray::Array2::zeros((embedded.point_set.tracks.len(), 2)),
+            image_file_hashes: hashes,
+        };
+        let row = verified_sift_thumbnail(&embedded, 1).expect("the photograph's .sift");
+        assert!(row.iter().all(|&b| b == 90));
+        assert!(verified_sift_thumbnail(&embedded, 0).is_none());
     }
 }

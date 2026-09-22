@@ -383,45 +383,50 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
 `SceneNode::display_thumbnails`), which comes from one of two sources:
 
 - **The file's own column.** When the `.sfmr` carries thumbnails, the display column is
-  the image table's own `Arc`, shared rather than copied, and every row is final from the
-  start.
-- **Rows built from the photographs.** When the file carries none (a version 11 file
-  written without them), the viewer builds display thumbnails when the node opens. Each
-  row is the photograph at `workspace_dir.join(name)`, the path Image Detail reads
-  full-resolution images from, decoded without applying EXIF orientation (the `image`
-  crate's default, matching the SIFT extractors) and resized to 128 x 128 by area
-  averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. That
-  resize matches the format's in method rather than bit for bit, which is all a display
-  needs.
+  the image table's own `Arc`, shared rather than copied.
+- **Rows the open builds.** When the file carries none (a version 11 file written
+  without them), the open that reads it builds every row before the node appears, as a
+  stage of its background task (`thumbnails`, [background-tasks.md](background-tasks.md)
+  § "Opening a file"). `DisplayThumbnails::build` builds the rows in parallel, each from
+  the first source that can supply it:
+  1. **The image's `.sift`**, when it verifiably belongs to the image
+     (`sfmtool_core::reconstruction::thumbnail::verified_sift_thumbnail`, which reads the
+     thumbnail, the metadata and the stored hashes alone with
+     `sfmtool_sift_format::read_sift_thumbnail`). In a `sift_files` file the `.sift`'s
+     content hash must be the image's `sift_content_hashes` entry; in an
+     `embedded_patches` file its recorded `image_file_xxh128` must be the image's
+     `image_file_hashes` entry. A `.sift` thumbnail is the 128 x 128 row an extractor
+     already reduced from the photograph, so reading it is a 48 KiB decompression where
+     the photograph is a full decode and a resize.
+  2. **The photograph** at `workspace_dir.join(name)`, the path Image Detail reads
+     full-resolution images from, decoded by `state::decode_full_res` (no EXIF
+     orientation applied, matching the SIFT extractors) and resized to 128 x 128 by area
+     averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. That
+     resize matches the format's in method rather than bit for bit, which is all a
+     display needs.
+  3. **A flat placeholder**, the neutral mid-grey `PLACEHOLDER_GREY` (128), for an image
+     neither source can supply; its path is logged.
+
+  When not one row comes from either source, the node has no display column: the
+  frustums draw their outlines without image quads, and the Image Browser and Track View
+  draw the placeholder rectangle. The build writes no Action Log line of its own; the
+  open's `thumbnails` stage says how many rows came from each source.
 
 **Display thumbnails are the node's, not the value's.** They live on the scene node beside
-its history and never enter an `ImageTable`, so nothing the viewer builds can reach a save:
-a file opened without thumbnails is saved without them, whatever was drawn. The viewer has
-no command that writes them into a value; `sfm xform --add-thumbnails` is how a file gains
-thumbnails. They are **keyed by image name**, so the one column built when the node opens
-serves every version: Delete Image renumbers the image table and Undo renumbers it back,
-and a name still finds its row. An image the column was not built for falls back to the
-value's own column when it carries one.
+its history and never enter an `ImageTable`, so nothing the viewer builds can reach a save
+or a content hash: a file opened without thumbnails is saved without them, whatever was
+drawn. The viewer has no command that writes them into a value; `sfm xform
+--add-thumbnails` is how a file gains thumbnails. They are **keyed by image name**, so the
+one column built when the node opens serves every version: Delete Image renumbers the image
+table and Undo renumbers it back, and a name still finds its row. An image the column was
+not built for falls back to the value's own column when it carries one.
 
-**Building runs off the GUI thread and fills in progressively.** It is not a document
-operation: it changes no value, costs no version, and does not occupy the one
-background-task slot edits use ([background-tasks.md](background-tasks.md)), so a large
-capture never locks out editing. It runs on a worker pool of its own, one thread fewer
-than the machine has, with no cap on the image count. Rows are built in image order,
-except that the Image Browser hands the pool the cells on screen that are still waiting,
-which are built first. Each finished row wakes the event loop and is visible on the next
-frame; until then its cell draws the placeholder rectangle a texture not yet loaded gets,
-and a Track View row the same. One Action Log line records the build when every row is
-done (`Built 17 display thumbnails for <node> from its photographs in 0.1 s`).
+**Every row is final when the node appears**, so no panel ever draws a row that is still
+being built. The Image Browser, Track View and the frustum atlas each read the column once
+and keep what they read.
 
-**A photograph that cannot be read gets a flat placeholder**: the row is a neutral
-mid-grey, the image's path is logged once, and the Action Log line counts such images. If
-no photograph can be read at all (the workspace did not resolve, or none of its images is
-on disk), the node has no display column: the frustums draw their outlines without image
-quads, and the Image Browser and Track View draw the placeholder.
-
-- Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`. Only final rows are
-  cached; a row still being built is asked for again once the column's ready count moves.
+- Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`. An image with no picture
+  is not cached, and its cell draws the placeholder rectangle.
 - Lazy: load a few thumbnails per frame to avoid stalling. Visible thumbnails load on the
   frame they are drawn.
 

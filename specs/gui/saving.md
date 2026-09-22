@@ -9,7 +9,8 @@ about that sequence -- it says which version the file on disk now holds, and
 everything the window shows about unsaved work is read off the distance between
 that version and the cursor.
 
-This spec describes the two save commands, what a save does to the node's
+This spec describes the three save commands (Save, Save As and the minimal
+copy Save As Minimal writes), what a save does to the node's
 history, the marks that say a node has changes the disk does not, the prompt
 that stands between unsaved changes and a close, and what the Action Log
 records. What a version is, and how the cursor walks, are
@@ -27,6 +28,7 @@ in [app.rs](../../crates/sfm-explorer/src/app.rs), and the close prompt is
 |------|----------|--------------|
 | `File > Save` | `Ctrl/Cmd+S` | Writes the selected node's value over the node's own path. |
 | `File > Save As...` | `Ctrl/Cmd+Shift+S` | Asks for a path, writes there, and re-points the node at it. |
+| `File > Save As Minimal...` | none | Asks for a path and writes a minimal copy there; the node is left as it was. |
 
 **Save is disabled for a node with no path** -- demo data -- with the hover
 text `The selected reconstruction came from no file
@@ -88,6 +90,54 @@ the only copy of the one being replaced.
 After the write, `History::set_disk_serial` names the version that reached the
 disk, and the Edit History panel's disk mark follows it
 ([edit-history.md](edit-history.md) § "The Edit History panel").
+
+## Save As Minimal
+
+`File > Save As Minimal...` writes the file `sfm xform --minimal` writes, as an
+export of the value at the cursor (`AppState::save_minimal_copy`). It asks for
+the path through the same native save dialog, suggesting `{label}-minimal.sfmr`.
+
+**One definition of minimal.** The copy is
+`SfmrReconstruction::to_minimal`
+([minimal.rs](../../crates/sfmtool-core/src/reconstruction/minimal.rs)), which
+the binding's `save(minimal=True)` shares through `stamp_save` and
+`clear_minimal_metadata`
+([xform-command.md](../cli/reconstruction/xform/xform-command.md#--minimal)). It
+carries no thumbnails and no patch bitmaps, whether the file's own or ones the
+open rendered for display; no `lineage`; an empty `workspace.absolute_path`;
+`workspace.relative_path` computed from the chosen file's directory; `operation`
+`minimal`, `tool` `sfm-explorer` and `tool_version` the crate's; and empty
+`tool_options`. The patch frames and normals stay.
+
+A value with an overlay is **materialised for the copy only**: nothing is pushed
+onto the history, because nothing about the node changes. **The node keeps its
+path, its label, its history and its disk serial**, so it is exactly as dirty or
+as clean as before, and the Action Log row is what says where the copy went.
+
+It is **refused over the node's own file**, with *"A minimal copy of {label}
+cannot replace the file it came from; choose another path."*, since the node
+would then claim a file that no longer holds what it shows. A running operation
+does not refuse it: reading the value at the cursor changes nothing about the
+node, and the worker reads the same allocation. A dismissed dialog writes and
+logs nothing.
+
+The row is kind `File`, with the stages `save minimal`, and under it
+`materialise` when there was an overlay to fold, `minimal` and `write`:
+
+```
+Saved a minimal copy of run_a at v7 to D:\published\run_a.sfmr
+```
+
+## What a plain save writes
+
+A Save or Save As writes the columns the file had. The display thumbnails the
+open builds for a file without thumbnails are the node's and never reach a
+value, so no save writes them. The patch bitmaps the open renders for a file
+without bitmaps are in the value, marked `PointSet::patch_bitmaps_for_display`,
+and the mark keeps them out of the written file and out of the content hash: a
+Save with nothing to fold writes the file's own content back under its own hash,
+and a Save that folds an edit hashes the columns it writes
+([background-tasks.md](background-tasks.md) § "Opening a file").
 
 ## The dirty marker
 
@@ -169,6 +219,14 @@ Save As writes elsewhere and re-points the node; that a save writes one log entr
 naming the path and the version; that a failed write is refused with a reason and
 changes nothing; and that the window title marks the first node while it is
 dirty.
+
+`crates/sfm-explorer/src/state/open/tests.rs` covers Save As Minimal: that it
+writes a file with neither heavy column, no lineage, no absolute path, a
+relative path from its own directory and the viewer's provenance, while the node
+keeps its path, label, versions, disk serial and dirty mark and the row names
+the copy; that it is refused over the node's own file, which is left untouched;
+and that a plain Save of a node whose open filled both columns in writes neither
+and keeps the file's hash.
 
 `crates/sfm-explorer/src/close_prompt/tests.rs` covers the modal itself: that
 asking twice keeps the first question, that a prompt never asked draws nothing

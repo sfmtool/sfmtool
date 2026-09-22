@@ -119,12 +119,33 @@ pub(super) fn jump_to_version(state: &mut AppState, label: &str, serial: &str) -
 /// refuses when it came from nowhere, Save As writes where it is told and
 /// re-points the node. No dialog is involved on either side -- the path-taking
 /// half is the method, and the chooser is the menu's own.
+///
+/// `minimal: true` is `AppState::save_minimal_copy`, File > Save As Minimal:
+/// a copy written to the path given, which leaves the node where it was.
 pub(super) fn save_reconstruction(
     state: &mut AppState,
     label: &str,
     path: Option<&Path>,
+    minimal: bool,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
+    if minimal {
+        // An export: the node is not re-pointed and not marked clean, so the
+        // reply names where the copy went and the version it holds.
+        let path = path.ok_or_else(|| {
+            ToolError::new(
+                "A minimal copy is written to a path of its own; pass path with minimal: true.",
+            )
+        })?;
+        state.save_minimal_copy(id, path).map_err(ToolError::new)?;
+        let node = state.node(id).expect("just resolved");
+        return Ok(json!({
+            "reconstruction_label": node.label,
+            "path": path.display().to_string(),
+            "serial": node.history.current_version().serial.to_string(),
+            "minimal": true,
+        }));
+    }
     match path {
         Some(path) => state.save_node_as(id, path),
         None => state.save_node(id),
@@ -187,7 +208,7 @@ pub(super) fn retriangulate_all_points(state: &mut AppState, label: &str) -> sup
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: task.started,
     }))
@@ -217,7 +238,7 @@ pub(super) fn prune_covered_observations(
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: task.started,
     }))
@@ -321,7 +342,7 @@ pub(super) fn bundle_adjust(
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: task.started,
     }))
@@ -349,7 +370,7 @@ pub(super) fn convert_to_embedded_patches(state: &mut AppState, label: &str) -> 
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: task.started,
     }))
@@ -414,15 +435,20 @@ pub(super) fn background_reply(
             // is the `Err` arm. So the field is here for the reason it is on
             // every other edit reply -- one question, one answer, whichever
             // family the caller is in.
-            Ok(report) => {
-                version_reply(state, pending.node, Some(report.clone())).map(|mut reply| {
-                    reply
-                        .as_object_mut()
-                        .expect("a version reply is an object")
-                        .insert("changed".into(), json!(true));
-                    super::ToolOutput::Json(reply)
-                })
-            }
+            Ok(report) => match pending.answer {
+                super::Answer::Version(node) => version_reply(state, node, Some(report.clone()))
+                    .map(|mut reply| {
+                        reply
+                            .as_object_mut()
+                            .expect("a version reply is an object")
+                            .insert("changed".into(), json!(true));
+                        super::ToolOutput::Json(reply)
+                    }),
+                super::Answer::Opened { already_open } => {
+                    super::write::opened_reply(state, outcome.opened, already_open)
+                        .map(super::ToolOutput::Json)
+                }
+            },
             Err(message) => Err(ToolError::new(message.clone())),
         });
     }

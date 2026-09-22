@@ -941,7 +941,7 @@ fn started_or(
     Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        node: id,
+        answer: super::Answer::Version(id),
         label: task.label.clone(),
         started: task.started,
     }))

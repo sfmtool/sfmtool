@@ -113,6 +113,24 @@ fn test_read_metadata_only() {
 }
 
 #[test]
+fn test_read_thumbnail_only() {
+    let data = make_test_data();
+    let dir = std::env::temp_dir().join("sift_test_thumbnail");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+
+    write_sift(&path, &data, 3).unwrap();
+
+    let (meta, hash, thumbnail) = read_sift_thumbnail(&path).unwrap();
+    let full = read_sift(&path).unwrap();
+    assert_eq!(thumbnail, data.thumbnail_y_x_rgb);
+    assert_eq!(meta.image_file_xxh128, full.metadata.image_file_xxh128);
+    assert_eq!(hash.content_xxh128, full.content_hash.content_xxh128);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_content_hash_populated() {
     let data = make_test_data();
     let dir = std::env::temp_dir().join("sift_test_hash");

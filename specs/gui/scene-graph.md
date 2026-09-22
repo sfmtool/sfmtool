@@ -1064,7 +1064,8 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
 ## Loading, CLI, Window Title
 
 - **File > Open…** uses `rfd`'s `pick_files()` (multi-select) and **appends**
-  one node per chosen file. Opening a path that is already loaded appends a
+  one node per chosen file, all of them read by one background open
+  ([background-tasks.md](background-tasks.md) § "Opening a file"). Opening a path that is already loaded appends a
   second node for it, with a history of its own: a node's value changes only
   through that history, so nothing re-reads a node in place. Two nodes over one
   file are two independent documents, told apart in the tree by the `" (2)"`
@@ -1077,11 +1078,12 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
   panel.
 - **Demo data** becomes a node labeled `demo` (`path: None`) and appends like
   any other load. This also fixes the current demo-load path that skips the
-  cache/selection resets `load_file` performs — node lifecycle is now one code
+  cache/selection resets `append_node` performs for an opened file, so node lifecycle is one code
   path.
 - **CLI**: `sfm explorer` accepts multiple paths
-  (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` loads every
-  trailing argument instead of only `args[1]`.
+  (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` opens every
+  trailing argument, in order, as one background open
+  ([background-tasks.md](background-tasks.md) § "Opening a file").
 - **Window title**: unchanged for zero or one file (`SfM Explorer`,
   `SfM Explorer - run_a.sfmr`); with N > 1 files:
   `SfM Explorer - run_a.sfmr (+2)`. The exact base title is load-bearing for

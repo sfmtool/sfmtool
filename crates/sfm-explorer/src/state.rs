@@ -5,7 +5,7 @@
 
 use egui_dock::DockState;
 
-use crate::action_log::{ActionLog, Actor, Kind};
+use crate::action_log::{ActionLog, Kind};
 use crate::dock::Tab;
 use crate::goto_point::{self, GotoPointDialog};
 use crate::image_detail::{Look, ViewGeometry};
@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) mod edits;
+pub(crate) mod open;
 mod ops;
 mod save;
 
@@ -837,15 +838,6 @@ impl AppState {
     /// look at it, and no panel should be left showing another file's row.
     pub fn append_node(&mut self, mut node: SceneNode) -> ReconId {
         node.label = unique_label(&self.scene, &node.label);
-        // A file without thumbnails gets display thumbnails built from its
-        // photographs, off this thread, filling in as they finish. They stay the
-        // node's and never reach its value, so a save writes none.
-        if node.display_thumbnails.is_none() {
-            node.display_thumbnails = crate::display_thumbnails::DisplayThumbnails::synthesize(
-                node.recon(),
-                self.wake.clone(),
-            );
-        }
         let id = node.id;
         self.scene.push(node);
         // Muted: arriving *is* a selection change, but the caller's own entry
@@ -860,26 +852,6 @@ impl AppState {
         // a solo left over from before would hide it the moment it loaded.
         self.solo = None;
         id
-    }
-
-    /// Record one Action Log line for each node whose display thumbnails have
-    /// just finished building from its photographs.
-    ///
-    /// Run once a frame. The line is the viewer's own: nobody asked for the
-    /// thumbnails, the node's opening did.
-    pub(crate) fn report_display_thumbnails(&mut self) {
-        let lines: Vec<String> = self
-            .scene
-            .iter()
-            .filter_map(|node| {
-                node.display_thumbnails
-                    .as_ref()?
-                    .take_finished_line(&node.label)
-            })
-            .collect();
-        for line in lines {
-            self.action_log.record_as(Actor::Viewer, Kind::File, line);
-        }
     }
 
     /// A node's label, or a placeholder if it has already left the scene.
@@ -929,11 +901,12 @@ impl AppState {
     /// One entry, not one per node: `Close All` is a single action, and a
     /// twelve-node scene should not push twelve lines through the log for it.
     ///
-    /// Refused as a whole while a background operation is running, since the
-    /// node it is running on is one of the ones this would close.
+    /// Refused as a whole while a background operation is running on a node,
+    /// since that node is one of the ones this would close. An open locks no
+    /// node, and the files it lands are appended to the empty scene.
     pub fn close_all(&mut self) -> Result<(), String> {
-        if let Some(process) = self.background_task.as_ref() {
-            if let Some(why) = self.busy_refusal(process.node) {
+        if let Some(node) = self.background_task.as_ref().and_then(|task| task.node) {
+            if let Some(why) = self.busy_refusal(node) {
                 return Err(why);
             }
         }

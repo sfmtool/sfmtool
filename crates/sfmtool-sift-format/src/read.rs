@@ -154,6 +154,36 @@ pub fn read_sift_keypoints(path: &Path, count: usize) -> Result<SiftKeypoints, S
     Ok((centers, affine))
 }
 
+/// One image's thumbnail, with the metadata and content hashes that say which
+/// photograph and which archive it came from.
+pub type SiftThumbnail = (SiftMetadata, SiftContentHash, Array3<u8>);
+
+/// Read only the thumbnail of a `.sift` file, with its metadata and stored
+/// content hashes.
+///
+/// Decompresses the two JSON entries and the thumbnail and nothing else, so a
+/// consumer that wants every image's picture (a viewer filling in the
+/// thumbnails a reconstruction does not carry) never touches the feature
+/// columns. The hashes are the ones the archive stores, which is what a caller
+/// matches against a reconstruction's record of the file; checking them against
+/// the bytes is [`crate::verify_sift`]'s job.
+pub fn read_sift_thumbnail(path: &Path) -> Result<SiftThumbnail, SiftError> {
+    let file = open_file(path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
+    let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
+    let pixels: Vec<u8> = read_binary_array(
+        &mut archive,
+        &thumbnail_entry_name(),
+        THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
+    )?;
+    let thumbnail = Array3::from_shape_vec((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3), pixels)
+        .map_err(|e| SiftError::ShapeMismatch(format!("thumbnail_y_x_rgb reshape: {e}")))?;
+    Ok((metadata, content_hash, thumbnail))
+}
+
 /// Read only metadata from a `.sift` file (fast, no binary data).
 pub fn read_sift_metadata(
     path: &Path,

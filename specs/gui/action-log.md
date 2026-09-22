@@ -622,7 +622,7 @@ owner that knows it happened:
 
 | Method | Why |
 |--------|-----|
-| `load_file(&Path) -> Result<ReconId, String>` | The failure is returned, not written, so the caller words it (§ "Threading and the MCP seam") |
+| `start_open(Vec<PathBuf>) -> Result<(), String>` | A refusal to begin is returned, not written, so the caller words it (§ "Threading and the MCP seam"); the open's own row is written when its task lands |
 | `set_solo(Option<ReconId>)` | The set form the MCP tool needs, with `toggle_solo` resolving a click into it — so one method owns the entry |
 | `clear_selection()` / `deselect_point()` | So that "drop everything" is one entry rather than the three deselects it is made of |
 
@@ -719,10 +719,11 @@ field it changed):
   receives. So that a failure is not logged twice, once by the method in its
   own words and once by the drain, **a method returns its failure rather than
   logging it, and the caller logs**: every `AppState` method the MCP layer
-  calls that can fail returns a `Result`. `load_file` therefore returns
-  `Result<ReconId, String>` and writes no entry on `Err`; the File menu logs
+  calls that can fail returns a `Result`. `start_open` therefore returns
+  `Result<(), String>` and writes no entry on `Err`; the File menu logs
   `Failed to load …` from that `Err`, and the drain logs
-  `open_reconstruction failed: …` from the same `Err`. One failure, one entry,
+  `open_reconstruction failed: …` from the same `Err`. An open that starts
+  writes its one row, success or failure, when its background task lands. One failure, one entry,
   in the vocabulary of whoever asked. This also removes the MCP writer's
   scrape of the status field to recover a load error. The catalogue's
   `Failed to load` row is the GUI caller's text;
@@ -750,7 +751,7 @@ same buffer the panel draws, on the same thread.
 ## Implementation notes
 
 - **Where the `record` calls go** is the whole of the implementation, and the
-  seams are these. `AppState` mutating methods: `load_file`,
+  seams are these. `AppState` mutating methods: the open's `append_opened`,
   `close_node`, `close_all`, `select_recon`, `select_camera`, `select_image`,
   `select_point`, `clear_selection`, `deselect_point`, `set_solo`, `align_node`,
   `resect_image`, `reset_node_transform`, plus the demo loader. `Viewer3D`'s
@@ -779,7 +780,7 @@ same buffer the panel draws, on the same thread.
   `Cleared selection` when it dropped both, `Deselected image` or
   `Deselected point` when it dropped one.
 - **Ordering with `append_node`.** `append_node` writes nothing of its own and
-  mutes the selection change it makes. `load_file` records after it returns
+  mutes the selection change it makes. The open records after it returns
   the label, since the text needs the deduplicated label (`global (2)`), not
   the file stem.
 - **The status field is removed, not shadowed.** Every reader goes through

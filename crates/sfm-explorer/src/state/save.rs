@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Writing a node back out: Save, Save As, and what the two of them owe the
-//! history.
+//! history; and the minimal copy, which owes it nothing.
 //!
 //! See `specs/gui/saving.md`. Save writes the value at the node's cursor over
 //! the node's own path; Save As writes it to a chosen path and re-points the
@@ -26,6 +26,13 @@
 //!   What keeps an id taken before the save naming the same point afterwards is
 //!   the session's version graph, which holds the map of every step including
 //!   the materialisation ([`crate::point_ids::resolve`] walks it).
+//!
+//! Save As Minimal is the third command and the odd one out:
+//! [`AppState::save_minimal_copy`] writes a copy with the heavy columns and the
+//! incidental metadata left out, and leaves the node, its history and its disk
+//! mark exactly as they were. A plain save writes the columns the file had:
+//! display thumbnails never reach a value, and patch bitmaps the open rendered
+//! for display are left out by the writer.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -33,6 +40,7 @@ use std::time::Instant;
 
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
+use sfmtool_core::reconstruction::minimal::SaveStamp;
 use sfmtool_core::EditedReconstruction;
 
 use crate::action_log::Kind;
@@ -50,6 +58,9 @@ const SAVE_OPERATION: &str = "edit";
 
 /// What the viewer records as the tool behind a file it writes.
 const SAVE_TOOL: &str = "sfm-explorer";
+
+/// What the viewer records as the operation behind a minimal copy it writes.
+const MINIMAL_OPERATION: &str = "minimal";
 
 impl AppState {
     /// Whether `id`'s cursor is somewhere other than the version its file holds.
@@ -107,6 +118,86 @@ impl AppState {
     /// Write `id` to `path` and re-point the node at it.
     pub fn save_node_as(&mut self, id: ReconId, path: &Path) -> Result<(), String> {
         self.write_node(id, path, true)
+    }
+
+    /// Write a minimal copy of `id`'s value at the cursor to `path`: the file
+    /// `sfm xform --minimal` writes, with the viewer as its tool.
+    ///
+    /// No thumbnails, no patch bitmaps (the file's own or ones the open
+    /// rendered for display), no `lineage`, an empty `workspace.absolute_path`,
+    /// `workspace.relative_path` from `path`'s directory, and `operation`
+    /// `minimal` by `sfm-explorer` with empty `tool_options`
+    /// ([`SfmrReconstruction::to_minimal`](sfmtool_core::SfmrReconstruction::to_minimal),
+    /// the one definition the binding's `save(minimal=True)` shares). A value
+    /// with point edits on it is materialised for the copy and nothing else.
+    ///
+    /// **The node is left exactly as it was.** A minimal copy is an export: the
+    /// node keeps its path, its label, its history and its disk mark, so it is
+    /// no cleaner and no dirtier than before, and the Action Log row says where
+    /// the copy went. For the same reason the copy is refused over the node's
+    /// own file, which would leave the node claiming a file that no longer
+    /// holds what it shows. A running operation does not refuse it, since
+    /// nothing about the node changes.
+    pub fn save_minimal_copy(&mut self, id: ReconId, path: &Path) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
+        let message = {
+            let save = collector.phase("save minimal");
+            let node = self
+                .node(id)
+                .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            if node.path.as_deref().is_some_and(|own| same_file(own, path)) {
+                return Err(format!(
+                    "A minimal copy of {} cannot replace the file it came from; choose \
+                     another path.",
+                    node.label
+                ));
+            }
+            let version = node.history.current_version();
+            if version.value.is_none() {
+                return Err(format!(
+                    "{}'s current version was released to keep it inside the history \
+                     budget; there is nothing to write.",
+                    node.label
+                ));
+            }
+            let edited = node.history.current();
+            let materialised;
+            let base = if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                &*edited.base
+            } else {
+                let _phase = save.phase("materialise");
+                materialised = edited.materialize().0;
+                &materialised
+            };
+            let minimal = {
+                let _phase = save.phase("minimal");
+                base.to_minimal(
+                    path,
+                    &SaveStamp {
+                        operation: MINIMAL_OPERATION,
+                        tool: SAVE_TOOL,
+                        tool_version: env!("CARGO_PKG_VERSION"),
+                    },
+                    Default::default(),
+                )
+            };
+            {
+                let _phase = save.phase("write");
+                minimal
+                    .save(path)
+                    .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+            }
+            format!(
+                "Saved a minimal copy of {} at {} to {}",
+                node.label,
+                version.serial,
+                path.display()
+            )
+        };
+        self.action_log
+            .record_done(Kind::File, started, message, collector.take());
+        Ok(())
     }
 
     /// The body of both: materialise if there is an overlay, write, and mark the
@@ -243,5 +334,14 @@ impl AppState {
         let id = self.scene[index].id;
         self.follow_selection_forward(id);
         Ok(())
+    }
+}
+
+/// Whether `a` and `b` name one file: compared canonically where both exist,
+/// and as written otherwise.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }

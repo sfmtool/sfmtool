@@ -369,6 +369,17 @@ share, each charged its observations and its consensus bitmap
 memory, of which 1 189 MB are those two columns -- that is some 165 MB for a
 bulk edit, so the budget holds twenty-odd of them, or any number of point edits.
 
+**Columns the open filled in for display** are counted by where they live. A
+node's display thumbnails, which the open builds for a file carrying none, are
+held once on the node beside the history and belong to no version, so no version
+is charged for them. Patch bitmaps the open renders for such a file are in the
+value, marked `PointSet::patch_bitmaps_for_display`, so every reader of the
+column sees them as it would a file's own; they are charged like any bitmap
+column, and like one are shared by pointer between versions that keep them. The
+mark leaves them out of every save and every content hash, so the value keeps
+the identity of the file it was read from
+([background-tasks.md](background-tasks.md) § "Opening a file").
+
 It is a constant, not a setting: it is a ceiling that keeps a session from
 exhausting memory, not a quantity anyone has a reason to tune from the window.
 

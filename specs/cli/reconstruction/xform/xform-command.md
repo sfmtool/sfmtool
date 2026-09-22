@@ -507,7 +507,19 @@ bitmaps.
 
 #### `--add-thumbnails`
 
-Builds the thumbnail column from the **source photographs**. For each image,
+Builds the thumbnail column from each image's **`.sift` copy first and its
+source photograph second**.
+
+**The `.sift` copy**, when it verifiably belongs to the image: in a
+`sift_files` file, by its content hash against `sift_content_hashes`; in an
+`embedded_patches` file, by its recorded `image_file_xxh128` against
+`image_file_hashes`. An `embedded_patches` file records no `.sift` link at all,
+so a `.sift` there is found only by the path `feature_prefix_dir` gives. A
+`.sift` thumbnail is the row the extractor already reduced from the photograph,
+so reading it is a 48 KiB decompression where the photograph is a full decode
+and a resize, and the two give the same bytes. That is why it is read first.
+
+**The photograph**, for an image whose `.sift` is missing or unverified:
 `workspace_dir / name` is decoded as colour with its EXIF orientation ignored,
 resized to 128 x 128 by area averaging and converted to RGB. That is the SIFT
 extractors' own decode and resize
@@ -516,24 +528,19 @@ extractors' own decode and resize
 `.sift` thumbnail an extractor writes for the same photograph, and to the row a
 file carried before `--drop-thumbnails`. The decode deliberately does not go
 through [_workspace_image.py](../../../../src/sfmtool/_workspace_image.py)
-`read_workspace_image`, which applies the orientation tag.
+`read_workspace_image`, which applies the orientation tag. In an
+`embedded_patches` file a photograph read is first checked against the image's
+stored `image_file_hashes` entry, the hash that says "this is still the
+photograph the reconstruction was built from"; a mismatch fails the step.
 
-In an `embedded_patches` file each photograph found is first checked against
-the image's stored `image_file_hashes` entry, the hash that says "this is still
-the photograph the reconstruction was built from"; a mismatch fails the step.
+The step prints how many rows came from each source. The column is whole or
+absent and the format forbids a placeholder row, so an image that yields no row
+from either source fails the step, and the error names every such image.
 
-**The photograph is preferred over the image's `.sift` copy.** A thumbnail is a
-downscale of the photograph, so the photograph is the source and the `.sift` is
-a cache of it; an `embedded_patches` file records no `.sift` link at all, so a
-`.sift` there is found only by the path `feature_prefix_dir` gives. The `.sift`
-copy is the fallback when a photograph is missing or cannot be decoded, and only
-when that `.sift` can be verified: in a `sift_files` file, by its content hash
-against `sift_content_hashes`; in an `embedded_patches` file, by its recorded
-`image_file_xxh128` against `image_file_hashes`.
-
-The column is whole or absent and the format forbids a placeholder row, so an
-image that yields no row from either source fails the step, and the error names
-every such image.
+The viewer fills in a missing column for display in the same order, with its
+own decode for the photograph
+([multi-panel-image-browser.md](../../../gui/multi-panel-image-browser.md)
+§ "Thumbnail loading").
 
 #### `--add-patch-bitmaps [resolution=<R>,sampler=<S>]`
 
@@ -557,11 +564,14 @@ The render is the one place a representative is fused for a patch whose
 placement and keypoints are settled:
 [`fuse_patch_bitmap`](../../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs)
 runs the sub-pixel kernel with no Gauss-Newton step and a single sweep, and
-`fuse_patch_cloud_bitmaps` is its whole-cloud form, parallel over points, bound
+`fuse_patch_cloud_bitmaps` is its whole-cloud form, parallel over points. It takes
+one view per image as an `Option`, leaving a `None` view out of every patch's
+view set, and a `Progress` that counts `patches` and can cancel it. It is bound
 as `PatchCloud.render_bitmaps(recon, images, resolution=24,
 sampler="bilinear_mip", progress=None)`, which returns the `(P, R, R, 4)` array
 `clone_with_changes(patch_bitmaps=...)` takes. The bench commit
-(`bench::fit::fuse_bitmap`) calls the same function for one track.
+(`bench::fit::fuse_bitmap`) calls the same function for one track, and the
+viewer's open runs the whole-cloud form for a file whose bitmaps are absent.
 
 Its bitmaps therefore equal what `--refine-keypoints` renders for a patch whose
 keypoints it did not move, and what the bench commits. They are not
@@ -602,10 +612,18 @@ It has two parts, which take effect at different times:
   `operation`, `tool`, `tool_version`, the counts and both workspace paths after
   every step has run, so `--minimal` anywhere in the chain marks the output, and
   the save (`SfmrReconstruction.save(..., minimal=True)`) writes it minimal.
-  Giving it twice is the same as giving it once.
+  Giving it twice is the same as giving it once. The clearing is
+  `SfmrReconstruction::clear_minimal_metadata`, run after the save's
+  `stamp_save`, in
+  [minimal.rs](../../../../crates/sfmtool-core/src/reconstruction/minimal.rs).
+  That is the one definition of a minimal file: the viewer's
+  `File > Save As Minimal...` writes through `to_minimal`, which drops both
+  columns and runs the same stamp and clearing
+  ([saving.md](../../../gui/saving.md) § "Save As Minimal").
 
 Thumbnails are in the shorthand as well as bitmaps because the purpose is the
-smallest file, and both are rebuilt from the photographs by the `--add-*` steps.
+smallest file, and the `--add-*` steps rebuild both: the thumbnails from the
+`.sift` files or the photographs, the bitmaps from the photographs.
 A caller that wants the thumbnails kept writes `--minimal --add-thumbnails`.
 
 **`--minimal` drops `lineage` entirely.** The output is a new file with no
@@ -696,9 +714,10 @@ The write is `SfmrReconstruction.save(path, operation="xform",
 tool_options={"transforms": [...]})`, which stamps `operation`, `tool`,
 `tool_version` and the counts, recomputes both workspace paths from the output's
 location, merges `transforms` into the inherited `tool_options`, and passes
-`lineage` through unchanged. With `minimal=True`, set when `--minimal` is in the
-chain, it instead clears `absolute_path`, drops `lineage` and replaces
-`tool_options` (see [`--minimal`](#--minimal)).
+`lineage` through unchanged. The stamp is `SfmrReconstruction::stamp_save` in
+sfmtool-core. With `minimal=True`, set when `--minimal` is in the chain, it then
+clears `absolute_path`, drops `lineage` and replaces `tool_options` through
+`clear_minimal_metadata` (see [`--minimal`](#--minimal)).
 
 ### Rust primitives behind the operations
 

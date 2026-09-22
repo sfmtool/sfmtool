@@ -7,8 +7,9 @@ A reconstruction's image thumbnails and patch bitmaps are conveniences for a
 viewer: neither says where a camera or a point is, and together they are nearly
 all of a file's bytes. ``--drop-thumbnails`` and ``--drop-patch-bitmaps``
 discard a column and keep every row of everything; ``--add-thumbnails`` and
-``--add-patch-bitmaps`` fill an absent column back in from the source
-photographs; ``--minimal`` drops both and marks the output to be saved with
+``--add-patch-bitmaps`` fill an absent column back in (the thumbnails from
+the ``.sift`` files first and the photographs second, the bitmaps from the
+photographs); ``--minimal`` drops both and marks the output to be saved with
 minimal metadata. None of them moves a point, renumbers a row or changes a
 keypoint.
 
@@ -78,16 +79,22 @@ def _restore_note(step: str, column: str) -> None:
 
 
 class AddThumbnailsTransform:
-    """Build the thumbnail column from the source photographs.
+    """Build the thumbnail column, from each image's ``.sift`` first and its
+    photograph second.
 
-    Each row is the photograph at ``workspace_dir / name`` decoded the way the
-    SIFT extractors decode it (EXIF orientation ignored) and resized the way
-    they resize it, so it is byte-identical to the ``.sift`` thumbnail an
-    extractor writes for the same photograph. In an ``embedded_patches`` file
-    each photograph is first checked against its recorded ``image_file_hashes``
-    entry. A missing photograph falls back to the image's ``.sift`` copy when
-    that can be verified; otherwise the step fails, naming every image it could
-    not build, since the column is whole or absent.
+    A ``.sift`` thumbnail is the row an extractor already reduced from the
+    photograph, so it is read first, when that ``.sift`` verifiably belongs to
+    the image: its content hash is the image's ``sift_content_hashes`` entry in
+    a ``sift_files`` file, and its recorded ``image_file_xxh128`` is the
+    image's ``image_file_hashes`` entry in an ``embedded_patches`` file.
+    Otherwise the row is the photograph at ``workspace_dir / name`` decoded the
+    way the SIFT extractors decode it (EXIF orientation ignored) and resized
+    the way they resize it, so it is byte-identical to the ``.sift`` thumbnail
+    an extractor writes for the same photograph. In an ``embedded_patches``
+    file that photograph is first checked against its recorded
+    ``image_file_hashes`` entry. An image neither source can supply fails the
+    step, naming every image it could not build, since the column is whole or
+    absent.
     """
 
     def __init__(self) -> None:
@@ -111,28 +118,31 @@ class AddThumbnailsTransform:
         failures: list[str] = []
         from_sift = 0
         for index, name in enumerate(recon.image_names):
-            path = workspace / name
-            row = None
-            if path.is_file():
-                if embedded and bytes.fromhex(xxh128_of_file(path)) != bytes(
-                    image_hashes[index]
-                ):
-                    failures.append(
-                        f"{name} (not the photograph the reconstruction was built "
-                        "from: its image_file_hashes entry does not match)"
-                    )
-                    continue
-                image = read_image_bgr(path)
-                if image is not None:
-                    row = thumbnail_of_bgr(image)
-            if row is None:
-                row = _verified_sift_thumbnail(recon, index, name)
-                if row is not None:
-                    from_sift += 1
-            if row is None:
-                failures.append(f"{name} (photograph missing or unreadable)")
+            row = _verified_sift_thumbnail(recon, index, name)
+            if row is not None:
+                from_sift += 1
+                rows.append(np.ascontiguousarray(row, dtype=np.uint8))
                 continue
-            rows.append(np.ascontiguousarray(row, dtype=np.uint8))
+            path = workspace / name
+            if not path.is_file():
+                failures.append(f"{name} (no verified .sift, and no photograph)")
+                continue
+            if embedded and bytes.fromhex(xxh128_of_file(path)) != bytes(
+                image_hashes[index]
+            ):
+                failures.append(
+                    f"{name} (no verified .sift, and not the photograph the "
+                    "reconstruction was built from: its image_file_hashes entry "
+                    "does not match)"
+                )
+                continue
+            image = read_image_bgr(path)
+            if image is None:
+                failures.append(
+                    f"{name} (no verified .sift, and the photograph is unreadable)"
+                )
+                continue
+            rows.append(np.ascontiguousarray(thumbnail_of_bgr(image), dtype=np.uint8))
 
         if failures:
             listed = "\n    ".join(failures)
@@ -141,10 +151,11 @@ class AddThumbnailsTransform:
                 f"{len(failures)} of {recon.image_count} images, and the column "
                 f"is whole or absent:\n    {listed}"
             )
-        source = "photographs"
-        if from_sift:
-            source += f" ({from_sift} from verified .sift copies)"
-        print(f"  Built thumbnails of {recon.image_count} images from their {source}")
+        from_photographs = recon.image_count - from_sift
+        print(
+            f"  Built thumbnails of {recon.image_count} images: {from_sift} from "
+            f"verified .sift copies, {from_photographs} from photographs"
+        )
         thumbnails = (
             np.stack(rows)
             if rows

@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 
 use sfmtool_core::patch::keypoint_subpixel::{fuse_patch_cloud_bitmaps, KeypointSubpixelParams};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
@@ -80,17 +81,28 @@ impl PyPatchCloud {
         };
         let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
-        let views: Vec<ProjectedImage<'_>> = (0..posed.len())
-            .map(|i| ProjectedImage {
-                camera: &posed.cameras[i],
-                cam_from_world: &posed.poses[i],
-                pyramid: &pyramids[i],
+        let views: Vec<Option<ProjectedImage<'_>>> = (0..posed.len())
+            .map(|i| {
+                Some(ProjectedImage {
+                    camera: &posed.cameras[i],
+                    cam_from_world: &posed.poses[i],
+                    pyramid: &pyramids[i],
+                })
             })
             .collect();
         let counter = progress.as_ref().map(|p| p.handle());
-        let column = py.detach(|| {
-            fuse_patch_cloud_bitmaps(&self.inner, recon, &views, &params, counter.as_deref())
-        });
+        let column = py
+            .detach(|| {
+                fuse_patch_cloud_bitmaps(
+                    &self.inner,
+                    recon,
+                    &views,
+                    &params,
+                    counter.as_deref(),
+                    &Progress::none(),
+                )
+            })
+            .expect("nothing cancels a fuse given no cancel flag");
         Ok(column.into_pyarray(py))
     }
 }

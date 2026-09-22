@@ -61,6 +61,7 @@ pub struct PointSet {
     pub patch_u_halfvec_xyz: Option<Array2<f32>>,
     pub patch_v_halfvec_xyz: Option<Array2<f32>>,
     pub patch_bitmaps_y_x_rgba: Option<Arc<Array4<u8>>>,
+    pub patch_bitmaps_for_display: bool,
     pub has_normals: bool,
     pub normal_confidence: Option<Vec<u8>>,
     pub point_constraints: Option<PointConstraintColumns>,
@@ -134,6 +135,19 @@ touched it. `subset_by_image_indices` builds a column of the kept rows when its
 input has one and keeps `None` otherwise; every other edit shares the input's
 `Option<Arc>`. The demo reconstruction carries none, since it has no
 photographs and a zero column would be the placeholder rows the format forbids.
+
+**A bitmap column rendered for display is marked so, and never saved.**
+`PointSet::patch_bitmaps_for_display` says the column was rendered to be drawn
+rather than read or computed as part of the reconstruction: the viewer's open
+renders the column of a file that carries none and sets it, so the bench, the
+edits and the panels read it as they would a file's own. A marked column is
+**left out of what `to_sfmr_data` emits**, and so out of every save and every
+content hash (`content_xxh128` runs the writer over `to_sfmr_data`): the value
+keeps the identity of the file it was read from, and a save writes the columns
+that file had. Every pass that selects or reorders the column's rows
+(`filter_points_by_mask`, `subset_by_image_indices`, the similarity transform,
+the materialisation, the prune) carries the mark with them; a producer that
+builds a new column clears it, as `clone_with_changes(patch_bitmaps=...)` does.
 
 **The derived indexes belong to the point set even though two of them are sized
 by the image count.** `observation_offsets`, `image_feature_to_point`,

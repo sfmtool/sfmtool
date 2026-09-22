@@ -7,7 +7,7 @@
 ``--add-patch-bitmaps`` and the ``--minimal`` shorthand, end to end on the
 17-image seoul_bull reconstruction. The properties under test: the drops keep
 every row of everything; ``--add-thumbnails`` rebuilds the column byte for byte
-from the photographs; ``--add-patch-bitmaps`` moves nothing and renders what the
+from the ``.sift`` copies first and the photographs second; ``--add-patch-bitmaps`` moves nothing and renders what the
 zero-step fuse renders; ``--minimal`` writes the smallest file with metadata that
 names no machine and no history. See
 ``specs/cli/reconstruction/xform/xform-command.md``.
@@ -124,9 +124,8 @@ def test_add_patch_bitmaps_takes_a_bare_or_joined_value():
 
 
 def test_drop_then_add_thumbnails_reproduces_the_bytes(embedded_sfmr, tmp_path):
-    # The input's thumbnails were copied out of the `.sift` files, which the
-    # extractor made from the photographs; rebuilding them from the photographs
-    # must give the same bytes.
+    # The input's thumbnails were copied out of the `.sift` files, and adding
+    # them back reads those same `.sift` copies first.
     dropped = tmp_path / "dropped.sfmr"
     _xform(embedded_sfmr, dropped, "--drop-thumbnails")
     assert read_sfmr(dropped)["thumbnails_y_x_rgb"] is None
@@ -141,6 +140,17 @@ def test_drop_then_add_thumbnails_reproduces_the_bytes(embedded_sfmr, tmp_path):
     np.testing.assert_array_equal(
         after["thumbnails_y_x_rgb"], before["thumbnails_y_x_rgb"]
     )
+
+
+def test_add_thumbnails_from_the_photographs_reproduces_the_bytes(embedded_sfmr):
+    # With no `.sift` to read, every row is the photograph's decode and resize,
+    # which is what the extractor wrote into the `.sift` in the first place.
+    recon = SfmrReconstruction.load(embedded_sfmr)
+    original = np.asarray(recon.thumbnails_y_x_rgb).copy()
+    for name in recon.image_names:
+        get_sift_path_from_recon(recon, name).unlink()
+    rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
+    np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
 
 
 def test_add_thumbnails_on_sift_files_reproduces_the_bytes(seoul_bull_workspace):
@@ -175,12 +185,45 @@ def test_add_thumbnails_is_a_no_op_when_present(embedded_sfmr, capsys):
     )
 
 
-def test_a_missing_photograph_falls_back_to_its_verified_sift(embedded_sfmr):
+def test_a_verified_sift_is_read_before_the_photograph(embedded_sfmr, capsys):
+    # Image 3's photograph is replaced by another of the capture, which would
+    # fail its hash check if it were read; its `.sift` is read first, so it
+    # never is.
+    recon = SfmrReconstruction.load(embedded_sfmr)
+    original = np.asarray(recon.thumbnails_y_x_rgb).copy()
+    workspace = Path(recon.workspace_dir)
+    shutil.copy(workspace / recon.image_names[7], workspace / recon.image_names[3])
+    rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
+    np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
+    assert (
+        "17 from verified .sift copies, 0 from photographs" in capsys.readouterr().out
+    )
+
+
+def test_a_missing_photograph_is_read_from_its_verified_sift(embedded_sfmr):
     recon = SfmrReconstruction.load(embedded_sfmr)
     original = np.asarray(recon.thumbnails_y_x_rgb).copy()
     (Path(recon.workspace_dir) / recon.image_names[3]).unlink()
     rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
     np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
+
+
+def test_a_sift_that_is_not_the_images_falls_back_to_the_photograph(
+    embedded_sfmr, capsys
+):
+    # Image 2's `.sift` is replaced by image 7's, whose recorded photograph
+    # hash is not image 2's: it is passed over, and the photograph is read.
+    recon = SfmrReconstruction.load(embedded_sfmr)
+    original = np.asarray(recon.thumbnails_y_x_rgb).copy()
+    shutil.copy(
+        get_sift_path_from_recon(recon, recon.image_names[7]),
+        get_sift_path_from_recon(recon, recon.image_names[2]),
+    )
+    rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
+    np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
+    assert (
+        "16 from verified .sift copies, 1 from photographs" in capsys.readouterr().out
+    )
 
 
 def test_a_missing_photograph_with_no_sift_fails_naming_it(embedded_sfmr):
@@ -199,8 +242,10 @@ def test_a_different_photograph_fails_naming_it(embedded_sfmr):
     workspace = Path(recon.workspace_dir)
     name = recon.image_names[2]
     # Another photograph of the capture in its place: decodable, and not the one
-    # the reconstruction was built from.
+    # the reconstruction was built from. Its `.sift` is gone, so the photograph
+    # is what is read.
     shutil.copy(workspace / recon.image_names[7], workspace / name)
+    get_sift_path_from_recon(recon, name).unlink()
     bare = DropThumbnailsTransform().apply(recon)
     with pytest.raises(ValueError, match="image_file_hashes") as error:
         AddThumbnailsTransform().apply(bare)

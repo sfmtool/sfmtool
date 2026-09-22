@@ -421,8 +421,8 @@ texture array atlas. Outputs opaque color to 3 targets.
 
 The atlas is filled from the node's **display column**
 ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs)): the
-file's own thumbnail column when it carries one, otherwise rows the viewer builds
-from the source photographs off the GUI thread (see
+file's own thumbnail column when it carries one, otherwise the rows the open built
+from each image's `.sift` or photograph before the node appeared (see
 [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). A node with no display column and a value with no column of its own
 gets no atlas.
@@ -445,16 +445,13 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    feels as it grows.
 3. Creates the image quad bind group (uniforms + texture array view + sampler)
 
-A cell whose row is still being built from its photograph holds a flat
-mid-grey placeholder. Every frame, `refresh_thumbnails()` compares the display
-column's ready count with the one the atlas was filled at, and when rows have
-finished since it writes those cells, one `write_texture` each, and nothing
-else; the frame's `thumbnails` phase runs again for it. The atlas is kept, not
-rebuilt, while the display column, the value's own column and the image list
+Every row is final when the node appears, so the atlas is written once. A cell
+for an image with no picture in either column holds a flat mid-grey
+placeholder. The atlas is kept, not rebuilt, while the display column, the value's own column and the image list
 are the ones it was built from (`UploadedThumbnails` in
 [upload/thumbnails.rs](../../crates/sfm-explorer/src/scene_renderer/upload/thumbnails.rs)
-holds all three), which is every edit that leaves the image list alone.
-
+holds all three: the display column and the value's column by pointer, and the
+image names), which is every edit that leaves the image list alone.
 
 The shader receives `images_per_page` as a uniform so it can compute the
 texture array layer and within-page UV from the flat `frustum_index`.

@@ -1326,20 +1326,21 @@ fn edit_menu_items() {
     .expect("the Edit menu is missing an item");
 }
 
-/// The File menu's two save items, and which of them applies to demo data.
+/// The File menu's three save items, and which of them apply to demo data.
 ///
-/// Both are matched on a name *prefix*: each carries its keyboard shortcut in
-/// the button's text, and the shortcut is spelled by the platform (`Ctrl+S`
+/// Save and Save As are matched on a name *prefix*: each carries its keyboard
+/// shortcut in the button's text, and the shortcut is spelled by the platform (`Ctrl+S`
 /// against `⌘S`), so an exact name would be asserting egui's formatting rather
-/// than the menu -- the same reason `edit_menu_items` above names only the one
-/// item with no shortcut.
+/// than the menu, for the same reason `edit_menu_items` above names only the one
+/// item with no shortcut. Save As Minimal has none, and is matched exactly.
 ///
 /// Demo data came from no file — `--demo` appends a generated node, whose path
 /// is `None` exactly as the menu's is — so there is nothing for Save to write
-/// over and Save As is the only way out. Both items are nonetheless present:
+/// over and Save As is the only way out; Save As Minimal writes a copy of any
+/// node, from a file or not. All three items are nonetheless present:
 /// an action that vanishes when it does not apply reads as unimplemented.
 /// Presence is
-/// all this asserts: which of the two is enabled is not read here, because the
+/// all this asserts: which of them is enabled is not read here, because the
 /// accessibility tree does not report egui's disabled state the same way on
 /// every platform (Linux never matched an `enabled="false"` selector), and the
 /// enabled logic, like what each item does, is covered headlessly in
@@ -1350,13 +1351,16 @@ fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
     let app = attach(_guard.child());
 
     // The menu opening confirms `Save As...`, which is this test's first
-    // assertion; only `Save` is left to look up.
+    // assertion; `Save` and `Save As Minimal...` are left to look up.
     app.probe(r#"button[name="File"]"#)
         .press_revealing(&app.probe(r#"button[name^="Save As..."]"#), CONTENT_TIMEOUT)
         .expect("File menu item 'Save As...' did not appear");
     app.probe(r#"button[name^="Save "]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("File menu item 'Save' did not appear");
+    app.probe(r#"button[name="Save As Minimal..."]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("File menu item 'Save As Minimal...' did not appear");
 }
 
 /// File > Quit exits the process.

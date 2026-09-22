@@ -105,6 +105,19 @@ pub struct PointSet {
     /// bitmaps share one copy. Nothing writes through it: a producer that
     /// changes the bitmaps builds a new array and wraps it.
     pub patch_bitmaps_y_x_rgba: Option<Arc<Array4<u8>>>,
+    /// Whether `patch_bitmaps_y_x_rgba` was rendered for display rather than
+    /// read or computed as part of the reconstruction.
+    ///
+    /// The viewer renders the column of a file that carries none and sets this,
+    /// so the bench, the edits and the panels that read the column see it as
+    /// they would a file's own. A column marked so is **left out of what
+    /// [`SfmrReconstruction::to_sfmr_data`](super::SfmrReconstruction::to_sfmr_data)
+    /// emits**, and so out of every save and every content hash: the value
+    /// keeps the identity of the file it was read from, and a save writes the
+    /// columns that file had. Every pass that selects or reorders the column's
+    /// rows carries the mark with them; a producer that builds a new column
+    /// clears it.
+    pub patch_bitmaps_for_display: bool,
     /// Whether this reconstruction carries per-point normals. When `false`, each
     /// point's inline `normal` is left zero and the columnar `normals_xyz` array
     /// is neither built nor written. `true` for everything loaded from versions 1

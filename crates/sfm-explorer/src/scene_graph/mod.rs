@@ -280,7 +280,7 @@ impl SceneGraphPanel {
         // walk below borrows the scene mutably.
         let busy = state
             .background_task()
-            .map(|task| task.node)
+            .and_then(|task| task.node)
             .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
         // The SIFT Index row is truthful on a node whose bench is empty, so the
         // look that Track View and the bench do happens here too --

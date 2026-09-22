@@ -372,8 +372,8 @@ impl PointTrackView {
     ) {
         let img_idx = image.index();
 
-        // Load thumbnail texture if not cached. A row still being built from its
-        // photograph is not cached, so the next frame asks again.
+        // Load thumbnail texture if not cached. An image with no picture is not
+        // cached, and draws the placeholder.
         if !self.thumbnail_textures.contains_key(&image) {
             self.load_thumbnail(ui.ctx(), recon, image);
         }
@@ -417,7 +417,7 @@ impl PointTrackView {
         }
     }
 
-    /// Load a single thumbnail texture into the cache, when its row is final.
+    /// Load a single thumbnail texture into the cache, when there is a picture.
     fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
         let idx = image.index();
         let Some(row) = row_for(self.display.as_deref(), recon, idx) else {

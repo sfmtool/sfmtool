@@ -900,6 +900,25 @@ impl PatchCloud {
             point_indexes,
         }
     }
+
+    /// The patch cloud a reconstruction stores: one patch per point whose
+    /// stored frame is present ([`Self::from_halfvec_arrays`] over its
+    /// `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` and its point positions),
+    /// with `w = 0` on the patches of points at infinity. `None` when the
+    /// reconstruction carries no patch frame. Geometry only: bitmaps are not
+    /// loaded into the cloud.
+    pub fn from_stored_frames(recon: &crate::SfmrReconstruction) -> Option<Self> {
+        let u = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
+        let v = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
+        let centers: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
+        let mut cloud = Self::from_halfvec_arrays(u, v, &centers);
+        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_indexes.iter()) {
+            if recon.point_set.points[pid as usize].is_at_infinity() {
+                patch.w = 0.0;
+            }
+        }
+        Some(cloud)
+    }
 }
 
 /// The reconstruction-independent inputs shared by

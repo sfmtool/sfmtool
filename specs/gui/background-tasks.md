@@ -10,12 +10,16 @@ it is not, and `get_background_task` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node, with an id of its own. One task runs at a time. The ten
-operations are the four whole-value edits -- `Bundle adjust`, `Convert to
-embedded patches`, `Retriangulate all points` and `Prune covered observations`
--- and the six the bench runs -- `Evaluate track`, `Fit track`, `Set track
-stage`, `Search descriptors`, `Geometry search` and `Build SIFT index`
-([bench.md](bench.md)). Every one of them is **cancellable**: the bench steps
+one, on one node (or, for an open, on none), with an id of its own. One task
+runs at a time. The eleven operations are `Open`, which reads files and makes
+them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
+`Convert to embedded patches`, `Retriangulate all points` and `Prune covered
+observations`; and the six the bench runs, `Evaluate track`, `Fit track`, `Set
+track stage`, `Search descriptors`, `Geometry search` and `Build SIFT index`
+([bench.md](bench.md)). Every one of them is **cancellable**. The open polls the
+flag between files, between each file's stages, before every thumbnail it builds
+and every photograph it decodes, and before every patch it fuses, and a
+cancelled open appends no node. The bench steps
 that read photographs poll the flag on either side of the decode and inside the
 kernels -- between the reading's rounds and between the views the localizer or
 geometry selector renders, which is where their widened searches spend their
@@ -245,8 +249,9 @@ Earlier rows are above it, and none of them is a summary of another:
 
 Everything that reads the scene keeps working. The node shows the version at its
 cursor, which is the value the worker was handed and which nothing is mutating,
-so orbiting, selecting, opening Track View, taking a screenshot and
-opening a second file all behave exactly as they do when nothing is running.
+so orbiting, selecting, opening Track View and taking a screenshot all behave
+exactly as they do when nothing is running. Opening a file is itself an
+operation, and waits its turn (below).
 
 What is refused is anything that would change the node the operation is running
 on. An edit, an undo, a redo, a history jump, a save or a close of that node is
@@ -258,7 +263,9 @@ provoked.
 **One operation at a time, viewer-wide.** Starting a second is refused with
 *"{operation} is still running on {label}."* These operations saturate the
 machine, so running two would make both slower and neither would finish sooner;
-a queue is state with no demand behind it, and is a non-goal below.
+a queue is state with no demand behind it, and is a non-goal below. An open is
+held to the same rule, so `File > Open...` is greyed while another operation runs,
+with that sentence as its tooltip.
 
 Quitting while an operation runs abandons it. The result would have nowhere to
 land, and a viewer that refuses to close is worse than a solve that has to be
@@ -329,12 +336,12 @@ neither today, in exchange for nothing. So:
   resection, at 838 ms, is the other bulk edit over the threshold that matters;
   it runs on the GUI thread, and the mechanism here is what it would use.
 
-**Opening a file is not a candidate**, though it looks like the other thing that
-freezes a fresh session. Measured, an open of the 45 MB dino set is 1.45 s of
-which the read and the derived-index build are **141 ms**: the rest is 434 ms of
-GPU upload, which cannot move (§ "Non-goals"), and 868 ms of the renderer
-starting, which happens once. Backgrounding it would move a seventh of the wait
-off the thread and complicate the load path for it.
+**Opening a file goes to the background** for the fill-in rather than for the
+read. Measured, an open of the 45 MB dino set spends **141 ms** on the read and
+the derived-index build; what can make an open long is a file that carries no
+thumbnails or no patch bitmaps, whose columns the open builds for display before
+the node appears (§ "Opening a file"). A decode of every photograph and a fuse
+per point is work of the size of an adjustment, and belongs where one runs.
 
 The **materialisation** an edit performs before calling a kernel is the one
 plausible further adopter: it is a pure function over a value nothing else
@@ -342,6 +349,59 @@ holds, so it fits the mechanism without extending it. Whether it is worth
 anything is unmeasured, and now measurable: it has a `materialise` phase, and a
 reader can settle the question from the Action Log before anybody writes the
 code.
+
+## Opening a file
+
+`File > Open...`, a path on the command line and the MCP `open_reconstruction`
+tool all start one [`Operation::OPEN`](../../crates/sfm-explorer/src/background/mod.rs)
+task, through `AppState::start_open` (the tool) or `AppState::open_files` (the
+menu and the command line, which write a failed row of their own for each path
+that is not a file and open the rest). Both live in
+[state/open.rs](../../crates/sfm-explorer/src/state/open.rs). A path that is not
+a file is refused before the task starts, since that is the one failure knowable
+without the read; so is a start while another operation runs.
+
+**An open locks no node.** The node it makes does not exist until it finishes,
+so `BackgroundTask::node` is `None` for it and every loaded node stays editable
+while it runs. Its label, for the panel, the refusals and the handle, is the
+file's stem, or `{n} files` for several paths. The one-at-a-time rule still
+holds, so an open waits for an adjustment as an adjustment waits for an open.
+
+Several paths are one task, read in the order given, each under an equal share
+of the bar. Each file's stages sit under a phase `open` of its own:
+
+| Stage | Runs when | Reports |
+|-------|-----------|---------|
+| `read`, `convert convention`, `derive` | always | `SfmrReconstruction::load`'s own stages and notes |
+| `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders` |
+| `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read` |
+| `patch bitmaps` > `fuse` | the same | a count of `patches`; note `{P} patches at {R} px` |
+
+The file's share of the bar splits 1 : 9 between the read and the rest, and the
+rest 1 : 8 between thumbnails and bitmaps, a stage the file does not need taking
+a weight of zero. The thumbnail rows come from each image's verified `.sift`
+first and its photograph second
+([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
+loading"). The bitmaps are the fuse `sfm xform --add-patch-bitmaps` runs,
+`fuse_patch_cloud_bitmaps`, over every photograph that decodes at its camera's
+size; one that does not is left out of every patch's views.
+
+**Where the filled columns live.** The thumbnails are display data on the node
+(`DisplayThumbnails`), never in the value. The patch bitmaps go into the value,
+marked `PointSet::patch_bitmaps_for_display`, because every reader of bitmaps
+looks there: the bench fit and commit, every edit that selects or reorders
+rows, Track View and the renderer. A column held beside the value would need
+each of those row maps carried out a second time. The mark keeps the column out
+of `to_sfmr_data`, so no save writes it and no content hash covers it, and the
+value keeps the content hash of the file it was read from, which is what every
+point id is minted against ([saving.md](saving.md)).
+
+The worker ends with `Finished::Opened`, one `OpenedFile` per path, and the GUI
+thread appends them as nodes in order (`AppState::append_opened`) under a phase
+`append nodes` at depth 0. The entry is `Opened {label} from {path}`, several
+files joined with `; `, under the actor who asked. A file that could not be read
+is a failed row of its own; an open of one file that could not be read ends as
+the task's failed entry, so one failure is one row.
 
 ## Reporting progress
 
@@ -399,8 +459,10 @@ pub(crate) struct BackgroundTask {
     /// What it is, for the panel and the refusals, and what it claims about
     /// itself.
     pub operation: Operation,
-    /// The node it will install its answer into, and the node it locks.
-    pub node: ReconId,
+    /// The node it will install its answer into, and the node it locks:
+    /// `None` for an open, whose node does not exist until it finishes.
+    pub node: Option<ReconId>,
+    /// That node's label, or the stem of the file an open reads.
     pub label: String,
     pub started: std::time::Instant,
     /// Who asked, so the entry this writes belongs to them and not to the
@@ -482,6 +544,11 @@ pub(crate) enum Finished {
         forest: Arc<LazyKdForestU8>,
         text: String,
     },
+    /// The files an open read, each with what it filled in for display or
+    /// the sentence saying why it could not be read. Appended in order.
+    Opened(Vec<OpenedFile>),
+    /// The kernel ran to its end and found nothing to change.
+    NoChange(String),
     Cancelled,
     Failed(String),
 }
@@ -500,8 +567,18 @@ impl AppState {
     pub fn busy_refusal(&self, id: ReconId) -> Option<String>;
 
     /// Start `operation` on `id`. Refuses when anything is already running.
-    pub fn start_background_task(&mut self, operation: Operation, id: ReconId)
+    pub fn start_background_task(&mut self, operation: Operation, id: ReconId, job: Job)
         -> Result<(), String>;
+
+    /// Why starting anything is refused right now, or `None`.
+    pub fn running_refusal(&self) -> Option<String>;
+
+    /// The body both starters share: `node` is `None` for an open.
+    pub fn start_task(&mut self, operation: Operation, node: Option<ReconId>,
+        label: String, job: Job) -> Result<(), String>;
+
+    /// Start opening `paths`, in order, as one `Operation::OPEN` task.
+    pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<(), String>;
 
     /// Apply every report the worker has sent.
     ///
@@ -523,6 +600,12 @@ impl AppState {
     pub fn cancel_refusal(&self) -> Option<String>;
 }
 ```
+
+What the operation that ran most recently came to is kept after its task is
+gone, as `AppState::last_background_task`, a `FinishedTask` holding its id, name,
+label, cost, transcript and outcome. For an open it also holds `opened`, the
+first node the open made, which is what `open_reconstruction` answers with once
+the open lands.
 
 `poll_background_task` runs **in phase 0, before the MCP drain**. A completed
 operation's version is then on screen in the frame it landed, and an agent's
@@ -556,6 +639,13 @@ already broken. One still running at the threshold replies with a handle:
   "operation_id": 2                         // names this run, not merely "one is running"
 }
 ```
+
+`open_reconstruction` is one of these. Its normal result is the reconstruction
+entry of the node the open made, with `already_open` saying whether the path was
+open when the call was made; the pending reply records which answer it owes as
+`Answer::Opened { already_open }`, where an edit's is `Answer::Version(node)`.
+Its handle's `reconstruction_label` is the file's stem, the label the node
+arrives with unless another node already holds it.
 
 `running` is the discriminator, so a reader tests one field rather than sniffing
 the shape. `operation_id` names *which* run, so a poll still answers about an
@@ -667,13 +757,33 @@ Panel, through `test_support::run_frame_headless`:
 - A status replaces the previous one rather than adding a line, and the panel
   shows nothing there for an operation that has never set one.
 - **Every `Operation` that declares `cancellable` really is**: cancelling each
-  one stops it and writes the cancelled entry. A declaration nothing checks is a
-  declaration that rots. Each is started over a fixture that can really run it
-  -- the adjustment over the resection node, the conversion over a `sift_files`
-  node with a `.sift` companion per image, the bench steps including geometry
-  search over a node with a point on its bench and a photograph per image, the
-  descriptor search over a workspace with `.sift` files and a built `.kdf` --
-  so what is held to the claim is the kernel rather than a stand-in for it.
+  one stops it, writes the cancelled entry, pushes no version and appends no
+  node. A declaration nothing checks is a declaration that rots. Each is
+  started over a fixture that can really run it: the open over a saved
+  `embedded_patches` file with patch frames and a photograph per image, the
+  adjustment over the resection node, the conversion over a `sift_files` node
+  with a `.sift` companion per image, the bench steps including geometry search
+  over a node with a point on its bench and a photograph per image, the
+  descriptor search over a workspace with `.sift` files and a built `.kdf`. What
+  is held to the claim is the kernel rather than a stand-in for it.
+
+`crates/sfm-explorer/src/state/open/tests.rs`, the open over real files:
+
+- A file without thumbnails gets every row at once, from a vouched-for `.sift`
+  first, the photograph second and the grey placeholder last, held by the node
+  while the value carries none, and the `thumbnails` stage says how many came
+  from where.
+- A file with patch frames and no bitmaps gets the column rendered and marked
+  for display, a tile for a point two photographs see and a zero row for one
+  seen once, under `patch bitmaps`, `decode photographs` and `fuse`.
+- The value keeps the file's content hash with the display column in it; a
+  plain Save writes the file's own columns back with the same hash, and a Save
+  that folds an edit mints a version whose hash is the written file's.
+- A path that is not a file is refused before anything starts and logs nothing;
+  an open is refused while another operation runs; several files open in order
+  as one task, a missing one a failed row of its own.
+- Save As Minimal writes the minimal file and leaves the node where it was, and
+  is refused over the node's own file ([saving.md](saving.md)).
 
 `crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
 editing fixture's node, so the wire is read at an instant the test chose:

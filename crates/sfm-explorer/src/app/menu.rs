@@ -34,7 +34,13 @@ pub(super) fn show(
     egui::Panel::top("menu_bar").show(root_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("Open...").clicked() {
+                // An open is a background task, and one runs at a time: greyed
+                // while another is running, with the refusal as its tooltip.
+                let running = app_state.running_refusal();
+                let open = ui
+                    .add_enabled(running.is_none(), egui::Button::new("Open..."))
+                    .on_disabled_hover_text(running.unwrap_or_default());
+                if open.clicked() {
                     // Multi-select, and every chosen file *appends* a
                     // node, a path that is already open included: that
                     // opens it a second time, as a second node with a
@@ -43,17 +49,11 @@ pub(super) fn show(
                         .add_filter("SfM Reconstruction", &["sfmr"])
                         .pick_files()
                     {
-                        for path in paths {
-                            // `load_file` returns its failure rather
-                            // than logging it, so the menu writes the
-                            // line in the vocabulary of the person who
-                            // asked. See `AppState::load_file`.
-                            if let Err(message) = app_state.load_file(&path) {
-                                app_state
-                                    .action_log
-                                    .fail(crate::action_log::Kind::File, message);
-                            }
-                        }
+                        // One background task for the lot, which writes its
+                        // own row when it lands; a path that is not a file
+                        // is a failed row of its own. See
+                        // `AppState::open_files`.
+                        app_state.open_files(paths);
                     }
                     ui.close();
                 }
@@ -87,6 +87,21 @@ pub(super) fn show(
                     .on_disabled_hover_text("Select a reconstruction to save it");
                 if save_as.clicked() {
                     let outcome = target.map(|id| save::save_as_with_dialog(app_state, id));
+                    save::save_outcome(app_state, outcome);
+                    ui.close();
+                }
+                // A copy with the heavy columns and the incidental metadata
+                // left out, as `sfm xform --minimal` writes it. The node keeps
+                // its path and its state; see `AppState::save_minimal_copy`.
+                let save_minimal = ui
+                    .add_enabled(target.is_some(), egui::Button::new("Save As Minimal..."))
+                    .on_hover_text(
+                        "Write a copy without thumbnails, patch bitmaps, lineage or an \
+                         absolute workspace path; the open reconstruction is unchanged",
+                    )
+                    .on_disabled_hover_text("Select a reconstruction to save it");
+                if save_minimal.clicked() {
+                    let outcome = target.map(|id| save::save_minimal_with_dialog(app_state, id));
                     save::save_outcome(app_state, outcome);
                     ui.close();
                 }

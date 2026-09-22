@@ -221,6 +221,7 @@ impl SfmrReconstruction {
                 patch_u_halfvec_xyz: None,
                 patch_v_halfvec_xyz: None,
                 patch_bitmaps_y_x_rgba: None,
+                patch_bitmaps_for_display: false,
                 has_normals: true,
                 normal_confidence: None,
                 point_constraints: None,

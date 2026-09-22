@@ -171,8 +171,6 @@ impl App {
             // next frame has something new to draw.
             self.egui_ctx.request_repaint();
         }
-        // Display thumbnails built from photographs say once when they are done.
-        self.state.report_display_thumbnails();
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 
@@ -451,24 +449,6 @@ impl App {
                 }
                 self.scene_renderer.set_uploaded_base(id, base);
                 uploaded_any = true;
-            }
-            // Display thumbnails built from photographs finish after the atlas
-            // was filled; the thumbnails phase runs again, writing only the
-            // cells whose rows are new.
-            if node
-                .display_thumbnails
-                .as_ref()
-                .is_some_and(|display| display.is_synthesized())
-            {
-                let mut phase = uploads.phase("thumbnails");
-                let written = self
-                    .scene_renderer
-                    .refresh_thumbnails(queue, id, node.recon());
-                if written == 0 {
-                    phase.cancel();
-                } else {
-                    note_upload(&mut phase, Uploaded::Built(written), "image", "images");
-                }
             }
             // The overlay's additions are the other half of the same question,
             // and are keyed on the addition set rather than on the base: a base

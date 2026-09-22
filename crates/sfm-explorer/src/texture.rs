@@ -5,7 +5,7 @@
 //!
 //! egui wants `ColorImage` (RGBA); every image source the viewer holds is
 //! 3-channel RGB: the display thumbnails (a file's
-//! [`ImageTable::thumbnails_y_x_rgb`], or rows built from its photographs) and
+//! [`ImageTable::thumbnails_y_x_rgb`], or the rows the open built) and
 //! the decoded full-resolution
 //! images in [`crate::state::AppState`]'s full-res cache. Three panels used to expand it
 //! themselves, and the copies disagreed: two derived the output extent from the

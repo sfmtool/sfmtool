@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Image browser panel: a horizontally-scrollable strip of the node's display
-//! thumbnails ([`crate::display_thumbnails`]): the file's own, or rows built from
-//! the photographs.
+//! thumbnails ([`crate::display_thumbnails`]): the file's own, or the rows the
+//! open built from the `.sift` files and the photographs.
 //!
 //! Uses manual offset-based panning instead of `ScrollArea` so that Windows
 //! DirectManipulation gesture events can drive the horizontal scroll.
@@ -131,9 +131,6 @@ pub struct ImageBrowser {
     prev_selected: Option<usize>,
     /// Index of the next thumbnail to lazily load.
     next_lazy_load: usize,
-    /// The display column's ready count the lazy loader last swept for. A row
-    /// built from its photograph since then sends it round again.
-    seen_ready: usize,
     /// Horizontal scroll offset in logical pixels.
     offset_x: f32,
     /// Previous frame's thumbnail height, for rescaling offset on resize.
@@ -153,7 +150,6 @@ impl ImageBrowser {
             cached_image_count: 0,
             prev_selected: None,
             next_lazy_load: 0,
-            seen_ready: 0,
             offset_x: 0.0,
             prev_img_height: 0.0,
             minibar: NavigationMinibar::new(),
@@ -189,8 +185,8 @@ impl ImageBrowser {
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         recon_id: ReconId,
-        // The node's display column: the file's thumbnails, or rows built from
-        // the photographs that fill in over several frames.
+        // The node's display column: the file's thumbnails, or the rows the
+        // open built from the .sift files and the photographs.
         display: Option<&DisplayThumbnails>,
         selected_image: Option<usize>,
         track_images: &[usize],
@@ -226,16 +222,8 @@ impl ImageBrowser {
             self.animation.reset();
         }
 
-        // A row built from its photograph since the last sweep: sweep again, so
-        // the cell it belongs to swaps its placeholder for the picture.
-        let ready = display.map_or(0, DisplayThumbnails::ready);
-        if ready != self.seen_ready {
-            self.seen_ready = ready;
-            self.next_lazy_load = 0;
-        }
-
-        // Lazy-load up to 8 thumbnails per frame (background loading). A row
-        // that is not final yet is skipped rather than cached as a placeholder.
+        // Lazy-load up to 8 thumbnails per frame (background loading). An image
+        // with no picture is skipped rather than cached as a placeholder.
         let mut loaded_this_frame = 0;
         while loaded_this_frame < 8 && self.next_lazy_load < num_images {
             let idx = self.next_lazy_load;
@@ -536,9 +524,6 @@ impl ImageBrowser {
         let clicked = panel_response.clicked() && !pointer_in_minibar;
         let double_clicked = panel_response.double_clicked() && !pointer_in_minibar;
         let font = egui::FontId::proportional(11.0);
-        // The cells on screen still waiting on their photographs, which are
-        // built ahead of the rest.
-        let mut waiting: Vec<usize> = Vec::new();
 
         for (i, &(pos_x, thumb_w)) in thumb_positions.iter().enumerate() {
             let screen_x = panel_rect.left() + pos_x - self.offset_x;
@@ -549,10 +534,8 @@ impl ImageBrowser {
             }
 
             // Ensure thumbnail is loaded (may not have been lazy-loaded yet).
-            if !self.thumbnail_cache.contains_key(&i)
-                && !self.load_thumbnail(ui.ctx(), recon, display, i)
-            {
-                waiting.push(i);
+            if !self.thumbnail_cache.contains_key(&i) {
+                self.load_thumbnail(ui.ctx(), recon, display, i);
             }
 
             let thumb_rect = egui::Rect::from_min_size(
@@ -679,19 +662,10 @@ impl ImageBrowser {
 
         // ── Navigation minibar ────────────────────────────────────────
 
-        if let Some(display) = display.filter(|_| !waiting.is_empty()) {
-            display.prioritize(
-                waiting
-                    .iter()
-                    .map(|&i| recon.image_table.images[i].name.as_str()),
-            );
-        }
-
-        // Build barcode texture once every row is final: a cell is cached only
-        // once its row is.
+        // Build barcode texture once every row is cached; an image with no
+        // picture is never cached, and leaves the minibar without a barcode.
         if self.minibar.color_barcode.is_none()
             && self.thumbnail_cache.len() == num_images
-            && display.is_none_or(DisplayThumbnails::is_complete)
             && num_images > 0
         {
             self.build_barcode(ui.ctx(), recon, display);
@@ -877,10 +851,10 @@ impl ImageBrowser {
         self.minibar.cached_image_count = num_images;
     }
 
-    /// Load a single thumbnail into the texture cache, when its row is final.
+    /// Load a single thumbnail into the texture cache, when there is a picture.
     ///
-    /// Returns whether it did: a row still being built from its photograph is
-    /// not cached, so its cell keeps the placeholder and asks again later.
+    /// Returns whether it did: an image with no row is not cached, so its cell
+    /// keeps the placeholder.
     fn load_thumbnail(
         &mut self,
         ctx: &egui::Context,

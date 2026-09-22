@@ -1242,7 +1242,7 @@ fn openable_file(dir: &Path) -> PathBuf {
 fn opened_and_edited(dir: &Path) -> (AppState, ReconId) {
     let mut state = AppState::new();
     let id = state
-        .load_file(&openable_file(dir))
+        .open_now(&openable_file(dir))
         .expect("the fixture file");
     state
         .delete_point(PointRef::new(id, 3))
@@ -1268,7 +1268,7 @@ fn every_operation_names_at_least_one_stage() {
         ("open", |dir| {
             let mut state = AppState::new();
             state
-                .load_file(&openable_file(dir))
+                .open_now(&openable_file(dir))
                 .expect("the fixture file");
             state
         }),
@@ -1353,18 +1353,19 @@ fn every_operation_names_at_least_one_stage() {
     }
 }
 
-/// What an open is made of: the stages the load names for itself, and the
-/// reconstruction becoming a node.
+/// What an open is made of: the stages the load names for itself, the
+/// thumbnails the file does not carry, and the reconstruction becoming a node.
 ///
 /// Two rows for the load rather than three: the fixture was written by the
 /// current writer, so it is already canonical and the convention upgrade's
-/// guard closes nothing.
+/// guard closes nothing. It carries no patch frame, so there is no bitmap
+/// stage either.
 #[test]
 fn opening_a_file_names_the_loads_stages_and_the_append() {
     let dir = temp_dir("open_stages");
     let path = openable_file(&dir);
     let mut state = AppState::new();
-    state.load_file(&path).expect("the fixture file");
+    state.open_now(&path).expect("the fixture file");
 
     let recon = state.scene[0].recon();
     let read = format!(
@@ -1384,7 +1385,8 @@ fn opening_a_file_names_the_loads_stages_and_the_append() {
             ("open", 0, 1),
             ("read", 1, 1),
             ("derive", 1, 1),
-            ("append node", 1, 1)
+            ("thumbnails", 1, 1),
+            ("append nodes", 0, 1)
         ],
         "{:?}",
         entry.detail,

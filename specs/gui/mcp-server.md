@@ -120,7 +120,7 @@ write, and one writes a file.
 | `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
-| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
+| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, as a background open that fills in the thumbnails and patch bitmaps the file lacks |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
 | `select_camera_image` | write | Select a camera image — and with it the intrinsics it was shot through |
@@ -177,7 +177,7 @@ write, and one writes a file.
 | `open_sift_index` | write | Adopt a `.kdf` as one reconstruction's SIFT index |
 | `build_sift_index` | write | Index every `.sift` file of one reconstruction into a `.kdf` beside its `.sfmr`, and open it, on a worker thread |
 | `close_sift_index` | write | Let go of the SIFT index open beside one reconstruction |
-| `save_reconstruction` | write file | Write the version at the cursor to disk |
+| `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
@@ -597,18 +597,28 @@ point, and the refusal says that rather than quoting a count.
 { "closed": ["global"] }
 ```
 
-`open_reconstruction` is `AppState::load_file`, which **always appends**:
-opening a path that is already open opens it a second time, as a second node
-with a history of its own. `already_open: true` says that happened. The
-returned `label` may differ from the file stem —
-`unique_label` disambiguates a collision as `global (2)` — so the agent must
-read the label back rather than assume it.
+`open_reconstruction` is `AppState::start_open`, a background open
+([background-tasks.md](background-tasks.md) § "Opening a file"): the file is
+read, and the thumbnails and patch bitmaps it does not carry are built for
+display, on a worker, before the node appears. It replies the way every
+background tool does. An open that lands within `REPLY_DIRECTLY_WITHIN` answers
+with the entry above; one still running answers with the handle, `running: true`,
+`operation: "Open"`, the file's stem as `reconstruction_label` and an
+`operation_id` for `get_background_task`, and the node appears when the open
+lands. It **always appends**: opening a path that is already open opens it a
+second time, as a second node with a history of its own, and `already_open:
+true`, decided when the call is made, says that happened. The returned `label`
+may differ from the file stem, since `unique_label` disambiguates a collision as
+`global (2)`, so the agent must read the label back rather than assume it.
 
-A load failure is a tool error, not a silent status line (§ "Errors").
-`load_file` returns `Result<ReconId, String>` and writes no Action Log entry on
-`Err`, so the failure is simply propagated as the refusal. The caller is what
-words it: the File menu records `Failed to load …`, the drain records
+A refusal to begin is a tool error, not a silent status line (§ "Errors"), and
+immediate: a path that is not a file, or another background operation running.
+`start_open` returns it and writes no Action Log entry, so the caller words it:
+the File menu records `Failed to load …`, the drain records
 `open_reconstruction failed: …`, and either way one failure produces one entry.
+A file that turns out unreadable once the open is running ends the task with
+its failed entry, and the deferred reply carries the same sentence as its
+refusal.
 
 `close_reconstruction` takes `reconstruction_label` or `all: true`, and refuses
 both at once: "close this one" and "close everything" are different requests,
@@ -1841,6 +1851,13 @@ where any version it would pass through has been released.
 { "reconstruction_label": "seoul_bull_edited",   // read this back: a save-as renames
   "path": "C:/work/seoul_bull_edited.sfmr",
   "serial": "v7" }                               // the version the file now holds
+
+// save_reconstruction { "reconstruction_label": "seoul_bull",
+//                       "path": "D:/published/seoul_bull.sfmr", "minimal": true }
+{ "reconstruction_label": "seoul_bull",          // the node is not re-pointed
+  "path": "D:/published/seoul_bull.sfmr",      // the copy
+  "serial": "v7",                                // the version at the cursor
+  "minimal": true }
 ```
 
 With no path it is `AppState::save_node`, which writes over the file the node
@@ -1860,6 +1877,17 @@ would time out against it.
 clean. A save with an overlay materialises first, and that materialisation is a
 version like any other, so the serial in the reply can be one the call itself
 made ([saving.md](saving.md) § "Materialise on save").
+
+With `minimal: true` it is `AppState::save_minimal_copy`, File > Save As
+Minimal: a copy without thumbnails, patch bitmaps, `lineage` or an absolute
+workspace path, the file `sfm xform --minimal` writes
+([saving.md](saving.md) § "Save As Minimal"). The node is **not** re-pointed
+and **not** marked clean, so the reply's `path` is the copy's and its `serial`
+is the version at the cursor. It needs a path, refusing without one with *"A
+minimal copy is written to a path of its own; pass path with minimal: true."*,
+and refuses the node's own file. `minimal` is an argument rather than a tool of
+its own because it is the same write with a different definition of what is
+written, as `save(minimal=True)` is in the binding.
 
 ### `delete_point` / `delete_camera_image`
 
@@ -3169,6 +3197,14 @@ where a test hands no host over.
   returns the serial the disk now holds; a save with no path afterwards goes
   over that same file; a node that came from no file is refused a pathless save
   in the File menu's own words.
+- **`save_reconstruction` with `minimal` writes a copy and leaves the node**:
+  the copy has no thumbnails, lineage or absolute path and the viewer's
+  provenance, the node keeps its path and its dirty mark, and a minimal save
+  without a path is refused.
+- **`open_reconstruction` defers and answers with the reconstruction**: the
+  pending reply names `Open`, the landed answer is the node's entry with
+  `already_open: false`, and a second open of the same path is `scene (2)` with
+  `already_open: true`.
 - **Every editing tool requires its `reconstruction_label`**, walked over the
   whole family, and an unknown one is refused naming what is loaded. A
   `pt3d_<hash>_<index>` id resolving to a different node than the call named is

@@ -27,19 +27,9 @@ pub struct UploadedThumbnails {
     column: Option<Arc<Array4<u8>>>,
     /// The image names in atlas order, the value's image order.
     names: Vec<String>,
-    /// Which cells hold a final row rather than the placeholder.
-    written: Vec<bool>,
-    /// The display column's ready count when the cells were last filled.
-    ready_seen: usize,
 }
 
 impl UploadedThumbnails {
-    /// How many cells hold a final row.
-    #[cfg(test)]
-    pub(crate) fn final_cells(&self) -> usize {
-        self.written.iter().filter(|&&w| w).count()
-    }
-
     /// Whether this atlas was built for `display`, `column` and the images of
     /// `recon`, in `recon`'s order.
     fn matches(
@@ -68,23 +58,20 @@ impl UploadedThumbnails {
     }
 }
 
-/// One cell's pixels: the row when it is final, the flat placeholder until
-/// then.
+/// One cell's pixels: the image's row, or the flat placeholder for an image
+/// with no picture to show.
 fn cell<'a>(
     display: Option<&'a DisplayThumbnails>,
     recon: &'a SfmrReconstruction,
     index: usize,
     placeholder: &'a [u8],
-) -> (std::borrow::Cow<'a, [u8]>, bool) {
+) -> std::borrow::Cow<'a, [u8]> {
     match row_for(display, recon, index) {
         Some(view) => match view.to_slice() {
-            Some(slice) => (std::borrow::Cow::Borrowed(slice), true),
-            None => (
-                std::borrow::Cow::Owned(view.iter().copied().collect()),
-                true,
-            ),
+            Some(slice) => std::borrow::Cow::Borrowed(slice),
+            None => std::borrow::Cow::Owned(view.iter().copied().collect()),
         },
-        None => (std::borrow::Cow::Borrowed(placeholder), false),
+        None => std::borrow::Cow::Borrowed(placeholder),
     }
 }
 
@@ -94,9 +81,8 @@ impl SceneRenderer {
     ///
     /// Packs all 128×128 RGB thumbnails into a single large 2D texture arranged
     /// as a grid, avoiding the 256-layer limit of texture arrays. Also creates
-    /// the node's image quad uniform buffer. A cell whose row is still being
-    /// built from its photograph holds a flat grey placeholder, which
-    /// [`Self::refresh_thumbnails`] overwrites once the row is final.
+    /// the node's image quad uniform buffer. A cell for an image with no picture
+    /// to show holds a flat grey placeholder.
     ///
     /// A node with no display column and a value with no thumbnail column of
     /// its own gets no atlas, and its frustums draw outlines without image
@@ -132,7 +118,7 @@ impl SceneRenderer {
         // column and the image list, and of nothing else. An edit that leaves
         // the image list alone leaves it correct, so the node keeps the one it
         // has rather than paying a texture allocation to arrive at the same
-        // pixels; rows that finished since are written by `refresh_thumbnails`.
+        // pixels.
         let bundle = self.recons.get(&id).expect("just ensured");
         let reusable = bundle
             .uploaded_thumbnails
@@ -192,12 +178,9 @@ impl SceneRenderer {
         // the patch atlas and for the same reason ([`super::atlas`]).
         let tiles_phase = progress.detail_phase("tiles");
         let placeholder = vec![PLACEHOLDER_GREY; (THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3) as usize];
-        let ready_seen = display.map_or(0, |d| d.ready());
-        let mut written = vec![false; image_count as usize];
         let mut band = Band::new(atlas_width, THUMBNAIL_SIZE);
         for i in 0..image_count_clamped {
-            let (tile, final_row) = cell(display.map(|d| &**d), recon, i as usize, &placeholder);
-            written[i as usize] = final_row;
+            let tile = cell(display.map(|d| &**d), recon, i as usize, &placeholder);
             let idx_in_page = i % images_per_page;
             let col = idx_in_page % cols;
             band.place_rgb(col, &tile);
@@ -251,8 +234,6 @@ impl SceneRenderer {
                 .iter()
                 .map(|image| image.name.clone())
                 .collect(),
-            written,
-            ready_seen,
         });
         bundle.image_quad_uniform_buffer = Some(uniform_buf);
         bundle.thumbnail_texture = Some(texture);
@@ -267,96 +248,4 @@ impl SceneRenderer {
         );
         Uploaded::Built(image_count_clamped as usize)
     }
-
-    /// Write the cells whose rows have become final since the atlas was
-    /// filled, and nothing else.
-    ///
-    /// Runs every frame for every node, and costs a counter comparison unless
-    /// synthesis has finished rows since the last look. Returns how many cells
-    /// it wrote.
-    pub fn refresh_thumbnails(
-        &mut self,
-        queue: &wgpu::Queue,
-        id: ReconId,
-        recon: &SfmrReconstruction,
-    ) -> usize {
-        let Some(bundle) = self.recons.get_mut(&id) else {
-            return 0;
-        };
-        let (Some(uploaded), Some(texture)) = (
-            bundle.uploaded_thumbnails.as_mut(),
-            bundle.thumbnail_texture.as_ref(),
-        ) else {
-            return 0;
-        };
-        let Some(display) = uploaded.display.clone() else {
-            return 0;
-        };
-        let ready = display.ready();
-        if ready == uploaded.ready_seen {
-            return 0;
-        }
-        uploaded.ready_seen = ready;
-        let (cols, images_per_page) = (bundle.atlas_cols, bundle.images_per_page);
-        let placeholder: [u8; 0] = [];
-        let mut count = 0;
-        let mut band = Band::new(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
-        for (i, written) in uploaded.written.iter_mut().enumerate() {
-            if *written || i as u32 >= images_per_page * texture.depth_or_array_layers() {
-                continue;
-            }
-            let (tile, final_row) = cell(Some(&display), recon, i, &placeholder);
-            if !final_row {
-                continue;
-            }
-            *written = true;
-            count += 1;
-            // One cell at its own origin: a band one tile wide.
-            band.place_rgb(0, &tile);
-            let idx_in_page = i as u32 % images_per_page;
-            write_cell(
-                queue,
-                texture,
-                &band,
-                i as u32 / images_per_page,
-                idx_in_page % cols,
-                idx_in_page / cols,
-            );
-        }
-        count
-    }
-}
-
-/// Upload a one-tile band into cell (`col`, `row`) of page `page`.
-fn write_cell(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    band: &Band,
-    page: u32,
-    col: u32,
-    row: u32,
-) {
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d {
-                x: col * THUMBNAIL_SIZE,
-                y: row * THUMBNAIL_SIZE,
-                z: page,
-            },
-            aspect: wgpu::TextureAspect::All,
-        },
-        band.bytes(),
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(band.bytes_per_row()),
-            rows_per_image: Some(THUMBNAIL_SIZE),
-        },
-        wgpu::Extent3d {
-            width: THUMBNAIL_SIZE,
-            height: THUMBNAIL_SIZE,
-            depth_or_array_layers: 1,
-        },
-    );
 }

@@ -609,6 +609,8 @@ pub(crate) fn clone_with_changes(
             }
             recon.point_set.patch_bitmaps_y_x_rgba =
                 Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
+            // A column handed in is the reconstruction's own.
+            recon.point_set.patch_bitmaps_for_display = false;
         }
     }
 

@@ -580,6 +580,7 @@ fn prune_rows(
             .patch_bitmaps_y_x_rgba
             .as_ref()
             .map(|a| Arc::new(a.select(Axis(0), &keep_idx))),
+        patch_bitmaps_for_display: set.patch_bitmaps_for_display,
         has_normals: set.has_normals,
         normal_confidence: set
             .normal_confidence

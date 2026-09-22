@@ -34,8 +34,8 @@ pub hovered_point: Option<usize>,  // Point3D index under cursor
 These are updated every frame from the panel that currently has pointer focus.
 Only one panel has pointer focus at a time, so there is no conflict.
 
-Both fields are cleared in `load_file()` alongside `selected_image` and
-`selected_point` when a new reconstruction is loaded.
+Both fields are cleared in `append_node()` alongside `selected_image` and
+`selected_point` when an opened reconstruction lands.
 
 ### Hover Sources
 
@@ -140,7 +140,7 @@ Hover state is transient but persists across frames:
 - Set every frame by the panel with pointer focus via `has_pointer` ownership
 - Cleared when a different panel takes pointer focus (each panel clears the
   other panel's hover field when it has the pointer)
-- Cleared on reconstruction load (`load_file()`)
+- Cleared when an opened reconstruction lands (`append_node()`)
 - Never persisted or saved
 - Does not affect GPU buffer uploads (frustums, points, track rays)
 - Does not trigger SIFT cache loading or image loading

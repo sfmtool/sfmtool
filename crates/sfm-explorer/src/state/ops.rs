@@ -1,13 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`AppState`]'s reconstruction operations: the methods that read a file off
-//! disk or run a fit, build a [`SceneNode`] out of the answer and write the
-//! sentence the user reads about it.
+//! [`AppState`]'s reconstruction operations: the methods that make demo data
+//! or run a fit, build a [`SceneNode`] out of the answer or move one, and write
+//! the sentence the user reads about it. Opening a file is a background task of
+//! its own, in [`super::open`].
 //!
 //! They are a second `impl AppState` rather than a second type, because every
 //! one of them ends by editing the scene and the selection that `state.rs`'s
-//! accessors describe — a load that lands a node also selects it, and closing
+//! accessors describe: demo data that lands a node also selects it, and closing
 //! one has to re-point the solo. Splitting them into their own struct would
 //! mean handing that struct a `&mut AppState` and gaining nothing but a hop.
 //!
@@ -17,11 +18,8 @@
 //! synchronously, by a menu item, a dialog or an MCP tool — and every one of
 //! them is the only place its own failure text is written.
 
-use std::time::Instant;
-
 use crate::action_log::Kind;
 use crate::align::{self, AlignOptions};
-use crate::progress::Collector;
 use crate::resect::{self, ResectFrom};
 use crate::scene::{ReconId, SceneNode};
 use sfmtool_core::SfmrReconstruction;
@@ -29,70 +27,6 @@ use sfmtool_core::SfmrReconstruction;
 use super::AppState;
 
 impl AppState {
-    /// Load a reconstruction from an .sfmr file, **appending** it as a node.
-    ///
-    /// **Always** appends, including for a path that is already loaded: that
-    /// opens the file a second time, as a second node with its own history.
-    /// A node's value changes only through its own history, so there is nothing
-    /// that reloads one in place — see `specs/gui/document-model.md`.
-    ///
-    /// A failure is **returned, not logged**: the File menu records it as
-    /// `Failed to load …`, the MCP drain as `open_reconstruction failed: …`,
-    /// and one failure that logged itself as well would appear twice, in two
-    /// vocabularies. Success is logged here, because there the text is the same
-    /// whoever asked.
-    ///
-    /// The entry carries the stages an open has: the three the load reports
-    /// for itself, and then the reconstruction becoming a node. It is recorded
-    /// with [`crate::action_log::ActionLog::record_done`] from the instant
-    /// below, so the row says how long the open took rather than how long
-    /// writing the row took.
-    pub fn load_file(&mut self, path: &std::path::Path) -> Result<ReconId, String> {
-        let started = Instant::now();
-        // The level the Action Log toolbar's checkbox last left, read as the
-        // operation starts so that a change to it takes effect on the next one.
-        let collector = Collector::new(self.action_log.detailed_timing());
-        let open = collector.phase("open");
-        // The load names its own three stages -- the archive read, the
-        // convention upgrade an older file needs, and the build of the value
-        // and its derived indexes -- and they nest directly under `open`. This
-        // method used to stand one `read` row over the whole call, because the
-        // boundaries inside it were not reachable from here; a row of its own
-        // above the three would now only add an indent and a second name for
-        // what they say between them.
-        let read = SfmrReconstruction::load(path, &open);
-        match read {
-            Ok(recon) => {
-                log::info!(
-                    "Loaded {} points, {} images from {}",
-                    recon.point_count(),
-                    recon.image_count(),
-                    path.display()
-                );
-                // Recorded after the append, which is what deduplicates the
-                // label: the entry should name the node as the tree does
-                // (`global (2)`), not the file stem the node arrived with.
-                let id = {
-                    let _phase = open.phase("append node");
-                    self.append_node(SceneNode::from_path(path, recon))
-                };
-                let label = self.label_of(id);
-                drop(open);
-                self.action_log.record_done(
-                    Kind::File,
-                    started,
-                    format!("Opened {label} from {}", path.display()),
-                    collector.take(),
-                );
-                Ok(id)
-            }
-            Err(e) => {
-                let msg = format!("Failed to load {}: {}", path.display(), e);
-                log::error!("{}", msg);
-                Err(msg)
-            }
-        }
-    }
     /// Append a node of generated demo data.
     pub fn load_demo(&mut self, num_points: usize) {
         self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));

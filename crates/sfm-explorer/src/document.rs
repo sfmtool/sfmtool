@@ -574,9 +574,10 @@ fn value_bytes(value: &EditedReconstruction, previous: Option<&EditedReconstruct
         (base.image_table.images.len() * std::mem::size_of::<sfmtool_core::SfmrImage>()) as u64;
     // The two heavy columns count only when this value does not point at the
     // same allocation its predecessor's base did.
-    // A node's display thumbnails built from photographs are the node's, not
-    // any version's, so they are held once beside the history and never
-    // counted here.
+    // A node's display thumbnails built by the open are the node's, not any
+    // version's, so they are held once beside the history and never counted
+    // here. Patch bitmaps the open rendered for display are the value's column
+    // and count like any other.
     let previous_base = previous.map(|p| &*p.base);
     if let Some(thumbnails) = &base.image_table.thumbnails_y_x_rgb {
         let shared = previous_base.is_some_and(|p| {

@@ -14,6 +14,7 @@ use sfmtool_core::analysis::infinity::Classification;
 use sfmtool_core::geometry::viewing_angle::viewing_rays;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::progress::Progress;
+use sfmtool_core::reconstruction::minimal::SaveStamp;
 use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use sfmtool_core::SfmrReconstruction;
 
@@ -125,39 +126,33 @@ impl PySfmrReconstruction {
         tool_options: Option<&Bound<'_, PyDict>>,
         minimal: bool,
     ) -> PyResult<()> {
-        // Update metadata if operation is provided
+        // Update metadata if operation is provided. The stamp and the minimal
+        // clearing are sfmtool-core's, the one definition the viewer's
+        // Save As Minimal writes through too.
         if let Some(op) = operation {
-            let meta = &mut self.inner.metadata;
-            meta.operation = op.to_string();
-            meta.tool = tool_name.unwrap_or("sfmtool").to_string();
-            if meta.tool == "sfmtool" {
-                // The version of the sfmtool that wrote this file, not of
-                // whatever wrote the one it was read from.
-                meta.tool_version = env!("CARGO_PKG_VERSION").to_string();
-            }
-            meta.image_count = self.inner.image_table.images.len() as u32;
-            meta.point_count = self.inner.point_set.points.len() as u32;
-            meta.observation_count = self.inner.point_set.tracks.len() as u32;
-            meta.camera_count = self.inner.image_table.cameras.len() as u32;
-
-            // Update workspace paths relative to output file
-            let output_path = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
-            if let Some(parent) = output_path.parent() {
-                if let Some(rel) = pathdiff::diff_paths(&self.inner.workspace_dir, parent) {
-                    meta.workspace.relative_path = rel.to_string_lossy().replace('\\', "/");
-                }
-            }
-            meta.workspace.absolute_path = self.inner.workspace_dir.to_string_lossy().to_string();
+            let tool = tool_name.unwrap_or("sfmtool");
+            // The version of the sfmtool that wrote this file, not of whatever
+            // wrote the one it was read from; another tool's version is kept.
+            let tool_version = if tool == "sfmtool" {
+                env!("CARGO_PKG_VERSION").to_string()
+            } else {
+                self.inner.metadata.tool_version.clone()
+            };
+            self.inner.stamp_save(
+                &path,
+                &SaveStamp {
+                    operation: op,
+                    tool,
+                    tool_version: &tool_version,
+                },
+            );
         }
 
         // A minimal file records nothing about the machine or the history it was
         // written on: no absolute path, no ancestry, and only the options of the
         // operation that wrote it.
         if minimal {
-            let meta = &mut self.inner.metadata;
-            meta.workspace.absolute_path.clear();
-            meta.lineage.clear();
-            meta.tool_options.clear();
+            self.inner.clear_minimal_metadata();
         }
 
         // Merge tool_options if provided
@@ -563,26 +558,7 @@ impl PySfmrReconstruction {
     /// bitmaps, if stored, are not loaded into the cloud).
     #[getter]
     fn patches(&self) -> Option<crate::PyPatchCloud> {
-        let u = self.inner.point_set.patch_u_halfvec_xyz.as_ref()?;
-        let v = self.inner.point_set.patch_v_halfvec_xyz.as_ref()?;
-        // The patch center for each point is the point's own position (a
-        // direction for a point at infinity).
-        let centers: Vec<Point3<f64>> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|p| p.position)
-            .collect();
-        let mut cloud = sfmtool_core::patch::PatchCloud::from_halfvec_arrays(u, v, &centers);
-        // from_halfvec_arrays builds every patch finite; mark the rows whose
-        // source point is at infinity so rendering treats their corners as
-        // directions.
-        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_indexes.iter()) {
-            if self.inner.point_set.points[pid as usize].is_at_infinity() {
-                patch.w = 0.0;
-            }
-        }
+        let cloud = sfmtool_core::patch::PatchCloud::from_stored_frames(&self.inner)?;
         Some(crate::PyPatchCloud { inner: cloud })
     }
 

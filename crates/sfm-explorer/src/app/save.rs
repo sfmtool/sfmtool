@@ -93,3 +93,27 @@ pub(super) fn save_outcome(
             .fail(crate::action_log::Kind::File, message);
     }
 }
+
+/// Ask for a path and write a minimal copy of `id` there, through the same
+/// native dialog Save As uses.
+///
+/// The suggested name is the node's label with `-minimal`, so the dialog does
+/// not open on the node's own file, which a minimal copy never replaces.
+/// `Ok(())` with nothing written when the dialog was dismissed.
+pub(super) fn save_minimal_with_dialog(
+    state: &mut crate::state::AppState,
+    id: crate::scene::ReconId,
+) -> Result<(), String> {
+    let suggested = state
+        .node(id)
+        .map(|node| format!("{}-minimal.sfmr", node.label))
+        .unwrap_or_else(|| "reconstruction-minimal.sfmr".to_string());
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("SfM Reconstruction", &["sfmr"])
+        .set_file_name(suggested)
+        .save_file()
+    else {
+        return Ok(());
+    };
+    state.save_minimal_copy(id, &path)
+}

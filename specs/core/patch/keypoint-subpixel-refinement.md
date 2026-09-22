@@ -300,11 +300,17 @@ keypoints are settled: the kernel above with `max_gn_steps = 0`,
 `max_outer_sweeps = 1` and `render_bitmaps = true`, seeded at `keypoints`, so
 nothing moves and the pass only renders and blends. It returns `None` when fewer
 than two views render in frame. `fuse_patch_cloud_bitmaps(cloud, recon, views,
-params, done)` is its whole-cloud form, parallel over points, fusing each patch
-from its point's whole track at the reconstruction's stored keypoints and
-returning the `(P, R, R, 4)` column with a zero row for a point that fused
-nothing; it is bound as `PatchCloud.render_bitmaps` and is what `sfm xform
---add-patch-bitmaps` runs. The bench commit (`bench::fit::fuse_bitmap`) calls
+params, done, progress) -> Result<Array4<u8>, Cancelled>` is its whole-cloud
+form, parallel over points, fusing each patch from its point's track at the
+reconstruction's stored keypoints and returning the `(P, R, R, 4)` column with a
+zero row for a point that fused nothing. `views` holds one
+`Option<ProjectedImage>` per image, and a `None` view (a photograph not to hand)
+is left out of every patch's view set, so a point still fuses from the readable
+views that see it. `progress` receives a `patches` count about every hundredth
+of the way and is polled before each patch; a cancelled call returns
+`Cancelled`. It is bound as `PatchCloud.render_bitmaps`, is what `sfm xform
+--add-patch-bitmaps` runs, and is what the viewer's open runs for a file that
+carries patch frames and no bitmaps. The bench commit (`bench::fit::fuse_bitmap`) calls
 `fuse_patch_bitmap` for one track.
 
 ## Validation

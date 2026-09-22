@@ -208,6 +208,22 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One or more `.sfmr` files read and made nodes, with the columns a file
+    /// does not carry filled in for display (`specs/gui/background-tasks.md`
+    /// section "Opening a file").
+    ///
+    /// The one operation that runs on no node: the node it makes does not exist
+    /// until it finishes, so it locks nothing and every loaded node stays
+    /// editable while it runs. Cancellable because the open polls the flag
+    /// between files and between the stages of each, before every thumbnail it
+    /// builds and every photograph it decodes, and before every patch it fuses,
+    /// and a cancelled open appends no node at all.
+    pub(crate) const OPEN: Operation = Operation {
+        name: "Open",
+        cancellable: true,
+        kind: Kind::File,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the test
@@ -215,7 +231,8 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 10] = [
+    pub(crate) const ALL: [Operation; 11] = [
+        Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
@@ -251,9 +268,11 @@ pub(crate) struct BackgroundTask {
     pub(crate) id: u64,
     /// What it is, for the refusals, and what it claims about itself.
     pub(crate) operation: Operation,
-    /// The node it will install its answer into, and the node it locks.
-    pub(crate) node: ReconId,
-    /// That node's label, for the sentences that name it. Kept here rather
+    /// The node it will install its answer into, and the node it locks: `None`
+    /// for an open, whose node does not exist until it finishes.
+    pub(crate) node: Option<ReconId>,
+    /// That node's label, for the sentences that name it, or for an open the
+    /// label the file suggests. Kept here rather
     /// than read back from the scene, so a refusal reads the same whatever has
     /// happened to the node in the meantime.
     pub(crate) label: String,
@@ -353,6 +372,13 @@ pub(crate) enum Finished {
         /// The Action Log sentence, up to the serials.
         text: String,
     },
+    /// The files an open read, each with what it filled in for display, and
+    /// the ones it could not read.
+    ///
+    /// Not a version of anything: each file becomes a node of its own, whose
+    /// first version is the file as read. The GUI thread appends them in the
+    /// order they were asked for and writes one row.
+    Opened(Vec<crate::state::open::OpenedFile>),
     /// The kernel ran to its end and found nothing to change.
     ///
     /// Not a refusal and not a version: an edit whose answer is "there was
@@ -383,6 +409,9 @@ pub(crate) struct FinishedTask {
     pub(crate) operation: Operation,
     /// The label of the node it ran on, as it read when the operation started.
     pub(crate) label: String,
+    /// The first node an open made, which is what `open_reconstruction`
+    /// answers with once it lands. `None` for every other operation.
+    pub(crate) opened: Option<ReconId>,
     /// What the whole operation cost, measured from the instant it started.
     ///
     /// Not the entry's `took`, which the frame stamps on settling and which
@@ -467,7 +496,7 @@ impl AppState {
     /// whose parent is not the version it was computed from.
     pub(crate) fn busy_refusal(&self, id: ReconId) -> Option<String> {
         let task = self.background_task.as_ref()?;
-        (task.node == id).then(|| {
+        (task.node == Some(id)).then(|| {
             format!(
                 "{} is busy: {} is still running.",
                 task.label, task.operation.name
@@ -506,16 +535,45 @@ impl AppState {
         id: ReconId,
         job: Job,
     ) -> Result<(), String> {
-        if let Some(running) = self.background_task.as_ref() {
-            return Err(format!(
-                "{} is still running on {}.",
-                running.operation.name, running.label
-            ));
+        if let Some(why) = self.running_refusal() {
+            return Err(why);
         }
         let label = self
             .node(id)
             .map(|node| node.label.clone())
             .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        self.start_task(operation, Some(id), label, job)
+    }
+
+    /// Why starting anything is refused right now, or `None`.
+    ///
+    /// One operation at a time, viewer-wide, whatever it runs on: an open
+    /// waits for an adjustment as an adjustment waits for an open.
+    pub(crate) fn running_refusal(&self) -> Option<String> {
+        self.background_task.as_ref().map(|running| {
+            format!(
+                "{} is still running on {}.",
+                running.operation.name, running.label
+            )
+        })
+    }
+
+    /// Start `operation`, named `label`, running `job` on a worker thread.
+    ///
+    /// `node` is the node it locks and installs into, or `None` for an open,
+    /// which locks nothing because the node it makes does not exist yet. The
+    /// body [`Self::start_background_task`] and
+    /// [`Self::start_open`](crate::state::AppState::start_open) share.
+    pub(crate) fn start_task(
+        &mut self,
+        operation: Operation,
+        node: Option<ReconId>,
+        label: String,
+        job: Job,
+    ) -> Result<(), String> {
+        if let Some(why) = self.running_refusal() {
+            return Err(why);
+        }
 
         let (reports, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -560,7 +618,7 @@ impl AppState {
         self.background_task = Some(BackgroundTask {
             id: operation_id,
             operation,
-            node: id,
+            node,
             label,
             started: Instant::now(),
             actor: self.action_log.actor(),
@@ -661,13 +719,14 @@ impl AppState {
         let BackgroundTask {
             id,
             operation,
-            node,
+            node: locked,
             label,
             started,
             actor,
             collector,
             ..
         } = task;
+        let mut opened = None;
         let mut installed = None;
         let outcome = match finished {
             Finished::Produced {
@@ -675,7 +734,7 @@ impl AppState {
                 map,
                 version_label,
                 text,
-            } => match self.scene.iter().position(|n| n.id == node) {
+            } => match self.scene.iter().position(|n| Some(n.id) == locked) {
                 // Closing the busy node is refused, so this is a bug rather
                 // than a race; it is still said out loud rather than dropped,
                 // because a solve that produced an answer nobody can see is
@@ -698,6 +757,7 @@ impl AppState {
                         )
                     };
                     let parent = crate::state::edits::version_before(&self.scene[index], serial);
+                    let node = self.scene[index].id;
                     self.follow_selection_forward(node);
                     installed = Some(node);
                     Ok(format!("{text} ({parent} → {serial})"))
@@ -714,7 +774,7 @@ impl AppState {
                 track,
                 version_label,
                 text,
-            } => match self.scene.iter().position(|n| n.id == node) {
+            } => match self.scene.iter().position(|n| Some(n.id) == locked) {
                 None => Err(format!(
                     "{} of {label} finished, but it is no longer loaded.",
                     operation.name
@@ -735,7 +795,7 @@ impl AppState {
                             };
                             let parent =
                                 crate::state::edits::version_before(&self.scene[index], serial);
-                            installed = Some(node);
+                            installed = Some(self.scene[index].id);
                             Ok(format!("{text} ({parent} → {serial})"))
                         }
                     }
@@ -746,15 +806,29 @@ impl AppState {
             // A node that has left the scene in the meantime leaves the file on
             // disk, which the next session opens.
             Finished::SiftIndex { path, forest, text } => {
-                match self.scene.iter().any(|n| n.id == node) {
-                    false => Err(format!(
+                match locked.filter(|&node| self.scene.iter().any(|n| n.id == node)) {
+                    None => Err(format!(
                         "{} of {label} finished, but it is no longer loaded.",
                         operation.name
                     )),
-                    true => {
+                    Some(node) => {
                         self.install_sift_index(node, path, forest);
                         Ok(text)
                     }
+                }
+            }
+            // Each file becomes a node in the order it was asked for, and the
+            // row names every one; a file the worker could not read is a failed
+            // row of its own under the same actor. Nothing is installed into
+            // an existing node, so no panel cache describes a value that has
+            // changed.
+            Finished::Opened(files) => {
+                let _phase = collector.phase("append nodes");
+                let (made, refused) = self.append_opened(files, actor);
+                opened = made.first().copied();
+                match (made.is_empty(), refused) {
+                    (true, Some(message)) => Err(message),
+                    _ => Ok(crate::state::open::opened_sentence(self, &made)),
                 }
             }
             // Nothing to install and nothing to push, so the row is the whole
@@ -797,6 +871,7 @@ impl AppState {
             id,
             operation,
             label,
+            opened,
             took,
             detail: kept,
             outcome,
