@@ -445,8 +445,10 @@ The active track of the node's **bench** ([`bench.md`](bench.md)) is drawn on
 this panel as a second layer, independent of the mode above in the same way the
 intrinsics layer is, and **last**: it is the one thing here that is not about
 the reconstruction, so no mode turns it off and nothing draws on top of it. It
-is drawn only in the images that track observes, and only for the *active*
-item: the bench holds several and this panel shows the one being worked on.
+is drawn only for the *active* item: the bench holds several and this panel
+shows the one being worked on. Its marks and handles are in the images that
+track observes; an image it does not observe shows at most the **ghost
+outline** described below.
 
 The colours are the bench's own, one violet per verdict (`in`, `candidate`,
 `out`), used nowhere else in the panel, so a mark on the bench is never read as
@@ -487,6 +489,28 @@ differs by stage:
   § "The cluster stage's units"), so a seed clicked at a radius in pixels is
   drawn at that many pixels before anything has evaluated it.
 
+**The ghost outline.** An image counts as the track's when it holds an
+observation of any verdict, so a `candidate` or an `out` sighting is drawn as
+above. In an image with **no** observation, the track stage still has a patch
+standing in the world, and the layer draws where this camera sees it: the
+patch's own square, not re-anchored on anything since there is no keypoint
+here, sampled and projected as the member outline is and in the same stroke,
+in the `in` colour at 30% opacity (`GHOST_OPACITY`, 0.3). The patch can then
+be followed across every photograph of the capture, and the transparency says
+this image is not one of its sightings. It has no centre mark: the hollow
+centre of a member image is where the projection-offset segments end, and here
+there is no segment, while a lone dot would read as a keypoint.
+
+No ghost is drawn at the cluster stage, which has no shared geometry to
+project, nor at a track stage with no placement yet. Nor is one drawn where the
+camera cannot see the square: its back face turned to the camera
+(`OrientedPatch::is_front_facing`), its plane within 5 degrees of edge-on (the
+bar `bench::geometry::plane_is_edge_on` refuses the 3D viewport's plane handles
+at), or its centre behind the camera or outside the lens model's domain. Past
+those tests a boundary sample that fails to project breaks the curve, exactly
+as in a member outline. Occlusion is not tested: the ghost is where the square
+would be seen, not a claim that nothing stands in front of it.
+
 Clicking a mark selects that observation's row in Track View's edit mode
 ([`track-view.md`](track-view.md) § "Edit mode"): the mark and the row are one observation, so
 clicking either is the one gesture. The layer is on top, so a click it catches
@@ -496,7 +520,11 @@ does not also select a feature underneath.
 
 **What the layer draws, it edits.** Each mark is a handle, so the geometry a
 person is looking at is the geometry they take hold of, and there is no second
-picture of the patch to keep in step with the first.
+picture of the patch to keep in step with the first. The one exception is the
+ghost outline, which is display only: it offers no handle and no cursor, a
+click on it selects no row, and a press on it pans the photograph as a press on
+empty image does. It shows the patch in a photograph that has no sighting to
+move, and a gesture there would have no observation to be read through.
 
 - **The dot moves the patch.** At the track stage a track has one patch and
   every observation is a view of it, so dragging a mark slides that patch

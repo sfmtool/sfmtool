@@ -1280,15 +1280,19 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
     }
 }
 
-/// The layer is the *active* track's, and only in the images that track
-/// observes: an empty bench and a photograph outside the track both draw
-/// nothing.
+/// The layer is the *active* track's, and its marks are only in the images
+/// that track observes: an empty bench draws nothing at all, and a photograph
+/// outside the track draws no opaque mark (only the ghost, below).
 #[test]
-fn the_bench_layer_draws_nothing_without_a_track_or_outside_it() {
+fn the_bench_layer_draws_nothing_without_a_track_and_no_mark_outside_it() {
     let (node, track) = bench_track_fixture();
     assert!(
         bench_shapes(&node, 0, BenchMenu::default()).is_empty(),
         "the layer drew with nothing on the bench",
+    );
+    assert!(
+        ghost_shapes(&node, 0, BenchMenu::default()).is_empty(),
+        "a ghost was drawn with nothing on the bench",
     );
     let seen: Vec<u32> = track.observations.iter().map(|o| o.image).collect();
     let unseen = (0..node.edited().image_count())
@@ -1305,7 +1309,302 @@ fn the_bench_layer_draws_nothing_without_a_track_or_outside_it() {
             },
         )
         .is_empty(),
-        "the layer drew in an image the track does not observe",
+        "an opaque mark was drawn in an image the track does not observe",
+    );
+}
+
+// ── The ghost outline ───────────────────────────────────────────────────
+
+/// Every path the frame painted in the ghost outline's colour.
+fn ghost_shapes(
+    node: &SceneNode,
+    image_index: usize,
+    bench: BenchMenu<'_>,
+) -> Vec<Vec<egui::Pos2>> {
+    let ghost = egui::epaint::ColorMode::Solid(super::bench_track::ghost_color());
+    let mut found = Vec::new();
+    for clipped in &bench_frame(node, image_index, bench) {
+        collect_paths_in(&clipped.shape, &ghost, &mut found);
+    }
+    found
+}
+
+fn collect_paths_in(
+    shape: &egui::Shape,
+    color: &egui::epaint::ColorMode,
+    out: &mut Vec<Vec<egui::Pos2>>,
+) {
+    match shape {
+        egui::Shape::Path(path) if &path.stroke.color == color => {
+            out.push(path.points.clone());
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_paths_in(shape, color, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The fixture's track with its patch turned to face the first image the track
+/// has no observation in, and that image: the photograph a ghost is drawn in.
+///
+/// The demo's patches face the cameras that see them, so an image outside the
+/// track sees each one from well off its normal. Turning the patch square to
+/// that camera makes the ghost's view of it unambiguous without moving its
+/// centre, and the images the track observes keep their sightings.
+fn ghost_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack, usize) {
+    let (node, track) = bench_track_fixture();
+    let unseen = (0..node.edited().image_count())
+        .find(|i| track.observations.iter().all(|o| o.image as usize != *i))
+        .expect("the fixture's track does not span every image");
+    let eye = node.edited().base.image_table.images[unseen].camera_center();
+    let track = with_placement(&track, |placement| {
+        let patch = placement
+            .as_mut()
+            .expect("a track from a point carries a patch");
+        *patch = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+            patch.center,
+            eye - patch.center,
+            nalgebra::Vector3::z(),
+            patch.half_extent,
+        );
+    });
+    (node, track, unseen)
+}
+
+/// The fixture's track with its placement changed by `change`.
+fn with_placement(
+    track: &sfmtool_core::bench::EditableTrack,
+    change: impl FnOnce(&mut Option<sfmtool_core::patch::cloud::OrientedPatch>),
+) -> sfmtool_core::bench::EditableTrack {
+    let mut changed = track.clone();
+    match &mut changed.stage {
+        sfmtool_core::bench::Stage::Track(payload) => change(&mut payload.placement),
+        sfmtool_core::bench::Stage::Cluster(_) => panic!("the fixture is at the track stage"),
+    }
+    changed
+}
+
+/// In a photograph the track has no sighting in, the track stage draws the
+/// patch's own square where that camera sees it, at the ghost opacity, and
+/// nothing opaque: no dot, no segment, no member outline.
+#[test]
+fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
+    let (node, track, unseen) = ghost_fixture();
+    let photograph = pixels(640, 480);
+    let bench = BenchMenu {
+        busy: None,
+        active_track: Some(&track),
+        lock: true,
+    };
+    let ghosts = ghost_shapes(&node, unseen, bench);
+    assert_eq!(ghosts.len(), 1, "one ghost outline, got {}", ghosts.len());
+    let outline = &ghosts[0];
+    assert!(
+        outline.len() > 4,
+        "the ghost is the four corners rather than a sampled curve: {outline:?}",
+    );
+    let alpha = super::bench_track::ghost_color().a();
+    let expected_alpha = (255.0 * super::bench_track::GHOST_OPACITY).round() as u8;
+    assert!(
+        alpha.abs_diff(expected_alpha) <= 1,
+        "the ghost is drawn at alpha {alpha}, not at the ghost opacity ({expected_alpha})",
+    );
+
+    // The patch itself, not re-anchored on anything: there is no sighting here.
+    let patch = track
+        .track()
+        .and_then(|payload| payload.placement.as_ref())
+        .expect("a track from a point carries the stored patch");
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+        .expect("the demo's images have cameras");
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let expected = to_panel(&photograph, patch_pixel(patch, &camera, &pose, s, t));
+        let nearest = outline
+            .iter()
+            .map(|point| (*point - expected).length())
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest < 0.01,
+            "the ghost misses the corner ({s}, {t}) at {expected:?} by {nearest}",
+        );
+    }
+    assert!(
+        bench_shapes(&node, unseen, bench).is_empty(),
+        "an opaque outline was drawn in an image the track does not observe",
+    );
+    assert!(
+        bench_segments(&node, unseen, bench).is_empty(),
+        "a projection-offset segment was drawn where there is no sighting",
+    );
+}
+
+/// An image the track observes keeps its own drawing and gets no ghost, and
+/// that holds for a `candidate` or an `out` sighting as much as an `in` one:
+/// any observation makes the image the track's.
+#[test]
+fn a_member_image_draws_its_outline_and_no_ghost_whatever_the_verdict() {
+    use sfmtool_core::bench::Verdict;
+
+    let (node, track) = bench_track_fixture();
+    for verdict in [Verdict::In, Verdict::Candidate, Verdict::Out] {
+        let mut judged = track.clone();
+        for observation in &mut judged.observations {
+            observation.verdict = verdict;
+        }
+        let bench = BenchMenu {
+            busy: None,
+            active_track: Some(&judged),
+            lock: true,
+        };
+        for image in judged.observations.iter().map(|o| o.image as usize) {
+            assert!(
+                ghost_shapes(&node, image, bench).is_empty(),
+                "{verdict:?}: image {image} is the track's and drew a ghost",
+            );
+            assert!(
+                !bench_shapes(&node, image, bench).is_empty(),
+                "{verdict:?}: image {image} lost its member outline",
+            );
+        }
+    }
+}
+
+/// The cluster stage has no shared geometry, so there is nothing to project
+/// into a photograph the cluster has no sighting in.
+#[test]
+fn the_cluster_stage_draws_no_ghost() {
+    use sfmtool_core::bench::{create_cluster, Bench, ClusterSeed};
+
+    let node = SceneNode::demo(crate::state::edits::tests::projected_embedded_demo(12));
+    let (bench, report) = create_cluster(
+        &Bench::new(),
+        &ClusterSeed::from_pixel(0, "image_0", [320.0, 240.0], 24.0),
+    )
+    .expect("a usable seed");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+    let menu = BenchMenu {
+        busy: None,
+        active_track: Some(&track),
+        lock: true,
+    };
+    for image in 1..node.edited().image_count() {
+        assert!(
+            ghost_shapes(&node, image, menu).is_empty(),
+            "the cluster drew a ghost in image {image}",
+        );
+        assert!(
+            bench_shapes(&node, image, menu).is_empty(),
+            "the cluster drew in image {image}, which it has no sighting in",
+        );
+    }
+}
+
+/// A track-stage track with no placement has no square to project, and a
+/// patch whose back is turned to the camera, or whose plane that camera sees
+/// edge-on, is not one that photograph sees.
+#[test]
+fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
+    let (node, track, unseen) = ghost_fixture();
+    let menu = |track| BenchMenu {
+        busy: None,
+        active_track: Some(track),
+        lock: true,
+    };
+    assert!(
+        !ghost_shapes(&node, unseen, menu(&track)).is_empty(),
+        "the fixture should draw a ghost before anything is changed",
+    );
+
+    let unplaced = with_placement(&track, |placement| *placement = None);
+    assert!(
+        ghost_shapes(
+            &node,
+            unseen,
+            BenchMenu {
+                busy: None,
+                active_track: Some(&unplaced),
+                lock: true,
+            },
+        )
+        .is_empty(),
+        "a ghost was drawn for a track with no placement",
+    );
+
+    // Swapping the axes turns the normal over and leaves the square where it
+    // was, so the only thing that changed is which face the camera sees.
+    let turned = with_placement(&track, |placement| {
+        let patch = placement.as_mut().expect("the fixture has a placement");
+        std::mem::swap(&mut patch.u_axis, &mut patch.v_axis);
+    });
+    assert!(
+        ghost_shapes(
+            &node,
+            unseen,
+            BenchMenu {
+                busy: None,
+                active_track: Some(&turned),
+                lock: true,
+            },
+        )
+        .is_empty(),
+        "a ghost was drawn for a patch whose back faces the camera",
+    );
+
+    // Turned a right angle about the vertical, the plane holds the line of
+    // sight: the square is seen edge-on and projects to a line.
+    let eye = node.edited().base.image_table.images[unseen].camera_center();
+    let edge_on = with_placement(&track, |placement| {
+        let patch = placement.as_mut().expect("the fixture has a placement");
+        *patch = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+            patch.center,
+            (eye - patch.center).cross(&nalgebra::Vector3::z()),
+            nalgebra::Vector3::z(),
+            patch.half_extent,
+        );
+    });
+    assert!(
+        ghost_shapes(&node, unseen, menu(&edge_on)).is_empty(),
+        "a ghost was drawn for a patch seen edge-on",
+    );
+}
+
+/// The ghost is display only: a press on its corner takes no handle, asks for
+/// no cursor, pans the photograph as a press on empty image does, and edits
+/// nothing.
+#[test]
+fn a_press_on_the_ghost_pans_and_edits_nothing() {
+    let (node, track, unseen) = ghost_fixture();
+    let patch = track
+        .track()
+        .and_then(|payload| payload.placement.as_ref())
+        .expect("a track from a point carries the stored patch");
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+        .expect("the demo's images have cameras");
+    let centre = patch_pixel(patch, &camera, &pose, 0.0, 0.0);
+    let corner = patch_pixel(patch, &camera, &pose, 1.0, 1.0);
+    let dragged = gesture(
+        &node,
+        unseen,
+        &track,
+        centre,
+        corner,
+        &[egui::vec2(30.0, 0.0)],
+        false,
+        true,
+    );
+    assert_eq!(dragged.edit, None, "a press on the ghost edited the patch");
+    assert_eq!(
+        dragged.cursor,
+        egui::CursorIcon::Default,
+        "the ghost asked for a cursor",
+    );
+    assert!(
+        dragged.panned.length() > 1.0,
+        "a drag from the ghost should pan the photograph, moved {:?}",
+        dragged.panned,
     );
 }
 

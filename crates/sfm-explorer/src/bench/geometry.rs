@@ -599,6 +599,11 @@ pub(crate) fn plane_point(
 /// read against it: the angle between the view ray through the centre and the
 /// plane is under [`MIN_PLANE_ANGLE_DEG`].
 ///
+/// The same bar says when a photograph has no view of the square worth
+/// drawing: Image Detail's ghost outline, the patch projected into an image
+/// the track has no sighting in, is left out under it, a figure collapsed to a
+/// line saying nothing about where the square is.
+///
 /// Never true for a **direction patch**, whose tangent plane faces the eye by
 /// construction: the bearing is read rotation-only, so the viewer stands at the
 /// centre of the sphere it is tangent to.

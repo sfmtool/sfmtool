@@ -925,8 +925,9 @@ still read.
   mark the active track's `in` observations are proposed in the same draft. Both
   of the panels that do draw the active track draw it as handles: the Image
   Detail panel's bench layer marks it in each photograph that observes it, where
-  a mark places a sighting and sizes and turns the patch
-  ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
+  a mark places a sighting and sizes and turns the patch, and at the track stage
+  draws the patch as a display-only ghost outline in each photograph that does
+  not ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
   layer"), and the 3D viewer draws the patch where it stands in the world, with
   two further handles that move it along its normal and turn that normal
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).

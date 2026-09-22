@@ -513,7 +513,8 @@ track. **A cluster and a track are the same body at two stages**: the header's
 headline, the table's cells and the row menu follow the stage, and there is no
 separate cluster layout. What differs is outside the panel: a cluster has no
 geometry, so the 3D viewer's bench layer draws nothing for it and Image Detail
-draws its parallelograms rather than an outline. A cluster has no view mode
+draws its parallelograms rather than an outline, and no ghost outline in the
+images it has no sighting in. A cluster has no view mode
 either, since there is no committed point behind it, so the way back to a
 cluster after Edit has been cleared is its row under *Bench Clusters*.
 

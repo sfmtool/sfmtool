@@ -26,6 +26,15 @@
 //!   refined affine shape, with the seed's own parallelogram dashed behind it.
 //!   The two apart are how far the refinement moved and how much it turned.
 //!
+//! In a photograph the track has **no** observation in, the track stage still
+//! has something to say: where its patch would be seen. There the patch's own
+//! square is projected through that image's camera and drawn as a **ghost
+//! outline**, the member outline's stroke at [`GHOST_OPACITY`], so the one
+//! patch can be followed across the whole capture without reading as a
+//! sighting. The ghost is display only. It is built apart from [`Layer`], so it
+//! offers no handle, no cursor and no click, and a press on it pans the
+//! photograph as a press on empty image does. See [`Ghost`].
+//!
 //! **What it draws, it edits.** At the track stage every handle edits the one
 //! patch and each photograph shows where it lands: the dot slides it across
 //! its own plane, an edge resizes it, a corner turns it. At the cluster stage
@@ -63,6 +72,11 @@ use super::ImageDetailResponse;
 /// Stroke width of the bench's outlines. Thicker than a feature ellipse's, so
 /// the layer reads as being on top of the overlay rather than part of it.
 const STROKE_WIDTH: f32 = 2.5;
+
+/// How opaque the ghost outline is, as a fraction of the member outline's
+/// colour: 70% transparent, so it is plainly the same patch and plainly not a
+/// sighting.
+pub(super) const GHOST_OPACITY: f32 = 0.3;
 
 /// Radius of the mark drawn at an observation's own position, in panel px.
 const KEYPOINT_RADIUS: f32 = 4.0;
@@ -223,35 +237,6 @@ impl Outline {
             .collect()
     }
 
-    /// The runs of consecutive samples that landed, and whether the boundary
-    /// closed.
-    ///
-    /// A sample behind the camera or outside the lens model's domain ends a run
-    /// and starts the next, so an outline that leaves the model's field is
-    /// drawn as the arcs that are defined rather than closed across the gap
-    /// with a chord that means nothing.
-    fn runs(&self) -> (Vec<Vec<Pos2>>, bool) {
-        let n = self.samples.len();
-        let Some(gap) = (0..n).find(|&i| self.samples[i].is_none()) else {
-            return (vec![self.samples.iter().flatten().copied().collect()], true);
-        };
-        // Walk from the sample after the first gap, so a run that spans the
-        // point the boundary happens to start at is one run rather than two.
-        let mut runs: Vec<Vec<Pos2>> = Vec::new();
-        let mut run: Vec<Pos2> = Vec::new();
-        for step in 1..=n {
-            match self.samples[(gap + step) % n] {
-                Some(point) => run.push(point),
-                None if run.len() > 1 => runs.push(std::mem::take(&mut run)),
-                None => run.clear(),
-            }
-        }
-        if run.len() > 1 {
-            runs.push(run);
-        }
-        (runs, false)
-    }
-
     /// The box every sample that landed sits in.
     fn bounds(&self) -> Option<Rect> {
         self.samples.iter().flatten().fold(None, |bounds, point| {
@@ -267,7 +252,9 @@ impl Layer {
     /// the track does not observe.
     ///
     /// Nothing is built for such an image: the track is a set of sightings, and
-    /// a photograph it has none in has nothing of it to show.
+    /// a photograph it has none in has none of them to take hold of. What it
+    /// can still show is where the patch would be, which is [`Ghost`]'s and
+    /// takes no pointer.
     ///
     /// `lock` is Track View's *Lock*, which decides whether the outline is a
     /// handle at all.
@@ -288,12 +275,7 @@ impl Layer {
         if here.is_empty() {
             return None;
         }
-        let to_panel = |p: [f64; 2]| -> Pos2 {
-            Pos2::new(
-                image_rect.min.x + p[0] as f32 * effective_scale,
-                image_rect.min.y + p[1] as f32 * effective_scale,
-            )
-        };
+        let to_panel = panel_mapping(image_rect, effective_scale);
         let mut layer = Layer {
             sightings: Vec::new(),
             outlines: Vec::new(),
@@ -572,18 +554,11 @@ impl Layer {
             ));
         }
         for outline in &self.outlines {
-            let stroke = Stroke::new(STROKE_WIDTH, verdict_color(outline.verdict));
-            let (runs, closed) = outline.runs();
-            for run in runs {
-                if run.len() < 2 {
-                    continue;
-                }
-                if closed {
-                    painter.add(Shape::closed_line(run, stroke));
-                } else {
-                    painter.add(Shape::line(run, stroke));
-                }
-            }
+            paint_boundary(
+                painter,
+                &outline.samples,
+                Stroke::new(STROKE_WIDTH, verdict_color(outline.verdict)),
+            );
         }
         for sighting in &self.sightings {
             let color = verdict_color(sighting.verdict);
@@ -707,6 +682,124 @@ impl Layer {
     }
 }
 
+/// The ghost outline: the track-stage patch's own square projected into a
+/// photograph the track has no observation in.
+///
+/// An image counts as the track's when it holds an observation of any verdict,
+/// so a `candidate` or an `out` sighting keeps the drawing it has in
+/// [`Layer`] and only an image with none gets the ghost. What is projected is
+/// the patch **itself**, not a frame re-anchored on a keypoint, because there
+/// is no keypoint here to anchor on: the ghost is where the 3D places the
+/// square, which is also where the hollow centre of a member image sits.
+///
+/// There is nothing to draw, and so no ghost, at the cluster stage (no shared
+/// geometry exists to project), at a track stage with no placement yet, and in
+/// a view that cannot see the square: the patch's back face turned toward the
+/// camera ([`OrientedPatch::is_front_facing`]), its plane seen within
+/// [`geometry::MIN_PLANE_ANGLE_DEG`] of edge-on ([`geometry::plane_is_edge_on`]),
+/// or its centre behind the camera or outside the lens model's domain. Past
+/// those tests the boundary is sampled and drawn as a member outline is, a
+/// sample that fails to project breaking the curve rather than being bridged.
+///
+/// It carries no observation, no hit test and no cursor, being display only;
+/// that is why it is its own type rather than an [`Outline`] of a [`Layer`],
+/// whose every outline is a handle.
+struct Ghost {
+    /// The boundary samples in panel coordinates, `None` for one that did not
+    /// project.
+    samples: Vec<Option<Pos2>>,
+}
+
+impl Ghost {
+    /// The ghost for `track` in `img_idx`, or `None` when there is none to
+    /// draw, for the reasons [`Ghost`] lists.
+    fn build(
+        image_table: &ImageTable,
+        img_idx: usize,
+        track: &EditableTrack,
+        to_panel: &impl Fn([f64; 2]) -> Pos2,
+    ) -> Option<Self> {
+        let Stage::Track(payload) = &track.stage else {
+            return None;
+        };
+        let patch = payload.placement.as_ref()?;
+        let (camera, pose) = geometry::view_of(image_table, img_idx)?;
+        if !patch.is_front_facing(&pose)
+            || geometry::plane_is_edge_on(patch, pose.inverse_translation_origin())
+        {
+            return None;
+        }
+        geometry::project(&camera, &pose, patch.center.coords, patch.w)?;
+        let (samples, _) = project_outline(patch, &camera, &pose);
+        Some(Ghost {
+            samples: samples.into_iter().map(|p| p.map(to_panel)).collect(),
+        })
+    }
+
+    /// Paint the ghost: the member outline's stroke at [`GHOST_OPACITY`], in
+    /// the `in` colour, since what it shows is the patch the track's `in`
+    /// sightings settle. No centre mark: in a member image the hollow centre
+    /// is where the projection-offset segments end, and with no sighting there
+    /// is no segment for it to end, while a lone dot would read as a keypoint.
+    fn paint(&self, painter: &egui::Painter) {
+        paint_boundary(
+            painter,
+            &self.samples,
+            Stroke::new(STROKE_WIDTH, ghost_color()),
+        );
+    }
+}
+
+/// The ghost outline's colour: the `in` violet at [`GHOST_OPACITY`].
+pub(super) fn ghost_color() -> Color32 {
+    verdict_color(Verdict::In).gamma_multiply(GHOST_OPACITY)
+}
+
+/// Stroke a projected patch boundary, one polyline per run of samples that
+/// landed, closed when every sample did.
+fn paint_boundary(painter: &egui::Painter, samples: &[Option<Pos2>], stroke: Stroke) {
+    let (runs, closed) = runs(samples);
+    for run in runs {
+        if run.len() < 2 {
+            continue;
+        }
+        if closed {
+            painter.add(Shape::closed_line(run, stroke));
+        } else {
+            painter.add(Shape::line(run, stroke));
+        }
+    }
+}
+
+/// The runs of consecutive boundary samples that landed, and whether the
+/// boundary closed.
+///
+/// A sample behind the camera or outside the lens model's domain ends a run and
+/// starts the next, so an outline that leaves the model's field is drawn as the
+/// arcs that are defined rather than closed across the gap with a chord that
+/// means nothing.
+fn runs(samples: &[Option<Pos2>]) -> (Vec<Vec<Pos2>>, bool) {
+    let n = samples.len();
+    let Some(gap) = (0..n).find(|&i| samples[i].is_none()) else {
+        return (vec![samples.iter().flatten().copied().collect()], true);
+    };
+    // Walk from the sample after the first gap, so a run that spans the point
+    // the boundary happens to start at is one run rather than two.
+    let mut runs: Vec<Vec<Pos2>> = Vec::new();
+    let mut run: Vec<Pos2> = Vec::new();
+    for step in 1..=n {
+        match samples[(gap + step) % n] {
+            Some(point) => run.push(point),
+            None if run.len() > 1 => runs.push(std::mem::take(&mut run)),
+            None => run.clear(),
+        }
+    }
+    if run.len() > 1 {
+        runs.push(run);
+    }
+    (runs, false)
+}
+
 /// Draw the active bench track in `img_idx`, and report a click on one of its
 /// marks.
 ///
@@ -748,6 +841,13 @@ pub(super) fn draw(
         effective_scale,
         lock,
     ) else {
+        // A photograph the track has no sighting in: the ghost, if there is
+        // one, and nothing else. No handle, cursor or click comes from it, so
+        // the pointer here is the view's.
+        let to_panel = panel_mapping(image_rect, effective_scale);
+        if let Some(ghost) = Ghost::build(image_table, img_idx, shown, &to_panel) {
+            ghost.paint(painter);
+        }
         return;
     };
     layer.paint(painter);
@@ -780,6 +880,17 @@ pub(super) fn draw(
                 response.select_point = None;
             }
         }
+    }
+}
+
+/// Where a source pixel lands in the panel, for the image drawn in
+/// `image_rect` at `effective_scale` panel px per source px.
+fn panel_mapping(image_rect: Rect, effective_scale: f32) -> impl Fn([f64; 2]) -> Pos2 {
+    move |p: [f64; 2]| {
+        Pos2::new(
+            image_rect.min.x + p[0] as f32 * effective_scale,
+            image_rect.min.y + p[1] as f32 * effective_scale,
+        )
     }
 }
 
