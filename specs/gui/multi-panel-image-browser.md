@@ -495,7 +495,7 @@ above. In an image with **no** observation, the track stage still has a patch
 standing in the world, and the layer draws where this camera sees it: the
 patch's own square, not re-anchored on anything since there is no keypoint
 here, sampled and projected as the member outline is and in the same stroke,
-in the `in` colour at 30% opacity (`GHOST_OPACITY`, 0.3). The patch can then
+in the `in` colour at 80% opacity (`GHOST_OPACITY`, 0.8). The patch can then
 be followed across every photograph of the capture, and the transparency says
 this image is not one of its sightings. It has no centre mark: the hollow
 centre of a member image is where the projection-offset segments end, and here

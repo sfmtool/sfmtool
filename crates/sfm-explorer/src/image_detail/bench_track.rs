@@ -74,9 +74,9 @@ use super::ImageDetailResponse;
 const STROKE_WIDTH: f32 = 2.5;
 
 /// How opaque the ghost outline is, as a fraction of the member outline's
-/// colour: 70% transparent, so it is plainly the same patch and plainly not a
+/// colour: 80% opaque, so it is plainly the same patch and still plainly not a
 /// sighting.
-pub(super) const GHOST_OPACITY: f32 = 0.3;
+pub(super) const GHOST_OPACITY: f32 = 0.8;
 
 /// Radius of the mark drawn at an observation's own position, in panel px.
 const KEYPOINT_RADIUS: f32 = 4.0;
