@@ -32,10 +32,12 @@
 //! pointer is read as a **ray of the viewport's camera** met with the patch's
 //! own geometry ([`crate::bench::geometry`]), which is the same idea the Image
 //! Detail panel reads a pixel by, and the edit it names is handed to the same
-//! core step. The segment and the arrowhead are the two handles with no
-//! counterpart in a photograph, which is why they are here: a sighting names
-//! the ray the patch lies along, and says nothing about how far down it the
-//! surface is or which way it faces.
+//! core step. The segment and the arrowhead are the two handles no sighting
+//! can stand in for: a keypoint names the ray the patch lies along, and says
+//! nothing about how far down it the surface is or which way it faces. They are
+//! read against a camera that sees that ray from the side, which is this
+//! viewport's, or a photograph's in Image Detail, where the same two handles
+//! are drawn through the lens.
 
 use egui::{Color32, CursorIcon, Pos2, Rect};
 use nalgebra::{Point3, Vector3};
@@ -62,22 +64,6 @@ const CIRCLE_RADIUS: f64 = 1.0 / 8.0;
 /// buffer, so geometry exactly coplanar with it flickers between the two. A
 /// fraction of the half-length keeps the lift independent of the scene's size.
 const PLANE_LIFT: f64 = 1e-3;
-
-/// How far the normal stands off the frame, in half-lengths -- one side length,
-/// which is long enough to be grabbed and short enough not to cross the scene.
-///
-/// Visible to [`crate::bench::geometry`], which states the arrowhead's aiming
-/// lever in terms of it: the arrow a person sees and the travel their pointer
-/// turns it by are two facts about one handle, and a second literal could drift
-/// from this one silently.
-pub(crate) const NORMAL_LENGTH: f64 = 2.0;
-
-/// How far back along the normal the arrowhead's barbs reach, as a fraction of
-/// the normal's own length.
-const BARB_BACK: f64 = 0.25;
-
-/// How far to either side they reach, in the same units.
-const BARB_SIDE: f64 = 0.1;
 
 /// How far behind the scene the figure fades to the floor, in half-lengths.
 ///
@@ -396,9 +382,10 @@ fn ring(frame: &OrientedPatch, at: Vector3<f64>, radius: f64) -> Vec<Vector3<f64
 
 /// The normal's segment and the arrowhead's two barbs, in world coordinates.
 ///
-/// The barbs are built after the transform rather than before it, because what
-/// squares them to the viewer is the eye, which is in world coordinates. A
-/// similarity preserves angles, so the head is the same shape either way.
+/// [`geometry::arrow`] is the construction, which Image Detail draws the same
+/// arrow by. It runs after the transform rather than before it, because what
+/// squares the barbs to the viewer is the eye, which is in world coordinates.
+/// A similarity preserves angles, so the head is the same shape either way.
 fn arrow(
     frame: &OrientedPatch,
     half: f64,
@@ -407,36 +394,29 @@ fn arrow(
     eye: Point3<f64>,
 ) -> [Stroke; 3] {
     let color = rgba(crate::bench::IN_COLOR);
-    let centre = transform.apply_to_point(&frame.center);
-    let normal = rotation * frame.normal();
-    let length = NORMAL_LENGTH * half * transform.scale;
-    let tip = centre + normal * length;
-    // Perpendicular to the normal and as square to the viewer as it can be, so
-    // the head never goes edge-on. When the normal points at the eye the cross
-    // product vanishes and the frame's own `u` stands in.
-    let side = normal.cross(&(eye - tip));
-    let side = if side.norm() > 1e-12 {
-        side.normalize()
-    } else {
-        (rotation * frame.u_axis).normalize()
-    };
-    let back = tip - normal * (BARB_BACK * length);
+    let arrow = geometry::arrow(
+        transform.apply_to_point(&frame.center),
+        rotation * frame.normal(),
+        geometry::NORMAL_LENGTH * half * transform.scale,
+        eye,
+        rotation * frame.u_axis,
+    );
     let point = |p: Point3<f64>| [p.x as f32, p.y as f32, p.z as f32, 1.0];
-    let tip = point(tip);
+    let tip = point(arrow.tip);
     [
         Stroke {
-            a: point(centre),
+            a: point(arrow.tail),
             b: tip,
             color,
         },
         Stroke {
             a: tip,
-            b: point(back + side * (BARB_SIDE * length)),
+            b: point(arrow.barbs[0]),
             color,
         },
         Stroke {
             a: tip,
-            b: point(back - side * (BARB_SIDE * length)),
+            b: point(arrow.barbs[1]),
             color,
         },
     ]
@@ -460,7 +440,7 @@ pub(crate) enum Handle {
     /// One corner: dragging it turns the patch about its outward normal.
     Corner(usize),
     /// The normal's segment: dragging it moves the patch along its own normal,
-    /// which is one of the two things no photograph can say -- a sighting names
+    /// which is one of the two things no sighting can say, a keypoint naming
     /// the ray the patch lies along and not how far down it the surface is.
     Normal,
     /// The arrowhead at the far end of that segment: dragging it turns the

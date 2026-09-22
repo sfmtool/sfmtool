@@ -997,7 +997,7 @@ fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
 
     let before = versions(&state, id);
     let out = crate::bench::PatchEdit::TranslateToPixel {
-        observation: 0,
+        viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
         pixel: [site[0] + 4.0, site[1] - 3.0],
     };
     let edited = state
@@ -1007,7 +1007,7 @@ fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
     assert_eq!(versions(&state, id), before + 1);
 
     let back = crate::bench::PatchEdit::TranslateToPixel {
-        observation: 0,
+        viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
         pixel: site,
     };
     let edited = state

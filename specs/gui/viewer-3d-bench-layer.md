@@ -14,11 +14,14 @@ there is no second picture of the patch to keep in step with the first.
 The Image Detail panel already draws the same track in each photograph that
 observes it, with the same marks acting as handles
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
-layer"). What the world view adds is the two gestures no photograph can express.
-A picture fixes the ray a piece of surface lies along; it is silent about how
-far down that ray the surface is, and silent about which way the surface faces.
-Those two are settled out here, on the normal's own segment and on the arrowhead
-at the end of it.
+layer"). What the world view is for is the two gestures no sighting can
+express. A keypoint fixes the ray a piece of surface lies along; it is silent
+about how far down that ray the surface is, and silent about which way the
+surface faces. Those two are settled against a camera that sees that ray from
+the side, on the normal's own segment and on the arrowhead at the end of it:
+here that camera is the viewport's, and Image Detail draws the same two handles
+through a photograph's own camera, where an oblique view shows the surface to
+align against.
 
 ## The layer, and what it is handed
 
@@ -440,9 +443,6 @@ Every value here is a constant of the module named beside it, not a setting.
 | `CIRCLE_SEGMENTS` | `24` | segments in the centre disc and in each mark's circle (`viewer_3d/bench_track.rs`) |
 | `CIRCLE_RADIUS` | `1/8` | the disc's and the circles' radius, in half-lengths |
 | `PLANE_LIFT` | `1e-3` | how far in-plane geometry is lifted along the normal, in half-lengths |
-| `NORMAL_LENGTH` | `2.0` | how far the normal's segment stands off the square, in half-lengths |
-| `BARB_BACK` | `0.25` | how far back along the normal the barbs reach, as a fraction of its length |
-| `BARB_SIDE` | `0.1` | how far to either side they reach, in the same units |
 | `FOG_DISTANCE` | `4.0` | how far behind the scene the figure fades to the floor, in half-lengths |
 | `SELECTED_CIRCLE_SCALE` | `1.6` | how much larger the selected observation's circle is drawn |
 | `HANDLE_HIT_RADIUS` | `9.0` | reach of the dot, a corner, the arrowhead and a circle, in panel px |
@@ -452,6 +452,9 @@ Every value here is a constant of the module named beside it, not a setting.
 | `FLOOR_OPACITY` | `0.15` | the opacity it fades to and never below |
 | `INF_DEPTH` | `1e-6` | the NDC depth a direction's fragments are pinned at |
 | `MIN_PLANE_ANGLE_DEG` | `5.0` | the edge-on and end-on refusals, in degrees (`bench/geometry.rs`) |
+| `NORMAL_LENGTH` | `2.0` | how far the normal's segment stands off the square, in half-lengths |
+| `BARB_BACK` | `0.25` | how far back along the normal the barbs reach, as a fraction of its length |
+| `BARB_SIDE` | `0.1` | how far to either side they reach, in the same units |
 | `MAX_BEARING_ANGLE_DEG` | `85.0` | how far from a bearing a pointer may point, in degrees |
 | `AIM_ANGLE_DEG` | `45.0` | how near the line of sight the normal must lie for the arrowhead to aim |
 | `AIM_LEVER` | `2 * NORMAL_LENGTH` | the aim's lever, in half-lengths, stated in terms of the arrow's own length |
@@ -460,7 +463,9 @@ Every value here is a constant of the module named beside it, not a setting.
 `AIM_LEVER` is written in terms of `NORMAL_LENGTH` rather than as a second
 literal, because the arrow a person sees and the travel their pointer turns it
 by are two facts about one handle and a second literal could drift from the
-first silently.
+first silently. The arrow's three constants live with the geometry rather than
+with this layer because Image Detail draws the same arrow, through
+`bench::geometry::arrow`, the one construction both panels build it by.
 
 ## Testing
 

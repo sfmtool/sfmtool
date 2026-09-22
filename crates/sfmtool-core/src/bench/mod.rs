@@ -81,7 +81,8 @@ pub use steps::{
     AddObservationReport, Axis, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,
     CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed, ResizeReport,
     ShapeReport, SightReport, SpinReport, SplitError, SplitReport, ThresholdReport, TiltReport,
-    TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, VerdictReport, MAX_TILT_DEG,
+    TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, VerdictReport, Viewpoint,
+    MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,

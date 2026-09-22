@@ -1515,7 +1515,7 @@ fn an_arrowhead_drag_tilts_the_patch_and_orbits_nothing() {
 }
 
 /// How near the patch this test stands the eye, in half-lengths: inside
-/// [`geometry::AIM_LEVER`], and outside [`bench_track::NORMAL_LENGTH`] so the
+/// [`geometry::AIM_LEVER`], and outside [`geometry::NORMAL_LENGTH`] so the
 /// arrowhead is still in front of the camera to be pressed at all.
 const CLOSE_STANDOFF: f64 = 3.0;
 

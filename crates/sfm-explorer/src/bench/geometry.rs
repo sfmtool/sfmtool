@@ -8,9 +8,12 @@
 //! it, how far off is it -- and they have to agree to the pixel, because a panel
 //! draws the answer while the tool states it. So all of them build the same
 //! [`PatchEdit`] and hand it to the same [`apply`], which is one core step
-//! each. The last two of the questions are the 3D viewport's alone: a
-//! photograph names the ray the patch lies along, and says nothing about how
-//! far down it the surface is or which way it faces.
+//! each. The last two of the questions no sighting can answer: a keypoint
+//! names the ray the patch lies along, and says nothing about how far down it
+//! the surface is or which way it faces. They are read instead against a
+//! **vantage**, a camera looking at the patch from off that ray, which is the 3D
+//! viewport's camera or a photograph's own ([`pixel_ray`]): the pointer is a
+//! ray of that camera either way, so both panels ask the same functions.
 //!
 //! The arithmetic that turns a pointer into a patch is core's
 //! (`sfmtool_core::bench::resize_patch_to_pixel`,
@@ -25,7 +28,7 @@
 use nalgebra::{Point3, Rotation3, Unit, Vector3};
 use sfmtool_core::bench::{
     self, Edge, EditableTrack, Observation, ResizeReport, ShapeReport, SightReport, SpinReport,
-    TiltReport, TrackEditError, TranslateReport, TranslateToPixelReport,
+    TiltReport, TrackEditError, TranslateReport, TranslateToPixelReport, Viewpoint,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -53,22 +56,26 @@ const MIN_OFFSET: f64 = 1e-12;
 /// wire, whose namespace is flat, spells `translate_bench_patch` out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PatchEdit {
-    /// Slide the track-stage patch across its own plane until its centre sits
-    /// under this pixel of that observation's image. Every sighting follows.
-    /// The track stage's dot while Track View's *Lock* is ticked.
+    /// Slide the track-stage patch across its own plane until the square drawn
+    /// from `viewpoint` has its centre under this pixel. Every sighting
+    /// follows. The track stage's dot while Track View's *Lock* is ticked, and
+    /// the ghost outline's centre mark.
     TranslateToPixel {
-        /// The observation whose image the pixel is in.
-        observation: usize,
+        /// The image the pixel is in, and the square it is read against: an
+        /// observation's, re-anchored on its keypoint, or an image's, the patch
+        /// as it stands.
+        viewpoint: Viewpoint,
         /// Where, in that image's own px.
         pixel: [f64; 2],
     },
     /// Move the track-stage patch by this displacement on its own orthonormal
     /// axes `[u, v, n]`, in world units. Every sighting follows.
     ///
-    /// The 3D viewport's centre-dot drag names a tangential displacement and its
-    /// normal-segment drag a normal one; the normal part is the one thing no
-    /// photograph can name, a sighting saying which ray the patch lies along and
-    /// nothing about how far down it the surface is.
+    /// The 3D viewport's centre-dot drag names a tangential displacement, and
+    /// the normal-segment drag of either panel a normal one. The normal part is
+    /// one thing no sighting can name, a keypoint saying which ray the patch
+    /// lies along and nothing about how far down it the surface is, so it is
+    /// read off a vantage that sees that ray from the side.
     Translate {
         /// `[u, v, n]`, in the reconstruction's own units.
         by: [f64; 3],
@@ -81,14 +88,15 @@ pub(crate) enum PatchEdit {
         /// Which edge moves, or `None` for both about a held centre.
         moved_edge: Option<Edge>,
     },
-    /// Put one edge of the outline drawn at this observation under this pixel,
+    /// Put one edge of the outline drawn from `viewpoint` under this pixel,
     /// with the opposite edge left where it is.
     ///
     /// The one size gesture that spans both stages, a pixel being meaningful at
-    /// either where a world half-length is not.
+    /// either where a world half-length is not. The cluster stage takes only
+    /// an observation, its outlines being each sighting's own.
     ResizeToPixel {
-        /// The observation whose sighting the outline is drawn at.
-        observation: usize,
+        /// The image the pixel is in, and the square it is read against.
+        viewpoint: Viewpoint,
         /// Which edge was grabbed.
         edge: Edge,
         /// Where its midpoint should land, in that image's own px.
@@ -111,8 +119,8 @@ pub(crate) enum PatchEdit {
     /// normal, by the least rotation and no further than the observations can
     /// still see it.
     ///
-    /// The 3D viewport's arrowhead drag, and the other edit no photograph can
-    /// name: a sighting says which ray the patch lies along and nothing about
+    /// The arrowhead drag of either panel, and the other edit no sighting can
+    /// name: a keypoint says which ray the patch lies along and nothing about
     /// which way the surface under it faces.
     Tilt {
         /// The outward normal wanted, in the reconstruction's own coordinates.
@@ -295,9 +303,8 @@ pub(crate) fn apply(
     edit: &PatchEdit,
 ) -> Result<(EditableTrack, EditReport), TrackEditError> {
     match *edit {
-        PatchEdit::TranslateToPixel { observation, pixel } => {
-            let (next, report) =
-                bench::translate_patch_to_pixel(track, edited, observation, pixel)?;
+        PatchEdit::TranslateToPixel { viewpoint, pixel } => {
+            let (next, report) = bench::translate_patch_to_pixel(track, edited, viewpoint, pixel)?;
             Ok((next, EditReport::TranslatedToPixel(report)))
         }
         PatchEdit::Translate { by } => {
@@ -312,12 +319,12 @@ pub(crate) fn apply(
             Ok((next, EditReport::Resized(report)))
         }
         PatchEdit::ResizeToPixel {
-            observation,
+            viewpoint,
             edge,
             pixel,
         } => {
             let (next, report) =
-                bench::resize_patch_to_pixel(track, edited, observation, edge, pixel)?;
+                bench::resize_patch_to_pixel(track, edited, viewpoint, edge, pixel)?;
             Ok((next, EditReport::Resized(report)))
         }
         PatchEdit::Spin { angle_rad } => {
@@ -399,6 +406,27 @@ pub(crate) fn view_of(
     let row = image_table.images.get(image)?;
     let camera = image_table.cameras.get(row.camera_index as usize)?;
     Some((camera.clone(), crate::scene::cam_from_world(row)))
+}
+
+/// The ray one pixel of a photograph names: the camera's centre and the unit
+/// world direction the lens model maps that pixel from, or `None` for a
+/// direction that is not one.
+///
+/// What lets a photograph be a **vantage** as the 3D viewport's camera is: the
+/// readings this module takes of a pointer against a patch ([`plane_point`],
+/// [`normal_line_point`], [`tilt_point`]) take a ray, and this is a pixel's.
+/// Through the lens model's own inverse (`CameraIntrinsics::pixel_to_ray`), so a
+/// fisheye's pixel names the ray its lens really images there rather than a
+/// pinhole's reading of it, and the ray and [`project`] are each other's
+/// inverse.
+pub(crate) fn pixel_ray(
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+    pixel: [f64; 2],
+) -> Option<(Point3<f64>, Vector3<f64>)> {
+    let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
+    let direction = pose.to_rotation_matrix().transpose() * Vector3::new(ray[0], ray[1], ray[2]);
+    Some((pose.inverse_translation_origin(), unit(direction)?))
 }
 
 /// Project a homogeneous world point into the view, or `None` when it falls
@@ -635,6 +663,10 @@ pub(crate) fn plane_is_edge_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool 
 /// sine of this angle, which is what makes a pixel of pointer motion an
 /// unbounded distance along the line.
 ///
+/// The same bar says when a photograph has no view of the normal worth
+/// drawing: Image Detail leaves its arrow out, and offers neither of its
+/// handles, when this is true from that photograph's camera.
+///
 /// Always true for a **direction patch**, whose normal is its own bearing:
 /// there is no line standing off the frame to take hold of.
 pub(crate) fn normal_is_end_on(frame: &OrientedPatch, eye: Point3<f64>) -> bool {
@@ -665,9 +697,10 @@ fn view_cosine(frame: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
 /// The point of the frame's normal line `c + t n` nearest the ray from `origin`
 /// along `direction`.
 ///
-/// Where the 3D viewport's normal-segment drag reads the pointer, and the
+/// Where the normal-segment drag of either panel reads the pointer, and the
 /// counterpart of [`plane_point`] for the one handle that does not name a place
-/// on the plane. A point rather than the parameter `t`, so the press and the
+/// on the plane. The ray is the 3D viewport's or a photograph's
+/// ([`pixel_ray`]), and nothing here asks which. A point rather than the parameter `t`, so the press and the
 /// pointer are the same kind of thing as the plane handles' two places and the
 /// drag carries them in one pair; the signed distance the gesture means is their
 /// difference along `n`, which is the one reading left.
@@ -761,7 +794,7 @@ pub(crate) const AIM_ANGLE_DEG: f64 = 45.0;
 /// as `4h` along the old one plus the pointer's travel, so `4h` of travel is 45
 /// degrees.
 ///
-/// Twice the arrow's own [`NORMAL_LENGTH`](crate::viewer_3d::bench_track::NORMAL_LENGTH),
+/// Twice the arrow's own [`NORMAL_LENGTH`],
 /// stated in terms of it rather than as a second literal, because the two are
 /// facts about one handle: the travel is read on the plane through the centre,
 /// which is also the plane the arrow is drawn out of, so `4h` of travel is
@@ -777,7 +810,69 @@ pub(crate) const AIM_ANGLE_DEG: f64 = 45.0;
 /// the handle's sensitivity to the eye's distance, since what a pixel of pointer
 /// is worth on a plane depends on how far that plane is; read on the centre's
 /// own plane, the gesture is the same gesture at every zoom.
-pub(crate) const AIM_LEVER: f64 = 2.0 * crate::viewer_3d::bench_track::NORMAL_LENGTH;
+pub(crate) const AIM_LEVER: f64 = 2.0 * NORMAL_LENGTH;
+
+/// How far the normal stands off the patch, in half-lengths: one side length,
+/// which is long enough to be grabbed and short enough not to cross the scene.
+///
+/// Here rather than in either panel, because both draw the arrow and
+/// [`AIM_LEVER`] is stated in terms of it: the arrow a person sees and the
+/// travel their pointer turns it by are two facts about one handle, and a
+/// second literal could drift from this one silently.
+pub(crate) const NORMAL_LENGTH: f64 = 2.0;
+
+/// How far back along the normal the arrowhead's barbs reach, as a fraction of
+/// the normal's own length.
+const BARB_BACK: f64 = 0.25;
+
+/// How far to either side they reach, in the same units.
+const BARB_SIDE: f64 = 0.1;
+
+/// The normal's arrow as world points: the segment from `tail` to `tip`, and
+/// the arrowhead's two barbs, each running from `tip` back to its point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Arrow {
+    /// Where the segment leaves the patch: its centre.
+    pub(crate) tail: Point3<f64>,
+    /// The far end, where the arrowhead is and where it is grabbed.
+    pub(crate) tip: Point3<f64>,
+    /// The two barbs' far ends.
+    pub(crate) barbs: [Point3<f64>; 2],
+}
+
+/// The arrow that stands `length` along the unit `normal` from `centre`, its
+/// barbs squared to `eye`.
+///
+/// One construction for the two panels, which draw it through different
+/// cameras: the 3D viewport after its similarity, the photograph through its
+/// lens. The barbs lie across the normal and as square to the viewer as they
+/// can be, along `normal x (eye - tip)`, so the head never goes edge-on; where
+/// the normal points straight at the eye that product vanishes and `fallback`
+/// (the patch's own `u`) stands in.
+pub(crate) fn arrow(
+    centre: Point3<f64>,
+    normal: Vector3<f64>,
+    length: f64,
+    eye: Point3<f64>,
+    fallback: Vector3<f64>,
+) -> Arrow {
+    let tip = centre + normal * length;
+    let side = normal.cross(&(eye - tip));
+    let side = if side.norm() > MIN_DIRECTION {
+        side.normalize()
+    } else {
+        fallback.normalize()
+    };
+    let back = tip - normal * (BARB_BACK * length);
+    Arrow {
+        tail: centre,
+        tip,
+        barbs: [
+            back + side * (BARB_SIDE * length),
+            back - side * (BARB_SIDE * length),
+        ],
+    }
+}
 
 /// Which of the arrowhead's two gestures a press makes, and what it is fixed
 /// to.

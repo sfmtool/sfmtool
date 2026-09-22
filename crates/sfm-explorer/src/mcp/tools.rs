@@ -1173,8 +1173,10 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "translate_bench_patch",
             description: "Move a bench track's patch -- the dot drag on the Image Detail panel's \
-                          bench layer with Track View's Lock ticked, and the dot and \
-                          normal-segment drags in the 3D viewer. A \
+                          bench layer with Track View's Lock ticked (a sighting's dot, or the \
+                          ghost outline's centre in an image the track has no sighting in), and \
+                          the normal-segment drag in either panel and the dot drag in the 3D \
+                          viewer. A \
                           track-stage track has one patch and every observation is a view of it, \
                           so this moves the patch and not a sighting: the centre moves, the axes \
                           and the size are kept, and every observation's keypoint is carried by \
@@ -1183,13 +1185,18 @@ fn build_catalog() -> Vec<ToolSpec> {
                           exactly one of two ways. `by` is [u, v, n] on the patch's OWN \
                           orthonormal axes, in the reconstruction's world units: u and v slide it \
                           across its own plane, n moves it along its outward normal, and both \
-                          together are allowed. The n part is a statement no photograph can make \
+                          together are allowed. The n part is a statement no sighting can make \
                           -- a sighting says which ray the patch lies along and nothing about how \
                           far down it the surface is -- so it is where a patch's depth is settled, \
                           and the sightings then move by DIFFERENT amounts in their photographs, \
-                          that spread being the parallax the old depth was wrong by. Or name an \
-                          `observation` and a `pixel`, and the centre lands under that pixel of \
-                          that observation's image. Nothing is pinned: where the patch is says \
+                          that spread being the parallax the old depth was wrong by. Or name a \
+                          `pixel` and the photograph it is in, as exactly one of `observation` \
+                          (the outline there is the patch re-anchored on that sighting, and the \
+                          sighting lands under the pixel) or `camera_image` (an index or an \
+                          .sfmr relative path; the outline there is the patch as it stands, and \
+                          its own centre lands under the pixel; it is the only form that reaches \
+                          an image the track has no sighting in). Nothing is pinned: where the \
+                          patch is says \
                           nothing about whether a sighting belongs to it. A track at infinity \
                           refuses a `by` with an n part, its normal being its own bearing. A \
                           cluster-stage track has no shared geometry -- use \
@@ -1208,11 +1215,12 @@ fn build_catalog() -> Vec<ToolSpec> {
                             "maxItems": 3,
                             "description":
                                 "[u, v, n] on the patch's own orthonormal axes, in the \
-                                 reconstruction's world units. Give this or the \
-                                 observation/pixel pair, not both.",
+                                 reconstruction's world units. Give this or a pixel with \
+                                 its observation or camera_image, not both.",
                         }),
                     ),
                     ("observation", observation_schema()),
+                    ("camera_image", pixel_view_schema()),
                     ("pixel", pixel_schema()),
                 ],
             ),
@@ -1274,11 +1282,13 @@ fn build_catalog() -> Vec<ToolSpec> {
                           (\"+u\", \"-u\", \"+v\", \"-v\"), that edge moves and the opposite one \
                           is held, so the centre shifts and every sighting is carried with it; \
                           omitted, both edges move about a held centre and no sighting is touched \
-                          at all. Or name an `observation`, an `edge` and a `pixel` -- the edge \
-                          drag on the Image Detail panel's bench layer -- and the pixel is \
+                          at all. Or name an `edge`, a `pixel` and the photograph it is in, which \
+                          is the edge drag on the Image Detail panel's bench layer: the pixel is \
                           unprojected onto the patch's own plane, so the edge lands there exactly \
-                          through whatever distortion the lens has; the observation says whose \
-                          outline is meant, which is the patch re-anchored on that sighting. \
+                          through whatever distortion the lens has. The photograph is exactly \
+                          one of `observation`, whose outline is the patch re-anchored on that \
+                          sighting, or `camera_image`, whose outline is the patch as it stands \
+                          (the ghost outline of an image the track has no sighting in). \
                           A patch is square, so a resize is one scale and not two. Nothing \
                           is pinned. A cluster-stage track is refused: use resize_bench_shape.",
             kind: Write,
@@ -1293,12 +1303,13 @@ fn build_catalog() -> Vec<ToolSpec> {
                             "exclusiveMinimum": 0,
                             "description":
                                 "The patch's new half-length along both axes, in the \
-                                 reconstruction's world units. Give this or the \
-                                 observation/edge/pixel triple, not both.",
+                                 reconstruction's world units. Give this or an edge and a \
+                                 pixel with its observation or camera_image, not both.",
                         }),
                     ),
                     ("moved_edge", edge_schema()),
                     ("observation", observation_schema()),
+                    ("camera_image", pixel_view_schema()),
                     ("edge", edge_schema()),
                     ("pixel", pixel_schema()),
                 ],
@@ -1329,8 +1340,9 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "tilt_bench_patch",
             description: "Turn a bench track's patch to face a new outward normal -- the \
-                          arrowhead drag in the 3D viewer, and the other gesture no photograph \
-                          can make. A sighting says which ray the patch lies along and nothing \
+                          arrowhead drag in the 3D viewer and in Image Detail, and the other \
+                          gesture no sighting can make. A keypoint says which ray the patch lies \
+                          along and nothing \
                           about which way the surface under it faces, so this is where the \
                           orientation of a patch is settled. The turn is the least rotation onto \
                           the normal named, about the axis square to the old normal and the new \
@@ -1904,6 +1916,23 @@ fn camera_image_schema() -> Value {
         "description":
             "Which camera image: its index in the reconstruction, or its name — the .sfmr \
              relative path, as in \"images/IMG_0042.jpg\".",
+        "anyOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "string" },
+        ],
+    })
+}
+
+/// The photograph a bench patch tool's pixel is in, named as a camera image in
+/// place of an observation: the ghost outline's square rather than a
+/// sighting's.
+fn pixel_view_schema() -> Value {
+    json!({
+        "description":
+            "The camera image the pixel is in, by index or by .sfmr relative path, in place \
+             of observation: the pixel is read against the patch as it stands (the ghost \
+             outline Image Detail draws where the track has no sighting), not re-anchored on \
+             a keypoint. Give this or observation, not both.",
         "anyOf": [
             { "type": "integer", "minimum": 0 },
             { "type": "string" },
@@ -3348,24 +3377,50 @@ fn describe(value: &Value) -> &'static str {
 /// can act on.
 fn translate_target(args: &Args<'_>) -> Result<super::TranslateTarget, ToolError> {
     let by = args.optional_vec3("by")?;
-    let observation = args.optional_usize("observation")?;
+    let viewpoint = pixel_viewpoint(args)?;
     let pixel = args.optional_numbers::<2>("pixel")?;
-    match (by, observation, pixel) {
+    match (by, viewpoint, pixel) {
         (Some(by), None, None) => Ok(super::TranslateTarget::By(by)),
-        (None, Some(observation), Some(pixel)) => {
-            Ok(super::TranslateTarget::Pixel { observation, pixel })
+        (None, Some(viewpoint), Some(pixel)) => {
+            Ok(super::TranslateTarget::Pixel { viewpoint, pixel })
         }
         (Some(_), _, _) => Err(args.error(
-            "was given by as well as an observation or a pixel -- a displacement on the patch's \
-             own axes and a pixel of one photograph are two ways to say where the patch goes, so \
-             give one."
+            "was given by as well as a pixel or the photograph it is in. A displacement on \
+             the patch's own axes and a pixel of one photograph are two ways to say where the \
+             patch goes, so give one."
                 .to_string(),
         )),
         _ => Err(args.error(
             "needs either by, a displacement [u, v, n] on the patch's own axes in world units, \
-             or both observation and pixel."
+             or a pixel with the photograph it is in, as observation or camera_image."
                 .to_string(),
         )),
+    }
+}
+
+/// The photograph a pixel form names, as exactly one of `observation` and
+/// `camera_image`, or `None` when the call named neither.
+///
+/// Both at once is refused here, with a sentence naming the two, rather than
+/// one quietly winning: they name different squares, the patch re-anchored on
+/// a sighting and the patch as it stands, so a call carrying both has no one
+/// answer.
+fn pixel_viewpoint(args: &Args<'_>) -> Result<Option<super::ViewpointSel>, ToolError> {
+    let observation = args.optional_usize("observation")?;
+    let camera_image = match args.map.get("camera_image") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(args.camera_image("camera_image")?),
+    };
+    match (observation, camera_image) {
+        (Some(_), Some(_)) => Err(args.error(
+            "was given both observation and camera_image. The first reads the pixel against \
+             the patch re-anchored on that sighting and the second against the patch as it \
+             stands, so give one."
+                .to_string(),
+        )),
+        (Some(observation), None) => Ok(Some(super::ViewpointSel::Observation(observation))),
+        (None, Some(image)) => Ok(Some(super::ViewpointSel::CameraImage(image))),
+        (None, None) => Ok(None),
     }
 }
 
@@ -3373,26 +3428,27 @@ fn translate_target(args: &Args<'_>) -> Result<super::TranslateTarget, ToolError
 /// [`translate_target`] is its own function.
 fn resize_target(args: &Args<'_>) -> Result<super::ResizeTarget, ToolError> {
     let half_length = args.optional_f64("half_length")?;
-    let observation = args.optional_usize("observation")?;
+    let viewpoint = pixel_viewpoint(args)?;
     let pixel = args.optional_numbers::<2>("pixel")?;
-    match (half_length, observation, pixel) {
+    match (half_length, viewpoint, pixel) {
         (Some(half_length), None, None) => Ok(super::ResizeTarget::HalfLength {
             half_length,
             moved_edge: args.optional_edge("moved_edge")?,
         }),
-        (None, Some(observation), Some(pixel)) => Ok(super::ResizeTarget::Pixel {
-            observation,
+        (None, Some(viewpoint), Some(pixel)) => Ok(super::ResizeTarget::Pixel {
+            viewpoint,
             edge: args.edge("edge")?,
             pixel,
         }),
         (Some(_), _, _) => Err(args.error(
-            "was given half_length as well as an observation or a pixel -- a world half-length \
-             and an edge under a pixel are two ways to say how large the patch is, so give one."
+            "was given half_length as well as a pixel or the photograph it is in. A world \
+             half-length and an edge under a pixel are two ways to say how large the patch is, \
+             so give one."
                 .to_string(),
         )),
         _ => Err(args.error(
-            "needs either half_length, a world half-length, or all three of observation, edge \
-             and pixel."
+            "needs either half_length, a world half-length, or an edge and a pixel with the \
+             photograph it is in, as observation or camera_image."
                 .to_string(),
         )),
     }

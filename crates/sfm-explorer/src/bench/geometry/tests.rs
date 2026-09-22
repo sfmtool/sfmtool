@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! What a ray of the 3D viewport means against a patch, asserted on patches
-//! written by hand.
+//! What a ray of the 3D viewport or of a photograph means against a patch,
+//! asserted on patches written by hand.
 //!
 //! No reconstruction and no window: these are the two meetings the viewport's
 //! plane handles are built on -- a ray with a finite frame's plane and a
@@ -382,5 +382,91 @@ fn the_boundarys_edges_are_named_in_the_order_the_square_is_walked() {
     assert_eq!(
         [edge_of(0), edge_of(1), edge_of(2), edge_of(3)],
         [Edge::MinusV, Edge::PlusU, Edge::PlusV, Edge::MinusU],
+    );
+}
+
+/// A photograph is a vantage like the 3D viewport's camera: a pixel's ray,
+/// through a fisheye's own inverse, starts at the camera's centre and runs
+/// through the world points that project back onto that pixel, off axis as
+/// much as on it.
+#[test]
+fn a_pixels_ray_leaves_the_camera_centre_and_projects_back_onto_the_pixel() {
+    use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
+    use sfmtool_core::geometry::RigidTransform;
+
+    let camera = CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 129.15,
+            focal_length_y: 129.26,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.038,
+            radial_distortion_k2: -0.008,
+            radial_distortion_k3: 0.0083,
+            radial_distortion_k4: -0.0027,
+        },
+        width: 480,
+        height: 480,
+    };
+    // Turned and moved, so neither the rotation nor the centre is the
+    // identity's.
+    let q = nalgebra::Vector4::new(0.9, 0.1, -0.3, 0.2).normalize();
+    let pose = RigidTransform::from_wxyz_translation([q.x, q.y, q.z, q.w], [0.4, -1.2, 2.5]);
+    let centre = pose.inverse_translation_origin();
+    // Inside the lens's image circle, whose radius is the frame's half-width:
+    // the frame's corners are outside it and name no ray the lens images.
+    for pixel in [[240.0, 240.0], [140.0, 330.0], [350.0, 150.0]] {
+        let (origin, direction) = pixel_ray(&camera, &pose, pixel).expect("a pixel of the frame");
+        assert!(
+            (origin - centre).norm() < 1e-12,
+            "the ray leaves {origin:?}"
+        );
+        assert!((direction.norm() - 1.0).abs() < 1e-12);
+        for depth in [0.5, 7.0] {
+            let back = project(&camera, &pose, (origin + direction * depth).coords, 1.0)
+                .expect("in front of the camera");
+            assert!(
+                (back[0] - pixel[0]).abs() < 1e-6 && (back[1] - pixel[1]).abs() < 1e-6,
+                "{pixel:?} came back as {back:?} at depth {depth}",
+            );
+        }
+    }
+}
+
+/// The arrow both panels draw: its segment runs the length asked along the
+/// normal, and its barbs sit back from the tip, either side of it, across the
+/// normal and square to the eye; seen straight down the normal the fallback
+/// axis stands in.
+#[test]
+fn the_arrow_stands_its_length_off_the_centre_with_barbs_square_to_the_eye() {
+    let frame = flat();
+    let eye = Point3::new(5.0, 0.0, 3.0);
+    let length = NORMAL_LENGTH * frame.half_extent[0];
+    let drawn = arrow(frame.center, frame.normal(), length, eye, frame.u_axis);
+    assert_eq!(drawn.tail, frame.center);
+    assert!((drawn.tip - (frame.center + frame.normal() * length)).norm() < 1e-12);
+    let [a, b] = drawn.barbs;
+    let across = a - b;
+    assert!(
+        across.dot(&frame.normal()).abs() < 1e-12,
+        "the barbs are not across the normal"
+    );
+    assert!(
+        across.dot(&(eye - drawn.tip)).abs() < 1e-9,
+        "the barbs are not square to the eye"
+    );
+    assert!(((a - drawn.tip).dot(&frame.normal()) + 0.25 * length).abs() < 1e-12);
+
+    let above = arrow(
+        frame.center,
+        frame.normal(),
+        length,
+        Point3::new(0.0, 0.0, 9.0),
+        frame.u_axis,
+    );
+    let across = above.barbs[0] - above.barbs[1];
+    assert!(
+        across.cross(&frame.u_axis).norm() < 1e-12,
+        "the fallback axis did not stand in"
     );
 }

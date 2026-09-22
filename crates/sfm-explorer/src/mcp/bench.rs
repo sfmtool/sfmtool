@@ -32,12 +32,13 @@
 use serde_json::{json, Value};
 use sfmtool_core::bench::{
     Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Verdict,
+    Viewpoint,
 };
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
     CameraImageSel, Deferred, JsonReply, Outcome, ResizeTarget, ThresholdChange, ToolError,
-    TranslateTarget,
+    TranslateTarget, ViewpointSel,
 };
 use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
@@ -307,13 +308,17 @@ pub(super) fn add_bench_track_observation(
 /// projection.
 ///
 /// `by` is `[u, v, n]` on the patch's own orthonormal axes, in world units. Its
-/// tangential part slides the patch across its own plane, which a photograph can
-/// also say; its normal part is the one no photograph can, a sighting naming the
+/// tangential part slides the patch across its own plane, which a pixel can
+/// also say; its normal part is the one no sighting can, a keypoint naming the
 /// ray the patch lies along and not how far down it the surface is. A track at
 /// infinity refuses a `by` with a normal part and carries a tangential one.
 ///
-/// The pixel form names `observation` -- the image the pixel is in, and the
-/// outline the pointer is read against -- and lands the patch's centre under it.
+/// The pixel form names the photograph the pixel is in, which is also the
+/// outline the pointer is read against, and lands that outline's centre under
+/// it: an `observation`, whose outline is the patch re-anchored on its keypoint,
+/// or a `camera_image`, whose outline is the patch as it stands. The second is
+/// the ghost outline's centre drag, and it reaches an image the track has no
+/// sighting in.
 pub(super) fn translate_bench_patch(
     state: &mut AppState,
     label: &str,
@@ -321,19 +326,22 @@ pub(super) fn translate_bench_patch(
     to: &TranslateTarget,
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    match *to {
+    match to {
         TranslateTarget::By(by) => {
+            let by = *by;
             let edit = PatchEdit::Translate { by };
             let (reply, _) = patched(state, id, &item, &edit)?;
             let mut reply = with_item(reply, &item);
             insert(&mut reply, "by", json!(by));
             Ok(reply)
         }
-        TranslateTarget::Pixel { observation, pixel } => {
-            let edit = PatchEdit::TranslateToPixel { observation, pixel };
+        TranslateTarget::Pixel { viewpoint, pixel } => {
+            let pixel = *pixel;
+            let viewpoint = resolve_viewpoint(state, id, viewpoint)?;
+            let edit = PatchEdit::TranslateToPixel { viewpoint, pixel };
             let (reply, edited) = patched(state, id, &item, &edit)?;
             let mut reply = with_item(reply, &item);
-            insert(&mut reply, "observation", json!(observation));
+            insert_viewpoint(&mut reply, viewpoint);
             insert_clamp(
                 &mut reply,
                 edited.pixel.or(Some(pixel)),
@@ -411,9 +419,10 @@ pub(super) fn shape_bench_observation(
 ///
 /// The pixel form is the gesture, and it is what makes the answer exact: the
 /// pixel is unprojected onto the patch's own plane, so the edge really lands
-/// there through whatever distortion the lens has. The observation says whose
-/// outline is meant -- the patch re-anchored on that sighting -- and the pixel is
-/// in that observation's image.
+/// there through whatever distortion the lens has. An `observation` says the
+/// outline meant is the patch re-anchored on that sighting and the pixel is in
+/// its image; a `camera_image` says it is the patch as it stands, seen in that
+/// image, which is the ghost outline's edge drag.
 ///
 /// A cluster-stage track is refused: there is no world geometry to give a world
 /// half-length to, and its parallelograms are `resize_bench_shape`'s.
@@ -425,11 +434,12 @@ pub(super) fn resize_bench_patch(
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Track, "resize_bench_shape")?;
-    match *to {
+    match to {
         ResizeTarget::HalfLength {
             half_length,
             moved_edge,
         } => {
+            let (half_length, moved_edge) = (*half_length, *moved_edge);
             let edit = PatchEdit::Resize {
                 half_length,
                 moved_edge,
@@ -445,18 +455,20 @@ pub(super) fn resize_bench_patch(
             Ok(reply)
         }
         ResizeTarget::Pixel {
-            observation,
+            viewpoint,
             edge,
             pixel,
         } => {
+            let (edge, pixel) = (*edge, *pixel);
+            let viewpoint = resolve_viewpoint(state, id, viewpoint)?;
             let edit = PatchEdit::ResizeToPixel {
-                observation,
+                viewpoint,
                 edge,
                 pixel,
             };
             let (reply, edited) = patched(state, id, &item, &edit)?;
             let mut reply = with_item(reply, &item);
-            insert(&mut reply, "observation", json!(observation));
+            insert_viewpoint(&mut reply, viewpoint);
             insert(&mut reply, "edge", json!(edge.name()));
             insert_clamp(
                 &mut reply,
@@ -488,7 +500,7 @@ pub(super) fn resize_bench_shape(
     let (id, item) = target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Cluster, "resize_bench_patch")?;
     let edit = PatchEdit::ResizeToPixel {
-        observation,
+        viewpoint: Viewpoint::Observation(observation),
         edge,
         pixel,
     };
@@ -502,6 +514,30 @@ pub(super) fn resize_bench_shape(
         edited.clamped_from,
     );
     Ok(reply)
+}
+
+/// The view a pixel form named, as the core step takes it: an observation as
+/// given, and a camera image resolved against the node.
+fn resolve_viewpoint(
+    state: &AppState,
+    id: ReconId,
+    viewpoint: &ViewpointSel,
+) -> Result<Viewpoint, ToolError> {
+    Ok(match viewpoint {
+        ViewpointSel::Observation(observation) => Viewpoint::Observation(*observation),
+        ViewpointSel::CameraImage(selector) => {
+            Viewpoint::Image(resolve_camera_image(state, id, selector)?.image)
+        }
+    })
+}
+
+/// Say in the reply which view the pixel was read in, under the argument's own
+/// name: `observation` or `camera_image`.
+fn insert_viewpoint(reply: &mut Value, viewpoint: Viewpoint) {
+    match viewpoint {
+        Viewpoint::Observation(observation) => insert(reply, "observation", json!(observation)),
+        Viewpoint::Image(image) => insert(reply, "camera_image", json!(image)),
+    }
 }
 
 /// `tilt_bench_patch`: the patch turned to face a new outward normal.

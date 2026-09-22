@@ -2659,8 +2659,9 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let out = corner_pixel(&before, &camera, &pose, 2.3, 0.0);
 
     let offsets = projection_offsets(&track, edited);
-    let (next, report) = resize_patch_to_pixel(&track, edited, 1, Edge::PlusU, out)
-        .expect("a pixel the ray reaches");
+    let (next, report) =
+        resize_patch_to_pixel(&track, edited, Viewpoint::Observation(1), Edge::PlusU, out)
+            .expect("a pixel the ray reaches");
     assert!(report.changed);
     assert_eq!(report.observation, Some(1));
 
@@ -2767,9 +2768,10 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
 
     let offsets = projection_offsets(&track, edited);
     let (next, report) =
-        translate_patch_to_pixel(&track, edited, dragged, target).expect("a pixel the ray reaches");
+        translate_patch_to_pixel(&track, edited, Viewpoint::Observation(dragged), target)
+            .expect("a pixel the ray reaches");
     assert!(report.changed);
-    assert_eq!(report.observation, dragged);
+    assert_eq!(report.observation, Some(dragged));
     assert_eq!(report.image, track.observations[dragged].image);
     assert_eq!(report.placed, next.observations.len());
 
@@ -2836,7 +2838,8 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
 
     // A slide to where the dragged sighting already sits changes nothing.
     let (again, report) =
-        translate_patch_to_pixel(&next, edited, dragged, landed).expect("the same place");
+        translate_patch_to_pixel(&next, edited, Viewpoint::Observation(dragged), landed)
+            .expect("the same place");
     assert!(report.moved < 1e-3, "a slide to where it is moved it");
     let _ = again;
 
@@ -2845,7 +2848,91 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let (bench, made) =
         create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
     assert!(matches!(
-        translate_patch_to_pixel(&track_of(&bench, &made.label), edited, 0, where_at),
+        translate_patch_to_pixel(
+            &track_of(&bench, &made.label),
+            edited,
+            Viewpoint::Observation(0),
+            where_at
+        ),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+}
+
+/// A pixel named in an image rather than through an observation is read
+/// against the patch **as it stands**: the slide lands the patch's own centre
+/// under the pointer and the resize puts the patch's own edge there, whatever
+/// the image's keypoint says. A cluster has no such square and refuses it.
+#[test]
+fn a_pixel_named_in_an_image_reads_the_patch_as_it_stands() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let image = track.observations[1].image;
+    let (camera, pose) = view(&edited, image as usize);
+    // Move this image's keypoint off the centre's projection, so a reading
+    // anchored on it would be told apart from one of the patch itself.
+    let patch = track
+        .track()
+        .and_then(|payload| payload.placement.clone())
+        .expect("a frame");
+    let off = corner_pixel(&patch, &camera, &pose, 0.3, -0.2);
+    let (track, _) = sight_observation(&track, &edited, 1, off).expect("a usable pixel");
+
+    let target = corner_pixel(&patch, &camera, &pose, 0.7, 0.4);
+    let (slid, report) = translate_patch_to_pixel(&track, &edited, Viewpoint::Image(image), target)
+        .expect("a pixel the ray reaches");
+    assert!(report.changed);
+    assert_eq!(report.observation, None);
+    assert_eq!(report.image, image);
+    assert_eq!(report.pixel, target);
+    let moved = slid
+        .track()
+        .and_then(|payload| payload.placement.clone())
+        .expect("a frame");
+    let centre = corner_pixel(&moved, &camera, &pose, 0.0, 0.0);
+    assert!(
+        (centre[0] - target[0]).abs() < 1e-9 && (centre[1] - target[1]).abs() < 1e-9,
+        "the patch's centre should land on {target:?}, it landed on {centre:?}",
+    );
+
+    let edge = corner_pixel(&patch, &camera, &pose, 2.0, 0.0);
+    let far = corner_pixel(&patch, &camera, &pose, -1.0, 0.0);
+    let (resized, report) =
+        resize_patch_to_pixel(&track, &edited, Viewpoint::Image(image), Edge::PlusU, edge)
+            .expect("a pixel the ray reaches");
+    assert_eq!(report.observation, None);
+    assert_eq!(report.image, Some(image));
+    let grown = resized
+        .track()
+        .and_then(|payload| payload.placement.clone())
+        .expect("a frame");
+    let landed = corner_pixel(&grown, &camera, &pose, 1.0, 0.0);
+    let held = corner_pixel(&grown, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (landed[0] - edge[0]).abs() < 1e-9 && (landed[1] - edge[1]).abs() < 1e-9,
+        "the dragged edge should land on {edge:?}, it landed on {landed:?}",
+    );
+    assert!(
+        (held[0] - far[0]).abs() < 1e-9 && (held[1] - far[1]).abs() < 1e-9,
+        "the far edge moved from {far:?} to {held:?}",
+    );
+
+    assert!(matches!(
+        translate_patch_to_pixel(&track, &edited, Viewpoint::Image(u32::MAX), target),
+        Err(TrackEditError::NoSuchImage { .. })
+    ));
+    let where_at = scene_pixel(&edited);
+    let (bench, made) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    assert!(matches!(
+        resize_patch_to_pixel(
+            &track_of(&bench, &made.label),
+            &edited,
+            Viewpoint::Image(0),
+            Edge::PlusU,
+            where_at,
+        ),
         Err(TrackEditError::WrongStage { .. })
     ));
 }
@@ -2917,8 +3004,9 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
     let far_before = corner_pixel(&before, &camera, &pose, 0.0, -1.0);
     let out = corner_pixel(&before, &camera, &pose, 0.0, 1.8);
 
-    let (next, _) = resize_patch_to_pixel(&track, &edited, 0, Edge::PlusV, out)
-        .expect("a pixel the ray reaches");
+    let (next, _) =
+        resize_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), Edge::PlusV, out)
+            .expect("a pixel the ray reaches");
     let after = next
         .track()
         .and_then(|p| p.placement.clone())
@@ -3087,7 +3175,8 @@ fn a_pixel_gesture_is_the_step_the_pointer_named() {
     let by = Vector3::new(offset.dot(&frame.u_axis), offset.dot(&frame.v_axis), 0.0);
 
     let (by_pixel, _) =
-        translate_patch_to_pixel(&track, &edited, dragged, target).expect("a usable drag");
+        translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(dragged), target)
+            .expect("a usable drag");
     let (by_axes, _) = translate_patch(&track, &edited, by).expect("a finite displacement");
     assert!(
         (placement_of(&by_pixel).center - placement_of(&by_axes).center).norm() < 1e-12,
@@ -3099,8 +3188,14 @@ fn a_pixel_gesture_is_the_step_the_pointer_named() {
         .keypoint_plane_offset(&camera, &pose, edge)
         .expect("the fixture's ray meets the plane");
     let half_length = (offset.dot(&frame.u_axis) + frame.half_extent[0]) / 2.0;
-    let (by_pixel, pixel_report) =
-        resize_patch_to_pixel(&track, &edited, dragged, Edge::PlusU, edge).expect("a usable drag");
+    let (by_pixel, pixel_report) = resize_patch_to_pixel(
+        &track,
+        &edited,
+        Viewpoint::Observation(dragged),
+        Edge::PlusU,
+        edge,
+    )
+    .expect("a usable drag");
     let (by_length, length_report) =
         resize_patch(&track, &edited, half_length, Some(Edge::PlusU)).expect("a usable length");
     assert!((pixel_report.half - length_report.half).abs() < 1e-12);
@@ -3965,7 +4060,8 @@ fn a_cluster_edge_drag_scales_the_shape_and_holds_the_far_edge_of_the_parallelog
     );
 
     let (next, report) =
-        resize_patch_to_pixel(&track, &edited, 0, Edge::PlusU, out).expect("a usable drag");
+        resize_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), Edge::PlusU, out)
+            .expect("a usable drag");
     assert!(report.changed);
     let cluster = next.observations[0].cluster.as_ref().expect("a seed");
     let scaled = cluster.seed_shape;
@@ -4476,8 +4572,13 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
 
     // A slide: the pointer two pixels off the centre's own projection.
     let centre = corner_pixel(&before, &camera, &pose, 0.0, 0.0);
-    let (slid, _) = translate_patch_to_pixel(&track, &edited, 0, [centre[0] + 2.0, centre[1]])
-        .expect("a pixel the ray reaches");
+    let (slid, _) = translate_patch_to_pixel(
+        &track,
+        &edited,
+        Viewpoint::Observation(0),
+        [centre[0] + 2.0, centre[1]],
+    )
+    .expect("a pixel the ray reaches");
     let frame = placement_of(&slid);
     unit(&frame, "a slide");
     assert_eq!(
@@ -4489,8 +4590,9 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
 
     // An edge drag.
     let out = corner_pixel(&before, &camera, &pose, 0.0, 1.8);
-    let (resized, _) = resize_patch_to_pixel(&track, &edited, 0, Edge::PlusV, out)
-        .expect("a pixel the ray reaches");
+    let (resized, _) =
+        resize_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), Edge::PlusV, out)
+            .expect("a pixel the ray reaches");
     let frame = placement_of(&resized);
     unit(&frame, "an edge drag");
     assert_eq!(
@@ -4844,18 +4946,31 @@ fn a_patch_edit_that_changes_nothing_reports_no_effect() {
     // The centre put back under the pixel it already projects to.
     let site = track.observations[0].site().expect("a sighting");
     let (moved, report) =
-        translate_patch_to_pixel(&track, &edited, 0, site).expect("the sighting's own pixel");
+        translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), site)
+            .expect("the sighting's own pixel");
     assert!(!report.changed, "the patch already sits there: {report:?}");
     assert_eq!(report.moved, 0.0);
     assert_eq!(moved, track, "a no-effect step gives the track back");
 
     // A resize repeated: the second drag names the size the first left.
     let target = [site[0] + 3.0, site[1] + 1.0];
-    let (bigger, first) =
-        resize_patch_to_pixel(&track, &edited, 0, Edge::PlusU, target).expect("a usable drag");
+    let (bigger, first) = resize_patch_to_pixel(
+        &track,
+        &edited,
+        Viewpoint::Observation(0),
+        Edge::PlusU,
+        target,
+    )
+    .expect("a usable drag");
     assert!(first.changed);
-    let (again, second) =
-        resize_patch_to_pixel(&bigger, &edited, 0, Edge::PlusU, target).expect("the same drag");
+    let (again, second) = resize_patch_to_pixel(
+        &bigger,
+        &edited,
+        Viewpoint::Observation(0),
+        Edge::PlusU,
+        target,
+    )
+    .expect("the same drag");
     assert!(
         !second.changed,
         "the patch is already that size: {second:?}"
@@ -4897,8 +5012,14 @@ fn a_cluster_edit_that_changes_nothing_reports_no_effect() {
         where_at[0] + shape[0][0] * radius,
         where_at[1] + shape[1][0] * radius,
     ];
-    let (held, report) =
-        resize_patch_to_pixel(&track, &edited, 0, Edge::PlusU, edge).expect("the edge's own pixel");
+    let (held, report) = resize_patch_to_pixel(
+        &track,
+        &edited,
+        Viewpoint::Observation(0),
+        Edge::PlusU,
+        edge,
+    )
+    .expect("the edge's own pixel");
     assert!(!report.changed, "the parallelogram is already that size");
     assert_eq!(held, track);
 }
@@ -4935,7 +5056,8 @@ fn a_pixel_off_the_photograph_is_brought_inside_it() {
     let track = track_of(&bench, &label);
     let off = [-500.0, -500.0];
 
-    let (_, report) = translate_patch_to_pixel(&track, &edited, 0, off).expect("a finite pixel");
+    let (_, report) = translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), off)
+        .expect("a finite pixel");
     assert_eq!(
         report.clamped_from,
         Some(off),
@@ -4955,7 +5077,8 @@ fn a_pixel_off_the_photograph_is_brought_inside_it() {
     assert_eq!(report.pixel, [0.0, 0.0], "the nearest pixel is the corner");
 
     let (_, report) =
-        resize_patch_to_pixel(&track, &edited, 0, Edge::PlusU, off).expect("a finite pixel");
+        resize_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), Edge::PlusU, off)
+            .expect("a finite pixel");
     assert_eq!(report.clamped_from, Some(off));
     assert_eq!(report.pixel, Some([0.0, 0.0]));
 

@@ -178,11 +178,20 @@ pub fn split(
 ) -> Result<(Bench, SplitReport), SplitError>;
 
 // Placing a sighting, and moving, sizing and turning the patch, by hand.
+
+/// Which photograph a pixel of a gesture is in, and so which square it is
+/// read against: an observation's image, the patch re-anchored on its
+/// keypoint, or any image by its index, the patch as it stands.
+pub enum Viewpoint {
+    Observation(usize),
+    Image(u32),
+}
+
 pub fn translate_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    observation: usize,                  // whose image the pixel is in
-    pixel: [f64; 2],                     // where the centre should land in it
+    viewpoint: Viewpoint,                // the image the pixel is in, and its square
+    pixel: [f64; 2],                     // where that square's centre should land
 ) -> Result<(EditableTrack, TranslateToPixelReport), TrackEditError>;
 
 /// The move itself: `by` is read on the patch's **own orthonormal axes**
@@ -226,7 +235,7 @@ pub fn resize_patch(
 pub fn resize_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    observation: usize,                  // whose outline is being dragged
+    viewpoint: Viewpoint,                // whose outline is being dragged
     edge: Edge,
     pixel: [f64; 2],                     // where that edge's midpoint lands
 ) -> Result<(EditableTrack, ResizeReport), TrackEditError>;
@@ -1106,13 +1115,18 @@ is not one is refused as `BadPixel`.
 
 **`translate_patch_to_pixel` is that step named as a pixel.** A person dragging the
 outline in a photograph names a place by pointing at it, so the pixel is read
-against the outline as drawn -- the patch re-anchored on that observation's
-sighting -- and the offset of the meeting from *that* centre, read on `u` and `v`
-alone, is the `by` `translate_patch` is then given. The consequence is the one
-the gesture wants: the sighting the drag came through lands under the pointer,
-because its plane point plus the displacement *is* the plane point under the
-pixel, and every other sighting moves with the patch. There is one
-implementation of the move and both forms reach it.
+against the outline as drawn, and the offset of the meeting from *that* outline's
+centre, read on `u` and `v` alone, is the `by` `translate_patch` is then given.
+**`Viewpoint` says which outline that is.** An observation's image draws the
+patch re-anchored on that sighting, so through `Viewpoint::Observation` the
+sighting the drag came through lands under the pointer, its plane point plus the
+displacement being the plane point under the pixel, and every other sighting
+moves with the patch. An image the track has no sighting in draws the patch as it
+stands (the viewer's ghost outline), so through `Viewpoint::Image` the patch's own
+centre lands under the pointer; any image with a camera is accepted, one the
+track observes included, the variant saying only that no keypoint anchors the
+square. There is one implementation of the move and every form reaches it, and
+the report carries the observation when there was one and the image either way.
 
 **`sight_observation` places one sighting**, and one only. At the track
 stage it writes that observation's keypoint -- the pixel a commit writes and the
@@ -1155,16 +1169,19 @@ direction, so the far edge is held there too.
 **`resize_patch_to_pixel` is that step named as a pixel**, and it is the gesture
 and the **one step that spans both stages**, a pixel being meaningful at either
 where a world half-length is not. *What the outline shows is what is resized*: at
-the track stage the outline is the patch re-anchored on `observation`'s own
-sighting, which is where a person sees the patch in that photograph, so that is
-the square the pixel is read against, and the offset of the meeting along the
-dragged edge's axis, read from the patch's own centre, gives the half-length
-`(p + h) / 2` that `resize_patch` is then handed with that edge. So the dot and
-the outline move together in the image the edge was dragged in, the far edge
-really does hold still there, and the outline in every other image moves with the
-patch. The arithmetic is core's rather than each caller's, and there is one
-implementation of the resize, so a tool call, a drag in a photograph and a drag
-in the 3D viewer cannot resize differently.
+the track stage the outline drawn from a `Viewpoint::Observation` is the patch
+re-anchored on that observation's own sighting, which is where a person sees the
+patch in that photograph, and the one drawn from a `Viewpoint::Image` is the patch
+as it stands. That square is the one the pixel is read against, and the offset of
+the meeting along the dragged edge's axis, read from its centre, gives the
+half-length `(p + h) / 2` that `resize_patch` is then handed with that edge. So
+the outline moves under the pointer in the image the edge was dragged in, the far
+edge really does hold still there, and the outline in every other image moves with
+the patch. At the cluster stage the outline is one sighting's parallelogram, so
+only a `Viewpoint::Observation` names one and a `Viewpoint::Image` is refused as
+`WrongStage`. The arithmetic is core's rather than each caller's, and there is
+one implementation of the resize, so a tool call, a drag in a photograph and a
+drag in the 3D viewer cannot resize differently.
 
 **`tilt_patch` turns the patch to face a new outward normal**, and is the
 other hand step no pixel can name: a sighting says which ray the patch lies

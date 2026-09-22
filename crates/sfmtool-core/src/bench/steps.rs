@@ -513,13 +513,55 @@ pub enum TrackEditError {
         /// The image named.
         image: u32,
     },
-    /// The patch and the pixel do not meet in that observation's view: the
-    /// centre falls outside the lens model's domain, or the pointer's ray runs
-    /// parallel to the patch's plane.
+    /// The patch and the pixel do not meet in that view: the centre falls
+    /// outside the lens model's domain, or the pointer's ray runs parallel to
+    /// the patch's plane.
     NoProjection {
-        /// The observation whose view was used.
-        observation: usize,
+        /// The view the pixel was named in.
+        viewpoint: Viewpoint,
     },
+}
+
+/// Which photograph a pixel of a gesture is in, and so which square the pointer
+/// is read against.
+///
+/// A pixel is a ray, and a ray names a place only against a square. Two squares
+/// are drawn over a photograph, and they are the two variants: an observation's
+/// image shows the patch **re-anchored on that sighting's keypoint**, which is
+/// where the photograph sees the patch's content, while an image with no
+/// sighting of the track shows the patch **as it stands**, there being no
+/// keypoint to anchor it on. [`translate_patch_to_pixel`] and
+/// [`resize_patch_to_pixel`] take one of these, so a drag of either outline is
+/// the same step read against the square that outline is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Viewpoint {
+    /// The image this observation is in, the patch re-anchored on its
+    /// keypoint. The observation is named by its position in the track's list.
+    Observation(usize),
+    /// This image, by its index in the reconstruction's image table, with the
+    /// patch read as it stands. Any image with a camera will do, one the track
+    /// observes included; what the variant says is that no keypoint anchors the
+    /// square.
+    Image(u32),
+}
+
+impl Viewpoint {
+    /// The observation this names, for the variant that names one.
+    pub fn observation(self) -> Option<usize> {
+        match self {
+            Viewpoint::Observation(observation) => Some(observation),
+            Viewpoint::Image(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Viewpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Viewpoint::Observation(observation) => write!(f, "observation {observation}'s view"),
+            Viewpoint::Image(image) => write!(f, "image {image}"),
+        }
+    }
 }
 
 impl std::fmt::Display for TrackEditError {
@@ -570,10 +612,9 @@ impl std::fmt::Display for TrackEditError {
             TrackEditError::NoSuchImage { image } => {
                 write!(f, "image {image} is not in this reconstruction")
             }
-            TrackEditError::NoProjection { observation } => write!(
-                f,
-                "the patch and that pixel do not meet in observation {observation}'s view"
-            ),
+            TrackEditError::NoProjection { viewpoint } => {
+                write!(f, "the patch and that pixel do not meet in {viewpoint}")
+            }
         }
     }
 }
@@ -923,10 +964,12 @@ pub fn sight_observation(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResizeReport {
     /// The observation whose outline was dragged, for
-    /// [`resize_patch_to_pixel`]; the resize is of the one patch either way, and
-    /// this says which sighting's view of it the size was named in.
+    /// [`resize_patch_to_pixel`] read through [`Viewpoint::Observation`]; the
+    /// resize is of the one patch either way, and this says which sighting's
+    /// view of it the size was named in. `None` for [`resize_patch`] and for a
+    /// pixel named through [`Viewpoint::Image`].
     pub observation: Option<usize>,
-    /// The image that observation is in.
+    /// The image the pixel was in, for [`resize_patch_to_pixel`].
     pub image: Option<u32>,
     /// The patch's new half-length: world units at the track stage, and the
     /// half-width along `u` in that image's own pixels at the cluster stage.
@@ -1089,12 +1132,12 @@ pub fn resize_patch(
     ))
 }
 
-/// Resize the patch by putting one edge of the outline drawn at `observation`
+/// Resize the patch by putting one edge of the outline drawn from `viewpoint`
 /// under `pixel`, with the **opposite edge left where it is**.
 ///
 /// This is the gesture: a person grabs an edge of the square they can see and
 /// pulls it, and what they expect is the edge under the pointer and the other
-/// three where the geometry puts them -- not the patch breathing about its
+/// three where the geometry puts them, not the patch breathing about its
 /// centre with the far edge running away. So the arithmetic is the one that
 /// holds the far edge still. With the dragged edge at `+h` from the centre and
 /// the far one at `-h`, and the pointer naming the offset `p` along the dragged
@@ -1107,45 +1150,41 @@ pub fn resize_patch(
 /// a world size against, and an edge under a pointer is a size all the same.
 ///
 /// **What the outline shows is what is resized.** At the track stage the
-/// outline is the patch re-anchored on `observation`'s own sighting
-/// (`OrientedPatch::anchored_at_keypoint`), which is where a person sees the
-/// patch in that photograph, so that is the square the pointer is read against.
-/// The offset of the meeting along the dragged edge's axis, read from the
-/// patch's own centre, is the half-length [`resize_patch`] is then handed with
-/// this edge as its `moved_edge`, so the patch takes the centre the outline had
-/// plus the edge's shift and the track's position follows it; `observation`'s
-/// keypoint is carried along the plane by the centre's own displacement,
-/// keeping its in-plane offset, so the dot and the outline move together and the
-/// far edge really does hold still on screen. Every other sighting is carried by
-/// the same displacement and keeps its own offset too. Nothing is pinned.
+/// outline drawn from [`Viewpoint::Observation`] is the patch re-anchored on
+/// that observation's own sighting (`OrientedPatch::anchored_at_keypoint`),
+/// which is where a person sees the patch in that photograph, and the one drawn
+/// from [`Viewpoint::Image`] is the patch as it stands; either way that is the
+/// square the pointer is read against. The offset of the meeting along the
+/// dragged edge's axis, read from that square's centre, is the half-length
+/// [`resize_patch`] is then handed with this edge as its `moved_edge`, so the
+/// patch takes the centre the outline had plus the edge's shift and the track's
+/// position follows it. Every sighting is carried along the plane by the
+/// centre's own displacement, keeping its in-plane offset, so the dot and the
+/// outline move together and the far edge really does hold still on screen.
+/// Nothing is pinned.
 ///
 /// At the **cluster stage** there is no geometry, so the same arithmetic runs
 /// in that image's pixels: the sighting's affine shape is scaled by one scalar,
 /// which preserves whatever anisotropy the detector read at the keypoint, and
 /// the sighting moves by half the change along the dragged edge's own
 /// direction, which is what holds the far edge of the parallelogram still. Only
-/// that observation is touched.
+/// that observation is touched, so the cluster stage takes a
+/// [`Viewpoint::Observation`] and refuses a [`Viewpoint::Image`] as the wrong
+/// stage: an image with no sighting there has no parallelogram to drag.
 pub fn resize_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    observation: usize,
+    viewpoint: Viewpoint,
     edge: Edge,
     pixel: [f64; 2],
 ) -> Result<(EditableTrack, ResizeReport), TrackEditError> {
     if !pixel.iter().all(|c| c.is_finite()) {
         return Err(TrackEditError::BadPixel(pixel));
     }
-    let current = observation_at(track, observation)?;
-    let image = current.image;
-    let site = current
-        .site()
-        .ok_or(TrackEditError::NoPlace { observation })?;
-    let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
-    match &track.stage {
-        Stage::Track(_) => {
+    match (&track.stage, viewpoint) {
+        (Stage::Track(_), _) => {
+            let pointed = pointed_at(track, edited, viewpoint, pixel)?;
             let patch = placement_of(track)?;
-            let (camera, cam_from_world) = view_of(edited, image)?;
-            let offset = pointer_offset(patch, &camera, &cam_from_world, site, pixel, observation)?;
             let direction = match edge.axis() {
                 Axis::U => patch.u_axis,
                 Axis::V => patch.v_axis,
@@ -1155,17 +1194,27 @@ pub fn resize_patch_to_pixel(
             // puts the far edge back at `-h` and the dragged one on `p` exactly
             // when the new half-length is `(p + h) / 2`.
             let was = patch.half_extent[0];
-            let half_length = (offset.dot(&direction) + was) / 2.0;
+            let half_length = (pointed.offset.dot(&direction) + was) / 2.0;
             let (next, mut report) = resize_patch(track, edited, half_length, Some(edge))?;
             // The step itself knows nothing of photographs; what the gesture
-            // adds is which sighting it was named in and where on it.
-            report.observation = Some(observation);
-            report.image = Some(image);
-            report.pixel = Some(pixel);
-            report.clamped_from = clamped_from;
+            // adds is which view it was named in and where in it.
+            report.observation = viewpoint.observation();
+            report.image = Some(pointed.image);
+            report.pixel = Some(pointed.pixel);
+            report.clamped_from = pointed.clamped_from;
             Ok((next, report))
         }
-        Stage::Cluster(payload) => {
+        (Stage::Cluster(_), Viewpoint::Image(_)) => Err(TrackEditError::WrongStage {
+            wanted: StageKind::Track,
+            is: StageKind::Cluster,
+        }),
+        (Stage::Cluster(payload), Viewpoint::Observation(observation)) => {
+            let current = observation_at(track, observation)?;
+            let image = current.image;
+            let site = current
+                .site()
+                .ok_or(TrackEditError::NoPlace { observation })?;
+            let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
             let radius = payload.radius;
             let shape = current
                 .shape()
@@ -1240,11 +1289,13 @@ pub fn resize_patch_to_pixel(
 /// What one translation of the patch did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TranslateToPixelReport {
-    /// The observation whose image the pointer named.
-    pub observation: usize,
-    /// That image.
+    /// The observation whose image the pointer named, or `None` for a pixel
+    /// named through [`Viewpoint::Image`].
+    pub observation: Option<usize>,
+    /// The image the pixel was in.
     pub image: u32,
-    /// Where the centre now projects in it.
+    /// Where the pointer's square now sits in it: the dragged sighting for an
+    /// observation, the centre's projection for an image.
     pub pixel: [f64; 2],
     /// Where the centre now stands. A unit bearing for a direction patch.
     pub center: Point3<f64>,
@@ -1262,28 +1313,32 @@ pub struct TranslateToPixelReport {
     pub clamped_from: Option<[f64; 2]>,
 }
 
-/// Slide the patch across its own plane until its centre sits under `pixel` in
-/// `observation`'s photograph.
+/// Slide the patch across its own plane until the square drawn from
+/// `viewpoint` has its centre under `pixel`.
 ///
 /// **This moves the patch, not one sighting.** A track-stage track has one
 /// patch and every observation is a view of it, so dragging the mark in one
 /// photograph is a statement about where that patch is: the centre moves, the
 /// half-vectors and the normal are kept, and **every** observation's keypoint
 /// moves by the same displacement along the plane, so the outline moves in
-/// every image at once. That is what makes the gesture worth having -- a patch
+/// every image at once. That is what makes the gesture worth having: a patch
 /// can be slid, turned and sized until it covers the piece of surface a person
 /// means, and each photograph shows where it lands.
 ///
-/// The pointer is read against the outline as drawn: the frame re-anchored on
-/// `observation`'s own sighting, so the offset is measured from the square the
-/// person can see. The move is in-plane by construction -- a ray-plane meeting
-/// minus a point on the plane -- so the normal and the plane are untouched. **Every**
-/// observation's keypoint is carried along the plane by that same displacement,
-/// keeping its own in-plane offset from the centre: a keypoint is where that
-/// photograph sees the patch's content, and the offset is what the tile is cut
-/// on, so resetting keypoints to the centre's projection would scramble the
-/// correlation the next reading scores. The sighting the drag came through
-/// therefore lands under the pointer, and the others move with the patch.
+/// The pointer is read against the outline as drawn. From a
+/// [`Viewpoint::Observation`] that is the frame re-anchored on the
+/// observation's own sighting, so the offset is measured from the square the
+/// person can see and that sighting lands under the pointer. From a
+/// [`Viewpoint::Image`] it is the patch as it stands, so the patch's own centre
+/// lands under the pointer: the gesture of an image the track has no sighting
+/// in, where a view from another side can make the patch's place plain. The
+/// move is in-plane by construction (a ray-plane meeting minus a point on the
+/// plane), so the normal and the plane are untouched. **Every** observation's
+/// keypoint is carried along the plane by that same displacement, keeping its
+/// own in-plane offset from the centre: a keypoint is where that photograph
+/// sees the patch's content, and the offset is what the tile is cut on, so
+/// resetting keypoints to the centre's projection would scramble the
+/// correlation the next reading scores.
 ///
 /// **Nothing is pinned.** A translation says where the patch is and not whether
 /// any sighting belongs to it, which is what a pin protects from the threshold
@@ -1298,44 +1353,42 @@ pub struct TranslateToPixelReport {
 pub fn translate_patch_to_pixel(
     track: &EditableTrack,
     edited: &EditedReconstruction,
-    observation: usize,
+    viewpoint: Viewpoint,
     pixel: [f64; 2],
 ) -> Result<(EditableTrack, TranslateToPixelReport), TrackEditError> {
     if !pixel.iter().all(|c| c.is_finite()) {
         return Err(TrackEditError::BadPixel(pixel));
     }
-    let current = observation_at(track, observation)?;
-    let image = current.image;
-    let site = current
-        .site()
-        .ok_or(TrackEditError::NoPlace { observation })?;
+    let pointed = pointed_at(track, edited, viewpoint, pixel)?;
     let patch = placement_of(track)?;
-    let (camera, cam_from_world) = view_of(edited, image)?;
-    let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
-    let offset = pointer_offset(patch, &camera, &cam_from_world, site, pixel, observation)?;
     // The offset lies in the plane by construction, so reading it on the two
     // in-plane axes is the whole of it and the normal part is zero outright.
+    let offset = pointed.offset;
     let by = Vector3::new(offset.dot(&patch.u_axis), offset.dot(&patch.v_axis), 0.0);
     let (next, slid) = translate_patch(track, edited, by)?;
-    // Where the dragged sighting now sits, which is the pointer: its own plane
-    // point plus the displacement is, by construction, the plane point under
-    // the pixel.
-    let landed = if slid.changed {
-        next.observations[observation].site().unwrap_or(pixel)
-    } else {
-        site
+    // Where the pointer's square now sits. For a sighting that is its own
+    // plane point plus the displacement, which by construction is the plane
+    // point under the pixel; for the patch as it stands it is the centre, which
+    // the move put on that same meeting, so the pixel itself is the answer.
+    let landed = match (viewpoint, pointed.site) {
+        (Viewpoint::Observation(observation), Some(_)) if slid.changed => next.observations
+            [observation]
+            .site()
+            .unwrap_or(pointed.pixel),
+        (Viewpoint::Observation(_), Some(site)) => site,
+        _ => pointed.pixel,
     };
     Ok((
         next,
         TranslateToPixelReport {
-            observation,
-            image,
+            observation: viewpoint.observation(),
+            image: pointed.image,
             pixel: landed,
             center: slid.center,
             moved: slid.moved,
             placed: slid.placed,
             changed: slid.changed,
-            clamped_from,
+            clamped_from: pointed.clamped_from,
         },
     ))
 }
@@ -1479,31 +1532,72 @@ pub fn translate_patch(
     ))
 }
 
-/// The in-plane offset from the patch's own centre that a pointer named,
+/// Where a pixel named from one [`Viewpoint`] meets the square drawn there.
+struct Pointed {
+    /// The image the pixel is in.
+    image: u32,
+    /// The sighting the square is anchored on, for a [`Viewpoint::Observation`].
+    site: Option<[f64; 2]>,
+    /// The pixel read, after the clamp to the photograph.
+    pixel: [f64; 2],
+    /// The pixel asked for, when the clamp moved it.
+    clamped_from: Option<[f64; 2]>,
+    /// The in-plane offset of the meeting from the square's own centre.
+    offset: Vector3<f64>,
+}
+
+/// The in-plane offset from the drawn square's centre that a pointer named,
 /// measured on the outline as drawn.
 ///
 /// The one reduction of a pixel gesture to the step behind it, which both
-/// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] make. The outline a
-/// person drags is the patch re-anchored on that sighting
-/// (`OrientedPatch::anchored_at_keypoint`), so the pointer's offset is read from
-/// *that* centre -- where the photograph sees the patch's content -- and then
-/// carried to the patch's own centre. Both steps want exactly that out of it: a
-/// slide moves the centre by the offset, and a resize reads the offset along the
-/// dragged edge's axis.
-fn pointer_offset(
-    patch: &OrientedPatch,
-    camera: &crate::camera::CameraIntrinsics,
-    cam_from_world: &crate::geometry::RigidTransform,
-    site: [f64; 2],
+/// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] make. The outline
+/// a person drags in an observation's image is the patch re-anchored on that
+/// sighting (`OrientedPatch::anchored_at_keypoint`), so the pointer's offset is
+/// read from *that* centre, where the photograph sees the patch's content, and
+/// then carried to the patch's own centre. In an image named as such the
+/// outline is the patch itself and the offset is read from its own centre. Both
+/// steps want exactly that out of it: a slide moves the centre by the offset,
+/// and a resize reads the offset along the dragged edge's axis.
+fn pointed_at(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    viewpoint: Viewpoint,
     pixel: [f64; 2],
-    observation: usize,
-) -> Result<Vector3<f64>, TrackEditError> {
-    let anchored = patch
-        .anchored_at_keypoint(camera, cam_from_world, site)
-        .ok_or(TrackEditError::NoProjection { observation })?;
-    anchored
-        .keypoint_plane_offset(camera, cam_from_world, pixel)
-        .ok_or(TrackEditError::NoProjection { observation })
+) -> Result<Pointed, TrackEditError> {
+    let (image, site) = match viewpoint {
+        Viewpoint::Observation(observation) => {
+            let current = observation_at(track, observation)?;
+            let site = current
+                .site()
+                .ok_or(TrackEditError::NoPlace { observation })?;
+            (current.image, Some(site))
+        }
+        Viewpoint::Image(image) => (image, None),
+    };
+    let patch = placement_of(track)?;
+    let (camera, cam_from_world) = view_of(edited, image)?;
+    let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
+    let refused = || TrackEditError::NoProjection { viewpoint };
+    let anchored;
+    let square = match site {
+        Some(site) => {
+            anchored = patch
+                .anchored_at_keypoint(&camera, &cam_from_world, site)
+                .ok_or_else(refused)?;
+            &anchored
+        }
+        None => patch,
+    };
+    let offset = square
+        .keypoint_plane_offset(&camera, &cam_from_world, pixel)
+        .ok_or_else(refused)?;
+    Ok(Pointed {
+        image,
+        site,
+        pixel,
+        clamped_from,
+        offset,
+    })
 }
 
 /// The observation a tilt stopped [`MAX_TILT_DEG`] short of.

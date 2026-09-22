@@ -448,7 +448,8 @@ the reconstruction, so no mode turns it off and nothing draws on top of it. It
 is drawn only for the *active* item: the bench holds several and this panel
 shows the one being worked on. Its marks and handles are in the images that
 track observes; an image it does not observe shows at most the **ghost
-outline** described below.
+outline** described below, which takes the patch-wide handles while Track View's
+*Lock* is ticked.
 
 The colours are the bench's own, one violet per verdict (`in`, `candidate`,
 `out`), used nowhere else in the panel, so a mark on the bench is never read as
@@ -479,6 +480,27 @@ differs by stage:
   proposed one because where this image's feature sits relative to the
   projection is what the layer is read for, and an observation already voted
   *in* is exactly the one whose answer is worth having in view.
+- Also at the **track stage**, the patch's **normal**: the 3D viewer's segment
+  and arrowhead ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) § "What
+  is drawn") built in the world and projected into this photograph, in the
+  outline's colour and the offset segments' 1.5 px width. It leaves the centre
+  of the square drawn, which in a member image is the re-anchored centre and so
+  the sighting's dot, not the hollow centre: the arrow belongs to the outline,
+  and one leaving the hollow centre would part from its own square by the
+  projection offset. The anchored square is the patch moved across its own
+  plane, so its normal line is parallel to the patch's and a depth or a facing
+  read off either is the same. The arrow is `2h` long in world units, the 3D
+  viewer's `NORMAL_LENGTH`, its barbs `0.5h` back and `0.2h` to either side
+  along `n x (eye - tip)` with this photograph's camera centre as the eye, so it
+  is the patch's size, foreshortens with the view exactly as the square does,
+  and is small on screen when the patch is. That is the point of drawing it
+  here: seen from an oblique photograph the arrow stands against the very
+  surface the patch is meant to lie on, which is geometry to align it by. It is
+  left out where the normal is within 5 degrees of this camera's line of sight
+  (`bench::geometry::normal_is_end_on`, the bar the 3D viewer refuses its
+  segment at), for a track at infinity, whose normal is its bearing, and where
+  any of its points falls behind the camera or outside the lens model's
+  domain.
 - At the **cluster stage** there is no geometry, so each observation in this
   image contributes the parallelogram its refined 2x2 affine shape maps the
   template's square to, at the refined position, with the seed's own
@@ -497,9 +519,14 @@ patch's own square, not re-anchored on anything since there is no keypoint
 here, sampled and projected as the member outline is and in the same stroke,
 in the `in` colour at 80% opacity (`GHOST_OPACITY`, 0.8). The patch can then
 be followed across every photograph of the capture, and the transparency says
-this image is not one of its sightings. It has no centre mark: the hollow
-centre of a member image is where the projection-offset segments end, and here
-there is no segment, while a lone dot would read as a keypoint.
+this image is not one of its sightings. With Track View's *Lock* ticked the
+ghost also draws a **hollow centre mark** at the patch's own projection, a
+circle of the keypoint dot's radius in the ghost colour, so its centre handle
+has something to grab, and the normal, from that centre and in the same colour.
+The mark is hollow because a member image's hollow circle marks the same place,
+the patch's own projection, and a filled dot would read as a keypoint. With the
+lock cleared the ghost is the outline alone. It keeps the ghost opacity either
+way.
 
 No ghost is drawn at the cluster stage, which has no shared geometry to
 project, nor at a track stage with no placement yet. Nor is one drawn where the
@@ -520,11 +547,17 @@ does not also select a feature underneath.
 
 **What the layer draws, it edits.** Each mark is a handle, so the geometry a
 person is looking at is the geometry they take hold of, and there is no second
-picture of the patch to keep in step with the first. The one exception is the
-ghost outline, which is display only: it offers no handle and no cursor, a
-click on it selects no row, and a press on it pans the photograph as a press on
-empty image does. It shows the patch in a photograph that has no sighting to
-move, and a gesture there would have no observation to be read through.
+picture of the patch to keep in step with the first. **The ghost outline is a
+handle too while Track View's *Lock* is ticked**: another view of the patch can
+make plain where it belongs when the photographs that see it do not, so the
+ghost offers the patch-wide handles a member outline offers, read against the
+patch as it stands in this image. Its centre mark slides the patch until the
+patch's own centre is under the pointer, an edge resizes it with the opposite
+edge held, a corner spins it about its normal, and its normal's segment and
+arrowhead move and tilt it as below. A click on it selects no row, the ghost
+having no sighting. With the lock cleared the ghost is display only, having no
+keypoint of its own for a dot to move: it offers no handle and no cursor, and a
+press on it pans the photograph as a press on empty image does.
 
 - **The dot moves the patch.** At the track stage a track has one patch and
   every observation is a view of it, so dragging a mark slides that patch
@@ -554,6 +587,23 @@ move, and a gesture there would have no observation to be read through.
   the tangent of the circle it spins on, the perpendicular of its radius from
   the sighting it spins about. Running the pointer along an edge and onto a
   corner therefore turns the cursor from across the edge to along the arc.
+- **The normal's segment moves the patch along its normal.** At the track stage
+  only. Both ends of the drag are read on the drawn normal's own line, and their
+  difference along `n` is a `translate_patch` with that normal part and no
+  other, so a segment grabbed near its tip does not jump the patch out to where
+  the tip was. The sightings move by different amounts in their photographs,
+  which is the parallax the old depth was wrong by. The cursor is the resize
+  cursor lying along the segment on screen.
+- **The arrowhead turns the normal.** At the track stage only. It is the 3D
+  viewer's arrowhead with this photograph's camera for the eye: at the press
+  `bench::geometry::tilt_gesture` decides between an **aim** (the normal within
+  45 degrees of this camera's line of sight) and a **swing** (about the axis of
+  the patch's plane nearest the camera), the gesture is held for the whole drag,
+  and the normal it names is a `tilt_patch` toward it, which stops 80 degrees
+  from any observation's camera ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)
+  § "The arrowhead's two gestures"). The new normal leans toward the pointer.
+  The cursor is `AllScroll` for an aim and, for a swing, the resize cursor along
+  the arc the head travels.
 
 **The pointer is read against the patch, not against the screen.** A pixel is a
 ray, the ray meets the patch's own plane, and what the pointer named is the
@@ -562,7 +612,16 @@ offset of that meeting on the patch's axes
 *reprojects onto the pointer*, through whatever distortion the lens has, and a
 turn is the angle swept on the patch's own surface rather than the foreshortened
 one swept on screen. The frame the pointer is read against is the one drawn: the
-patch re-anchored on the observation whose outline it is.
+patch re-anchored on the observation whose outline it is, or for the ghost the
+patch itself, which is what `sfmtool_core::bench::Viewpoint` names to the two
+pixel steps (`Observation` and `Image`). The normal's two handles read the same
+ray against the geometry the 3D viewer's do (the normal's line, and the plane
+the arrowhead's gesture reads): the pixel is unprojected through the lens
+model's own inverse into a ray from this photograph's camera centre
+(`bench::geometry::pixel_ray`), which is the one difference from the 3D viewer,
+whose ray is its own camera's. A photograph taken from the side of the patch is
+therefore as good a vantage for depth and facing as the 3D view is, and a
+fisheye's pixel names the ray its lens really images there.
 
 At the track stage the patch is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
@@ -593,15 +652,19 @@ track after it. In this photograph the outline follows the dot, being the patch
 re-anchored on the keypoint, while the hollow centre stays where the patch
 projects, so the segment between them grows by the drag.
 
-A track-stage sighting has a place of its own and no shape of its own; its size
-and its turn are the patch's. So while the lock is cleared **the outline's edges
-and corners take no drag**: they are drawn, a press on one pans the photograph
-as a press off the layer does, and no cursor is offered over them. Offering them
-patch-wide would make a resize or a spin move every sighting under a setting
-whose whole promise is that a drag here moves one. At the cluster stage the lock
-changes nothing, every handle there being one sighting's already, and the box is
-greyed. The lock reaches this panel only: the 3D viewer's handles are the
-patch's own, and its marks select rather than move.
+A track-stage sighting has a place of its own and no shape, depth or facing of
+its own; its size, its turn and its normal are the patch's. So while the lock is
+cleared **the outline's edges and corners and the normal's segment and arrowhead
+take no drag**: they are drawn, a press on one pans the photograph as a press off
+the layer does, and no cursor is offered over them. **The ghost is display
+only** as well, and draws neither its centre mark nor its normal, for the same
+reason and because it has no keypoint of its own for a dot to move. Offering any
+of them patch-wide would make a resize, a spin, a move along the normal or a
+tilt move every sighting under a setting whose whole promise is that a drag here
+moves one. At the cluster stage the lock changes nothing, every handle there
+being one sighting's already, and the box is greyed. The lock reaches this panel
+only: the 3D viewer's handles are the patch's own, and its marks select rather
+than move.
 
 **The press decides which handle, not the drag.** A pointer press inside the
 panel is hit-tested against the geometry that frame starts from -- which is what
@@ -617,15 +680,28 @@ hits no handle leaves the view's own drag exactly as it was. A press on a handle
 that never moves is a click: it selects that observation's row and edits
 nothing.
 
-The reach is nine panel pixels for a dot or a corner and eight from an edge's
-polyline, generous against the marks they draw, because the two misses do not
-cost the same: a handle missed by two pixels pans the photograph, which the
-person then has to undo by eye, while one caught a little early is released
-without motion and does nothing.
+The reach is nine panel pixels for a dot, a corner or the arrowhead and eight
+from an edge's polyline or the normal's segment, generous against the marks they
+draw, because the two misses do not cost the same: a handle missed by two pixels
+pans the photograph, which the person then has to undo by eye, while one caught
+a little early is released without motion and does nothing.
 
-**One version per drag.** While the pointer is down nothing is pushed: the
-layer draws from a transient copy, the track the release would produce, built
-by the same core step and read under the same lock. The release applies it through
+**The order the reaches are tried is arrowhead, dot, corner, edge, normal
+segment**, the nearest taken within each. The dot sits inside the outline it
+anchors and a corner is where two edges meet, so one nearest-thing search over
+them all would make the smaller handles unreachable. The segment and the
+arrowhead take the places the 3D viewer gives them, for its reasons: the segment
+leaves the centre, where the dot already is, and has the whole of its length to
+be reached along, so it is last and an edge it crosses keeps the press; the
+arrowhead is a point at the segment's far end, so it is first. Among the dot,
+the corners and the edges the order is this panel's own, the dot before the
+corners, where the 3D viewer tries its corners first: in a photograph the dot is
+a sighting and the thing most often reached for.
+
+**One version per drag**, the ghost's and the normal's included. While the
+pointer is down nothing is pushed: the layer draws from a transient copy, the
+track the release would produce, built by the same core step and read under the
+same lock. The release applies it through
 `AppState::edit_bench_patch`, which is the call the wire's eight patch tools
 make, so one gesture is one version, one Action Log row of kind `Bench`, and one
 Undo. A drag that ends where it started pushes nothing, the way a verdict an

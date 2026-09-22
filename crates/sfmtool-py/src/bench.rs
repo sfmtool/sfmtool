@@ -35,7 +35,7 @@ use sfmtool_core::bench::{
     BenchItem, ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack,
     EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation,
     ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport, StageKind,
-    TrackClassification, Verdict, DEFAULT_RADIUS_PX,
+    TrackClassification, Verdict, Viewpoint, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -708,9 +708,13 @@ fn translate_patch_to_pixel(
     observation: usize,
     pixel: [f64; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let (next, report) =
-        core_translate_patch_to_pixel(&track.inner, &edited.inner, observation, pixel)
-            .map_err(refused)?;
+    let (next, report) = core_translate_patch_to_pixel(
+        &track.inner,
+        &edited.inner,
+        Viewpoint::Observation(observation),
+        pixel,
+    )
+    .map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
     d.set_item("image", report.image)?;
@@ -838,9 +842,14 @@ fn resize_patch_to_pixel(
     pixel: [f64; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let edge: Edge = edge.parse().map_err(refused)?;
-    let (next, report) =
-        core_resize_patch_to_pixel(&track.inner, &edited.inner, observation, edge, pixel)
-            .map_err(refused)?;
+    let (next, report) = core_resize_patch_to_pixel(
+        &track.inner,
+        &edited.inner,
+        Viewpoint::Observation(observation),
+        edge,
+        pixel,
+    )
+    .map_err(refused)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),

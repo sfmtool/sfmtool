@@ -578,6 +578,8 @@ create_bench_cluster."*
 // resize_bench_patch         { "reconstruction_label": "bull", "observation": 3,
 //                              "edge": "+u", "pixel": [1049.0, 1702.9] }
 // resize_bench_patch         { "reconstruction_label": "bull", "half_length": 0.0184 }
+// translate_bench_patch      { "reconstruction_label": "bull", "camera_image": 11,
+//                              "pixel": [388.0, 502.5] }   // the ghost's centre
 // spin_bench_patch           { "reconstruction_label": "bull", "degrees": 12.3 }
 // tilt_bench_patch           { "reconstruction_label": "bull",
 //                              "normal": [0.1, -0.2, 0.97] }
@@ -659,14 +661,19 @@ normal itself.
 `translate_bench_patch` and `resize_bench_patch` each take **exactly one of two
 ways** to say what they want. A translation takes `by`, a displacement
 `[u, v, n]` on the patch's own orthonormal axes in world units, or an
-`observation` and a `pixel` its centre lands under. A resize takes a world
-`half_length` with an optional `moved_edge`, or an `observation`, an `edge` and
-a `pixel`. The pixel forms are the gestures, and they are what make the answer
-exact: the pixel is unprojected onto the patch's own plane, so the edge lands
-there through whatever distortion the lens has and the opposite edge is left
-where it was. A pixel form names the `observation` whose outline is meant, which
-is the patch re-anchored on that sighting. `spin_bench_patch` turns the patch
-about its own normal and names no sighting, there being one patch.
+`pixel` with the photograph it is in, which its centre lands under. A resize
+takes a world `half_length` with an optional `moved_edge`, or an `edge` and a
+`pixel` with the photograph it is in. The pixel forms are the gestures, and they
+are what make the answer exact: the pixel is unprojected onto the patch's own
+plane, so the edge lands there through whatever distortion the lens has and the
+opposite edge is left where it was. **The photograph is exactly one of
+`observation` and `camera_image`**, and the two name different squares, which
+is why a call carrying both is refused. An `observation` names that sighting's
+outline, the patch re-anchored on its keypoint. A `camera_image`, by index or by
+name, names the patch as it stands seen in that image, which is Image Detail's
+ghost outline, and it is the only form that reaches an image the track has no
+sighting in. The reply carries whichever it was. `spin_bench_patch` turns the
+patch about its own normal and names no sighting, there being one patch.
 
 **The cluster stage's own are tools of their own.** There is no shared geometry
 there, only one affine shape per sighting, so `resize_bench_shape` and
@@ -678,7 +685,7 @@ names rather than one with an optional observation, because a tool named for
 the part it acts on cannot act on two different parts.
 
 **The normal part of a `by`, and `tilt_bench_patch`, name no pixel**, because
-no photograph can say what they say. The `n` of a displacement moves the patch
+no sighting can say what they say. The `n` of a displacement moves the patch
 that many world units along its own outward normal, positive toward the face
 the patch shows: a sighting names the ray the patch lies along and not how far
 down it the surface is, so this is where a patch's depth is settled. A **mixed**
@@ -688,8 +695,9 @@ least rotation and so with no spin about the normal, and stops 80 degrees from
 any observation's camera -- where that photograph would be looking along the
 surface rather than at it -- the sentence naming the image that stopped it: a
 sighting says nothing about which way the surface under it faces either. Each is
-settled by the tool or by the 3D viewer drag it shares a step with, the normal's
-segment and the arrowhead at the end of it. A track at infinity refuses a `by`
+settled by the tool or by the drag it shares a step with, the normal's segment
+and the arrowhead at the end of it, in the 3D viewer or in Image Detail, where
+the drag is read through the photograph's own camera. A track at infinity refuses a `by`
 with a normal part and a tilt, a direction patch's normal being its own bearing,
 and carries a purely tangential `by` like any other.
 `sight_bench_observation` is the one that moves a single sighting: the cluster
@@ -925,11 +933,12 @@ still read.
   mark the active track's `in` observations are proposed in the same draft. Both
   of the panels that do draw the active track draw it as handles: the Image
   Detail panel's bench layer marks it in each photograph that observes it, where
-  a mark places a sighting and sizes and turns the patch, and at the track stage
-  draws the patch as a display-only ghost outline in each photograph that does
-  not ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
-  layer"), and the 3D viewer draws the patch where it stands in the world, with
-  two further handles that move it along its normal and turn that normal
+  a mark places a sighting and sizes, turns, moves along its normal and tilts
+  the patch, and at the track stage draws the patch as a ghost outline in each
+  photograph that does not, which takes the same patch-wide edits while Track
+  View's *Lock* is ticked ([`multi-panel-image-browser.md`](multi-panel-image-browser.md)
+  § "The bench layer"); the 3D viewer draws the patch where it stands in the
+  world, with the same handles read through its own camera
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are

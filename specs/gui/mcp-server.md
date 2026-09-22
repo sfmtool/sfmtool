@@ -2233,16 +2233,21 @@ them synonyms**: `translate` moves the centre, `resize` changes the half-length,
 
 `translate_bench_patch` moves the patch, and it takes exactly one of two ways to
 say where it goes: `by`, a displacement `[u, v, n]` on the patch's **own
-orthonormal axes** in world units, or an `observation` and a `pixel`, which its
-centre lands under. `resize_bench_patch` sizes it, again by one of two: a world
-`half_length` with an optional `moved_edge`, or an `observation`, an `edge`
-(`"+u"`, `"-u"`, `"+v"`, `"-v"`) and a `pixel`, with the **opposite edge left
-where it is**. `spin_bench_patch` turns it by `degrees` about its own normal.
-The pixel is unprojected onto the patch's own plane, so an edge lands there
-exactly through whatever distortion the lens has, and because a patch is square
-the whole square follows one scale. A pixel form names the `observation` whose
-outline is meant -- the patch re-anchored on that sighting -- and the pixel is in
-that observation's image.
+orthonormal axes** in world units, or a `pixel` with the photograph it is in,
+which the centre of the square drawn there lands under. `resize_bench_patch`
+sizes it, again by one of two: a world `half_length` with an optional
+`moved_edge`, or an `edge` (`"+u"`, `"-u"`, `"+v"`, `"-v"`) and a `pixel` with
+the photograph it is in, with the **opposite edge left where it is**.
+`spin_bench_patch` turns it by `degrees` about its own normal. The pixel is
+unprojected onto the patch's own plane, so an edge lands there exactly through
+whatever distortion the lens has, and because a patch is square the whole square
+follows one scale. **A pixel form names its photograph as exactly one of
+`observation` and `camera_image`.** An `observation` means that sighting's
+outline, the patch re-anchored on its keypoint, and the pixel is in its image. A
+`camera_image`, an index or an `.sfmr` relative path as everywhere else, means
+the patch as it stands seen in that image: Image Detail's ghost outline, and the
+only way to reach an image the track has no sighting in. Both at once is refused
+with a sentence naming the two, and the reply carries whichever was used.
 
 **The cluster stage's own two are tools of their own**, because there is no
 shared geometry there and what is turned or sized is one sighting's
@@ -2253,7 +2258,7 @@ five refuses the other stage and names the tool that belongs to it, which is
 why the pair is two names rather than one with an optional observation.
 
 **The displacement's normal part and `tilt_bench_patch` name no pixel at
-all**, being the wire's half of the two handles no photograph carries. The
+all**, being the wire's half of the two handles no sighting carries. The
 `n` of a `by` moves the patch that many world units along its own outward
 normal, positive toward the face the patch shows: a sighting says which ray the
 patch lies along and nothing about how far down it the surface is, and a mixed
@@ -2262,9 +2267,9 @@ The tilt turns the patch to face the outward `normal` named, by the **least**
 rotation -- the one about the axis square to the old normal and the new one --
 so no spin about the normal comes with it, that being `spin_bench_patch`'s; a
 sighting says nothing about which way the surface under it faces either. Both
-are settled out in the world, by these tools or by the drags in the 3D viewer
-they share their steps with: the normal's own segment, and the arrowhead at the
-end of it. A track at infinity refuses both, its normal being its own bearing,
+are settled by these tools or by the drags they share their steps with, the
+normal's own segment and the arrowhead at the end of it, in the 3D viewer or in
+Image Detail, where the drag is read through the photograph's own camera. A track at infinity refuses both, its normal being its own bearing,
 while carrying a purely tangential `by` like any other.
 
 **A tilt stops 80 degrees from any observation's camera**, which is where that

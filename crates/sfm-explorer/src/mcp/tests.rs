@@ -6666,6 +6666,127 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     assert_eq!(rows["observations"][1]["pinned"], json!(false), "{rows}");
 }
 
+/// The two pixel forms also take a `camera_image` in place of an observation,
+/// which reads the pixel against the patch **as it stands** in that image: the
+/// ghost outline's square, in an image the track has no sighting in. The slide
+/// lands the patch's own centre under the pixel, the resize puts the patch's
+/// own edge there, each is one version, and naming both photographs at once is
+/// refused.
+#[test]
+fn the_patch_tools_take_a_pixel_in_a_camera_image_the_track_has_no_sighting_in() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let id = state.scene[0].id;
+    let track = state.bench_track(id, &item).expect("on the bench").clone();
+    let unseen = (0..state.scene[0].image_count())
+        .find(|i| track.observations.iter().all(|o| o.image as usize != *i))
+        .expect("the fixture's track does not span every image");
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+            .expect("the fixture's images have cameras");
+    let patch = |state: &AppState| {
+        state
+            .bench_track(id, &item)
+            .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
+            .expect("a frame")
+    };
+    let corner = |patch: &sfmtool_core::patch::cloud::OrientedPatch, s: f64, t: f64| {
+        let (xyz, w) = patch.corner_homogeneous(s, t);
+        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("in front of the camera")
+    };
+    let before = version_count(&state);
+
+    let was = patch(&state);
+    let target = corner(&was, 0.6, -0.3);
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "translate_bench_patch",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": unseen,
+            "pixel": target,
+        }),
+    );
+    assert_eq!(moved["camera_image"], json!(unseen), "{moved}");
+    assert!(moved.get("observation").is_none(), "{moved}");
+    assert_eq!(version_count(&state), before + 1);
+    let landed = corner(&patch(&state), 0.0, 0.0);
+    assert!(
+        (landed[0] - target[0]).abs() < 1e-6 && (landed[1] - target[1]).abs() < 1e-6,
+        "the patch's own centre should land on {target:?}, it landed on {landed:?}",
+    );
+
+    // By name, as every camera_image argument may be.
+    let name = state.scene[0].recon().image_table.images[unseen]
+        .name
+        .clone();
+    let was = patch(&state);
+    let far = corner(&was, -1.0, 0.0);
+    let target = corner(&was, 1.5, 0.0);
+    let resized = call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_patch",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": name,
+            "edge": "+u",
+            "pixel": target,
+        }),
+    );
+    assert_eq!(resized["camera_image"], json!(unseen), "{resized}");
+    assert_eq!(resized["edge"], json!("+u"), "{resized}");
+    assert_eq!(version_count(&state), before + 2);
+    let grown = patch(&state);
+    let landed = corner(&grown, 1.0, 0.0);
+    let held = corner(&grown, -1.0, 0.0);
+    assert!(
+        (landed[0] - target[0]).abs() < 1e-6 && (landed[1] - target[1]).abs() < 1e-6,
+        "the +u edge should land on {target:?}, it landed on {landed:?}",
+    );
+    assert!(
+        (held[0] - far[0]).abs() < 1e-6 && (held[1] - far[1]).abs() < 1e-6,
+        "the far edge moved from {far:?} to {held:?}",
+    );
+
+    for (tool, arguments) in [
+        (
+            "translate_bench_patch",
+            json!({
+                "reconstruction_label": "run_a", "observation": 0,
+                "camera_image": unseen, "pixel": [10.0, 10.0],
+            }),
+        ),
+        (
+            "resize_bench_patch",
+            json!({
+                "reconstruction_label": "run_a", "observation": 0,
+                "camera_image": unseen, "edge": "+u", "pixel": [10.0, 10.0],
+            }),
+        ),
+    ] {
+        let refused = refused_call(&mut state, &mut viewer, tool, arguments).to_string();
+        assert!(
+            refused.contains("observation") && refused.contains("camera_image"),
+            "{tool}: {refused}"
+        );
+    }
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "translate_bench_patch",
+        json!({ "reconstruction_label": "run_a", "camera_image": 999, "pixel": [10.0, 10.0] }),
+    )
+    .to_string();
+    assert!(refused.contains("999"), "{refused}");
+    assert_eq!(
+        version_count(&state),
+        before + 2,
+        "a refusal pushes nothing"
+    );
+}
+
 /// The translation's normal part, which no photograph can say: the depth of the
 /// patch. The version's sentence carries the signed distance and the place the
 /// centre reached.

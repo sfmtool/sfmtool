@@ -21,6 +21,10 @@
 //!   projection, which is the projection offset the *Proj. off* column
 //!   reports. Where a sighting sits on the projection the segment has no
 //!   length and is not seen, which is the answer as much as a long one is.
+//!   Out of the outline's centre stands the patch's **normal**, the 3D
+//!   viewport's segment and arrowhead projected into the photograph, so a
+//!   photograph taken from the side shows which way the square faces against
+//!   the surface it is meant to lie on.
 //! - At the **cluster stage** there is no geometry, so what is drawn is the
 //!   parallelogram the template's square maps to under the observation's
 //!   refined affine shape, with the seed's own parallelogram dashed behind it.
@@ -31,47 +35,54 @@
 //! square is projected through that image's camera and drawn as a **ghost
 //! outline**, the member outline's stroke at [`GHOST_OPACITY`], so the one
 //! patch can be followed across the whole capture without reading as a
-//! sighting. The ghost is display only. It is built apart from [`Layer`], so it
-//! offers no handle, no cursor and no click, and a press on it pans the
-//! photograph as a press on empty image does. See [`Ghost`].
+//! sighting. With Track View's *Lock* ticked the ghost is a handle as well: a
+//! view from another side can make plain where the patch belongs, so it offers
+//! the patch-wide handles a member outline does, read against the patch as it
+//! stands rather than against a keypoint. See [`Layer::ghost`].
 //!
 //! **What it draws, it edits.** At the track stage every handle edits the one
 //! patch and each photograph shows where it lands: the dot slides it across
-//! its own plane, an edge resizes it, a corner turns it. At the cluster stage
-//! there is no shared geometry, so each handle is that sighting's own -- the
-//! dot moves its seed and the outline is its own affine shape.
+//! its own plane, an edge resizes it, a corner turns it, the normal's segment
+//! moves it along the normal and the arrowhead turns the normal itself. At the
+//! cluster stage there is no shared geometry, so each handle is that
+//! sighting's own: the dot moves its seed and the outline is its own affine
+//! shape.
 //!
 //! **Track View's *Lock* decides what the track stage's dot is.** Ticked, which
 //! is how it starts, the dot is the patch's, as above. Cleared, the dot is that
 //! one sighting's keypoint, and the patch and every other sighting stay where
 //! they are: the gesture that fixes a keypoint that settled on the wrong
-//! detail. A track-stage sighting has a place of its own and no shape of its
-//! own, its size and turn being the patch's, so while the lock is off the
-//! outline's edges and corners are drawn and take no drag. A resize or a spin
-//! would move every sighting at once, which is the one thing a cleared lock
-//! promises a drag here will not do. Each drag
-//! previews by drawing the track the release would produce, and the release is
-//! one version. The geometry a pointer is read against is
-//! [`crate::bench::geometry`], which the wire's patch tools read it against
-//! too.
+//! detail. A track-stage sighting has a place of its own and no shape, depth or
+//! facing of its own, its size, turn and normal being the patch's, so while the
+//! lock is off the outline's edges and corners and the normal's segment and
+//! arrowhead are drawn and take no drag, and the ghost is display only. Any of
+//! them would move every sighting at once, which is the one thing a cleared
+//! lock promises a drag here will not do. Each drag previews by drawing the
+//! track the release would produce, and the release is one version. The
+//! geometry a pointer is read against is [`crate::bench::geometry`], which the
+//! wire's patch tools read it against too.
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Shape, Stroke, Vec2};
-use sfmtool_core::bench::{EditableTrack, Observation, Stage, Verdict};
+use sfmtool_core::bench::{Edge, EditableTrack, Observation, Stage, Verdict, Viewpoint};
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
+use sfmtool_core::EditedReconstruction;
 use sfmtool_core::ImageTable;
 
-use crate::bench::geometry::{self, PatchEdit};
+use crate::bench::geometry::{self, PatchEdit, Tilt};
 use crate::bench::{distance_to_segment, resize_cursor, verdict_color};
-use sfmtool_core::bench::Edge;
-use sfmtool_core::EditedReconstruction;
 
 use super::ImageDetailResponse;
 
 /// Stroke width of the bench's outlines. Thicker than a feature ellipse's, so
 /// the layer reads as being on top of the overlay rather than part of it.
 const STROKE_WIDTH: f32 = 2.5;
+
+/// Stroke width of the normal's segment and arrowhead: the offset segments'
+/// width, so the arrow reads as standing off the square rather than as a
+/// fifth edge of it.
+const NORMAL_STROKE_WIDTH: f32 = 1.5;
 
 /// How opaque the ghost outline is, as a fraction of the member outline's
 /// colour: 80% opaque, so it is plainly the same patch and still plainly not a
@@ -81,7 +92,8 @@ pub(super) const GHOST_OPACITY: f32 = 0.8;
 /// Radius of the mark drawn at an observation's own position, in panel px.
 const KEYPOINT_RADIUS: f32 = 4.0;
 
-/// How far from a dot or a corner the pointer still grabs it, in panel px.
+/// How far from a dot, a corner or the arrowhead the pointer still grabs it,
+/// in panel px.
 ///
 /// Generous against the 4 px dot it draws, because the cost of the two misses
 /// is not symmetric: a handle missed by two pixels pans the photograph instead,
@@ -89,7 +101,8 @@ const KEYPOINT_RADIUS: f32 = 4.0;
 /// a little early is released with no motion and does nothing.
 const HANDLE_HIT_RADIUS: f32 = 9.0;
 
-/// How far from an edge's polyline the pointer still grabs it, in panel px.
+/// How far from an edge's polyline or the normal's segment the pointer still
+/// grabs it, in panel px.
 ///
 /// Narrower than a corner's reach, and tested after the corners, so the corner
 /// where two edges meet turns rather than resizing whichever edge won the
@@ -109,32 +122,52 @@ const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 
 
 /// What the pointer has hold of.
 ///
-/// Every handle names an observation: the sighting a dot moves, and, for the
-/// outline, the sighting whose place the outline is drawn at -- the frame is
-/// re-anchored on it at the track stage and is its own shape at the cluster
-/// stage, so the pointer is read against the square that observation is looking
-/// at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Every outline handle names the [`Viewpoint`] its outline was drawn from,
+/// which is the square the pointer is read against: an observation's, the
+/// patch re-anchored on that sighting at the track stage and its own shape at
+/// the cluster stage, or this image's own, the patch as it stands, for the
+/// ghost.
+///
+/// Not `Eq`, the arrowhead carrying the axis its swing turns about: the gesture
+/// is decided at the press and travels with the drag, as the 3D viewport's
+/// does.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Handle {
     /// The observation's own mark: dragging it places the sighting.
     Keypoint {
         /// The observation, by its position in the track's list.
         observation: usize,
     },
+    /// The ghost outline's centre mark: dragging it slides the patch across
+    /// its own plane until its centre sits under the pointer in this image.
+    Centre,
     /// One edge of the outline: dragging it resizes the patch, holding the
     /// opposite edge still.
     Edge {
-        /// The observation the outline is drawn at.
-        observation: usize,
+        /// The view the outline is drawn from.
+        outline: Viewpoint,
         /// Which edge of the patch's square it is.
         edge: Edge,
     },
     /// One corner of the outline: dragging it turns the patch.
     Corner {
-        /// The observation the outline is drawn at.
-        observation: usize,
+        /// The view the outline is drawn from.
+        outline: Viewpoint,
         /// Which corner, as an index into [`CORNERS`].
         corner: usize,
+    },
+    /// The normal's segment: dragging it moves the patch along its normal.
+    Normal {
+        /// The view the outline the normal stands out of is drawn from.
+        outline: Viewpoint,
+    },
+    /// The arrowhead at the far end of the segment: dragging it turns the
+    /// normal, by the gesture [`geometry::tilt_gesture`] chose at the press.
+    Arrowhead {
+        /// The view the outline the normal stands out of is drawn from.
+        outline: Viewpoint,
+        /// Which of the arrowhead's two gestures the drag makes.
+        tilt: Tilt,
     },
 }
 
@@ -184,14 +217,15 @@ struct Mark {
 /// hit test runs off it in front of the pan, and the paint runs off the copy
 /// built from the previewed track.
 pub(super) struct Layer {
-    /// One per observation of the track in this image.
+    /// One per observation of the track in this image. None for the ghost.
     sightings: Vec<Sighting>,
-    /// The outlines: one at the track stage, one per observation at the cluster
-    /// stage.
+    /// The outlines: one at the track stage and for the ghost, one per
+    /// observation at the cluster stage.
     outlines: Vec<Outline>,
     /// The patch's own projection, which every observation's
-    /// projection-offset segment runs to. `None` at the cluster stage and for
-    /// a track nothing has triangulated.
+    /// projection-offset segment runs to. `None` at the cluster stage, for a
+    /// track nothing has triangulated, and for the ghost, which has no segment
+    /// to end.
     center: Option<Pos2>,
     /// The seed parallelograms drawn dashed behind the cluster stage's
     /// outlines. Never a handle: where an observation *started* is not a thing
@@ -200,6 +234,14 @@ pub(super) struct Layer {
     /// Whether the outlines' edges and corners take a drag. False only at the
     /// track stage with the lock off; see [`outline_takes_drag`].
     outline_handles: bool,
+    /// The ghost outline's centre mark, the patch's own projection, when the
+    /// ghost offers handles.
+    ghost_centre: Option<Pos2>,
+    /// The normal standing out of the outline, when there is one to draw.
+    normal: Option<Arrow>,
+    /// Whether the normal's segment and arrowhead take a drag: the lock, since
+    /// a move along the normal or a turn of it moves every sighting.
+    normal_handles: bool,
 }
 
 /// One observation's own mark.
@@ -211,15 +253,19 @@ struct Sighting {
 
 /// One patch outline, as the boundary samples that landed.
 struct Outline {
-    /// The observation it is drawn at.
-    observation: usize,
-    /// The verdict its colour comes from.
-    verdict: Verdict,
+    /// The view it is drawn from.
+    viewpoint: Viewpoint,
+    /// The colour it is stroked in.
+    color: Color32,
     /// The `4 * per_edge` samples in boundary order, `None` for one that did
     /// not project.
     samples: Vec<Option<Pos2>>,
     /// Samples per edge, so corner `k` is sample `k * per_edge`.
     per_edge: usize,
+    /// Where the square it outlines is centred on screen, which is what a
+    /// corner spins about: the sighting for an anchored outline and at the
+    /// cluster stage, the patch's own projection for the ghost.
+    pivot: Option<Pos2>,
 }
 
 impl Outline {
@@ -247,17 +293,39 @@ impl Outline {
     }
 }
 
+/// The patch's normal projected into the photograph: the segment from the
+/// outline's centre to the tip, and the arrowhead's two barbs.
+///
+/// The 3D viewport's arrow ([`geometry::arrow`]), built in the world at the
+/// same length, [`geometry::NORMAL_LENGTH`] half-lengths, with its barbs
+/// squared to this photograph's camera, and then projected through the lens as
+/// the outline is. Its size is therefore the patch's: a small patch has a small
+/// arrow, and the arrow foreshortens with the view as the square does, which is
+/// what makes it something to align against.
+struct Arrow {
+    /// The view of the outline it stands out of.
+    outline: Viewpoint,
+    /// Where it leaves the square, the outline's own centre.
+    tail: Pos2,
+    /// The far end, where the arrowhead is grabbed.
+    tip: Pos2,
+    /// The barbs' far ends.
+    barbs: [Pos2; 2],
+    /// The colour of the outline it stands out of.
+    color: Color32,
+    /// Which gesture a press on the arrowhead makes from this camera.
+    tilt: Option<Tilt>,
+}
+
 impl Layer {
-    /// The layer's geometry for `track` in `img_idx`, or `None` for an image
-    /// the track does not observe.
+    /// The layer's geometry for `track` in `img_idx`, or `None` when there is
+    /// nothing to draw there.
     ///
-    /// Nothing is built for such an image: the track is a set of sightings, and
-    /// a photograph it has none in has none of them to take hold of. What it
-    /// can still show is where the patch would be, which is [`Ghost`]'s and
-    /// takes no pointer.
+    /// An image the track observes gets the member drawing. An image it does
+    /// not gets the ghost, when there is one ([`Layer::ghost`]).
     ///
-    /// `lock` is Track View's *Lock*, which decides whether the outline is a
-    /// handle at all.
+    /// `lock` is Track View's *Lock*, which decides whether the patch-wide
+    /// handles take a drag at all.
     pub(super) fn build(
         image_table: &ImageTable,
         img_idx: usize,
@@ -272,16 +340,19 @@ impl Layer {
             .enumerate()
             .filter(|(_, o)| o.image as usize == img_idx)
             .collect();
-        if here.is_empty() {
-            return None;
-        }
         let to_panel = panel_mapping(image_rect, effective_scale);
+        if here.is_empty() {
+            return Self::ghost(image_table, img_idx, track, &to_panel, lock);
+        }
         let mut layer = Layer {
             sightings: Vec::new(),
             outlines: Vec::new(),
             center: None,
             seeds: Vec::new(),
             outline_handles: outline_takes_drag(track, lock),
+            ghost_centre: None,
+            normal: None,
+            normal_handles: lock,
         };
         for (index, observation) in &here {
             if let Some(site) = observation.site() {
@@ -296,6 +367,7 @@ impl Layer {
             Stage::Track(payload) => {
                 let view = geometry::view_of(image_table, img_idx);
                 layer.build_track_stage(
+                    track,
                     &here,
                     payload.placement.as_ref(),
                     view.as_ref(),
@@ -312,7 +384,7 @@ impl Layer {
     }
 
     /// The track stage: the patch's outline once, anchored on the sighting the
-    /// strongest verdict names.
+    /// strongest verdict names, with the normal standing out of its centre.
     ///
     /// One outline for the image rather than one per observation, because there
     /// is one patch: two candidates in a photograph are two readings of where
@@ -322,10 +394,20 @@ impl Layer {
     /// sighting is where the patch sits in this photograph, and the geometric
     /// projection is where the 3D says it should, which the hollow centre and
     /// the projection-offset segment show separately.
+    ///
+    /// The normal leaves the **anchored** centre, which is the sighting's dot,
+    /// for the reason the outline is anchored: the arrow belongs to the square
+    /// drawn, and one standing out of the hollow centre instead would part from
+    /// its own outline by the projection offset. The anchored frame is the
+    /// patch moved across its own plane, so its normal line is parallel to the
+    /// patch's and the two gestures read the same depth and the same facing off
+    /// either; the square a person looks at is the one the pointer is read
+    /// against.
     fn build_track_stage(
         &mut self,
+        track: &EditableTrack,
         here: &[(usize, &Observation)],
-        frame: Option<&OrientedPatch>,
+        patch: Option<&OrientedPatch>,
         view: Option<&(CameraIntrinsics, RigidTransform)>,
         to_panel: &impl Fn([f64; 2]) -> Pos2,
     ) {
@@ -342,23 +424,32 @@ impl Layer {
             .iter()
             .find(|(_, o)| o.verdict == strongest)
             .or_else(|| here.first());
-        let (Some((index, observation)), Some((camera, pose))) = (anchor, view) else {
+        let (Some((index, _)), Some((camera, pose))) = (anchor, view) else {
             return;
         };
-        self.center = frame
-            .and_then(|frame| geometry::project(camera, pose, frame.center.coords, frame.w))
+        self.center = patch
+            .and_then(|patch| geometry::project(camera, pose, patch.center.coords, patch.w))
             .map(to_panel);
-        let Some(frame) = frame else {
+        let viewpoint = Viewpoint::Observation(*index);
+        let Some(square) = square_of(track, viewpoint, camera, pose) else {
             return;
         };
-        let anchored = geometry::anchored_frame(frame, camera, pose, observation);
-        let (samples, per_edge) = project_outline(&anchored, camera, pose);
+        let color = verdict_color(strongest);
+        let (samples, per_edge) = project_outline(&square, camera, pose);
+        let pivot = self
+            .sightings
+            .iter()
+            .find(|sighting| sighting.observation == *index)
+            .map(|sighting| sighting.at)
+            .or(self.center);
         self.outlines.push(Outline {
-            observation: *index,
-            verdict: strongest,
+            viewpoint,
+            color,
             samples: samples.into_iter().map(|p| p.map(to_panel)).collect(),
             per_edge,
+            pivot,
         });
+        self.normal = normal_arrow(&square, viewpoint, camera, pose, color, to_panel);
     }
 
     /// The cluster stage: per observation, the template's square under the
@@ -398,26 +489,118 @@ impl Layer {
                 radius,
                 to_panel,
             );
+            let pivot = self
+                .sightings
+                .iter()
+                .find(|sighting| sighting.observation == *index)
+                .map(|sighting| sighting.at);
             self.outlines.push(Outline {
-                observation: *index,
-                verdict: observation.verdict,
+                viewpoint: Viewpoint::Observation(*index),
+                color: verdict_color(observation.verdict),
                 samples: corners.into_iter().map(Some).collect(),
                 per_edge: 1,
+                pivot,
             });
         }
     }
 
+    /// The ghost outline: the track-stage patch's own square projected into a
+    /// photograph the track has no observation in.
+    ///
+    /// An image counts as the track's when it holds an observation of any
+    /// verdict, so a `candidate` or an `out` sighting keeps the member drawing
+    /// and only an image with none gets the ghost. What is projected is the
+    /// patch **itself**, not a frame re-anchored on a keypoint, because there is
+    /// no keypoint here to anchor on: the ghost is where the 3D places the
+    /// square, which is also where the hollow centre of a member image sits.
+    ///
+    /// There is nothing to draw, and so no ghost, at the cluster stage (no
+    /// shared geometry exists to project), at a track stage with no placement
+    /// yet, and in a view that cannot see the square: the patch's back face
+    /// turned toward the camera ([`OrientedPatch::is_front_facing`]), its plane
+    /// seen within [`geometry::MIN_PLANE_ANGLE_DEG`] of edge-on
+    /// ([`geometry::plane_is_edge_on`]), or its centre behind the camera or
+    /// outside the lens model's domain. Past those tests the boundary is
+    /// sampled and drawn as a member outline is, a sample that fails to project
+    /// breaking the curve rather than being bridged.
+    ///
+    /// **With `lock` ticked the ghost is a handle**, read through
+    /// [`Viewpoint::Image`]: the centre mark slides the patch until its own
+    /// centre is under the pointer, an edge resizes it with the far edge held,
+    /// a corner spins it about its normal, and the normal it now draws moves
+    /// and tilts it. They are the member outline's patch-wide edits read
+    /// against the square this camera sees. With the lock cleared it is display
+    /// only, having no keypoint of its own for the dot to move: no mark, no
+    /// arrow, no handle, and a press on it pans.
+    fn ghost(
+        image_table: &ImageTable,
+        img_idx: usize,
+        track: &EditableTrack,
+        to_panel: &impl Fn([f64; 2]) -> Pos2,
+        lock: bool,
+    ) -> Option<Self> {
+        let Stage::Track(payload) = &track.stage else {
+            return None;
+        };
+        let patch = payload.placement.as_ref()?;
+        let (camera, pose) = geometry::view_of(image_table, img_idx)?;
+        if !patch.is_front_facing(&pose)
+            || geometry::plane_is_edge_on(patch, pose.inverse_translation_origin())
+        {
+            return None;
+        }
+        let centre = geometry::project(&camera, &pose, patch.center.coords, patch.w)?;
+        let viewpoint = Viewpoint::Image(img_idx as u32);
+        let (samples, per_edge) = project_outline(patch, &camera, &pose);
+        let color = ghost_color();
+        let centre = to_panel(centre);
+        Some(Layer {
+            sightings: Vec::new(),
+            outlines: vec![Outline {
+                viewpoint,
+                color,
+                samples: samples.into_iter().map(|p| p.map(to_panel)).collect(),
+                per_edge,
+                pivot: Some(centre),
+            }],
+            center: None,
+            seeds: Vec::new(),
+            outline_handles: lock,
+            ghost_centre: lock.then_some(centre),
+            normal: if lock {
+                normal_arrow(patch, viewpoint, &camera, &pose, color, to_panel)
+            } else {
+                None
+            },
+            normal_handles: lock,
+        })
+    }
+
     /// The handle nearest `pos`, or `None` when the pointer is on none of them.
     ///
-    /// Dots first, then corners, then edges: the dot sits inside the outline it
-    /// anchors, and the corner is where two edges meet, so a nearest-thing
-    /// search over all three at once would make the two smaller handles
-    /// unreachable.
+    /// The arrowhead, then the dots, then corners, then edges, then the
+    /// normal's segment. The dot sits inside the outline it anchors and the
+    /// corner is where two edges meet, so a nearest-thing search over all of
+    /// them at once would make the smaller handles unreachable. The segment is
+    /// last and the arrowhead first for the 3D viewport's reason: the segment
+    /// leaves the centre, where the dot already is, and has the whole of its
+    /// length to be reached along, while the arrowhead is a point at its far
+    /// end that anything tested before it would take the presses of.
     pub(super) fn hit(&self, pos: Pos2) -> Option<Handle> {
         let nearest = |best: Option<(f32, Handle)>, distance: f32, handle: Handle| match best {
             Some((d, _)) if d <= distance => best,
             _ => Some((distance, handle)),
         };
+        if let Some(arrow) = self.normal.as_ref().filter(|_| self.normal_handles) {
+            if let Some(tilt) = arrow.tilt {
+                if (arrow.tip - pos).length() <= HANDLE_HIT_RADIUS {
+                    return Some(Handle::Arrowhead {
+                        outline: arrow.outline,
+                        tilt,
+                    });
+                }
+            }
+        }
         let mut found = None;
         for sighting in &self.sightings {
             let distance = (sighting.at - pos).length();
@@ -431,53 +614,69 @@ impl Layer {
                 );
             }
         }
+        if let Some(centre) = self.ghost_centre {
+            let distance = (centre - pos).length();
+            if distance <= HANDLE_HIT_RADIUS {
+                found = nearest(found, distance, Handle::Centre);
+            }
+        }
         if let Some((_, handle)) = found {
             return Some(handle);
         }
         // An outline that takes no drag is not a handle, so a press on it falls
         // through to the view and pans, as a press anywhere off the layer does.
-        if !self.outline_handles {
-            return None;
-        }
-        for outline in &self.outlines {
-            for corner in 0..4 {
-                let Some(at) = outline.corner(corner) else {
-                    continue;
-                };
-                let distance = (at - pos).length();
-                if distance <= HANDLE_HIT_RADIUS {
-                    found = nearest(
-                        found,
-                        distance,
-                        Handle::Corner {
-                            observation: outline.observation,
-                            corner,
-                        },
-                    );
+        if self.outline_handles {
+            for outline in &self.outlines {
+                for corner in 0..4 {
+                    let Some(at) = outline.corner(corner) else {
+                        continue;
+                    };
+                    let distance = (at - pos).length();
+                    if distance <= HANDLE_HIT_RADIUS {
+                        found = nearest(
+                            found,
+                            distance,
+                            Handle::Corner {
+                                outline: outline.viewpoint,
+                                corner,
+                            },
+                        );
+                    }
                 }
             }
-        }
-        if let Some((_, handle)) = found {
-            return Some(handle);
-        }
-        for outline in &self.outlines {
-            for edge in 0..4 {
-                let Some(distance) = distance_to_polyline(&outline.edge(edge), pos) else {
-                    continue;
-                };
-                if distance <= EDGE_HIT_WIDTH {
-                    found = nearest(
-                        found,
-                        distance,
-                        Handle::Edge {
-                            observation: outline.observation,
-                            edge: geometry::edge_of(edge),
-                        },
-                    );
+            if let Some((_, handle)) = found {
+                return Some(handle);
+            }
+            for outline in &self.outlines {
+                for edge in 0..4 {
+                    let Some(distance) = distance_to_polyline(&outline.edge(edge), pos) else {
+                        continue;
+                    };
+                    if distance <= EDGE_HIT_WIDTH {
+                        found = nearest(
+                            found,
+                            distance,
+                            Handle::Edge {
+                                outline: outline.viewpoint,
+                                edge: geometry::edge_of(edge),
+                            },
+                        );
+                    }
                 }
             }
+            if let Some((_, handle)) = found {
+                return Some(handle);
+            }
         }
-        found.map(|(_, handle)| handle)
+        self.normal
+            .as_ref()
+            .filter(|arrow| {
+                self.normal_handles
+                    && distance_to_segment(arrow.tail, arrow.tip, pos) <= EDGE_HIT_WIDTH
+            })
+            .map(|arrow| Handle::Normal {
+                outline: arrow.outline,
+            })
     }
 
     /// The cursor `handle` asks for, with the outline's own orientation on
@@ -496,24 +695,27 @@ impl Layer {
     /// and onto the corner then turns the cursor from across the edge to along
     /// the arc, and that turn is exactly the difference between the two
     /// gestures.
+    ///
+    /// The normal's two handles take the 3D viewport's cursors: the segment is
+    /// dragged along itself, so it hands [`resize_cursor`] its own
+    /// perpendicular; an aiming arrowhead is free in two directions and takes
+    /// `AllScroll`; a swinging one travels along its arc and takes the
+    /// corner's reading, the radius from the tail.
     fn cursor(&self, handle: Handle) -> CursorIcon {
+        let outline = |viewpoint: Viewpoint| {
+            self.outlines
+                .iter()
+                .find(move |outline| outline.viewpoint == viewpoint)
+        };
         match handle {
-            Handle::Keypoint { .. } => CursorIcon::Move,
+            Handle::Keypoint { .. } | Handle::Centre => CursorIcon::Move,
             Handle::Corner {
-                observation,
+                outline: at,
                 corner,
-            } => self
-                .outlines
-                .iter()
-                .find(|outline| outline.observation == observation)
-                .and_then(|outline| outline.corner(corner))
-                .zip(self.pivot(observation))
-                .map(|(corner, pivot)| resize_cursor(corner - pivot))
+            } => outline(at)
+                .and_then(|outline| Some(resize_cursor(outline.corner(corner)? - outline.pivot?)))
                 .unwrap_or(CursorIcon::Move),
-            Handle::Edge { observation, edge } => self
-                .outlines
-                .iter()
-                .find(|outline| outline.observation == observation)
+            Handle::Edge { outline: at, edge } => outline(at)
                 .and_then(|outline| {
                     let k = (0..4).find(|k| geometry::edge_of(*k) == edge)?;
                     let points = outline.edge(k);
@@ -521,22 +723,26 @@ impl Layer {
                     Some(resize_cursor(*last - *first))
                 })
                 .unwrap_or(CursorIcon::Move),
+            Handle::Normal { .. } => self
+                .normal
+                .as_ref()
+                .map(|arrow| {
+                    let along = arrow.tip - arrow.tail;
+                    resize_cursor(egui::vec2(-along.y, along.x))
+                })
+                .unwrap_or(CursorIcon::Move),
+            Handle::Arrowhead {
+                tilt: Tilt::Aim, ..
+            } => CursorIcon::AllScroll,
+            Handle::Arrowhead {
+                tilt: Tilt::Swing(_),
+                ..
+            } => self
+                .normal
+                .as_ref()
+                .map(|arrow| resize_cursor(arrow.tip - arrow.tail))
+                .unwrap_or(CursorIcon::Move),
         }
-    }
-
-    /// Where the outline drawn at `observation` spins about, on screen.
-    ///
-    /// The sighting's own mark, because both stages spin about it: the track
-    /// stage turns the frame re-anchored on that sighting, whose centre lands
-    /// on it, and the cluster stage turns the shape about the sighting's
-    /// position. A sighting with no place to draw leaves the frame
-    /// un-anchored, and then the pivot is the patch's own projection.
-    fn pivot(&self, observation: usize) -> Option<Pos2> {
-        self.sightings
-            .iter()
-            .find(|sighting| sighting.observation == observation)
-            .map(|sighting| sighting.at)
-            .or(self.center)
     }
 
     /// Paint the layer.
@@ -557,8 +763,23 @@ impl Layer {
             paint_boundary(
                 painter,
                 &outline.samples,
-                Stroke::new(STROKE_WIDTH, verdict_color(outline.verdict)),
+                Stroke::new(STROKE_WIDTH, outline.color),
             );
+        }
+        // Polylines rather than segments, so the arrow is never read as one of
+        // the projection-offset segments, which are the layer's only segments.
+        if let Some(arrow) = &self.normal {
+            let stroke = Stroke::new(NORMAL_STROKE_WIDTH, arrow.color);
+            painter.add(Shape::line(vec![arrow.tail, arrow.tip], stroke));
+            painter.add(Shape::line(
+                vec![arrow.barbs[0], arrow.tip, arrow.barbs[1]],
+                stroke,
+            ));
+        }
+        // Hollow, as a member image's mark for the same place is: the patch's
+        // own projection, which a filled dot would misread as a keypoint.
+        if let Some(centre) = self.ghost_centre {
+            painter.circle_stroke(centre, KEYPOINT_RADIUS, Stroke::new(1.5, ghost_color()));
         }
         for sighting in &self.sightings {
             let color = verdict_color(sighting.verdict);
@@ -578,7 +799,8 @@ impl Layer {
     }
 
     /// The marks a click selects a Track View row by: each sighting, with the
-    /// outline it belongs to as its reach.
+    /// outline it belongs to as its reach. The ghost has no sighting, so a
+    /// click on it selects nothing.
     fn marks(&self) -> Vec<Mark> {
         let bounds =
             self.outlines
@@ -601,17 +823,23 @@ impl Layer {
 
     /// What this drag would do to the track, in the form the core steps take.
     ///
-    /// Two of the three gestures are already in those terms: a dot drag and an
-    /// edge drag both name a pixel, and the arithmetic behind the edge -- the
-    /// opposite edge held still -- is `sfmtool_core::bench::resize_patch_to_pixel`'s
-    /// rather than this panel's, so a tool call and a drag cannot resize
-    /// differently. What is left here is the turn, which is a reading of two
-    /// pointer positions against the patch and has no other home.
+    /// Two of the plane gestures are already in those terms: a dot drag and an
+    /// edge drag both name a pixel and the view it is in, and the arithmetic
+    /// behind the edge (the opposite edge held still) is
+    /// `sfmtool_core::bench::resize_patch_to_pixel`'s rather than this panel's,
+    /// so a tool call and a drag cannot resize differently. What is left here
+    /// is the three readings of two pointer positions against the patch that
+    /// have no other home: the turn a corner swept, and the normal's two
+    /// gestures, each pixel read as a ray of this photograph's camera
+    /// ([`geometry::pixel_ray`]) against the geometry the 3D viewport reads its
+    /// own rays against.
     ///
     /// `lock` is Track View's *Lock*: at the track stage it is what makes the
     /// dot the patch's ([`PatchEdit::TranslateToPixel`]) or the sighting's
-    /// alone ([`PatchEdit::Sight`]), and with it off an edge or a corner edits
-    /// nothing, the sighting having no size or turn of its own.
+    /// alone ([`PatchEdit::Sight`]), and with it off every patch-wide handle
+    /// (an edge, a corner, the normal, the arrowhead and the ghost's centre)
+    /// edits nothing, the sighting having no size, turn, depth or facing of its
+    /// own.
     ///
     /// `None` when the pointer names nothing the patch can be given: a ray that
     /// misses its plane, or a turn about the centre itself.
@@ -624,16 +852,25 @@ impl Layer {
         if drag.cancelled {
             return None;
         }
-        let observation = match drag.handle {
-            Handle::Keypoint { observation }
-            | Handle::Edge { observation, .. }
-            | Handle::Corner { observation, .. } => observation,
-        };
-        // The same rule the hit test was built by, asked again rather than
+        // The same rules the hit test was built by, asked again rather than
         // assumed: a drag is judged by the setting in force when it is read.
-        if !matches!(drag.handle, Handle::Keypoint { .. }) && !outline_takes_drag(track, lock) {
+        let takes_drag = match drag.handle {
+            Handle::Keypoint { .. } => true,
+            Handle::Edge { .. } | Handle::Corner { .. } => outline_takes_drag(track, lock),
+            Handle::Centre | Handle::Normal { .. } | Handle::Arrowhead { .. } => {
+                lock && matches!(track.stage, Stage::Track(_))
+            }
+        };
+        if !takes_drag {
             return None;
         }
+        let read_square = |outline: Viewpoint| {
+            let (camera, pose) = geometry::view_of(image_table, drag.image)?;
+            let square = square_of(track, outline, &camera, &pose)?;
+            let from = geometry::pixel_ray(&camera, &pose, drag.from)?;
+            let to = geometry::pixel_ray(&camera, &pose, drag.to)?;
+            Some((square, camera, pose, from, to))
+        };
         match drag.handle {
             // The dot means different things at the two stages, because the two
             // stages have different things to move: a track-stage track has one
@@ -642,9 +879,9 @@ impl Layer {
             // shared geometry at all, so the mark is that sighting's own seed
             // and nothing else moves. The lock off makes the track stage's mark
             // the sighting's own too, which is the one step both stages share.
-            Handle::Keypoint { .. } => Some(match track.stage {
+            Handle::Keypoint { observation } => Some(match track.stage {
                 Stage::Track(_) if lock => PatchEdit::TranslateToPixel {
-                    observation,
+                    viewpoint: Viewpoint::Observation(observation),
                     pixel: drag.to,
                 },
                 Stage::Track(_) | Stage::Cluster(_) => PatchEdit::Sight {
@@ -652,107 +889,127 @@ impl Layer {
                     pixel: drag.to,
                 },
             }),
-            Handle::Edge { edge, .. } => Some(PatchEdit::ResizeToPixel {
-                observation,
+            Handle::Centre => Some(PatchEdit::TranslateToPixel {
+                viewpoint: Viewpoint::Image(drag.image as u32),
+                pixel: drag.to,
+            }),
+            Handle::Edge { outline, edge } => Some(PatchEdit::ResizeToPixel {
+                viewpoint: outline,
                 edge,
                 pixel: drag.to,
             }),
-            Handle::Corner { .. } => {
-                let sighting = track.observations.get(observation)?;
-                match &track.stage {
-                    Stage::Track(payload) => {
-                        let frame = payload.placement.as_ref()?;
-                        let (camera, pose) = geometry::view_of(image_table, drag.image)?;
-                        let anchored = geometry::anchored_frame(frame, &camera, &pose, sighting);
-                        let angle_rad =
-                            geometry::turn_between(&anchored, &camera, &pose, drag.from, drag.to)?;
-                        Some(PatchEdit::Spin { angle_rad })
-                    }
-                    Stage::Cluster(_) => {
-                        let angle_rad =
-                            geometry::pixel_turn_between(sighting.site()?, drag.from, drag.to)?;
-                        Some(PatchEdit::SpinShape {
-                            observation,
-                            angle_rad,
-                        })
-                    }
+            Handle::Corner { outline, .. } => match (&track.stage, outline) {
+                (Stage::Track(_), _) => {
+                    let (square, camera, pose, _, _) = read_square(outline)?;
+                    let angle_rad =
+                        geometry::turn_between(&square, &camera, &pose, drag.from, drag.to)?;
+                    Some(PatchEdit::Spin { angle_rad })
                 }
+                (Stage::Cluster(_), Viewpoint::Observation(observation)) => {
+                    let sighting = track.observations.get(observation)?;
+                    let angle_rad =
+                        geometry::pixel_turn_between(sighting.site()?, drag.from, drag.to)?;
+                    Some(PatchEdit::SpinShape {
+                        observation,
+                        angle_rad,
+                    })
+                }
+                (Stage::Cluster(_), Viewpoint::Image(_)) => None,
+            },
+            // Both ends are points of the drawn normal's own line, so their
+            // difference along it is the whole gesture, and a segment grabbed
+            // at its tip does not jump the patch out to where the tip was.
+            Handle::Normal { outline } => {
+                let (square, _, _, from, to) = read_square(outline)?;
+                let start = geometry::normal_line_point(&square, from.0, from.1)?;
+                let now = geometry::normal_line_point(&square, to.0, to.1)?;
+                Some(PatchEdit::Translate {
+                    by: [0.0, 0.0, (now - start).dot(&square.normal())],
+                })
+            }
+            Handle::Arrowhead { outline, tilt } => {
+                let (square, _, _, from, to) = read_square(outline)?;
+                let start = geometry::tilt_point(&square, tilt, from.0, from.1)?;
+                let now = geometry::tilt_point(&square, tilt, to.0, to.1)?;
+                let normal = geometry::tilt_normal(&square, tilt, start, now)?;
+                Some(PatchEdit::Tilt {
+                    normal: [normal.x, normal.y, normal.z],
+                })
             }
         }
-    }
-}
-
-/// The ghost outline: the track-stage patch's own square projected into a
-/// photograph the track has no observation in.
-///
-/// An image counts as the track's when it holds an observation of any verdict,
-/// so a `candidate` or an `out` sighting keeps the drawing it has in
-/// [`Layer`] and only an image with none gets the ghost. What is projected is
-/// the patch **itself**, not a frame re-anchored on a keypoint, because there
-/// is no keypoint here to anchor on: the ghost is where the 3D places the
-/// square, which is also where the hollow centre of a member image sits.
-///
-/// There is nothing to draw, and so no ghost, at the cluster stage (no shared
-/// geometry exists to project), at a track stage with no placement yet, and in
-/// a view that cannot see the square: the patch's back face turned toward the
-/// camera ([`OrientedPatch::is_front_facing`]), its plane seen within
-/// [`geometry::MIN_PLANE_ANGLE_DEG`] of edge-on ([`geometry::plane_is_edge_on`]),
-/// or its centre behind the camera or outside the lens model's domain. Past
-/// those tests the boundary is sampled and drawn as a member outline is, a
-/// sample that fails to project breaking the curve rather than being bridged.
-///
-/// It carries no observation, no hit test and no cursor, being display only;
-/// that is why it is its own type rather than an [`Outline`] of a [`Layer`],
-/// whose every outline is a handle.
-struct Ghost {
-    /// The boundary samples in panel coordinates, `None` for one that did not
-    /// project.
-    samples: Vec<Option<Pos2>>,
-}
-
-impl Ghost {
-    /// The ghost for `track` in `img_idx`, or `None` when there is none to
-    /// draw, for the reasons [`Ghost`] lists.
-    fn build(
-        image_table: &ImageTable,
-        img_idx: usize,
-        track: &EditableTrack,
-        to_panel: &impl Fn([f64; 2]) -> Pos2,
-    ) -> Option<Self> {
-        let Stage::Track(payload) = &track.stage else {
-            return None;
-        };
-        let patch = payload.placement.as_ref()?;
-        let (camera, pose) = geometry::view_of(image_table, img_idx)?;
-        if !patch.is_front_facing(&pose)
-            || geometry::plane_is_edge_on(patch, pose.inverse_translation_origin())
-        {
-            return None;
-        }
-        geometry::project(&camera, &pose, patch.center.coords, patch.w)?;
-        let (samples, _) = project_outline(patch, &camera, &pose);
-        Some(Ghost {
-            samples: samples.into_iter().map(|p| p.map(to_panel)).collect(),
-        })
-    }
-
-    /// Paint the ghost: the member outline's stroke at [`GHOST_OPACITY`], in
-    /// the `in` colour, since what it shows is the patch the track's `in`
-    /// sightings settle. No centre mark: in a member image the hollow centre
-    /// is where the projection-offset segments end, and with no sighting there
-    /// is no segment for it to end, while a lone dot would read as a keypoint.
-    fn paint(&self, painter: &egui::Painter) {
-        paint_boundary(
-            painter,
-            &self.samples,
-            Stroke::new(STROKE_WIDTH, ghost_color()),
-        );
     }
 }
 
 /// The ghost outline's colour: the `in` violet at [`GHOST_OPACITY`].
 pub(super) fn ghost_color() -> Color32 {
     verdict_color(Verdict::In).gamma_multiply(GHOST_OPACITY)
+}
+
+/// The square an outline drawn from `viewpoint` shows in a view, at the track
+/// stage: the patch re-anchored on the observation's keypoint, or the patch
+/// itself for an image. `None` at the cluster stage, for a track with no
+/// placement, and for an observation index past the end.
+///
+/// The one place both the drawing and the drag decide it, so the square a
+/// pointer is read against is the square drawn.
+fn square_of(
+    track: &EditableTrack,
+    viewpoint: Viewpoint,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+) -> Option<OrientedPatch> {
+    let Stage::Track(payload) = &track.stage else {
+        return None;
+    };
+    let patch = payload.placement.as_ref()?;
+    Some(match viewpoint {
+        Viewpoint::Observation(observation) => {
+            geometry::anchored_frame(patch, camera, pose, track.observations.get(observation)?)
+        }
+        Viewpoint::Image(_) => patch.clone(),
+    })
+}
+
+/// The normal standing out of `square` as this photograph sees it, or `None`
+/// when there is none to draw.
+///
+/// None for a normal seen end-on from this camera
+/// ([`geometry::normal_is_end_on`]), the bar the 3D viewport refuses its
+/// segment at: seen down its own length the arrow collapses onto the centre and
+/// a pixel of pointer motion along it is an unbounded distance. That also
+/// covers a direction patch, whose normal is its bearing. None as well where
+/// the tail, the tip or a barb falls behind the camera or outside the lens
+/// model's domain, an arrow drawn in part saying nothing about where it points.
+fn normal_arrow(
+    square: &OrientedPatch,
+    viewpoint: Viewpoint,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+    color: Color32,
+    to_panel: &impl Fn([f64; 2]) -> Pos2,
+) -> Option<Arrow> {
+    let eye = pose.inverse_translation_origin();
+    if geometry::normal_is_end_on(square, eye) {
+        return None;
+    }
+    let arrow = geometry::arrow(
+        square.center,
+        square.normal(),
+        geometry::NORMAL_LENGTH * square.half_extent[0],
+        eye,
+        square.u_axis,
+    );
+    let at = |point: nalgebra::Point3<f64>| {
+        geometry::project(camera, pose, point.coords, 1.0).map(to_panel)
+    };
+    Some(Arrow {
+        outline: viewpoint,
+        tail: at(arrow.tail)?,
+        tip: at(arrow.tip)?,
+        barbs: [at(arrow.barbs[0])?, at(arrow.barbs[1])?],
+        color,
+        tilt: geometry::tilt_gesture(square, eye),
+    })
 }
 
 /// Stroke a projected patch boundary, one polyline per run of samples that
@@ -841,20 +1098,13 @@ pub(super) fn draw(
         effective_scale,
         lock,
     ) else {
-        // A photograph the track has no sighting in: the ghost, if there is
-        // one, and nothing else. No handle, cursor or click comes from it, so
-        // the pointer here is the view's.
-        let to_panel = panel_mapping(image_rect, effective_scale);
-        if let Some(ghost) = Ghost::build(image_table, img_idx, shown, &to_panel) {
-            ghost.paint(painter);
-        }
         return;
     };
     layer.paint(painter);
     if let Some(handle) = hovered {
         ui.ctx().set_cursor_icon(match drag {
             Some(drag) if !drag.cancelled => match drag.handle {
-                Handle::Keypoint { .. } => CursorIcon::Grabbing,
+                Handle::Keypoint { .. } | Handle::Centre => CursorIcon::Grabbing,
                 other => layer.cursor(other),
             },
             _ => layer.cursor(handle),

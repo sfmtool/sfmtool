@@ -661,25 +661,42 @@ impl ThresholdChange {
 /// One enum and not a bag of optional fields, because these are two *intents*
 /// and not two spellings of one: a displacement on the patch's own axes is a
 /// statement out in the world, where the normal part is a statement about depth
-/// no photograph could make, and a pixel is a statement in one photograph. A
+/// no sighting could make, and a pixel is a statement in one photograph. A
 /// call carrying both would have no answer, so the wire takes exactly one.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TranslateTarget {
     /// `[u, v, n]` on the patch's own orthonormal axes, in world units.
     By([f64; 3]),
-    /// A pixel of one observation's photograph, which the patch's centre lands
-    /// under.
+    /// A pixel of one photograph, which the centre of the square drawn there
+    /// lands under.
     Pixel {
-        /// The observation whose image the pixel is in.
-        observation: usize,
+        /// The photograph the pixel is in, and so the square it is read
+        /// against.
+        viewpoint: ViewpointSel,
         /// Where, in that image's own px.
         pixel: [f64; 2],
     },
 }
 
+/// Which photograph a pixel form names its pixel in: the wire's spelling of
+/// `sfmtool_core::bench::Viewpoint`.
+///
+/// Either an observation, whose image shows the patch re-anchored on its
+/// keypoint, or a camera image in either of its two spellings, which shows the
+/// patch as it stands: the ghost outline's square in an image the track has no
+/// sighting in. The camera image is resolved against the node when the call
+/// runs, as every other `camera_image` is.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ViewpointSel {
+    /// An observation of the track, by its position in the track's list.
+    Observation(usize),
+    /// A camera image of the reconstruction.
+    CameraImage(CameraImageSel),
+}
+
 /// How `resize_bench_patch` named the size, for the reason
 /// [`TranslateTarget`] is an enum.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ResizeTarget {
     /// A world half-length, with the edge that moves or `None` for both about a
     /// held centre.
@@ -689,10 +706,10 @@ pub(crate) enum ResizeTarget {
         /// Which edge moves, the far one held.
         moved_edge: Option<sfmtool_core::bench::Edge>,
     },
-    /// One edge of the outline drawn at an observation, put under a pixel.
+    /// One edge of the outline drawn in a photograph, put under a pixel.
     Pixel {
-        /// The observation whose outline is being dragged.
-        observation: usize,
+        /// The photograph whose outline is being dragged.
+        viewpoint: ViewpointSel,
         /// Which edge of the patch's square.
         edge: sfmtool_core::bench::Edge,
         /// Where its midpoint should land, in that image's own px.

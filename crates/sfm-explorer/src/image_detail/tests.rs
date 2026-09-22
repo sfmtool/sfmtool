@@ -1571,11 +1571,11 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
     );
 }
 
-/// The ghost is display only: a press on its corner takes no handle, asks for
-/// no cursor, pans the photograph as a press on empty image does, and edits
-/// nothing.
+/// With the lock cleared the ghost is display only: a press on its corner takes
+/// no handle, asks for no cursor, pans the photograph as a press on empty image
+/// does, and edits nothing.
 #[test]
-fn a_press_on_the_ghost_pans_and_edits_nothing() {
+fn with_the_lock_off_a_press_on_the_ghost_pans_and_edits_nothing() {
     let (node, track, unseen) = ghost_fixture();
     let patch = track
         .track()
@@ -1593,7 +1593,7 @@ fn a_press_on_the_ghost_pans_and_edits_nothing() {
         corner,
         &[egui::vec2(30.0, 0.0)],
         false,
-        true,
+        false,
     );
     assert_eq!(dragged.edit, None, "a press on the ghost edited the patch");
     assert_eq!(
@@ -1857,6 +1857,9 @@ struct Dragged {
     /// The bench-coloured segments the last frame before the release painted:
     /// the preview, drawn while the handle is still held.
     held_segments: Vec<([egui::Pos2; 2], egui::Color32)>,
+    /// Every path that same frame painted, with its colour: the outlines and
+    /// the normal's arrow of the preview.
+    held_paths: Vec<(Vec<egui::Pos2>, egui::epaint::ColorMode)>,
 }
 
 /// Drive one press-move-release over the bench layer and report what it
@@ -1926,6 +1929,7 @@ fn gesture(
     let mut edit = None;
     let mut cursor = egui::CursorIcon::Default;
     let mut held_segments = Vec::new();
+    let mut held_paths = Vec::new();
     let release = frames.len() - 1;
     for (index, events) in frames.into_iter().enumerate() {
         let input = egui::RawInput {
@@ -1966,6 +1970,7 @@ fn gesture(
         if index + 1 == release {
             for clipped in &output.shapes {
                 collect_bench_segments(&clipped.shape, &mut held_segments);
+                collect_all_paths(&clipped.shape, &mut held_paths);
             }
         }
         if let Some(from_panel) = response.and_then(|response| response.bench_edit) {
@@ -1977,7 +1982,30 @@ fn gesture(
         cursor,
         panned: detail.pan - was,
         held_segments,
+        held_paths,
     }
+}
+
+fn collect_all_paths(
+    shape: &egui::Shape,
+    out: &mut Vec<(Vec<egui::Pos2>, egui::epaint::ColorMode)>,
+) {
+    match shape {
+        egui::Shape::Path(path) => out.push((path.points.clone(), path.stroke.color.clone())),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_all_paths(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The panel mapping [`gesture`] frames its view with, for a test that reads
+/// the preview it painted: source pixels to panel positions.
+fn gesture_panel(center_on: [f64; 2]) -> impl Fn([f64; 2]) -> egui::Pos2 {
+    let mut detail = ImageDetail::new();
+    framed(&mut detail, &pixels(1920, 1080), center_on)
 }
 
 /// One press-move-release between two places named in **source-image** pixels.
@@ -2209,7 +2237,7 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     // coordinate on the way in and the source pixel is read back out of it, so
     // the round trip is exact only to that type's precision, not to the drag's.
     assert!(
-        matches!(edit, crate::bench::PatchEdit::TranslateToPixel { observation: 0, pixel }
+        matches!(edit, crate::bench::PatchEdit::TranslateToPixel { viewpoint: sfmtool_core::bench::Viewpoint::Observation(0), pixel }
             if (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
         "the drag named something else: {edit:?}",
     );
@@ -2296,7 +2324,7 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         matches!(
             edit,
             crate::bench::PatchEdit::ResizeToPixel {
-                observation: 0,
+                viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
                 edge: sfmtool_core::bench::Edge::PlusU,
                 ..
             }
@@ -2478,7 +2506,7 @@ fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
         matches!(
             edit,
             crate::bench::PatchEdit::ResizeToPixel {
-                observation: 0,
+                viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
                 edge: sfmtool_core::bench::Edge::PlusU,
                 ..
             }
@@ -2598,7 +2626,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
     let drag = super::bench_track::Drag {
         image: 0,
         handle: super::bench_track::Handle::Edge {
-            observation: 0,
+            outline: sfmtool_core::bench::Viewpoint::Observation(0),
             edge: sfmtool_core::bench::Edge::PlusU,
         },
         from: edge,
@@ -2644,7 +2672,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         );
         let corner = super::bench_track::Drag {
             handle: super::bench_track::Handle::Corner {
-                observation: 0,
+                outline: sfmtool_core::bench::Viewpoint::Observation(0),
                 corner: 2,
             },
             from: [seed[0] + 4.0, seed[1] + 4.0],
@@ -2772,5 +2800,627 @@ fn the_max_track_angle_of_a_bearing_is_zero_and_not_the_spread_about_the_origin(
     assert!(
         super::compute_max_track_angle_deg(&place, 2) > 1.0,
         "the fixture's finite track should subtend a real angle"
+    );
+}
+
+// ── The ghost's handles and the normal's ────────────────────────────────
+
+/// `patch` turned so its normal leans `degrees` off the line of sight to
+/// `eye`, about the world's vertical: a view that sees the square and its
+/// normal both, neither edge-on nor end-on.
+fn leaning(
+    patch: &sfmtool_core::patch::cloud::OrientedPatch,
+    eye: nalgebra::Point3<f64>,
+    degrees: f64,
+) -> sfmtool_core::patch::cloud::OrientedPatch {
+    let turn =
+        nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), degrees.to_radians());
+    sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
+        patch.center,
+        turn * (eye - patch.center),
+        nalgebra::Vector3::z(),
+        patch.half_extent,
+    )
+}
+
+/// The first image the track has no observation in.
+fn unseen_image(node: &SceneNode, track: &sfmtool_core::bench::EditableTrack) -> usize {
+    (0..node.edited().image_count())
+        .find(|i| track.observations.iter().all(|o| o.image as usize != *i))
+        .expect("the fixture's track does not span every image")
+}
+
+/// The patch of a track-stage track.
+fn placement(
+    track: &sfmtool_core::bench::EditableTrack,
+) -> sfmtool_core::patch::cloud::OrientedPatch {
+    track
+        .track()
+        .and_then(|payload| payload.placement.clone())
+        .expect("a track-stage track with a patch")
+}
+
+/// The bench state of [`bench_state`] with its patch tilted to lean 30 degrees
+/// off the view of the first image it has no sighting in, and that image: a
+/// ghost whose square and normal that camera both sees.
+///
+/// The tilt goes through the step a drag would push, so the bench holds it as
+/// a version and a gesture after it is one more.
+fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usize) {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let unseen = unseen_image(&state.scene[0], &track);
+    let eye = state.scene[0].edited().base.image_table.images[unseen].camera_center();
+    let want = leaning(&placement(&track), eye, 30.0).normal();
+    state
+        .edit_bench_patch(
+            id,
+            &label,
+            &crate::bench::PatchEdit::Tilt {
+                normal: [want.x, want.y, want.z],
+            },
+        )
+        .expect("a finite normal");
+    let track = on_bench(&state, id, &label);
+    let (_, pose) =
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+            .expect("the demo's images have cameras");
+    let patch = placement(&track);
+    let eye = pose.inverse_translation_origin();
+    assert!(
+        patch.is_front_facing(&pose)
+            && !crate::bench::geometry::plane_is_edge_on(&patch, eye)
+            && !crate::bench::geometry::normal_is_end_on(&patch, eye),
+        "the fixture's ghost should see the square and its normal both",
+    );
+    (state, id, label, unseen)
+}
+
+/// Where a world point lands in one image, in its own px.
+fn pixel_of(node: &SceneNode, image: usize, point: nalgebra::Point3<f64>) -> [f64; 2] {
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, image)
+        .expect("the demo's images have cameras");
+    crate::bench::geometry::project(&camera, &pose, point.coords, 1.0)
+        .expect("in front of the camera")
+}
+
+/// The tip of the normal's arrow standing out of `square`.
+fn tip_of(square: &sfmtool_core::patch::cloud::OrientedPatch) -> nalgebra::Point3<f64> {
+    square.center
+        + square.normal() * (crate::bench::geometry::NORMAL_LENGTH * square.half_extent[0])
+}
+
+/// Panel px per source px for [`layer_at`]: enough that the demo's small
+/// patch spreads its handles well past one another's reach.
+const LAYER_SCALE: f32 = 64.0;
+
+/// The layer for `image` at [`LAYER_SCALE`], with the image's origin at the
+/// panel's, so [`pos`] is where a source pixel lands.
+fn layer_at(
+    node: &SceneNode,
+    image: usize,
+    track: &sfmtool_core::bench::EditableTrack,
+    lock: bool,
+) -> Option<super::bench_track::Layer> {
+    super::bench_track::Layer::build(
+        &node.edited().base.image_table,
+        image,
+        track,
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1e6, 1e6)),
+        LAYER_SCALE,
+        lock,
+    )
+}
+
+fn pos(pixel: [f64; 2]) -> egui::Pos2 {
+    egui::pos2(pixel[0] as f32 * LAYER_SCALE, pixel[1] as f32 * LAYER_SCALE)
+}
+
+/// Locked, the ghost offers the patch-wide handles, each read against the
+/// patch as it stands in this image: its centre, an edge, a corner, and the
+/// normal's segment and arrowhead. Cleared, it offers none of them.
+#[test]
+fn the_locked_ghost_offers_the_patch_handles_and_the_unlocked_one_none() {
+    use super::bench_track::Handle;
+    use sfmtool_core::bench::{Edge, Viewpoint};
+
+    let (state, id, label, unseen) = ghost_state();
+    let node = &state.scene[0];
+    let track = on_bench(&state, id, &label);
+    let patch = placement(&track);
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+        .expect("the demo's images have cameras");
+    let at = |s, t| pos(patch_pixel(&patch, &camera, &pose, s, t));
+    let here = Viewpoint::Image(unseen as u32);
+
+    let locked = layer_at(node, unseen, &track, true).expect("a ghost");
+    assert_eq!(locked.hit(at(0.0, 0.0)), Some(Handle::Centre));
+    assert_eq!(
+        locked.hit(at(1.0, 1.0)),
+        Some(Handle::Corner {
+            outline: here,
+            corner: 2
+        })
+    );
+    assert!(
+        matches!(
+            locked.hit(at(1.0, 0.0)),
+            Some(Handle::Edge { outline, edge: Edge::PlusU }) if outline == here
+        ),
+        "the +u edge's midpoint is not its handle: {:?}",
+        locked.hit(at(1.0, 0.0)),
+    );
+    let tip = pos(pixel_of(node, unseen, tip_of(&patch)));
+    assert!(
+        matches!(locked.hit(tip), Some(Handle::Arrowhead { outline, .. }) if outline == here),
+        "the arrowhead is not a handle: {:?}",
+        locked.hit(tip),
+    );
+
+    let unlocked = layer_at(node, unseen, &track, false).expect("a ghost, drawn");
+    for place in [at(0.0, 0.0), at(1.0, 1.0), at(1.0, 0.0), tip] {
+        assert_eq!(
+            unlocked.hit(place),
+            None,
+            "the unlocked ghost offered a handle at {place:?}"
+        );
+    }
+
+    // The cursors are the member layer's.
+    let centre = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    let dragged = gesture(node, unseen, &track, centre, centre, &[], false, true);
+    assert_eq!(dragged.cursor, egui::CursorIcon::Move);
+}
+
+/// The ghost draws a hollow centre mark when it offers handles, so the dot has
+/// something to grab, and keeps the ghost opacity whether or not it does.
+#[test]
+fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
+    let (state, id, label, unseen) = ghost_state();
+    let node = &state.scene[0];
+    let track = on_bench(&state, id, &label);
+    let ghost = super::bench_track::ghost_color();
+    let circles = |lock| {
+        bench_frame(
+            node,
+            unseen,
+            BenchMenu {
+                busy: None,
+                active_track: Some(&track),
+                lock,
+            },
+        )
+        .iter()
+        .filter(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Circle(circle) if circle.stroke.color == ghost)
+        })
+        .count()
+    };
+    assert_eq!(circles(true), 1, "the locked ghost has one centre mark");
+    assert_eq!(circles(false), 0, "the unlocked ghost has no centre mark");
+    for lock in [true, false] {
+        let menu = BenchMenu {
+            busy: None,
+            active_track: Some(&track),
+            lock,
+        };
+        assert!(
+            ghost_shapes(node, unseen, menu)
+                .iter()
+                .any(|path| path.len() > 4),
+            "lock {lock}: the ghost outline is not drawn at the ghost colour",
+        );
+    }
+}
+
+/// A drag of the ghost's centre slides the patch until its own centre sits
+/// under the release point in this image, as one version.
+#[test]
+fn dragging_the_ghost_centre_slides_the_patch_under_the_pointer() {
+    let (mut state, id, label, unseen) = ghost_state();
+    let track = on_bench(&state, id, &label);
+    let patch = placement(&track);
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+            .expect("the demo's images have cameras");
+    let was = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    let to = [was[0] + 1.5, was[1] + 2.0];
+    let edit = bench_drag(&state.scene[0], unseen, &track, was, was, to, false)
+        .edit
+        .expect("the ghost's centre was dragged");
+    assert!(
+        matches!(edit, crate::bench::PatchEdit::TranslateToPixel {
+            viewpoint: sfmtool_core::bench::Viewpoint::Image(image), pixel }
+            if image as usize == unseen
+                && (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
+        "the drag named something else: {edit:?}",
+    );
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel the ray reaches");
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before + 1,
+        "one gesture, one version"
+    );
+    let moved = placement(&on_bench(&state, id, &label));
+    let landed = patch_pixel(&moved, &camera, &pose, 0.0, 0.0);
+    assert!(
+        (landed[0] - to[0]).abs() < 1e-3 && (landed[1] - to[1]).abs() < 1e-3,
+        "the patch's centre should land on {to:?}, it landed on {landed:?}",
+    );
+    assert!(
+        (moved.normal() - patch.normal()).norm() < 1e-12,
+        "a slide keeps the normal"
+    );
+}
+
+/// A drag of the ghost's edge resizes the patch with the far edge held, both
+/// read in this image, as one version; a drag of its corner spins it about its
+/// normal.
+#[test]
+fn dragging_the_ghost_edge_and_corner_resizes_and_spins_the_patch() {
+    let (mut state, id, label, unseen) = ghost_state();
+    let track = on_bench(&state, id, &label);
+    let patch = placement(&track);
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+            .expect("the demo's images have cameras");
+    let centre = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&patch, &camera, &pose, 1.0, 0.0);
+    let to = patch_pixel(&patch, &camera, &pose, 1.6, 0.0);
+    let far = patch_pixel(&patch, &camera, &pose, -1.0, 0.0);
+
+    let dragged = bench_drag(&state.scene[0], unseen, &track, centre, from, to, false);
+    let edit = dragged.edit.expect("the ghost's edge was dragged");
+    assert!(
+        matches!(edit, crate::bench::PatchEdit::ResizeToPixel {
+            viewpoint: sfmtool_core::bench::Viewpoint::Image(image),
+            edge: sfmtool_core::bench::Edge::PlusU, .. } if image as usize == unseen),
+        "the drag named something else: {edit:?}",
+    );
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel the ray reaches");
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before + 1,
+        "one gesture, one version"
+    );
+    let grown = placement(&on_bench(&state, id, &label));
+    let landed = patch_pixel(&grown, &camera, &pose, 1.0, 0.0);
+    let held = patch_pixel(&grown, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (landed[0] - to[0]).abs() < 1e-2 && (landed[1] - to[1]).abs() < 1e-2,
+        "the dragged edge should land on {to:?}, it landed on {landed:?}",
+    );
+    assert!(
+        (held[0] - far[0]).abs() < 1e-2 && (held[1] - far[1]).abs() < 1e-2,
+        "the far edge moved from {far:?} to {held:?}",
+    );
+    // What was drawn while the edge was held is the square the release left.
+    let panel = gesture_panel(centre);
+    let ghost = egui::epaint::ColorMode::Solid(super::bench_track::ghost_color());
+    let outline = dragged
+        .held_paths
+        .iter()
+        .filter(|(_, color)| *color == ghost)
+        .map(|(points, _)| points)
+        .max_by_key(|points| points.len())
+        .expect("the preview drew the ghost");
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let expected = panel(patch_pixel(&grown, &camera, &pose, s, t));
+        let nearest = outline
+            .iter()
+            .map(|point| (*point - expected).length())
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest < 0.05,
+            "the preview misses the released corner ({s}, {t}) by {nearest}"
+        );
+    }
+
+    let track = on_bench(&state, id, &label);
+    let patch = placement(&track);
+    let centre = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&patch, &camera, &pose, 1.0, 1.0);
+    let to = patch_pixel(&patch, &camera, &pose, -1.0, 1.0);
+    let edit = bench_drag(&state.scene[0], unseen, &track, centre, from, to, false)
+        .edit
+        .expect("the ghost's corner was dragged");
+    let crate::bench::PatchEdit::Spin { angle_rad } = edit else {
+        panic!("the drag named something else: {edit:?}");
+    };
+    assert!(
+        (angle_rad.to_degrees() - 90.0).abs() < 0.5,
+        "a corner dragged onto its neighbour is a quarter turn, not {}",
+        angle_rad.to_degrees(),
+    );
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a finite angle");
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before + 1,
+        "one gesture, one version"
+    );
+}
+
+/// The normal is drawn out of the outline's centre in a member image (the
+/// sighting's, the outline being anchored there) and out of the patch's own
+/// centre in the ghost, as a segment and a two-barbed head.
+#[test]
+fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
+    let (state, id, label, unseen) = ghost_state();
+    let node = &state.scene[0];
+    let track = on_bench(&state, id, &label);
+    let menu = |lock| BenchMenu {
+        busy: None,
+        active_track: Some(&track),
+        lock,
+    };
+    // The segment is the one two-point path the layer draws.
+    let segments = |image, lock, color: egui::Color32| -> Vec<Vec<egui::Pos2>> {
+        let mut paths = Vec::new();
+        for clipped in &bench_frame(node, image, menu(lock)) {
+            collect_paths_in(
+                &clipped.shape,
+                &egui::epaint::ColorMode::Solid(color),
+                &mut paths,
+            );
+        }
+        paths.into_iter().filter(|path| path.len() <= 3).collect()
+    };
+    let photograph = pixels(640, 480);
+
+    let member = track.observations[0].image as usize;
+    let (square, _, _) = outline_at(node, &track, 0);
+    let color = crate::bench::verdict_color(track.observations[0].verdict);
+    for lock in [true, false] {
+        let arrow = segments(member, lock, color);
+        let segment = arrow
+            .iter()
+            .find(|path| path.len() == 2)
+            .unwrap_or_else(|| panic!("lock {lock}: no normal in the member image: {arrow:?}"));
+        let tail = to_panel(&photograph, pixel_of(node, member, square.center));
+        let tip = to_panel(&photograph, pixel_of(node, member, tip_of(&square)));
+        assert!(
+            (segment[0] - tail).length() < 0.01,
+            "the normal leaves {:?}, not {tail:?}",
+            segment[0]
+        );
+        assert!(
+            (segment[1] - tip).length() < 0.01,
+            "the normal ends at {:?}, not {tip:?}",
+            segment[1]
+        );
+        assert!(arrow.iter().any(|path| path.len() == 3), "no arrowhead");
+    }
+
+    let ghost = super::bench_track::ghost_color();
+    let arrow = segments(unseen, true, ghost);
+    let patch = placement(&track);
+    let segment = arrow
+        .iter()
+        .find(|path| path.len() == 2)
+        .expect("no normal in the locked ghost");
+    let tail = to_panel(&photograph, pixel_of(node, unseen, patch.center));
+    assert!(
+        (segment[0] - tail).length() < 0.01,
+        "the ghost's normal leaves {:?}",
+        segment[0]
+    );
+    assert!(
+        segments(unseen, false, ghost).is_empty(),
+        "the unlocked ghost drew a normal",
+    );
+}
+
+/// Seen down its own length the normal is not drawn and not offered, the bar
+/// the 3D viewport refuses its segment at; a cluster has no normal at all; and
+/// with the lock cleared a member image draws it and offers neither handle.
+#[test]
+fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unlocked() {
+    use super::bench_track::Handle;
+
+    let (node, track) = bench_track_fixture();
+    let member = track.observations[0].image as usize;
+    let eye = node.edited().base.image_table.images[member].camera_center();
+    let end_on = with_placement(&track, |placement| {
+        let patch = placement.as_mut().expect("the fixture has a placement");
+        *patch = leaning(patch, eye, 0.0);
+    });
+    let layer = layer_at(&node, member, &end_on, true).expect("a member image");
+    let (square, _, _) = outline_at(&node, &end_on, 0);
+    let tip = pos(pixel_of(&node, member, tip_of(&square)));
+    assert!(
+        !matches!(
+            layer.hit(tip),
+            Some(Handle::Arrowhead { .. } | Handle::Normal { .. })
+        ),
+        "an end-on normal took a press",
+    );
+    let lines = |track: &sfmtool_core::bench::EditableTrack| {
+        let paths = bench_shapes(
+            &node,
+            member,
+            BenchMenu {
+                busy: None,
+                active_track: Some(track),
+                lock: true,
+            },
+        );
+        paths.into_iter().filter(|path| path.len() == 2).count()
+    };
+    assert_eq!(lines(&end_on), 0, "an end-on normal was drawn");
+
+    // Leaning well off the view, the same image draws it and offers it, and
+    // with the lock cleared it still draws it and offers nothing.
+    let oblique = with_placement(&track, |placement| {
+        let patch = placement.as_mut().expect("the fixture has a placement");
+        *patch = leaning(patch, eye, 35.0);
+    });
+    assert_eq!(lines(&oblique), 1, "an oblique normal was not drawn");
+    let (square, _, _) = outline_at(&node, &oblique, 0);
+    let tip_px = pixel_of(&node, member, tip_of(&square));
+    // Near the tip, where the segment has left the square: inside it an edge
+    // it crosses is tried first and takes the press.
+    let middle_px = {
+        let a = pixel_of(&node, member, square.center);
+        [
+            a[0] * 0.08 + tip_px[0] * 0.92,
+            a[1] * 0.08 + tip_px[1] * 0.92,
+        ]
+    };
+    let (tip, middle) = (pos(tip_px), pos(middle_px));
+    let locked = layer_at(&node, member, &oblique, true).expect("a member image");
+    assert!(
+        matches!(locked.hit(tip), Some(Handle::Arrowhead { .. })),
+        "{:?}",
+        locked.hit(tip)
+    );
+    assert!(
+        matches!(locked.hit(middle), Some(Handle::Normal { .. })),
+        "{:?}",
+        locked.hit(middle)
+    );
+    let unlocked = layer_at(&node, member, &oblique, false).expect("a member image");
+    for place in [tip, middle] {
+        assert!(
+            !matches!(
+                unlocked.hit(place),
+                Some(Handle::Arrowhead { .. } | Handle::Normal { .. })
+            ),
+            "an unlocked normal took a press at {place:?}",
+        );
+    }
+    let drag = super::bench_track::Drag {
+        image: member,
+        handle: Handle::Normal {
+            outline: sfmtool_core::bench::Viewpoint::Observation(0),
+        },
+        from: middle_px,
+        to: tip_px,
+        moved: true,
+        cancelled: false,
+    };
+    let table = &node.edited().base.image_table;
+    assert!(super::bench_track::Layer::edit(table, &oblique, &drag, false).is_none());
+    assert!(super::bench_track::Layer::edit(table, &oblique, &drag, true).is_some());
+
+    // The cluster stage has no shared geometry, so no normal.
+    use sfmtool_core::bench::{create_cluster, Bench, ClusterSeed};
+    let (bench, report) = create_cluster(
+        &Bench::new(),
+        &ClusterSeed::from_pixel(0, "image_0", [320.0, 240.0], 24.0),
+    )
+    .expect("a usable seed");
+    let cluster = (**bench.track(&report.label).expect("just put on")).clone();
+    assert_eq!(lines(&cluster), 0, "a cluster drew a normal");
+}
+
+/// Dragging the arrowhead tilts the patch, and the new normal leans toward
+/// the pointer: its tip, projected, is nearer the release point than the old
+/// one was. What was drawn while it was held is the arrow the release left.
+/// Dragging the segment toward the tip pushes the patch out along its normal.
+#[test]
+fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_the_normal() {
+    let (mut state, id, label, _) = ghost_state();
+    let track = on_bench(&state, id, &label);
+    let member = track.observations[0].image as usize;
+    let node = &state.scene[0];
+    let (square, _, pose) = outline_at(node, &track, 0);
+    let eye = pose.inverse_translation_origin();
+    assert!(
+        !crate::bench::geometry::normal_is_end_on(&square, eye),
+        "the fixture's normal should be seen from the side in the member image",
+    );
+    let centre = pixel_of(node, member, square.center);
+    let tip = pixel_of(node, member, tip_of(&square));
+    // Across the arrow on screen, a sixth of its length.
+    let along = [tip[0] - centre[0], tip[1] - centre[1]];
+    let to = [tip[0] - along[1] / 6.0, tip[1] + along[0] / 6.0];
+
+    let dragged = bench_drag(node, member, &track, centre, tip, to, false);
+    let edit = dragged.edit.expect("the arrowhead was dragged");
+    let crate::bench::PatchEdit::Tilt { normal } = edit else {
+        panic!("the drag named something else: {edit:?}");
+    };
+    let turned = nalgebra::Vector3::from(normal).normalize();
+    assert!(
+        turned.dot(&square.normal()) < 1.0 - 1e-9,
+        "the normal did not turn"
+    );
+    let new_tip = {
+        let length = crate::bench::geometry::NORMAL_LENGTH * square.half_extent[0];
+        pixel_of(node, member, square.center + turned * length)
+    };
+    let distance = |a: [f64; 2]| (a[0] - to[0]).hypot(a[1] - to[1]);
+    assert!(
+        distance(new_tip) < distance(tip),
+        "the tip moved away from the pointer: {tip:?} -> {new_tip:?}, pointer at {to:?}",
+    );
+
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a finite normal");
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before + 1,
+        "one gesture, one version"
+    );
+    let tilted = on_bench(&state, id, &label);
+    let node = &state.scene[0];
+    // The preview's arrow is the released track's arrow.
+    let (released, _, _) = outline_at(node, &tilted, 0);
+    let panel = gesture_panel(centre);
+    let expected = [
+        panel(pixel_of(node, member, released.center)),
+        panel(pixel_of(node, member, tip_of(&released))),
+    ];
+    let held = dragged
+        .held_paths
+        .iter()
+        .find(|(points, _)| points.len() == 2)
+        .map(|(points, _)| points.clone())
+        .expect("the preview drew the normal");
+    for (drawn, expected) in held.iter().zip(expected) {
+        assert!(
+            (*drawn - expected).length() < 0.05,
+            "the preview drew the arrow at {drawn:?}, the release put it at {expected:?}",
+        );
+    }
+
+    // The segment, grabbed part way along and pulled toward the tip.
+    let (square, _, _) = outline_at(node, &tilted, 0);
+    let centre = pixel_of(node, member, square.center);
+    let tip = pixel_of(node, member, tip_of(&square));
+    let from = [
+        centre[0] * 0.5 + tip[0] * 0.5,
+        centre[1] * 0.5 + tip[1] * 0.5,
+    ];
+    let to = [
+        centre[0] * 0.3 + tip[0] * 0.7,
+        centre[1] * 0.3 + tip[1] * 0.7,
+    ];
+    let edit = bench_drag(node, member, &tilted, centre, from, to, false)
+        .edit
+        .expect("the segment was dragged");
+    let crate::bench::PatchEdit::Translate { by } = edit else {
+        panic!("the drag named something else: {edit:?}");
+    };
+    assert!(by[0] == 0.0 && by[1] == 0.0 && by[2] > 0.0, "{by:?}");
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a finite displacement");
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before + 1,
+        "one gesture, one version"
     );
 }
