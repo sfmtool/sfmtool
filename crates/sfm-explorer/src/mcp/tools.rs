@@ -1173,7 +1173,8 @@ fn build_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "translate_bench_patch",
             description: "Move a bench track's patch -- the dot drag on the Image Detail panel's \
-                          bench layer, and the dot and normal-segment drags in the 3D viewer. A \
+                          bench layer with Track View's Lock ticked, and the dot and \
+                          normal-segment drags in the 3D viewer. A \
                           track-stage track has one patch and every observation is a view of it, \
                           so this moves the patch and not a sighting: the centre moves, the axes \
                           and the size are kept, and every observation's keypoint is carried by \
@@ -1225,9 +1226,13 @@ fn build_catalog() -> Vec<ToolSpec> {
                           at the old pixel are dropped, because none of them says anything about \
                           the new one, and the observation is pinned: a sighting you placed is \
                           one you have ruled on, so the thresholds leave its verdict alone. The \
-                          panel's dot drag is this only at the cluster stage; at the track stage \
-                          it moves the whole patch (translate_bench_patch), because there the \
-                          patch is the thing every sighting is a view of.",
+                          panel's dot drag is this at the cluster stage, and at the track stage \
+                          with Track View's Lock cleared: the fix for one keypoint that settled on \
+                          the wrong detail. With the Lock ticked the track stage's dot moves the \
+                          whole patch instead (translate_bench_patch), because there the patch is \
+                          the thing every sighting is a view of. The Lock is the panel's own \
+                          setting and the wire has no copy of it: which of the two tools you call \
+                          is the choice it makes.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],

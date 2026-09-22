@@ -50,7 +50,8 @@ SIFT index a search queries is in
 /// of a patch, so the variants are the verbs alone.
 pub(crate) enum PatchEdit {
     /// Slide the track-stage patch until its centre sits under this pixel of
-    /// that observation's image. Every sighting follows.
+    /// that observation's image. Every sighting follows. The track stage's dot
+    /// while Track View's Lock is ticked.
     TranslateToPixel { observation: usize, pixel: [f64; 2] },
     /// Move the track-stage patch by this displacement on its own orthonormal
     /// axes `[u, v, n]`, in world units. Every sighting follows.
@@ -70,7 +71,8 @@ pub(crate) enum PatchEdit {
     /// normal, by the least rotation.
     Tilt { normal: [f64; 3] },
     /// Put one observation's own sighting at this pixel, and leave every other
-    /// where it is. The cluster stage's dot.
+    /// where it is. The cluster stage's dot, and the track stage's with Track
+    /// View's Lock cleared.
     Sight { observation: usize, pixel: [f64; 2] },
     /// Give one cluster-stage sighting this affine shape outright.
     Shape { observation: usize, shape: [[f64; 2]; 2] },
@@ -691,7 +693,10 @@ segment and the arrowhead at the end of it. A track at infinity refuses a `by`
 with a normal part and a tilt, a direction patch's normal being its own bearing,
 and carries a purely tangential `by` like any other.
 `sight_bench_observation` is the one that moves a single sighting: the cluster
-stage's dot, and a script that means one keypoint.
+stage's dot, the track stage's dot with Track View's *Lock* cleared, and a
+script that means one keypoint. The lock is the panel's setting and the wire
+carries no copy of it, because a tool call already says which of the two it
+means by being one tool or the other.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -875,7 +880,13 @@ handle, while the same motion from a press on empty photograph pans as it always
 did; hovering an edge asks for the resize cursor its orientation on screen
 names, a corner for the resize cursor along the arc it spins on, and a dot for
 `Move`; a drag of the dot publishes a move that `AppState` turns into exactly
-one version whose label names it; a drag of an edge resizes so that the outline's dragged edge
+one version whose label names it; with *Lock* cleared the same drag publishes a
+`Sight` of that one observation, whose version moves its keypoint, pins it and
+leaves the patch and every other sighting as they were, while a press on an edge
+or a corner pans and edits nothing (and the cluster stage's dot and corner are
+that sighting's own either way); the segment the held dot draws to the patch's
+projection is none when locked and the length of the drag when not, which is
+what each release then leaves; a drag of an edge resizes so that the outline's dragged edge
 reprojects under the release point while the far edge holds; a drag of a corner
 onto its neighbour is a quarter turn and one version; Escape leaves no edit
 behind; and a drag that ends where it started pushes no version. The panel is

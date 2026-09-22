@@ -346,13 +346,14 @@ pub(super) fn translate_bench_patch(
 
 /// `sight_bench_observation`: one sighting put where the caller says.
 ///
-/// **One** sighting, which at the track stage is the step the panel's dot no
-/// longer makes: dragging the dot there moves the patch
-/// (`translate_bench_patch`), because a patch every observation is a view of is
-/// the thing that gesture is about. This is what remains for a caller that
-/// really means one keypoint -- the cluster stage's dot, where there is no
-/// shared geometry, and a script placing one sighting of a track-stage track by
-/// hand. Either way it writes that observation alone and pins it, because a
+/// **One** sighting: the cluster stage's dot, where there is no shared
+/// geometry, and the track stage's dot with Track View's *Lock* cleared, which
+/// is how one keypoint that settled on the wrong detail is put right. With the
+/// lock ticked the track stage's dot moves the patch instead
+/// (`translate_bench_patch`), because a patch every observation is a view of
+/// is the thing that gesture is about. The lock is the panel's setting and the
+/// wire carries no copy of it: a caller says which it means by the tool it
+/// calls. Either way this writes that observation alone and pins it, because a
 /// sighting a person placed is one they have ruled on, and drops the
 /// measurements read at the old pixel.
 pub(super) fn sight_bench_observation(

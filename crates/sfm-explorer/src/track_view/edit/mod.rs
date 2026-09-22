@@ -17,12 +17,12 @@
 //! `&AppState` while it draws, and a step needs it mutably.
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
-//! the panel owns is the slider positions, the row selection a split reads, the
-//! tiles it has rendered, and the painting the sliders produce -- the last two
-//! cached against the track's own `Arc` rather than recomputed per frame,
-//! because the painting is `apply_thresholds` run over a copy (and a copy of a
-//! track carries its consensus bitmap) and a tile is a warp of a
-//! full-resolution photograph.
+//! the panel owns is the slider positions, the *Lock* box Image Detail reads a
+//! dot drag by, the row selection a split reads, the tiles it has rendered,
+//! and the painting the sliders produce. The last two are cached against the
+//! track's own `Arc` rather than recomputed per frame, because the painting is
+//! `apply_thresholds` run over a copy (and a copy of a track carries its
+//! consensus bitmap) and a tile is a warp of a full-resolution photograph.
 
 use std::collections::HashMap;
 
@@ -172,6 +172,17 @@ pub struct TrackEdit {
     /// rather than a bar the painting judges by, so moving it repaints nothing
     /// and changes no number until the next reading runs.
     search_px: f64,
+    /// Whether a dot drag in Image Detail at the track stage moves the patch,
+    /// every sighting following (`true`, the default), or that one sighting's
+    /// keypoint alone (`false`). The *Lock* checkbox.
+    ///
+    /// A tool setting and not bench state: it says what the next gesture will
+    /// mean rather than anything about the track, so toggling it is no step,
+    /// pushes no version and is not undone by Undo. It lives here for the
+    /// session and is not saved with the layout, because a lock left off by
+    /// the last session would turn the next one's first drag into an edit of
+    /// one sighting nobody asked for.
+    lock: bool,
     /// Tracked vertical scroll offset.
     scroll_offset_y: Option<f32>,
 }
@@ -199,6 +210,7 @@ impl TrackEdit {
             rows: Vec::new(),
             build_refusal: None,
             search_px: crate::bench::default_search_px(),
+            lock: true,
             scroll_offset_y: None,
         }
     }
@@ -219,6 +231,17 @@ impl TrackEdit {
     #[cfg(test)]
     pub(crate) fn search_px(&self) -> f64 {
         self.search_px
+    }
+
+    /// Whether the *Lock* box is ticked: a track-stage dot drag in Image Detail
+    /// moves the patch when it is, and one sighting's keypoint when it is not.
+    ///
+    /// The box's own state, whatever stage the active track is in. At the
+    /// cluster stage the box is greyed and every handle is already one
+    /// sighting's, so what it holds there is only what the next track stage
+    /// will be edited with.
+    pub(crate) fn lock(&self) -> bool {
+        self.lock
     }
 
     /// Select one observation row from outside the panel.
@@ -403,8 +426,33 @@ impl TrackEdit {
             }
         });
         ui.horizontal_wrapped(|ui| {
+            self.show_lock(ui, track);
             self.show_rename(ui, label, busy, response);
         });
+    }
+
+    /// The *Lock* box: whether dragging a sighting's dot in Image Detail moves
+    /// the patch or that sighting alone.
+    ///
+    /// Never greyed by a busy node, because toggling it is no step: it changes
+    /// what the next drag will mean, and a drag on a busy node is refused on
+    /// its own. Greyed at the cluster stage instead, where there is nothing
+    /// for it to decide: a cluster has no shared geometry, so every handle is
+    /// already one sighting's own.
+    fn show_lock(&mut self, ui: &mut egui::Ui, track: &EditableTrack) {
+        let at_cluster = track.stage_kind() == StageKind::Cluster;
+        let checkbox = ui.add_enabled(!at_cluster, egui::Checkbox::new(&mut self.lock, LOCK_LABEL));
+        if at_cluster {
+            checkbox.on_disabled_hover_text(LOCK_AT_CLUSTER);
+        } else if self.lock {
+            checkbox.on_hover_text(
+                "Locked: dragging a sighting's dot in Image Detail slides the patch, and                  every sighting follows it. Clear to move one keypoint on its own",
+            );
+        } else {
+            checkbox.on_hover_text(
+                "Unlocked: dragging a sighting's dot in Image Detail moves that keypoint                  alone, and the patch and every other sighting stay where they are. The                  outline's edges and corners take no drag while unlocked, a sighting                  having no size or turn of its own",
+            );
+        }
     }
 
     /// *Rename*, which opens a field in place and commits on Enter.
@@ -598,6 +646,13 @@ impl TrackEdit {
         self.tiles_for = Some(key);
     }
 }
+
+/// The edit-mode checkbox that says whether Image Detail's dot drag moves the
+/// patch or one sighting, in one constant so the tests aim at the label drawn.
+pub(crate) const LOCK_LABEL: &str = "Lock";
+
+/// Why *Lock* is greyed at the cluster stage.
+pub(crate) const LOCK_AT_CLUSTER: &str = "A cluster has no shared patch: every sighting is                                           already moved on its own, locked or not.";
 
 /// The observation row's context-menu entry, in one constant, as the Image
 /// Detail menu's entries are: the label is quoted in a refusal and read back by

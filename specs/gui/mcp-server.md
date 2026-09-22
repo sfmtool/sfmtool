@@ -158,7 +158,7 @@ write, and one writes a file.
 | `duplicate_bench_item` | write | Put a copy of one item on the bench beside it |
 | `add_bench_track_observation` | write | Add a candidate observation of a bench track, in one camera image |
 | `translate_bench_patch` | write | Move the patch, on its own axes or to a pixel; every sighting follows |
-| `sight_bench_observation` | write | Put one observation's own sighting at a pixel, by hand |
+| `sight_bench_observation` | write | Put one observation's own sighting at a pixel, by hand; the Image Detail dot with Track View's Lock cleared |
 | `shape_bench_observation` | write | Give one cluster sighting its affine shape outright |
 | `resize_bench_patch` | write | Size the patch, by a world half-length or by an edge under a pixel |
 | `resize_bench_shape` | write | Put one edge of a cluster sighting's parallelogram under a pixel |
@@ -2301,8 +2301,10 @@ steps. It is what makes the gestures worth having: a patch can be slid, turned,
 sized and aimed until it covers the piece of surface a person means. None of
 them pins anything, because where the patch is says nothing about whether a
 sighting belongs to it. `sight_bench_observation` is the one that moves a single
-sighting: the cluster stage's dot, where there is no shared geometry, and a
-script placing one keypoint of a track-stage track by hand. It writes that
+sighting: the cluster stage's dot, where there is no shared geometry, the track
+stage's dot with Track View's *Lock* cleared, and a script placing one keypoint
+of a track-stage track by hand. The lock itself is not on the wire; the tool a
+caller picks is the choice it makes. It writes that
 observation alone, pins it, and drops the measurements read at the old pixel.
 
 **`duplicate_bench_item` is how a second patch over neighbouring ground is

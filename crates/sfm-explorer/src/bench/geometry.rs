@@ -55,6 +55,7 @@ const MIN_OFFSET: f64 = 1e-12;
 pub(crate) enum PatchEdit {
     /// Slide the track-stage patch across its own plane until its centre sits
     /// under this pixel of that observation's image. Every sighting follows.
+    /// The track stage's dot while Track View's *Lock* is ticked.
     TranslateToPixel {
         /// The observation whose image the pixel is in.
         observation: usize,
@@ -120,7 +121,8 @@ pub(crate) enum PatchEdit {
     },
     /// Put one observation's own sighting at this pixel of its own image, and
     /// leave every other where it is. The cluster stage's dot, where there is
-    /// no shared geometry to move.
+    /// no shared geometry to move, and the track stage's with Track View's
+    /// *Lock* cleared, where the patch stays put and one keypoint moves.
     Sight {
         /// The observation, by its position in the track's list.
         observation: usize,

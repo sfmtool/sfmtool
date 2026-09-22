@@ -561,6 +561,7 @@ fn starting_a_cluster_needs_only_a_pixel_and_a_node_that_is_not_busy() {
         start_cluster_entry(BenchMenu {
             busy: Some(BUSY),
             active_track: None,
+            lock: true,
         }),
         Err(BUSY.to_string()),
     );
@@ -584,6 +585,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
         add_bench_observation_entry(BenchMenu {
             busy: None,
             active_track: Some(&track),
+            lock: true,
         }),
         Ok(()),
     );
@@ -591,6 +593,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
         add_bench_observation_entry(BenchMenu {
             busy: Some(BUSY),
             active_track: Some(&track),
+            lock: true,
         }),
         Err(BUSY.to_string()),
     );
@@ -605,6 +608,7 @@ fn the_context_menu_offers_the_two_bench_entries() {
     let texts = context_menu_texts(BenchMenu {
         busy: None,
         active_track: Some(&track),
+        lock: true,
     });
     for label in [START_CLUSTER_LABEL, ADD_BENCH_OBSERVATION_LABEL] {
         assert!(
@@ -745,6 +749,7 @@ fn edit_on_bench_needs_a_feature_with_a_point_behind_it() {
             BenchMenu {
                 busy: Some(BUSY),
                 active_track: None,
+                lock: true,
             },
             Some(FeatureHit::Point(7)),
         ),
@@ -1133,6 +1138,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         BenchMenu {
             busy: None,
             active_track: Some(&track),
+            lock: true,
         },
     );
     assert!(!paths.is_empty(), "the layer drew nothing");
@@ -1252,6 +1258,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
             BenchMenu {
                 busy: None,
                 active_track: Some(&judged),
+                lock: true,
             },
         );
         assert_eq!(
@@ -1294,6 +1301,7 @@ fn the_bench_layer_draws_nothing_without_a_track_or_outside_it() {
             BenchMenu {
                 busy: None,
                 active_track: Some(&track),
+                lock: true,
             },
         )
         .is_empty(),
@@ -1327,6 +1335,7 @@ fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
         BenchMenu {
             busy: None,
             active_track: Some(&track),
+            lock: true,
         },
     );
     let outline = paths
@@ -1546,6 +1555,9 @@ struct Dragged {
     /// claim a handle drag makes: the photograph holds still for the whole of
     /// it.
     panned: egui::Vec2,
+    /// The bench-coloured segments the last frame before the release painted:
+    /// the preview, drawn while the handle is still held.
+    held_segments: Vec<([egui::Pos2; 2], egui::Color32)>,
 }
 
 /// Drive one press-move-release over the bench layer and report what it
@@ -1561,6 +1573,9 @@ struct Dragged {
 /// The frames are the gesture: one to load the photograph, one hovering (which
 /// is where the cursor is read), one that presses, one per step, and one that
 /// releases.
+///
+/// `lock` is Track View's *Lock*, handed to the panel as the dock hands it.
+#[allow(clippy::too_many_arguments)]
 fn gesture(
     node: &SceneNode,
     image_index: usize,
@@ -1569,6 +1584,7 @@ fn gesture(
     press: [f64; 2],
     steps: &[egui::Vec2],
     escape: bool,
+    lock: bool,
 ) -> Dragged {
     let image = pixels(1920, 1080);
     let ctx = egui::Context::default();
@@ -1610,6 +1626,8 @@ fn gesture(
 
     let mut edit = None;
     let mut cursor = egui::CursorIcon::Default;
+    let mut held_segments = Vec::new();
+    let release = frames.len() - 1;
     for (index, events) in frames.into_iter().enumerate() {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
@@ -1630,6 +1648,7 @@ fn gesture(
                 BenchMenu {
                     busy: None,
                     active_track: Some(track),
+                    lock,
                 },
                 &[],
                 &crate::platform::ScrollInput::default(),
@@ -1645,6 +1664,11 @@ fn gesture(
         if index == 1 {
             cursor = output.platform_output.cursor_icon;
         }
+        if index + 1 == release {
+            for clipped in &output.shapes {
+                collect_bench_segments(&clipped.shape, &mut held_segments);
+            }
+        }
         if let Some(from_panel) = response.and_then(|response| response.bench_edit) {
             edit = Some(from_panel);
         }
@@ -1653,6 +1677,7 @@ fn gesture(
         edit,
         cursor,
         panned: detail.pan - was,
+        held_segments,
     }
 }
 
@@ -1671,7 +1696,42 @@ fn bench_drag(
         (to[0] - from[0]) as f32 * scale,
         (to[1] - from[1]) as f32 * scale,
     );
-    gesture(node, image_index, track, center_on, from, &[step], escape)
+    gesture(
+        node,
+        image_index,
+        track,
+        center_on,
+        from,
+        &[step],
+        escape,
+        true,
+    )
+}
+
+/// [`bench_drag`] with Track View's *Lock* cleared.
+fn unlocked_drag(
+    node: &SceneNode,
+    image_index: usize,
+    track: &sfmtool_core::bench::EditableTrack,
+    center_on: [f64; 2],
+    from: [f64; 2],
+    to: [f64; 2],
+) -> Dragged {
+    let scale = panel_scale(1920, 1080);
+    let step = egui::vec2(
+        (to[0] - from[0]) as f32 * scale,
+        (to[1] - from[1]) as f32 * scale,
+    );
+    gesture(
+        node,
+        image_index,
+        track,
+        center_on,
+        from,
+        &[step],
+        false,
+        false,
+    )
 }
 
 /// Panel pixels per source pixel at [`HANDLE_ZOOM`].
@@ -2099,7 +2159,16 @@ fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
     // and is exactly what used to be spent panning the photograph.
     let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
 
-    let dragged = gesture(&state.scene[0], 0, &track, centre, edge, &steps, false);
+    let dragged = gesture(
+        &state.scene[0],
+        0,
+        &track,
+        centre,
+        edge,
+        &steps,
+        false,
+        true,
+    );
     assert_eq!(
         dragged.panned,
         egui::Vec2::ZERO,
@@ -2133,6 +2202,214 @@ fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
     );
 }
 
+/// With Track View's *Lock* cleared, the track stage's dot is that one
+/// sighting's keypoint: the drag names [`crate::bench::PatchEdit::Sight`], the
+/// release moves that keypoint and nothing else, and the patch, its size, its
+/// turn and every other sighting stand where they stood.
+#[test]
+fn with_the_lock_off_the_dot_moves_one_sighting_and_leaves_the_patch_and_the_rest() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let was = track.observations[0].site().expect("a sighting");
+    let to = [was[0] + 1.5, was[1] + 2.0];
+
+    let dragged = unlocked_drag(&state.scene[0], 0, &track, was, was, to);
+    assert_eq!(
+        dragged.cursor,
+        egui::CursorIcon::Move,
+        "the dot is still a handle"
+    );
+    assert_eq!(dragged.panned, egui::Vec2::ZERO);
+    let edit = dragged.edit.expect("the dot was dragged");
+    assert!(
+        matches!(edit, crate::bench::PatchEdit::Sight { observation: 0, pixel }
+            if (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
+        "the drag named something else: {edit:?}",
+    );
+
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel on the photograph");
+    let labels = version_labels(&state, id);
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Moved observation 0 of {label} to (")),
+        "the version's label does not name the one sighting: {:?}",
+        labels.last(),
+    );
+
+    let moved = on_bench(&state, id, &label);
+    let site = moved.observations[0].site().expect("a sighting");
+    assert!(
+        (site[0] - to[0]).abs() < 1e-3 && (site[1] - to[1]).abs() < 1e-3,
+        "the dot should sit at {to:?}, it sits at {site:?}",
+    );
+    assert!(moved.observations[0].pinned, "a hand placement is a ruling");
+    assert_eq!(
+        moved.track().and_then(|p| p.placement.clone()),
+        track.track().and_then(|p| p.placement.clone()),
+        "the patch moved under an unlocked drag",
+    );
+    assert_eq!(
+        moved.track().map(|p| p.position),
+        track.track().map(|p| p.position)
+    );
+    for index in 1..track.observations.len() {
+        assert_eq!(
+            moved.observations[index], track.observations[index],
+            "observation {index} moved under an unlocked drag of observation 0",
+        );
+    }
+}
+
+/// With the lock off, the outline's edges and corners are not handles: a
+/// track-stage sighting has no size or turn of its own, and a resize or a spin
+/// would move every sighting at once. A press on one pans the photograph, as a
+/// press off the layer does, and edits nothing. The cluster stage's outline is
+/// each sighting's own shape, so the lock leaves it a handle there.
+#[test]
+fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let corner = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
+    let beyond = patch_pixel(&frame, &camera, &pose, 2.0, 0.0);
+    for grabbed in [edge, corner] {
+        let dragged = unlocked_drag(&state.scene[0], 0, &track, centre, grabbed, beyond);
+        assert!(
+            dragged.edit.is_none(),
+            "an unlocked outline edited the track: {:?}",
+            dragged.edit,
+        );
+        assert_ne!(
+            dragged.panned,
+            egui::Vec2::ZERO,
+            "a press on an outline that is no handle is a pan"
+        );
+        assert_eq!(dragged.cursor, egui::CursorIcon::Default);
+    }
+
+    // And the same rule asked of the drag itself, for a drag already held.
+    let drag = super::bench_track::Drag {
+        image: 0,
+        handle: super::bench_track::Handle::Edge {
+            observation: 0,
+            edge: sfmtool_core::bench::Edge::PlusU,
+        },
+        from: edge,
+        to: beyond,
+        moved: true,
+        cancelled: false,
+    };
+    let table = &state.scene[0].edited().base.image_table;
+    assert!(super::bench_track::Layer::edit(table, &track, &drag, false).is_none());
+    assert!(super::bench_track::Layer::edit(table, &track, &drag, true).is_some());
+
+    // At the cluster stage every handle is one sighting's already, so the lock
+    // changes nothing: the dot places that seed and a corner turns that shape,
+    // whichever way the box is set.
+    let seed = [120.0, 90.0];
+    let cluster = state
+        .start_bench_cluster(
+            crate::scene::ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: seed,
+                radius_px: Some(6.0),
+            },
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    let cluster = on_bench(&state, id, &cluster);
+    let table = &state.scene[0].edited().base.image_table;
+    for lock in [true, false] {
+        let dot = super::bench_track::Drag {
+            image: 0,
+            handle: super::bench_track::Handle::Keypoint { observation: 0 },
+            from: seed,
+            to: [seed[0] + 2.0, seed[1]],
+            moved: true,
+            cancelled: false,
+        };
+        assert!(
+            matches!(
+                super::bench_track::Layer::edit(table, &cluster, &dot, lock),
+                Some(crate::bench::PatchEdit::Sight { observation: 0, .. })
+            ),
+            "lock {lock}",
+        );
+        let corner = super::bench_track::Drag {
+            handle: super::bench_track::Handle::Corner {
+                observation: 0,
+                corner: 2,
+            },
+            from: [seed[0] + 4.0, seed[1] + 4.0],
+            to: [seed[0] - 4.0, seed[1] + 4.0],
+            ..dot
+        };
+        assert!(
+            matches!(
+                super::bench_track::Layer::edit(table, &cluster, &corner, lock),
+                Some(crate::bench::PatchEdit::SpinShape { observation: 0, .. })
+            ),
+            "lock {lock}",
+        );
+    }
+}
+
+/// What is drawn while the dot is held is what the release leaves, in both
+/// lock states. The one image's own view tells the two apart by the
+/// projection-offset segment: locked, the patch slides and the sighting keeps
+/// its offset from the patch's projection, which for this fixture is none; the
+/// lock off, the patch stays and the segment runs the length of the drag.
+#[test]
+fn the_held_dot_previews_what_its_release_does_in_both_lock_states() {
+    let (state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let was = track.observations[0].site().expect("a sighting");
+    let to = [was[0] + 1.5, was[1] + 2.0];
+    let panel_px = f64::from(panel_scale(1920, 1080));
+    let drawn_px = (to[0] - was[0]).hypot(to[1] - was[1]) * panel_px;
+    let longest = |dragged: &Dragged| {
+        dragged
+            .held_segments
+            .iter()
+            .map(|(points, _)| f64::from((points[1] - points[0]).length()))
+            .fold(0.0f64, f64::max)
+    };
+
+    let locked = bench_drag(&state.scene[0], 0, &track, was, was, to, false);
+    assert!(
+        longest(&locked) < 0.05 * drawn_px,
+        "a locked drag previews a sighting parted from the patch: {} of {drawn_px} px",
+        longest(&locked),
+    );
+    let unlocked = unlocked_drag(&state.scene[0], 0, &track, was, was, to);
+    assert!(
+        (longest(&unlocked) - drawn_px).abs() < 0.05 * drawn_px,
+        "an unlocked drag should preview a {drawn_px} px offset, it drew {}",
+        longest(&unlocked),
+    );
+
+    // And each release is the track its preview drew: the offset in source px,
+    // which is what the segment was drawing.
+    for (dragged, offset) in [(&locked, 0.0), (&unlocked, drawn_px / panel_px)] {
+        let edit = dragged.edit.expect("the dot was dragged");
+        let (next, _) = crate::bench::geometry::apply(&track, state.scene[0].edited(), &edit)
+            .expect("a pixel the step takes");
+        let landed = projection_offsets(&state.scene[0], &next)[0];
+        assert!(
+            (landed[0].hypot(landed[1]) - offset).abs() < 0.05 * (drawn_px / panel_px),
+            "{edit:?} released on an offset of {landed:?}, not {offset}",
+        );
+    }
+}
+
 /// A press that hits no handle is the pan it always was, and a press on a
 /// handle that never moves is a click: neither edits the track.
 #[test]
@@ -2145,7 +2422,16 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
 
     // Far outside the outline, which is a couple of source pixels across.
     let empty = [centre[0] + 40.0, centre[1] + 40.0];
-    let dragged = gesture(&state.scene[0], 0, &track, centre, empty, &steps, false);
+    let dragged = gesture(
+        &state.scene[0],
+        0,
+        &track,
+        centre,
+        empty,
+        &steps,
+        false,
+        true,
+    );
     assert!(dragged.edit.is_none(), "empty image edited the track");
     assert!(
         dragged.panned.x > 20.0 && dragged.panned.y == 0.0,
@@ -2155,7 +2441,7 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
 
     // And a press on the edge that never moves leaves the track alone.
     let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
-    let still = gesture(&state.scene[0], 0, &track, centre, edge, &[], false);
+    let still = gesture(&state.scene[0], 0, &track, centre, edge, &[], false, true);
     assert!(still.edit.is_none(), "a click edited the track");
     assert_eq!(still.panned, egui::Vec2::ZERO);
 }

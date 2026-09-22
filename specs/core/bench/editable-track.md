@@ -1128,7 +1128,8 @@ they have ruled on, so `apply_thresholds` leaves its verdict where it is rather
 than painting over a placement by hand. Nothing else on the track moves -- which
 is the difference from `translate_patch_to_pixel`, and why the two are separate steps: the
 viewer's dot is the translation at the track stage and this at the cluster stage,
-and this is also what a script that really means one keypoint asks for.
+unless Track View's *Lock* is cleared, when the track stage's dot is this too.
+It is also what a script that really means one keypoint asks for.
 
 **`resize_patch` sizes the patch to one half-length on both axes.** One scalar
 and not two, because a patch is square: the stored half-vector pair has

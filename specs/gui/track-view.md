@@ -72,6 +72,10 @@ impl TrackView {
     pub(crate) fn select_row(&mut self, id: ReconId, label: &str, observation: usize);
     /// The one edit-mode row selected on `label`'s track, when exactly one is.
     pub(crate) fn selected_row(&self, id: ReconId, label: &str) -> Option<usize>;
+    /// Whether edit mode's *Lock* box is ticked: what the dock hands Image
+    /// Detail, whose track-stage dot slides the patch when it is and moves one
+    /// sighting's keypoint when it is not.
+    pub(crate) fn lock(&self) -> bool;
 }
 
 pub(crate) struct TrackViewResponse {
@@ -516,8 +520,8 @@ cluster after Edit has been cleared is its row under *Bench Clusters*.
 Almost no state lives in the body. The bench is the node's, at its cursor, so a
 step taken anywhere, in this panel, in the Scene tree or by an undo, shows here on
 the next frame. What the body owns is about looking rather than about the track:
-where the sliders stand, which rows are selected, the tiles it has rendered, and
-the painting.
+where the sliders stand, whether *Lock* is ticked, which rows are selected, the
+tiles it has rendered, and the painting.
 
 #### The header
 
@@ -546,8 +550,8 @@ changes the header's first word, which is how a person sees that it crossed.
 
 Two rows. The first acts on the active track: *Evaluate*, *Fit*, the *Stage*
 toggle (which names the stage it would move to), *Apply thresholds*, *Split off
-N rows*, *Duplicate*, *Commit* and *Discard*. The second is *Rename*, which
-opens a field in place and commits on Enter. Each entry is enabled, or greyed
+N rows*, *Duplicate*, *Commit* and *Discard*. The second is the *Lock* box and
+*Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed
 with a hover text naming what is missing, and the refusal is the core step's own
 sentence asked of the very track the button would act on, so the button and the
 step cannot disagree. *Commit* asks the core commit; *Evaluate*, *Fit* and the
@@ -585,6 +589,27 @@ after a fit are the numbers *Evaluate* would report. *Fit* greys with
 `fit_preconditions`' sentence for a track stage with fewer than two `in`
 observations, while *Evaluate* stays available for it, because one sighting is
 something to report.
+
+***Lock* says what Image Detail's dot does at the track stage.** Ticked, which
+is how the panel starts, dragging a sighting's dot there slides the patch and
+every sighting follows it. Cleared, the dot moves that one sighting's keypoint
+and the patch and every other sighting stay where they are, which is how a
+keypoint that settled on the wrong detail is fixed; the outline's edges and
+corners take no drag while it is cleared, a track-stage sighting having no size
+or turn of its own ([`multi-panel-image-browser.md`](multi-panel-image-browser.md)
+§ "The handles"). At the cluster stage the box is drawn and greyed, its hover
+text saying that every sighting there already moves on its own. It keeps its
+state across the greyed stretch, so a track taken to the cluster stage and back
+is edited with the lock it had.
+
+**The lock is a tool setting, not bench state.** It says what the next drag will
+mean and nothing about the track, so toggling it is no step: no version, no
+Action Log row, nothing for Undo to walk, and it is not greyed by a busy node,
+whose drags are refused on their own. It is panel state for the session and is
+not saved with the layout, since a lock left cleared by one session would make
+the next session's first drag an edit of one sighting that nobody asked for.
+The wire has no copy of it: an agent says which it means by calling
+`translate_bench_patch` or `sight_bench_observation`.
 
 **The row selection is panel state, not a version.** It is what *Split off N
 rows* reads and nothing else; a split names its observations explicitly, because
@@ -769,7 +794,9 @@ panel` and `Closed Track View panel`.
 **The bench layers follow the box.** Image Detail's bench layer and the 3D
 viewer's draw the active item and nothing else, so with Edit clear neither draws
 anything and none of their handles can be grabbed. That is what "no track is
-active for editing" means in the rest of the window.
+active for editing" means in the rest of the window. Image Detail's layer also
+reads *Lock*, which the dock hands it beside the active track; the 3D viewer's
+does not, its handles being the patch's own.
 
 ---
 
@@ -837,7 +864,10 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   another item; the Status cell's reading sentence and its `walked` form; the
   header's `Bearing (...)` and `Position (` lines; the row menu's search entries
   and their remedies; a row click reporting the image and the pixel, and a
-  double-click asking for camera view.
+  double-click asking for camera view; *Lock* starting ticked, a click clearing
+  it and a second ticking it again with no version pushed and no gesture
+  reported, and the box drawn greyed at the cluster stage, where a click leaves
+  it as it was.
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a

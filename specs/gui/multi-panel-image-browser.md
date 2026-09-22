@@ -505,7 +505,9 @@ picture of the patch to keep in step with the first.
   moves by the same displacement along the plane, keeping its own offset, so
   the outline moves in every image at once. At the **cluster** stage there is
   no shared geometry, so the mark is that sighting's own seed and nothing else
-  moves. The cursor is `Move` on hover and `Grabbing` while it is held.
+  moves. With Track View's *Lock* cleared the track stage's mark is that
+  sighting's own keypoint as well (below). The cursor is `Move` on hover and
+  `Grabbing` while it is held.
 - **An edge resizes the patch, with the opposite edge left where it is.**
   Dragging one of the outline's four edges is "put this edge here", and what a
   person expects is the other three where the geometry puts them rather than the
@@ -551,6 +553,28 @@ sizing and turning by hand"). At the cluster stage each sighting has its own
 affine shape and its own seed, so every gesture touches only the observation
 whose mark or outline was grabbed.
 
+**Track View's *Lock* decides what the track stage's dot is**
+([`track-view.md`](track-view.md) § "The toolbar"). Ticked, which is how it
+starts, the dot slides the patch as above. Cleared, the dot moves **that one
+sighting's keypoint** and nothing else: the patch keeps its place, its size and
+its turn, every other sighting keeps its own, and the step is the one the
+cluster stage's dot already is (`sight_observation`), so the sighting is pinned
+and the measurements read at its old pixel are dropped. This is how a keypoint
+that settled on the wrong detail is put right without dragging the rest of the
+track after it. In this photograph the outline follows the dot, being the patch
+re-anchored on the keypoint, while the hollow centre stays where the patch
+projects, so the segment between them grows by the drag.
+
+A track-stage sighting has a place of its own and no shape of its own; its size
+and its turn are the patch's. So while the lock is cleared **the outline's edges
+and corners take no drag**: they are drawn, a press on one pans the photograph
+as a press off the layer does, and no cursor is offered over them. Offering them
+patch-wide would make a resize or a spin move every sighting under a setting
+whose whole promise is that a drag here moves one. At the cluster stage the lock
+changes nothing, every handle there being one sighting's already, and the box is
+greyed. The lock reaches this panel only: the 3D viewer's handles are the
+patch's own, and its marks select rather than move.
+
 **The press decides which handle, not the drag.** A pointer press inside the
 panel is hit-tested against the geometry that frame starts from -- which is what
 the person pressed on, since nothing has panned yet -- and if it lands on a
@@ -571,9 +595,9 @@ cost the same: a handle missed by two pixels pans the photograph, which the
 person then has to undo by eye, while one caught a little early is released
 without motion and does nothing.
 
-**One version per drag.** While the pointer is down the layer draws from a
-transient copy -- the track the release would produce, built by the same core
-step -- and nothing is pushed. The release applies it through
+**One version per drag.** While the pointer is down nothing is pushed: the
+layer draws from a transient copy, the track the release would produce, built
+by the same core step and read under the same lock. The release applies it through
 `AppState::edit_bench_patch`, which is the call the wire's eight patch tools
 make, so one gesture is one version, one Action Log row of kind `Bench`, and one
 Undo. A drag that ends where it started pushes nothing, the way a verdict an
@@ -587,10 +611,10 @@ and what a pointer means against a patch is
 [bench/geometry.rs](../../crates/sfm-explorer/src/bench/geometry.rs), which the
 wire's patch tools read it through too.
 Like the selection, what the panel is told about the bench is passed in by the
-dock rather than read by the panel: one value carrying the task holding the node
-and the active track, which both this layer and the menu's two bench entries
-read, so what is offered and what is drawn cannot disagree about which track is
-active.
+dock rather than read by the panel: one value carrying the task holding the node,
+the active track and Track View's *Lock*, which both this layer and the menu's
+two bench entries read, so what is offered and what is drawn cannot disagree
+about which track is active or what its dot does.
 
 #### Feature Filtering
 

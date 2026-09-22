@@ -104,6 +104,12 @@ impl TrackView {
         self.edit.selected_row(id, label)
     }
 
+    /// Whether edit mode's *Lock* box is ticked, which Image Detail reads a
+    /// track-stage dot drag by. See [`TrackEdit::lock`].
+    pub(crate) fn lock(&self) -> bool {
+        self.edit.lock()
+    }
+
     /// Drop everything either body cached for a reconstruction that has left
     /// the scene, or whose value an edit has replaced.
     pub(crate) fn forget_recon(&mut self, id: crate::scene::ReconId) {

@@ -691,6 +691,7 @@ impl TabContext<'_> {
                 crate::image_detail::BenchMenu {
                     busy: bench_busy.as_deref(),
                     active_track: bench_track.as_deref(),
+                    lock: self.track_view.lock(),
                 },
                 self.gesture_events,
                 self.scroll_input,

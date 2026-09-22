@@ -30,7 +30,17 @@
 //! patch and each photograph shows where it lands: the dot slides it across
 //! its own plane, an edge resizes it, a corner turns it. At the cluster stage
 //! there is no shared geometry, so each handle is that sighting's own -- the
-//! dot moves its seed and the outline is its own affine shape. Each drag
+//! dot moves its seed and the outline is its own affine shape.
+//!
+//! **Track View's *Lock* decides what the track stage's dot is.** Ticked, which
+//! is how it starts, the dot is the patch's, as above. Cleared, the dot is that
+//! one sighting's keypoint, and the patch and every other sighting stay where
+//! they are: the gesture that fixes a keypoint that settled on the wrong
+//! detail. A track-stage sighting has a place of its own and no shape of its
+//! own, its size and turn being the patch's, so while the lock is off the
+//! outline's edges and corners are drawn and take no drag. A resize or a spin
+//! would move every sighting at once, which is the one thing a cleared lock
+//! promises a drag here will not do. Each drag
 //! previews by drawing the track the release would produce, and the release is
 //! one version. The geometry a pointer is read against is
 //! [`crate::bench::geometry`], which the wire's patch tools read it against
@@ -173,6 +183,9 @@ pub(super) struct Layer {
     /// outlines. Never a handle: where an observation *started* is not a thing
     /// to drag.
     seeds: Vec<(Vec<Pos2>, Color32)>,
+    /// Whether the outlines' edges and corners take a drag. False only at the
+    /// track stage with the lock off; see [`outline_takes_drag`].
+    outline_handles: bool,
 }
 
 /// One observation's own mark.
@@ -255,12 +268,16 @@ impl Layer {
     ///
     /// Nothing is built for such an image: the track is a set of sightings, and
     /// a photograph it has none in has nothing of it to show.
+    ///
+    /// `lock` is Track View's *Lock*, which decides whether the outline is a
+    /// handle at all.
     pub(super) fn build(
         image_table: &ImageTable,
         img_idx: usize,
         track: &EditableTrack,
         image_rect: Rect,
         effective_scale: f32,
+        lock: bool,
     ) -> Option<Self> {
         let here: Vec<(usize, &Observation)> = track
             .observations
@@ -282,6 +299,7 @@ impl Layer {
             outlines: Vec::new(),
             center: None,
             seeds: Vec::new(),
+            outline_handles: outline_takes_drag(track, lock),
         };
         for (index, observation) in &here {
             if let Some(site) = observation.site() {
@@ -433,6 +451,11 @@ impl Layer {
         }
         if let Some((_, handle)) = found {
             return Some(handle);
+        }
+        // An outline that takes no drag is not a handle, so a press on it falls
+        // through to the view and pans, as a press anywhere off the layer does.
+        if !self.outline_handles {
+            return None;
         }
         for outline in &self.outlines {
             for corner in 0..4 {
@@ -610,12 +633,18 @@ impl Layer {
     /// differently. What is left here is the turn, which is a reading of two
     /// pointer positions against the patch and has no other home.
     ///
+    /// `lock` is Track View's *Lock*: at the track stage it is what makes the
+    /// dot the patch's ([`PatchEdit::TranslateToPixel`]) or the sighting's
+    /// alone ([`PatchEdit::Sight`]), and with it off an edge or a corner edits
+    /// nothing, the sighting having no size or turn of its own.
+    ///
     /// `None` when the pointer names nothing the patch can be given: a ray that
     /// misses its plane, or a turn about the centre itself.
     pub(super) fn edit(
         image_table: &ImageTable,
         track: &EditableTrack,
         drag: &Drag,
+        lock: bool,
     ) -> Option<PatchEdit> {
         if drag.cancelled {
             return None;
@@ -625,19 +654,25 @@ impl Layer {
             | Handle::Edge { observation, .. }
             | Handle::Corner { observation, .. } => observation,
         };
+        // The same rule the hit test was built by, asked again rather than
+        // assumed: a drag is judged by the setting in force when it is read.
+        if !matches!(drag.handle, Handle::Keypoint { .. }) && !outline_takes_drag(track, lock) {
+            return None;
+        }
         match drag.handle {
             // The dot means different things at the two stages, because the two
             // stages have different things to move: a track-stage track has one
             // patch and every sighting is a view of it, so dragging the mark
             // slides the **patch** and every sighting follows; a cluster has no
             // shared geometry at all, so the mark is that sighting's own seed
-            // and nothing else moves.
+            // and nothing else moves. The lock off makes the track stage's mark
+            // the sighting's own too, which is the one step both stages share.
             Handle::Keypoint { .. } => Some(match track.stage {
-                Stage::Track(_) => PatchEdit::TranslateToPixel {
+                Stage::Track(_) if lock => PatchEdit::TranslateToPixel {
                     observation,
                     pixel: drag.to,
                 },
-                Stage::Cluster(_) => PatchEdit::Sight {
+                Stage::Track(_) | Stage::Cluster(_) => PatchEdit::Sight {
                     observation,
                     pixel: drag.to,
                 },
@@ -677,7 +712,8 @@ impl Layer {
 ///
 /// `drag` is the handle the pointer has hold of, if any: the layer is drawn
 /// from the track that drag would produce, so what a person sees mid-gesture is
-/// what releasing would leave behind.
+/// what releasing would leave behind. `lock` is Track View's *Lock*, read by
+/// the preview exactly as the release reads it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     painter: &egui::Painter,
@@ -690,6 +726,7 @@ pub(super) fn draw(
     effective_scale: f32,
     drag: Option<&Drag>,
     hovered: Option<Handle>,
+    lock: bool,
     response: &mut ImageDetailResponse,
 ) {
     // The preview: the track the release would push, drawn instead of the one
@@ -698,12 +735,19 @@ pub(super) fn draw(
     let image_table = &edited.base.image_table;
     let previewed = drag
         .filter(|drag| drag.image == img_idx && !drag.cancelled)
-        .and_then(|drag| Layer::edit(image_table, track, drag))
+        .and_then(|drag| Layer::edit(image_table, track, drag, lock))
         .and_then(|edit| geometry::apply(track, edited, &edit).ok())
         .map(|(next, _)| next);
     let shown = previewed.as_ref().unwrap_or(track);
 
-    let Some(layer) = Layer::build(image_table, img_idx, shown, image_rect, effective_scale) else {
+    let Some(layer) = Layer::build(
+        image_table,
+        img_idx,
+        shown,
+        image_rect,
+        effective_scale,
+        lock,
+    ) else {
         return;
     };
     layer.paint(painter);
@@ -737,6 +781,16 @@ pub(super) fn draw(
             }
         }
     }
+}
+
+/// Whether an outline's edges and corners take a drag: always at the cluster
+/// stage, whose outline is each sighting's own shape, and at the track stage
+/// only with the lock on, the outline there being the patch's.
+///
+/// One rule, asked by the hit test and again by [`Layer::edit`], so a handle
+/// the layer does not offer is also one it does not act on.
+fn outline_takes_drag(track: &EditableTrack, lock: bool) -> bool {
+    lock || matches!(track.stage, Stage::Cluster(_))
 }
 
 /// The four panel-space corners of the square `[-radius, radius]^2` mapped

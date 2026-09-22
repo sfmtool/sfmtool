@@ -364,6 +364,7 @@ impl ImageDetail {
         ui: &egui::Ui,
         interact_response: &egui::Response,
         track: Option<&sfmtool_core::bench::EditableTrack>,
+        lock: bool,
         image_table: &sfmtool_core::ImageTable,
         img_idx: usize,
         image_rect: egui::Rect,
@@ -376,8 +377,14 @@ impl ImageDetail {
             self.bench_drag = None;
         }
         let track = track?;
-        let layer =
-            bench_track::Layer::build(image_table, img_idx, track, image_rect, effective_scale)?;
+        let layer = bench_track::Layer::build(
+            image_table,
+            img_idx,
+            track,
+            image_rect,
+            effective_scale,
+            lock,
+        )?;
         let to_image = |pos: egui::Pos2| -> [f64; 2] {
             [
                 f64::from((pos.x - image_rect.min.x) / effective_scale),
@@ -435,7 +442,7 @@ impl ImageDetail {
         if !down {
             if let Some(drag) = self.bench_drag.take() {
                 if drag.moved {
-                    response.bench_edit = bench_track::Layer::edit(image_table, track, &drag);
+                    response.bench_edit = bench_track::Layer::edit(image_table, track, &drag, lock);
                 }
             }
         }
@@ -629,6 +636,7 @@ impl ImageDetail {
             ui,
             &interact_response,
             bench.active_track,
+            bench.lock,
             &edited.base.image_table,
             img_idx,
             image_rect,
@@ -764,6 +772,7 @@ impl ImageDetail {
                 effective_scale,
                 self.bench_drag.as_ref(),
                 hovered_handle,
+                bench.lock,
                 &mut response,
             );
         }

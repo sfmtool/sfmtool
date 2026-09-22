@@ -50,7 +50,11 @@ pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench t
 /// and the layer that draws the active track
 /// ([`mod@super::bench_track`]) read this one value, so what is offered and
 /// what is drawn cannot disagree about which track is the active one.
-#[derive(Debug, Default, Clone, Copy)]
+///
+/// It also carries the one tool setting the layer's handles are read by,
+/// Track View's *Lock*, which is not bench state but belongs beside it: the
+/// drag it decides the meaning of is a drag of the active track.
+#[derive(Debug, Clone, Copy)]
 pub struct BenchMenu<'a> {
     /// Why no step on this node can run -- a background task is holding it --
     /// or `None` when one can.
@@ -58,6 +62,24 @@ pub struct BenchMenu<'a> {
     /// The bench's active track, or `None` when no track is on the bench. A
     /// gesture that names no item means the active one.
     pub active_track: Option<&'a EditableTrack>,
+    /// Track View's *Lock*: at the track stage, whether the dot slides the
+    /// patch with every sighting following (`true`) or moves that one
+    /// sighting's keypoint alone (`false`), in which case the outline's edges
+    /// and corners take no drag. Read at the cluster stage not at all, where
+    /// every handle is already one sighting's.
+    pub lock: bool,
+}
+
+impl Default for BenchMenu<'_> {
+    /// Nothing busy, nothing on the bench, and the lock on, which is what the
+    /// box starts ticked at.
+    fn default() -> Self {
+        Self {
+            busy: None,
+            active_track: None,
+            lock: true,
+        }
+    }
 }
 
 /// Which point the menu's Edit-on-Bench entry would stage, and why it is greyed

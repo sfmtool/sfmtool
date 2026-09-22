@@ -12,7 +12,7 @@
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 
-use super::{TrackEdit, TrackEditResponse};
+use super::{TrackEdit, TrackEditResponse, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::tests::projected_embedded_demo;
 use crate::state::AppState;
@@ -622,6 +622,65 @@ fn double_clicking_a_row_asks_for_camera_view() {
     let response = run_frame_with(&mut panel, &ctx, &state, events);
     assert_eq!(response.request_camera_view, Some(1));
     assert_eq!(response.select_image, Some(1));
+}
+
+/// *Lock* starts ticked, which is the dot moving the whole patch, and toggling
+/// it is a tool setting rather than a step: no version, no gesture reported,
+/// and the box holds what it was set to from one frame to the next.
+#[test]
+fn the_lock_starts_ticked_and_toggling_it_pushes_no_version() {
+    let (state, id, _, mut panel, ctx) = on_the_bench();
+    assert!(TrackEdit::new().lock(), "a new panel starts locked");
+    assert!(panel.lock());
+    let versions = state.node(id).expect("loaded").history.versions().len();
+
+    let at = menu_entry_pos(&mut panel, &ctx, &state, LOCK_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert!(!panel.lock(), "a click on the box clears it");
+    assert_eq!(
+        TrackEditResponse {
+            has_pointer: response.has_pointer,
+            hovered_image: response.hovered_image,
+            ..TrackEditResponse::default()
+        },
+        response,
+        "toggling the lock asked the dock for a step",
+    );
+    run_frame(&mut panel, &ctx, &state);
+    assert!(!panel.lock(), "the box keeps what it was set to");
+    assert_eq!(
+        state.node(id).expect("loaded").history.versions().len(),
+        versions,
+        "toggling the lock pushed a version",
+    );
+
+    at_pointer(&mut panel, &ctx, &state, at, true);
+    assert!(panel.lock(), "a second click ticks it again");
+}
+
+/// At the cluster stage every handle is one sighting's already, so the box is
+/// drawn but greyed: a click on it changes nothing.
+#[test]
+fn the_lock_is_greyed_at_the_cluster_stage() {
+    let (mut state, id) = state();
+    state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+        )
+        .expect("a pixel on the sensor");
+    let (mut panel, ctx) = settled(&state);
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(
+        texts.iter().any(|text| text == LOCK_LABEL),
+        "the box is drawn at the cluster stage too: {texts:?}"
+    );
+    let at = menu_entry_pos(&mut panel, &ctx, &state, LOCK_LABEL);
+    at_pointer(&mut panel, &ctx, &state, at, true);
+    assert!(panel.lock(), "a greyed box took the click");
 }
 
 #[test]
