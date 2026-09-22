@@ -192,7 +192,7 @@ the first observing camera's up axis) keeps a track's patches mutually aligned.
 grid resolution in the signature, because the callers that need it are otherwise
 unrelated: keypoint localization scales the same offset into its search grid's
 steps (`seed_offset`), while the Explorer's per-observation patch tiles
-([point-track-detail.md](../../gui/point-track-detail.md)) warp straight through
+([track-view.md](../../gui/track-view.md)) warp straight through
 the returned frame so a track's tiles show the pixels that were aligned rather
 than the point's geometric projection. Both share one unprojection, so a seed and
 a rendered tile cannot disagree about where a keypoint puts the patch:

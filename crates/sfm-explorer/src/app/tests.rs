@@ -194,14 +194,14 @@ fn texts(state: &AppState) -> Vec<String> {
 /// A double-click reaches this twice, because the second click of one is a
 /// click in its own right: the first selects, the second stages.
 ///
-/// What it has to leave behind is one bench item, the Track Edit panel raised,
+/// What it has to leave behind is one bench item, Track View raised,
 /// and one Action Log row per thing that actually happened -- one selection,
 /// however many clicks named the same point.
 #[test]
-fn a_double_click_on_a_point_stages_it_once_and_raises_track_edit() {
+fn a_double_click_on_a_point_stages_it_once_and_raises_track_view() {
     let (mut state, id) = edits::adjustable_state();
     let point = PointRef::new(id, 11);
-    state.hide_panel(crate::dock::Tab::TrackEdit);
+    state.hide_panel(crate::dock::Tab::TrackView);
 
     super::apply_point_click(&mut state, point, false);
     super::apply_point_click(&mut state, point, true);
@@ -209,7 +209,7 @@ fn a_double_click_on_a_point_stages_it_once_and_raises_track_edit() {
     assert_eq!(state.selected_point, Some(point));
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "the double-click staged twice");
-    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
 
     let rows = texts(&state);
     let selections = rows.iter().filter(|t| t.starts_with("Selected ")).count();
@@ -249,9 +249,8 @@ struct Parts {
     viewer_3d: crate::viewer_3d::Viewer3D,
     image_browser: crate::image_browser::ImageBrowser,
     image_detail: crate::image_detail::ImageDetail,
-    point_track_detail: crate::point_track_detail::PointTrackDetail,
+    track_view: crate::track_view::TrackView,
     intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail,
-    track_edit: crate::track_edit::TrackEdit,
 }
 
 impl Parts {
@@ -265,9 +264,8 @@ impl Parts {
             viewer_3d: crate::viewer_3d::Viewer3D::new(),
             image_browser: crate::image_browser::ImageBrowser::new(),
             image_detail: crate::image_detail::ImageDetail::new(),
-            point_track_detail: crate::point_track_detail::PointTrackDetail::new(),
+            track_view: crate::track_view::TrackView::new(),
             intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail::new(),
-            track_edit: crate::track_edit::TrackEdit::new(),
         }
     }
 
@@ -304,9 +302,8 @@ impl Parts {
             viewer_3d,
             image_browser,
             image_detail,
-            point_track_detail,
+            track_view,
             intrinsics_detail,
-            track_edit,
         } = self;
         crate::test_support::run_frame_headless(&ctx, input, |ui| {
             if typing {
@@ -318,9 +315,8 @@ impl Parts {
                 viewer_3d,
                 image_browser,
                 image_detail,
-                point_track_detail,
+                track_view,
                 intrinsics_detail,
-                track_edit,
             };
             super::menu::shortcuts(ui, &mut parts);
         });

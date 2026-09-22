@@ -172,8 +172,8 @@ pub(crate) enum Home {
 /// The panels that go home to one another, in default order.
 ///
 /// A panel opened from the menu goes home to whichever of its group-mates is
-/// still on screen (rule 2), which is what keeps the Point Track panel behind
-/// Camera Intrinsics rather than beside it.
+/// still on screen (rule 2), which is what puts a reopened Track View in a tab
+/// beside Camera Intrinsics rather than in a column of its own.
 ///
 /// Three of these are the multi-tab nodes of the default layout. The fourth is
 /// not: Scene and Background are a top-bottom split there, and are group-mates
@@ -182,21 +182,20 @@ pub(crate) enum Home {
 const GROUPS: [&[Tab]; 4] = [
     &[Tab::SceneGraph, Tab::BackgroundTask],
     &[Tab::Viewer3D, Tab::ImageDetail],
-    &[Tab::PointTrackDetail, Tab::IntrinsicsDetail, Tab::TrackEdit],
+    &[Tab::TrackView, Tab::IntrinsicsDetail],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
 impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
-    pub(crate) const ALL: [Tab; 10] = [
+    pub(crate) const ALL: [Tab; 9] = [
         Tab::SceneGraph,
         Tab::BackgroundTask,
         Tab::Viewer3D,
         Tab::ImageBrowser,
         Tab::ImageDetail,
-        Tab::PointTrackDetail,
+        Tab::TrackView,
         Tab::IntrinsicsDetail,
-        Tab::TrackEdit,
         Tab::ActionLog,
         Tab::EditHistory,
     ];
@@ -210,9 +209,8 @@ impl Tab {
             Tab::Viewer3D => "viewer_3d",
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
-            Tab::PointTrackDetail => "point_track",
+            Tab::TrackView => "track_view",
             Tab::IntrinsicsDetail => "camera_intrinsics",
-            Tab::TrackEdit => "track_edit",
             Tab::ActionLog => "action_log",
             Tab::EditHistory => "edit_history",
         }
@@ -248,12 +246,10 @@ impl Tab {
                 edge: Split::Below,
                 share: 0.20,
             },
-            Tab::ImageDetail | Tab::PointTrackDetail | Tab::IntrinsicsDetail | Tab::TrackEdit => {
-                Home::Edge {
-                    edge: Split::Right,
-                    share: 0.33,
-                }
-            }
+            Tab::ImageDetail | Tab::TrackView | Tab::IntrinsicsDetail => Home::Edge {
+                edge: Split::Right,
+                share: 0.33,
+            },
         }
     }
 
@@ -279,14 +275,14 @@ impl Tab {
 const LEFT_COLUMN_SPLIT: f32 = 0.72;
 
 impl Default for Layout {
-    /// The stock ten-panel grid:
+    /// The stock nine-panel grid:
     ///
     /// ```text
-    /// ┌────────┬─────────────────────────┬───────────────┐
-    /// │ Scene  │[3D Viewer][Image Detail]│ [Point Track] │
-    /// ├────────┼─────────────────────────┴───────────────┤
+    /// ┌────────┬─────────────────────────┬──────────────┐
+    /// │ Scene  │[3D Viewer][Image Detail]│ [Track View] │
+    /// ├────────┼─────────────────────────┴──────────────┤
     /// │Backgr. │[Image Browser][Action Log][Edit History]│
-    /// └────────┴─────────────────────────────────────────┘
+    /// └────────┴────────────────────────────────────────┘
     /// ```
     ///
     /// The left column takes a narrow left split of the root, narrow because
@@ -296,7 +292,7 @@ impl Default for Layout {
     /// than one tab, and in all three the first is the active one: the bottom
     /// node opens on the Image Browser with the Action Log and the Edit History
     /// behind it, the middle node on the 3D Viewer with Image Detail behind it,
-    /// and the right-hand node on Point Track.
+    /// and the right-hand node on Track View with Camera Intrinsics behind it.
     ///
     /// The viewport and Image Detail share a node because they are the two
     /// large pictures of the same selection and each wants the width: flipping
@@ -324,9 +320,8 @@ impl Default for Layout {
                         fraction: 0.67,
                         first: Box::new(LayoutNode::leaf(&[Tab::Viewer3D, Tab::ImageDetail])),
                         second: Box::new(LayoutNode::leaf(&[
-                            Tab::PointTrackDetail,
+                            Tab::TrackView,
                             Tab::IntrinsicsDetail,
-                            Tab::TrackEdit,
                         ])),
                     }),
                     second: Box::new(LayoutNode::leaf(&[

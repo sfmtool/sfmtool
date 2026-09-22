@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-two tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty-six
+Seventy-three tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty-seven
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -151,7 +151,8 @@ write, and one writes a file.
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
 | `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
-| `activate_bench_item` | write | Make one item the active one of its kind |
+| `activate_bench_item` | write | Make one item the active one, the item Track View edits |
+| `deactivate_bench_item` | write | Leave every item on the bench with none active: Track View's Edit box cleared |
 | `rename_bench_item` | write | Give one item a label of your own |
 | `discard_bench_item` | write | Take one item off the bench |
 | `duplicate_bench_item` | write | Put a copy of one item on the bench beside it |
@@ -180,7 +181,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the fifty-six writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the fifty-seven writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -261,11 +262,13 @@ handful of "pane". A panel has one handle, its name, so the argument spells
 both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
-The ten names are the layout file's, and there is no second spelling of them
+The nine names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `background_task`, `viewer_3d`, `image_browser`,
-`image_detail`, `point_track`, `camera_intrinsics`, `track_edit`, `action_log`,
+`image_detail`, `track_view`, `camera_intrinsics`, `action_log`,
 `edit_history` (`Tab::wire_name`). An unknown name is refused with a message
-listing all ten (`Tab::all_wire_names`). `Tab` stays the Rust name — it is
+listing all nine (`Tab::all_wire_names`), and that includes a name no panel
+carries any more: `point_track` and `track_edit` are refused like any other
+unknown name, with no alias. `Tab` stays the Rust name — it is
 `egui_dock`'s word for the thing in a node, and the code is not the wire.
 
 **`window_layout`** is the whole document — the window's placement and the panel
@@ -547,8 +550,8 @@ array, not from an error it has to tell apart from a real one.
 number the agent is told matches the colour the human is looking at.
 `get_camera_image`'s summary is `compute_observation_reprojection_errors`, which
 the Image Detail panel's error heatmap uses; a track observation's is
-`metrics::compute_observation_metrics`, the same function the Point Track
-Detail table tabulates. `metrics` sits at the crate root rather than inside
+`metrics::compute_observation_metrics`, the same function Track View's
+table tabulates in view mode. `metrics` sits at the crate root rather than inside
 that panel for exactly this reason: no one surface owns a number three of them
 quote.
 
@@ -570,8 +573,8 @@ against each other.
 `get_point` accepts either shape `goto_point::parse_point_query` accepts — a
 bare index against the selected reconstruction, or a full `pt3d_<hash>_<index>`
 id that names its own — and resolves it through `resolve_point_query`. One
-parser, one set of error messages, and a point id copied out of the Point Track
-panel by a human pastes straight into a tool call. A bare JSON integer is
+parser, one set of error messages, and a point id copied out of Track View by a
+human pastes straight into a tool call. A bare JSON integer is
 accepted as the index form, since that is what a caller reading an index out of
 a track will naturally send.
 
@@ -761,7 +764,7 @@ to set — the same rule as `set_reconstruction_display`.
 
 **The wire spellings are the code's.** `overlay_mode` takes the snake-cased
 `OverlayMode` variant (`OverlayMode::wire_name`, `from_wire_name`,
-`all_wire_names`, exactly as `Tab` spells the eight panels), because the GUI's
+`all_wire_names`, exactly as `Tab` spells the nine panels), because the GUI's
 labels — `Reproj Error`, `Max Track Angle` — are display text with spaces in
 it, and § "Where the GUI has no word, the code's word wins" applies to a word
 the GUI has only as a label. An unknown mode is refused with a message listing
@@ -923,7 +926,7 @@ otherwise.
 - **`bench_observation` does**, because a sighting *is* a place in a particular
   photograph; so walking a track's observations takes one argument per step.
   Where it sits is `bench::observation_site`'s, the same rule the panel's own
-  bench mark, the Track Edit row click and `get_bench_track`'s `pixel` share
+  bench mark, the Track View row click and `get_bench_track`'s `pixel` share
   ([bench.md](bench.md)).
 
 **The call brings the panel to where its answer can be seen.** The photograph
@@ -1461,12 +1464,13 @@ Where the window is, and which panels are where. No arguments.
     "layout": { "main": { /* … */ }, "windows": [] }
   },
   "window": { /* the window block, live, with `monitors` — null with no window */ },
-  "panels": {                       // one entry per panel, always all eight
+  "panels": {                       // one entry per panel, always all nine
     "scene":             { "open": true,  "active": true },
+    "background_task":   { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
     "image_detail":      { "open": true,  "active": false },
-    "point_track":       { "open": true,  "active": true },
+    "track_view":        { "open": true,  "active": true },
     "camera_intrinsics": { "open": true,  "active": false },
     "action_log":        { "open": true,  "active": false },
     "edit_history":      { "open": true,  "active": false }
@@ -2116,10 +2120,10 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Twenty-nine tools that read and work the **bench** beside a node
+Thirty tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
-`crate::bench` -- the same call the Track Edit panel's button or the Image
+`crate::bench` -- the same call a Track View gesture or the Image
 Detail menu entry makes -- so an agent's verdict, split or commit is a version
 in the history the human is looking at, undoable by either of them.
 
@@ -2130,8 +2134,18 @@ means. What this surface adds is the three things every tool family here adds.
 **An item is named by its label**, exactly as a node is by
 `reconstruction_label`. The bench tools take `item`; the track tools take
 `track`, and **a call that names no track acts on the active one**, which is
-what a gesture in the Track Edit panel means when it names no item. A label that
+what a gesture in Track View's edit mode means when it names no item. A label that
 names nothing on the bench is refused naming it.
+
+**A bench can hold items with none active.** `deactivate_bench_item` is Track
+View's *Edit* box cleared: every item stays on the bench and none is active,
+one version, and a no-effect reply with nothing active. A discard of the active
+item leaves none active too. So `get_bench`'s `active.track` is `null` over a
+bench that has items, and a reader that took "non-empty" to mean "something is
+active" reads the wrong thing. A track tool that names no `track` while nothing
+is active is refused with the remedies: *"No track is active on bull's bench.
+Name one with track, activate one with activate_bench_item, or put one on with
+create_bench_track or create_bench_cluster."*
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on -- a create and a
@@ -2209,7 +2223,7 @@ a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Eight of the twenty-nine are the patch a track is**, and they are the
+**Eight of the thirty are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -2302,7 +2316,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the twenty-nine are about the SIFT index**, which is the node's
+**Four of the thirty are about the SIFT index**, which is the node's
 rather than any track's: `open_sift_index` adopts a `.kdf`, `build_sift_index`
 makes one out of the node's `.sift` files -- at a `path` of the caller's where
 it names one, refused when that path resolves outside the directory holding the
@@ -2536,7 +2550,7 @@ out of step with one.
 **The drain drops what the panels cached about a node an edit renumbered.** A
 bulk edit gives a node a whole new base and a cursor move lands on one, so an
 image index or a point index in the Image Browser's textures, the Image Detail
-panel's rendered patches, the Point Track table's prepared rows or the Camera
+panel's rendered patches, Track View's prepared rows or the Camera
 Intrinsics panel's derived quantities is afterwards a statement about something
 else. Those panels are `App`'s fields and not `AppState`'s, which is why this is
 the drain's job rather than the command vocabulary's: `apply_as_agent` reports
@@ -2805,7 +2819,7 @@ the window title read one thing.
 resolving a `.sfmr` observation to a pixel means reading the `.sift` file it
 points into, and the viewer memoizes that in `AppState::sift_cache`. Reading
 through the cache is what makes the number reported here the same number the
-Point Track panel shows, rather than a second implementation of it.
+Track View shows, rather than a second implementation of it.
 
 ## Transport and protocol
 
@@ -3231,7 +3245,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-two tools**, fifteen of them reads and one of them
+- **The catalog is seventy-three tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

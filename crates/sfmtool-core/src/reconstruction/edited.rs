@@ -259,8 +259,8 @@ fn constraint_triples_agree(a: Option<(u8, f64, u32)>, b: Option<(u8, f64, u32)>
 /// A point read through the overlay: a borrow into whichever point set holds
 /// it, with the columns addressed by that set's own local index.
 ///
-/// Handing back a view rather than a record is what lets the Point Track Detail
-/// panel and the track rays read an edited reconstruction at the cost of a
+/// Handing back a view rather than a record is what lets the viewer's Track View
+/// and the track rays read an edited reconstruction at the cost of a
 /// slice, with no allocation and no materialisation; [`Self::to_record`] is
 /// there for the caller that wants the owned form.
 #[derive(Clone, Copy)]

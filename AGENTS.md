@@ -224,7 +224,7 @@ backlog and keep them honest as findings get addressed:
   `sfm-explorer` splits in two: its `ui_basic` integration tests need a real
   window, while its **lib** tests are headless —
   `scene_renderer/upload/tests.rs` drives real `wgpu` uploads on the `noop`
-  backend and `point_track_detail/tests.rs` runs whole egui frames through
+  backend and `track_view/view/tests.rs` runs whole egui frames through
   `Context::run_ui`, so they need neither a GPU nor a window and run anywhere.
   **That split is a Cargo feature, not a convention**: `ui_basic` is declared as
   an explicit `[[test]]` target with `required-features = ["ui-tests"]`, so a

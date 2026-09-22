@@ -246,7 +246,7 @@ fn a_view_reset_forgets_the_extent_it_was_measured_against() {
 
 // ── Revealing a feature ─────────────────────────────────────────────────
 //
-// A row click in the Point Track Detail or Track Edit panel selects an image
+// A row click in the either mode of Track View panel selects an image
 // *and* names a feature in it. Zoomed in, that feature can be nowhere on
 // screen, so the panel is asked to bring it into view: by panning, never by
 // zooming, and only when it has to.
@@ -427,7 +427,7 @@ fn the_embedded_overlay_skips_a_deleted_point_and_shows_an_addition() {
 /// one lands. Before the version joined that key the overlay outlived the edit,
 /// and all three of the symptoms that follow are the one stale list: the
 /// deleted point's features went on drawing, a click on one selected an index
-/// the version has no point at, and the Point Track panel -- which reads that
+/// the version has no point at, and Track View -- which reads that
 /// index *through* the version -- then showed nothing while a second delete
 /// refused, because there was no live point there to delete.
 ///
@@ -571,10 +571,10 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
     let track = a_track();
     let why = add_bench_observation_entry(BenchMenu::default())
         .expect_err("nothing is on the bench to add to");
-    assert!(why.contains("No track is on the bench"), "{why}");
-    assert!(
-        why.contains(START_CLUSTER_LABEL),
-        "the refusal does not say how to start one: {why}",
+    assert_eq!(
+        why,
+        "No track is being edited: tick Edit in Track View, or double-click a Bench item \
+         in the Scene tree."
     );
 
     // The image the menu is open over is nowhere in the rule: a second
@@ -2164,7 +2164,7 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
 /// is zero degrees whatever the baseline. The three stored numbers are that
 /// direction and not a place: subtracting a camera centre from them measures the
 /// spread of rays to a point a unit from the world origin, which is a confident
-/// wrong number and a different one from what the Point Track Detail panel
+/// wrong number and a different one from what Track View
 /// reports for the same row.
 #[test]
 fn the_max_track_angle_of_a_bearing_is_zero_and_not_the_spread_about_the_origin() {

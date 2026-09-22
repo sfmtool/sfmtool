@@ -16,14 +16,14 @@ use std::path::Path;
 use sfmtool_core::EditedReconstruction;
 
 use super::patch::{build_patch_frame, build_stored_patch_texture};
-use super::{PointTrackDetail, TrackObservationData};
+use super::{PointTrackView, TrackObservationData};
 use crate::metrics::{
     compute_max_pairwise_angle, compute_observation_metrics, compute_point_diagnostics,
 };
 use crate::scene::{ImageRef, PointRef};
 use crate::state::CachedSiftFeatures;
 
-impl PointTrackDetail {
+impl PointTrackView {
     /// Prepare observation data for a newly selected point.
     pub(super) fn prepare_observations(
         &mut self,

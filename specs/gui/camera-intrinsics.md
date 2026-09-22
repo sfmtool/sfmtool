@@ -850,12 +850,12 @@ field and at some readable off-axis angle, which is the point of composing them.
 
 The panel is
 [`intrinsics_detail/`](../../crates/sfm-explorer/src/intrinsics_detail/mod.rs),
-split the way `point_track_detail/` is: `mod.rs` owns the state and the one
+split the way `track_view/view/` is: `mod.rs` owns the state and the one
 frame, with `derived`, `header`, `parameters`, `extrinsics`, `format` and
 `projection_plot` under it.
 
 A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Camera Intrinsics"**,
-defaulting into the same top-right tab group as Point Track, as the non-active
+defaulting into the same top-right tab group as Track View, as the non-active
 tab. It is a detail view of a selection like its neighbour, and like it is fully
 re-dockable.
 
@@ -1278,7 +1278,7 @@ Two caveats remain, both named in the tests rather than left implicit:
   spelling of the ideal map can match every one of them exactly.
 
 **`sfm-explorer` lib tests** (headless, `Context::run_ui`, the
-`point_track_detail/tests.rs` pattern):
+`track_view/view/tests.rs` pattern):
 - The selection coupling, one test per row of the truth table, driven through
   `AppState::select_image` / `select_camera` with no UI at all.
 - `scene_graph/tests.rs`: the group renders with the right label and count; a

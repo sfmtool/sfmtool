@@ -213,7 +213,7 @@ fn tracked_cursor_pos() -> Option<PhysicalPosition<f64>> {
 /// before it will take a scroll. So from the frame after a click until the
 /// pointer moves again, no scroll area scrolls: not under the wheel, and not
 /// under a two-finger pan, which reaches those panels only as the wheel event
-/// [`super::gesture_scroll_events`] synthesizes for them. Clicking a Track Edit
+/// [`super::gesture_scroll_events`] synthesizes for them. Clicking a Track View
 /// row or a Scene tree camera left that list dead to the touchpad until the
 /// mouse was nudged. The panels that read [`GestureEvent`]s themselves were
 /// never affected, because they route gestures by

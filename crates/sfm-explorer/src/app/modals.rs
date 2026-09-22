@@ -11,9 +11,8 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         app_state,
         image_browser,
         image_detail,
-        point_track_detail,
+        track_view,
         intrinsics_detail,
-        track_edit,
         ..
     } = parts;
     let UiRequests {
@@ -55,9 +54,8 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
                         Some(id),
                         image_browser,
                         image_detail,
-                        point_track_detail,
+                        track_view,
                         intrinsics_detail,
-                        track_edit,
                     );
                     if let Err(message) = app_state.close_node(id) {
                         app_state
@@ -85,9 +83,8 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
             let id = node.id;
             image_browser.forget_recon(id);
             image_detail.forget_recon(id);
-            point_track_detail.forget_recon(id);
+            track_view.forget_recon(id);
             intrinsics_detail.forget_recon(id);
-            track_edit.forget_recon(id);
         }
         if let Err(message) = app_state.close_all() {
             app_state
@@ -151,10 +148,10 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     {
         app_state.select_point(point);
         // Raise the panel that answers "what is this point?", so the
-        // jump has something to show for itself even when Point Track
+        // jump has something to show for itself even when Track View
         // is tabbed behind Image Detail (which is the default layout)
         // — or closed, which `show_panel` re-opens at its home rather
         // than silently finding nothing to raise.
-        app_state.show_panel(Tab::PointTrackDetail);
+        app_state.show_panel(Tab::TrackView);
     }
 }

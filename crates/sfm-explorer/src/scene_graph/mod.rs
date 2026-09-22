@@ -196,11 +196,13 @@ pub struct SceneGraphResponse {
     pub close_sift_index: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
-    /// A Bench row was clicked: make that item the active one of its kind. The
-    /// item is named by its position on the bench rather than by its label, so
-    /// this response stays a `Copy` value; the dock reads the label off the
-    /// bench at that position.
-    pub activate_bench_item: Option<(ReconId, usize)>,
+    /// A Bench row was double-clicked: make that item the active one, select
+    /// its node and raise Track View on it. The item is named by its position
+    /// on the bench rather than by its label, so this response stays a `Copy`
+    /// value. The raise is a layout operation, so the panel also keeps the
+    /// request for [`SceneGraphPanel::take_bench_edit`], which `app.rs` drains
+    /// once the dock is back in the state; the dock applies nothing of it.
+    pub edit_bench_item: Option<(ReconId, usize)>,
     /// `Discard` chosen on a Bench row, the item named the same way.
     pub discard_bench_item: Option<(ReconId, usize)>,
     /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
@@ -237,11 +239,24 @@ pub struct SceneGraphPanel {
     /// state: they configure the *next* fit and nothing outside the menu reads
     /// them, but they have to survive the frame the popup is open.
     align_options: AlignOptions,
+    /// A Bench row's double-click, kept for `app.rs` to apply after the dock
+    /// is back in the state. See [`SceneGraphPanel::take_bench_edit`].
+    bench_edit: Option<(ReconId, usize)>,
 }
 
 impl SceneGraphPanel {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Take the Bench row double-click the last frame reported, if any.
+    ///
+    /// Drained by `app.rs` once the dock is back in the state, for the reason
+    /// the Image Detail panel's point gesture is drained there: the gesture
+    /// ends in raising Track View, and applied inside the tab body the raise
+    /// would land on the placeholder dock and be thrown away with it.
+    pub(crate) fn take_bench_edit(&mut self) -> Option<(ReconId, usize)> {
+        self.bench_edit.take()
     }
 
     /// Where a row or toggle was drawn on the last frame, if it was drawn.
@@ -268,7 +283,7 @@ impl SceneGraphPanel {
             .map(|task| task.node)
             .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
         // The SIFT Index row is truthful on a node whose bench is empty, so the
-        // look that the Track Edit panel and the bench do happens here too --
+        // look that Track View and the bench do happens here too --
         // once per node per frame, and remembered, so a reconstruction with no
         // index beside it is not stat-ed again (`specs/gui/sift-index.md`).
         let ids: Vec<ReconId> = state.scene.iter().map(|node| node.id).collect();
@@ -362,6 +377,9 @@ impl SceneGraphPanel {
                 }
             });
 
+        if let Some(edit) = out.response.edit_bench_item {
+            self.bench_edit = Some(edit);
+        }
         out.response
     }
 }
@@ -880,9 +898,10 @@ fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
 /// node's parts are listed, and they are per node because an item names that
 /// node's images and poses (`specs/gui/bench.md`).
 ///
-/// Clicking a row makes that item active, which is a step like any other; the
-/// panel that edits the item is [`crate::track_edit`], and a secondary click
-/// offers *Discard*. An item is named to the dock by its **position on the
+/// A click on a row selects the node it is under and does nothing to the
+/// bench, the way a click on the node's own row selects it; a double-click
+/// makes the item active and raises [`crate::track_view`] on it, and a
+/// secondary click offers *Discard*. An item is named by its **position on the
 /// bench**, which is the position it holds in the whole list rather than in the
 /// group it is drawn under, so both groups' rows reach the same item.
 fn show_bench_stage_group(
@@ -940,7 +959,10 @@ fn show_bench_stage_group(
                 ));
             let row = out.hit(row_id(id, &format!("bench_item_{}", entry.label)), row);
             if row.clicked() {
-                out.response.activate_bench_item = Some((id, position));
+                out.response.select_recon = Some(id);
+            }
+            if row.double_clicked() {
+                out.response.edit_bench_item = Some((id, position));
             }
             crate::context_menu::on_secondary_click(&row).show(|ui| {
                 let discard = ui.button("Discard");

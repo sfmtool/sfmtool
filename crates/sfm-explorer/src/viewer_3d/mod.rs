@@ -376,7 +376,7 @@ impl Viewer3D {
             if entry(
                 ui,
                 EDIT_ON_BENCH_LABEL,
-                "Put this point's track on the bench and open the Track Edit panel on it.",
+                "Put this point's track on the bench and open Track View on it.",
             ) {
                 self.point_menu = Some(PointGesture::EditOnBench(point));
                 ui.close();

@@ -5,7 +5,7 @@
 //! behind it.
 //!
 //! egui needs no GPU to lay out a frame, so the panel tests run the real thing
-//! through `Context::run_ui` (the `point_track_detail/tests.rs` pattern): the
+//! through `Context::run_ui` (the `track_view/view/tests.rs` pattern): the
 //! tree is really built, `CollapsingState` really stores its expansion under
 //! [`row_id`], and clicks are really delivered by pointer events. Clicks aim at
 //! the rects the panel recorded on the previous frame
@@ -643,12 +643,36 @@ fn a_group_with_nothing_in_it_is_not_drawn() {
     assert!(!drawn(&ctx, row_id(id, "bench_clusters")));
 }
 
-/// Clicking a row activates that item from either group, and the active item is
-/// one across the two: the bench's kinds are items, not stages.
-#[test]
-fn a_row_in_either_group_activates_its_item() {
+/// [`benched`], with a second node appended after it and selected, so that
+/// what a gesture on the first node's Bench rows does to the node selection
+/// can be seen.
+fn benched_behind_another() -> (AppState, crate::scene::ReconId, String, String) {
     let (mut state, id, point, cluster) = benched();
+    let other = state.append_node(SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    state.select_recon(other);
+    assert_ne!(state.selected_recon, Some(id));
+    (state, id, point, cluster)
+}
+
+/// The number of versions `id`'s history holds.
+fn versions(state: &AppState, id: crate::scene::ReconId) -> usize {
+    state.node(id).expect("loaded").history.versions().len()
+}
+
+/// A single click on a Bench row selects the node it is under and does nothing
+/// to the bench: the node row's own pair, click to select and double-click to
+/// act, is the pattern the bench rows follow, and a pass of clicks down the
+/// tree pushes no versions.
+#[test]
+fn a_single_click_on_a_bench_row_selects_its_node_only() {
+    let (mut state, id, point, cluster) = benched_behind_another();
     let (mut panel, ctx) = settled(&mut state);
+    let before = versions(&state, id);
+    let active =
+        crate::bench::active_track_label(state.bench(id).expect("a bench")).map(str::to_string);
+    assert_eq!(active.as_deref(), Some(cluster.as_str()));
 
     let response = click(
         &mut panel,
@@ -656,43 +680,137 @@ fn a_row_in_either_group_activates_its_item() {
         &mut state,
         row_id(id, &format!("bench_item_{point}")),
     );
-    let (node, position) = response
-        .activate_bench_item
-        .expect("a Bench Points row reported nothing");
-    assert_eq!(node, id);
+    assert_eq!(response.select_recon, Some(id));
+    assert_eq!(response.edit_bench_item, None);
     assert_eq!(
-        state.bench(id).expect("a bench").entries()[position].label,
-        point,
-        "the position names the item in the whole bench"
+        panel.take_bench_edit(),
+        None,
+        "a single click asked for a raise"
     );
-    state
-        .activate_bench_item(id, &point)
-        .expect("on the bench, as the dock would");
+    state.select_recon(id);
+
+    assert_eq!(versions(&state, id), before, "a click pushed a version");
+    assert_eq!(
+        crate::bench::active_track_label(state.bench(id).expect("a bench")),
+        active.as_deref(),
+        "a click changed the active item"
+    );
+}
+
+/// A double-click on a Bench row makes that item active, selects the node it
+/// is under and raises Track View, from either group: the active item is one
+/// across the two, because the bench's kinds are items, not stages.
+#[test]
+fn a_double_click_on_a_bench_row_edits_its_item() {
+    let (_, _, point, _) = benched();
+    // The cluster, put on last, is the active item, so the point row is the
+    // one a double-click moves the activation to; and the point is made active
+    // first for the cluster row's turn, so both are a real change.
+    for (which, group) in [(0, "Bench Points"), (1, "Bench Clusters")] {
+        let (mut state, id, point_label, cluster_label) = benched_behind_another();
+        let label = if which == 0 {
+            point_label
+        } else {
+            cluster_label
+        };
+        if which == 1 {
+            state.activate_bench_item(id, &point).expect("on the bench");
+            state.select_recon(state.scene[1].id);
+        }
+        let (mut panel, ctx) = settled(&mut state);
+        state.hide_panel(crate::dock::Tab::TrackView);
+
+        let pos = panel
+            .hit_rect(row_id(id, &format!("bench_item_{label}")))
+            .unwrap_or_else(|| panic!("the {group} row"))
+            .center();
+        click_at(&mut panel, &ctx, &mut state, pos);
+        let response = click_at(&mut panel, &ctx, &mut state, pos);
+        let (node, position) = response
+            .edit_bench_item
+            .unwrap_or_else(|| panic!("a {group} double-click reported nothing"));
+        assert_eq!(node, id);
+        assert_eq!(
+            state.bench(id).expect("a bench").entries()[position].label,
+            label,
+            "the position names the item in the whole bench"
+        );
+        let before = versions(&state, id);
+        let (node, position) = panel.take_bench_edit().expect("the panel kept the request");
+        state.edit_bench_item_at(node, position);
+
+        assert_eq!(state.selected_recon, Some(id), "the node was not selected");
+        assert_eq!(
+            crate::bench::active_track_label(state.bench(id).expect("a bench")),
+            Some(label.as_str()),
+            "{group}"
+        );
+        assert_eq!(
+            versions(&state, id),
+            before + 1,
+            "one activation, one version"
+        );
+        assert!(state.is_panel_open(crate::dock::Tab::TrackView));
+    }
+}
+
+/// A double-click on the item already active asked for the panel, and the
+/// panel is what it gets: no version, and no no-effect row.
+#[test]
+fn a_double_click_on_the_active_item_only_raises_the_panel() {
+    let (mut state, id, _point, cluster) = benched();
+    let position = state
+        .bench(id)
+        .expect("a bench")
+        .position(&cluster)
+        .expect("on the bench");
+    state.hide_panel(crate::dock::Tab::TrackView);
+    let before = versions(&state, id);
+    let rows = state.action_log.entries().count();
+
+    state.edit_bench_item_at(id, position);
+
+    assert_eq!(versions(&state, id), before, "a version was pushed");
+    let bench_rows = state
+        .action_log
+        .entries()
+        .skip(rows)
+        .filter(|entry| entry.kind == crate::action_log::Kind::Bench)
+        .count();
+    assert_eq!(bench_rows, 0, "a bench row was written");
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
+}
+
+/// The frame takes the dock out of the state while a tab body draws, so the
+/// raise the double-click asks for is kept by the panel past that swap and
+/// applied by `app.rs` afterwards, as Image Detail's *Edit on Bench* is. Here
+/// the double-click lands while the dock is swapped out, and the raise still
+/// reaches the real dock once the request is drained.
+#[test]
+fn the_double_click_raise_survives_the_swapped_out_dock() {
+    let (mut state, id, point, _cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+    state.hide_panel(crate::dock::Tab::TrackView);
+    let pos = panel
+        .hit_rect(row_id(id, &format!("bench_item_{point}")))
+        .expect("the Bench Points row")
+        .center();
+
+    let dock = std::mem::replace(&mut state.dock, egui_dock::DockState::new(Vec::new()));
+    click_at(&mut panel, &ctx, &mut state, pos);
+    click_at(&mut panel, &ctx, &mut state, pos);
+    let placeholder = std::mem::replace(&mut state.dock, dock);
+    assert!(
+        placeholder.find_tab(&crate::dock::Tab::TrackView).is_none(),
+        "the panel raised inside the swap"
+    );
+
+    let (node, position) = panel.take_bench_edit().expect("the panel kept the request");
+    state.edit_bench_item_at(node, position);
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
     assert_eq!(
         crate::bench::active_track_label(state.bench(id).expect("a bench")),
         Some(point.as_str())
-    );
-
-    let response = click(
-        &mut panel,
-        &ctx,
-        &mut state,
-        row_id(id, &format!("bench_item_{cluster}")),
-    );
-    let (_, position) = response
-        .activate_bench_item
-        .expect("a Bench Clusters row reported nothing");
-    assert_eq!(
-        state.bench(id).expect("a bench").entries()[position].label,
-        cluster
-    );
-    state
-        .activate_bench_item(id, &cluster)
-        .expect("on the bench");
-    assert_eq!(
-        crate::bench::active_track_label(state.bench(id).expect("a bench")),
-        Some(cluster.as_str()),
-        "the active item is one across both groups"
     );
 }
 

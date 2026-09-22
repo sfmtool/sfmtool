@@ -4,7 +4,7 @@
 //! The observation table: the columns, one row per observation, and the
 //! three-state verdict control each row carries.
 //!
-//! The columns the Point Track Detail panel has come first -- the rendered
+//! The columns Track View has come first -- the rendered
 //! patch tile, the image and its name, the reprojection error and the ray angle
 //! -- and what the bench adds follows them: the verdict, the stage's own
 //! photometric numbers, the kernel's status and where the observation came
@@ -26,7 +26,7 @@ use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
 
 /// Side of one rendered tile, and so the tallest thing in a row. The size the
-/// Point Track Detail panel draws its own tiles at, because they are the same
+/// Track View draws its own tiles at, because they are the same
 /// tile.
 pub(crate) const TILE_SIZE: f32 = 48.0;
 /// Height of one observation row.
@@ -361,6 +361,11 @@ impl TrackEdit {
             response.reveal_feature = crate::bench::observation_pixel(row);
             let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
             self.toggle_row(observation, extend);
+        }
+        // Camera view for the row's image, as a view-mode row's double-click
+        // enters it: the rows of both modes are observations of one track.
+        if row_response.double_clicked() {
+            response.request_camera_view = Some(image.index());
         }
 
         let x0 = rect.min.x;

@@ -95,8 +95,8 @@ pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
 /// ID select a *different* reconstruction than the one in front of you.
 ///
 /// The index is checked here rather than left to the panels: a selection that
-/// names no point of its own reconstruction would show as an empty Point Track
-/// panel with nothing to say why. The check is **against the version's own
+/// names no point of its own reconstruction would show as an empty Track View
+/// with nothing to say why. The check is **against the version's own
 /// index space** and not against its point count -- a deletion leaves the
 /// indexes above it where they were and a replacement hands out one past the
 /// end, so a live point's index can sit above that count and an index below it
@@ -179,7 +179,7 @@ fn plural(count: usize) -> String {
     }
 }
 
-/// The Point ID of the current selection, as the Point Track header displays it
+/// The Point ID of the current selection, as Track View's header displays it
 /// — what the dialog opens prefilled with.
 ///
 /// `None` when nothing is selected, or when the selection has gone stale
@@ -195,8 +195,8 @@ pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) 
 
 /// The modal that collects the text.
 ///
-/// Opened from `Go ▸ Go to Point…`, from the shortcut, or from the Point Track
-/// panel's own button; it stays open on a bad query so the message sits right
+/// Opened from `Go ▸ Go to Point…`, from the shortcut, or from Track View's
+/// own button; it stays open on a bad query so the message sits right
 /// under the text that caused it and can be corrected in place.
 #[derive(Default)]
 pub struct GotoPointDialog {
@@ -252,7 +252,7 @@ impl GotoPointDialog {
     ///
     /// Returning the [`PointRef`] rather than applying it keeps this free of
     /// `AppState`: the caller owns what "go there" means (select the point,
-    /// and raise the Point Track tab so the result is visible).
+    /// and raise Track View so the result is visible).
     pub fn show(
         &mut self,
         ctx: &egui::Context,

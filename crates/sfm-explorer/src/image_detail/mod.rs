@@ -115,10 +115,14 @@ pub struct ImageDetail {
     /// the frame.
     ///
     /// Held here rather than carried out in the panel's response because it
-    /// ends in a layout operation: Edit on Bench raises the Track Edit panel,
-    /// and the frame swaps the dock out of the state while a tab body draws.
-    /// See [`ImageDetail::take_point_gesture`].
+    /// ends in a layout operation: Edit on Bench raises Track View, and the
+    /// frame swaps the dock out of the state while a tab body draws. See
+    /// [`ImageDetail::take_point_gesture`].
     point_gesture: Option<PointGesture>,
+    /// *Start cluster on the bench here*, at the image and pixel the menu was
+    /// opened on, drained by `app.rs` after the frame for the same reason: it
+    /// raises Track View on the cluster. See [`ImageDetail::take_cluster_start`].
+    cluster_start: Option<(ImageRef, [f32; 2])>,
 }
 
 /// A feature to draw on the image detail panel.
@@ -168,19 +172,22 @@ pub struct ImageDetailResponse {
     pub context_menu_pixel: Option<[f32; 2]>,
     /// The pixel the context menu's `Start cluster on the bench here` was
     /// clicked for: a cluster-stage track starts there, on the node's bench.
+    ///
+    /// Read by the panel itself, like `edit_on_bench`: the gesture raises
+    /// Track View, so `show` keeps it for [`ImageDetail::take_cluster_start`].
     pub start_bench_cluster: Option<[f32; 2]>,
     /// The pixel the context menu's `Add observation to bench track here` was
     /// clicked for: a candidate joins the bench's active track there.
     pub add_bench_observation: Option<[f32; 2]>,
     /// `Edit on Bench` was chosen on a feature, or one was double-clicked:
-    /// put the point it observes on the bench and raise the Track Edit panel.
+    /// put the point it observes on the bench and raise Track View.
     ///
     /// Read by the panel itself rather than by the dock, because the gesture
     /// ends in a layout operation and so has to outlive the tab body: `show`
     /// turns it into the [`PointGesture`] `app.rs` drains after the frame.
     pub edit_on_bench: Option<usize>,
-    /// A mark of the bench layer was clicked: select this observation of the
-    /// active track in the Track Edit panel. The layer is on top, so a click it
+    /// A mark of the bench layer was clicked: select this observation's row of
+    /// the active track in Track View. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
     pub select_bench_row: Option<usize>,
     /// The edit a drag of one of the bench layer's handles just finished, in
@@ -210,6 +217,7 @@ impl ImageDetail {
             last_display_size: None,
             bench_drag: None,
             point_gesture: None,
+            cluster_start: None,
         }
     }
 
@@ -220,6 +228,13 @@ impl ImageDetail {
     /// the raise would land on the placeholder dock and be thrown away with it.
     pub(crate) fn take_point_gesture(&mut self) -> Option<PointGesture> {
         self.point_gesture.take()
+    }
+
+    /// Take the *Start cluster on the bench here* the last frame chose, if
+    /// any: the image and the pixel in it. Drained by `app.rs` with
+    /// [`ImageDetail::take_point_gesture`], and for the same reason.
+    pub(crate) fn take_cluster_start(&mut self) -> Option<(ImageRef, [f32; 2])> {
+        self.cluster_start.take()
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -318,7 +333,7 @@ impl ImageDetail {
     /// Point the view at what `look` names, in the frame `geometry` describes.
     ///
     /// The one door a request from outside the panel comes through: the
-    /// row-click reveal from Point Track Detail and Track Edit, and the wire's
+    /// row-click reveal from both modes of Track View, and the wire's
     /// `set_image_detail_view`. What each request *means* is
     /// [`view::look_at`]'s, a pure function over the geometry, so a pixel an
     /// agent asked to be centred lands exactly where a reveal of the same pixel
@@ -721,6 +736,10 @@ impl ImageDetail {
         // request `app.rs` applies once the dock is back in the state.
         if let Some(point) = response.edit_on_bench {
             self.point_gesture = Some(PointGesture::EditOnBench(PointRef::new(recon_id, point)));
+        }
+        // The other one: a cluster started here raises Track View on it.
+        if let (Some(pixel), Some(image)) = (response.start_bench_cluster, selected_image) {
+            self.cluster_start = Some((ImageRef::new(recon_id, image), pixel));
         }
 
         // The one mark that draws over the features rather than under them.
@@ -1132,7 +1151,7 @@ fn populate_feature_diagnostics(
 /// stored numbers are that direction rather than a place, and subtracting a
 /// camera centre from them would measure the spread of rays to a point one unit
 /// from the world origin -- a confident wrong number, and a different one from
-/// what the Point Track Detail panel reports for the same row.
+/// what Track View reports for the same row.
 fn compute_max_track_angle_deg(edited: &EditedReconstruction, point_idx: u32) -> f32 {
     let Some(view) = edited.point(point_idx) else {
         return f32::NAN;

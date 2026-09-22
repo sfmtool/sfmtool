@@ -40,7 +40,7 @@ second, non-active tab, so the viewer still opens on the image strip:
 
 ```
 ┌────────┬──────────────────┬───────────────┐
-│        │    3D Viewer     │  Point Track  │
+│        │    3D Viewer     │  Track View   │
 │ Scene  ├──────────────────┴───────────────┤
 │        │  Image Browser │ Action Log      │  ← tab group, Image Browser active
 └────────┴──────────────────────────────────┘

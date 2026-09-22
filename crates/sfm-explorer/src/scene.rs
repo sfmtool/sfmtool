@@ -663,7 +663,7 @@ pub fn version_hash_prefix(node: &SceneNode) -> String {
         .unwrap_or_else(|| hash_prefix(node))
 }
 
-/// The copyable point id the Point Track panel shows, `pt3d_<hash>_<index>`.
+/// The copyable point id Track View shows, `pt3d_<hash>_<index>`.
 ///
 /// Minted by [`crate::point_ids::mint`], so it names the content the point is on
 /// disk in when it is in one, and the earliest content it reaches otherwise --

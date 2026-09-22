@@ -281,6 +281,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         item: String,
     },
+    /// Leave every item on the bench and make none active: Track View's *Edit*
+    /// box cleared.
+    DeactivateBenchItem {
+        reconstruction_label: String,
+    },
     RenameBenchItem {
         reconstruction_label: String,
         item: String,
@@ -1143,6 +1148,9 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &item,
         )),
+        Command::DeactivateBenchItem {
+            reconstruction_label,
+        } => done(bench::deactivate_bench_item(state, &reconstruction_label)),
         Command::RenameBenchItem {
             reconstruction_label,
             item,
@@ -1631,8 +1639,8 @@ pub(super) fn resolve_camera_intrinsics(
 /// The 3D point a tool named.
 ///
 /// Goes through the same parse and the same lookup the Go to Point dialog uses
-/// ([`crate::goto_point`]), so a point id a human copied out of the Point Track
-/// panel pastes straight into a tool call, and the two paths cannot disagree
+/// ([`crate::goto_point`]), so a point id a human copied out of Track View
+/// pastes straight into a tool call, and the two paths cannot disagree
 /// about what an id means.
 pub(super) fn resolve_point(
     state: &AppState,
@@ -1869,6 +1877,7 @@ impl Command {
             Command::CreateBenchCluster { .. } => "create_bench_cluster",
             Command::CreateBenchTrack { .. } => "create_bench_track",
             Command::ActivateBenchItem { .. } => "activate_bench_item",
+            Command::DeactivateBenchItem { .. } => "deactivate_bench_item",
             Command::RenameBenchItem { .. } => "rename_bench_item",
             Command::DiscardBenchItem { .. } => "discard_bench_item",
             Command::DuplicateBenchItem { .. } => "duplicate_bench_item",
@@ -2076,6 +2085,7 @@ impl Command {
             Command::CreateBenchCluster { .. }
             | Command::CreateBenchTrack { .. }
             | Command::ActivateBenchItem { .. }
+            | Command::DeactivateBenchItem { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }

@@ -38,7 +38,7 @@ pipeline),
 (the query the descriptor search is one of), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
 (the proposal for the searches and the pull-in), and
-[`../../gui/track-edit.md`](../../gui/track-edit.md) (the panel it is edited in).
+[`../../gui/track-view.md`](../../gui/track-view.md) (the panel it is edited in).
 
 ## Rust API
 
@@ -752,7 +752,7 @@ read a `w` off, and a bearing it came from is still a bearing: a reader that wen
 to the frame would call it a place one unit from the world origin, publish it
 under `position`, and commit it back at `w = 1`. So `create_track` takes the
 point's own `w`, `fit` takes the classification's, and everything that states
-which of the two it is holding -- the Track Edit header's word, the wire's choice
+which of the two it is holding -- Track View's edit-mode header word, the wire's choice
 of `direction` over `position`, the commit's `w`, the reading's report -- reads
 the flag. Where a frame exists the two agree, and every step that writes one
 writes both.
@@ -785,7 +785,7 @@ written down:
   by it before framing the patch. A track taken down and put back up is the
   size it was.
 - **Everything that draws reads it**: the bench layer's parallelogram in the
-  Image Detail panel and the Track Edit panel's tile. A cluster carries its
+  Image Detail panel and Track View's tile. A cluster carries its
   radius from the moment it is started, so a seed is drawn at the size it was
   named before anything has read a photograph, and an evaluation that finds the
   same scale leaves the outline where it is.
@@ -1336,7 +1336,7 @@ a corpus image index and the observation it becomes names a node image index,
 and this step takes no reconstruction to compare a name table against, so the
 two are stated to be one number. The caller that adopts a forest is where that
 is checked -- in the viewer, at the moment a `.kdf` is opened
-([`../../gui/track-edit.md`](../../gui/track-edit.md)).
+([`../../gui/track-view.md`](../../gui/track-view.md)).
 
 The keypoints are the caller's: nothing here opens a `.sift` file, because a
 window already holds every image's keypoints to draw them over the photograph
@@ -2103,7 +2103,7 @@ on cancellation without returning a partial track.
 
 - **Building the descriptor index.** `search_descriptors` takes an open forest;
   making one out of a capture's `.sift` files is the viewer's
-  ([`../../gui/track-edit.md`](../../gui/track-edit.md)) or a script's.
+  ([`../../gui/track-view.md`](../../gui/track-view.md)) or a script's.
 - **The pairwise coherence matrix.** An evaluation scores each observation
   against the others' consensus; the `k x k` matrix that shows a track made of
   two surfaces as two blocks is

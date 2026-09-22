@@ -130,7 +130,7 @@ fn a_touch_or_touchpad_contact_is_not_the_mouse() {
 /// The bug this exists for: on Windows every click arrives as a contact, and
 /// `egui-winit` ends a contact by forgetting where the pointer is
 /// (`Event::PointerGone`), which costs `egui::ScrollArea` the `interact_pos`
-/// it takes a scroll by. A click on a Track Edit row or a Scene tree camera
+/// it takes a scroll by. A click on a Track View row or a Scene tree camera
 /// left that list dead to the wheel and to a two-finger pan until the mouse was
 /// moved. The release is followed back into egui by the cursor position the
 /// window procedure tracks, so the pointer never goes anywhere.

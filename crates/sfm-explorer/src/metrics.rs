@@ -9,8 +9,8 @@
 //! that quotes them stay thin. A point arrives as a [`PointView`], so the
 //! numbers describe the version on screen rather than the base under it.
 //! They live at the crate root rather than under a panel
-//! because three different surfaces read the same numbers: the Point Track
-//! Detail table tabulates them, the Image Detail overlay colours features by
+//! because three different surfaces read the same numbers: Track View's
+//! table tabulates them, the Image Detail overlay colours features by
 //! them, and the MCP `get_point` tool reports them to an agent. A figure an
 //! agent is told and a figure the human beside it reads off a panel have to be
 //! the same figure, and that is easier to keep true when there is one

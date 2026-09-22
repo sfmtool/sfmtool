@@ -313,7 +313,7 @@ below. The noise floor reaches the CLI as the fourth component of
 **The GUI** consumes the core functions directly. Two overlay modes back onto
 these diagnostics — "Depth Reliability", driven by `inverse_depth_z` (low =
 near-infinity, unconstrained depth), and "Condition Number" on a log scale —
-computed per point by `point_track_detail::compute_point_diagnostics` via
+computed per point by `metrics::compute_point_diagnostics` via
 `triangulate_batch` / `depth_uncertainty_batch`. The same numbers appear in the
 point-track header and in the Image Detail tooltip, next to the max track angle.
 

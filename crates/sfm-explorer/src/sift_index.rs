@@ -237,7 +237,7 @@ impl AppState {
     /// Look for `id`'s index if nothing has yet, and re-derive its state when
     /// the node's image table has moved since the state was derived.
     ///
-    /// What the Track Edit panel, the Scene tree and the first item put on a
+    /// What Track View, the Scene tree and the first item put on a
     /// node's bench call. A `.kdf` opens without decoding a tree or a
     /// descriptor block, so looking costs a stat and a header read, and a
     /// session that finds the file the last one built is a session that can

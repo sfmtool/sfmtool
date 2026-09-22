@@ -4,7 +4,7 @@
 //! The tools that read and work the bench beside a node.
 //!
 //! See `specs/gui/bench.md` § "The wire". Every step here is one `AppState`
-//! call from [`crate::bench`] -- the same call the Track Edit panel's button or
+//! call from [`crate::bench`] -- the same call a Track View button or
 //! the Image Detail menu entry makes -- so an agent's verdict, split or commit
 //! is a version in the history the human is looking at, with the same Action
 //! Log row and the same Undo. What this module adds is the resolution of a wire
@@ -76,7 +76,8 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
     Ok(json!({
         "reconstruction_label": node_label(state, id),
         // One active item per kind, which is what an omitted `track` resolves
-        // to; null where the bench holds none of that kind.
+        // to; null when none of that kind is active, which a bench holding
+        // items can be once Track View's Edit box is cleared.
         "active": { "track": active },
         "items": items,
         // The index a descriptor search would query, reported here rather than
@@ -104,7 +105,7 @@ pub(super) fn sift_index(state: &AppState, id: ReconId) -> Value {
     })
 }
 
-/// `get_bench_track`: one track's table, which is the Track Edit panel's own
+/// `get_bench_track`: one track's table, which is Track View's edit-mode
 /// reading of it.
 ///
 /// An observation is addressed by its position in `observations`, and that
@@ -209,6 +210,14 @@ pub(super) fn activate_bench_item(state: &mut AppState, label: &str, item: &str)
     let id = resolve_reconstruction(state, Some(label))?;
     let reply = edit::edited(state, id, |state| state.activate_bench_item(id, item))?;
     Ok(with_item(reply, item))
+}
+
+/// `deactivate_bench_item`: Track View's *Edit* box cleared. Every item stays
+/// on the bench and none is active; with nothing active it is a no-effect
+/// reply, as every bench step's nothing-to-do is.
+pub(super) fn deactivate_bench_item(state: &mut AppState, label: &str) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    edit::edited(state, id, |state| state.deactivate_bench_item(id))
 }
 
 /// `rename_bench_item`: the item under a name of the caller's own.
@@ -705,8 +714,8 @@ pub(super) fn commit_bench_track(
 /// later call can address it by, and the index it replaced where it replaced
 /// one.
 ///
-/// The id is [`crate::scene::point_id`]'s, which is the id the Point Track
-/// panel shows for the same row and the id `get_point` and `select_point` take
+/// The id is [`crate::scene::point_id`]'s, which is the id Track View shows
+/// for the same row and the id `get_point` and `select_point` take
 /// back -- a created point carries the commit's own edit hash, since there is no
 /// base row to name it by.
 fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed) -> Value {
@@ -906,7 +915,7 @@ fn started_or(
 ///
 /// What `set_image_detail_view`'s `bench_observation` target resolves to. The
 /// pixel is [`crate::bench::observation_pixel`]'s, the one rule the Image
-/// Detail panel's own mark and the Track Edit row click already share, so a
+/// Detail panel's own mark and the Track View row click already share, so a
 /// caller that asked to look at an observation is looking at the mark drawn for
 /// it rather than at a second reading of where it is.
 pub(super) fn observation_place(
@@ -924,8 +933,9 @@ pub(super) fn observation_place(
             .map(str::to_string)
             .ok_or_else(|| {
                 ToolError::new(format!(
-                    "No track is active on {}'s bench. Name one with track, or put one on with \
-                     create_bench_track or create_bench_cluster.",
+                    "No track is active on {}'s bench. Name one with track, activate one with \
+                     activate_bench_item, or put one on with create_bench_track or \
+                     create_bench_cluster.",
                     node_label(state, label_of_node)
                 ))
             })?,
@@ -975,8 +985,9 @@ fn target(
         .map(str::to_string)
         .ok_or_else(|| {
             ToolError::new(format!(
-                "No track is active on {}'s bench. Name one with track, or put one on with \
-                 create_bench_track or create_bench_cluster.",
+                "No track is active on {}'s bench. Name one with track, activate one with \
+                 activate_bench_item, or put one on with create_bench_track or \
+                 create_bench_cluster.",
                 node_label(state, id)
             ))
         })?;

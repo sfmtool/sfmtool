@@ -105,7 +105,7 @@ default share of
 
 ```
 ┌────────┬──────────────────┬───────────────┐
-│ Scene  │    3D Viewer     │  Point Track  │
+│ Scene  │    3D Viewer     │  Track View   │
 ├────────┼──────────────────┴───────────────┤
 │Backgr. │  Image Browser │ Action Log      │
 └────────┴──────────────────────────────────┘
@@ -245,7 +245,7 @@ Earlier rows are above it, and none of them is a summary of another:
 
 Everything that reads the scene keeps working. The node shows the version at its
 cursor, which is the value the worker was handed and which nothing is mutating,
-so orbiting, selecting, opening the Point Track panel, taking a screenshot and
+so orbiting, selecting, opening Track View, taking a screenshot and
 opening a second file all behave exactly as they do when nothing is running.
 
 What is refused is anything that would change the node the operation is running

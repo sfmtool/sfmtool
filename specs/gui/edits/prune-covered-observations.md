@@ -169,7 +169,7 @@ The core function's own tests are
   position, not fit. A residual filter is a different operation and would read
   as one.
 - **Adding an observation.** The edit only subtracts. Deciding which sightings a
-  track should have is the bench's work ([../track-edit.md](../track-edit.md)).
+  track should have is the bench's work ([../track-view.md](../track-view.md)).
 - **A dialog for the thresholds.** The menu passes the operation's defaults; the
   wire is where the three are named. A dialog is a thing to add when somebody
   wants one, not before.

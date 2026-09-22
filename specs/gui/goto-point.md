@@ -7,7 +7,7 @@ point -- switching the selected reconstruction when the ID names a different
 one.
 
 For the panel this most directly serves, see
-[point-track-detail.md](point-track-detail.md). For the ID format
+[track-view.md](track-view.md). For the ID format
 itself, see the [Point ID section in the `.sfmr` format
 spec](../formats/sfmr-file-format.md#point-id-portable-3d-point-references).
 
@@ -39,7 +39,7 @@ Three, all opening the same dialog:
 |-------------|-------|-----------|
 | `Go ▸ Go to Point…` | Menu bar | Discoverable; the conventional home for "jump to a thing by name" (editors put it under *Go* or *Goto*). |
 | Ctrl+G / Cmd+G | Anywhere | The conventional shortcut for the same. `COMMAND` rather than `CTRL` so macOS gets Cmd. |
-| Button in the Point Track Detail panel | Header, beside *Copy Point ID*; and in the empty state | Copy and Go-to are the two halves of one round trip, so they belong side by side. The empty state is where a user with an ID in hand and no selection actually looks. |
+| Button in Track View | Header, beside *Copy Point ID*; and in the empty state | Copy and Go-to are the two halves of one round trip, so they belong side by side. The empty state is where a user with an ID in hand and no selection actually looks. |
 
 The **Go** menu is new. The menu bar previously held only **File** — the former
 View menu having moved into the viewport HUD (see
@@ -88,7 +88,7 @@ and a selected field would delete the whole query on the next keystroke.
 #### Prefill and Selection on Open
 
 Opening the dialog puts the **currently selected point's ID** in the field, as
-the Point Track header displays it, and selects the whole thing.
+Track View's header displays it, and selects the whole thing.
 
 Both halves matter, and the selection is the load-bearing one. A field that
 opens prefilled but unselected is actively worse than one that opens empty:
@@ -170,7 +170,7 @@ this reconstruction a moment ago.
 any selection happens, and the failure names the node and its count
 (`run_b has 60 points — index 60 is out of range.`). Checking here rather than
 leaving it to the panels matters: a selection pointing past the end of its own
-reconstruction would render as an empty Point Track panel with nothing to say
+reconstruction would render as an empty Track View with nothing to say
 why.
 
 ### The ID forms and the version graph
@@ -258,11 +258,13 @@ On a query that resolves:
    reconstruction and clears any image selection belonging to a different one,
    per the finer-selection invariant in
    [scene-graph.md](scene-graph.md).
-2. The **Point Track Detail** tab is raised
-   (`DockState::find_tab` + `set_active_tab`), so the jump has something to show
-   for itself. In the default layout that panel is tabbed *behind* Image Detail,
-   and without this the only visible effect of a successful jump would be a
-   recoloured splat somewhere in the 3D viewport.
+2. The **Track View** tab is raised (`AppState::show_panel(Tab::TrackView)`),
+   so the jump has something to show for itself; closed, it is re-opened at its
+   home. Without this the only visible effect of a successful jump could be a
+   recoloured splat somewhere in the 3D viewport. The jump is a selection
+   gesture and not a bench step: in edit mode Track View stays on the item being
+   edited, and its selection notice names the point jumped to, with *View* one
+   click away ([track-view.md](track-view.md) § "The selection notice").
 3. The dialog closes.
 
 Everything else follows from the ordinary selection propagation: track rays
@@ -328,7 +330,7 @@ widget has already run for the frame, so the selection takes effect on the next
 frame — which is also the first frame the field is focused, leaving no window in
 which the user could type into an unselected field.
 
-The Point Track Detail panel reports its button through
-`PointTrackDetailResponse::request_goto_point`, which `dock.rs` turns into
+Track View reports its button through
+`PointTrackViewResponse::request_goto_point`, which `dock.rs` turns into
 `state.open_goto_point()` — the same shape every other cross-panel action in
 that response uses.

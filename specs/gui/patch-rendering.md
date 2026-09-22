@@ -332,8 +332,7 @@ these rows and `recon.patches` re-marks them on load.
 
 Because patches write `PICK_TAG_POINT | point_index`, the existing pick pipeline
 (`app.rs::process_pick_readback`) resolves a patch click to its 3D point with **no
-new code** — selection highlight, cross-panel hover, and the Point Track Detail
-panel all work through the point they already key on. Hover highlight of the
+new code** — selection highlight, cross-panel hover, and Track View all work through the point they already key on. Hover highlight of the
 patch itself (e.g. a rim) can reuse the point-splat `selection/hover index`
 uniforms if desired, but is not required for v1.
 

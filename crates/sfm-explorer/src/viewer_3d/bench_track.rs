@@ -28,7 +28,7 @@
 //! an edge resizes it with the far edge held, a corner turns it about its
 //! normal, the normal's own segment moves it along that normal, the arrowhead
 //! at the far end of that segment turns the normal itself, and an
-//! observation's circle selects that row in Track Edit. The
+//! observation's circle selects that row in Track View. The
 //! pointer is read as a **ray of the viewport's camera** met with the patch's
 //! own geometry ([`crate::bench::geometry`]), which is the same idea the Image
 //! Detail panel reads a pixel by, and the edit it names is handed to the same
@@ -86,7 +86,7 @@ const BARB_SIDE: f64 = 0.1;
 /// behind it sits at the floor.
 const FOG_DISTANCE: f64 = 4.0;
 
-/// How much larger the circle of the observation selected in Track Edit is
+/// How much larger the circle of the observation selected in Track View is
 /// drawn.
 ///
 /// The one thing the figure says about the selection, and the other half of the
@@ -136,7 +136,7 @@ pub(crate) struct BenchTrack<'a> {
     /// coordinates and put through this, because the pass draws from one shared
     /// buffer with no per-recon `model` matrix of its own.
     pub(crate) transform: &'a Se3Transform,
-    /// The observation row selected in Track Edit, whose circle is drawn
+    /// The observation row selected in Track View, whose circle is drawn
     /// [`SELECTED_CIRCLE_SCALE`] larger.
     pub(crate) selected: Option<usize>,
     /// Whether a background task holds the node. The layer still draws -- what
@@ -470,7 +470,7 @@ pub(crate) enum Handle {
     Arrowhead(Tilt),
     /// One observation's circle. It edits nothing -- where a photograph sees the
     /// patch's content is that photograph's answer and not a thing to drag --
-    /// but a click on it selects that row in Track Edit, as clicking a mark in
+    /// but a click on it selects that row in Track View, as clicking a mark in
     /// the Image Detail panel does.
     Circle {
         /// The observation, by its position in the track's list.
@@ -484,7 +484,7 @@ pub(crate) enum BenchGesture {
     /// A drag finished: apply this edit, through the call the wire's patch
     /// tools make, as one version and one Action Log row.
     Edit(PatchEdit),
-    /// A circle was clicked: select that observation's row in Track Edit.
+    /// A circle was clicked: select that observation's row in Track View.
     SelectRow(usize),
 }
 

@@ -17,7 +17,7 @@ Related specs:
 right click is told from a right drag),
 [../scene-graph.md](../scene-graph.md) (the reconstruction row's menu),
 [../background-tasks.md](../background-tasks.md) (the worker the whole-value
-action runs on), [../track-edit.md](../track-edit.md) (the bench the point
+action runs on), [../track-view.md](../track-view.md) (the bench the point
 menu's other entry stages onto), [README.md](README.md) (the other edit
 families).
 
@@ -190,7 +190,7 @@ what is tested here is the wrapping.
   entry carries, and the refusal quotes it.
 - **The menu's requests are carried out**: a menu that only opened selects the
   point and edits nothing; `Retriangulate Point` selects and pushes its version;
-  `Edit on Bench` stages the track and raises the Track Edit panel, which is
+  `Edit on Bench` stages the track and raises Track View, which is
   asserted against a dock the test closes that panel out of first.
 - **The viewport menu itself**, headless: a right click on a point opens it and
   names the point, a right click on nothing opens nothing, a right drag past
@@ -211,7 +211,7 @@ what is tested here is the wrapping.
   ([bundle-adjust.md](bundle-adjust.md)).
 - **Adding, removing or walking an observation.** The track is read as it
   stands. Deciding which sightings a track should have is the bench's work
-  ([../track-edit.md](../track-edit.md)), and the point menu's other entry is
+  ([../track-view.md](../track-view.md)), and the point menu's other entry is
   how a reviewer gets there from the same gesture.
 - **Deleting a point the observations cannot place.** A point too thinly seen
   keeps what it had and is counted, because a retriangulation asked for by hand

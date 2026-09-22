@@ -12,8 +12,7 @@ and it leaves the window's menu bar with no View menu at all.
 ## Motivation
 
 Every control that used to sit in the View menu (`app.rs`) is 3D-viewport
-state. None of it affects the Image Browser, Image Detail, or Point Track
-panels. Two problems followed from housing it in an app-global menu:
+state. None of it affects the Image Browser, Image Detail, or Track View. Two problems followed from housing it in an app-global menu:
 
 1. **It contradicts the panel model.** The dock already establishes that a
    panel owns its own controls: Image Detail has an overlay/filter toolbar

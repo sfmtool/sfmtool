@@ -47,8 +47,8 @@ const DEFAULT_JSON: &str = r#"{
             "active": "viewer_3d"
           },
           "second": {
-            "tabs": ["point_track", "camera_intrinsics", "track_edit"],
-            "active": "point_track"
+            "tabs": ["track_view", "camera_intrinsics"],
+            "active": "track_view"
           }
         },
         "second": {
@@ -170,13 +170,10 @@ fn the_viewport_opens_with_image_detail_behind_it_and_the_tables_beside_it() {
     );
     let right = leaves
         .iter()
-        .find(|(tabs, _)| tabs.contains(&Tab::PointTrackDetail))
-        .expect("no leaf holds the Point Track panel");
-    assert_eq!(
-        right.0,
-        vec![Tab::PointTrackDetail, Tab::IntrinsicsDetail, Tab::TrackEdit]
-    );
-    assert_eq!(right.1, Tab::PointTrackDetail);
+        .find(|(tabs, _)| tabs.contains(&Tab::TrackView))
+        .expect("no leaf holds Track View");
+    assert_eq!(right.0, vec![Tab::TrackView, Tab::IntrinsicsDetail]);
+    assert_eq!(right.1, Tab::TrackView);
 }
 
 /// The left column is a top-bottom split, not a second set of tabs: the tree
@@ -311,9 +308,8 @@ fn tab_all_is_in_the_menus_order() {
             Tab::Viewer3D,
             Tab::ImageBrowser,
             Tab::ImageDetail,
-            Tab::PointTrackDetail,
+            Tab::TrackView,
             Tab::IntrinsicsDetail,
-            Tab::TrackEdit,
             Tab::ActionLog,
             Tab::EditHistory,
         ]
@@ -372,8 +368,8 @@ fn showing_an_open_panel_only_changes_the_active_tab() {
 #[test]
 fn a_panel_goes_home_to_a_group_mate() {
     for (tab, mate) in [
-        (Tab::PointTrackDetail, Tab::IntrinsicsDetail),
-        (Tab::IntrinsicsDetail, Tab::PointTrackDetail),
+        (Tab::TrackView, Tab::IntrinsicsDetail),
+        (Tab::IntrinsicsDetail, Tab::TrackView),
         // The viewport and Image Detail share a node in the default layout, so
         // either of them re-opened goes back behind the other.
         (Tab::ImageDetail, Tab::Viewer3D),
@@ -561,7 +557,59 @@ fn an_unknown_panel_name_lists_them_all() {
     assert_eq!(
         message,
         "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_task, viewer_3d, \
-         image_browser, image_detail, point_track, camera_intrinsics, track_edit, action_log, edit_history"
+         image_browser, image_detail, track_view, camera_intrinsics, action_log, edit_history"
+    );
+}
+
+/// The two panels Track View took the place of are unknown names like any
+/// other: a file naming either is refused whole, with no alias for the old
+/// spelling and no rule for a file that names both.
+#[test]
+fn a_retired_panel_name_is_refused_whole() {
+    for retired in ["point_track", "track_edit"] {
+        let message = layout_refusal(&format!(
+            r#"{{"main": {{"tabs": ["{retired}"], "active": "{retired}"}}}}"#
+        ));
+        assert!(
+            message.starts_with(&format!("layout.main: unknown panel \"{retired}\"")),
+            "{message}"
+        );
+        assert!(message.contains("track_view"), "{message}");
+    }
+    assert_eq!(Tab::from_wire_name("point_track"), None);
+    assert_eq!(Tab::from_wire_name("track_edit"), None);
+}
+
+/// The stock layout every earlier viewer wrote, with both retired names in one
+/// leaf: refused at the first of them, and the dock left as it was.
+#[test]
+fn the_earlier_stock_layout_is_refused_and_leaves_the_dock_alone() {
+    let earlier = DEFAULT_JSON.replace(
+        r#""tabs": ["track_view", "camera_intrinsics"],
+            "active": "track_view""#,
+        r#""tabs": ["point_track", "camera_intrinsics", "track_edit"],
+            "active": "point_track""#,
+    );
+    assert_ne!(earlier, DEFAULT_JSON, "the fixture did not change");
+    let message = refusal(&earlier);
+    assert_eq!(
+        message,
+        "layout.main.second.first.second: unknown panel \"point_track\"; the panels are scene, \
+         background_task, viewer_3d, image_browser, image_detail, track_view, camera_intrinsics, \
+         action_log, edit_history"
+    );
+}
+
+/// The at-most-once rule applies to Track View as to every other panel.
+#[test]
+fn track_view_may_appear_only_once() {
+    let twice = r#"{"main": {
+        "split": "left_right", "fraction": 0.5,
+        "first": {"tabs": ["track_view"]},
+        "second": {"tabs": ["camera_intrinsics", "track_view"]}}}"#;
+    assert_eq!(
+        layout_refusal(twice),
+        "layout.main.second: panel \"track_view\" appears more than once"
     );
 }
 
@@ -1333,6 +1381,54 @@ fn loading_a_file_records_where_it_came_from() {
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert!(entries[0].0, "the entry is a failure: {entries:?}");
     assert!(entries[0].1.contains("layout.main"), "{entries:?}");
+
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// The startup path over a default-layout file saved before Track View: the
+/// file names both retired panels, so it is refused whole, the viewer keeps the
+/// stock grid (which holds Track View), and the failed entry is what the
+/// viewport status line shows, so the person sees why their layout did not come
+/// back.
+///
+/// `load_layout_file` on a freshly built state is exactly what `resumed` does
+/// with the file at startup, between creating the window and showing it.
+#[test]
+fn a_default_layout_file_naming_a_retired_panel_starts_on_the_stock_grid() {
+    let directory =
+        std::env::temp_dir().join(format!("sfm-explorer-retired-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let path = directory.join(DEFAULT_LAYOUT_FILE_NAME);
+    let earlier = DEFAULT_JSON.replace("\"track_view\"", "\"point_track\"");
+    std::fs::write(&path, &earlier).expect("write");
+
+    let mut state = crate::state::AppState::new();
+    let mut host = FakeWindow::default();
+    state.observe_window(&host);
+    state.load_layout_file(&mut host, &path);
+
+    assert_eq!(
+        state.layout(),
+        Layout::default(),
+        "the stock grid was not kept"
+    );
+    assert!(state.is_panel_open(Tab::TrackView));
+    assert!(!host.maximized, "a refused file moved the window");
+    let entries = layout_entries(&state);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(entries[0].0, "the entry is not a failure: {entries:?}");
+    assert!(
+        entries[0]
+            .1
+            .starts_with(&format!("Load layout from {}", path.display())),
+        "{entries:?}"
+    );
+    assert!(
+        entries[0].1.contains("unknown panel \"point_track\""),
+        "{entries:?}"
+    );
+    let status = state.status_message().expect("a status line");
+    assert!(status.contains("unknown panel \"point_track\""), "{status}");
 
     std::fs::remove_dir_all(&directory).ok();
 }

@@ -2115,7 +2115,7 @@ fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
     viewer.wait_for_window();
     viewer.initialize();
 
-    // Behind Point Track in the stock grid.
+    // Behind Track View in the stock grid.
     let behind = viewer.call(
         "screenshot",
         serde_json::json!({ "panel_name": "camera_intrinsics" }),
@@ -2123,7 +2123,7 @@ fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
     assert_eq!(behind["isError"], serde_json::Value::Bool(true), "{behind}");
     let message = behind["content"][0]["text"].as_str().expect("a refusal");
     assert!(
-        message.contains("Point Track") && message.contains("show_panel"),
+        message.contains("Track View") && message.contains("show_panel"),
         "{message}"
     );
 

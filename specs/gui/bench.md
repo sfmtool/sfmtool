@@ -18,8 +18,8 @@ activation, and every step over an item -- is `sfmtool_core::bench`
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), a value
 and pure functions with no window in them.
 
-Related specs: [`track-edit.md`](track-edit.md) (the panel that edits a track on
-it), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
+Related specs: [`track-view.md`](track-view.md) (the panel that edits the active
+track with its *Edit* box ticked), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
 Detail panel, which carries the two steps that name a pixel and draws the active
 track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
 the reconstruction), [`document-model.md`](document-model.md) (the version the
@@ -158,6 +158,19 @@ impl AppState {
     pub(crate) fn split_bench_track(&mut self, id: ReconId, label: &str,
                                     observations: &[usize]) -> Result<String, String>;
     pub(crate) fn activate_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// Every item left on the bench and none active: Track View's Edit box
+    /// cleared. No version, and a no-effect row, with nothing active.
+    pub(crate) fn deactivate_bench_item(&mut self, id: ReconId) -> Result<(), String>;
+    /// The Edit box ticked (the selected point put on, or its item activated)
+    /// or cleared (`deactivate_bench_item`).
+    pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String>;
+    /// A Scene tree double-click on a Bench row: select the node, activate the
+    /// item unless it is active already, raise Track View.
+    pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize);
+    /// Image Detail's *Start cluster on the bench here*: the cluster put on,
+    /// active, and Track View raised.
+    pub(crate) fn start_cluster_here(&mut self, image: ImageRef, pixel: [f32; 2]);
+    /// Discarding the active item leaves nothing active.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     /// A copy of the item beside it, active, with no origin: the label it took.
     pub(crate) fn duplicate_bench_item(&mut self, id: ReconId, label: &str)
@@ -378,8 +391,8 @@ and how many the walk bound left at their seeds.
 ### Labels
 
 A label is minted from what the item was made from and is how the item is named
-everywhere -- in the Scene tree, on the panel's tabs, in every row and version
-label. The minting is core's ([`../core/bench/bench.md`](../core/bench/bench.md)
+everywhere -- in the Scene tree, in Track View's header, in every row and
+version label. The minting is core's ([`../core/bench/bench.md`](../core/bench/bench.md)
 § "Labels") with one exception the viewer supplies: **a track put on the bench
 from a point is labelled by that point's portable id**, `pt3d_a1b2c3d4_1207`,
 because that id names the content the point is a row of and the version graph
@@ -389,6 +402,16 @@ that content sits in, and core has neither ([`goto-point.md`](goto-point.md)).
 person asked to work on that point, and there it is; a second item for one point
 would be two answers to one question. The test is the origin, followed to the
 cursor.
+
+**The bench holds one active item, and may hold none.** A track and a cluster
+share the one activation, so activating one leaves the other on the bench,
+inactive. Clearing Track View's *Edit* box is `deactivate_bench_item`, one
+version labelled `Stopped editing IMG_0042@142,198; it stays on the bench`, and
+with nothing active it pushes nothing and writes the no-effect row `Stopped
+editing: no effect, no track is active`. Discarding the active item leaves
+nothing active rather than handing the activation to a neighbour, so Track View
+returns to view mode instead of switching to an item nobody asked for. An undo
+over any of these restores the activation the version held.
 
 ---
 
@@ -413,7 +436,7 @@ in it.** What names them is the split validation below: each publishes the half
 of its own refusal that reads no photograph, so a caller can refuse in front of
 the decode. The geometry search reads photographs and cancels the same way, but
 its refusals are the panel's and the wire's
-([`track-edit.md`](track-edit.md) § "Right-clicking a row"), not a published
+([`track-view.md`](track-view.md) § "Edit mode"), not a published
 core precondition, because what it needs of a track -- the track stage, a
 fitted patch, and a sighting to search from -- the viewer already holds.
 
@@ -481,15 +504,22 @@ label, with its `in` count, the active one marked as a selected row. There is no
 eye: nothing on the bench is drawn from these rows, and an item is not part of
 the reconstruction.
 
-Clicking a row makes that item the active one of its kind, which is a step like
-any other; a secondary click offers *Discard*. One item is active across both
-groups, the kind being the item rather than the stage. The bench is in the tree
+A click on a row selects the node it is under and does nothing to the bench,
+as a click on the node's own row selects it, so a pass of clicks down the tree
+pushes no versions. A **double-click** makes the item active, selects the node
+and raises Track View on it (`AppState::edit_bench_item_at`); on the item that
+is active already it pushes no version and writes no row, since the gesture
+asked for the panel. A secondary click offers *Discard*. One item is active
+across both groups, the kind being the item rather than the stage. The bench is in the tree
 because the tree is where a node's parts are listed, and it is per node because
 an item names that node's images and poses.
 
 The row reports the item by its **position** on the bench rather than by its
 label, because `SceneGraphResponse` is a `Copy` value and a label is a `String`;
-the dock reads the label off the bench at that position before calling the step.
+the step reads the label off the bench at that position. The double-click ends
+in a raise, which is a layout operation, so the panel keeps it for
+`SceneGraphPanel::take_bench_edit` and `app.rs` applies it once the dock is back
+in the state, the path Image Detail's *Edit on Bench* takes.
 The position is the item's place in the **whole** bench and not in the group it
 is drawn under, so the two groups' rows reach one list.
 
@@ -497,7 +527,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-eight MCP tools
+An agent gets the same bench a human does, through thirty MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -505,8 +535,11 @@ verdict, split or commit a version in the history the human is looking at.
 
 Every tool takes `reconstruction_label`. The item tools take `item`; the track
 tools take `track`, and **a call that names no track acts on the active one**,
-resolved with `active_track_label`, which is what a gesture in the Track Edit
-panel means when it names no item.
+resolved with `active_track_label`, which is what a gesture in Track View's edit
+mode means when it names no item. With nothing active such a call is refused:
+*"No track is active on bull's bench. Name one with track, activate one with
+activate_bench_item, or put one on with create_bench_track or
+create_bench_cluster."*
 
 ```jsonc
 // The two creates are named by the stage they make, and where the first
@@ -521,6 +554,7 @@ panel means when it names no item.
 // The list.
 // get_bench            { "reconstruction_label": "bull" }
 // activate_bench_item  { "reconstruction_label": "bull", "item": "IMG_0042@142,198" }
+// deactivate_bench_item { "reconstruction_label": "bull" }
 // rename_bench_item    { "reconstruction_label": "bull", "item": "IMG_0042@142,198",
 //                        "label": "bull-nose" }
 // discard_bench_item   { "reconstruction_label": "bull", "item": "bull-nose" }
@@ -576,19 +610,20 @@ panel means when it names no item.
 
 **The two reads have no panel gesture behind them**, because a panel shows what
 they answer. `get_bench` is the bench as JSON: each item's label, kind, stage,
-origin and counts, and the active label per kind. It is **one flat list** in the
+origin and counts, and the active label per kind, `null` when none is active,
+which a bench holding items can be. It is **one flat list** in the
 bench's own order, with the stage on each item, rather than the tree's two
 groups: a reader that wants them apart has the field to do it with, and a
 grouping on the wire would be the panel's layout rather than the bench's own
 state. `get_bench_track` is
-the Track Edit table: the stage and its data, the origin, the thresholds, and
+Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at the track stage, the two distances
 (`seed_shift_px` and `projection_offset_px`), `walked_px` for a row the last fit
 refused to move, and, for a row the reading could
 not score, the `reason` sentence in place of a ZNCC. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the
-other null, for the reason the Track Edit header carries a word in front of it:
+other null, for the reason Track View's edit header carries a word in front of it:
 the same three numbers are a place or a bearing depending on `w`, and an agent
 that read `position` off a `w = 0` track would be holding a place one unit from
 the world origin. **An observation is
@@ -606,7 +641,7 @@ every reader of a sighting wants and a candidate a descriptor search has just
 added has no keypoint at all -- an agent would otherwise have to know which slot
 to fall back to before it could look at one. It is `crate::bench::observation_site`'s
 rule, so the number an agent reads here is the pixel the Image Detail panel
-marks, the place the Track Edit row click reveals, the centre of the tile that
+marks, the place the Track View row click reveals, the centre of the tile that
 row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`
 only for an observation nothing says the place of, which is the state core's
 `Unmeasured::NoSeed` names.
@@ -825,6 +860,12 @@ point's exact projection and a photograph cached for every image:
   whole report, counts and all: the two are different lengths on purpose, and a
   label that stopped at the item would hide the step's real outcome.
 
+The deactivation is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds one version
+labelled as above with the item still on the bench, an undo bringing edit mode back, and a
+discard of the active item leaving view mode; [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs) calls
+`deactivate_bench_item` twice, one version and then a no-effect reply, with `get_bench`
+reporting `null` active in between.
+
 The handles are tested in
 [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
 which drives real frames: a press on an edge followed by two panel pixels of
@@ -880,5 +921,5 @@ still read.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-eight tools for the steps that exist
+  proposed in the same draft. The thirty tools for the steps that exist
   are § "The wire".

@@ -1157,8 +1157,8 @@ fn search_radius(
 }
 
 /// One observation's reprojection error in px and the angle its ray makes with
-/// the direction to `position`, in degrees -- the two numbers the Point Track
-/// Detail panel tabulates for a committed track, over this track's own position
+/// the direction to `position`, in degrees -- the two numbers the viewer's
+/// Track View tabulates for a committed track, over this track's own position
 /// and the pixel this observation sits at rather than the stored ones.
 ///
 /// `w` says which `position` is. At `w == 1` the angle is between the sighting's

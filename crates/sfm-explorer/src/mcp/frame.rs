@@ -132,9 +132,8 @@ impl App {
         for id in applied.stale {
             self.image_browser.forget_recon(id);
             self.image_detail.forget_recon(id);
-            self.point_track_detail.forget_recon(id);
+            self.track_view.forget_recon(id);
             self.intrinsics_detail.forget_recon(id);
-            self.track_edit.forget_recon(id);
         }
         for (outcome, reply) in applied.outcomes.into_iter().zip(replies) {
             match outcome {

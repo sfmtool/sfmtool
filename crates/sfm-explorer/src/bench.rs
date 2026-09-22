@@ -287,7 +287,7 @@ pub(crate) fn default_search_px() -> f64 {
 ///
 /// One rule in one place, because everything that draws or names a sighting
 /// draws the same answer: the Image Detail bench layer puts its mark there, a
-/// Track Edit row click asks that panel to reveal it, the Track Edit tile is
+/// Track View row click asks that panel to reveal it, the Track View tile is
 /// cut around it, and the wire reports it. A mark, a row, a tile and a reply
 /// are one observation, so they cannot be allowed to disagree about where it
 /// is.
@@ -808,10 +808,105 @@ impl AppState {
         Ok(())
     }
 
+    /// Leave every item on `id`'s bench where it is and make none active: what
+    /// clearing Track View's *Edit* box does, and the wire's
+    /// `deactivate_bench_item`.
+    ///
+    /// One version, like an activation, so an undo brings back what was being
+    /// edited. With nothing active it pushes nothing and writes the no-effect
+    /// row every bench step answers a nothing-to-do with.
+    pub(crate) fn deactivate_bench_item(&mut self, id: ReconId) -> Result<(), String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let bench = Arc::clone(self.scene[index].history.current_bench());
+        let Some(label) = active_track_label(&bench).map(str::to_string) else {
+            self.no_effect("Stopped editing: no effect, no track is active".to_string());
+            return Ok(());
+        };
+        let next = bench.deactivate(sfmtool_core::bench::ItemKind::Track);
+        let text = format!("Stopped editing {label}; it stays on the bench");
+        self.push_bench_step(index, next, text);
+        Ok(())
+    }
+
+    /// What Track View's *Edit* box asks of `id`'s bench.
+    ///
+    /// Ticked (`true`), the selected point is put on the bench, which activates
+    /// the item already there when one came from that point
+    /// ([`Self::put_point_on_bench`]); the selection notice's *Edit it* is the
+    /// same call. Cleared (`false`), nothing is active and every item stays on
+    /// the bench ([`Self::deactivate_bench_item`]). Either is one bench step.
+    pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String> {
+        if !on {
+            return self.deactivate_bench_item(id);
+        }
+        let point = self
+            .selected_point
+            .filter(|point| point.recon == id)
+            .ok_or_else(crate::track_view::nothing_to_edit)?;
+        self.put_point_on_bench(point).map(|_| ())
+    }
+
+    /// *Start cluster on the bench here*, chosen in the Image Detail panel at
+    /// `pixel` of `image`: a cluster-stage track put on the bench there and
+    /// made active, and Track View raised on it.
+    ///
+    /// The cluster starts at the size the reconstruction's own patches project
+    /// to in this image, so it starts at the scale the node already works at
+    /// there. Applied by `app.rs` once the dock is back in the state, since the
+    /// raise is a layout operation; a refusal is one failed row and no raise.
+    pub(crate) fn start_cluster_here(&mut self, image: ImageRef, pixel: [f32; 2]) {
+        let radius = self.default_patch_radius(image);
+        let seed = Seed::Pixel {
+            pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
+            radius_px: Some(f64::from(radius)),
+        };
+        match self.start_bench_cluster(image, &seed) {
+            Ok(_) => self.show_panel(crate::dock::Tab::TrackView),
+            Err(why) => self.action_log.fail(Kind::Bench, why),
+        }
+    }
+
+    /// Make the item at `position` on `id`'s bench the active one, select the
+    /// node it is on, and raise Track View on it: a Scene tree double-click on
+    /// a Bench row.
+    ///
+    /// The node is selected because Track View shows the selected node's bench,
+    /// and a raise onto another node's bench would show the wrong item. An item
+    /// already active pushes no version and writes no row: the gesture asked
+    /// for the panel, and the panel is what it gets. Applied by `app.rs` once
+    /// the dock is back in the state, since the raise is a layout operation.
+    pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize) {
+        let Some(label) = self
+            .bench(id)
+            .and_then(|bench| bench.entries().get(position))
+            .map(|entry| entry.label.clone())
+        else {
+            return;
+        };
+        if self.selected_recon != Some(id) {
+            self.select_recon(id);
+        }
+        let already = self
+            .bench(id)
+            .is_some_and(|bench| active_track_label(bench) == Some(label.as_str()));
+        if !already {
+            if let Err(why) = self.activate_bench_item(id, &label) {
+                self.action_log.fail(Kind::Bench, why);
+                return;
+            }
+        }
+        self.show_panel(crate::dock::Tab::TrackView);
+    }
+
     /// Take the item called `label` off the bench.
     ///
     /// No confirmation anywhere that calls this: a discard is a version, and an
-    /// undo puts the item back where it was and active as it was.
+    /// undo puts the item back where it was and active as it was. Discarding the
+    /// active item leaves nothing active, so Track View returns to view mode
+    /// rather than switching to an item nobody asked for.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
@@ -878,7 +973,7 @@ impl AppState {
     ///
     /// **The written point becomes the selection**, through
     /// [`AppState::select_point`] like any other, so the viewport puts the
-    /// track rays on it and the Point Track Detail panel opens on it --
+    /// track rays on it and Track View opens on it --
     /// wherever the selection happened to be, and whether the commit replaced a
     /// point or created one. A commit is a gesture about one point, and the
     /// index it landed at is the one thing the person who asked for it cannot
@@ -1616,7 +1711,7 @@ impl AppState {
     /// the walk is the node's own version graph -- the same walk a copied point
     /// id takes ([`crate::point_ids`]), and defined across an undo, a redo and
     /// a discarded redo tail alike.
-    fn resolved_origin(&self, node: &SceneNode, track: &EditableTrack) -> Option<u32> {
+    pub(crate) fn resolved_origin(&self, node: &SceneNode, track: &EditableTrack) -> Option<u32> {
         let origin = track.origin?;
         let from = node
             .history

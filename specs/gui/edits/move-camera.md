@@ -136,7 +136,7 @@ the pending pose *is* the viewport pose and a wireframe pinned to the eye says
 nothing a reviewer can act on.
 
 Everything outside the viewport reads the value at the cursor and is not told
-about the pending pose: the Image Detail panel, the Point Track Detail panel,
+about the pending pose: the Image Detail panel, Track View,
 the Scene Graph's pose readout and the MCP `get_camera_image` reply all show the
 stored pose until the commit. A lock is viewport state, not document state,
 which is the same line camera view itself sits on.

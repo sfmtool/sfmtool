@@ -357,7 +357,7 @@ pub(super) fn get_view(state: &AppState) -> JsonReply {
 /// **The call selects the photograph it is about.** A `bench_observation` and a
 /// `point` name their own, a `camera_image` argument names one outright, and
 /// [`AppState::look_at_in_image`] selects whichever it is as the row click in
-/// Track Edit does. So the only thing left to refuse is a call that names no
+/// Track View does. So the only thing left to refuse is a call that names no
 /// photograph with none selected.
 ///
 /// **The panel's size is the panel's to say**, so a call arriving before it has

@@ -6,7 +6,7 @@
 //! egui lays a frame out with no GPU, so the panel really runs — the tables are
 //! really built, the grids really allocate, and the strings the panel decided
 //! to paint come back out of the frame's galleys
-//! (`test_support::painted_texts`, the `point_track_detail/tests.rs` pattern).
+//! (`test_support::painted_texts`, the `track_view/view/tests.rs` pattern).
 //! The assertions target what the panel *says* rather than pixels.
 //!
 //! The numbers themselves are asserted where they are computed — `P` against

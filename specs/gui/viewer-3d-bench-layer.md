@@ -44,7 +44,7 @@ what it needs is read out beside the selection and passed in. The dock hands the
 viewport one value per frame, carrying the node whose bench it is, the active
 track, the node's edited reconstruction at its cursor (for the camera poses the
 marks unproject their keypoints through), the node's similarity, the observation
-row Track Edit has selected, and whether a background task holds the node. A
+row Track View has selected, and whether a background task holds the node. A
 task holding the node does not stop the layer drawing, because what is being
 worked on does not stop being worth seeing; it stops every handle taking a
 press.
@@ -99,7 +99,7 @@ half-length states the whole of its size.
   whose ray cannot meet the plane in front of its own camera, draws no mark at
   all and leaves a gap in the list rather than a mark that means nothing.
 
-The circle of the observation Track Edit has selected is drawn 1.6 times the
+The circle of the observation Track View has selected is drawn 1.6 times the
 others'. That is the one thing the figure says about the selection, and it is
 the other half of the click that sets it: a row picked in the panel can be found
 out in the world, and a mark picked in the world can be seen to be that row.
@@ -223,7 +223,7 @@ though the viewport still does not orbit until the button comes up, because what
 the pointer means was decided where it went down. A drag that ends where it
 started pushes nothing, the way a verdict an observation already holds does. A
 press that never moves is a click, which on an observation's circle selects that
-row in Track Edit and anywhere else on the figure does nothing. A gesture that
+row in Track View and anywhere else on the figure does nothing. A gesture that
 outlives the node it was editing, or that is caught by a background task, is
 dropped.
 
@@ -291,7 +291,7 @@ where the figure happened to be drawn.
 | Corner | the patch's plane | a spin by the angle swept about `n`, both places read about `c` |
 | Normal segment | the line `c + t n`, at its nearest point to the ray | a translation along `n` by the difference between the two places |
 | Arrowhead | a plane through `c`, square to `n` or to the swing axis | a tilt to the normal the gesture names |
-| Observation circle | nothing | the row selected in Track Edit, on a click |
+| Observation circle | nothing | the row selected in Track View, on a click |
 
 The dot's travel has its component along `n` **set to zero by the handle**, and
 that is where the constraint belongs. The two places are meetings of a ray with
@@ -515,8 +515,10 @@ and does not change under it.
 - **Drawing the tracks that are not active.** The bench holds several items and
   this layer draws the one being worked on, as the Image Detail bench layer
   does. Clicking a track in the world to make it active is not something the
-  layer offers; a track is activated from the Scene tree or Track Edit
-  ([`track-edit.md`](track-edit.md)).
+  layer offers; a track is activated by a double-click on its row in the Scene
+  tree, or by ticking *Edit* in Track View over a selected point
+  ([`track-view.md`](track-view.md)). With nothing active, which a bench holding
+  items can be, the layer draws nothing.
 - **A pick-buffer entry.** Hit-testing is on the CPU, against the figure the
   pass drew projected through the same camera, so occlusion does not enter into
   it: a handle drawn through the point cloud is grabbed like any other. The

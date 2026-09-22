@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the Point Track Detail panel.
+//! Headless tests for Track View.
 //!
 //! egui needs no GPU to lay out a frame, so the whole panel runs through
 //! `Context::run_ui` here — `show` really does prepare its data, paint the
@@ -31,7 +31,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use super::patch::render_frame;
 use super::table::format_feature_size;
-use super::{PointTrackDetail, PointTrackDetailResponse};
+use super::{PointTrackView, PointTrackViewResponse};
 use crate::platform::ScrollInput;
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
@@ -246,14 +246,14 @@ fn edited_of(recon: &SfmrReconstruction) -> sfmtool_core::EditedReconstruction {
 const TEST_POINT_ID: &str = "pt3d_deadbeef_0_n0";
 
 fn run_frame(
-    panel: &mut PointTrackDetail,
+    panel: &mut PointTrackView,
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
     sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
     full_res_cache: &HashMap<ImageRef, Option<std::sync::Arc<ImageU8Pyramid>>>,
     events: Vec<egui::Event>,
-) -> PointTrackDetailResponse {
+) -> PointTrackViewResponse {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
         events,
@@ -275,6 +275,7 @@ fn run_frame(
             full_res_cache,
             &[],
             &ScrollInput::default(),
+            None,
         ));
     });
     response.expect("the panel ran")
@@ -282,12 +283,12 @@ fn run_frame(
 
 /// One frame with no input events and no full-res images.
 fn show_once(
-    panel: &mut PointTrackDetail,
+    panel: &mut PointTrackView,
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
     sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
-) -> PointTrackDetailResponse {
+) -> PointTrackViewResponse {
     run_frame(
         panel,
         ctx,
@@ -304,13 +305,13 @@ fn show_once(
 /// against the widget rects registered on the *previous* pass, so a single
 /// frame never reports an interaction.
 fn show_at_pointer(
-    panel: &mut PointTrackDetail,
+    panel: &mut PointTrackView,
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
     pos: egui::Pos2,
     clicks: usize,
-) -> PointTrackDetailResponse {
+) -> PointTrackViewResponse {
     let cache = sift_cache(8, 16);
     let mut response = None;
     for frame in 0..2 {
@@ -345,7 +346,7 @@ fn show_at_pointer(
 #[test]
 fn selecting_a_point_prepares_one_row_per_observation() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(3), &sift_cache(8, 16));
@@ -365,7 +366,7 @@ fn selecting_a_point_prepares_one_row_per_observation() {
 #[test]
 fn no_selection_clears_previously_prepared_state() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let cache = sift_cache(8, 16);
 
@@ -380,7 +381,7 @@ fn no_selection_clears_previously_prepared_state() {
 #[test]
 fn an_out_of_range_point_index_falls_back_to_the_placeholder() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     let response = show_once(&mut panel, &ctx, &recon, Some(999), &sift_cache(8, 16));
@@ -393,7 +394,7 @@ fn an_out_of_range_point_index_falls_back_to_the_placeholder() {
 #[test]
 fn changing_the_selection_reprepares_the_table() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let cache = sift_cache(8, 16);
 
@@ -414,7 +415,7 @@ fn changing_the_selection_reprepares_the_table() {
 #[test]
 fn feature_extents_are_the_doubled_affine_column_norms_larger_first() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(2), &sift_cache(8, 16));
@@ -435,7 +436,7 @@ fn the_larger_extent_comes_first_whichever_affine_column_is_longer() {
     // Same shape with its columns swapped: the ordering must come from the
     // norms, not from the column order.
     for shape in [[[2.0, 0.0], [0.0, 4.0]], [[4.0, 0.0], [0.0, 2.0]]] {
-        let mut panel = PointTrackDetail::new();
+        let mut panel = PointTrackView::new();
         let cache = sift_cache_with_shape(8, 16, shape);
         show_once(&mut panel, &ctx, &recon, Some(2), &cache);
         for obs in &panel.observations {
@@ -447,7 +448,7 @@ fn the_larger_extent_comes_first_whichever_affine_column_is_longer() {
 #[test]
 fn a_missing_sift_cache_leaves_the_feature_columns_empty() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     // No cache entries at all — the table must still draw, reporting zeros
@@ -469,7 +470,7 @@ fn a_missing_sift_cache_leaves_the_feature_columns_empty() {
 #[test]
 fn a_path_with_nothing_above_it_gets_no_mark() {
     let recon = with_flat_image_paths(SfmrReconstruction::demo(12));
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(1), &sift_cache(8, 16));
@@ -485,7 +486,7 @@ fn a_path_with_nothing_above_it_gets_no_mark() {
 #[test]
 fn the_image_name_column_keeps_the_parent_directory() {
     let recon = with_nested_image_paths(SfmrReconstruction::demo(12));
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(1), &sift_cache(8, 16));
@@ -509,7 +510,7 @@ fn the_image_name_column_keeps_the_parent_directory() {
 #[test]
 fn the_max_pairwise_angle_spans_the_observing_cameras() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(5), &sift_cache(8, 16));
@@ -546,7 +547,7 @@ fn hovered_images_down_the_panel(
     let mut first_y = Vec::new();
     for step in 0..100 {
         let y = step as f32 * 8.0;
-        let mut panel = PointTrackDetail::new();
+        let mut panel = PointTrackView::new();
         let ctx = egui::Context::default();
         let response = show_at_pointer(
             &mut panel,
@@ -591,7 +592,7 @@ fn clicking_a_row_selects_its_image_and_double_clicking_enters_camera_view() {
     // Aim at the middle of the second row's band, well clear of its edges.
     let pos = egui::pos2(300.0, first_y[1] + 24.0);
 
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let single = show_at_pointer(&mut panel, &ctx, &recon, Some(0), pos, 1);
     assert_eq!(single.select_image, Some(1));
@@ -601,7 +602,7 @@ fn clicking_a_row_selects_its_image_and_double_clicking_enters_camera_view() {
     let feature = panel.observations[1].feature_xy;
     assert_eq!(single.reveal_feature, Some(feature));
 
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let double = show_at_pointer(&mut panel, &ctx, &recon, Some(0), pos, 2);
     assert_eq!(double.select_image, Some(1));
@@ -620,7 +621,7 @@ fn the_empty_state_offers_a_way_in_by_index_or_id() {
     // is swept rather than a layout position hard-coded, so the test survives
     // the placeholder being restyled.
     let opened = (0..100).any(|step| {
-        let mut panel = PointTrackDetail::new();
+        let mut panel = PointTrackView::new();
         let ctx = egui::Context::default();
         show_at_pointer(
             &mut panel,
@@ -647,7 +648,7 @@ fn the_header_offers_the_same_way_in_while_a_point_is_selected() {
     // so it is somewhere along the first row, whose exact x depends on the ID
     // width and the font.
     let opened = (0..200).any(|step| {
-        let mut panel = PointTrackDetail::new();
+        let mut panel = PointTrackView::new();
         let ctx = egui::Context::default();
         show_at_pointer(
             &mut panel,
@@ -671,7 +672,7 @@ fn merely_looking_at_the_panel_does_not_ask_for_the_dialog() {
     // The flag is a click report, not a state read: a frame nobody clicked in
     // must leave it false, or the dialog would reopen every frame.
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     let idle = show_at_pointer(
@@ -689,7 +690,7 @@ fn merely_looking_at_the_panel_does_not_ask_for_the_dialog() {
 #[test]
 fn the_panel_reports_whether_it_holds_the_pointer() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     let inside = show_at_pointer(
@@ -719,7 +720,7 @@ fn the_panel_reports_whether_it_holds_the_pointer() {
 #[test]
 fn each_observed_image_gets_a_cached_thumbnail() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(6), &sift_cache(8, 16));
@@ -734,7 +735,7 @@ fn each_observed_image_gets_a_cached_thumbnail() {
 #[test]
 fn a_reconstruction_without_patches_has_no_patch_column() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
@@ -747,7 +748,7 @@ fn a_reconstruction_without_patches_has_no_patch_column() {
 #[test]
 fn embedded_patches_enable_the_patch_column_and_header_tile() {
     let recon = with_embedded_patches(SfmrReconstruction::demo(12));
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(0), &HashMap::new());
@@ -780,7 +781,7 @@ fn embedded_patches_enable_the_patch_column_and_header_tile() {
 fn patch_tiles_render_once_per_observed_image() {
     let recon = with_embedded_patches(SfmrReconstruction::demo(12));
     let full_res = full_res_images(&recon, &[0, 1]);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     run_frame(
@@ -805,7 +806,7 @@ fn a_missing_full_res_image_leaves_its_patch_tile_uncached() {
     let recon = with_embedded_patches(SfmrReconstruction::demo(12));
     // Only camera 0's source is available; camera 1 also observes point 0.
     let full_res = full_res_images(&recon, &[0]);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     run_frame(
@@ -834,7 +835,7 @@ fn the_tile_frame_is_anchored_on_the_observations_own_keypoint() {
         [6.0, -4.0],
     );
     let full_res = full_res_images(&recon, &[0, 1]);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     run_frame(
@@ -885,7 +886,7 @@ fn a_reconstruction_without_stored_keypoints_renders_the_geometric_frame() {
     // There is no keypoint to anchor on, so the tiles keep the stored frame.
     let recon = with_patch_frames(SfmrReconstruction::demo(12));
     let full_res = full_res_images(&recon, &[0, 1]);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     run_frame(
@@ -934,7 +935,7 @@ fn an_all_zero_patch_bitmap_leaves_the_header_tile_empty() {
     let mut recon = with_embedded_patches(SfmrReconstruction::demo(12));
     let n = recon.point_set.points.len();
     recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::<u8>::zeros((n, 8, 8, 4))));
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(0), &HashMap::new());
@@ -951,7 +952,7 @@ fn the_header_shows_the_point_id_it_was_handed() {
     // is a question about the node rather than about this reconstruction value —
     // so the panel takes the answer and shows it rather than deriving one.
     let recon = with_content_hash(SfmrReconstruction::demo(12), "deadbeefcafef00d");
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
@@ -963,7 +964,7 @@ fn the_header_shows_the_point_id_it_was_handed() {
 fn clear_resets_every_cache() {
     let recon = with_embedded_patches(SfmrReconstruction::demo(12));
     let full_res = full_res_images(&recon, &[0, 1]);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     run_frame(
@@ -1025,7 +1026,7 @@ fn the_printed_size_is_twice_the_affine_semi_axis() {
     // 4, so the row must read 8x4 — the span of the quad drawn in the
     // viewport, not the 3.0 mean-radius the old column printed.
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(2), &sift_cache(8, 16));
@@ -1085,7 +1086,7 @@ fn the_panel_shows_a_modified_points_track_and_not_the_bases() {
     record.observations.sort_by_key(|o| o.image_index);
     let moved = edited.replace_point(3, record).expect("a live point");
 
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let cache = sift_cache(8, 16);
     let input = egui::RawInput {
@@ -1104,6 +1105,7 @@ fn the_panel_shows_a_modified_points_track_and_not_the_bases() {
             &HashMap::new(),
             &[],
             &ScrollInput::default(),
+            None,
         );
     });
 
@@ -1127,7 +1129,7 @@ fn a_deleted_point_shows_the_empty_state() {
     let mut edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::clone(&base));
     edited.delete_point(3).expect("a live point");
 
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let cache = sift_cache(8, 16);
     let input = egui::RawInput {
@@ -1146,6 +1148,7 @@ fn a_deleted_point_shows_the_empty_state() {
             &HashMap::new(),
             &[],
             &ScrollInput::default(),
+            None,
         );
     });
 
@@ -1158,7 +1161,7 @@ fn a_deleted_point_shows_the_empty_state() {
 #[test]
 fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
     let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
+    let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
     let cache = sift_cache(8, 16);
     // One frame prepares the observations; the painting is read off the next.
@@ -1184,6 +1187,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
                 &full_res,
                 &[],
                 &ScrollInput::default(),
+                None,
             );
         },
     );

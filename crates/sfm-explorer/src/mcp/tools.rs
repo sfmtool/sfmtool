@@ -291,7 +291,7 @@ fn build_catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "get_bench_track",
-            description: "One track on the bench, as its Track Edit table: the stage, the point \
+            description: "One track on the bench, as its Track View table: the stage, the point \
                           it came from, the thresholds, and every observation with what put it \
                           there, the verdict on it, where it sits and whatever each stage has \
                           measured about it. An observation's pixel is where it sits whether or \
@@ -1069,9 +1069,9 @@ fn build_catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "activate_bench_item",
-            description: "Make one item on the bench the active one of its kind, which is the \
-                          item the Track Edit panel shows and the item a bench tool acts on when \
-                          it names none.",
+            description: "Make one item on the bench the active one, which is the item Track \
+                          View is editing and the item a bench tool acts on when it names none. \
+                          A track and a cluster share the one activation.",
             kind: Write,
             schema: object(
                 &[],
@@ -1080,6 +1080,15 @@ fn build_catalog() -> Vec<ToolSpec> {
                     ("item", bench_item_schema()),
                 ],
             ),
+        },
+        ToolSpec {
+            name: "deactivate_bench_item",
+            description: "Stop editing: every item stays on the bench and none is active, which \
+                          is Track View's Edit box cleared, so the panel shows the selected \
+                          point's committed track. One version; with nothing active, a no-effect \
+                          reply. get_bench then reports active.track as null.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
             name: "rename_bench_item",
@@ -1913,13 +1922,14 @@ fn bench_item_schema() -> Value {
 }
 
 /// The track a bench tool acts on, which is optional: a call that names none
-/// acts on the active track, as a gesture in the Track Edit panel does.
+/// acts on the active track, as a gesture in Track View's edit mode does.
 fn bench_track_schema() -> Value {
     json!({
         "type": "string",
         "description":
-            "Which track on the bench, by its label. Omit for the active track, which is what \
-             the Track Edit panel is showing and what a create or an activate last made active.",
+            "Which track on the bench, by its label. Omit for the active track, which is the \
+             item Track View is editing and what a create or an activate last made active; with \
+             nothing active, a call that omits it is refused.",
     })
 }
 
@@ -2526,6 +2536,9 @@ pub(crate) fn parse(
         "activate_bench_item" => Command::ActivateBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.required_string("item")?,
+        },
+        "deactivate_bench_item" => Command::DeactivateBenchItem {
+            reconstruction_label: args.required_string("reconstruction_label")?,
         },
         "rename_bench_item" => Command::RenameBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,

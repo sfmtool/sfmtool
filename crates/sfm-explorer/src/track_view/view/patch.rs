@@ -8,7 +8,7 @@
 //! half-vectors (it gates the table's "Patch" column),
 //! [`build_stored_patch_texture`] turns the stored bitmap into the header tile,
 //! [`render_frame`] re-anchors the point's frame on one observation's stored
-//! keypoint, and [`PointTrackDetail::ensure_rendered_patch`] warps that
+//! keypoint, and [`PointTrackView::ensure_rendered_patch`] warps that
 //! observation's full-res image through the re-anchored frame to produce the
 //! per-row tiles.
 
@@ -22,14 +22,14 @@ use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{PointView, SfmrReconstruction};
 
-use super::PointTrackDetail;
+use super::PointTrackView;
 use crate::scene::ImageRef;
 
 /// Render resolution of per-observation patch tiles (rendered crisp at this
 /// resolution, displayed scaled to [`super::PATCH_TILE`]).
 const PATCH_RES: u32 = 64;
 
-impl PointTrackDetail {
+impl PointTrackView {
     /// Render the patch tile for one observation if not already cached: warp
     /// the observation's full-res image through the selected point's patch
     /// frame (`WarpMap::from_patch` + `remap_bilinear`), **re-anchored so the
@@ -111,8 +111,8 @@ impl PointTrackDetail {
 /// point's residual leaves it. `name` is the texture's id, which the caller
 /// makes unique across whatever it keys its own cache by.
 ///
-/// The picture itself is [`patch_color_image`]'s, which is what the Track Edit
-/// panel draws its own tile through for a track on the bench: one warp, so a
+/// The picture itself is [`patch_color_image`]'s, which is what edit mode
+/// draws its own tile through for a track on the bench: one warp, so a
 /// committed track and the editable copy of it cannot show the same surface two
 /// ways.
 pub(super) fn render_patch_texture(

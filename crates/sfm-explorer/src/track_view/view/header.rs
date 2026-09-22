@@ -5,9 +5,9 @@
 //! length, triangulation diagnostics) and, for embedded-patches
 //! reconstructions, the stored-patch preview tile drawn beneath it.
 
-use super::{PointTrackDetail, STORED_PATCH_SIZE};
+use super::{PointTrackView, STORED_PATCH_SIZE};
 
-impl PointTrackDetail {
+impl PointTrackView {
     /// Draw the point summary header bar, returning whether its Go to Point
     /// button was clicked.
     pub(super) fn show_header(

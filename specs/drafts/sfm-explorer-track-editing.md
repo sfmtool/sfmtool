@@ -11,7 +11,7 @@ take some and leave others, compare it with another, and only then put it back.
 This draft proposes the **bench**: a place beside each loaded reconstruction
 where things are put to be worked on, held in the same history as the
 reconstruction so one Undo covers both. The first kind of thing that goes on it
-is the **editable track**, edited in a **Track Edit panel**: a track with the
+is the **editable track**, edited in **Track View**: a track with the
 searches that suggest observations for it, the photometric and geometric measurements
 that judge them, the two representations it passes through on the way from a
 set of image patches to a reconstructed point, and the one step that finally
@@ -19,19 +19,19 @@ writes it into the reconstruction as a version like any other.
 
 **Decided:** the bench is per node, holds a list of items with one active per
 kind, the way the reconstruction has one selected point and one selected image,
-each kind edited in a bench panel of its own of which Track Edit is the first, and
+each kind edited in a bench panel of its own of which Track View is the first, and
 is the second half of every version so one Undo walks the reconstruction and
 the bench together; the editable track is its first kind of item and the only
 one this draft specifies; an editable track has two stages, a 2D cluster stage
 and a 3D track stage, with transitions in both directions; every evaluation is
 a pure function that produces a report, and installing the report is a step
-like any other; the commit is one ordinary edit; the Point Track Detail panel
+like any other; the commit is one ordinary edit; Track View
 stays view-only; the bench and the editable track are values and pure
 functions in `sfmtool-core`, bound to Python, and the viewer adds only the
 history, the panels and the wire.
 
 Related standing specs: [`../gui/bench.md`](../gui/bench.md),
-[`../gui/track-edit.md`](../gui/track-edit.md) and
+[`../gui/track-view.md`](../gui/track-view.md) and
 [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md) (the viewer half
 that is built: the bench as a half of every version, the panel, the Scene tree
 group and the commit),
@@ -39,8 +39,6 @@ group and the commit),
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the core
 half that is built: the two values, the steps, the evaluation at both stages and
 the transitions between them, whose non-goals are what this draft proposes),
-[`../gui/point-track-detail.md`](../gui/point-track-detail.md)
-(the view-only panel the editable track is the editing counterpart of),
 [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md) (the one step
 that reaches the reconstruction),
 [`../gui/document-model.md`](../gui/document-model.md)
@@ -71,10 +69,10 @@ work that precedes that certainty, for four reasons that each argue for the same
 thing.
 
 **Two tracks on screen.** Judging a candidate track means looking at it beside
-the track it might be, might duplicate, or might be split from. The Point Track
-Detail panel shows the selected point's track, and the selection is one value
+the track it might be, might duplicate, or might be split from. Track View's
+view mode shows the selected point's track, and the selection is one value
 the whole window agrees on. A second track needs a second place, and making
-Point Track Detail able to show two would either take the selection away from
+view mode able to show two would either take the selection away from
 the rest of the window or turn one panel into two. A place of its own is the
 smaller change, and it leaves the view-only panel exactly as clean as it is.
 
@@ -120,7 +118,7 @@ The active labels are the bench's counterpart of the reconstruction's selections
 The window agrees on one selected point and one selected image, and every
 panel reads them; the bench likewise has one active track, and later one active
 image or whatever else is put on it, and each kind's **bench panel** shows that
-kind's active item and acts on it when a gesture names no target. Track Edit is
+kind's active item and acts on it when a gesture names no target. Track View is
 the first bench panel. A second kind of item gets a second panel, not a mode in
 this one, so each panel's vocabulary stays that of the thing it edits.
 
@@ -274,7 +272,7 @@ evaluate.
 
 A track put on the bench from a committed point begins at the track stage with
 the point's own frame, bitmap and keypoints, and its observations `in`. Its
-measurements are the ones the Point Track Detail panel already computes, so
+measurements are the ones Track View already computes, so
 putting a track on the bench and doing nothing shows the same numbers the
 view-only panel shows, plus the verdict column.
 
@@ -450,7 +448,7 @@ search seeds each admitted image at the surfel's own projection and leaves the
 localization to the next Evaluate or Fit. Filed as
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Searching by geometry" and
-[`../gui/track-edit.md`](../gui/track-edit.md) § "Right-clicking a row". What
+[`../gui/track-view.md`](../gui/track-view.md) § "Edit mode". What
 is described below is the proposal it came from.
 
 At the track stage, **Sweep views** takes every image of the node that
@@ -465,14 +463,14 @@ runs per point in `embed-patches`, put under a person's control for one point.
 ### From another track
 
 **Pull in the selected track** takes the observations of the point selected in the
-Point Track Detail panel and adds them to the active track as candidates,
+Track View and adds them to the active track as candidates,
 marked as coming from that point. **Pull in from the bench** does the same from
 another track on the bench, marking them as coming from it. Either is how two
 tracks that might be one are tested: pull the second in, evaluate, and read the
 track's own coherence matrix, where two surfaces show as two blocks and one
 surface as one (§ "Part 4"). Nothing compares two tracks as such: the
-Point Track Detail panel shows the selected point's track and Track Edit shows
-the active one, and looking at both is the comparison. A commit that keeps observations pulled from a point
+Track View shows the selected point's track with its Edit box clear and
+the active one with it ticked, and flipping between the two is the comparison. A commit that keeps observations pulled from a point
 is a merge, § "Part 6"; observations pulled from another item are just observations,
 since an item is not a point and nothing has to be deleted for them. The item
 they came from is left as it was, and discarding it afterwards is the
@@ -569,10 +567,10 @@ A step that changes nothing, a verdict a observation already has, pushes no vers
 
 ---
 
-## Part 7: the Track Edit panel
+## Part 7: Track View
 
 The bench is a place; a bench panel is for editing one kind of thing that is on
-it, and shows that kind's active item (§ "Part 2"). **Track Edit** is the first
+it, and shows that kind's active item (§ "Part 2"). **Track View** is the first
 bench panel: it edits the tracks on the bench and shows the active track.
 
 **The bench is in the Scene tree.** Each `.sfmr` node gains a **Bench** child,
@@ -580,14 +578,14 @@ beside its Camera Images and Camera Intrinsics groups
 ([`../gui/scene-graph.md`](../gui/scene-graph.md)). Inside it, today, is the
 list of editable tracks: one row per track in the order they were put on, the
 active one marked, each by its label. Clicking a row makes it active, which is a step, and raises
-the Track Edit panel; a secondary click offers *Discard*. When another
+Track View; a secondary click offers *Discard*. When another
 kind of item exists it is listed in the same Bench child under its own kind,
 and clicking it raises the panel that edits that kind. The bench is in the tree
 because the tree is already where a node's parts are listed, and it is per node
 because an item names that node's images and poses.
 
-**Placement.** A tab, `Tab::TrackEdit`, titled **Track Edit**, whose home is the
-top-right node beside Image Detail and Point Track, as the non-active tab
+**Placement.** A tab, `Tab::TrackView`, titled **Track View**, whose home is the
+top-right node, as the active tab with Camera Intrinsics behind it
 ([`../gui/panel-layout.md`](../gui/panel-layout.md) § "Home positions"). It is a
 panel like any other: closeable, ticked in the Panels menu. Like the Edit
 History panel it has almost no state of its own: the bench is the selected
@@ -606,8 +604,8 @@ its own panel, not here. Below the row, the panel shows the active track.
 **Empty.** With no track on the bench: `No track on the bench`, above three
 ways in, each naming its gesture: *Put selected track on the bench* (greyed
 with no point selected), *Start from a pixel: right-click in Image Detail*, and
-*Build a SIFT index: the Scene tree's SIFT Index row*. The Point Track Detail
-panel gains the first of
+*Build a SIFT index: the Scene tree's SIFT Index row*. View mode
+gains the first of
 these as one line under its stored-patch tile, beside the hints it already
 carries, quoting the button's label from one constant. Putting a point on the
 bench that already has a track with that origin makes that track active rather
@@ -637,11 +635,11 @@ so a reader who knows that panel reads this one, then what the bench adds:
 |---|---|---|
 | Verdict | tri-state, click cycles `in` / `out` / `candidate` | same |
 | Tile | the reference template warped onto this observation | the surfel re-rendered from this observation at its keypoint, the view-only panel's tile |
-| Thumbnail, Image, Name | as Point Track Detail | as Point Track Detail |
+| Thumbnail, Image, Name | as view mode | as view mode |
 | ZNCC | against the reference | leave-one-out against the consensus |
 | Seed sh., Proj. off | from the seed, px | the peak's move from the sighting, and the sighting's distance from the projection |
 | σ_pos | the observation's own tile | the same |
-| Error, Angle | absent | as Point Track Detail |
+| Error, Angle | absent | as view mode |
 | Status | the `member_status` word | `localized`, the reading's reason sentence, or `not evaluated` |
 | From | provenance | provenance |
 
@@ -684,7 +682,7 @@ out from the rest:
   there is nothing in 3D to draw.
 - **The Image Browser** borders the active track's `in` observations' thumbnails in
   the bench colour, beside the orange the selected point's track gets.
-- **The Point Track Detail panel** is unchanged in what it shows. Its one line
+- **Track View** is unchanged in what it shows. Its one line
   of new text is the way onto the bench.
 
 ---
@@ -883,14 +881,14 @@ print(report["label"])                         # the sentence the Action Log wou
 ### In the viewer
 
 **Built**, and filed as [`../gui/bench.md`](../gui/bench.md),
-[`../gui/track-edit.md`](../gui/track-edit.md) and
+[`../gui/track-view.md`](../gui/track-view.md) and
 [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md):
 
 - `History`'s `Version` holds the bench half, a push states both halves, the
   dirty test reads the document half, and the budget sums both. This is the only
   place a bench step becomes a *version*: core has no history.
-- The Track Edit panel (`track_edit/` beside `point_track_detail/`) with its
-  item tabs, header, toolbar, sliders and observation table -- including the
+- Track View (`track_view/`, its `edit/` body beside `view/`) with its
+  header, toolbar, sliders and observation table -- including the
   per-observation tile column, which renders the surfel through the view-only
   panel's own renderer at the track stage and the refinement kernel's own grid
   at the cluster stage -- and the Bench child in the Scene tree.
@@ -900,7 +898,7 @@ print(report["label"])                         # the sentence the Action Log wou
 - The Image Detail bench layer: the active track drawn over the photograph in
   the bench's own colours, the surfel's outline sampled and projected through
   the lens at the track stage and the observations' parallelograms at the
-  cluster stage, with a click on a mark selecting that row in Track Edit.
+  cluster stage, with a click on a mark selecting that row in Track View.
 - The Action Log row and version label for each step, the actor column, and the
   evaluation and the stage change as background tasks, each of which is one
   `AppState` call that decodes the images through the node's full-resolution
@@ -981,7 +979,7 @@ for everything that is a value or a pure function, and in the viewer
 synthetic textured-plane scene the localization tests already build:
 
 - A track put on the bench from a committed point is at the track stage with
-  every observation `in` and reports the numbers Point Track Detail reports for that
+  every observation `in` and reports the numbers view mode reports for that
   point.
 - Downgrade then upgrade of that track, with nothing turned `out`, triangulates
   back to within tolerance of where it was.
@@ -1089,11 +1087,11 @@ covered by the existing layout test that walks every tab.
    need them.
 2. **Done.** The bench in the history, with its items and labels; the
    evaluation and the stage change as background tasks; the Bench group in the
-   Scene tree; the Track Edit panel with the item tabs, the table, the
+   Scene tree; Track View with the table, the
    thresholds and the toolbar; putting a point on the bench and starting from a
    pixel; the commit with and without an origin. Filed as
    [`../gui/bench.md`](../gui/bench.md),
-   [`../gui/track-edit.md`](../gui/track-edit.md) and
+   [`../gui/track-view.md`](../gui/track-view.md) and
    [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md). What remains
    of the panel is what the steps below add to it, plus the per-observation
    tile column.
@@ -1113,7 +1111,7 @@ covered by the existing layout test that walks every tab.
    part of it. Filed as
    [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
    § "Searching by geometry" and
-   [`../gui/track-edit.md`](../gui/track-edit.md).
+   [`../gui/track-view.md`](../gui/track-view.md).
 5. Pull-in from a point and from the bench, the coherence grid, and the merging
    commit. *Split off selected observations* arrived with step 2.
 6. **Done**, for the tools whose steps exist: the two creates, the three item

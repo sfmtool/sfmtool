@@ -132,9 +132,9 @@ same gate. It is where a person looks first.
 
 ## The search entry
 
-In the Track Edit panel a row's context menu offers *Find matches by SIFT
-query* when the node's index is current ([`track-edit.md`](track-edit.md)
-§ "Right-clicking a row"). When it is not, the entry itself is the remedy:
+In Track View a row's context menu offers *Find matches by SIFT
+query* when the node's index is current ([`track-view.md`](track-view.md)
+§ "Edit mode"). When it is not, the entry itself is the remedy:
 
 - `none`: the entry reads *Build SIFT Index to Search* and starts the build.
 - `stale`: the entry reads *Rebuild SIFT Index to Search*, starts the build,
@@ -149,7 +149,7 @@ candidates on a track unasked is a surprise.
 ## Opening on sight
 
 The node's index path is looked at when the Scene tree draws a row, when the
-Track Edit panel draws, and when the first item goes onto the node's bench.
+Track View draws, and when the first item goes onto the node's bench.
 Opening a `.kdf` decodes no tree and no descriptor block
 ([`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)),
 so looking costs a stat and a header read, and a session finds what the last one
@@ -257,7 +257,7 @@ The index lives in
 [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), one open forest
 per loaded node on `AppState`. The Scene tree's row and its menu are in
 [scene_graph/](../../crates/sfm-explorer/src/scene_graph/), the search entry in
-[track_edit/table.rs](../../crates/sfm-explorer/src/track_edit/table.rs), and
+[track_view/edit/table.rs](../../crates/sfm-explorer/src/track_view/edit/table.rs), and
 the wire in [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs).
 
 ```rust
@@ -374,7 +374,7 @@ reconstruction row's menu carrying the build above *Convert to Embedded
 Patches*; and an unsaved node's build entry greyed.
 
 The search entry's three labels are in
-[track_edit/tests.rs](../../crates/sfm-explorer/src/track_edit/tests.rs), with
+[track_view/edit/tests.rs](../../crates/sfm-explorer/src/track_view/edit/tests.rs), with
 the assertion that choosing a build label asks for the build and asks for no
 search, and that the panel draws no index row of its own.
 

@@ -37,7 +37,6 @@ mod mcp;
 mod metrics;
 mod platform;
 mod point_ids;
-mod point_track_detail;
 mod progress;
 mod resect;
 mod scene;
@@ -48,7 +47,7 @@ mod state;
 #[cfg(test)]
 mod test_support;
 mod texture;
-mod track_edit;
+mod track_view;
 mod viewer_3d;
 mod window;
 
@@ -61,13 +60,12 @@ use egui::ViewportId;
 use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use intrinsics_detail::IntrinsicsDetail;
-use point_track_detail::PointTrackDetail;
 use progress::Collector;
 use scene::{CameraRef, ImageRef, PointRef};
 use scene_graph::SceneGraphPanel;
 use scene_renderer::SceneRenderer;
 use state::AppState;
-use track_edit::TrackEdit;
+use track_view::TrackView;
 use viewer_3d::Viewer3D;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -226,8 +224,7 @@ pub fn run() {
         scene_graph: SceneGraphPanel::new(),
         image_browser: ImageBrowser::new(),
         image_detail: ImageDetail::new(),
-        point_track_detail: PointTrackDetail::new(),
-        track_edit: TrackEdit::new(),
+        track_view: TrackView::new(),
         intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
         frame: Arc::new(Collector::new(false)),
@@ -330,8 +327,7 @@ pub(crate) struct App {
     pub(crate) scene_graph: SceneGraphPanel,
     pub(crate) image_browser: ImageBrowser,
     pub(crate) image_detail: ImageDetail,
-    pub(crate) point_track_detail: PointTrackDetail,
-    pub(crate) track_edit: TrackEdit,
+    pub(crate) track_view: TrackView,
     pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
     /// Where this frame's own phases land: the uploads, the two draws and the

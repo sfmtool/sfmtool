@@ -441,8 +441,8 @@ pub struct AppState {
     /// request in that image's own source coordinates.
     ///
     /// Set beside the image selection by the gestures that name a *feature*
-    /// rather than a photograph (a row click in Point Track Detail or in Track
-    /// Edit), and by the wire's `set_image_detail_view`; taken by the dock on
+    /// rather than a photograph (a row click in either mode of Track View),
+    /// and by the wire's `set_image_detail_view`; taken by the dock on
     /// the frame the Image Detail panel shows that image. It lives here, with
     /// the selection, so that every caller asks for one thing through one path
     /// rather than each teaching the detail panel its own way to scroll.
@@ -598,7 +598,7 @@ pub struct AppState {
 
     /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
     /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
-    /// ImageDetail (builds its GPU texture from level 0) and PointTrackDetail
+    /// ImageDetail (builds its GPU texture from level 0) and PointTrackView
     /// (CPU-samples it to render per-observation patch tiles). Cleared when the
     /// scene changes.
     ///
@@ -1089,7 +1089,7 @@ impl AppState {
     /// Select `image` and ask the Image Detail panel to bring `pixel`, a
     /// place in that image's own source pixels, into view with it.
     ///
-    /// What a row click in Point Track Detail or Track Edit calls: the row is
+    /// What a row click in either mode of Track View calls: the row is
     /// an *observation*, so the image is only half of what it names, and at a
     /// zoomed-in view the other half can sit off-screen. The selection itself
     /// is [`AppState::select_image`]'s, so the coupling rules and the Action
@@ -1221,7 +1221,7 @@ impl AppState {
     /// Open the Go to Point dialog, prefilled with the selected point's ID.
     ///
     /// The one entry point for all three ways in (the Go menu, Ctrl/Cmd+G, the
-    /// Point Track panel's button), so none of them can forget the prefill —
+    /// Track View's button), so none of them can forget the prefill —
     /// which is what makes the dialog double as a place to read or copy the
     /// current point's ID rather than only to type a new one.
     pub fn open_goto_point(&mut self) {
@@ -1448,7 +1448,7 @@ pub fn ensure_sift_cached<'a>(
 /// photometric fit's sampler needs, and what the kernels' own callers build.
 ///
 /// One constant, because the cluster sampler mip-selects by the grid's
-/// footprint and the Track Edit panel draws the tile the kernel measured: two
+/// footprint and Track View draws the tile the kernel measured: two
 /// depths would be two pictures of one surface.
 pub(crate) const PYRAMID_LEVELS: usize = 6;
 

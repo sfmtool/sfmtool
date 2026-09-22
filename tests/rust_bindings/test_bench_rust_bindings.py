@@ -146,15 +146,33 @@ class TestTheBench:
         # The bench a step was called on is not changed by it.
         assert bench.labels == ["IMG_0042@1,2"]
 
-    def test_a_discard_leaves_the_one_before_it_active(self):
+    def test_a_discard_of_the_active_item_leaves_nothing_active(self):
         bench, _ = create_cluster(Bench(), 1, "a", (1.0, 1.0), radius_px=7.5)
         bench, _ = create_cluster(bench, 2, "b", (2.0, 2.0), radius_px=7.5)
         assert bench.active_label() == "b@2,2"
         bench = bench.discard("b@2,2")
-        assert bench.active_label() == "a@1,1"
+        assert bench.labels == ["a@1,1"]
+        assert bench.active_label() is None
+        assert bench.active_track is None
         bench = bench.discard("a@1,1")
         assert len(bench) == 0
         assert bench.active_label() is None
+
+    def test_a_deactivate_leaves_every_item_and_none_active(self):
+        bench, _ = create_cluster(Bench(), 1, "a", (1.0, 1.0), radius_px=7.5)
+        bench, _ = create_cluster(bench, 2, "b", (2.0, 2.0), radius_px=7.5)
+        off = bench.deactivate()
+        assert off.labels == ["a@1,1", "b@2,2"]
+        assert off.active_label() is None
+        assert off.active_track is None
+        # The bench a step was called on is not changed by it.
+        assert bench.active_label() == "b@2,2"
+        # Activating afterwards restores one.
+        assert off.activate("a@1,1").active_label() == "a@1,1"
+
+    def test_a_deactivate_of_an_unknown_kind_is_refused(self):
+        with pytest.raises(ValueError, match="unknown item kind"):
+            Bench().deactivate("patch")
 
     def test_a_label_that_names_nothing_is_refused_by_name(self):
         with pytest.raises(ValueError, match="nothing on the bench is called"):

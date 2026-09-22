@@ -7,8 +7,8 @@ comparing what you have with something else that is also unsettled, and only
 then writing the result down. A reconstruction has no room for work in that
 state: everything in it is a point that exists. The **bench** is the place
 beside it where things that are not settled yet are held. It is a list of
-labelled **items**, in the order they were put there, with one **active** item
-per kind of item, and nothing on it is part of the reconstruction: a save does
+labelled **items**, in the order they were put there, with at most one
+**active** item per kind of item, and nothing on it is part of the reconstruction: a save does
 not write an item, the point count does not include one, and exactly one step
 crosses from an item to a point.
 
@@ -76,6 +76,8 @@ impl Bench {
     pub fn put(&self, base: &str, item: BenchItem) -> (Bench, String);
     pub fn replace(&self, label: &str, item: BenchItem) -> Result<Bench, BenchError>;
     pub fn activate(&self, label: &str) -> Result<Bench, BenchError>;
+    /// The bench with no active item of `kind`, every item left where it is.
+    pub fn deactivate(&self, kind: ItemKind) -> Bench;
     pub fn discard(&self, label: &str) -> Result<Bench, BenchError>;
     pub fn rename(&self, label: &str, to: &str) -> Result<Bench, BenchError>;
 }
@@ -105,6 +107,15 @@ functions is what keeps a hundred verdicts from renaming anything.
 in its own panel and a gesture that names no target means "the active one of the
 kind this panel edits". A single "active item" would make one panel's click
 change what another panel is showing.
+
+**A non-empty bench may have no active item.** `put` activates what it puts on,
+but `deactivate` takes the activation away and leaves every item where it is,
+and a discard of the active item leaves its kind with none. The viewer's Track
+View shows a committed point while nothing is active and the active item while
+something is ([`../../gui/track-view.md`](../../gui/track-view.md)), so "on the
+bench" and "being edited" are two states and the bench has to hold both. A
+deactivation of a kind with nothing active gives back an equal bench, which is
+how a caller tells that it had no effect.
 
 **Every refusal names its subject.** The caller is a menu entry or a wire tool
 that has to say in one sentence why nothing happened, so `BenchError`'s
@@ -154,11 +165,11 @@ added, which is a row of no content at all.
 
 ## Implementation notes
 
-**A discard moves the activation to a neighbour of the same kind.** The item
-before it in the list, or the one after it when the discarded item was the
-first, and no active item at all when the kind has nothing left. It is a
-neighbour *of the same kind* rather than the adjacent entry, because the list
-interleaves kinds and each kind's activation is its own.
+**A discard of the active item leaves its kind with no active item.** The
+activation is not handed to a neighbour: the item that would arrive is one
+nobody asked for, and with the viewer's list of items in the Scene tree rather
+than in the panel that edits them, nothing on screen would say which one it was.
+A discard of an item that is not active leaves the activation as it was.
 
 **A rename that changes nothing is not a collision.** Renaming an item to the
 label it already holds is allowed, because the label it collides with is itself;
@@ -173,7 +184,8 @@ in it.
 
 `sfmtool._sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
 `len(bench)`, `bench.labels`, `bench.track(label)`, `bench.active_label(kind)`
-and `bench.active_track`; change it with `bench.activate`, `bench.discard`,
+and `bench.active_track`; change it with `bench.activate`,
+`bench.deactivate(kind="track")`, `bench.discard`,
 `bench.rename` and `bench.replace`, each of which returns the next bench and
 leaves the object it was called on as it was. A refusal is a `ValueError`
 carrying the core sentence.
@@ -199,12 +211,15 @@ bench = bench.rename("IMG_0042@142,198", "bull-nose")
 
 [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) covers the
 labels (each origin's form, the collision suffix, a rename freeing the old
-label), the activation (a discard moving it to the neighbour, an empty bench
-having none), and the sharing: a step on one item leaves every other item the
+label), the activation (a discard of the active item leaving none active, a
+discard of another keeping it, `deactivate` leaving every item the same `Arc`
+and none active and an activation afterwards restoring one, a deactivation with
+nothing active giving back an equal bench), and the sharing: a step on one item leaves every other item the
 same `Arc`, which is the property the viewer's per-version budget rests on.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
-covers the same through the bindings, and that a step leaves the Python object
-it was called on unchanged.
+covers the same through the bindings, `deactivate` and its refusal of an
+unknown kind included, and that a step leaves the Python object it was called
+on unchanged.
 
 ## Non-goals
 

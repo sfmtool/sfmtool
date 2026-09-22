@@ -3,9 +3,9 @@
 
 //! Dock tab identity and tab rendering.
 //!
-//! Names the ten panels (Scene, Background, 3D Viewer, Image Browser, Image
-//! Detail, Point Track Detail, Camera Intrinsics, Track Edit, Action Log, Edit
-//! History) and holds the `TabViewer`
+//! Names the nine panels (Scene, Background, 3D Viewer, Image Browser, Image
+//! Detail, Track View, Camera Intrinsics, Action Log, Edit History) and holds
+//! the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -17,11 +17,10 @@ use crate::image_browser::ImageBrowser;
 use crate::image_detail::ImageDetail;
 use crate::intrinsics_detail::IntrinsicsDetail;
 use crate::platform;
-use crate::point_track_detail::PointTrackDetail;
 use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
-use crate::track_edit::TrackEdit;
+use crate::track_view::TrackView;
 use crate::viewer_3d::Viewer3D;
 
 #[cfg(test)]
@@ -37,11 +36,10 @@ pub(crate) enum Tab {
     Viewer3D,
     ImageBrowser,
     ImageDetail,
-    PointTrackDetail,
+    /// The selected point's committed track, or the bench's active track
+    /// while its *Edit* box is ticked. See [`crate::track_view`].
+    TrackView,
     IntrinsicsDetail,
-    /// The bench's active track, and the steps that act on it. See
-    /// [`crate::track_edit`].
-    TrackEdit,
     ActionLog,
     EditHistory,
 }
@@ -54,9 +52,8 @@ impl Tab {
             Tab::Viewer3D => "3D Viewer",
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
-            Tab::PointTrackDetail => "Point Track",
+            Tab::TrackView => "Track View",
             Tab::IntrinsicsDetail => "Camera Intrinsics",
-            Tab::TrackEdit => "Track Edit",
             Tab::ActionLog => "Action Log",
             Tab::EditHistory => "Edit History",
         }
@@ -70,9 +67,8 @@ pub(crate) struct TabContext<'a> {
     pub scene_graph: &'a mut SceneGraphPanel,
     pub image_browser: &'a mut ImageBrowser,
     pub image_detail: &'a mut ImageDetail,
-    pub point_track_detail: &'a mut PointTrackDetail,
+    pub track_view: &'a mut TrackView,
     pub intrinsics_detail: &'a mut IntrinsicsDetail,
-    pub track_edit: &'a mut TrackEdit,
     /// Where the panel work that can outlast a frame reports: the `.sift`
     /// reads the overlays ask for.
     ///
@@ -118,9 +114,8 @@ impl TabViewer for TabContext<'_> {
             Tab::Viewer3D => self.show_viewer_3d(ui),
             Tab::ImageBrowser => self.show_image_browser(ui),
             Tab::ImageDetail => self.show_image_detail(ui),
-            Tab::PointTrackDetail => self.show_point_track_detail(ui),
+            Tab::TrackView => self.show_track_view(ui),
             Tab::IntrinsicsDetail => self.show_intrinsics_detail(ui),
-            Tab::TrackEdit => self.show_track_edit(ui),
             // One of the two tabs with no empty state: an empty scene still has
             // a session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
@@ -193,10 +188,10 @@ impl TabContext<'_> {
             let bench = self.state.bench(id)?;
             let label = crate::bench::active_track_label(bench)?.to_string();
             let track = bench.track(&label).cloned()?;
-            // The row Track Edit has selected, which the figure draws larger:
+            // The row Track View has selected, which the figure draws larger:
             // read here because the panel is a sibling field of the state the
             // viewport borrows.
-            let selected = self.track_edit.selected_row(id, &label);
+            let selected = self.track_view.selected_row(id, &label);
             Some((label, track, selected))
         });
         // Fetched only after `show_hud` has handed back its `&mut
@@ -267,7 +262,7 @@ impl TabContext<'_> {
     /// One version per drag, through `AppState::edit_bench_patch` -- the call
     /// the wire's patch tools and the Image Detail panel's handles all make, so
     /// a gesture out in the world and one over a photograph are the same step
-    /// with the same sentence. A click on a mark selects that row in Track Edit,
+    /// with the same sentence. A click on a mark selects that row in Track View,
     /// as clicking a mark there does: the mark and the row are one observation.
     fn apply_bench_gesture(&mut self, label: Option<&str>) {
         use crate::viewer_3d::bench_track::BenchGesture;
@@ -286,37 +281,24 @@ impl TabContext<'_> {
                 }
             }
             BenchGesture::SelectRow(observation) => {
-                self.track_edit.select_row(id, label, observation);
+                self.track_view.select_row(id, label, observation);
             }
         }
     }
 
-    /// The Edit History tab: the selected node's versions, and the jump a click on
-    /// one of them asks for.
-    ///
-    /// The jump is applied here rather than in the panel for the reason every
-    /// other panel's response is: the panel holds `&AppState` while it draws,
-    /// and moving the cursor needs it mutably.
-    /// The Track Edit tab: the bench's active track, and each step the panel
-    /// asked for.
+    /// Apply what Track View's edit mode asked for: each step on the active
+    /// track.
     ///
     /// Applied here rather than in the panel for the reason the Edit History
     /// panel's jump is: the panel holds `&AppState` while it draws, and every
     /// step below needs it mutably. One gesture per frame, so the order these
     /// are read in decides nothing.
-    fn show_track_edit(&mut self, ui: &mut egui::Ui) {
-        self.cache_bench_track_images();
-        // The node's index, opened on sight: a `.kdf` opens without decoding a
-        // tree or a descriptor block, and a session that finds the file the
-        // last one built is a session that can search. The look is remembered,
-        // so a reconstruction with no index is not stat-ed once a frame.
-        if let Some(id) = self.state.selected_recon {
-            self.state.refresh_sift_index(id);
-        }
-        let response = self.track_edit.show(ui, self.state);
-        let Some(id) = self.state.selected_recon else {
-            return;
-        };
+    fn apply_track_edit_response(
+        &mut self,
+        ui: &egui::Ui,
+        id: ReconId,
+        response: crate::track_view::TrackEditResponse,
+    ) {
         if response.build_sift_index {
             // A refusal to begin is logged by the starter, in the words its own
             // gate uses.
@@ -327,10 +309,6 @@ impl TabContext<'_> {
                 state.action_log.fail(Kind::Bench, why);
             }
         };
-        if let Some(label) = response.activate.as_deref() {
-            let outcome = self.state.activate_bench_item(id, label);
-            refuse(self.state, outcome);
-        }
         if let Some(label) = response.discard.as_deref() {
             let outcome = self.state.discard_bench_item(id, label);
             refuse(self.state, outcome);
@@ -338,12 +316,6 @@ impl TabContext<'_> {
         if let Some((label, to)) = response.rename.as_ref() {
             let outcome = self.state.rename_bench_item(id, label, to);
             refuse(self.state, outcome);
-        }
-        if response.put_selected_point_on_bench {
-            if let Some(point) = self.state.selected_point {
-                let outcome = self.state.put_point_on_bench(point).map(|_| ());
-                refuse(self.state, outcome);
-            }
         }
         // Everything below acts on the active track, which is what a bench
         // panel's gesture means when it names no item.
@@ -422,8 +394,19 @@ impl TabContext<'_> {
         if response.has_pointer {
             self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
         }
+        // After the steps, because ending a held camera move needs the state
+        // mutably, as it does for a view-mode row.
+        if let Some(image) = response.request_camera_view {
+            self.look_through(ui, ImageRef::new(id, image));
+        }
     }
 
+    /// The Edit History tab: the selected node's versions, and the jump a click on
+    /// one of them asks for.
+    ///
+    /// The jump is applied here rather than in the panel for the reason every
+    /// other panel's response is: the panel holds `&AppState` while it draws,
+    /// and moving the cursor needs it mutably.
     fn show_edit_history(&mut self, ui: &mut egui::Ui) {
         let response = crate::edit_history_panel::show(ui, self.state);
         if let Some((id, serial)) = response.jump {
@@ -552,8 +535,8 @@ impl TabContext<'_> {
     /// Decode the photographs the active bench track's rows draw their tiles
     /// from, into the node's shared full-resolution cache.
     ///
-    /// Here rather than in the panel for the reason the Point Track Detail
-    /// panel's pre-cache is here: filling the cache needs `&mut AppState` and
+    /// Here rather than in the panel for the reason view mode's pre-cache is
+    /// here: filling the cache needs `&mut AppState` and
     /// the panel is handed `&AppState` while it draws. The images are the ones
     /// that track's observations name, each decoded once for the whole viewer.
     fn cache_bench_track_images(&mut self) {
@@ -687,7 +670,7 @@ impl TabContext<'_> {
                 )
             });
             // Full-res CPU pixels come from the shared cache (also
-            // used by the Point Track Detail patch tiles), so each
+            // used by Track View's patch tiles), so each
             // image is decoded from disk at most once.
             let full_res = selected_image.and_then(|idx| {
                 crate::state::ensure_full_res_cached(
@@ -736,27 +719,11 @@ impl TabContext<'_> {
                 // also what records the selection.
                 self.state.select_point(PointRef::new(id, point_idx));
             }
-            // The two bench gestures, at the pixel the menu carried out. Each
-            // is one step on the node's bench, which the Track Edit panel then
-            // shows; a refusal is one failed row, in the words the step's own
-            // gate uses.
-            if let Some(pixel) = detail_response.start_bench_cluster {
-                if let Some(image) = self.state.selected_image {
-                    // The size the reconstruction's own patches project to in
-                    // this image, so a cluster starts at the scale the node
-                    // already works at there.
-                    let radius = self.state.default_patch_radius(image);
-                    let seed = crate::bench::Seed::Pixel {
-                        pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
-                        radius_px: Some(f64::from(radius)),
-                    };
-                    if let Err(why) = self.state.start_bench_cluster(image, &seed) {
-                        self.state
-                            .action_log
-                            .fail(crate::action_log::Kind::Bench, why);
-                    }
-                }
-            }
+            // The bench gesture at the pixel the menu carried out, one step on
+            // the node's bench that Track View then shows; a refusal is one
+            // failed row, in the words the step's own gate uses. *Start cluster
+            // on the bench here* is not applied here: it raises Track View, so
+            // the panel keeps it for `app.rs` (`ImageDetail::take_cluster_start`).
             if let Some(pixel) = detail_response.add_bench_observation {
                 if let (Some(image), Some(label)) = (self.state.selected_image, &bench_label) {
                     // No shape: the track is worked at the scale its reference
@@ -785,12 +752,12 @@ impl TabContext<'_> {
                     }
                 }
             }
-            // A click on one of the bench layer's marks selects that row in the
-            // Track Edit panel, which is the same gesture as clicking the row
+            // A click on one of the bench layer's marks selects that row in
+            // Track View's edit mode, which is the same gesture as clicking the row
             // there: the mark and the row are one observation.
             if let Some(observation) = detail_response.select_bench_row {
                 if let Some(label) = &bench_label {
-                    self.track_edit.select_row(id, label, observation);
+                    self.track_view.select_row(id, label, observation);
                 }
             }
             if detail_response.has_pointer {
@@ -808,99 +775,143 @@ impl TabContext<'_> {
         }
     }
 
-    /// The Point Track tab: the selected point's observations across the
-    /// images that see it, and the image selection its rows report back.
-    fn show_point_track_detail(&mut self, ui: &mut egui::Ui) {
-        let node = selected_node(&self.state.scene, self.state.selected_recon);
-        if let Some(node) = node {
-            let recon = node.recon();
-            let id = node.id;
-            let selected_point = self.state.selected_point_in(id);
-            // Ensure SIFT positions are cached for all images in the
-            // track (sift_files only; embedded_patches reads keypoints
-            // inline, so the `.sift` probe would fail every time).
-            if recon.feature_indexes().is_some() {
-                if let Some(pt_idx) = selected_point {
-                    for img_idx in node.edited().track_image_indices(pt_idx as u32) {
-                        let need = recon.point_set.max_track_feature_index[img_idx] as usize + 1;
-                        crate::state::ensure_sift_cached(
-                            &mut self.state.sift_cache,
-                            recon,
-                            ImageRef::new(id, img_idx),
-                            need,
-                            &self.frame,
-                        );
-                    }
-                }
+    /// The Track View tab: the Edit box, and whichever of the two bodies it
+    /// says is on screen, with each gesture applied after the draw.
+    fn show_track_view(&mut self, ui: &mut egui::Ui) {
+        self.cache_track_view_images();
+        // The node's index, opened on sight in either mode: a `.kdf` opens
+        // without decoding a tree or a descriptor block, and a session that
+        // finds the file the last one built is a session that can search. The
+        // look is remembered, so a reconstruction with no index is not stat-ed
+        // once a frame.
+        if let Some(id) = self.state.selected_recon {
+            self.state.refresh_sift_index(id);
+        }
+        let response = self
+            .track_view
+            .show(ui, self.state, self.gesture_events, self.scroll_input);
+        let Some(id) = self.state.selected_recon else {
+            return;
+        };
+        // The box and the selection notice, each one bench step
+        // (`AppState::set_editing`), refused in its own words.
+        let on = response
+            .set_edit
+            .or(response.edit_selected_point.then_some(true));
+        if let Some(on) = on {
+            if let Err(why) = self.state.set_editing(id, on) {
+                self.state.action_log.fail(Kind::Bench, why);
             }
-            // Pre-cache full-res images for every observing image of
-            // the selected point so the panel can render per-observation
-            // patch tiles from an immutable cache reference. Only
-            // needed when the recon carries patch frames (the tiles
-            // are gated on them).
-            if recon.point_set.patch_u_halfvec_xyz.is_some() {
-                if let Some(pt_idx) = selected_point {
-                    for img_idx in node.edited().track_image_indices(pt_idx as u32) {
-                        crate::state::ensure_full_res_cached(
-                            &mut self.state.full_res_cache,
-                            recon,
-                            ImageRef::new(id, img_idx),
-                        );
-                    }
-                }
-            }
-            let point_id = selected_point
-                .map(|index| crate::scene::point_id(node, index))
-                .unwrap_or_default();
-            let track_response = self.point_track_detail.show(
-                ui,
-                node.edited(),
-                id,
-                &point_id,
-                selected_point,
-                self.state.hovered_image_in(id),
-                &self.state.sift_cache,
-                &self.state.full_res_cache,
-                self.gesture_events,
-                self.scroll_input,
-            );
-            // As in the browser arm: applied once `node`'s borrow is
-            // done with, since the setter needs the state mutably.
-            let new_selection = track_response
-                .select_image
-                .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
-            let requested_view = track_response
-                .request_camera_view
-                .map(|img_idx| ImageRef::new(id, img_idx));
-            if track_response.has_pointer {
-                // Track detail owns hover state when it has the pointer.
-                self.state.hovered_image =
-                    track_response.hovered_image.map(|i| ImageRef::new(id, i));
-                // Clear point hover from other panels since track detail
-                // doesn't produce hovered_point.
-                self.state.hovered_point = None;
-            }
-            if track_response.request_goto_point {
-                self.state.open_goto_point();
-            }
-            // The row names an observation, so the selection carries the
-            // feature's pixel with it and the Image Detail panel brings it into
-            // view when the image arrives zoomed in on somewhere else.
-            if let Some((image, pixel)) = new_selection {
-                match pixel {
-                    Some(pixel) => self.state.reveal_in_image(image, pixel),
-                    None => self.state.select_image(Some(image)),
-                }
-            }
-            // After the node's borrow, because ending a held camera move needs
-            // the state mutably.
-            if let Some(image) = requested_view {
-                self.look_through(ui, image);
-            }
+        }
+        if let Some(view) = response.view {
+            self.apply_point_track_view_response(ui, id, view);
+        }
+        if let Some(edit) = response.edit {
+            self.apply_track_edit_response(ui, id, edit);
+        }
+    }
+
+    /// Decode what the mode Track View is about to draw reads from: in view
+    /// mode the selected point's `.sift` positions and photographs, in edit
+    /// mode the active track's photographs.
+    ///
+    /// Here rather than in the panel because filling the caches needs
+    /// `&mut AppState` and the panel is handed `&AppState` while it draws.
+    fn cache_track_view_images(&mut self) {
+        let Some(id) = self.state.selected_recon else {
+            return;
+        };
+        let editing = self
+            .state
+            .bench(id)
+            .is_some_and(|bench| crate::bench::active_track_label(bench).is_some());
+        if editing {
+            self.cache_bench_track_images();
         } else {
-            ui.centered_and_justified(|ui| {
-                ui.label("No reconstruction loaded");
-            });
+            self.cache_selected_point_images(id);
+        }
+    }
+
+    /// Decode what view mode's rows draw for the selected point: the `.sift`
+    /// positions of every observing image and, where the reconstruction carries
+    /// patch frames, the full-resolution photographs its tiles are warped from.
+    fn cache_selected_point_images(&mut self, id: ReconId) {
+        let Some(node) = crate::scene::node_by_id(&self.state.scene, id) else {
+            return;
+        };
+        let recon = node.recon();
+        let Some(pt_idx) = self.state.selected_point_in(id) else {
+            return;
+        };
+        if node.edited().point(pt_idx as u32).is_none() {
+            return;
+        }
+        // Ensure SIFT positions are cached for all images in the track
+        // (sift_files only; embedded_patches reads keypoints inline, so the
+        // `.sift` probe would fail every time).
+        if recon.feature_indexes().is_some() {
+            for img_idx in node.edited().track_image_indices(pt_idx as u32) {
+                let need = recon.point_set.max_track_feature_index[img_idx] as usize + 1;
+                crate::state::ensure_sift_cached(
+                    &mut self.state.sift_cache,
+                    recon,
+                    ImageRef::new(id, img_idx),
+                    need,
+                    &self.frame,
+                );
+            }
+        }
+        // Pre-cache full-res images for every observing image of the selected
+        // point so the body can render per-observation patch tiles from an
+        // immutable cache reference. Only needed when the recon carries patch
+        // frames (the tiles are gated on them).
+        if recon.point_set.patch_u_halfvec_xyz.is_some() {
+            for img_idx in node.edited().track_image_indices(pt_idx as u32) {
+                crate::state::ensure_full_res_cached(
+                    &mut self.state.full_res_cache,
+                    recon,
+                    ImageRef::new(id, img_idx),
+                );
+            }
+        }
+    }
+
+    /// Apply what Track View's view mode asked for: the image selection and
+    /// the camera view its rows report, the hover, and the Go to Point dialog.
+    fn apply_point_track_view_response(
+        &mut self,
+        ui: &egui::Ui,
+        id: ReconId,
+        track_response: crate::track_view::PointTrackViewResponse,
+    ) {
+        let new_selection = track_response
+            .select_image
+            .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
+        let requested_view = track_response
+            .request_camera_view
+            .map(|img_idx| ImageRef::new(id, img_idx));
+        if track_response.has_pointer {
+            // Track View owns hover state when it has the pointer.
+            self.state.hovered_image = track_response.hovered_image.map(|i| ImageRef::new(id, i));
+            // Clear point hover from other panels since view mode doesn't
+            // produce hovered_point.
+            self.state.hovered_point = None;
+        }
+        if track_response.request_goto_point {
+            self.state.open_goto_point();
+        }
+        // The row names an observation, so the selection carries the feature's
+        // pixel with it and the Image Detail panel brings it into view when the
+        // image arrives zoomed in on somewhere else.
+        if let Some((image, pixel)) = new_selection {
+            match pixel {
+                Some(pixel) => self.state.reveal_in_image(image, pixel),
+                None => self.state.select_image(Some(image)),
+            }
+        }
+        // Last, because ending a held camera move needs the state mutably.
+        if let Some(image) = requested_view {
+            self.look_through(ui, image);
         }
     }
 
@@ -1111,13 +1122,8 @@ impl TabContext<'_> {
         }
         // The Bench rows, whose items the tree names by position so that the
         // response stays a `Copy` value; the label is read off the bench here.
-        if let Some((id, position)) = response.activate_bench_item {
-            if let Some(label) = self.bench_label_at(id, position) {
-                if let Err(why) = self.state.activate_bench_item(id, &label) {
-                    self.state.action_log.fail(Kind::Bench, why);
-                }
-            }
-        }
+        // A row's double-click is not applied here: it raises Track View, so
+        // the panel keeps it for `app.rs` (`SceneGraphPanel::take_bench_edit`).
         if let Some((id, position)) = response.discard_bench_item {
             if let Some(label) = self.bench_label_at(id, position) {
                 if let Err(why) = self.state.discard_bench_item(id, &label) {
@@ -1204,9 +1210,8 @@ impl TabContext<'_> {
     fn forget_recon(&mut self, id: ReconId) {
         self.image_browser.forget_recon(id);
         self.image_detail.forget_recon(id);
-        self.point_track_detail.forget_recon(id);
+        self.track_view.forget_recon(id);
         self.intrinsics_detail.forget_recon(id);
-        self.track_edit.forget_recon(id);
     }
 }
 

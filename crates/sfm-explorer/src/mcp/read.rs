@@ -12,7 +12,7 @@
 //! wrong and is not: resolving a `.sfmr` observation to a pixel means reading
 //! the `.sift` file it points into, and the viewer memoizes that in
 //! `AppState::sift_cache`. Reading through the cache is what makes the number
-//! reported here the same number the Point Track panel shows, rather than a
+//! reported here the same number Track View shows, rather than a
 //! second implementation of it.
 
 use std::time::Duration;
@@ -572,7 +572,7 @@ pub(super) fn point_observation_xy(
 /// reconstruction stores it in.
 ///
 /// `(0, 0)` when the `.sift` file could not be read — the same fallback
-/// `point_track_detail::prepare` uses, so the two panels and this tool agree on
+/// `track_view::view::prepare` uses, so the two panels and this tool agree on
 /// what an unreadable feature looks like rather than each inventing an answer.
 fn observation_xy(
     state: &AppState,

@@ -1,11 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the Track Edit panel.
+//! Headless tests for Track View's edit mode.
 //!
-//! egui needs no GPU to lay out a frame, so the whole panel runs through
-//! `Context::run_ui` here: `show` really does draw the tabs, the header, the
-//! toolbar, the sliders and every row of the table. What the assertions target
+//! egui needs no GPU to lay out a frame, so the whole body runs through
+//! `Context::run_ui` here: `show` really does draw the header, the toolbar,
+//! the sliders and every row of the table. What the assertions target
 //! is what the panel *decides* -- which rows it drew, what each says, what the
 //! sliders paint, and what it reports back to the dock -- rather than pixels.
 
@@ -114,8 +114,8 @@ fn at_pointer(
 }
 
 /// The y at which the row for `image` answers the pointer, found by walking
-/// down the panel: what sits above the table is the tabs, the header, the
-/// toolbar and the sliders, and a hard-coded offset would go stale the moment
+/// down the panel: what sits above the table is the header, the toolbar and
+/// the sliders, and a hard-coded offset would go stale the moment
 /// one of them gains a line.
 fn row_y(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, image: usize) -> f32 {
     for step in 0..(VIEWPORT.y as usize / 8) {
@@ -216,42 +216,19 @@ fn on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
     (state, id, label, panel, ctx)
 }
 
+/// With nothing active the body draws nothing: Track View is in view mode
+/// then, and the ways in are its empty state's.
 #[test]
-fn an_empty_bench_offers_the_ways_in_and_draws_no_rows() {
+fn with_nothing_active_the_body_draws_no_rows_and_no_text() {
     let (state, _) = state();
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
     let response = run_frame(&mut panel, &ctx, &state);
 
     assert!(panel.rows().is_empty());
-    assert!(!response.put_selected_point_on_bench);
-    let texts = crate::test_support::painted_texts(
-        &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
-            ..Default::default()
-        },
-        |ui| {
-            panel.show(ui, &state);
-        },
-    );
-    assert!(
-        texts.iter().any(|t| t == "No track on the bench"),
-        "{texts:?}"
-    );
-    assert!(
-        texts.iter().any(|t| t == super::PUT_ON_BENCH_LABEL),
-        "the way onto the bench is not offered: {texts:?}"
-    );
-    // The other way in is a pixel, and a pixel is named in the Image Detail
-    // panel's context menu rather than here: what this panel carries is the
-    // sentence saying so, quoting that entry's own label.
-    assert!(
-        texts
-            .iter()
-            .any(|t| t.contains(crate::image_detail::START_CLUSTER_LABEL)),
-        "the pixel gesture is not pointed at: {texts:?}"
-    );
+    assert_eq!(response, TrackEditResponse::default());
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(texts.is_empty(), "{texts:?}");
 }
 
 #[test]
@@ -416,7 +393,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let sfmr_image = &recon.image_table.images[row.image as usize];
     let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
-    let at_the_seed = crate::point_track_detail::patch_color_image(
+    let at_the_seed = crate::track_view::view::patch_color_image(
         &frame,
         camera,
         &cam_from_world,
@@ -425,7 +402,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     );
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
-    let at_the_projection = crate::point_track_detail::patch_color_image(
+    let at_the_projection = crate::track_view::view::patch_color_image(
         &frame,
         camera,
         &cam_from_world,
@@ -533,8 +510,11 @@ fn the_toolbar_offers_the_reading_and_the_fit_with_a_search_radius() {
     }
 }
 
+/// Edit mode draws the active item and nothing else on the bench: no row of
+/// item tabs, so the labels of the other items appear nowhere in what the frame
+/// painted. The bench as a list is the Scene tree's.
 #[test]
-fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
+fn edit_mode_draws_the_active_item_and_no_item_tabs() {
     let (mut state, id) = state();
     let first = state
         .put_point_on_bench(PointRef::new(id, POINT as usize))
@@ -549,6 +529,19 @@ fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
         )
         .expect("a pixel on the sensor")
         .label;
+    let third = state
+        .start_bench_cluster(
+            ImageRef::new(id, 1),
+            &crate::bench::Seed::Pixel {
+                pixel: [60.0, 40.0],
+                radius_px: Some(6.0),
+            },
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    state
+        .activate_bench_item(id, &second)
+        .expect("on the bench");
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
@@ -567,10 +560,14 @@ fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
             panel.show(ui, &state);
         },
     );
-    for label in [&first, &second] {
+    assert!(
+        texts.contains(&second),
+        "the active item's header: {texts:?}"
+    );
+    for label in [&first, &third] {
         assert!(
-            texts.iter().any(|t| t.starts_with(label.as_str())),
-            "{label} is not named anywhere: {texts:?}"
+            !texts.iter().any(|t| t.contains(label.as_str())),
+            "{label} is not the active item and was painted: {texts:?}"
         );
     }
 }
@@ -592,6 +589,39 @@ fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
 
     assert_eq!(response.select_image, Some(1));
     assert_eq!(response.reveal_feature, Some(expected));
+    assert_eq!(
+        response.request_camera_view, None,
+        "a single click asked for camera view"
+    );
+}
+
+/// A double-click on a row enters camera view for its image, as a view-mode
+/// row's does: the rows of both modes are observations of one track.
+#[test]
+fn double_clicking_a_row_asks_for_camera_view() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    let pos = egui::pos2(400.0, y + 8.0);
+    run_frame_with(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    let mut events = vec![egui::Event::PointerMoved(pos)];
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+    }
+    let response = run_frame_with(&mut panel, &ctx, &state, events);
+    assert_eq!(response.request_camera_view, Some(1));
+    assert_eq!(response.select_image, Some(1));
 }
 
 #[test]
@@ -932,7 +962,7 @@ fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
         "a copy commits as a creation"
     );
 
-    // And the panel shows both, with the copy's tab the one it is drawing.
+    // And the panel shows the copy, and nothing of the original.
     run_frame(&mut panel, &ctx, &state);
     let texts = crate::test_support::painted_texts(
         &ctx,
@@ -944,16 +974,11 @@ fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
             panel.show(ui, &state);
         },
     );
-    // A tab reads `<label> (n in)`, so the labels are matched as prefixes.
     assert!(
-        texts.iter().any(|t| t.starts_with(&format!("{label} ("))),
-        "{texts:?}"
+        !texts.contains(&label),
+        "the original was painted beside the copy: {texts:?}"
     );
-    assert!(
-        texts.iter().any(|t| t.starts_with(&format!("{copy} ("))),
-        "{texts:?}"
-    );
-    // And the copy is the one being drawn: its header says it commits as a
+    // The copy is the one being drawn: its header says it commits as a
     // creation, because it has no origin.
     assert!(texts.contains(&copy), "{texts:?}");
     assert!(

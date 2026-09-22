@@ -248,7 +248,7 @@ fn scroll_offset_after_click_and_pan(restore_pointer: bool) -> f32 {
     scroll_offset_over_frames(1, frames)
 }
 
-/// The bug this exists for: clicking a row in the Track Edit list, or a camera
+/// The bug this exists for: clicking a row in Track View's list, or a camera
 /// in the Scene tree, stopped the touchpad from scrolling that list until the
 /// mouse was moved. A Windows click reaches egui as a contact, `egui-winit`
 /// ends it with `PointerGone`, and from the next frame egui has no

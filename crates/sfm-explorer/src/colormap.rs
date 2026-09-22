@@ -80,7 +80,7 @@ pub fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
 /// Reprojection error over `[vmin, vmax]` px: green (good) → yellow → red.
 ///
 /// Named because two panels colour the same quantity — the Image Detail
-/// overlay over the image's own error range, the Point Track Detail table's
+/// overlay over the image's own error range, the Track View table's
 /// thumbnail dots over a fixed 0–2 px — and the name is what says they are the
 /// same ramp.
 pub fn error_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {

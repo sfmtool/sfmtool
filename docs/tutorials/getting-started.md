@@ -99,10 +99,10 @@ across photographs.
 
 ### 1. Set up the layout
 
-Arrange SfM Explorer so that the **Image Detail** and **Point Track** panels
+Arrange SfM Explorer so that the **Image Detail** and **Track View** panels
 are visible side by side.
 
-![Image Detail and Point Track panels side by side](images/dino-in-sfm-explorer-track-image-panels-split.jpg)
+![Image Detail and Track View side by side](images/dino-in-sfm-explorer-track-image-panels-split.jpg)
 
 In this screenshot, I've also double-clicked on the third image to set the 3D
 viewport, selected a feature in the Image Detail panel, and changed the Image

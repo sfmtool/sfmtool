@@ -23,9 +23,8 @@ pub(super) fn show(
         viewer_3d,
         image_browser,
         image_detail,
-        point_track_detail,
+        track_view,
         intrinsics_detail,
-        track_edit,
     } = parts;
     let UiRequests {
         close_all_requested,
@@ -135,9 +134,8 @@ pub(super) fn show(
                         target,
                         image_browser,
                         image_detail,
-                        point_track_detail,
+                        track_view,
                         intrinsics_detail,
-                        track_edit,
                     );
                     crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                     ui.close();
@@ -156,9 +154,8 @@ pub(super) fn show(
                         target,
                         image_browser,
                         image_detail,
-                        point_track_detail,
+                        track_view,
                         intrinsics_detail,
-                        track_edit,
                     );
                     crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                     ui.close();
@@ -188,9 +185,8 @@ pub(super) fn show(
                         image.map(|i| i.recon),
                         image_browser,
                         image_detail,
-                        point_track_detail,
+                        track_view,
                         intrinsics_detail,
-                        track_edit,
                     );
                     ui.close();
                 }
@@ -229,9 +225,8 @@ pub(super) fn show(
                                 moved,
                                 image_browser,
                                 image_detail,
-                                point_track_detail,
+                                track_view,
                                 intrinsics_detail,
-                                track_edit,
                             );
                         }
                     } else if let Err(message) = crate::camera_lock::enter(viewer_3d, app_state) {
@@ -279,9 +274,8 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
         viewer_3d,
         image_browser,
         image_detail,
-        point_track_detail,
+        track_view,
         intrinsics_detail,
-        track_edit,
     } = parts;
     // Ctrl/Cmd+G opens the same dialog from anywhere, gated on egui's
     // own keyboard arbitration so a HUD `DragValue` — or the dialog's
@@ -340,9 +334,8 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
                 target,
                 image_browser,
                 image_detail,
-                point_track_detail,
+                track_view,
                 intrinsics_detail,
-                track_edit,
             );
             // A step of the cursor can move the very pose the viewport
             // is looking through, and camera view follows the value.
@@ -371,9 +364,8 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
                 Some(moved),
                 image_browser,
                 image_detail,
-                point_track_detail,
+                track_view,
                 intrinsics_detail,
-                track_edit,
             );
         }
         viewer_3d.handle_image_step(root_ui, app_state);
@@ -431,16 +423,14 @@ pub(super) fn forget_selected(
     id: Option<crate::scene::ReconId>,
     image_browser: &mut crate::image_browser::ImageBrowser,
     image_detail: &mut crate::image_detail::ImageDetail,
-    point_track_detail: &mut crate::point_track_detail::PointTrackDetail,
+    track_view: &mut crate::track_view::TrackView,
     intrinsics_detail: &mut crate::intrinsics_detail::IntrinsicsDetail,
-    track_edit: &mut crate::track_edit::TrackEdit,
 ) {
     let Some(id) = id else { return };
     image_browser.forget_recon(id);
     image_detail.forget_recon(id);
-    point_track_detail.forget_recon(id);
+    track_view.forget_recon(id);
     intrinsics_detail.forget_recon(id);
-    track_edit.forget_recon(id);
 }
 
 // ── The Panels menu ──────────────────────────────────────────────────────

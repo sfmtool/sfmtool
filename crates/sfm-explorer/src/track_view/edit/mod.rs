@@ -1,17 +1,17 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Track Edit panel: the bench's active track, and the steps that act on
+//! Track View's edit mode: the bench's active track, and the steps that act on
 //! it.
 //!
-//! See `specs/gui/track-edit.md`. This is the first **bench panel**: it shows
-//! the active track of the selected node's bench ([`crate::bench`]) and every
-//! gesture in it names that track. The Point Track Detail panel beside it stays
-//! what it is -- the view of the *selected point's* committed track -- and this
-//! panel's table carries that panel's columns first, so a reader who knows one
-//! reads the other.
+//! See `specs/gui/track-view.md`. This body is drawn while Track View's *Edit*
+//! box is ticked, which is while the selected node's bench ([`crate::bench`])
+//! has an active track, and every gesture in it names that track. It shows the
+//! active item and nothing else on the bench: the bench as a list is the Scene
+//! tree's. The table carries view mode's columns first, so a reader who knows
+//! one reads the other.
 //!
-//! The panel decides nothing. Each gesture lands in [`TrackEditResponse`] and
+//! The body decides nothing. Each gesture lands in [`TrackEditResponse`] and
 //! the dock applies it through the `AppState` method that pushes the version,
 //! for the reason every other panel's response works that way: the panel holds
 //! `&AppState` while it draws, and a step needs it mutably.
@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use sfmtool_core::bench::{
-    apply_thresholds, Bench, EditableTrack, Observation, Provenance, StageKind, Thresholds, Verdict,
+    apply_thresholds, EditableTrack, Observation, Provenance, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::SfmrReconstruction;
 
@@ -48,14 +48,10 @@ pub(crate) use table::RowSummary;
 /// entries that push a version are buttons, and a button is clicked once.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TrackEditResponse {
-    /// A tab or a Scene-tree row asked for this item to become the active one.
-    pub activate: Option<String>,
-    /// A tab's close mark, or the toolbar's *Discard*.
+    /// The toolbar's *Discard*.
     pub discard: Option<String>,
     /// *Rename* was committed: the item, and the label it should take.
     pub rename: Option<(String, String)>,
-    /// *Put selected point on bench*.
-    pub put_selected_point_on_bench: bool,
     /// *Evaluate*, carrying the search radius the control stands at: the
     /// reading moves nothing, so the one thing it needs from the panel is how
     /// far around each observation to look.
@@ -85,8 +81,11 @@ pub struct TrackEditResponse {
     /// A verdict control was clicked: the observation, and the verdict it
     /// cycled to.
     pub set_verdict: Option<(usize, Verdict)>,
-    /// A row was clicked -- select this image, as the view-only panel does.
+    /// A row was clicked -- select this image, as a view-mode row does.
     pub select_image: Option<usize>,
+    /// A row was double-clicked -- enter camera view for this image, as a
+    /// view-mode row's double-click does.
+    pub request_camera_view: Option<usize>,
     /// The clicked row's observation, in that image's own pixels: the place the
     /// Image Detail panel is asked to bring into view along with the image.
     /// `None` for an observation nothing has placed yet.
@@ -97,7 +96,7 @@ pub struct TrackEditResponse {
     pub has_pointer: bool,
 }
 
-/// Track Edit panel state.
+/// Track View's edit-mode state.
 pub struct TrackEdit {
     /// Where the threshold sliders stand. Panel state: a slider proposes and
     /// *Apply thresholds* is what makes the proposal verdicts, so moving one
@@ -266,7 +265,10 @@ impl TrackEdit {
         self.rows.clear();
     }
 
-    /// Draw the panel and report what the user did with it.
+    /// Draw the active track and report what the user did with it.
+    ///
+    /// Track View calls this only while a track is active; with none, or with
+    /// no node selected, it draws nothing and forgets the rows it drew.
     pub fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackEditResponse {
         let mut response = TrackEditResponse::default();
         let panel_rect = ui.available_rect_before_wrap();
@@ -276,22 +278,16 @@ impl TrackEdit {
 
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
             self.rows.clear();
-            ui.centered_and_justified(|ui| {
-                ui.label("No reconstruction selected");
-            });
             return response;
         };
         let id = node.id;
         let bench = node.history.current_bench();
-
-        self.show_item_tabs(ui, bench, &mut response);
 
         let active = crate::bench::active_track_label(bench).map(str::to_string);
         let Some(label) = active else {
             self.rows.clear();
             self.selected_rows.clear();
             self.selection_of = None;
-            show_empty_state(ui, state, node, &mut response);
             return response;
         };
         let track = bench.track(&label).expect("the active label names a track");
@@ -319,47 +315,6 @@ impl TrackEdit {
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
-    }
-
-    /// The row of tabs, one per track on the bench, the active one raised.
-    fn show_item_tabs(
-        &mut self,
-        ui: &mut egui::Ui,
-        bench: &Bench,
-        response: &mut TrackEditResponse,
-    ) {
-        if bench.is_empty() {
-            return;
-        }
-        let active = crate::bench::active_track_label(bench);
-        ui.horizontal_wrapped(|ui| {
-            for entry in bench.entries() {
-                let Some(track) = entry.item.as_track() else {
-                    continue;
-                };
-                let selected = active == Some(entry.label.as_str());
-                let text = format!("{} ({} in)", entry.label, track.verdict_counts().0);
-                if ui
-                    .add(egui::Button::selectable(selected, text))
-                    .on_hover_text(format!(
-                        "{} · the {} stage",
-                        entry.label,
-                        track.stage_kind()
-                    ))
-                    .clicked()
-                {
-                    response.activate = Some(entry.label.clone());
-                }
-                if ui
-                    .small_button("x")
-                    .on_hover_text(format!("Discard {} from the bench", entry.label))
-                    .clicked()
-                {
-                    response.discard = Some(entry.label.clone());
-                }
-            }
-        });
-        ui.separator();
     }
 
     /// The toolbar: every step that acts on the active track, each greyed with
@@ -448,18 +403,6 @@ impl TrackEdit {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let point_refusal = busy.clone().or_else(|| {
-                (state.selected_point.filter(|p| p.recon == id).is_none())
-                    .then(|| "No point is selected.".to_string())
-            });
-            if entry(
-                ui,
-                PUT_ON_BENCH_LABEL,
-                point_refusal,
-                "Put the selected point's track on the bench and work on it",
-            ) {
-                response.put_selected_point_on_bench = true;
-            }
             self.show_rename(ui, label, busy, response);
         });
     }
@@ -656,10 +599,6 @@ impl TrackEdit {
     }
 }
 
-/// The button the Point Track Detail panel names as the way onto the bench, and
-/// the toolbar's own entry, quoted from one constant so the two agree.
-pub(crate) const PUT_ON_BENCH_LABEL: &str = "Put selected point on bench";
-
 /// The observation row's context-menu entry, in one constant, as the Image
 /// Detail menu's entries are: the label is quoted in a refusal and read back by
 /// a test, and three spellings of one entry would drift.
@@ -703,8 +642,8 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
         sfmtool_core::bench::Stage::Track(payload) => {
             // A bearing and a position are the same three numbers and different
             // statements, so the word in front of them is what tells a reader
-            // which they are looking at. "at infinity" is the Point Track Detail
-            // panel's own word for the same row.
+            // which they are looking at. "at infinity" is view mode's own word
+            // for the same row.
             //
             // The track's own flag and not its patch's `w`: a point put on the
             // bench from a node that stores no patch frames has no patch to read
@@ -727,40 +666,6 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
             });
         }
     }
-}
-
-/// The panel with nothing on the bench: the ways in, each naming its gesture.
-fn show_empty_state(
-    ui: &mut egui::Ui,
-    state: &AppState,
-    node: &SceneNode,
-    response: &mut TrackEditResponse,
-) {
-    ui.centered_and_justified(|ui| {
-        ui.vertical_centered(|ui| {
-            ui.label("No track on the bench");
-            ui.add_space(8.0);
-            let id = node.id;
-            let point_refusal = state.busy_refusal(id).or_else(|| {
-                (state.selected_point.filter(|p| p.recon == id).is_none())
-                    .then(|| "No point is selected.".to_string())
-            });
-            if entry(
-                ui,
-                PUT_ON_BENCH_LABEL,
-                point_refusal,
-                "Put the selected point's track on the bench and work on it",
-            ) {
-                response.put_selected_point_on_bench = true;
-            }
-            ui.add_space(4.0);
-            ui.weak(format!(
-                "Or start one from a pixel: right-click it in the Image Detail panel and \
-                 choose \"{}\".",
-                crate::image_detail::START_CLUSTER_LABEL,
-            ));
-        });
-    });
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.

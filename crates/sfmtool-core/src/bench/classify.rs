@@ -145,7 +145,7 @@ pub struct TrackClassification {
     pub finite_horizon: f64,
     /// The widest angle between any two of the rays, in degrees. Not a test --
     /// it is the number a person reads a near-parallel track by, and it is the
-    /// one the Point Track Detail panel already shows for a committed track.
+    /// one Track View already shows for a committed track.
     pub max_pair_angle_deg: f64,
     /// Rms distance, in px, from each sighting to where the **triangulated
     /// point** projects in its own photograph. `NaN` when no sighting's view

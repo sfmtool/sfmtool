@@ -1,13 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Point Track Detail panel — shows all observations of a selected 3D point.
+//! Track View's view mode: every observation of the selected 3D point.
 //!
-//! When a 3D point is selected (via click in the 3D viewer or feature click in
-//! the Image Detail panel), this panel displays a header with point summary
-//! statistics and a scrollable table of per-image observations.
+//! Drawn while Track View's *Edit* box is clear. When a 3D point is selected
+//! (via click in the 3D viewer or feature click in the Image Detail panel),
+//! this body displays a header with point summary statistics and a scrollable
+//! table of per-image observations. It reads the reconstruction and never the
+//! bench.
 //!
-//! This module owns the panel state and the [`PointTrackDetail::show`] entry
+//! This module owns the body's state and the [`PointTrackView::show`] entry
 //! point that orchestrates one frame; the work lives in five children:
 //!
 //! - [`prepare`] — builds [`TrackObservationData`] when the selection changes,
@@ -65,8 +67,8 @@ struct TrackObservationData {
     image_full_name: String,
 }
 
-/// Point Track Detail panel state.
-pub struct PointTrackDetail {
+/// Track View's view-mode state.
+pub struct PointTrackView {
     /// The point we've prepared data for, or None. A ref, so re-preparing is
     /// forced when a new reconstruction reuses the same point index — which is
     /// also what makes the texture caches below safe to rebuild wholesale.
@@ -103,12 +105,12 @@ pub struct PointTrackDetail {
     scroll_offset_y: Option<f32>,
 }
 
-/// Response from the Point Track Detail panel.
+/// What one frame of view mode asks the dock to do.
 ///
 /// Image indices are local to the reconstruction the panel was shown with;
 /// `dock.rs` pairs them back into [`ImageRef`]s. A track never spans
 /// reconstructions, so every row belongs to the selected point's own recon.
-pub struct PointTrackDetailResponse {
+pub struct PointTrackViewResponse {
     /// If Some, the user clicked a row — select this image.
     pub select_image: Option<usize>,
     /// The clicked row's feature, in that image's own pixels: the place the
@@ -135,7 +137,7 @@ const PATCH_TILE: f32 = THUMB_SIZE;
 /// Display size of the stored-patch header tile.
 const STORED_PATCH_SIZE: f32 = 64.0;
 
-impl PointTrackDetail {
+impl PointTrackView {
     pub fn new() -> Self {
         Self {
             prepared_point: None,
@@ -152,7 +154,10 @@ impl PointTrackDetail {
         }
     }
 
-    /// Show the point track detail panel.
+    /// Draw the selected point's committed track.
+    ///
+    /// `empty_note` is the line drawn under *Go to Point...* when no point is
+    /// selected: Track View's sentence about what the bench holds.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -167,8 +172,9 @@ impl PointTrackDetail {
         full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
-    ) -> PointTrackDetailResponse {
-        let mut response = PointTrackDetailResponse {
+        empty_note: Option<&str>,
+    ) -> PointTrackViewResponse {
+        let mut response = PointTrackViewResponse {
             select_image: None,
             reveal_feature: None,
             request_camera_view: None,
@@ -196,7 +202,7 @@ impl PointTrackDetail {
         // needs no click on a splat.
         let selected_point = selected_point.filter(|&idx| edited.point(idx as u32).is_some());
         let Some(point_idx) = selected_point else {
-            response.request_goto_point = show_empty_state(ui);
+            response.request_goto_point = show_empty_state(ui, empty_note);
             self.prepared_point = None;
             self.observations.clear();
             return response;
@@ -227,21 +233,6 @@ impl PointTrackDetail {
 
         // --- Stored-patch header tile (embedded-patches reconstructions) ---
         self.show_stored_patch_tile(ui);
-
-        // The way onto the bench, said where the track is being read. This
-        // panel stays view-only: the line names the button and the panel it
-        // is in, quoting the label from the one constant that spells it.
-        if !edited.has_feature_indexes() {
-            ui.label(
-                egui::RichText::new(format!(
-                    "To work on this track: press \u{201c}{}\u{201d} in the Track Edit panel. \
-                     The bench holds it beside the reconstruction until you commit it.",
-                    crate::track_edit::PUT_ON_BENCH_LABEL
-                ))
-                .weak()
-                .small(),
-            );
-        }
 
         ui.separator();
 
@@ -291,8 +282,9 @@ impl PointTrackDetail {
 ///
 /// The button is here and not only in the menu because this is the panel a user
 /// stares at when they have an ID in hand and no idea how to feed it in — the
-/// empty state is the most likely place to look for the way to fill it.
-fn show_empty_state(ui: &mut egui::Ui) -> bool {
+/// empty state is the most likely place to look for the way to fill it. The
+/// note under it, when there is one, is Track View's line about the bench.
+fn show_empty_state(ui: &mut egui::Ui, note: Option<&str>) -> bool {
     let mut clicked = false;
     ui.centered_and_justified(|ui| {
         ui.vertical_centered(|ui| {
@@ -302,6 +294,10 @@ fn show_empty_state(ui: &mut egui::Ui) -> bool {
                 .button("Go to Point...")
                 .on_hover_text("Type or paste a point index or pt3d_<hash>_<index> ID")
                 .clicked();
+            if let Some(note) = note {
+                ui.add_space(4.0);
+                ui.weak(note);
+            }
         });
     });
     clicked

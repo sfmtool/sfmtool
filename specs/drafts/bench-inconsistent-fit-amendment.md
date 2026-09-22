@@ -77,7 +77,7 @@ cameras are wrong:
   the reading is reported as undecidable below four observations, and the
   pairwise table is what the person has.
 
-The Track Edit panel shows the report in place of the measurements it could not
+Track View shows the report in place of the measurements it could not
 make, and the Action Log records its summary line. The MCP reply carries the
 same structure.
 

@@ -254,7 +254,7 @@ pub struct TrackMeasurement {
     /// The angle between this observation's own ray and the direction from its
     /// camera to the triangulated position, in degrees: the reprojection
     /// residual stated as an angle, which is what makes it comparable across
-    /// lenses and depths. The same number the Point Track Detail panel's
+    /// lenses and depths. The same number Track View's
     /// *Angle* column shows for a committed track.
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
@@ -377,7 +377,7 @@ pub struct ClusterPayload {
     /// at exactly this radius rather than at
     /// [`ClusterRefineParams::radius`](crate::patch::cluster_refine::ClusterRefineParams::radius),
     /// so the meaning of a seed cannot change under it; everything drawn --
-    /// the overlay's parallelogram, the Track Edit tile -- is read at it too.
+    /// the overlay's parallelogram, the Track View tile -- is read at it too.
     pub radius: f64,
     /// The cut itself. `None` until an evaluation cuts it, because the cut is a
     /// function of the reference's pixels and the bench holds no photographs.

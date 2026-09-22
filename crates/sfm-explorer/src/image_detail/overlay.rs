@@ -29,11 +29,11 @@ pub(crate) enum FeatureHit {
     Unmatched,
 }
 
-/// The start-a-cluster entry's label, and what the Track Edit panel's empty
+/// The start-a-cluster entry's label, and what Track View's empty
 /// state quotes so the two cannot drift.
 ///
 /// "On the bench" rather than the bare verb: nothing this entry does reaches
-/// the reconstruction, and the commit in the Track Edit panel is what crosses
+/// the reconstruction, and the commit in Track View is what crosses
 /// back.
 pub(crate) const START_CLUSTER_LABEL: &str = "Start cluster on the bench here";
 
@@ -119,10 +119,11 @@ pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), St
         return Err(why.to_string());
     }
     if bench.active_track.is_none() {
-        return Err(format!(
-            "No track is on the bench: start one with \"{START_CLUSTER_LABEL}\", \
-             or put the selected point on the bench in the Track Edit panel."
-        ));
+        return Err(
+            "No track is being edited: tick Edit in Track View, or double-click a \
+                    Bench item in the Scene tree."
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -399,8 +400,8 @@ impl ImageDetail {
             // ── The bench's two entries ──
             //
             // Nothing either of them does reaches the reconstruction: each is a
-            // step on the node's bench (`crate::bench`), and the commit in the
-            // Track Edit panel is what crosses back. They are offered whatever
+            // step on the node's bench (`crate::bench`), and the commit in
+            // Track View is what crosses back. They are offered whatever
             // backs an observation, because a bench track is seeds in one
             // image's pixels until it is committed.
             //

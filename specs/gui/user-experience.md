@@ -197,7 +197,7 @@ did turn out to be app-global: it takes a typed or pasted point index — or a
 whole `pt3d_<hash>_<index>` ID — and selects that point, switching the selected
 reconstruction when the ID names a different loaded file. It is the way *back
 in* from an ID copied out into a constraints file or a CLI run, and it is
-reachable from the Point Track Detail panel too. See
+reachable from Track View too. See
 [goto-point.md](goto-point.md).
 
 The window title names the loaded file — `SfM Explorer - kerry_park.sfmr` —
@@ -238,10 +238,12 @@ panels. Panels can be re-docked, reordered, and resized:
   Full-resolution image of the selected camera, with a 7-mode overlay toolbar
   (features, reproj error, track length, max track angle, depth reliability,
   condition number, none).
-- **Point Track Detail** — Top-right (~33% width). Per-observation
-  diagnostics for the selected 3D point: per-image reprojection error, ray
-  angle, thumbnails, copy-`pt3d_<hash>_<index>` and the Go to Point button that
-  takes one back.
+- **Track View** — Top-right (~33% width), with Camera Intrinsics behind it.
+  With its *Edit* box clear, per-observation diagnostics for the selected 3D
+  point: per-image reprojection error, ray angle, thumbnails,
+  copy-`pt3d_<hash>_<index>` and the Go to Point button that takes one back.
+  With it ticked, the bench's active track and the steps that measure, fit and
+  commit it.
 - **Image Browser** — Bottom strip (~20% height). Horizontally-scrollable
   thumbnails with click-to-select, gesture-driven panning, and a navigation
   minibar with animation playback.

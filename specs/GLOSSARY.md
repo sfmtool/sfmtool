@@ -41,6 +41,9 @@ and the wire's bench tools.
 | **sighting** | one image's view of the patch, interchangeable with **observation** | | |
 | **keypoint** | where one photograph sees the patch's content | | not the projection of the centre. The gap between the two is that sighting's in-plane offset |
 | **bench** | where an item is held and judged before it is committed | | |
+| **active item** | the one item on a bench that Track View edits and a bench tool acts on when it names none; one per bench, whether it is at the cluster or the track stage, and possibly none | a selected Scene tree row, the front tab of a dock node | "active" is the bench's word. A Scene tree row is *selected* and a dock tab is *raised*, so bench prose that says "active" means this and nothing else |
+| **activate** / **deactivate** | make an item the active one / leave every item on the bench and make none active | `clear`, `unset`, `close` | the pair names what it acts on, the activation, so `deactivate_bench_item` sits beside `activate_bench_item` and needs no item argument; *discard* is the separate step that takes an item off the bench |
+| **Track View** | the panel that shows one point's track: the selected point's committed track in **view mode**, the active item in **edit mode** | `Point Track`, `Track Edit` | one panel with an explicit mode, whose **Edit** checkbox is a reading of the bench (ticked iff an item is active); wire and layout name `track_view` |
 
 **The four gestures are named for the axis they act on**, so that no two are
 synonyms: **translate** moves the centre, **resize** changes the half-length,
@@ -69,7 +72,7 @@ where the context has already supplied two.
 `OrientedPatch`, and the split is deliberate rather than settled by a count: the
 renderer is doing surfel splatting, which is what that word means in graphics,
 while the bench is editing one patch in the PatchMatch sense. `surfel` is
-correct in `scene_renderer/`, `point_track_detail/`, `state*` and the specs that
+correct in `scene_renderer/`, `track_view/`, `state*` and the specs that
 describe rendering. Inside the bench it is wrong. *If this boundary is ever
 removed it should be removed deliberately and in one pass, not eroded from
 either side.*

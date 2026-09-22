@@ -412,6 +412,16 @@ impl PyBench {
     }
 }
 
+/// The item kind a Python caller names, refused when it names none.
+fn item_kind(kind: &str) -> PyResult<ItemKind> {
+    match kind {
+        "track" => Ok(ItemKind::Track),
+        other => Err(PyValueError::new_err(format!(
+            "unknown item kind: {other:?} (expected track)"
+        ))),
+    }
+}
+
 #[pymethods]
 impl PyBench {
     /// A bench with nothing on it.
@@ -433,18 +443,13 @@ impl PyBench {
     /// The label of the active item of `kind`, or ``None``.
     #[pyo3(signature = (kind = "track"))]
     fn active_label(&self, kind: &str) -> PyResult<Option<String>> {
-        let kind = match kind {
-            "track" => ItemKind::Track,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown item kind: {other:?} (expected track)"
-                )))
-            }
-        };
-        Ok(self.inner.active_label(kind).map(str::to_string))
+        Ok(self
+            .inner
+            .active_label(item_kind(kind)?)
+            .map(str::to_string))
     }
 
-    /// The active track, or ``None`` when no track is on the bench.
+    /// The active track, or ``None`` when no track is active.
     #[getter]
     fn active_track(&self) -> Option<PyEditableTrack> {
         self.inner.active_track().map(|t| PyEditableTrack {
@@ -476,8 +481,15 @@ impl PyBench {
         self.inner.activate(label).map(Self::wrap).map_err(refused)
     }
 
-    /// Take the item called `label` off the bench. Its label is then free to be
-    /// minted again.
+    /// The bench with no active item of `kind`, every item left where it is.
+    #[pyo3(signature = (kind = "track"))]
+    fn deactivate(&self, kind: &str) -> PyResult<Self> {
+        Ok(Self::wrap(self.inner.deactivate(item_kind(kind)?)))
+    }
+
+    /// Take the item called `label` off the bench. When it was the active item
+    /// of its kind, nothing of that kind is active afterwards. Its label is then
+    /// free to be minted again.
     fn discard(&self, label: &str) -> PyResult<Self> {
         self.inner.discard(label).map(Self::wrap).map_err(refused)
     }

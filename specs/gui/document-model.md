@@ -397,7 +397,7 @@ materialisation's when there was one.
 its geometry, its track, its keypoints, its patch frame and bitmap, its
 constraint -- resolves through `EditedReconstruction::point`, so a point the
 version modified or added is what the panels show and a point it deleted resolves
-to nothing. That covers the Point Track Detail panel, the track rays, the pick
+to nothing. That covers Track View, the track rays, the pick
 path, Go to Point, the Image Detail panel's embedded-features overlay and its
 per-point colourings, the track-highlight helpers, and the MCP `get_point` reply.
 The embedded-features overlay walks the version's **live indexes** rather than

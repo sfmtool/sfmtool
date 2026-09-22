@@ -1,6 +1,6 @@
 # Commit track
 
-The **Commit** button in the Track Edit panel, which writes the active bench
+The **Commit** button in Track View, which writes the active bench
 track into the reconstruction as a point. It is the one step of the bench that
 touches the file, and it is one ordinary point edit: one version, one label, one
 Action Log entry of kind `Edit`, undoable like any other.
@@ -11,7 +11,7 @@ some taken and some refused -- that was held on the bench until it was settled
 ([`../bench.md`](../bench.md)).
 
 Related specs: [`../bench.md`](../bench.md) (the bench and its versions),
-[`../track-edit.md`](../track-edit.md) (the panel the button is in),
+[`../track-view.md`](../track-view.md) (the panel the button is in),
 [`../../core/bench/editable-track.md`](../../core/bench/editable-track.md)
 § "The commit" (the core function this wraps, and every refusal),
 [`../document-model.md`](../document-model.md) (the version),
@@ -22,7 +22,7 @@ and [`../saving.md`](../saving.md).
 
 ## Invocation
 
-*Commit*, in the Track Edit panel's toolbar. The viewer's half is
+*Commit*, in Track View's toolbar. The viewer's half is
 `AppState::commit_bench_track` in
 [bench.rs](../../../crates/sfm-explorer/src/bench.rs); the write itself is
 `sfmtool_core::bench::commit`. It acts on the active track, which
@@ -100,8 +100,8 @@ and the track back to the half it had before.
 ### The selection
 
 **The written point becomes the selection**, through `AppState::select_point`
-like any other, so the 3D viewport puts the track rays on it, the Point Track
-Detail panel opens on it and the images that observe it light up. That holds
+like any other, so the 3D viewport puts the track rays on it, Track View
+shows it in view mode once *Edit* is cleared, and the images that observe it light up. That holds
 wherever the selection was standing and whether the commit replaced a point or
 created one: a commit is a gesture about one point, and the index it landed at
 is the one thing the person who asked for it cannot work out.
@@ -142,7 +142,7 @@ replaced, a creation takes whatever index the overlay had free, and the sentence
 below states neither as a number a caller can use. It is what the step selects;
 the wire reports it
 as `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced": 1207 } }`,
-the id being the one the Point Track panel shows and `get_point` takes back, so
+the id being the one Track View shows and `get_point` takes back, so
 an agent's next call names the row rather than hunting for it
 ([`../bench.md`](../bench.md) § "The wire").
 

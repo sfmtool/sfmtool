@@ -144,7 +144,7 @@ pub(super) struct Drag {
 
 /// What one observation of the track offers a click in this image.
 struct Mark {
-    /// The row it selects in the Track Edit panel.
+    /// The row it selects in Track View.
     observation: usize,
     /// The outline's bounding box, in panel coordinates.
     rect: Rect,
@@ -579,7 +579,7 @@ impl Layer {
         }
     }
 
-    /// The marks a click selects a Track Edit row by: each sighting, with the
+    /// The marks a click selects a Track View row by: each sighting, with the
     /// outline it belongs to as its reach.
     fn marks(&self) -> Vec<Mark> {
         let bounds =

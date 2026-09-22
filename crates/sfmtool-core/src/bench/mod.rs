@@ -192,7 +192,8 @@ pub struct Bench {
     /// The items, oldest first.
     entries: Vec<BenchEntry>,
     /// The active label per kind. A kind with no entry has no active item,
-    /// which is the state of an empty bench.
+    /// which is the state of an empty bench and of a bench after
+    /// [`Bench::deactivate`] or a discard of the active item.
     active: BTreeMap<ItemKind, String>,
 }
 
@@ -238,13 +239,13 @@ impl Bench {
         self.get(label)?.as_track()
     }
 
-    /// The label of the active item of `kind`, or `None` when the bench holds
-    /// none of that kind.
+    /// The label of the active item of `kind`, or `None` when none is active:
+    /// the bench holds none of that kind, or holds some with none active.
     pub fn active_label(&self, kind: ItemKind) -> Option<&str> {
         self.active.get(&kind).map(String::as_str)
     }
 
-    /// The active track, or `None` when no track is on the bench.
+    /// The active track, or `None` when no track is active.
     pub fn active_track(&self) -> Option<&Arc<EditableTrack>> {
         self.track(self.active_label(ItemKind::Track)?)
     }
@@ -303,12 +304,23 @@ impl Bench {
         Ok(next)
     }
 
+    /// The bench with no active item of `kind`, every item left where it is.
+    ///
+    /// Every item is the same `Arc` in both benches. A bench with nothing of
+    /// `kind` active gives back an equal bench, which is how a caller tells a
+    /// deactivation that had no effect.
+    pub fn deactivate(&self, kind: ItemKind) -> Bench {
+        let mut next = self.clone();
+        next.active.remove(&kind);
+        next
+    }
+
     /// Take the item called `label` off the bench.
     ///
-    /// When it was the active item of its kind, the item before it in the list
-    /// becomes active, and the one after it when it was the first; a kind with
-    /// nothing left has no active item. Its label is free to be minted again,
-    /// because it names nothing now.
+    /// When it was the active item of its kind, nothing of that kind is active
+    /// afterwards: the activation is not handed to a neighbour, because the
+    /// item that would arrive is one nobody asked for. Its label is free to be
+    /// minted again, because it names nothing now.
     pub fn discard(&self, label: &str) -> Result<Bench, BenchError> {
         let at = self
             .position(label)
@@ -317,14 +329,7 @@ impl Bench {
         let mut next = self.clone();
         next.entries.remove(at);
         if next.active.get(&kind).is_some_and(|l| l == label) {
-            match next.neighbour_of_kind(at, kind) {
-                Some(neighbour) => {
-                    next.active.insert(kind, neighbour);
-                }
-                None => {
-                    next.active.remove(&kind);
-                }
-            }
+            next.active.remove(&kind);
         }
         Ok(next)
     }
@@ -351,17 +356,5 @@ impl Bench {
             next.active.insert(kind, to.to_string());
         }
         Ok(next)
-    }
-
-    /// The label of the item of `kind` nearest to the slot `at`, which a
-    /// removal has already closed up: the one before it, or the one after it
-    /// when the removal was at the front.
-    fn neighbour_of_kind(&self, at: usize, kind: ItemKind) -> Option<String> {
-        self.entries[..at]
-            .iter()
-            .rev()
-            .chain(self.entries[at..].iter())
-            .find(|e| e.item.kind() == kind)
-            .map(|e| e.label.clone())
     }
 }

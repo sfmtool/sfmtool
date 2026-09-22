@@ -503,7 +503,7 @@ fn a_step_on_one_item_leaves_every_other_the_same_arc() {
 }
 
 #[test]
-fn discarding_the_active_item_activates_the_one_before_it() {
+fn discarding_the_active_item_leaves_nothing_active() {
     let (bench, first) =
         create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
     let (bench, second) =
@@ -514,14 +514,64 @@ fn discarding_the_active_item_activates_the_one_before_it() {
     );
 
     let bench = bench.discard(&second.label).expect("a live item");
-    assert_eq!(
-        bench.active_label(ItemKind::Track),
-        Some(first.label.as_str())
-    );
+    assert_eq!(bench.len(), 1);
+    assert_eq!(bench.active_label(ItemKind::Track), None);
+    assert!(bench.active_track().is_none());
 
     let bench = bench.discard(&first.label).expect("a live item");
     assert!(bench.is_empty());
     assert_eq!(bench.active_label(ItemKind::Track), None);
+}
+
+#[test]
+fn discarding_an_item_that_is_not_active_keeps_the_activation() {
+    let (bench, first) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let (bench, second) =
+        create_cluster(&bench, &pixel_seed(2, [20.0, 20.0])).expect("a usable seed");
+    let bench = bench.discard(&first.label).expect("a live item");
+    assert_eq!(
+        bench.active_label(ItemKind::Track),
+        Some(second.label.as_str())
+    );
+}
+
+#[test]
+fn deactivating_leaves_every_item_the_same_arc_and_none_active() {
+    let (bench, first) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let (bench, second) =
+        create_cluster(&bench, &pixel_seed(2, [20.0, 20.0])).expect("a usable seed");
+
+    let off = bench.deactivate(ItemKind::Track);
+    assert_eq!(off.len(), 2);
+    assert_eq!(off.active_label(ItemKind::Track), None);
+    assert!(off.active_track().is_none());
+    for label in [&first.label, &second.label] {
+        assert!(Arc::ptr_eq(
+            bench.track(label).expect("on before"),
+            off.track(label).expect("still on")
+        ));
+    }
+    // The bench it was called on is unchanged.
+    assert_eq!(
+        bench.active_label(ItemKind::Track),
+        Some(second.label.as_str())
+    );
+
+    // Activating afterwards restores one.
+    let on = off.activate(&first.label).expect("a live item");
+    assert_eq!(on.active_label(ItemKind::Track), Some(first.label.as_str()));
+}
+
+#[test]
+fn deactivating_with_nothing_active_gives_back_an_equal_bench() {
+    assert_eq!(Bench::new().deactivate(ItemKind::Track), Bench::new());
+    let (bench, _) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let off = bench.deactivate(ItemKind::Track);
+    assert_eq!(off.deactivate(ItemKind::Track), off);
+    assert_ne!(off, bench);
 }
 
 // ---- Verdicts --------------------------------------------------------------

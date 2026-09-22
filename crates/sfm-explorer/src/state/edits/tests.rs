@@ -1880,17 +1880,17 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
     let point = PointRef::new(id, 11);
     // Closed first, so that what the gesture does to the dock is visible: the
     // default layout already carries the panel.
-    state.hide_panel(crate::dock::Tab::TrackEdit);
-    assert!(!state.is_panel_open(crate::dock::Tab::TrackEdit));
+    state.hide_panel(crate::dock::Tab::TrackView);
+    assert!(!state.is_panel_open(crate::dock::Tab::TrackView));
 
     state.apply_point_gesture(PointGesture::EditOnBench(point));
 
     assert_eq!(state.selected_point, Some(point));
-    // The same staging the Track Edit panel's own button does, and then the
+    // The same staging ticking Track View's Edit box does, and then the
     // panel itself, because this gesture was made somewhere the panel is not.
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "the point is not on the bench");
-    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
 }
 
 /// A second Edit on Bench on the same point -- a double-click after a menu, or
@@ -1909,7 +1909,7 @@ fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
         .expect("a track is active")
         .to_string();
 
-    state.hide_panel(crate::dock::Tab::TrackEdit);
+    state.hide_panel(crate::dock::Tab::TrackView);
     state.apply_point_gesture(PointGesture::EditOnBench(point));
 
     let bench = state.scene[0].history.current_bench();
@@ -1919,7 +1919,7 @@ fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
         Some(label.as_str()),
         "the item already there is not the active one",
     );
-    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
 }
 
 /// The raise is a layout operation, so it has to reach the dock the state
@@ -1934,18 +1934,18 @@ fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
 fn a_gesture_applied_while_the_dock_is_swapped_out_loses_the_raise() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.hide_panel(crate::dock::Tab::TrackEdit);
+    state.hide_panel(crate::dock::Tab::TrackView);
 
     let dock = std::mem::replace(&mut state.dock, egui_dock::DockState::new(Vec::new()));
     state.apply_point_gesture(PointGesture::EditOnBench(point));
     let placeholder = std::mem::replace(&mut state.dock, dock);
 
     assert!(
-        placeholder.find_tab(&crate::dock::Tab::TrackEdit).is_some(),
+        placeholder.find_tab(&crate::dock::Tab::TrackView).is_some(),
         "the raise did not land on the placeholder, so this test proves nothing",
     );
     assert!(
-        !state.is_panel_open(crate::dock::Tab::TrackEdit),
+        !state.is_panel_open(crate::dock::Tab::TrackView),
         "the raise reached the real dock from inside the swap",
     );
 }

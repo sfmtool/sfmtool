@@ -29,7 +29,7 @@ assumption runs through every layer:
   `scene_center`, `scene_radius`).
 - A long tail of caches key by bare image index: `AppState::sift_cache` /
   `full_res_cache`, `ImageBrowser::thumbnail_cache` (invalidated only by image
-  *count*), `ImageDetail::loaded_image`, `PointTrackDetail`'s texture maps, and
+  *count*), `ImageDetail::loaded_image`, Track View's texture maps, and
   `SceneRenderer::bg_image_loaded_index`.
 - `File > Open` replaces the loaded file wholesale.
 
@@ -217,7 +217,7 @@ selected point there is a **selected reconstruction**
 (`selected_recon: Option<ReconId>`). UI that is inherently sequence- or
 file-shaped and cannot meaningfully show several reconstructions at once — the
 Image Browser strip, animation playback, `,` / `.` camera stepping — follows
-it, exactly as Image Detail follows the selected image and Point Track follows
+it, exactly as Image Detail follows the selected image and Track View follows
 the selected point. This matters most when the loaded reconstructions have
 *different image sets*: the strip shows the selected reconstruction's own
 sequence, never a merge.
@@ -256,7 +256,7 @@ reconstructions.
 
 A fifth dock tab, `Tab::SceneGraph`, title **"Scene"**. Default layout: a new
 left split of the root (~18% width), with the existing 3D Viewer / Image
-Detail / Point Track / Image Browser arrangement to its right. Like the other
+Detail / Track View / Image Browser arrangement to its right. Like the other
 tabs it can be re-docked freely and closed, and **Panels ▸ Scene** brings it
 back ([panel-layout.md](panel-layout.md)).
 
@@ -441,8 +441,8 @@ fixed-height for virtualization.
 - Eye drives `show_points`; an inline `∞` mini-toggle drives
   `show_points_at_infinity` when the recon has infinity points.
 - Expands to **selection and hover rows only**, not a full listing:
-  - `selected: pt3d_<hash>_<index>` — the same copyable ID the Point Track
-    panel shows; click re-selects (useful after selecting elsewhere), and the
+  - `selected: pt3d_<hash>_<index>` — the same copyable ID Track View
+    shows; click re-selects (useful after selecting elsewhere), and the
     row doubles as where selection is *visible* in the tree.
   - `hovered: pt3d_<hash>_<index>` — transient, present only while a point of
     this recon is hovered.
@@ -467,12 +467,24 @@ own expansion, and both open by default.
 Each expands to one row per item of its stage, in the bench's own order, by
 label and with its `in` count; the active item is drawn as the selected row.
 There is **one** active item across both groups, the bench's kinds being items
-rather than stages. A click makes an item active, which is a step of the node's
-history like any other, and a secondary click offers *Discard*; an item is named
-to the dock by its position in the whole bench, so both groups' rows reach the
-same list. Nothing here is drawn in the 3D viewport, which is why the rows have
+rather than stages. A **click** on a row selects the node it is under and does
+nothing to the bench, the pair the node row follows (click to select,
+double-click to act), so a pass of clicks down the tree pushes no versions. A
+**double-click** makes the item active, which is a step of the node's history
+like any other, selects the node, and raises Track View on it; on the item that
+is active already it pushes no version and writes no row. A secondary click
+offers *Discard*. An item is named by its position in the whole bench, so both
+groups' rows reach the same list.
+
+The raise is a layout operation, and the tree is drawn inside a tab body, where
+the dock is swapped out of the state and a raise would land on the placeholder.
+So the double-click travels in the response as `edit_bench_item`, the panel
+keeps it for `SceneGraphPanel::take_bench_edit`, and `app.rs` applies it through
+`AppState::edit_bench_item_at` after the dock is back, the path Image Detail's
+*Edit on Bench* takes. The click's node selection is the ordinary
+`select_recon`, applied by the dock with the rest of the response. Nothing here is drawn in the 3D viewport, which is why the rows have
 no eye, and the groups are per node because an item names that node's images and
-poses. The panel that edits a track on it is [track-edit.md](track-edit.md).
+poses. The panel that edits a track on it is [track-view.md](track-view.md).
 
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
@@ -520,8 +532,9 @@ pub struct SceneGraphResponse {
     pub toggle_solo: Option<ReconId>,
     pub close_node: Option<ReconId>,
     pub delete_image: Option<ImageRef>,
-    /// A Bench row, named by its position so the response stays `Copy`.
-    pub activate_bench_item: Option<(ReconId, usize)>,
+    /// A Bench row's double-click, named by its position so the response
+    /// stays `Copy`; the panel also keeps it for `take_bench_edit`.
+    pub edit_bench_item: Option<(ReconId, usize)>,
     pub discard_bench_item: Option<(ReconId, usize)>,
     /// The SIFT Index row's menu, and the build entry on the node's own.
     pub build_sift_index: Option<ReconId>,
@@ -1097,7 +1110,7 @@ when more than one is contributing:
 | **Scene Graph** | New (this spec). |
 | **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
-| **Point Track Detail** | Selection-driven via `PointRef`. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
+| **Track View** | Selection-driven via `PointRef` in view mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
 Cross-panel selection semantics are otherwise untouched: clicking a frustum in
 the 3D view selects that image, which selects its reconstruction (switching
@@ -1152,11 +1165,20 @@ bundle from `retain_nodes` on the next frame.
 ## Testing
 
 - **Scene panel** lib tests run whole egui frames via `Context::run_ui`
-  (the `point_track_detail/tests.rs` pattern): tree structure, expansion
+  (the `track_view/view/tests.rs` pattern): tree structure, expansion
   state via explicit `CollapsingState` IDs, row click → response mapping,
   selection auto-scroll, eye and interaction-cursor toggles,
   selected-reconstruction marking, `Align to` menu gating (point mode
   disabled without feature indexes).
+- **The Bench rows**, through the same whole frames: a click on a row of a
+  node that is not selected reports `select_recon` for it, no `edit_bench_item`
+  and nothing to `take_bench_edit`, and pushes no version; a double-click on a
+  row of either group reports the item by its position in the whole bench and
+  hands the request to `take_bench_edit`, and applied it selects the node,
+  activates the item in one version and raises Track View; applied over the item
+  that is active it pushes no version and writes no `Bench` row; and a
+  double-click made while the dock is swapped out for the placeholder still
+  raises the panel once the request is drained against the real dock.
 - **The SIFT Index row**, through the same whole frames: it says `none`, counts
   a current index's descriptors and reads `stale`; its menu carries the build,
   the open and the close, and the close reports the node; a right-click on the

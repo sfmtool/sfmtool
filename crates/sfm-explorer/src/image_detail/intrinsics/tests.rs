@@ -7,7 +7,7 @@
 //! displacement field, the auto scale, the tick ladder — is tested without a
 //! frame, because a painted string cannot show any of it. What the layer *says*
 //! comes off a real headless egui frame's galleys
-//! (`test_support::painted_texts`, the `point_track_detail/tests.rs` pattern).
+//! (`test_support::painted_texts`, the `track_view/view/tests.rs` pattern).
 //!
 //! And one test that is neither: every glyph the layer writes has to be in
 //! egui's bundled fonts. A glyph that is not renders as a replacement box

@@ -46,9 +46,8 @@ struct UiParts<'a> {
     viewer_3d: &'a mut crate::viewer_3d::Viewer3D,
     image_browser: &'a mut crate::image_browser::ImageBrowser,
     image_detail: &'a mut crate::image_detail::ImageDetail,
-    point_track_detail: &'a mut crate::point_track_detail::PointTrackDetail,
+    track_view: &'a mut crate::track_view::TrackView,
     intrinsics_detail: &'a mut crate::intrinsics_detail::IntrinsicsDetail,
-    track_edit: &'a mut crate::track_edit::TrackEdit,
 }
 
 #[derive(Default)]
@@ -163,9 +162,8 @@ impl App {
                 Some(id),
                 &mut self.image_browser,
                 &mut self.image_detail,
-                &mut self.point_track_detail,
+                &mut self.track_view,
                 &mut self.intrinsics_detail,
-                &mut self.track_edit,
             );
         }
         if polled.changed {
@@ -856,9 +854,8 @@ impl App {
         let scene_graph = &mut self.scene_graph;
         let image_browser = &mut self.image_browser;
         let image_detail = &mut self.image_detail;
-        let point_track_detail = &mut self.point_track_detail;
+        let track_view = &mut self.track_view;
         let intrinsics_detail = &mut self.intrinsics_detail;
-        let track_edit = &mut self.track_edit;
 
         // Both close paths are collected here rather than acted on in the menu
         // closure, because a dirty node turns either of them into a question
@@ -878,9 +875,8 @@ impl App {
                     viewer_3d,
                     image_browser,
                     image_detail,
-                    point_track_detail,
+                    track_view,
                     intrinsics_detail,
-                    track_edit,
                 };
                 menu::show(root_ui, &mut parts, &mut requests, &mut window_host);
                 menu::shortcuts(root_ui, &mut parts);
@@ -902,9 +898,8 @@ impl App {
                     scene_graph,
                     image_browser,
                     image_detail,
-                    point_track_detail,
+                    track_view,
                     intrinsics_detail,
-                    track_edit,
                     frame: *progress,
                     scene_texture_id,
                     hover_depth,
@@ -916,9 +911,11 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
-                // The two panels' point gestures are the tab responses that end
-                // in a layout operation (Edit on Bench raises Track Edit), so
-                // they are applied here, with the dock back in the state.
+                // The tab responses that end in a layout operation are applied
+                // here, with the dock back in the state: the two panels' point
+                // gestures (Edit on Bench raises Track View), Image Detail's
+                // *Start cluster on the bench here*, and the Scene tree's
+                // double-click on a Bench row, each of which raises Track View.
                 // Applied inside a tab body the raise would land on the
                 // placeholder dock and be overwritten by the line above.
                 if let Some(request) = viewer_3d.point_menu.take() {
@@ -926,6 +923,12 @@ impl App {
                 }
                 if let Some(request) = image_detail.take_point_gesture() {
                     app_state.apply_point_gesture(request);
+                }
+                if let Some((image, pixel)) = image_detail.take_cluster_start() {
+                    app_state.start_cluster_here(image, pixel);
+                }
+                if let Some((id, position)) = scene_graph.take_bench_edit() {
+                    app_state.edit_bench_item_at(id, position);
                 }
             });
         });
@@ -1010,9 +1013,8 @@ impl App {
                             moved,
                             &mut self.image_browser,
                             &mut self.image_detail,
-                            &mut self.point_track_detail,
+                            &mut self.track_view,
                             &mut self.intrinsics_detail,
-                            &mut self.track_edit,
                         );
                         // Double-click on frustum → enter/switch camera view mode
                         if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon)
@@ -1091,7 +1093,7 @@ fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
 }
 
 /// What a viewport click that picked a point does: select it, and on a
-/// double-click put its track on the bench and raise the Track Edit panel.
+/// double-click put its track on the bench and raise Track View.
 ///
 /// The pick arrives one frame late through the GPU readback, so this is reached
 /// from [`App::process_pick_readback`] rather than from the panel body -- which

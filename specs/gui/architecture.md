@@ -143,17 +143,18 @@ sfmtool/
 │   │       │   ├── mod.rs            # Panel state and per-frame `show`
 │   │       │   ├── input.rs          # Pan / zoom / hover dispatch
 │   │       │   └── overlay.rs        # Feature + reprojection overlays
-│   │       ├── point_track_detail/   # Per-observation diagnostics for the
-│   │       │                         # selected 3D point (4th panel)
-│   │       │   ├── mod.rs            # Panel state and per-frame `show`
-│   │       │   ├── prepare.rs        # Per-observation data for a new selection
-│   │       │   ├── header.rs         # Point summary bar + stored-patch tile
-│   │       │   ├── table.rs          # Observation table, rows, thumbnails
-│   │       │   └── patch.rs          # Oriented-patch frames and textures
-│   │       ├── track_edit/           # The bench's active track: the observation
-│   │       │                         # table, the sliders and the toolbar
-│   │       │   ├── mod.rs            # Panel state, tabs, header, toolbar, sliders
-│   │       │   └── table.rs          # Observation table, rows, verdict controls
+│   │       ├── track_view/           # Track View: the Edit checkbox and its two bodies
+│   │       │   ├── mod.rs            # The box, the dispatch, the selection notice
+│   │       │   ├── view/             # View mode: the selected point's track
+│   │       │   │   ├── mod.rs        # Body state and per-frame `show`
+│   │       │   │   ├── prepare.rs    # Per-observation data for a new selection
+│   │       │   │   ├── header.rs     # Point summary bar + stored-patch tile
+│   │       │   │   ├── table.rs      # Observation table, rows, thumbnails
+│   │       │   │   └── patch.rs      # Oriented-patch frames and textures
+│   │       │   └── edit/             # Edit mode: the bench's active track
+│   │       │       ├── mod.rs        # Body state, header, toolbar, sliders
+│   │       │       ├── table.rs      # Observation table, rows, verdict controls
+│   │       │       └── tile.rs       # Per-observation tiles
 │   │       ├── bench.rs              # Every bench step as a version of the node
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
 │   │       ├── context_menu.rs       # The context-menu builder every panel opens with
@@ -185,7 +186,7 @@ sfmtool/
 | Module | Responsibility |
 |--------|---------------|
 | `main.rs` | Thin entry-point shim (~6 lines) that calls into `lib::run`. |
-| `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization with four tabs (3D Viewer, Image Browser, Image Detail, Point Track Detail). |
+| `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization from `Layout::default()` ([panel-layout.md](panel-layout.md)). |
 | `app.rs` | The per-frame pipeline (`App::run_ui_and_paint`): per-frame uploads (points, frustums, frustum colors, thumbnails, track rays, bg image, clip planes), camera-uniform updates, scene encoder + render passes, egui pass with the dock UI, AccessKit propagation, surface acquire/present, pick-result dispatch. |
 | `app/menu.rs`, `app/modals.rs`, `app/save.rs` | The menu bar and keyboard shortcuts, modal answers and deferred closes, and File-menu save handling, respectively. The egui pass calls them in that order before drawing the dock. |
 | `dock.rs` | `Tab` enum (4 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
@@ -197,13 +198,12 @@ sfmtool/
 | `window.rs` | What the window is (`WindowInfo`, `WindowState`, `MonitorInfo`), the `window` section of a layout document (`WindowChange`, `MonitorRect`, `fit_to_monitor`), and the `WindowHost` seam every `winit` window call goes through — five primitives and the provided `apply` that orders them. |
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom that persists across image and reconstruction switches, and 7 overlay modes. |
-| `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures. The numbers themselves are `metrics.rs`, at the crate root. |
-| `track_edit/` | The Track Edit panel: the active track of the selected node's bench, its observation table with a verdict per row, the threshold sliders that paint it, and the toolbar that evaluates, moves the stage, splits and commits. `mod.rs` holds the panel state and draws everything above the table, `table.rs` the table. See [track-edit.md](track-edit.md). |
+| `track_view/` | Track View ([track-view.md](track-view.md)). `mod.rs` draws the *Edit* checkbox, which reads the bench's activation, and dispatches to one of two bodies. `view/` is the selected 3D point's committed track: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures. `edit/` is the active track of the selected node's bench: its observation table with a verdict per row, the threshold sliders that paint it, and the toolbar that evaluates, moves the stage, splits and commits. The numbers themselves are `metrics.rs`, at the crate root. |
 | `bench.rs` | Every step on a node's bench, as a version of that node: the `AppState` methods that call the pure `sfmtool_core::bench` steps, push one version and write one Action Log row, and the two that read photographs as background tasks. See [bench.md](bench.md). |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
 | `context_menu.rs` | `on_secondary_click(&response)`, the builder every context menu in the window is opened with. It is `egui::Popup::context_menu` restricted to `clicked_by(Secondary)`: egui's own builder also opens on a long touch, and on Windows the left mouse button reaches egui as a touch contact, so a left press rested for 0.8 s would otherwise put the menu up. See [scene-graph.md](scene-graph.md) § "Panel plumbing". |
-| `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — the Point Track Detail table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
+| `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — Track View's table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
 
@@ -434,7 +434,7 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 - **Trackpad scroll in `ScrollArea`s**: DM claims the touchpad contacts for the
   whole window, so Windows never synthesises a `WM_MOUSEWHEEL` for a two-finger
   scroll and egui's own scroll areas — the scene graph tree and its inner
-  lists, the Camera Intrinsics panel, the Point Track table — would sit still
+  lists, the Camera Intrinsics panel, Track View's table — would sit still
   under one. `platform::gesture_scroll_events` converts each frame's DM pan back
   into a `Point`-unit `Event::MouseWheel` on the raw input, which is what makes
   them scroll. X is negated on the way through: DM reports a horizontal pan
@@ -483,8 +483,8 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 The crate's tests split by what they need underneath them. The **lib** tests
 are headless and run anywhere: `scene_renderer/upload/tests.rs` drives real
 `wgpu` uploads on the `noop` backend, which validates in wgpu-core while
-stubbing the driver, and `point_track_detail/tests.rs` and
-`track_edit/tests.rs` run whole egui frames through `Context::run_ui`.
+stubbing the driver, and `track_view/view/tests.rs` and
+`track_view/edit/tests.rs` run whole egui frames through `Context::run_ui`.
 Everything decidable without an OS is decided there, because it is decidable in
 milliseconds and on every platform.
 

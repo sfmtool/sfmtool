@@ -357,7 +357,7 @@ pub enum PointGesture {
     /// act on is also what the rest of the viewer is looking at.
     Opened(PointRef),
     /// `Edit on Bench` was chosen, or the point was double-clicked: put its
-    /// track on the bench and show the Track Edit panel.
+    /// track on the bench and show Track View.
     EditOnBench(PointRef),
     /// `Retriangulate Point` was chosen: re-solve this point from its own
     /// observations.
@@ -433,12 +433,12 @@ impl AppState {
         match request {
             PointGesture::Opened(_) => {}
             PointGesture::EditOnBench(point) => {
-                // The same call the Track Edit panel's own button makes. That
-                // button lives inside the panel and so has nothing to raise;
+                // The same call ticking Track View's Edit box makes. That
+                // box lives inside the panel and so has nothing to raise;
                 // this one is reached from the viewport, and a track staged
                 // into a panel nobody can see is a gesture with no answer.
                 match self.put_point_on_bench(point) {
-                    Ok(_) => self.show_panel(crate::dock::Tab::TrackEdit),
+                    Ok(_) => self.show_panel(crate::dock::Tab::TrackView),
                     Err(why) => self.action_log.fail(Kind::Bench, why),
                 }
             }

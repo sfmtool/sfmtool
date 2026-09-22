@@ -10,9 +10,9 @@ Four panel types:
 1. **3D Viewer** — the existing viewport (point cloud, frustums, navigation)
 2. **Image Browser** — bottom strip of 128×128 thumbnails for browsing the image sequence
 3. **Image Detail** — full-resolution image view for the selected camera
-4. **Point Track Detail** — per-observation diagnostics for the selected 3D point
-   (see `specs/gui/point-track-detail.md`); shares the right-side tab
-   region with Image Detail.
+4. **Track View** — the selected 3D point's observations, or the bench's active
+   track while its *Edit* box is ticked (see [track-view.md](track-view.md));
+   the right-hand column beside the two pictures.
 
 A fifth panel, **Scene**, was added by
 [scene-graph.md](scene-graph.md); it takes a narrow left split of the
@@ -24,9 +24,9 @@ root, and everything below describes the arrangement to its right.
 ┌───────┬──────────────────────────┬──────────────┐
 │  File                            │  (menu bar)  │
 ├───────┼──────────────────────────┼──────────────┤
-│       │[3D Viewer][Image Detail] │ [Point Track]│
+│       │[3D Viewer][Image Detail] │ [Track View] │
 │       │                          │              │
-│ Scene │        3D Viewer         │  Point Track │
+│ Scene │        3D Viewer         │  Track View  │
 │       │                          │              │
 ├───────┤                          │              │
 │Backgr.├──────────────────────────┴──────────────┤
@@ -46,8 +46,8 @@ root, and everything below describes the arrangement to its right.
   Full-resolution image of the selected camera. The two are the large pictures
   of one selection and each wants the width, so they take turns in the middle
   rather than halving it.
-- **Point Track**: top-right, ~1/3 width, sharing a tab group with Camera
-  Intrinsics and Track Edit, and the active member of it. The column beside the
+- **Track View**: top-right, ~1/3 width, sharing a tab group with Camera
+  Intrinsics, and the active member of it. The column beside the
   pictures is where the tables about the selection go.
 - **Image Browser**: bottom strip, full width, ~20% of the height.
   Horizontally-scrollable strip of 128×128 thumbnails. It shares its tab group
@@ -242,7 +242,7 @@ The `egui_dock` layout lives in
 panels beside it —
 [image_browser.rs](../../crates/sfm-explorer/src/image_browser.rs),
 [image_detail/](../../crates/sfm-explorer/src/image_detail),
-[point_track_detail/](../../crates/sfm-explorer/src/point_track_detail) — while
+[track_view/](../../crates/sfm-explorer/src/track_view) — while
 the cross-panel selection state they share is `AppState` in
 [state.rs](../../crates/sfm-explorer/src/state.rs).
 
@@ -253,12 +253,14 @@ the cross-panel selection state they share is `AppState` in
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     SceneGraph,
+    BackgroundTask,
     Viewer3D,
     ImageBrowser,
     ImageDetail,
-    PointTrackDetail,
+    TrackView,
     IntrinsicsDetail,
     ActionLog,
+    EditHistory,
 }
 ```
 
@@ -268,14 +270,16 @@ specified on its own:
 
 | Tab | Title | Spec |
 |---|---|---|
-| `PointTrackDetail` | Point Track Detail | [point-track-detail.md](point-track-detail.md) |
 | `SceneGraph` | Scene | [scene-graph.md](scene-graph.md) |
+| `BackgroundTask` | Background Task | [background-tasks.md](background-tasks.md) |
+| `TrackView` | Track View | [track-view.md](track-view.md) |
 | `IntrinsicsDetail` | Camera Intrinsics | [camera-intrinsics.md](camera-intrinsics.md) |
 | `ActionLog` | Action Log | [action-log.md](action-log.md) |
+| `EditHistory` | Edit History | [edit-history.md](edit-history.md) |
 
-`IntrinsicsDetail` shares the Image Detail / Point Track tab group as its third
-and non-active member; `ActionLog` shares the Image Browser's as its second and
-non-active member.
+`IntrinsicsDetail` shares Track View's tab group as its second and non-active
+member; `ActionLog` and `EditHistory` share the Image Browser's as its second
+and third.
 
 ### TabContext and TabViewer
 
@@ -304,12 +308,14 @@ Written as a tree of panel names rather than as a sequence of splits, it is:
 
 ```rust
 Split { split: LeftRight, fraction: 0.18,
-    first:  Leaf { tabs: [SceneGraph] },
+    first:  Split { split: TopBottom, fraction: 0.72,
+        first:  Leaf { tabs: [SceneGraph] },
+        second: Leaf { tabs: [BackgroundTask] } },
     second: Split { split: TopBottom, fraction: 0.8,
         first:  Split { split: LeftRight, fraction: 0.67,
-            first:  Leaf { tabs: [Viewer3D] },
-            second: Leaf { tabs: [ImageDetail, PointTrackDetail, IntrinsicsDetail] } },
-        second: Leaf { tabs: [ImageBrowser, ActionLog] } } }
+            first:  Leaf { tabs: [Viewer3D, ImageDetail] },
+            second: Leaf { tabs: [TrackView, IntrinsicsDetail] } },
+        second: Leaf { tabs: [ImageBrowser, ActionLog, EditHistory] } } }
 ```
 
 `fraction` is the share of the **first** child in layout order.
@@ -317,8 +323,8 @@ Split { split: LeftRight, fraction: 0.18,
 split, which is true only of Right and Below; 0.21 gave the Scene panel four
 fifths of the window when it was read the other way. `Layout::to_dock` only
 ever splits Right and Below for exactly that reason.) A leaf opens on its
-**first** tab, which is what puts Image Detail and the Image Browser in front
-of the tabs they share a node with.
+**first** tab, which is what puts the 3D Viewer, Track View and the Image
+Browser in front of the tabs they share a node with.
 
 The panels are **closeable**, so the grid above is the layout they start in
 rather than the only one they have. [panel-layout.md](panel-layout.md) carries
@@ -452,7 +458,7 @@ differs by stage:
 - At the **track stage**, the patch's square boundary sampled and each sample
   pushed through the camera's own forward projection, drawn as a closed
   polyline. The patch is first re-anchored on this image's keypoint
-  (`OrientedPatch::anchored_at_keypoint`), as the tile in Track Edit is
+  (`OrientedPatch::anchored_at_keypoint`), as the tile in Track View is
   rendered, so the outline sits where the sighting is in this photograph; the
   patch's own projection is the hollow centre the offset segments run to. The outline is therefore the curve a distorting lens really maps
   that square to, rather than the quadrilateral through its four corners:
@@ -481,8 +487,8 @@ differs by stage:
   § "The cluster stage's units"), so a seed clicked at a radius in pixels is
   drawn at that many pixels before anything has evaluated it.
 
-Clicking a mark selects that observation's row in the Track Edit panel
-([`track-edit.md`](track-edit.md)): the mark and the row are one observation, so
+Clicking a mark selects that observation's row in Track View's edit mode
+([`track-view.md`](track-view.md) § "Edit mode"): the mark and the row are one observation, so
 clicking either is the one gesture. The layer is on top, so a click it catches
 does not also select a feature underneath.
 
@@ -846,12 +852,12 @@ than on the reconstruction, in this order:
 
 | Entry | What it does |
 |-------|--------------|
-| `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises the Track Edit panel on it |
-| `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius |
+| `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises Track View on it |
+| `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
 | `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track |
 
-All three are edited afterwards in the Track Edit panel
-([`track-edit.md`](track-edit.md)), and the commit there is what reaches the
+All three are edited afterwards in Track View
+([`track-view.md`](track-view.md)), and the commit there is what reaches the
 reconstruction. The lower two are the viewer's only way to name a pixel, so this
 is where every gesture that needs one lives.
 
@@ -872,8 +878,10 @@ point a click there would have selected.
 The two lower entries are offered whatever backs the node's observations,
 because a bench track is seeds in one image's pixels until it is
 committed. Starting a cluster needs nothing but a pixel and a node no background
-task is holding; adding to the bench track is greyed, saying so, until a track
-is on the bench. An image the active track already holds a sighting in is not a
+task is holding; adding to the bench track is greyed until a track is active,
+with *"No track is being edited: tick Edit in Track View, or double-click a
+Bench item in the Scene tree."*, since a bench with items on it can have none
+active. An image the active track already holds a sighting in is not a
 refusal -- a second one joins as a candidate and is scored like any other, and
 it is the `in` verdict a track cannot hold twice
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)). A busy
@@ -886,11 +894,14 @@ off the place the user named. It is also what `Edit on Bench` hit-tests at, so
 the point the entry stages is the point that was under the pointer when the menu
 went up.
 
-`Edit on Bench` ends in a layout operation, which the other two do not, so it
-alone cannot be carried out where the panel's response is read: the frame swaps
-the dock out of the state while a tab body draws, and a raise applied there
-would land on the placeholder. The panel keeps the request instead, as the
-viewport keeps its menu's, and `app.rs` drains both once the dock is back.
+`Edit on Bench` and `Start cluster on the bench here` end in a layout
+operation, the raise of Track View, which `Add observation` does not, so they
+cannot be carried out where the panel's response is read: the frame swaps the
+dock out of the state while a tab body draws, and a raise applied there would
+land on the placeholder. The panel keeps each request instead
+(`ImageDetail::take_point_gesture`, `ImageDetail::take_cluster_start`), as the
+viewport keeps its menu's, and `app.rs` drains them once the dock is back,
+the cluster through `AppState::start_cluster_here`.
 
 **Rendering** (`image_detail/`):
 - `base_scale = min(panel_w / tex_w, panel_h / tex_h)` fits the image to panel
@@ -1038,8 +1049,8 @@ re-frame the panel on every later frame.
 
 ### Revealing a feature named by another panel
 
-A row in the Point Track Detail panel and a row in the Track Edit panel are both
-*observations*: each names an image **and** a place in it. Clicking one selects
+A row of Track View, in either of its modes, is an
+*observation*: it names an image **and** a place in it. Clicking one selects
 the image, and this panel then shows it at whatever view was left behind, which
 by the persistence above can be a corner of the frame the feature is nowhere
 near. So the selection carries the feature's pixel with it, and the panel brings

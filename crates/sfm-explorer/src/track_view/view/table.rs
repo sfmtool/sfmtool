@@ -16,7 +16,7 @@ use ndarray::Axis;
 use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::SfmrReconstruction;
 
-use super::{PointTrackDetail, PointTrackDetailResponse, PATCH_TILE, THUMB_SIZE};
+use super::{PointTrackView, PointTrackViewResponse, PATCH_TILE, THUMB_SIZE};
 use crate::colormap;
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, ReconId};
@@ -99,7 +99,7 @@ impl ColumnLayout {
     }
 }
 
-impl PointTrackDetail {
+impl PointTrackView {
     /// Draw the scrollable observation table.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn show_observation_table(
@@ -111,7 +111,7 @@ impl PointTrackDetail {
         full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
-        response: &mut PointTrackDetailResponse,
+        response: &mut PointTrackViewResponse,
     ) {
         let extra_scroll_y = gesture_scroll_delta(ui, gesture_events, scroll_input);
 
@@ -166,7 +166,7 @@ impl PointTrackDetail {
         hovered_image: Option<usize>,
         full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
         cols: &ColumnLayout,
-        response: &mut PointTrackDetailResponse,
+        response: &mut PointTrackViewResponse,
     ) {
         // Copy the row's fields out up front: drawing the thumbnail and patch
         // tile takes `&mut self`, which would conflict with holding a borrow

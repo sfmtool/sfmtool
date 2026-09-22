@@ -247,7 +247,7 @@ Families, in the proposed order:
   The first structural edits, and the ones the selection-remapping rule is
   tested against.
 - **Point constraints**: set a selected point free, ranged, or held, with the
-  reference image and distance, from the Point Track Detail panel. The
+  reference image and distance, from Track View. The
   ground-truth workflow does this today in scripts against a CSV.
 - **Bake transform**: apply the node's `Align to…` transform to the value and
   reset the transform to identity. This is the edit that breaks the scene-graph

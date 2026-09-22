@@ -2610,7 +2610,7 @@ fn a_panel_that_is_not_drawn_is_refused_naming_show_panel() {
         &mut viewer,
         screenshot(Some(Tab::IntrinsicsDetail), true, None),
     );
-    assert!(behind.0.contains("Point Track"), "{behind}");
+    assert!(behind.0.contains("Track View"), "{behind}");
     assert!(behind.0.contains("show_panel"), "{behind}");
 
     // An unknown name is the panel vocabulary's own refusal, listing all seven.
@@ -2621,6 +2621,49 @@ fn a_panel_that_is_not_drawn_is_refused_naming_show_panel() {
         json!({ "panel_name": "viewport" }),
     );
     assert!(unknown.0.contains("viewer_3d") && unknown.0.contains("action_log"));
+}
+
+/// Track View is a panel like any other on the wire, and the two panels whose
+/// place it took are unknown names, refused with the list of the ones that
+/// exist rather than read as an alias.
+#[test]
+fn track_view_is_the_panel_name_and_the_retired_ones_are_refused() {
+    let (mut state, mut viewer) = quiet_scene();
+    let shown = call(
+        &mut state,
+        &mut viewer,
+        "show_panel",
+        json!({ "panel_name": "track_view" }),
+    );
+    assert_eq!(
+        panel(&shown, "track_view")["active"],
+        json!(true),
+        "{shown}"
+    );
+    let arguments = json!({ "panel_name": "track_view" });
+    let parsed = tools::parse("screenshot", arguments.as_object()).expect("a panel name");
+    assert!(
+        matches!(
+            parsed,
+            Command::Screenshot {
+                panel: Some(Tab::TrackView),
+                ..
+            }
+        ),
+        "{parsed:?}"
+    );
+    for retired in ["point_track", "track_edit"] {
+        for tool in ["show_panel", "hide_panel", "screenshot"] {
+            let why = refused_call(
+                &mut state,
+                &mut viewer,
+                tool,
+                json!({ "panel_name": retired }),
+            );
+            assert!(why.0.contains(&format!("\"{retired}\"")), "{tool}: {why}");
+            assert!(why.0.contains("track_view"), "{tool}: {why}");
+        }
+    }
 }
 
 /// Both checks are against the dock at *apply* time, so a `show_panel` earlier
@@ -2767,7 +2810,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             tab.wire_name()
         );
     }
-    // The default layout has three multi-tab nodes, so half of the ten sit
+    // The default layout has three multi-tab nodes, so four of the nine sit
     // behind a sibling rather than in front of it.
     let active: Vec<&str> = Tab::ALL
         .iter()
@@ -2781,7 +2824,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             "background_task",
             "viewer_3d",
             "image_browser",
-            "point_track"
+            "track_view"
         ]
     );
 }
@@ -2868,9 +2911,9 @@ fn show_panel_on_an_open_panel_raises_it_and_moves_nothing_else() {
         &mut state,
         &mut viewer,
         "show_panel",
-        json!({ "panel_name": "point_track" }),
+        json!({ "panel_name": "track_view" }),
     );
-    assert_eq!(panel(&raised, "point_track")["active"], json!(true));
+    assert_eq!(panel(&raised, "track_view")["active"], json!(true));
     assert_eq!(panel(&raised, "image_detail")["active"], json!(false));
     for tab in Tab::ALL {
         assert_eq!(
@@ -3254,9 +3297,9 @@ fn the_layout_writes_record_the_menus_own_entries_as_the_agent() {
         ),
         (
             Command::ShowPanel {
-                panel: Tab::PointTrackDetail,
+                panel: Tab::TrackView,
             },
-            "Raised Point Track panel",
+            "Raised Track View panel",
         ),
         (
             Command::SetWindowLayout {
@@ -3603,6 +3646,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         (
             "activate_bench_item",
             json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
+        ),
+        (
+            "deactivate_bench_item",
+            json!({ "reconstruction_label": "alpha" }),
         ),
         (
             "rename_bench_item",
@@ -4002,15 +4049,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-six writes, the one that writes a file, and the
+    // Fifteen reads, fifty-seven writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 72, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 73, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        56
+        57
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -7405,6 +7452,67 @@ fn commit_answers_with_a_version_an_undo_takes_back() {
             .is_some_and(|point| point.observations().len() == 3),
         "the undo did not restore the point the commit replaced"
     );
+}
+
+/// `deactivate_bench_item` is Track View's Edit box cleared: one version that
+/// leaves the item on the bench, `get_bench` then reporting no active track
+/// over a bench that has items, and a track tool that names none refused with
+/// the remedies. A second call, with nothing active, is a no-effect reply.
+#[test]
+fn deactivate_leaves_the_item_and_nothing_active() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "deactivate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    assert_eq!(version_count(&state), before + 1, "{reply}");
+    assert_eq!(
+        reply["label"],
+        json!(format!("Stopped editing {item}; it stays on the bench")),
+        "{reply}"
+    );
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["active"]["track"], Value::Null, "{bench}");
+    assert_eq!(bench["items"].as_array().map(Vec::len), Some(1), "{bench}");
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        refused.0,
+        "No track is active on run_a's bench. Name one with track, activate one with \
+         activate_bench_item, or put one on with create_bench_track or create_bench_cluster."
+    );
+
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "deactivate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert_eq!(
+        version_count(&state),
+        before + 1,
+        "a no-effect call pushed a version"
+    );
+    let report = again["report"].as_str().expect("the step's own sentence");
+    assert!(report.contains("no effect"), "{again}");
 }
 
 /// The three item steps: a rename hands back the new label, an activation moves

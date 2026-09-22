@@ -134,7 +134,7 @@ impl Operation {
         kind: Kind::Edit,
     };
 
-    /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
+    /// One bench track read at the stage it is in (`specs/gui/track-view.md`).
     ///
     /// Cancellable: the reading polls the flag on either side of the decode,
     /// between its rounds, and inside the localizer between the views it

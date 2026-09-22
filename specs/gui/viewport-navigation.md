@@ -56,7 +56,7 @@ during Zoom to Fit to center on the point cloud.
 | Set target | Alt + Click | Set target to the point under the cursor (depth pick) |
 | Enter camera view | Double-click frustum | Select frustum and enter camera view mode (see [camera-views.md](camera-views.md)) |
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
-| Edit on Bench | Double-click a point | Select that point, put its track on the bench and raise the Track Edit panel (see [The point context menu](#the-point-context-menu)) |
+| Edit on Bench | Double-click a point | Select that point, put its track on the bench and raise Track View (see [The point context menu](#the-point-context-menu)) |
 
 ### The point context menu
 
@@ -78,12 +78,13 @@ Two entries, in this order:
 
 | Entry | What it does |
 |-------|--------------|
-| `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises the Track Edit panel on it ([track-edit.md](track-edit.md)) |
+| `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises Track View on it ([track-view.md](track-view.md)) |
 | `Retriangulate Point` | Re-solves the point from its own observations at these poses and this lens, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
 
-`Edit on Bench` is the Track Edit panel's own `Put selected point on bench`
-reached from the viewport, and it raises that panel afterwards because this
-gesture is made somewhere the panel is not. Both entries are drawn and greyed
+`Edit on Bench` is what ticking Track View's *Edit* box over the selected
+point does, reached from the viewport: `AppState::put_point_on_bench`, which
+activates the item already there when one came from that point. It raises that
+panel afterwards because this gesture is made somewhere the panel is not. Both entries are drawn and greyed
 while an operation is running on the node, carrying the state's own busy
 sentence.
 

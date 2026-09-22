@@ -13,9 +13,9 @@
 //!
 //! - At the **track stage** it is the patch re-rendered from this
 //!   observation's own view, re-anchored where the observation sits -- the very
-//!   tile the Point Track Detail panel draws for a committed track, through
+//!   tile Track View draws for a committed track, through
 //!   that panel's own renderer
-//!   ([`crate::point_track_detail::patch_color_image`]), so a track on the
+//!   ([`crate::track_view::view::patch_color_image`]), so a track on the
 //!   bench and the point it came from cannot show one surface two ways.
 //! - At the **cluster stage** there is no surface, so it is the observation's
 //!   own grid: the `R x R` samples the refinement kernel reads at that place
@@ -74,7 +74,7 @@ pub(super) fn image(
             let frame = payload.placement.as_ref()?;
             let image = recon.image_table.images.get(img_idx)?;
             let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
-            Some(crate::point_track_detail::patch_color_image(
+            Some(crate::track_view::view::patch_color_image(
                 frame,
                 camera,
                 &crate::scene::cam_from_world(image),
