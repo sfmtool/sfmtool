@@ -69,7 +69,20 @@ it is `PatchEdit::Tilt`. Only the wire, whose namespace is flat, spells all
 three, as `tilt_bench_patch`. A name like `bench_track_frame` is three words
 where the context has already supplied two.
 
+## Optional columns
+
+The verbs of the `sfm xform` step vocabulary and the binding keywords behind
+it, for what a step does to a column rather than to a point.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **drop** | discard an optional column and keep every row: `--drop-thumbnails`, `--drop-patch-bitmaps`, `clone_with_changes(thumbnails_y_x_rgb=None)` | `remove`, `strip`, `clear` | already the word this code used for discarding an optional column: `--localize-keypoints` drops stale patch bitmaps, and `clone_with_changes` documents `None` as the way to drop `normal_confidence`. `remove` is taken, below |
+| **remove** | delete points, with their observations, and renumber the rest: `--remove-short-tracks`, `--remove-isolated` and the other point filters | `drop` | a `--remove-thumbnails` would read as the same kind of operation and is not, since it removes no row of anything. `--filter-by-*` removes points too, and `--include-*` / `--exclude-*` select images |
+| **add** | fill an absent optional column from the source data: `--add-thumbnails`, `--add-patch-bitmaps` | `embed`, `render`, `restore` | drop's inverse, saying only that the column appears. `embed` collides with the `embedded_patches` feature source and `sfm embed-patches`; `render` describes how bitmaps are made but not thumbnails, which are resized |
+| **display thumbnails** | the thumbnails the viewer draws for a node: the file's own column, or rows it builds from the photographs; held by the node, never by a value, so none reaches a save | `thumbnails` alone, where the two could be confused | a file's thumbnails and what the viewer shows are different things once a file may carry none; naming the viewer's own keeps "the file has thumbnails" meaning what it says |
+
 ## Words with a boundary
+
 
 **patch** (the bench) and **surfel** (the scene renderer). Both name an
 `OrientedPatch`, and the split is deliberate rather than settled by a count: the

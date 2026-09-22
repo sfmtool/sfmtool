@@ -419,6 +419,14 @@ texture array atlas. Outputs opaque color to 3 targets.
 
 ### Thumbnail loading
 
+The atlas is filled from the node's **display column**
+([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs)): the
+file's own thumbnail column when it carries one, otherwise rows the viewer builds
+from the source photographs off the GUI thread (see
+[multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
+loading"). A node with no display column and a value with no column of its own
+gets no atlas.
+
 On reconstruction load, `upload_thumbnails()` synchronously:
 
 1. Computes atlas grid dimensions constrained by the GPU's
@@ -426,8 +434,9 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    8192px limit → 64×64 = 4096 cells, but >4096 images), creates a
    `texture_2d_array` with multiple pages (layers). Each page has the
    same cols×rows grid layout.
-2. Fills the atlas a row of cells at a time: each embedded 128×128 thumbnail
-   is read from the `.sfmr` file and expanded RGB → RGBA directly into a band
+2. Fills the atlas a row of cells at a time: each image's display row, looked up
+   by image name in the value's image order, is expanded RGB → RGBA directly
+   into a band
    spanning the atlas, at its own cell (page = `i / images_per_page`, cell
    within page = `i % images_per_page`), and each filled band goes up in one
    `write_texture`. The band is shared with the patch atlas, which is where the
@@ -435,6 +444,17 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    priced by the tile count rather than the pixel count, which an image table
    feels as it grows.
 3. Creates the image quad bind group (uniforms + texture array view + sampler)
+
+A cell whose row is still being built from its photograph holds a flat
+mid-grey placeholder. Every frame, `refresh_thumbnails()` compares the display
+column's ready count with the one the atlas was filled at, and when rows have
+finished since it writes those cells, one `write_texture` each, and nothing
+else; the frame's `thumbnails` phase runs again for it. The atlas is kept, not
+rebuilt, while the display column, the value's own column and the image list
+are the ones it was built from (`UploadedThumbnails` in
+[upload/thumbnails.rs](../../crates/sfm-explorer/src/scene_renderer/upload/thumbnails.rs)
+holds all three), which is every edit that leaves the image list alone.
+
 
 The shader receives `images_per_page` as a uniform so it can compute the
 texture array layer and within-page UV from the flat `frustum_index`.

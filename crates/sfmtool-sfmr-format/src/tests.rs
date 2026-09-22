@@ -110,7 +110,7 @@ fn make_test_data() -> SfmrData {
         feature_tool_hashes: Some(vec![[0u8; 16]; image_count]),
         sift_content_hashes: Some(vec![[1u8; 16]; image_count]),
         image_file_hashes: None,
-        thumbnails_y_x_rgb: Array4::zeros((image_count, 128, 128, 3)),
+        thumbnails_y_x_rgb: Some(Array4::zeros((image_count, 128, 128, 3))),
         // Points sit at negative z: in front of the identity camera in the
         // canonical convention (the camera looks down −Z).
         positions_xyzw: Array2::from_shape_vec(
@@ -647,10 +647,11 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen from the writer at HEAD b7ce9ece, which is where format version 10
+    // Frozen at format version 11, which writes `has_thumbnails` into
+    // `images/metadata.json` and stamps the new version into `metadata.json`,
+    // both hashed. Before that it was frozen at b7ce9ece, where version 10
     // moved the depth statistics out of `images/` and into `derived/`, whose
-    // digest is deliberately not folded in here. That narrowed what this value
-    // covers, so it changed once, on purpose, from the 6528c746 value.
+    // digest is deliberately not folded in here.
     //
     // It should not change again. A diff here means either the bytes of a
     // hashed section moved or a section entered or left the fold, and both
@@ -659,7 +660,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "ea44f5c97d2352fde7fdd8a36d339604"
+        "0df964cf747475358ace0286bbfb482a"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -992,7 +993,7 @@ fn test_empty_reconstruction() {
         feature_tool_hashes: Some(vec![]),
         sift_content_hashes: Some(vec![]),
         image_file_hashes: None,
-        thumbnails_y_x_rgb: Array4::zeros((0, 128, 128, 3)),
+        thumbnails_y_x_rgb: Some(Array4::zeros((0, 128, 128, 3))),
         positions_xyzw: Array2::zeros((0, 4)),
         colors_rgb: Array2::zeros((0, 3)),
         reprojection_errors: Array1::from_vec(vec![]),
@@ -3016,10 +3017,10 @@ fn verification_reports_multiple_section_mismatches_in_order() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A version-10 file says what its derived section hashes to, and a reader of
+/// A file of version 10 or later says what its derived section hashes to, and a reader of
 /// an older one finds the statistics where that version kept them.
 #[test]
-fn a_version_10_file_carries_a_derived_hash() {
+fn a_version_10_or_later_file_carries_a_derived_hash() {
     let dir = std::env::temp_dir().join("sfmr_test_derived_present");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -3027,12 +3028,15 @@ fn a_version_10_file_carries_a_derived_hash() {
 
     let mut data = data_with_every_optional_column();
     write_sfmr(&path, &mut data).unwrap();
-    assert_eq!(read_sfmr_metadata(&path).unwrap().version, 10);
+    assert_eq!(
+        read_sfmr_metadata(&path).unwrap().version,
+        SFMR_FORMAT_VERSION
+    );
 
     let stored = read_sfmr_content_hash(&path).unwrap();
     assert!(
         stored.derived_xxh128.is_some(),
-        "a version 10 file stores its derived section hash",
+        "a version 10 or later file stores its derived section hash",
     );
     // And it is the hash the hash-only path reports for the same value.
     let computed = content_hash_of(&mut data, &WriteOptions::default()).unwrap();
@@ -3359,6 +3363,215 @@ fn a_write_that_fails_leaves_an_existing_file_byte_identical() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert_eq!(names, vec!["recon.sfmr".to_string()], "{names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Optional thumbnails (version 11) ────────────────────────────────────
+
+/// Decompressed JSON of the entry `name` in a written `.sfmr`.
+fn read_json_entry_of(path: &std::path::Path, name: &str) -> serde_json::Value {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut compressed = Vec::new();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_end(&mut compressed)
+        .unwrap();
+    serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap()).unwrap()
+}
+
+/// XXH128 over the decompressed `images/` entries of a written file, in
+/// lexicographic path order: the format's rule, spelled out rather than
+/// borrowed from the writer.
+fn images_digest(path: &std::path::Path) -> u128 {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut names: Vec<String> = archive
+        .file_names()
+        .filter(|n| n.starts_with("images/"))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        hasher.update(&zstd::stream::decode_all(&compressed[..]).unwrap());
+    }
+    hasher.digest128()
+}
+
+fn archive_names(path: &std::path::Path) -> Vec<String> {
+    let file = std::fs::File::open(path).unwrap();
+    let archive = zip::ZipArchive::new(file).unwrap();
+    archive.file_names().map(str::to_string).collect()
+}
+
+/// `make_test_data` with a thumbnail column whose rows differ, so a round trip
+/// that mixed rows up would show it.
+fn data_with_distinct_thumbnails() -> SfmrData {
+    let mut data = make_test_data();
+    data.thumbnails_y_x_rgb = Some(Array4::<u8>::from_shape_fn(
+        (3, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+        |(i, y, x, c)| ((i * 61 + y * 7 + x * 3 + c) % 256) as u8,
+    ));
+    data
+}
+
+#[test]
+fn a_value_without_thumbnails_round_trips_and_verifies() {
+    let dir = std::env::temp_dir().join("sfmr_test_no_thumbnails");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bare.sfmr");
+
+    let mut data = make_test_data();
+    data.thumbnails_y_x_rgb = None;
+    write_sfmr(&path, &mut data).unwrap();
+
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(loaded.metadata.version, SFMR_FORMAT_VERSION);
+    assert!(
+        loaded.thumbnails_y_x_rgb.is_none(),
+        "a read never fills it in"
+    );
+    assert_eq!(loaded.image_names, data.image_names);
+
+    let images_meta = read_json_entry_of(&path, "images/metadata.json.zst");
+    assert_eq!(images_meta["has_thumbnails"], serde_json::json!(false));
+    assert_eq!(images_meta["thumbnail_size"], serde_json::Value::Null);
+    assert!(
+        !archive_names(&path)
+            .iter()
+            .any(|n| n.starts_with("images/thumbnails_y_x_rgb")),
+        "no thumbnail entry is stored"
+    );
+
+    // The stored images hash is the digest over the entries that are there.
+    let stored = read_sfmr_content_hash(&path).unwrap();
+    assert_eq!(
+        stored.images_xxh128,
+        format!("{:032x}", images_digest(&path))
+    );
+    assert!(verify_sfmr(&path).unwrap().0);
+
+    // And the hash-only path agrees with what the write stored.
+    let mut again = make_test_data();
+    again.thumbnails_y_x_rgb = None;
+    let computed = content_hash_of(&mut again, &WriteOptions::default()).unwrap();
+    assert_eq!(computed.images_xxh128, stored.images_xxh128);
+    assert_eq!(computed.content_xxh128, stored.content_xxh128);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_value_with_thumbnails_round_trips_and_says_so() {
+    let dir = std::env::temp_dir().join("sfmr_test_with_thumbnails");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("thumbs.sfmr");
+
+    let mut data = data_with_distinct_thumbnails();
+    write_sfmr(&path, &mut data).unwrap();
+
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(loaded.thumbnails_y_x_rgb, data.thumbnails_y_x_rgb);
+    let images_meta = read_json_entry_of(&path, "images/metadata.json.zst");
+    assert_eq!(images_meta["has_thumbnails"], serde_json::json!(true));
+    assert_eq!(
+        images_meta["thumbnail_size"],
+        serde_json::json!(THUMBNAIL_SIZE)
+    );
+    let stored = read_sfmr_content_hash(&path).unwrap();
+    assert_eq!(
+        stored.images_xxh128,
+        format!("{:032x}", images_digest(&path))
+    );
+    assert!(verify_sfmr(&path).unwrap().0);
+
+    // Presence is part of the identity: the same value without the column
+    // hashes differently.
+    let mut bare = data_with_distinct_thumbnails();
+    bare.thumbnails_y_x_rgb = None;
+    let bare_hash = content_hash_of(&mut bare, &WriteOptions::default()).unwrap();
+    assert_ne!(bare_hash.images_xxh128, stored.images_xxh128);
+    assert_ne!(bare_hash.content_xxh128, stored.content_xxh128);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A version 10 file carries no `has_thumbnails` key and always carries the
+/// entry, so it reads as having thumbnails.
+#[test]
+fn a_version_10_file_without_the_flag_reads_as_having_thumbnails() {
+    let dir = std::env::temp_dir().join("sfmr_test_v10_thumbnails");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("v11.sfmr");
+    let legacy = dir.join("v10.sfmr");
+
+    let mut data = data_with_distinct_thumbnails();
+    write_sfmr(&current, &mut data).unwrap();
+    rewrite_entries(&current, &legacy, |name, raw| match name {
+        "images/metadata.json.zst" => {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json.as_object_mut().unwrap().remove("has_thumbnails");
+            Some(serde_json::to_vec(&json).unwrap())
+        }
+        "metadata.json.zst" => {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json["version"] = serde_json::json!(10);
+            Some(serde_json::to_vec(&json).unwrap())
+        }
+        _ => None,
+    });
+
+    let loaded = read_sfmr(&legacy).unwrap();
+    assert_eq!(loaded.metadata.version, 10);
+    assert_eq!(loaded.thumbnails_y_x_rgb, data.thumbnails_y_x_rgb);
+
+    // Saving it again writes the current version and the flag, keeping the
+    // column.
+    let resaved = dir.join("resaved.sfmr");
+    let mut value = loaded;
+    write_sfmr(&resaved, &mut value).unwrap();
+    assert_eq!(
+        read_sfmr_metadata(&resaved).unwrap().version,
+        SFMR_FORMAT_VERSION
+    );
+    let images_meta = read_json_entry_of(&resaved, "images/metadata.json.zst");
+    assert_eq!(images_meta["has_thumbnails"], serde_json::json!(true));
+    assert_eq!(
+        read_sfmr(&resaved).unwrap().thumbnails_y_x_rgb,
+        data.thumbnails_y_x_rgb
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_wrong_shaped_thumbnail_column_is_refused() {
+    let dir = std::env::temp_dir().join("sfmr_test_bad_thumbnails");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bad.sfmr");
+
+    let mut data = make_test_data();
+    data.thumbnails_y_x_rgb = Some(Array4::zeros((2, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)));
+    let error = write_sfmr(&path, &mut data).expect_err("shape validation");
+    assert!(error.to_string().contains("thumbnails_y_x_rgb"), "{error}");
+    assert!(!path.exists());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

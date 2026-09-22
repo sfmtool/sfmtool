@@ -422,7 +422,7 @@ scroll under them.
 
 | Column | Content |
 |--------|---------|
-| Thumbnail | The image's stored thumbnail, with a dot at the feature position tinted by that observation's reprojection error. |
+| Thumbnail | The image's display thumbnail (the file's own, or the row built from its photograph; see [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail loading"), with a dot at the feature position tinted by that observation's reprojection error. A row still being built draws the placeholder and is not cached. |
 | Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-resolution image (below). Absent, with the following columns keeping their offsets, when the point has no patch frame. |
 | Image | The image index. |
 | Name | The image file name, shortened by a cut out of the **middle** so the directory and the file name both survive (`images/seatt…yard_13.jpg`); the full path on hover. A path with a directory above its parent keeps a leading `…/` for what was left out. |

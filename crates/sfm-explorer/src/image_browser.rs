@@ -1,8 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Image browser panel — horizontally-scrollable strip of the reconstruction's
-//! embedded thumbnails.
+//! Image browser panel: a horizontally-scrollable strip of the node's display
+//! thumbnails ([`crate::display_thumbnails`]): the file's own, or rows built from
+//! the photographs.
 //!
 //! Uses manual offset-based panning instead of `ScrollArea` so that Windows
 //! DirectManipulation gesture events can drive the horizontal scroll.
@@ -10,10 +11,10 @@
 use std::collections::HashMap;
 
 use eframe::egui::{self, Sense};
-use ndarray::Axis;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::{ActionLog, Actor, Kind};
+use crate::display_thumbnails::{row_for, DisplayThumbnails};
 use crate::platform::GestureEvent;
 use crate::scene::ReconId;
 use crate::texture::thumbnail_color_image;
@@ -130,6 +131,9 @@ pub struct ImageBrowser {
     prev_selected: Option<usize>,
     /// Index of the next thumbnail to lazily load.
     next_lazy_load: usize,
+    /// The display column's ready count the lazy loader last swept for. A row
+    /// built from its photograph since then sends it round again.
+    seen_ready: usize,
     /// Horizontal scroll offset in logical pixels.
     offset_x: f32,
     /// Previous frame's thumbnail height, for rescaling offset on resize.
@@ -149,6 +153,7 @@ impl ImageBrowser {
             cached_image_count: 0,
             prev_selected: None,
             next_lazy_load: 0,
+            seen_ready: 0,
             offset_x: 0.0,
             prev_img_height: 0.0,
             minibar: NavigationMinibar::new(),
@@ -184,6 +189,9 @@ impl ImageBrowser {
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         recon_id: ReconId,
+        // The node's display column: the file's thumbnails, or rows built from
+        // the photographs that fill in over several frames.
+        display: Option<&DisplayThumbnails>,
         selected_image: Option<usize>,
         track_images: &[usize],
         hover_track_images: &[usize],
@@ -218,12 +226,22 @@ impl ImageBrowser {
             self.animation.reset();
         }
 
-        // Lazy-load up to 8 thumbnails per frame (background loading).
+        // A row built from its photograph since the last sweep: sweep again, so
+        // the cell it belongs to swaps its placeholder for the picture.
+        let ready = display.map_or(0, DisplayThumbnails::ready);
+        if ready != self.seen_ready {
+            self.seen_ready = ready;
+            self.next_lazy_load = 0;
+        }
+
+        // Lazy-load up to 8 thumbnails per frame (background loading). A row
+        // that is not final yet is skipped rather than cached as a placeholder.
         let mut loaded_this_frame = 0;
         while loaded_this_frame < 8 && self.next_lazy_load < num_images {
             let idx = self.next_lazy_load;
-            if !self.thumbnail_cache.contains_key(&idx) {
-                self.load_thumbnail(ui.ctx(), recon, idx);
+            if !self.thumbnail_cache.contains_key(&idx)
+                && self.load_thumbnail(ui.ctx(), recon, display, idx)
+            {
                 loaded_this_frame += 1;
             }
             self.next_lazy_load += 1;
@@ -518,6 +536,9 @@ impl ImageBrowser {
         let clicked = panel_response.clicked() && !pointer_in_minibar;
         let double_clicked = panel_response.double_clicked() && !pointer_in_minibar;
         let font = egui::FontId::proportional(11.0);
+        // The cells on screen still waiting on their photographs, which are
+        // built ahead of the rest.
+        let mut waiting: Vec<usize> = Vec::new();
 
         for (i, &(pos_x, thumb_w)) in thumb_positions.iter().enumerate() {
             let screen_x = panel_rect.left() + pos_x - self.offset_x;
@@ -528,8 +549,10 @@ impl ImageBrowser {
             }
 
             // Ensure thumbnail is loaded (may not have been lazy-loaded yet).
-            if !self.thumbnail_cache.contains_key(&i) {
-                self.load_thumbnail(ui.ctx(), recon, i);
+            if !self.thumbnail_cache.contains_key(&i)
+                && !self.load_thumbnail(ui.ctx(), recon, display, i)
+            {
+                waiting.push(i);
             }
 
             let thumb_rect = egui::Rect::from_min_size(
@@ -656,12 +679,22 @@ impl ImageBrowser {
 
         // ── Navigation minibar ────────────────────────────────────────
 
-        // Build barcode texture once all thumbnails are loaded.
+        if let Some(display) = display.filter(|_| !waiting.is_empty()) {
+            display.prioritize(
+                waiting
+                    .iter()
+                    .map(|&i| recon.image_table.images[i].name.as_str()),
+            );
+        }
+
+        // Build barcode texture once every row is final: a cell is cached only
+        // once its row is.
         if self.minibar.color_barcode.is_none()
             && self.thumbnail_cache.len() == num_images
+            && display.is_none_or(DisplayThumbnails::is_complete)
             && num_images > 0
         {
-            self.build_barcode(ui.ctx(), recon);
+            self.build_barcode(ui.ctx(), recon, display);
         }
 
         // Background: dark fill.
@@ -792,26 +825,33 @@ impl ImageBrowser {
     ///
     /// Each image contributes a column of 8 pixels, where each pixel is the
     /// average color of the corresponding vertical eighth of the thumbnail.
-    fn build_barcode(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction) {
+    fn build_barcode(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        display: Option<&DisplayThumbnails>,
+    ) {
         const BANDS: usize = 8;
-        // Both extents come from the loaded reconstruction rather than from the
-        // 128×128 the `.sfmr` format pins today: `thumb_h` divides into bands
-        // and `thumb_w` bounds the row scan. They were one constant before,
-        // which silently used the height as the width.
-        let shape = recon.image_table.thumbnails_y_x_rgb.shape();
-        let (thumb_h, thumb_w) = (shape[1], shape[2]);
-
         let num_images = recon.image_table.images.len();
+        let rows: Option<Vec<_>> = (0..num_images)
+            .map(|i| row_for(display, recon, i))
+            .collect();
+        let Some(rows) = rows else {
+            return;
+        };
         // Texture layout: width = num_images, height = BANDS, row-major (top to bottom).
         let mut pixels = Vec::with_capacity(num_images * BANDS * 4);
         // egui textures are stored row-major, so we iterate band (row) first.
         for band in 0..BANDS {
-            // Proportional bounds so a height that is not a multiple of BANDS
-            // still covers every row, and every band still spans at least one.
-            let y_start = band * thumb_h / BANDS;
-            let y_end = ((band + 1) * thumb_h / BANDS).max(y_start + 1).min(thumb_h);
-            for i in 0..num_images {
-                let rgb_slice = recon.image_table.thumbnails_y_x_rgb.index_axis(Axis(0), i);
+            for rgb_slice in &rows {
+                // Both extents come from the row itself rather than from the
+                // 128×128 the `.sfmr` format pins: `thumb_h` divides into bands
+                // and `thumb_w` bounds the row scan. Proportional bounds, so a
+                // height that is not a multiple of BANDS still covers every
+                // row, and every band still spans at least one.
+                let (thumb_h, thumb_w) = (rgb_slice.shape()[0], rgb_slice.shape()[1]);
+                let y_start = band * thumb_h / BANDS;
+                let y_end = ((band + 1) * thumb_h / BANDS).max(y_start + 1).min(thumb_h);
                 // Average the horizontal band [y_start..y_end].
                 let (mut r_sum, mut g_sum, mut b_sum) = (0u64, 0u64, 0u64);
                 let mut count = 0u64;
@@ -837,15 +877,23 @@ impl ImageBrowser {
         self.minibar.cached_image_count = num_images;
     }
 
-    /// Load a single thumbnail into the texture cache.
-    fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, idx: usize) {
-        let image = thumbnail_color_image(
-            recon
-                .image_table
-                .thumbnails_y_x_rgb
-                .index_axis(Axis(0), idx),
-        );
+    /// Load a single thumbnail into the texture cache, when its row is final.
+    ///
+    /// Returns whether it did: a row still being built from its photograph is
+    /// not cached, so its cell keeps the placeholder and asks again later.
+    fn load_thumbnail(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        display: Option<&DisplayThumbnails>,
+        idx: usize,
+    ) -> bool {
+        let Some(row) = row_for(display, recon, idx) else {
+            return false;
+        };
+        let image = thumbnail_color_image(row);
         let texture = ctx.load_texture(format!("thumb_{idx}"), image, egui::TextureOptions::LINEAR);
         self.thumbnail_cache.insert(idx, texture);
+        true
     }
 }

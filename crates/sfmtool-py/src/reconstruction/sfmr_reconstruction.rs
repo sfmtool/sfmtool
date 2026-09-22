@@ -101,6 +101,12 @@ impl PySfmrReconstruction {
     ///     tool_name: Tool that performed the operation (default ``"sfmtool"``).
     ///     tool_options: Optional dict of operation-specific metadata to merge
     ///         into ``metadata.tool_options``.
+    ///     minimal: Write the metadata a file meant to travel between machines
+    ///         carries: an empty ``workspace.absolute_path`` (none recorded), no
+    ///         ``lineage``, and ``tool_options`` replaced by the ``tool_options``
+    ///         given here rather than merged into the inherited ones. What
+    ///         ``sfm xform --minimal`` saves with. The in-memory value keeps
+    ///         whatever the save wrote, like the other metadata a save stamps.
     ///
     /// The write preserves the in-memory ``normals`` of every point that has one
     /// (recomputing only the missing/zero rows from geometry), so normals set via
@@ -109,7 +115,7 @@ impl PySfmrReconstruction {
     /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
     /// cloud is written as the per-point patch frame in ``points3d/`` (format
     /// version 3+).
-    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None))]
+    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false))]
     fn save(
         &mut self,
         py: Python<'_>,
@@ -117,12 +123,18 @@ impl PySfmrReconstruction {
         operation: Option<&str>,
         tool_name: Option<&str>,
         tool_options: Option<&Bound<'_, PyDict>>,
+        minimal: bool,
     ) -> PyResult<()> {
         // Update metadata if operation is provided
         if let Some(op) = operation {
             let meta = &mut self.inner.metadata;
             meta.operation = op.to_string();
             meta.tool = tool_name.unwrap_or("sfmtool").to_string();
+            if meta.tool == "sfmtool" {
+                // The version of the sfmtool that wrote this file, not of
+                // whatever wrote the one it was read from.
+                meta.tool_version = env!("CARGO_PKG_VERSION").to_string();
+            }
             meta.image_count = self.inner.image_table.images.len() as u32;
             meta.point_count = self.inner.point_set.points.len() as u32;
             meta.observation_count = self.inner.point_set.tracks.len() as u32;
@@ -136,6 +148,16 @@ impl PySfmrReconstruction {
                 }
             }
             meta.workspace.absolute_path = self.inner.workspace_dir.to_string_lossy().to_string();
+        }
+
+        // A minimal file records nothing about the machine or the history it was
+        // written on: no absolute path, no ancestry, and only the options of the
+        // operation that wrote it.
+        if minimal {
+            let meta = &mut self.inner.metadata;
+            meta.workspace.absolute_path.clear();
+            meta.lineage.clear();
+            meta.tool_options.clear();
         }
 
         // Merge tool_options if provided
@@ -574,6 +596,18 @@ impl PySfmrReconstruction {
         Some(b.clone().into_pyarray(py))
     }
 
+    /// The edge ``R`` of the stored ``(P, R, R, 4)`` patch bitmaps, or ``None``
+    /// when the reconstruction carries none. Reads no pixels, unlike
+    /// :attr:`patch_bitmaps`, which copies the column.
+    #[getter]
+    fn patch_bitmap_resolution(&self) -> Option<usize> {
+        self.inner
+            .point_set
+            .patch_bitmaps_y_x_rgba
+            .as_deref()
+            .map(|b| b.shape()[1])
+    }
+
     // ── Track data array getters ─────────────────────────────────────
 
     /// Image indexes for track observations, shape `(K,)`.
@@ -619,11 +653,12 @@ impl PySfmrReconstruction {
     }
 
     /// RGB thumbnails for each image, shape
-    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)`.
+    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)`, or ``None`` for a
+    /// reconstruction without them (a load never fills them in).
     ///
     /// Returns a read-only numpy view into the Rust-owned data (zero-copy).
     #[getter]
-    fn thumbnails_y_x_rgb<'py>(self_: &Bound<'py, Self>) -> Bound<'py, PyArray4<u8>> {
+    fn thumbnails_y_x_rgb<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray4<u8>>> {
         // Get a raw pointer to the thumbnail array. This is safe because:
         // 1. #[pyclass] objects are heap-allocated and pinned — the data won't move.
         //    The array is behind an `Arc`, so its buffer sits in an allocation of
@@ -635,7 +670,7 @@ impl PySfmrReconstruction {
             let borrow = self_.borrow();
             // Through the `Arc`: the view must point at the array itself, not
             // at the pointer that owns it.
-            &*borrow.inner.image_table.thumbnails_y_x_rgb as *const ndarray::Array4<u8>
+            borrow.inner.image_table.thumbnails_y_x_rgb.as_deref()? as *const ndarray::Array4<u8>
         };
         let view = unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) };
         // The buffer is shared: every clone of this reconstruction that did not
@@ -652,7 +687,7 @@ impl PySfmrReconstruction {
         view.call_method("setflags", (), Some(&kwargs)).expect(
             "numpy refuses write=False only on a view of a writeable base, which this is not",
         );
-        view
+        Some(view)
     }
 
     // ── Depth data getters ───────────────────────────────────────────

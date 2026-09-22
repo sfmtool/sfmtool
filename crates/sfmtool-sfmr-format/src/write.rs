@@ -564,8 +564,12 @@ fn write_sfmr_into<S: EntrySink>(
     }
 
     // images/metadata.json
-    let images_meta =
-        serde_json::json!({"image_count": image_count, "thumbnail_size": THUMBNAIL_SIZE});
+    let has_thumbnails = data.thumbnails_y_x_rgb.is_some();
+    let images_meta = serde_json::json!({
+        "image_count": image_count,
+        "has_thumbnails": has_thumbnails,
+        "thumbnail_size": has_thumbnails.then_some(THUMBNAIL_SIZE),
+    });
     let bytes = sink.write_json(entries::images_metadata(), &images_meta)?;
     images_hasher.update(&bytes);
 
@@ -598,13 +602,15 @@ fn write_sfmr_into<S: EntrySink>(
         )?;
     }
 
-    // images/thumbnails_y_x_rgb
-    binary_hashed(
-        &mut sink,
-        &entries::images_thumbnails_y_x_rgb(image_count),
-        data.thumbnails_y_x_rgb.as_slice().unwrap(),
-        &mut images_hasher,
-    )?;
+    // images/thumbnails_y_x_rgb (optional; absent from the digest when absent)
+    if let Some(thumbnails) = &data.thumbnails_y_x_rgb {
+        binary_hashed(
+            &mut sink,
+            &entries::images_thumbnails_y_x_rgb(image_count),
+            thumbnails.as_slice().unwrap(),
+            &mut images_hasher,
+        )?;
+    }
 
     // images/translations_xyz
     binary_hashed(
@@ -1156,13 +1162,15 @@ fn validate_dimensions_with(
             )
         );
     }
-    check!(
-        data.thumbnails_y_x_rgb.shape() == [image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3],
-        format!(
-            "thumbnails_y_x_rgb shape {:?} != [{image_count}, {THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3]",
-            data.thumbnails_y_x_rgb.shape()
-        )
-    );
+    if let Some(thumbnails) = &data.thumbnails_y_x_rgb {
+        check!(
+            thumbnails.shape() == [image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3],
+            format!(
+                "thumbnails_y_x_rgb shape {:?} != [{image_count}, {THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3]",
+                thumbnails.shape()
+            )
+        );
+    }
     check!(
         data.positions_xyzw.shape() == [point_count, 4],
         format!(

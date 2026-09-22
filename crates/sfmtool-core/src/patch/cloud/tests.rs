@@ -1103,7 +1103,7 @@ fn one_image_table(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageTabl
             quaternion_wxyz: *pose.rotation.as_nalgebra(),
             translation_xyz: pose.translation,
         }],
-        thumbnails_y_x_rgb: std::sync::Arc::new(ndarray::Array4::zeros((1, 1, 1, 3))),
+        thumbnails_y_x_rgb: None,
         depth_statistics: DepthStatistics {
             num_histogram_buckets: 0,
             images: Vec::new(),

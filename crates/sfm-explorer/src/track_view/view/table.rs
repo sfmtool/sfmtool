@@ -12,12 +12,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ndarray::Axis;
 use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::SfmrReconstruction;
 
 use super::{PointTrackView, PointTrackViewResponse, PATCH_TILE, THUMB_SIZE};
 use crate::colormap;
+use crate::display_thumbnails::row_for;
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, ReconId};
 use crate::texture::thumbnail_color_image;
@@ -372,7 +372,8 @@ impl PointTrackView {
     ) {
         let img_idx = image.index();
 
-        // Load thumbnail texture if not cached
+        // Load thumbnail texture if not cached. A row still being built from its
+        // photograph is not cached, so the next frame asks again.
         if !self.thumbnail_textures.contains_key(&image) {
             self.load_thumbnail(ui.ctx(), recon, image);
         }
@@ -388,7 +389,12 @@ impl PointTrackView {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
-
+        } else {
+            // The placeholder a texture not yet loaded gets.
+            ui.painter()
+                .rect_filled(thumb_rect, 0.0, egui::Color32::from_gray(40));
+        }
+        if self.thumbnail_textures.contains_key(&image) {
             // Draw feature dot overlay: map feature pixel coords to screen coords.
             let camera_idx = recon.image_table.images[img_idx].camera_index as usize;
             let intrinsics = &recon.image_table.cameras[camera_idx];
@@ -411,15 +417,14 @@ impl PointTrackView {
         }
     }
 
-    /// Load a single thumbnail texture into the cache.
+    /// Load a single thumbnail texture into the cache, when its row is final.
     fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
         let idx = image.index();
-        let color_image = thumbnail_color_image(
-            recon
-                .image_table
-                .thumbnails_y_x_rgb
-                .index_axis(Axis(0), idx),
-        );
+        let Some(row) = row_for(self.display.as_deref(), recon, idx) else {
+            return;
+        };
+        let color_image = thumbnail_color_image(row);
+
         let texture = ctx.load_texture(
             format!("track_thumb_{idx}"),
             color_image,

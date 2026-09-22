@@ -19,7 +19,8 @@ use crate::lineage::LineageEntry;
 ///
 /// The format pins this: it is written into the archive entry's *name*
 /// (`images/thumbnails_y_x_rgb.<image_count>.<size>.<size>.3.uint8.zst`) and into the
-/// `images` section metadata as `thumbnail_size`, so a reader locates the entry
+/// `images` section metadata as `thumbnail_size` (`null` in a file without
+/// thumbnails, see [`SfmrData::thumbnails_y_x_rgb`]), so a reader locates the entry
 /// by a string that embeds the size. Changing it changes the on-disk format and
 /// makes existing files unreadable — this constant exists so that the several
 /// places which must agree cannot drift apart, not because the value is
@@ -518,6 +519,14 @@ pub(crate) fn validate_point_constraints(
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 11 made the thumbnail column `images/thumbnails_y_x_rgb` optional,
+/// flagged by `images/metadata.json`'s `has_thumbnails` (see
+/// [`SfmrData::thumbnails_y_x_rgb`]). The flag defaults the other way from the
+/// `points3d` flags: a file of version 10 or earlier carries no key and always
+/// carries the entry, so a missing key reads as present. A file without
+/// thumbnails writes `thumbnail_size: null` and leaves the entry out of
+/// `images_xxh128`.
+///
 /// Version 9 added the optional `lineage` field of `metadata.json` (see
 /// [`LineageEntry`]), which records which earlier contents this file's point
 /// rows came from so a Point ID minted against one of them still resolves here.
@@ -558,7 +567,7 @@ pub(crate) fn validate_point_constraints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 10;
+pub const SFMR_FORMAT_VERSION: u32 = 11;
 
 /// The first `.sfmr` version that stores its write timestamp in `written.json`
 /// rather than in `metadata.json`.
@@ -745,8 +754,12 @@ pub struct SfmrData {
     /// for the `.sift`-mediated one); `None` in a `sift_files` file.
     pub image_file_hashes: Option<Vec<[u8; 16]>>,
     /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` RGB thumbnails of the source
-    /// images (see [`THUMBNAIL_SIZE`]).
-    pub thumbnails_y_x_rgb: Array4<u8>,
+    /// images (see [`THUMBNAIL_SIZE`]), or `None` for a file without them.
+    ///
+    /// The column is whole or absent: row `i` is a downscale of the
+    /// photograph `image_names[i]`, and a writer that cannot produce a row for
+    /// every image stores none. A read never fills it in.
+    pub thumbnails_y_x_rgb: Option<Array4<u8>>,
 
     // Points3D
     /// `(P, 4)` homogeneous 3D point positions in world coordinates.

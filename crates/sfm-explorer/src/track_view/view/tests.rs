@@ -32,7 +32,9 @@ use sfmtool_core::SfmrReconstruction;
 use super::patch::render_frame;
 use super::table::format_feature_size;
 use super::{PointTrackView, PointTrackViewResponse};
+use crate::display_thumbnails::DisplayThumbnails;
 use crate::platform::ScrollInput;
+
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
 
@@ -262,12 +264,15 @@ fn run_frame(
     // The panel reads its point through the overlay, so the fixture is wrapped
     // as a version with no edits; the tests that make an edit build their own.
     let edited = edited_of(recon);
+    // The node's display column for a file with thumbnails is the file's own.
+    let display = DisplayThumbnails::embedded(recon);
     let mut response = None;
     crate::test_support::run_frame_headless(ctx, input, |ui| {
         response = Some(panel.show(
             ui,
             &edited,
             RECON,
+            display.as_ref(),
             TEST_POINT_ID,
             selected_point,
             None,
@@ -717,9 +722,25 @@ fn the_panel_reports_whether_it_holds_the_pointer() {
 
 // ── Thumbnails and patch tiles ──────────────────────────────────────────
 
+/// `recon` carrying a thumbnail column, as a file with thumbnails does. The demo
+/// carries none: it has no photographs.
+fn with_thumbnails(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+    let n = recon.image_table.images.len();
+    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+        (
+            n,
+            sfmtool_core::THUMBNAIL_SIZE,
+            sfmtool_core::THUMBNAIL_SIZE,
+            3,
+        ),
+        90u8,
+    )));
+    recon
+}
+
 #[test]
 fn each_observed_image_gets_a_cached_thumbnail() {
-    let recon = SfmrReconstruction::demo(12);
+    let recon = with_thumbnails(SfmrReconstruction::demo(12));
     let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
 
@@ -730,6 +751,20 @@ fn each_observed_image_gets_a_cached_thumbnail() {
     assert_eq!(panel.thumbnail_textures.len(), 2);
     assert!(panel.thumbnail_textures.contains_key(&image(6)));
     assert!(panel.thumbnail_textures.contains_key(&image(7)));
+}
+
+#[test]
+fn a_reconstruction_without_thumbnails_caches_no_placeholder() {
+    // No display column and no column of its own: every row draws the
+    // placeholder, and none is cached as if it were the picture.
+    let recon = SfmrReconstruction::demo(12);
+    let mut panel = PointTrackView::new();
+    let ctx = egui::Context::default();
+
+    show_once(&mut panel, &ctx, &recon, Some(6), &sift_cache(8, 16));
+
+    assert!(panel.thumbnail_textures.is_empty());
+    assert_eq!(panel.observations.len(), 2);
 }
 
 #[test]
@@ -962,7 +997,7 @@ fn the_header_shows_the_point_id_it_was_handed() {
 
 #[test]
 fn clear_resets_every_cache() {
-    let recon = with_embedded_patches(SfmrReconstruction::demo(12));
+    let recon = with_thumbnails(with_embedded_patches(SfmrReconstruction::demo(12)));
     let full_res = full_res_images(&recon, &[0, 1]);
     let mut panel = PointTrackView::new();
     let ctx = egui::Context::default();
@@ -1098,6 +1133,7 @@ fn the_panel_shows_a_modified_points_track_and_not_the_bases() {
             ui,
             &edited,
             RECON,
+            None,
             TEST_POINT_ID,
             Some(moved as usize),
             None,
@@ -1141,6 +1177,7 @@ fn a_deleted_point_shows_the_empty_state() {
             ui,
             &edited,
             RECON,
+            None,
             TEST_POINT_ID,
             Some(3),
             None,
@@ -1180,6 +1217,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
                 ui,
                 &edited,
                 RECON,
+                None,
                 TEST_POINT_ID,
                 Some(3),
                 None,

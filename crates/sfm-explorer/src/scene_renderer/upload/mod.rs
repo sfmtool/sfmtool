@@ -17,6 +17,7 @@ mod overlay;
 mod patches;
 mod points;
 mod thumbnails;
+pub(crate) use thumbnails::UploadedThumbnails;
 mod track_rays;
 
 #[cfg(test)]

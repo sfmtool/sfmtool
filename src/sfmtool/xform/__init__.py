@@ -17,6 +17,13 @@ from ._filter_by_image_range import (
 from ._filter_by_localizability import FilterByLocalizabilityTransform
 from ._filter_by_patch_size import FilterByPatchSizeTransform
 from ._filter_by_reprojection_error import FilterByReprojectionErrorTransform
+from ._heavy_columns import (
+    AddPatchBitmapsTransform,
+    AddThumbnailsTransform,
+    DropPatchBitmapsTransform,
+    DropThumbnailsTransform,
+    MinimalTransform,
+)
 from ._find_points_at_infinity import (
     ClassifyPointsAtInfinityTransform,
     FindPointsAtInfinityTransform,
@@ -70,5 +77,10 @@ __all__ = [
     "SimilarityTransform",
     "SwitchCameraModelTransform",
     "ToEmbeddedPatchesTransform",
+    "DropThumbnailsTransform",
+    "DropPatchBitmapsTransform",
+    "AddThumbnailsTransform",
+    "AddPatchBitmapsTransform",
+    "MinimalTransform",
     "apply_transforms",
 ]

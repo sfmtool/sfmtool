@@ -181,7 +181,7 @@ impl SfmrReconstruction {
                 // The thumbnails are pixels of the source images, which a
                 // similarity of the scene does not touch, so the new value
                 // shares the old one's array rather than copying it.
-                thumbnails_y_x_rgb: Arc::clone(&self.image_table.thumbnails_y_x_rgb),
+                thumbnails_y_x_rgb: self.image_table.thumbnails_y_x_rgb.clone(),
                 depth_statistics: self.image_table.depth_statistics.clone(),
                 depth_histogram_counts: self.image_table.depth_histogram_counts.clone(),
             },
@@ -275,19 +275,21 @@ impl SfmrReconstruction {
             .map(|&i| self.image_table.images[i as usize].clone())
             .collect();
 
-        let new_thumbnails = {
-            let mut out = Array4::<u8>::zeros((new_image_count, 128, 128, 3));
+        // A new column of the kept rows when the input has one; a value
+        // without thumbnails stays without them.
+        let new_thumbnails = self.image_table.thumbnails_y_x_rgb.as_ref().map(|thumbs| {
+            let mut out = Array4::<u8>::zeros((
+                new_image_count,
+                thumbs.shape()[1],
+                thumbs.shape()[2],
+                thumbs.shape()[3],
+            ));
             for (new_idx, &old_idx) in image_indices.iter().enumerate() {
-                let src = self.image_table.thumbnails_y_x_rgb.slice(ndarray::s![
-                    old_idx as usize,
-                    ..,
-                    ..,
-                    ..
-                ]);
+                let src = thumbs.slice(ndarray::s![old_idx as usize, .., .., ..]);
                 out.slice_mut(ndarray::s![new_idx, .., .., ..]).assign(&src);
             }
-            out
-        };
+            Arc::new(out)
+        });
 
         let new_depth_stats_images: Vec<ImageDepthStats> = image_indices
             .iter()
@@ -499,7 +501,7 @@ impl SfmrReconstruction {
             image_table: ImageTable {
                 cameras: self.image_table.cameras.clone(),
                 images: new_images,
-                thumbnails_y_x_rgb: Arc::new(new_thumbnails),
+                thumbnails_y_x_rgb: new_thumbnails,
                 depth_statistics: new_depth_statistics,
                 depth_histogram_counts: new_depth_histogram_counts,
                 rig_frame_data: new_rig_frame_data,

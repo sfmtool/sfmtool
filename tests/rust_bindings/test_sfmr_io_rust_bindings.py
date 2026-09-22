@@ -446,3 +446,65 @@ class TestLineage:
         assert ok, errors
         assert read_sfmr(out)["metadata"]["lineage"] == lineage
         assert SfmrReconstruction.load(out).metadata()["lineage"] == lineage
+
+
+class TestOptionalThumbnails:
+    """From format version 11 a reconstruction may carry no thumbnails, and
+    every binding hands that absence through as ``None`` rather than filling
+    it in."""
+
+    def test_clone_with_changes_none_drops_the_column(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.thumbnails_y_x_rgb is not None
+        bare = recon.clone_with_changes(thumbnails_y_x_rgb=None)
+        assert bare.thumbnails_y_x_rgb is None
+        # Every row of everything else is kept.
+        assert bare.image_count == recon.image_count
+        assert bare.point_count == recon.point_count
+        assert bare.observation_count == recon.observation_count
+        # The input is untouched.
+        assert recon.thumbnails_y_x_rgb is not None
+
+    def test_a_save_without_thumbnails_loads_without_them(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        out = tmp_path / "bare.sfmr"
+        recon.clone_with_changes(thumbnails_y_x_rgb=None).save(out)
+        loaded = SfmrReconstruction.load(out)
+        assert loaded.thumbnails_y_x_rgb is None
+        assert loaded.metadata()["version"] >= 11
+        ok, errors = verify_sfmr(out)
+        assert ok, errors
+
+    def test_read_and_write_sfmr_accept_the_absent_column(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        original = data["thumbnails_y_x_rgb"]
+        data["thumbnails_y_x_rgb"] = None
+        out = tmp_path / "bare.sfmr"
+        write_sfmr(out, data)
+        again = read_sfmr(out)
+        assert again["thumbnails_y_x_rgb"] is None
+        # And the key may be left out altogether.
+        del data["thumbnails_y_x_rgb"]
+        write_sfmr(tmp_path / "keyless.sfmr", data)
+        assert read_sfmr(tmp_path / "keyless.sfmr")["thumbnails_y_x_rgb"] is None
+        # Putting the column back round-trips it.
+        data["thumbnails_y_x_rgb"] = original
+        write_sfmr(tmp_path / "back.sfmr", data)
+        assert np.array_equal(
+            read_sfmr(tmp_path / "back.sfmr")["thumbnails_y_x_rgb"], original
+        )
+
+    def test_a_wrong_shaped_column_is_refused(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        with pytest.raises(ValueError, match="thumbnails_y_x_rgb"):
+            recon.clone_with_changes(
+                thumbnails_y_x_rgb=np.zeros((recon.image_count, 64, 64, 3), np.uint8)
+            )
+
+    def test_patch_bitmap_resolution_reads_no_pixels(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.patch_bitmap_resolution is None

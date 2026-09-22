@@ -29,7 +29,9 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
     try_localize_patch_keypoints, KeypointLocalizeParams, LocalizeError,
 };
-use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
+use crate::patch::keypoint_subpixel::{
+    fuse_patch_bitmap, refine_patch_keypoints, KeypointSubpixelParams,
+};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
@@ -796,8 +798,8 @@ pub(super) fn triangulate_rays(
 /// Fuse the `in` observations into one consensus tile at their final keypoints,
 /// and read the point's colour off its centre.
 ///
-/// The fuse is the sub-pixel kernel's own (`render_bitmaps`), run with no
-/// Gauss-Newton step so it moves nothing: the keypoints are the ones the fit
+/// The fuse is [`fuse_patch_bitmap`], the sub-pixel kernel's own fuse run with
+/// no Gauss-Newton step so it moves nothing: the keypoints are the ones the fit
 /// already settled, and this pass only renders and blends them. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is fused is a
 /// tile the column can hold.
@@ -815,29 +817,23 @@ fn fuse_bitmap(
         None => (options.refine.resolution.max(2) as usize, 4),
     };
     let mut view_set: Vec<u32> = Vec::with_capacity(ins.len());
-    let mut seeds: Vec<Option<[f64; 2]>> = Vec::with_capacity(ins.len());
+    let mut keypoints: Vec<[f64; 2]> = Vec::with_capacity(ins.len());
     for &i in ins {
         let observation = &track.observations[i];
         let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) else {
             continue;
         };
         view_set.push(observation.image);
-        seeds.push(Some([f64::from(keypoint[0]), f64::from(keypoint[1])]));
+        keypoints.push([f64::from(keypoint[0]), f64::from(keypoint[1])]);
     }
     if view_set.len() < 2 {
         return (None, None);
     }
     let params = KeypointSubpixelParams {
         resolution: resolution as u32,
-        // Nothing moves: the keypoints are settled, and this pass is the fuse.
-        max_gn_steps: 0,
-        max_outer_sweeps: 1,
-        render_bitmaps: true,
         ..options.refine.clone()
     };
-    let Some(fused) =
-        refine_patch_keypoints(patch, images, &view_set, Some(&seeds), &params).representative
-    else {
+    let Some(fused) = fuse_patch_bitmap(patch, images, &view_set, &keypoints, &params) else {
         return (None, None);
     };
     // The kernel fuses RGBA; the column takes as many channels as it carries.

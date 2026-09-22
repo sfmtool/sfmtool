@@ -215,14 +215,14 @@ pub(super) struct ReconResources {
     // ── thumbnails: per-recon atlas + bind group ──
     pub thumbnail_texture: Option<wgpu::Texture>,
     pub thumbnail_view: Option<wgpu::TextureView>,
-    /// The thumbnail column this atlas was written from, held by pointer.
+    /// What this atlas was written from: the node's display column and the
+    /// value's own column, by pointer, and the image list.
     ///
-    /// The atlas is a function of that column and the image count alone, so an
-    /// edit that leaves both alone leaves the atlas correct -- and every edit
-    /// that is not about the image table does. See
-    /// [`PatchResources::uploaded_bitmaps`], which is the same reuse key for the
-    /// other atlas.
-    pub uploaded_thumbnails: Option<Arc<Array4<u8>>>,
+    /// The atlas is a function of those alone, so an edit that leaves them alone
+    /// leaves the atlas correct, and every edit that is not about the image
+    /// table does. See [`PatchResources::uploaded_bitmaps`], which is the same
+    /// reuse key for the other atlas.
+    pub uploaded_thumbnails: Option<super::upload::UploadedThumbnails>,
     /// Per-recon `ImageQuadUniforms` (view-projection + this atlas's grid).
     pub image_quad_uniform_buffer: Option<wgpu::Buffer>,
     /// Shared by the pinhole and distorted image-quad pipelines.

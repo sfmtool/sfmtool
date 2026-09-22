@@ -1562,8 +1562,8 @@ has its ray. One the kernels placed further than `max_shift_px` from its seed
 keeps its pixel too, and says so (§ "The fit's walk is bounded by the person's
 bar").
 
-The fuse is the sub-pixel kernel's own `render_bitmaps` path, run over the `in`
-views alone with no Gauss-Newton step, so it moves nothing and only renders and
+The fuse is `fuse_patch_bitmap`, the sub-pixel kernel's own `render_bitmaps`
+path, run over the `in` views alone with no Gauss-Newton step, so it moves nothing and only renders and
 blends the keypoints the fit settled. Its grid is the reconstruction's own
 bitmap grid where it stores one, so what is fused is a tile the column can hold
 and a commit can write.

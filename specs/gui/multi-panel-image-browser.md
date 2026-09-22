@@ -352,9 +352,9 @@ see [panel-layout.md](panel-layout.md) § "Implementation notes".
 A horizontally-scrollable strip of 128×128 thumbnails.
 
 **Thumbnails**: The image browser displays the same 128×128 thumbnails used on the 3D
-viewer's frustum far planes. These are loaded from disk via the `image` crate, resized to
-128×128, and cached as egui textures (separate from the GPU texture atlas in
-`SceneRenderer`, since egui has its own texture management).
+viewer's frustum far planes and beside every Track View row: the node's **display
+thumbnails** (see "Thumbnail loading" below), cached as egui textures (separate from the
+GPU texture atlas in `SceneRenderer`, since egui has its own texture management).
 
 **Aspect ratio**: The 128×128 thumbnails are square, but the source images are typically
 not. The image browser must display thumbnails at the correct aspect ratio. The aspect
@@ -378,11 +378,52 @@ so that the image at the center of the viewport stays anchored in place.
 - When `selected_image` changes externally (e.g., frustum click in 3D viewer), the
   browser auto-scrolls to keep the selected thumbnail visible.
 
-**Thumbnail loading**:
-- Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`.
-- Lazy: load a few thumbnails per frame to avoid stalling. Prioritize visible thumbnails.
-- Path: `reconstruction.workspace_dir.join(&img.name)`, resized to 128×128 with the
-  `image` crate (same as `SceneRenderer::upload_thumbnails`).
+**Thumbnail loading**: every panel that draws a thumbnail reads the node's display
+column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs),
+`SceneNode::display_thumbnails`), which comes from one of two sources:
+
+- **The file's own column.** When the `.sfmr` carries thumbnails, the display column is
+  the image table's own `Arc`, shared rather than copied, and every row is final from the
+  start.
+- **Rows built from the photographs.** When the file carries none (a version 11 file
+  written without them), the viewer builds display thumbnails when the node opens. Each
+  row is the photograph at `workspace_dir.join(name)`, the path Image Detail reads
+  full-resolution images from, decoded without applying EXIF orientation (the `image`
+  crate's default, matching the SIFT extractors) and resized to 128 x 128 by area
+  averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. That
+  resize matches the format's in method rather than bit for bit, which is all a display
+  needs.
+
+**Display thumbnails are the node's, not the value's.** They live on the scene node beside
+its history and never enter an `ImageTable`, so nothing the viewer builds can reach a save:
+a file opened without thumbnails is saved without them, whatever was drawn. The viewer has
+no command that writes them into a value; `sfm xform --add-thumbnails` is how a file gains
+thumbnails. They are **keyed by image name**, so the one column built when the node opens
+serves every version: Delete Image renumbers the image table and Undo renumbers it back,
+and a name still finds its row. An image the column was not built for falls back to the
+value's own column when it carries one.
+
+**Building runs off the GUI thread and fills in progressively.** It is not a document
+operation: it changes no value, costs no version, and does not occupy the one
+background-task slot edits use ([background-tasks.md](background-tasks.md)), so a large
+capture never locks out editing. It runs on a worker pool of its own, one thread fewer
+than the machine has, with no cap on the image count. Rows are built in image order,
+except that the Image Browser hands the pool the cells on screen that are still waiting,
+which are built first. Each finished row wakes the event loop and is visible on the next
+frame; until then its cell draws the placeholder rectangle a texture not yet loaded gets,
+and a Track View row the same. One Action Log line records the build when every row is
+done (`Built 17 display thumbnails for <node> from its photographs in 0.1 s`).
+
+**A photograph that cannot be read gets a flat placeholder**: the row is a neutral
+mid-grey, the image's path is logged once, and the Action Log line counts such images. If
+no photograph can be read at all (the workspace did not resolve, or none of its images is
+on disk), the node has no display column: the frustums draw their outlines without image
+quads, and the Image Browser and Track View draw the placeholder.
+
+- Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`. Only final rows are
+  cached; a row still being built is asked for again once the column's ready count moves.
+- Lazy: load a few thumbnails per frame to avoid stalling. Visible thumbnails load on the
+  frame they are drawn.
 
 **Label**: Image index or filename shown below each thumbnail.
 
@@ -1316,7 +1357,8 @@ struct NavigationMinibar {
 }
 ```
 
-- The color barcode texture is built once all thumbnails are loaded. For each
+- The color barcode texture is built once every display row is final. For each
+
   image, the 128×128 thumbnail is divided into 8 horizontal bands (16 rows
   each), and the average color of each band becomes one pixel in the column.
 - The barcode texture is invalidated and rebuilt when the reconstruction

@@ -460,6 +460,189 @@ will fail. The optional value is a comma-separated `key=value` string
 --to-embedded-patches extent=fixed,extent_value=1.0
 ```
 
+### Heavy Columns
+
+A reconstruction carries, beside the geometry, two columns of pictures: a
+128 x 128 thumbnail of every image and an RGBA bitmap of every surface patch.
+Both are conveniences for a viewer, neither says anything about where a camera
+or a point is, and together they are nearly all of a file's bytes. Four steps
+remove either column from a file or put it back from the source photographs,
+and `--minimal` is a shorthand over two of them. They run in command-line order
+like every other step.
+
+```bash
+sfm xform in.sfmr out.sfmr --drop-thumbnails
+sfm xform in.sfmr out.sfmr --drop-patch-bitmaps
+sfm xform in.sfmr out.sfmr --add-thumbnails
+sfm xform in.sfmr out.sfmr --add-patch-bitmaps [resolution=<R>,sampler=<S>]
+sfm xform in.sfmr out.sfmr --minimal
+```
+
+An `--add-*` step is a no-op, with one printed line, on a reconstruction that
+already carries the column. To re-render at a different resolution, drop first:
+`--drop-patch-bitmaps --add-patch-bitmaps resolution=32`.
+
+**Drop, add and remove** are three different verbs here (see
+[GLOSSARY.md](../../../GLOSSARY.md)): *drop* discards an optional column and
+keeps every row, *add* fills an absent optional column from the source data,
+and *remove* (`--remove-short-tracks` and the other point filters) deletes
+points.
+
+#### `--drop-thumbnails`
+
+Discards the per-image thumbnail column
+(`clone_with_changes(thumbnails_y_x_rgb=None)`). Reads no files and keeps every
+row of everything. Valid on both feature sources; a no-op, with one printed
+line, on a reconstruction without thumbnails.
+
+#### `--drop-patch-bitmaps`
+
+Discards the per-point patch bitmap column
+(`clone_with_changes(patch_bitmaps=None)`). The patch frames
+(`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the normals stay, so the
+patches keep their geometry and a later `--add-patch-bitmaps`,
+`--refine-keypoints` or `--refine-normals` can render onto them. Valid on both
+feature sources; a no-op, with one printed line, on a reconstruction without
+bitmaps.
+
+#### `--add-thumbnails`
+
+Builds the thumbnail column from the **source photographs**. For each image,
+`workspace_dir / name` is decoded as colour with its EXIF orientation ignored,
+resized to 128 x 128 by area averaging and converted to RGB. That is the SIFT
+extractors' own decode and resize
+([extract_sfmtool.py](../../../../src/sfmtool/sift/extract_sfmtool.py),
+`read_image_bgr` and `thumbnail_of_bgr`), so each row is byte-identical to the
+`.sift` thumbnail an extractor writes for the same photograph, and to the row a
+file carried before `--drop-thumbnails`. The decode deliberately does not go
+through [_workspace_image.py](../../../../src/sfmtool/_workspace_image.py)
+`read_workspace_image`, which applies the orientation tag.
+
+In an `embedded_patches` file each photograph found is first checked against
+the image's stored `image_file_hashes` entry, the hash that says "this is still
+the photograph the reconstruction was built from"; a mismatch fails the step.
+
+**The photograph is preferred over the image's `.sift` copy.** A thumbnail is a
+downscale of the photograph, so the photograph is the source and the `.sift` is
+a cache of it; an `embedded_patches` file records no `.sift` link at all, so a
+`.sift` there is found only by the path `feature_prefix_dir` gives. The `.sift`
+copy is the fallback when a photograph is missing or cannot be decoded, and only
+when that `.sift` can be verified: in a `sift_files` file, by its content hash
+against `sift_content_hashes`; in an `embedded_patches` file, by its recorded
+`image_file_xxh128` against `image_file_hashes`.
+
+The column is whole or absent and the format forbids a placeholder row, so an
+image that yields no row from either source fails the step, and the error names
+every such image.
+
+#### `--add-patch-bitmaps [resolution=<R>,sampler=<S>]`
+
+Renders an RGBA bitmap for every point that has a patch frame, **at the patch's
+stored frame and each observation's stored keypoint, moving nothing**:
+positions, normals, frames, keypoints and tracks come out exactly as they went
+in. It reads the source photographs, and requires an `embedded_patches`
+reconstruction with patch frames, like the other patch steps. A point with
+fewer than two observations that render in frame gets a zero row, as
+`--refine-keypoints` gives it.
+
+`resolution` defaults to 24, the default of `KeypointSubpixelParams::resolution`
+([keypoint_subpixel/params.rs](../../../../crates/sfmtool-core/src/patch/keypoint_subpixel/params.rs))
+and of the `resolution` key of `--refine-keypoints` and `--refine-normals`; it
+cannot default to the file's `patch_bitmap_resolution`, which is `null` whenever
+the step has anything to do. `sampler` takes the values and default of the
+`sampler` key of `--refine-keypoints`. Those are the only two keys: the other
+sub-pixel parameters tune a solve this step does not run.
+
+The render is the one place a representative is fused for a patch whose
+placement and keypoints are settled:
+[`fuse_patch_bitmap`](../../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs)
+runs the sub-pixel kernel with no Gauss-Newton step and a single sweep, and
+`fuse_patch_cloud_bitmaps` is its whole-cloud form, parallel over points, bound
+as `PatchCloud.render_bitmaps(recon, images, resolution=24,
+sampler="bilinear_mip", progress=None)`, which returns the `(P, R, R, 4)` array
+`clone_with_changes(patch_bitmaps=...)` takes. The bench commit
+(`bench::fit::fuse_bitmap`) calls the same function for one track.
+
+Its bitmaps therefore equal what `--refine-keypoints` renders for a patch whose
+keypoints it did not move, and what the bench commits. They are not
+byte-identical to `--refine-normals` bitmaps, which fuse over a different view
+subset with an obliquity weight, so a file whose bitmaps came from
+`--refine-normals` does not round-trip bit-exactly through
+`--drop-patch-bitmaps --add-patch-bitmaps`.
+
+#### What the four steps do not touch
+
+None of the four moves a point, renumbers a row or changes a keypoint, so the
+input's `lineage`, which maps ancestor points onto this file's rows, stays valid
+across them, and they keep `xform`'s ordinary lineage behaviour: the input's
+list is written into the output unchanged, and no entry is added. The
+`derived/` section is recomputed by the save as always.
+
+#### `--minimal`
+
+Writes the smallest file that still holds the whole reconstruction. It is a
+shorthand for `--drop-patch-bitmaps --drop-thumbnails`, plus a clearing of the
+metadata that is machine-local or incidental, and it is what a file meant for a
+repository is written with:
+
+```bash
+sfm xform in.sfmr out.sfmr --minimal
+sfm xform in.sfmr out.sfmr --minimal --add-thumbnails
+```
+
+It has two parts, which take effect at different times:
+
+- **The column part is an ordered step.** At its position in the chain it does
+  what `--drop-patch-bitmaps --drop-thumbnails` would do there. A later step sees
+  a reconstruction without either column, so `--minimal --add-thumbnails` writes
+  a file with thumbnails and minimal metadata. An `--add-*` step after it prints
+  one line saying it restores part of the shorthand, so the combination reads as
+  intended.
+- **The metadata part is a property of the save.** The save rewrites
+  `operation`, `tool`, `tool_version`, the counts and both workspace paths after
+  every step has run, so `--minimal` anywhere in the chain marks the output, and
+  the save (`SfmrReconstruction.save(..., minimal=True)`) writes it minimal.
+  Giving it twice is the same as giving it once.
+
+Thumbnails are in the shorthand as well as bitmaps because the purpose is the
+smallest file, and both are rebuilt from the photographs by the `--add-*` steps.
+A caller that wants the thumbnails kept writes `--minimal --add-thumbnails`.
+
+**`--minimal` drops `lineage` entirely.** The output is a new file with no
+ancestry: it carries none of the input's entries and gains none for the input.
+Point IDs minted against the input or any earlier version therefore do not
+resolve in the minimal file. A minimal file is a root, typically published
+somewhere its ancestors are not, so an entry could never lead a reader to an
+ancestor file.
+
+What it clears and what it keeps:
+
+| Field | `--minimal` | Why |
+|---|---|---|
+| `metadata.json` `workspace.absolute_path` | **cleared** to `""` | Names one machine's filesystem, and sits in `metadata_xxh128`, so the same reconstruction written on two machines would hash differently. An empty value means none was recorded. |
+| `workspace.relative_path` | recomputed by the save, from the output's directory to the workspace, as every `xform` save does | It is how a reader finds the workspace from where the file is. |
+| `workspace.contents` | kept | States which extractor and settings the features came from; `feature_prefix_dir` is how every `.sift`-reading step and the viewer's SIFT index build locate the features. |
+| `lineage` | **dropped**, and no entry added | Above. |
+| `tool_options` | **replaced** by `{"transforms": [...]}`, this invocation's own step list | An ordinary save *merges* its `transforms` record into the input's options, so a file accumulates the options of every operation behind it. The inherited keys describe an ancestor, which a root does not have. |
+| `operation`, `tool`, `tool_version` | rewritten by the save as for any `xform` (`xform`, `sfmtool`, its version) | They describe the operation that wrote this file. |
+| `version`, `feature_source`, the counts | kept, recomputed by the save | Format facts. |
+| `world_space_unit` | kept when present | It states what the coordinates mean. |
+| `written.json` `timestamp` | written by the save as always | Outside every section hash, so it adds nothing to the identity. |
+| `derived/` | recomputed by the save, kept | Recomputable, and outside `content_xxh128` already. |
+| `images/image_file_hashes` | kept | The identity of each photograph, which is what lets `--add-thumbnails` check that the photographs found are the ones reconstructed. |
+| `images/thumbnails_y_x_rgb` | **dropped** | The shorthand. |
+| `points3d/patch_bitmaps_y_x_rgba` | **dropped** | The shorthand. |
+| `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `normals_xyz` | kept | Geometry: the patches keep their placement, so bitmaps can be rendered back onto them. |
+| positions, colours, reprojection errors, tracks, keypoints, poses, cameras, image names | kept | The reconstruction itself. |
+
+The other optional columns (`normal_confidence`, `observation_confidence` and
+the point-constraint triple) are measurements or solve state and are kept when
+present. Nothing beyond the table is cleared: `--minimal` removes the columns
+that are the size and the metadata that describes a machine or a history, not
+every byte that could be recomputed. The same input written by `--minimal`
+twice, to the same place relative to its workspace, by one sfmtool version, has
+the same `content_xxh128` whatever machine wrote it.
+
 ### Scaling to Physical Units
 
 #### `--scale-by-measurements <measurements.yaml>`
@@ -508,6 +691,14 @@ class Transform(Protocol):
 Each operation is a class implementing this interface. The CLI parses arguments into an
 ordered list of `Transform` objects and applies them sequentially. The reconstruction is
 loaded once, transformed through the pipeline, and written once.
+
+The write is `SfmrReconstruction.save(path, operation="xform",
+tool_options={"transforms": [...]})`, which stamps `operation`, `tool`,
+`tool_version` and the counts, recomputes both workspace paths from the output's
+location, merges `transforms` into the inherited `tool_options`, and passes
+`lineage` through unchanged. With `minimal=True`, set when `--minimal` is in the
+chain, it instead clears `absolute_path`, drops `lineage` and replaces
+`tool_options` (see [`--minimal`](#--minimal)).
 
 ### Rust primitives behind the operations
 
@@ -566,7 +757,11 @@ sfm xform rig.sfmr left_only.sfmr \
   --include-glob "*fisheye_left*" \
   --remove-short-tracks 1
 
+# The smallest file for a repository, with the thumbnails kept
+sfm xform ground_truth.sfmr published/ground_truth.sfmr --minimal --add-thumbnails
+
 # Upgrade SIMPLE_RADIAL → RADIAL so bundle adjustment can refine k2
+
 sfm xform input.sfmr refined.sfmr \
   --camera-model RADIAL \
   --bundle-adjust

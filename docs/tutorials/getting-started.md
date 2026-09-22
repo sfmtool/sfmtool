@@ -185,6 +185,8 @@ Workspace:
 
 Reconstruction summary:
   Images: 85
+  Thumbnails: yes
+  Patch bitmaps: no
   Image paths:
     images\dino_dog_toy_%02d.jpg (85 files, sequence 1-85)
   Cameras: 1

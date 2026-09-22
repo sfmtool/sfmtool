@@ -1105,7 +1105,7 @@ impl EditedReconstruction {
             // No overlay edit touches an image, so the whole table is the
             // base's, thumbnails shared rather than copied.
             image_table: ImageTable {
-                thumbnails_y_x_rgb: Arc::clone(&self.base.image_table.thumbnails_y_x_rgb),
+                thumbnails_y_x_rgb: self.base.image_table.thumbnails_y_x_rgb.clone(),
                 ..self.base.image_table.clone()
             },
             point_set,

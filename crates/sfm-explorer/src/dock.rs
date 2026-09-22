@@ -455,6 +455,7 @@ impl TabContext<'_> {
                 ui,
                 recon,
                 id,
+                node.display_thumbnails.as_deref(),
                 self.state.selected_image_in(id),
                 &track_images,
                 &hover_track_images,

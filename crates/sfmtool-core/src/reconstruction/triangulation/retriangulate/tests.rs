@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use ndarray::{Array2, Array4};
+use ndarray::Array2;
 
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::progress::{Event, Progress};
@@ -90,12 +90,6 @@ fn truth() -> SfmrReconstruction {
             }
         })
         .collect();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
-        IMAGES,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        3,
-    )));
     let stats = recon.image_table.depth_statistics.images[0].clone();
     recon.image_table.depth_statistics.images = vec![stats; IMAGES];
     recon.image_table.depth_histogram_counts =

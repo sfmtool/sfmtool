@@ -574,15 +574,20 @@ fn value_bytes(value: &EditedReconstruction, previous: Option<&EditedReconstruct
         (base.image_table.images.len() * std::mem::size_of::<sfmtool_core::SfmrImage>()) as u64;
     // The two heavy columns count only when this value does not point at the
     // same allocation its predecessor's base did.
+    // A node's display thumbnails built from photographs are the node's, not
+    // any version's, so they are held once beside the history and never
+    // counted here.
     let previous_base = previous.map(|p| &*p.base);
-    let shared_thumbnails = previous_base.is_some_and(|p| {
-        Arc::ptr_eq(
-            &p.image_table.thumbnails_y_x_rgb,
-            &base.image_table.thumbnails_y_x_rgb,
-        )
-    });
-    if !shared_thumbnails {
-        bytes += base.image_table.thumbnails_y_x_rgb.len() as u64;
+    if let Some(thumbnails) = &base.image_table.thumbnails_y_x_rgb {
+        let shared = previous_base.is_some_and(|p| {
+            p.image_table
+                .thumbnails_y_x_rgb
+                .as_ref()
+                .is_some_and(|q| Arc::ptr_eq(q, thumbnails))
+        });
+        if !shared {
+            bytes += thumbnails.len() as u64;
+        }
     }
     if let Some(bitmaps) = &base.point_set.patch_bitmaps_y_x_rgba {
         let shared = previous_base.is_some_and(|p| {

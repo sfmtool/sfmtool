@@ -91,12 +91,6 @@ fn scene() -> SfmrReconstruction {
             }
         })
         .collect();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
-        IMAGES,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        3,
-    )));
     let stats = recon.image_table.depth_statistics.images[0].clone();
     recon.image_table.depth_statistics.images = vec![stats; IMAGES];
     recon.image_table.depth_histogram_counts =

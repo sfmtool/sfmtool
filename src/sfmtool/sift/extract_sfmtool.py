@@ -31,6 +31,8 @@ from sfmtool.sift.file import SiftExtractionError, xxh128_of_file
 __all__ = [
     "get_default_sfmtool_feature_options",
     "extract_sift_with_sfmtool",
+    "read_image_bgr",
+    "thumbnail_of_bgr",
 ]
 
 
@@ -74,6 +76,30 @@ def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> 
     }
 
 
+def read_image_bgr(image_path: Path | str) -> np.ndarray | None:
+    """Decode a photograph the way every SIFT extractor does.
+
+    Colour, with EXIF orientation **ignored** (``IMREAD_IGNORE_ORIENTATION``),
+    so the pixels are the stored ones in the stored order and a keypoint or a
+    thumbnail row addresses the same pixel whatever orientation tag the file
+    carries. Returns the BGR array, or ``None`` when the file cannot be read.
+    """
+    return cv2.imread(str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+
+
+def thumbnail_of_bgr(image: np.ndarray) -> np.ndarray:
+    """The ``THUMBNAIL_SIZE`` square RGB thumbnail of a BGR photograph.
+
+    The extractors' resize: ``INTER_AREA`` to the square, stretched, then BGR to
+    RGB. A ``.sift`` thumbnail and a ``.sfmr`` thumbnail row made from the same
+    decode are byte-identical because both come through here.
+    """
+    thumbnail = cv2.resize(
+        image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+    )
+    return cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
+
+
 def _decode_image(image_path: Path):
     """Read, decode, and thumbnail one image.
 
@@ -85,16 +111,11 @@ def _decode_image(image_path: Path):
     failure raises ``SiftExtractionError``, which the caller's FIFO surfaces in
     input order (see ``_stream_sift_with_sfmtool``).
     """
-    image = cv2.imread(
-        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-    )
+    image = read_image_bgr(image_path)
     if image is None:
         raise SiftExtractionError(f"Failed to load image: {image_path}")
     rgb = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    thumbnail = cv2.resize(
-        image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
-    )
-    thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
+    thumbnail = thumbnail_of_bgr(image)
     return image_path, rgb, thumbnail
 
 

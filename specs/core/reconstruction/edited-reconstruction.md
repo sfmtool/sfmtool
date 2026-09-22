@@ -47,7 +47,7 @@ pub struct SfmrReconstruction {
 pub struct ImageTable {
     pub cameras: Vec<CameraIntrinsics>,
     pub images: Vec<SfmrImage>,
-    pub thumbnails_y_x_rgb: Arc<Array4<u8>>,
+    pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
     pub depth_statistics: DepthStatistics,
     pub depth_histogram_counts: Vec<Vec<u32>>,
     pub rig_frame_data: Option<RigFrameData>,
@@ -119,12 +119,21 @@ table is then the same type as the base's point side.
 largest real reconstruction measured (530 674 points, 8.1 million observations,
 500 images, 24 px patch bitmaps) the whole value is 1 354 MB, of which the
 thumbnails and patch bitmaps are 1 189 MB, and a full clone costs 355 ms against
-32 ms for a clone without them. `Arc<Array4<u8>>` for the thumbnails and
-`Option<Arc<Array4<u8>>>` for the bitmaps let a producer that does not change
-them hand the new value its input's pointer. Nothing is ever written through
-either pointer: a producer that changes the bitmaps builds a new array and wraps
-it (see "The sharing rule" below). Reads deref transparently, so a caller writes
-`recon.image_table.thumbnails_y_x_rgb.index_axis(Axis(0), i)` exactly as before.
+32 ms for a clone without them. `Option<Arc<Array4<u8>>>` for both lets a
+producer that does not change them hand the new value its input's pointer.
+Nothing is ever written through either pointer: a producer that changes the
+bitmaps builds a new array and wraps it (see "The sharing rule" below).
+
+**Both heavy columns are optional, and a load never fills one in.** A file may
+carry no thumbnails (format version 11) and no patch bitmaps, and the value then
+holds `None`. Presence is a property of the value, carried from load to save
+unchanged unless an operation changes it deliberately: a reader that synthesised
+a column on load would have the next save write it, and a file dropped to a few
+tens of kilobytes would come back at its full size the first time anything
+touched it. `subset_by_image_indices` builds a column of the kept rows when its
+input has one and keeps `None` otherwise; every other edit shares the input's
+`Option<Arc>`. The demo reconstruction carries none, since it has no
+photographs and a zero column would be the placeholder rows the format forbids.
 
 **The derived indexes belong to the point set even though two of them are sized
 by the image count.** `observation_offsets`, `image_feature_to_point`,
@@ -624,9 +633,10 @@ argument in order to check the hash vectors' lengths.
 **The Python side sees the sharing rule as read-only views.** Every column
 getter on the `SfmrReconstruction` binding hands Python its own copy, so a
 write to the returned array never reaches the value. The one zero-copy getter,
-`thumbnails_y_x_rgb`, is a view of the shared buffer, and it is returned with
-numpy's writeable flag cleared: a write raises, and a caller that wants to edit
-takes `.copy()`. Without that flag a Python write would land in every
+`thumbnails_y_x_rgb`, is a view of the shared buffer (or `None` for a value
+without thumbnails), and it is returned with numpy's writeable flag cleared: a
+write raises, and a caller that wants to edit takes `.copy()`.
+ Without that flag a Python write would land in every
 reconstruction sharing the buffer at once, which is the one thing the rule
 forbids.
 

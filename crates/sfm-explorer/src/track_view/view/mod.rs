@@ -29,6 +29,7 @@ use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::EditedReconstruction;
 
+use crate::display_thumbnails::DisplayThumbnails;
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
@@ -82,8 +83,13 @@ pub struct PointTrackView {
     inverse_depth_z: f32,
     /// Condition number of the triangulation's normal matrix; NaN when undefined.
     condition_number: f32,
-    /// Cached thumbnail textures keyed by image.
+    /// Cached thumbnail textures keyed by image. Only final rows are cached: a
+    /// row still being built from its photograph is drawn as the placeholder
+    /// and asked for again on the next frame.
     thumbnail_textures: HashMap<ImageRef, egui::TextureHandle>,
+    /// The node's display column the rows are drawn from, as the last frame
+    /// was handed it.
+    display: Option<Arc<DisplayThumbnails>>,
     /// The selected point's oriented patch frame (from the stored patch
     /// half-vectors), or None when the reconstruction carries no frame or the
     /// point has no patch. Gates the per-observation "Patch" column.
@@ -146,6 +152,7 @@ impl PointTrackView {
             inverse_depth_z: f32::NAN,
             condition_number: f32::NAN,
             thumbnail_textures: HashMap::new(),
+            display: None,
             patch_frame: None,
             stored_patch_texture: None,
             rendered_patch_textures: HashMap::new(),
@@ -164,6 +171,8 @@ impl PointTrackView {
         ui: &mut egui::Ui,
         edited: &EditedReconstruction,
         recon_id: ReconId,
+        // The node's display thumbnails, which the rows draw.
+        display: Option<&Arc<DisplayThumbnails>>,
         // The selected point's Point ID, minted by the caller.
         point_id: &str,
         selected_point: Option<usize>,
@@ -174,6 +183,7 @@ impl PointTrackView {
         scroll_input: &platform::ScrollInput,
         empty_note: Option<&str>,
     ) -> PointTrackViewResponse {
+        self.display = display.cloned();
         let mut response = PointTrackViewResponse {
             select_image: None,
             reveal_feature: None,

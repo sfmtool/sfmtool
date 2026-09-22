@@ -111,6 +111,59 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     ),
 )
 @click.option(
+    "--drop-thumbnails",
+    is_flag=True,
+    multiple=True,
+    help=(
+        "Discard the per-image thumbnail column, keeping every row. Reads no "
+        "files. --add-thumbnails builds it back from the source photographs."
+    ),
+)
+@click.option(
+    "--drop-patch-bitmaps",
+    is_flag=True,
+    multiple=True,
+    help=(
+        "Discard the per-point patch bitmap column, keeping the patch frames and "
+        "normals so a later step can render onto them."
+    ),
+)
+@click.option(
+    "--add-thumbnails",
+    is_flag=True,
+    multiple=True,
+    help=(
+        "Build the thumbnail column from the source photographs, decoded and "
+        "resized as the SIFT extractors do. An embedded_patches file checks each "
+        "photograph against its recorded image hash; a missing photograph falls "
+        "back to a verified .sift copy, and otherwise fails the step. A no-op "
+        "when thumbnails are present."
+    ),
+)
+@click.option(
+    "--add-patch-bitmaps",
+    is_flag=False,
+    flag_value="",
+    multiple=True,
+    help=(
+        "Render the patch bitmap column at the stored frames and keypoints, "
+        "moving nothing. Optional 'resolution=<R>,sampler=<S>' (defaults 24 and "
+        "bilinear_mip). Requires an embedded_patches reconstruction; reads the "
+        "workspace source images. A no-op when bitmaps are present."
+    ),
+)
+@click.option(
+    "--minimal",
+    is_flag=True,
+    multiple=True,
+    help=(
+        "Write the smallest file that still holds the whole reconstruction: "
+        "--drop-patch-bitmaps --drop-thumbnails at this position, and a save "
+        "with an empty absolute workspace path, no lineage, and tool_options "
+        "holding only this invocation's transforms."
+    ),
+)
+@click.option(
     "--remove-narrow-tracks",
     multiple=True,
     help="Remove points with viewing angle < threshold (e.g., '5deg')",
@@ -276,6 +329,14 @@ def xform(ctx, input_path, output_path, **kwargs):
       --to-embedded-patches [PARAMS]      Convert sift_files → embedded_patches (no photometric adaptation; reads .sift)
 
     \b
+    Heavy columns:
+      --drop-thumbnails                   Discard the per-image thumbnails
+      --drop-patch-bitmaps                Discard the per-point patch bitmaps (frames kept)
+      --add-thumbnails                    Build thumbnails from the source photographs
+      --add-patch-bitmaps [PARAMS]        Render patch bitmaps at the stored frames (reads source images)
+      --minimal                           Drop both, and save minimal metadata (for a file that travels)
+
+    \b
     Alignment:
       --align-to path.sfmr                Align to another reconstruction
       --align-to-input                    Align back to original input
@@ -326,6 +387,15 @@ def xform(ctx, input_path, output_path, **kwargs):
         # Search keypoints into the photometric basin (drops non-registering
         # views), then sharpen the survivors to sub-pixel
         sfm xform in.sfmr out.sfmr --localize-keypoints --refine-keypoints
+
+    \b
+        # The smallest file for a repository, and the same with thumbnails kept
+        sfm xform in.sfmr out.sfmr --minimal
+        sfm xform in.sfmr out.sfmr --minimal --add-thumbnails
+
+    \b
+        # Re-render the patch bitmaps at a different resolution
+        sfm xform in.sfmr out.sfmr --drop-patch-bitmaps --add-patch-bitmaps resolution=32
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
 
@@ -386,6 +456,8 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
             "--localize-keypoints, --to-embedded-patches, "
+            "--drop-thumbnails, --drop-patch-bitmaps, --add-thumbnails, "
+            "--add-patch-bitmaps, --minimal, "
             "--align-to, --align-to-input"
         )
 
@@ -402,6 +474,12 @@ def xform(ctx, input_path, output_path, **kwargs):
         )
 
         transform_descriptions = [t.description() for t in transforms]
+        # --minimal anywhere in the chain marks the save: the save rewrites the
+        # metadata after every step has run, so clearing it at the step's own
+        # position would be undone.
+        from ..xform import MinimalTransform
+
+        minimal = any(isinstance(t, MinimalTransform) for t in transforms)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         click.echo(f"\nWriting transformed reconstruction to: {output_path}")
@@ -409,6 +487,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             str(output_path),
             operation="xform",
             tool_options={"transforms": transform_descriptions},
+            minimal=minimal,
         )
 
         click.echo("\nTransformed reconstruction saved to:")

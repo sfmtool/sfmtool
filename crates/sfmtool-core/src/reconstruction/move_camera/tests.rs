@@ -120,12 +120,6 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
             )
         })
         .collect();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
-        n,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        3,
-    )));
     recon.image_table.depth_statistics.images.truncate(n);
     recon.image_table.depth_histogram_counts.truncate(n);
 

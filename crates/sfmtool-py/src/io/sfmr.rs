@@ -79,7 +79,8 @@ where
 ///   patch_u_halfvec_xyz, patch_v_halfvec_xyz, patch_bitmaps_y_x_rgba,
 ///   image_indexes, feature_indexes, keypoints_xy, observation_confidence,
 ///   point_indexes, observation_counts, observed_depth_histogram_counts,
-///   thumbnails_y_x_rgb (numpy arrays).
+///   thumbnails_y_x_rgb (numpy arrays; `thumbnails_y_x_rgb` is `None` for a
+///   file without thumbnails).
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -225,7 +226,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     )?;
     dict.set_item(
         "thumbnails_y_x_rgb",
-        data.thumbnails_y_x_rgb.into_pyarray(py),
+        data.thumbnails_y_x_rgb.map(|t| t.into_pyarray(py)),
     )?;
 
     // Rig/frame data (optional)
@@ -314,8 +315,15 @@ pub(crate) fn parse_sfmr_data_from_dict(
         Some(v) => Some(py_to_u128_bytes(&v)?),
         None => None,
     };
-    let thumbnails_y_x_rgb: PyReadonlyArray4<u8> =
-        get_item(data, "thumbnails_y_x_rgb")?.extract()?;
+    let thumbnails_y_x_rgb = match get_optional_item(data, "thumbnails_y_x_rgb")? {
+        Some(v) => Some(
+            v.extract::<PyReadonlyArray4<u8>>()?
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+        ),
+        None => None,
+    };
 
     // Depth-related fields are only required when skipping recomputation.
     // Normals are optional: a missing or `None` `normals_xyz` means no normals.
@@ -440,10 +448,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         feature_tool_hashes,
         sift_content_hashes,
         image_file_hashes,
-        thumbnails_y_x_rgb: thumbnails_y_x_rgb
-            .as_array()
-            .as_standard_layout()
-            .into_owned(),
+        thumbnails_y_x_rgb,
         positions_xyzw: positions_xyzw.as_array().as_standard_layout().into_owned(),
         colors_rgb: colors_rgb.as_array().as_standard_layout().into_owned(),
         reprojection_errors: reprojection_errors

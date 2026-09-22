@@ -4,8 +4,9 @@
 //! RGB → RGBA expansion for egui texture uploads.
 //!
 //! egui wants `ColorImage` (RGBA); every image source the viewer holds is
-//! 3-channel RGB — the embedded thumbnails in
-//! [`ImageTable::thumbnails_y_x_rgb`] and the decoded full-resolution
+//! 3-channel RGB: the display thumbnails (a file's
+//! [`ImageTable::thumbnails_y_x_rgb`], or rows built from its photographs) and
+//! the decoded full-resolution
 //! images in [`crate::state::AppState`]'s full-res cache. Three panels used to expand it
 //! themselves, and the copies disagreed: two derived the output extent from the
 //! data while the third hard-coded 128, which is the thumbnail edge the `.sfmr`

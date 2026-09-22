@@ -232,6 +232,14 @@ def _merge_images(
     merged_rig_indexes = []
 
     has_rig_data = any(r.rig_frame_data is not None for r in reconstructions)
+    # The merged column is whole or absent: it exists only when every input
+    # carries one, and is never synthesised for an input that does not.
+    has_thumbnails = all(r.thumbnails_y_x_rgb is not None for r in reconstructions)
+    if not has_thumbnails:
+        click.echo(
+            "  Not every input carries thumbnails, so the merged reconstruction "
+            "has none (`sfm xform --add-thumbnails` builds them)"
+        )
 
     image_mapping = {}
     name_to_merged_idx = {}
@@ -265,7 +273,8 @@ def _merge_images(
                 merged_translations.append(r_trans[old_idx])
                 merged_feature_tool_hashes.append(r_ft_hashes[old_idx])
                 merged_sift_hashes.append(r_sift_hashes[old_idx])
-                merged_thumbnails.append(r_thumbs[old_idx])
+                if has_thumbnails:
+                    merged_thumbnails.append(r_thumbs[old_idx])
 
                 if rfd is not None:
                     merged_image_sensor_indexes.append(
@@ -288,7 +297,9 @@ def _merge_images(
         "translations": np.array(merged_translations),
         "feature_tool_hashes": merged_feature_tool_hashes,
         "sift_hashes": merged_sift_hashes,
-        "thumbnails_y_x_rgb": np.array(merged_thumbnails, dtype=np.uint8),
+        "thumbnails_y_x_rgb": (
+            np.array(merged_thumbnails, dtype=np.uint8) if has_thumbnails else None
+        ),
     }
 
     if has_rig_data:
@@ -333,8 +344,10 @@ def _create_merged_reconstruction(
         translations=np.ascontiguousarray(images["translations"], dtype=np.float64),
         feature_tool_hashes=images["feature_tool_hashes"],
         sift_content_hashes=images["sift_hashes"],
-        thumbnails_y_x_rgb=np.ascontiguousarray(
-            images["thumbnails_y_x_rgb"], dtype=np.uint8
+        thumbnails_y_x_rgb=(
+            None
+            if images["thumbnails_y_x_rgb"] is None
+            else np.ascontiguousarray(images["thumbnails_y_x_rgb"], dtype=np.uint8)
         ),
         positions=np.ascontiguousarray(points["positions"], dtype=np.float64),
         colors=np.ascontiguousarray(points["colors"], dtype=np.uint8),

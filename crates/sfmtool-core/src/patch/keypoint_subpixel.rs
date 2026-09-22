@@ -857,5 +857,108 @@ pub fn refine_patch_cloud_keypoints(
     out
 }
 
+/// Fuse `patch`'s RGBA representative from `views` at `keypoints`, moving
+/// nothing. `None` when fewer than two views render in frame.
+///
+/// This is the one place a representative is rendered for a patch whose
+/// placement and keypoints are settled: the sub-pixel kernel's own fuse
+/// ([`KeypointSubpixelParams::render_bitmaps`]) run with no Gauss-Newton step
+/// and a single sweep, so the keypoints come out where they went in and the
+/// pass only renders and blends. `keypoints` is parallel to `view_set`, in
+/// source-image pixels. Of `params`, `resolution`, `window`, `sampler` and
+/// `robust_iters` shape the render; the solve knobs are overridden.
+///
+/// # Panics
+///
+/// Panics if `keypoints.len() != view_set.len()` or a view index is out of
+/// range for `views`.
+pub fn fuse_patch_bitmap(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    keypoints: &[[f64; 2]],
+    params: &KeypointSubpixelParams,
+) -> Option<Vec<u8>> {
+    assert_eq!(
+        keypoints.len(),
+        view_set.len(),
+        "keypoints must be parallel to view_set"
+    );
+    let seeds: Vec<Option<[f64; 2]>> = keypoints.iter().map(|&k| Some(k)).collect();
+    let params = KeypointSubpixelParams {
+        // Nothing moves: the keypoints are settled, and this pass is the fuse.
+        max_gn_steps: 0,
+        max_outer_sweeps: 1,
+        render_bitmaps: true,
+        ..params.clone()
+    };
+    refine_patch_keypoints(patch, views, view_set, Some(&seeds), &params).representative
+}
+
+/// [`fuse_patch_bitmap`] over every patch of `cloud`, parallel across patches
+/// (rayon), each fused from its point's track in `recon` at the stored
+/// per-observation keypoints.
+///
+/// Returns the `(P, R, R, 4)` bitmap column for `recon`'s `P` points, `R` being
+/// `params.resolution` (at least 2). A point with no patch in the cloud, or
+/// whose fuse returns `None` (fewer than two views render in frame), gets a
+/// zero row, as the sub-pixel refiner gives it. `done`, when given, is bumped
+/// once per patch fused, for a caller polling progress from another thread.
+///
+/// # Panics
+///
+/// Panics if `recon` carries no inline keypoints (`keypoints_xy`), if a patch's
+/// point index is out of range for `recon`, or a track's image index is out of
+/// range for `views`.
+pub fn fuse_patch_cloud_bitmaps(
+    cloud: &PatchCloud,
+    recon: &crate::SfmrReconstruction,
+    views: &[ProjectedImage<'_>],
+    params: &KeypointSubpixelParams,
+    done: Option<&std::sync::atomic::AtomicUsize>,
+) -> ndarray::Array4<u8> {
+    let keypoints_xy = recon
+        .keypoints_xy()
+        .expect("fuse_patch_cloud_bitmaps needs a reconstruction with inline keypoints");
+    let resolution = params.resolution.max(2) as usize;
+    let point_count = recon.point_count();
+    let offsets = &recon.point_set.observation_offsets;
+    let tracks = &recon.point_set.tracks;
+    let fused: Vec<(usize, Option<Vec<u8>>)> = cloud
+        .patches
+        .par_iter()
+        .zip(cloud.point_indexes.par_iter())
+        .map(|(patch, &pid)| {
+            let p = pid as usize;
+            let rows = offsets[p]..offsets[p + 1];
+            let view_set: Vec<u32> = tracks[rows.clone()].iter().map(|o| o.image_index).collect();
+            let keypoints: Vec<[f64; 2]> = rows
+                .map(|j| {
+                    [
+                        f64::from(keypoints_xy[[j, 0]]),
+                        f64::from(keypoints_xy[[j, 1]]),
+                    ]
+                })
+                .collect();
+            let bitmap = fuse_patch_bitmap(patch, views, &view_set, &keypoints, params);
+            if let Some(counter) = done {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            (p, bitmap)
+        })
+        .collect();
+    let mut column = ndarray::Array4::<u8>::zeros((point_count, resolution, resolution, 4));
+    let row_len = resolution * resolution * 4;
+    let flat = column
+        .as_slice_mut()
+        .expect("a freshly allocated array is contiguous");
+    for (p, bitmap) in fused {
+        if let Some(bitmap) = bitmap {
+            flat[p * row_len..(p + 1) * row_len].copy_from_slice(&bitmap);
+        }
+    }
+    column
+}
+
 #[cfg(test)]
 mod tests;

@@ -59,6 +59,47 @@ def _check_integrity(valid: bool, errors: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sfmr_heavy_columns(path: Path) -> tuple[bool, int | None]:
+    """Whether a `.sfmr` carries thumbnails, and its patch bitmap edge.
+
+    Read off the archive's entry names, which pin both (the thumbnail entry is
+    present or absent, and the bitmap entry is named for its `R`), so nothing is
+    decompressed.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+    has_thumbnails = any(n.startswith("images/thumbnails_y_x_rgb.") for n in names)
+    resolution = None
+    for name in names:
+        if name.startswith("points3d/patch_bitmaps_y_x_rgba."):
+            # points3d/patch_bitmaps_y_x_rgba.{P}.{R}.{R}.4.uint8.zst
+            resolution = int(name.split(".")[2])
+    return has_thumbnails, resolution
+
+
+def _heavy_column_rows(
+    has_thumbnails: bool, bitmap_resolution: int | None
+) -> list[tuple[str, str]]:
+    """The two rows that say whether a viewer will need the photographs."""
+    bitmaps = (
+        f"{bitmap_resolution}x{bitmap_resolution}"
+        if bitmap_resolution is not None
+        else "no"
+    )
+    return [
+        ("Thumbnails", "yes" if has_thumbnails else "no"),
+        ("Patch bitmaps", bitmaps),
+    ]
+
+
+def _absolute_path_text(workspace_info: dict) -> str:
+    """A recorded absolute workspace path, or what an empty one means."""
+    absolute = workspace_info.get("absolute_path", "unknown")
+    return absolute if absolute else "(none recorded)"
+
+
 def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sfmr` reconstruction file."""
     from .._sfmtool.io import read_sfmr_metadata, verify_sfmr
@@ -88,6 +129,7 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
         ("3D points", points_value),
         ("Observations", f"{meta['observation_count']:,}"),
     ]
+    rows.extend(_heavy_column_rows(*_sfmr_heavy_columns(path)))
     if meta.get("rig_count"):
         rows.append(
             (
@@ -413,7 +455,7 @@ def print_reconstruction_summary(
     # Workspace
     workspace_info = metadata.get("workspace", {})
     click.echo("\nWorkspace:")
-    click.echo(f"  Absolute path: {workspace_info.get('absolute_path', 'unknown')}")
+    click.echo(f"  Absolute path: {_absolute_path_text(workspace_info)}")
     relative_path = workspace_info.get("relative_path", "unknown")
     click.echo(f"  Relative path: {relative_path}")
     click.echo(f"  Resolved workspace: {recon.workspace_dir}")
@@ -423,6 +465,10 @@ def print_reconstruction_summary(
     # Counts
     click.echo("\nReconstruction summary:")
     click.echo(f"  Images: {recon.image_count}")
+    for label, value in _heavy_column_rows(
+        recon.thumbnails_y_x_rgb is not None, recon.patch_bitmap_resolution
+    ):
+        click.echo(f"  {label}: {value}")
 
     # Image path summarization (optional dependency)
     try:

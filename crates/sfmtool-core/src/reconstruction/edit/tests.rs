@@ -205,3 +205,34 @@ fn subset_keeping_all_images_carries_the_patch_frame() {
         recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap()
     );
 }
+
+#[test]
+fn subset_of_a_value_without_thumbnails_has_none() {
+    let recon = SfmrReconstruction::demo(4);
+    assert!(recon.image_table.thumbnails_y_x_rgb.is_none());
+    let out = recon.subset_by_image_indices(&[2, 0], false).unwrap();
+    assert!(out.image_table.thumbnails_y_x_rgb.is_none());
+}
+
+#[test]
+fn subset_keeps_the_thumbnail_rows_of_the_kept_images_in_order() {
+    let mut recon = SfmrReconstruction::demo(4);
+    let n = recon.image_table.images.len();
+    let edge = crate::THUMBNAIL_SIZE;
+    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::<u8>::from_shape_fn(
+        (n, edge, edge, 3),
+        |(i, y, x, c)| ((i * 41 + y + x * 2 + c) % 256) as u8,
+    )));
+    let out = recon.subset_by_image_indices(&[2, 0], false).unwrap();
+    let before = recon.image_table.thumbnails_y_x_rgb.as_ref().unwrap();
+    let after = out.image_table.thumbnails_y_x_rgb.as_ref().unwrap();
+    assert_eq!(after.shape(), [2, edge, edge, 3]);
+    assert_eq!(
+        after.index_axis(ndarray::Axis(0), 0),
+        before.index_axis(ndarray::Axis(0), 2)
+    );
+    assert_eq!(
+        after.index_axis(ndarray::Axis(0), 1),
+        before.index_axis(ndarray::Axis(0), 0)
+    );
+}

@@ -479,21 +479,30 @@ pub(crate) fn clone_with_changes(
                     new_image_file_hashes = Some(py_to_u128_bytes(&value)?);
                 }
             }
+            "thumbnails_y_x_rgb" if value.is_none() => {
+                // Drop the column: every row of everything else is kept.
+                recon.image_table.thumbnails_y_x_rgb = None;
+            }
             "thumbnails_y_x_rgb" => {
                 // The `$dtype` slot also carries the shape suffix here so the
                 // rendered message reproduces the legacy thumbnails wording.
+                let s = sfmtool_core::THUMBNAIL_SIZE;
                 let arr = extract_ndarray!(
                     value,
                     "thumbnails_y_x_rgb",
                     numpy::PyReadonlyArray4<u8>,
                     "a 4D contiguous ndarray",
-                    format!(
-                        "uint8 and shape (N, {s}, {s}, 3)",
-                        s = sfmtool_core::THUMBNAIL_SIZE
-                    )
+                    format!("uint8 and shape (N, {s}, {s}, 3)")
                 )?;
+                let shape = arr.shape();
+                if shape[1] != s || shape[2] != s || shape[3] != 3 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'thumbnails_y_x_rgb' must have shape \
+                         (N, {s}, {s}, 3), got shape {shape:?}"
+                    )));
+                }
                 recon.image_table.thumbnails_y_x_rgb =
-                    Arc::new(arr.as_array().as_standard_layout().into_owned());
+                    Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
             }
             "rig_frame_data" => {
                 if value.is_none() {

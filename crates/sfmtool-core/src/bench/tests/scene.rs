@@ -201,12 +201,6 @@ pub(super) fn fixture_of(
             ),
         })
         .collect();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
-        n,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        sfmtool_sfmr_format::THUMBNAIL_SIZE,
-        3,
-    )));
     // One row per image either way: `resize` covers a scene with fewer cameras
     // than the demo value it is built on and one with more.
     let stats_row = recon.image_table.depth_statistics.images[0].clone();

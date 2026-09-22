@@ -10,10 +10,8 @@
 //! a data *generator*, not part of the data model.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use ndarray::Array4;
 
 use sfmtool_sfmr_format::{
     ContentHash, DepthStatistics, ImageDepthStats, ObservedDepthStats, SfmrMetadata,
@@ -211,7 +209,9 @@ impl SfmrReconstruction {
             image_table: ImageTable {
                 cameras,
                 images,
-                thumbnails_y_x_rgb: Arc::new(Array4::zeros((num_images, 128, 128, 3))),
+                // Demo data has no photographs, and a zero column would be the
+                // placeholder rows the format forbids.
+                thumbnails_y_x_rgb: None,
                 depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: None,

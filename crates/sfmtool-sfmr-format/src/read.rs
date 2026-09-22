@@ -222,17 +222,23 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         (Some(feature_tool_hashes), Some(sift_content_hashes), None)
     };
 
-    // Thumbnails
-    let thumbnails_vec: Vec<u8> = read_binary_array(
-        &mut archive,
-        &entries::images_thumbnails_y_x_rgb(image_count),
-        image_count * THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
-    )?;
-    let thumbnails_y_x_rgb = Array4::from_shape_vec(
-        (image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
-        thumbnails_vec,
-    )
-    .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?;
+    // Thumbnails, optional from version 11 behind `has_thumbnails`.
+    let thumbnails_y_x_rgb = if images_meta_has_thumbnails(&images_meta) {
+        let thumbnails_vec: Vec<u8> = read_binary_array(
+            &mut archive,
+            &entries::images_thumbnails_y_x_rgb(image_count),
+            image_count * THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
+        )?;
+        Some(
+            Array4::from_shape_vec(
+                (image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+                thumbnails_vec,
+            )
+            .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     // Depth statistics, under `images/` before version 10 and `derived/` from
     // version 10 on.
@@ -658,12 +664,27 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     })
 }
 
+/// Whether `images/metadata.json` says the thumbnail entry is present.
+///
+/// A missing `has_thumbnails` key reads as `true`: every file of version 10
+/// or earlier carries no key and always carries the entry, and a version 11
+/// writer always writes the key.
+pub(crate) fn images_meta_has_thumbnails(images_meta: &serde_json::Value) -> bool {
+    images_meta
+        .get("has_thumbnails")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
 /// Resolve the workspace directory for a `.sfmr` file.
 ///
 /// Strategy (from the spec):
 /// 1. Try `workspace.relative_path` from the `.sfmr` file's directory
 /// 2. Fall back to `workspace.absolute_path`
 /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
+///
+/// An empty `relative_path` or `absolute_path` means none was recorded, and
+/// its step is skipped.
 pub fn resolve_workspace_dir(
     sfmr_path: &Path,
     metadata: &SfmrMetadata,

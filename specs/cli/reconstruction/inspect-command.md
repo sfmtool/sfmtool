@@ -169,7 +169,12 @@ The default output is a compact label/value block. The fields per type:
   3D point / observation counts, rig counts (if present), integrity. When the
   reconstruction holds any points at infinity (`w == 0`), the 3D point count is
   annotated with how many are at infinity (e.g. `206,413  (105,773 at
-  infinity)`), read from the format's stored `infinity_point_count`.
+  infinity)`), read from the format's stored `infinity_point_count`. Two lines
+  say whether the file carries its heavy optional columns, since a file's size
+  and whether a viewer will need the photographs both turn on them:
+  `Thumbnails: yes` or `no`, and `Patch bitmaps: 24x24` (the stored
+  resolution) or `no`. Both are read off the archive's entry names, which pin
+  them, so nothing is decompressed.
 - **`.sift`** — image name and dimensions, feature count, feature tool,
   integrity.
 - **`.matches`** — format version, matching method (tool + version), image /
@@ -188,7 +193,11 @@ The default output is a compact label/value block. The fields per type:
   error, per-point depth-reliability diagnostics (inverse-depth z-score and
   condition number), observation statistics, nearest-neighbor distances. The
   3D point count carries the same `(N at infinity)` annotation as the default
-  summary when any points at infinity are present.
+  summary when any points at infinity are present, and the `Thumbnails` and
+  `Patch bitmaps` lines appear under the reconstruction summary. An empty
+  absolute workspace path, which means none was recorded (as `sfm xform
+  --minimal` writes), prints as `(none recorded)`.
+
 - **`.sift`** — adds image file size and hashes, feature tool and content
   hashes, feature tool options, and the top 5 features by size.
 - **`.matches`** — adds timestamp, workspace, matching options, matches-per-pair

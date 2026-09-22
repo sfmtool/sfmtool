@@ -29,9 +29,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
 
+use crate::display_thumbnails::DisplayThumbnails;
 use crate::document::History;
 
 /// Source of [`ReconId`] values. Monotonic and never reset, so ids are unique
@@ -312,11 +314,20 @@ pub struct SceneNode {
     /// memory nor the `.sfmr` on disk. Baking a transform into a file stays
     /// `sfm xform`'s job.
     pub transform: Se3Transform,
+
+    /// The thumbnails this node draws, or `None` when it has none to draw.
+    ///
+    /// The node's, not the value's: the file's own column when it carries
+    /// one, otherwise rows built from the photographs, keyed by image name so
+    /// one column serves every version. Never written into an `ImageTable`, so
+    /// nothing drawn here can reach a save. See [`crate::display_thumbnails`].
+    pub display_thumbnails: Option<Arc<DisplayThumbnails>>,
 }
 
 impl SceneNode {
     /// A node for `recon`, labeled `label` and sourced from `path`.
     fn new(label: String, path: Option<PathBuf>, recon: SfmrReconstruction) -> Self {
+        let display_thumbnails = DisplayThumbnails::embedded(&recon);
         let history = History::new(recon, format!("Opened {label}"));
         Self {
             id: ReconId::next(),
@@ -331,6 +342,7 @@ impl SceneNode {
             show_points_at_infinity: true,
             tint: NodeTint::Original,
             transform: Se3Transform::identity(),
+            display_thumbnails,
         }
     }
 

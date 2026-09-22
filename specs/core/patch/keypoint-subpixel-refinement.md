@@ -292,7 +292,23 @@ round). Two properties matter to consumers:
   `sfm embed-patches` **drops** such points instead of keeping them with an
   all-black bitmap.
 
+**Fusing without refining.** `fuse_patch_bitmap(patch, views, view_set,
+keypoints, params)` in
+[keypoint_subpixel.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs)
+is the one place a representative is rendered for a patch whose placement and
+keypoints are settled: the kernel above with `max_gn_steps = 0`,
+`max_outer_sweeps = 1` and `render_bitmaps = true`, seeded at `keypoints`, so
+nothing moves and the pass only renders and blends. It returns `None` when fewer
+than two views render in frame. `fuse_patch_cloud_bitmaps(cloud, recon, views,
+params, done)` is its whole-cloud form, parallel over points, fusing each patch
+from its point's whole track at the reconstruction's stored keypoints and
+returning the `(P, R, R, 4)` column with a zero row for a point that fused
+nothing; it is bound as `PatchCloud.render_bitmaps` and is what `sfm xform
+--add-patch-bitmaps` runs. The bench commit (`bench::fit::fuse_bitmap`) calls
+`fuse_patch_bitmap` for one track.
+
 ## Validation
+
 
 It deliberately produces a **better** sub-pixel result than a parabolic / discrete
 estimate, so it is *not* validated by equivalence to one:

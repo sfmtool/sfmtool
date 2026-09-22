@@ -195,7 +195,7 @@ reconstruction.sfmr (ZIP archive)
 │   ├── feature_tool_hashes.{N}.uint128.zst    # (sift_files only) feature extraction tool identification
 │   ├── sift_content_hashes.{N}.uint128.zst    # (sift_files only) feature file content verification
 │   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity (version 4+)
-│   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # 128x128 image thumbnails (RGB)
+│   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # (Optional, v11+) 128x128 image thumbnails (RGB)
 │   └── metadata.json.zst                      # Image metadata
 ├── derived/                                   # Recomputable from the sections above (v10+)
 │   ├── depth_statistics.json.zst              # Per-image depth stats
@@ -307,8 +307,10 @@ JSON structure describing the reconstruction:
 - `tool_version`: Version string of the tool
 - `tool_options`: Tool-specific configuration (key-value pairs, required, use empty object `{}` if none)
 - `workspace`: SfM workspace information (embeds `.sfm-workspace.json` content)
-  - `absolute_path`: Absolute path to workspace directory (at time of save)
-  - `relative_path`: Path from `.sfmr` file's directory to workspace (POSIX format)
+  - `absolute_path`: Absolute path to workspace directory (at time of save), or
+    empty when none was recorded
+  - `relative_path`: Path from `.sfmr` file's directory to workspace (POSIX
+    format), or empty when none was recorded
   - `contents`: Embedded workspace configuration (mirrors `.sfm-workspace.json` content)
     - `feature_tool`: Feature extraction tool used in workspace (e.g. `"colmap"`, `"opencv"`)
     - `feature_type`: Feature type (e.g. `"sift"`)
@@ -353,6 +355,12 @@ The workspace is the root directory for an SfM project, containing:
    - Fall back to `workspace.absolute_path` if relative path fails
    - Fall back to the workspace containing the `.sfmr` file if both fail
 2. All image paths are then resolved relative to the workspace directory
+
+**An empty `absolute_path` means none was recorded**, and resolution skips that
+step; the same holds for an empty `relative_path`. A file meant to travel
+between machines, such as one checked into a repository, records
+`relative_path` and an empty `absolute_path`, so that its hashed metadata holds
+nothing about the machine it was written on.
 
 **Example**:
 ```
@@ -513,7 +521,7 @@ checks `derived/` before images but excludes that digest from the overall fold.
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
+- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
 - `derived_xxh128`: (Version 10+) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`.
@@ -833,9 +841,24 @@ must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sen
 ```json
 {
   "image_count": 18,
+  "has_thumbnails": true,
   "thumbnail_size": 128
 }
 ```
+
+- `image_count`: The number of images, which must equal the top-level
+  `image_count`.
+- `has_thumbnails`: (version 11+) Whether
+  `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` is present. A version 11
+  writer always writes the key, `true` or `false`. A file of version 10 or
+  earlier carries no key and always carries the entry, so a missing key reads as
+  `true`. A missing key means the same thing in every version. This is the
+  opposite default to the flags in `points3d/metadata.json`, where a missing
+  flag means absent, and for the same reason: a missing key reads as what every
+  file written before the key existed actually holds.
+- `thumbnail_size`: `128` when `has_thumbnails` is `true`, and `null` when it is
+  `false`. It restates the edge fixed by the entry name rather than
+  parameterising it (see below).
 
 #### `images/names.json.zst`
 
@@ -924,9 +947,10 @@ that substitutes for the `.sift`-mediated link when there is no `.sift`:
   the hash remains reachable through `sift_content_hashes` → `.sift` →
   `image_file_xxh128`, so it is absent there.
 
-#### `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst`
+#### `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst` (Optional from version 11)
 
-Downscaled preview thumbnails for each image, embedded directly in the file:
+Downscaled preview thumbnails for each image, embedded directly in the file.
+Present exactly when `images/metadata.json`'s `has_thumbnails` is `true`:
 
 - **Shape**: `(N, 128, 128, 3)` where N = image_count
 - **Data type**: `uint8` (little-endian)
@@ -938,8 +962,27 @@ Downscaled preview thumbnails for each image, embedded directly in the file:
   sfmtool extractors, and `sfm undistort`) use it. (This line previously read
   "Bilinear interpolation (triangle filter)", which no producer has ever used;
   `specs/formats/sift-file-format.md` had it right.)
-- **Purpose**: Enables instant thumbnail display in viewers without requiring access to the workspace source images
-- **Source**: Copied from the `thumbnail_y_x_rgb.128.128.3.uint8.zst` in each image's `.sift` file during `.sfmr` creation, avoiding re-reading and re-downscaling the source images
+- **Purpose**: In a file that carries the column, enables instant thumbnail display in viewers without requiring access to the workspace source images. A file that omits it has traded that convenience for size.
+- **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above, which gives the same bytes the `.sift` holds.
+
+What the column's presence asserts:
+
+- **The column is whole or absent.** There is no per-image presence. A writer
+  either stores a row for every image or stores no entry at all.
+- **A present row is a downscale of the image it names.** Row `i` is the source
+  photograph `images[i]` resized to 128 x 128 by area averaging, stretched to
+  the square. A writer that cannot produce that row for some image (the
+  photograph is missing, or cannot be decoded) writes no entry. It never stores
+  a placeholder, because a flat or zero row in a present column would assert
+  that the photograph looks like that.
+- **Absence asserts nothing about the images.** A file without thumbnails is a
+  complete reconstruction. A consumer that wants previews builds them from the
+  photographs, which the workspace-relative `images/names` locate.
+
+The thumbnails are part of the reconstruction's identity (`content_xxh128`),
+not of the unidentifying `derived/` section: `derived/` holds values
+recomputable from the other sections of the file, and thumbnails are
+recomputable only from files outside it.
 
 The thumbnail edge is **fixed by the format at 128**, not a per-file parameter.
 It is part of the entry's own name
@@ -2079,9 +2122,30 @@ All extensions should:
 
 ## Versioning and Migration
 
-The format spans ten versions (`1` to `10`), all valid; each extends the previous,
-and how an older file maps to the current model is given below. Version 10 is the
-current format version: a reader accepts any version up to it.
+The format spans eleven versions (`1` to `11`), all valid; each extends the
+previous, and how an older file maps to the current model is given below.
+Version 11 is the current format version: a reader accepts any version up to
+it.
+
+A conforming writer always writes the current version. It does not choose its
+version by which optional columns a file carries: every optional column (normals
+in 3, observation confidence in 6, constraints in 7, thumbnails in 11) was
+introduced this way, and a writer that picked its version by content would make
+"which version is this file" a question about its columns.
+
+### Version 10 → Version 11
+
+| Change | Detail |
+|---|---|
+| `images/metadata.json` `has_thumbnails` | New key, always written: whether `images/thumbnails_y_x_rgb` is present. Rides inside `images/metadata.json`, which is already hashed, so no hash slot changes. |
+| `images/metadata.json` `thumbnail_size` | `null` when `has_thumbnails` is `false`. |
+| `images/thumbnails_y_x_rgb` | **Optional.** Absent when `has_thumbnails` is `false`, and then not part of `images_xxh128`. |
+
+Migration is mechanical and lossless in both directions. A version 10 file
+reads as `has_thumbnails: true`; a version 11 file that carries thumbnails is
+byte-identical in the images section to the version 10 file it came from apart
+from the added `true` flag. A version 11 file without thumbnails has no version
+10 equivalent until thumbnails are added back.
 
 ### Version 9 → Version 10
 
@@ -2223,6 +2287,10 @@ camera flip and leaves every camera facing backwards, putting every point behind
 its camera.
 
 ## Version History
+
+- **Version 11**: `images/thumbnails_y_x_rgb` becomes optional, flagged by
+  `has_thumbnails` in `images/metadata.json`; a version 10 or earlier file
+  reads as having thumbnails.
 
 - **Version 9**: Optional top-level `lineage`: the contents this
   reconstruction descends from, each with a composed map from its points onto

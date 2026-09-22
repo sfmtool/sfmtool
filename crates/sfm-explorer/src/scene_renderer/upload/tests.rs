@@ -108,12 +108,20 @@ fn device() -> (wgpu::Device, wgpu::Queue) {
     device_with_limits(wgpu::Limits::default())
 }
 
-/// `SfmrReconstruction::demo` gives 8 pinhole images, `n` finite points, two
-/// observations per point, and zeroed 128×128 thumbnails.
+/// `SfmrReconstruction::demo` gives 8 pinhole images, `n` finite points and two
+/// observations per point; [`demo`] adds a 128×128 thumbnail column.
 const DEMO_IMAGES: u32 = 8;
 
+/// The demo reconstruction carrying a thumbnail column, as a file with
+/// thumbnails does. The demo itself carries none: it has no photographs.
 fn demo(points: usize) -> SfmrReconstruction {
-    SfmrReconstruction::demo(points)
+    let mut recon = SfmrReconstruction::demo(points);
+    let n = recon.image_table.images.len();
+    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_shape_fn(
+        (n, 128, 128, 3),
+        |(i, y, x, c)| ((i * 29 + y + x + c) % 256) as u8,
+    )));
+    recon
 }
 
 /// A reconstruction wrapped as a version with no edits, for the reads that go
@@ -330,7 +338,7 @@ fn upload_frustums_builds_pinhole_image_quads_once_thumbnails_exist() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     let b = bundle(&r);
@@ -347,7 +355,7 @@ fn upload_frustums_tessellates_fisheye_cameras() {
     let recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     // n×n grid: 4 side edges + 4 boundary walks of (n-1) segments each.
@@ -369,7 +377,7 @@ fn upload_frustums_tessellates_distorted_cameras() {
     let recon = with_camera_model(demo(16), radial_distorted());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     let n = DISTORTION_SUBDIVISIONS + 1;
@@ -391,7 +399,7 @@ fn upload_frustums_replaces_quad_buffers_when_the_camera_model_changes() {
     let fisheye_recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &fisheye_recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &fisheye_recon, None, &SILENT);
     r.upload_frustums(&device, RECON, &fisheye_recon, 1.0, 1.0);
     assert!(bundle(&r).distorted_quad_index_count > 0);
 
@@ -448,7 +456,7 @@ fn upload_thumbnails_packs_a_square_ish_atlas_grid() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
 
     // cols = ceil(sqrt(8)) = 3, then rows = ceil(8/3) = 3.
     let b = bundle(&r);
@@ -474,7 +482,7 @@ fn upload_thumbnails_clamps_to_the_gpu_texture_limits() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(b.atlas_cols, 2);
@@ -496,10 +504,10 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
     let images = 25;
     let template = recon.image_table.images[0].clone();
     recon.image_table.images = vec![template; images];
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((images, 128, 128, 3)));
+    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((images, 128, 128, 3))));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
 
     // sqrt would ask for 5 columns, but a page is only 4 cells wide — the
     // texture-dimension budget is what caps the grid in practice. The
@@ -519,10 +527,10 @@ fn upload_thumbnails_skips_an_imageless_reconstruction() {
     let (device, queue) = device();
     let mut recon = demo(8);
     recon.image_table.images.clear();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((0, 128, 128, 3)));
+    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((0, 128, 128, 3))));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
 
     // Nothing to pack, so not even a bundle is created for it.
     assert!(r
@@ -670,10 +678,10 @@ fn two_nodes_upload_into_two_independent_bundles() {
     let first = demo(12);
     let second = with_camera_model(demo(30), fisheye());
     r.upload_points(&device, RECON, &first, &SILENT);
-    r.upload_thumbnails(&device, &queue, RECON, &first, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &first, None, &SILENT);
     r.upload_frustums(&device, RECON, &first, 1.0, 1.0);
     r.upload_points(&device, OTHER, &second, &SILENT);
-    r.upload_thumbnails(&device, &queue, OTHER, &second, &SILENT);
+    r.upload_thumbnails(&device, &queue, OTHER, &second, None, &SILENT);
     r.upload_frustums(&device, OTHER, &second, 1.0, 1.0);
 
     assert_eq!(r.recons.len(), 2);
@@ -1665,7 +1673,7 @@ fn sync(
     let uploaded = renderer.base_changed(id, &base);
     if uploaded {
         renderer.upload_points(device, id, &base, &SILENT);
-        renderer.upload_thumbnails(device, queue, id, &base, &SILENT);
+        renderer.upload_thumbnails(device, queue, id, &base, None, &SILENT);
         renderer.upload_patches(device, queue, id, &base, &SILENT);
         renderer.set_uploaded_base(id, base);
     }
@@ -2317,14 +2325,14 @@ fn a_new_base_keeps_the_thumbnail_atlas_when_the_images_are_the_same() {
     let before = demo(8);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &before, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &before, None, &SILENT);
     let atlas = bundle(&r)
         .thumbnail_texture
         .clone()
         .expect("the demo carries thumbnails");
 
     let after = with_points_moved(before.clone());
-    r.upload_thumbnails(&device, &queue, RECON, &after, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &after, None, &SILENT);
 
     assert_eq!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
@@ -2339,7 +2347,7 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
     let before = demo(8);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &before, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &before, None, &SILENT);
     let atlas = bundle(&r).thumbnail_texture.clone().unwrap();
 
     // What `delete_image` hands over: a shorter table with its own thumbnails.
@@ -2348,10 +2356,12 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
     let kept = after
         .image_table
         .thumbnails_y_x_rgb
+        .as_ref()
+        .unwrap()
         .slice(ndarray::s![..7, .., .., ..])
         .to_owned();
-    after.image_table.thumbnails_y_x_rgb = Arc::new(kept);
-    r.upload_thumbnails(&device, &queue, RECON, &after, &SILENT);
+    after.image_table.thumbnails_y_x_rgb = Some(Arc::new(kept));
+    r.upload_thumbnails(&device, &queue, RECON, &after, None, &SILENT);
 
     assert_ne!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
@@ -2410,11 +2420,11 @@ fn upload_thumbnails_reports_the_atlas_it_kept() {
     let mut r = SceneRenderer::new();
 
     assert_eq!(
-        r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT),
+        r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT),
         Uploaded::Built(DEMO_IMAGES as usize),
     );
     assert_eq!(
-        r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT),
+        r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT),
         Uploaded::Reused,
         "the second call paid a texture allocation and said nothing about it",
     );
@@ -2522,7 +2532,7 @@ fn the_pipeline_build_is_named_once_wherever_it_lands() {
         r.upload_points(&device, RECON, &recon, progress);
     });
     let second = stages(true, |progress| {
-        r.upload_thumbnails(&device, &queue, RECON, &recon, progress);
+        r.upload_thumbnails(&device, &queue, RECON, &recon, None, progress);
     });
 
     assert!(
@@ -2608,13 +2618,13 @@ fn the_thumbnail_upload_names_its_stages_with_detail_on() {
     let mut r = SceneRenderer::new();
 
     let rows = stages(true, |progress| {
-        r.upload_thumbnails(&device, &queue, RECON, &recon, progress);
+        r.upload_thumbnails(&device, &queue, RECON, &recon, None, progress);
     });
     assert_eq!(rows, ["pipelines", "atlas", "tiles"]);
 
     let again = stages(true, |progress| {
         assert_eq!(
-            r.upload_thumbnails(&device, &queue, RECON, &recon, progress),
+            r.upload_thumbnails(&device, &queue, RECON, &recon, None, progress),
             Uploaded::Reused,
         );
     });
@@ -2656,4 +2666,67 @@ fn the_stages_that_carry_a_count_say_what_they_counted() {
         notes["tiles"].as_deref(),
         Some("3 at 16\u{d7}16 px in 2 bands"),
     );
+}
+
+#[test]
+fn upload_thumbnails_builds_no_atlas_without_any_column() {
+    // No display column and no column of the value's own: the frustums draw
+    // their outlines and no image quads.
+    let (device, queue) = device();
+    let recon = SfmrReconstruction::demo(16);
+    let mut r = SceneRenderer::new();
+
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT),
+        Uploaded::Built(0)
+    );
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
+
+    let b = bundle(&r);
+    assert!(b.thumbnail_texture.is_none());
+    assert_eq!(b.image_quad_count, 0);
+    assert!(b.frustum_edge_count > 0, "the outlines are still drawn");
+}
+
+#[test]
+fn a_synthesized_column_fills_the_atlas_as_its_rows_finish() {
+    use crate::display_thumbnails::tests::{temp_dir, workspace_with_photographs};
+    use crate::display_thumbnails::DisplayThumbnails;
+
+    let dir = temp_dir("atlas");
+    let recon = workspace_with_photographs(&dir, &[]);
+    let display = DisplayThumbnails::synthesize(&recon, None).expect("photographs");
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
+        Uploaded::Built(DEMO_IMAGES as usize)
+    );
+    let already = bundle(&r)
+        .uploaded_thumbnails
+        .as_ref()
+        .unwrap()
+        .final_cells();
+    display.wait();
+
+    // Every cell that held the placeholder is written once its row is final,
+    // and a second look with nothing new writes nothing.
+    let written = r.refresh_thumbnails(&queue, RECON, &recon);
+    assert_eq!(already + written, DEMO_IMAGES as usize);
+    assert_eq!(
+        bundle(&r)
+            .uploaded_thumbnails
+            .as_ref()
+            .unwrap()
+            .final_cells(),
+        DEMO_IMAGES as usize
+    );
+    assert_eq!(r.refresh_thumbnails(&queue, RECON, &recon), 0);
+    // The same column and image list keep the atlas.
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
+        Uploaded::Reused
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

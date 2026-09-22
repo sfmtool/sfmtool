@@ -380,7 +380,7 @@ impl SfmrReconstruction {
             image_table: ImageTable {
                 cameras,
                 images,
-                thumbnails_y_x_rgb: Arc::new(data.thumbnails_y_x_rgb),
+                thumbnails_y_x_rgb: data.thumbnails_y_x_rgb.map(Arc::new),
                 depth_statistics: data.depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: data.rig_frame_data,
@@ -584,7 +584,7 @@ impl SfmrReconstruction {
             feature_tool_hashes,
             sift_content_hashes,
             image_file_hashes,
-            thumbnails_y_x_rgb: (*self.image_table.thumbnails_y_x_rgb).clone(),
+            thumbnails_y_x_rgb: self.image_table.thumbnails_y_x_rgb.as_deref().cloned(),
             positions_xyzw,
             colors_rgb,
             reprojection_errors,

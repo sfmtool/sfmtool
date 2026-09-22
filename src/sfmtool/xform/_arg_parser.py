@@ -21,10 +21,14 @@ import numpy as np
 
 from .._sfmtool.reconstruction import RangeExpr
 from . import (
+    AddPatchBitmapsTransform,
+    AddThumbnailsTransform,
     AlignToInputTransform,
     AlignToTransform,
     BundleAdjustTransform,
     ClassifyPointsAtInfinityTransform,
+    DropPatchBitmapsTransform,
+    DropThumbnailsTransform,
     ExcludeGlobFilter,
     ExcludeRangeFilter,
     FilterByLocalizabilityTransform,
@@ -34,6 +38,7 @@ from . import (
     IncludeGlobFilter,
     IncludeRangeFilter,
     LocalizeKeypointsTransform,
+    MinimalTransform,
     RefineKeypointsTransform,
     RefineNormalsTransform,
     RemoveIsolatedPointsFilter,
@@ -237,6 +242,53 @@ def parse_refine_keypoints_params(param: str) -> RefineKeypointsTransform:
                 )
 
     return RefineKeypointsTransform(**kwargs)
+
+
+# The two --add-patch-bitmaps keys. The other sub-pixel parameters tune a solve
+# this step does not run, so they are not offered.
+_ADD_PATCH_BITMAPS_KEYS: dict[str, Callable[[str], object]] = {
+    "resolution": int,
+    "sampler": str,
+}
+
+
+def parse_add_patch_bitmaps_params(param: str) -> AddPatchBitmapsTransform:
+    """Parse an ``--add-patch-bitmaps`` comma-separated ``key=value`` string.
+
+    An empty string renders at the defaults. Unknown keys, malformed tokens and
+    unparseable values raise ``click.UsageError``; range and enum validation is
+    the transform constructor's.
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --add-patch-bitmaps token '{token}': expected key=value"
+            )
+        key, value = (part.strip() for part in token.split("=", 1))
+        if not key:
+            raise click.UsageError(
+                f"Invalid --add-patch-bitmaps token '{token}': empty key"
+            )
+        if key not in _ADD_PATCH_BITMAPS_KEYS:
+            raise click.UsageError(
+                f"Unknown --add-patch-bitmaps key '{key}' "
+                f"(expected one of: {', '.join(sorted(_ADD_PATCH_BITMAPS_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --add-patch-bitmaps key '{key}'")
+        caster = _ADD_PATCH_BITMAPS_KEYS[key]
+        try:
+            kwargs[key] = caster(value)
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid value for --add-patch-bitmaps key '{key}': "
+                f"'{value}' is not a valid {caster.__name__}"
+            )
+    return AddPatchBitmapsTransform(**kwargs)
 
 
 # Each --localize-keypoints key maps to a caster for its value; the
@@ -478,6 +530,33 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
 
         elif arg == "--bundle-adjust":
             transforms.append(BundleAdjustTransform())
+
+        elif arg == "--drop-thumbnails":
+            transforms.append(DropThumbnailsTransform())
+
+        elif arg == "--drop-patch-bitmaps":
+            transforms.append(DropPatchBitmapsTransform())
+
+        elif arg == "--add-thumbnails":
+            transforms.append(AddThumbnailsTransform())
+
+        elif arg == "--minimal":
+            transforms.append(MinimalTransform())
+
+        elif arg == "--add-patch-bitmaps" or arg.startswith("--add-patch-bitmaps="):
+            # Optional value, same tokenization as --refine-normals.
+            if arg.startswith("--add-patch-bitmaps="):
+                param = arg[len("--add-patch-bitmaps=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_add_patch_bitmaps_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --add-patch-bitmaps parameter: {e}")
 
         elif arg == "--refine-normals" or arg.startswith("--refine-normals="):
             # Optional value. Mirror Click's optional-value tokenization (the
@@ -828,5 +907,16 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 i += 1
 
         i += 1
+
+    # An --add-* step after --minimal restores part of what the shorthand
+    # dropped; it says so when it runs, so the combination reads as intended.
+    seen_minimal = False
+    for transform in transforms:
+        if isinstance(transform, MinimalTransform):
+            seen_minimal = True
+        elif seen_minimal and isinstance(
+            transform, (AddThumbnailsTransform, AddPatchBitmapsTransform)
+        ):
+            transform.restores_minimal = True
 
     return transforms

@@ -181,6 +181,7 @@ impl TrackView {
                 ui,
                 node.edited(),
                 id,
+                node.display_thumbnails.as_ref(),
                 &point_id,
                 selected_point,
                 state.hovered_image_in(id),

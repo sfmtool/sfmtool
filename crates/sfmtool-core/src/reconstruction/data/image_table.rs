@@ -29,13 +29,15 @@ pub struct ImageTable {
     /// Registered images with poses.
     pub images: Vec<SfmrImage>,
     /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` RGB thumbnails of the source
-    /// images (see [`crate::THUMBNAIL_SIZE`]).
+    /// images (see [`crate::THUMBNAIL_SIZE`]), or `None` for a reconstruction
+    /// without them. Whole or absent: row `i` is a downscale of the photograph
+    /// `images[i]` names, and nothing fills the column in on load.
     ///
     /// Behind an [`Arc`] because it is one of the two columns that dominate a
     /// reconstruction's memory, so two reconstructions that agree on their
     /// thumbnails share one copy. Nothing writes through it: a producer that
     /// changes the thumbnails builds a new array and wraps it.
-    pub thumbnails_y_x_rgb: Arc<Array4<u8>>,
+    pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
     /// Per-image depth statistics.
     pub depth_statistics: DepthStatistics,
     /// Depth histogram counts: `depth_histogram_counts[i]` has

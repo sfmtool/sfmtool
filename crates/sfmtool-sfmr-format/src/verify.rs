@@ -319,7 +319,10 @@ fn verify_images_section<R: Read + Seek>(
         )?);
     }
     // images/metadata.json
-    images_hasher.update(&read_zst_entry(archive, entries::images_metadata())?);
+    let images_meta_raw = read_zst_entry(archive, entries::images_metadata())?;
+    images_hasher.update(&images_meta_raw);
+    let images_meta: serde_json::Value = serde_json::from_slice(&images_meta_raw)?;
+    let has_thumbnails = crate::read::images_meta_has_thumbnails(&images_meta);
     // images/names.json
     images_hasher.update(&read_zst_entry(archive, entries::images_names())?);
     // images/observed_depth_histogram_counts (pre-version-10 files only)
@@ -338,11 +341,13 @@ fn verify_images_section<R: Read + Seek>(
             &entries::images_sift_content_hashes(image_count),
         )?);
     }
-    // images/thumbnails_y_x_rgb
-    images_hasher.update(&read_zst_entry(
-        archive,
-        &entries::images_thumbnails_y_x_rgb(image_count),
-    )?);
+    // images/thumbnails_y_x_rgb (optional from version 11)
+    if has_thumbnails {
+        images_hasher.update(&read_zst_entry(
+            archive,
+            &entries::images_thumbnails_y_x_rgb(image_count),
+        )?);
+    }
     // images/translations_xyz
     images_hasher.update(&read_zst_entry(
         archive,

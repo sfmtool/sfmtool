@@ -248,7 +248,7 @@ The frame's upload phase, in
 ```rust
 if renderer.base_changed(id, &base) {
     renderer.upload_points(device, id, recon);
-    renderer.upload_thumbnails(device, queue, id, recon);
+    renderer.upload_thumbnails(device, queue, id, recon, node.display_thumbnails.as_ref());
     renderer.upload_patches(device, queue, id, recon);
     renderer.set_uploaded_base(id, base);
 }
@@ -263,8 +263,9 @@ all leave the base the same allocation, so none of them does.
 
 **The two atlases are keyed on their own pixels, not on the base.** A new base
 is a coarse signal: it says the value changed, not which part of it. The
-thumbnail atlas is a function of the image table's thumbnail column, and the
-patch atlas of the patch bitmap column and the packing over it, and a bulk edit
+thumbnail atlas is a function of the node's display thumbnails, the image
+table's own thumbnail column and the image list (see
+[camera-views.md](camera-views.md) § "Thumbnail loading"), and the patch atlas of the patch bitmap column and the packing over it, and a bulk edit
 rewrites poses, positions and patch frames while touching neither column.
 Rebuilding an atlas means a texture allocation and one `write_texture` per tile,
 which on a node with tens of thousands of patches is the whole cost of the
