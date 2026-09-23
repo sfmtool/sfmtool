@@ -15,6 +15,8 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 ## Priority recommendations
 
 **Split the MCP tool catalog and tests along their existing modules**
+> _Status (2026-09-23): Done — catalog definitions and all 230 headless MCP tests are grouped by concern, with the central catalog fixtures preserved; commit `bb7130e0`._
+
 - Location: `crates/sfm-explorer/src/mcp/tools.rs` (3,630 lines, catalog and schema helpers at 57–2417) and `crates/sfm-explorer/src/mcp/tests.rs` (10,373 lines, 230 `#[test]` cases).
 - Problem: The tool catalog now has 76 entries (15 read, 60 write, one save), up from 40 in September. The test file grew by 4,946 lines while covering transport, frame, layout, view, bench, screenshot, edits, and background behavior in one place. The production module tree already separates those concerns.
 - Proposed fix: Split catalog definitions and tests by the existing MCP modules, leaving the name/classification fixture in a central catalog test and sharing only common test fixtures. Preserve the exact catalog/schema/command tests added since September.
