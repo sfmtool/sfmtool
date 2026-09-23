@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "feature_tool": "sfmtool",
+  "feature_type": "sift-sfmtool",
+  "feature_options": {
+    "octave_layers": 3,
+    "sigma": 1.6,
+    "blur_radius_factor": 2.25,
+    "input_sigma": 0.5,
+    "double_image": true,
+    "contrast_threshold": 0.0067,
+    "edge_threshold": 10.0,
+    "max_num_features": 8192,
+    "orientation_bins": 36,
+    "peak_ratio": 0.8,
+    "descriptor_width": 4,
+    "descriptor_bins": 8,
+    "descriptor_magnification": 3.0,
+    "descriptor_clamp": 0.2,
+    "gray_formula": "0.2126*R + 0.7152*G + 0.0722*B"
+  },
+  "feature_prefix_dir": "features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9"
+}

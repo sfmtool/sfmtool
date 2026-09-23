@@ -72,14 +72,28 @@ when in doubt, mention the gap in the PR description.
 
 ## Test data
 
-Three datasets are checked in under `test-data/images/`:
+Four datasets are checked in under `test-data/images/`:
 
 - `seoul_bull_sculpture` — 17 @ 270×480 (the small fixture used in tests)
 - `dino_dog_toy` — 85 @ 2040×1536
 - `seattle_backyard` — 26 @ 360×640
+- `kerry_park` — 24 rig frames × 2 fisheyes @ 480×480, with `rig_config.json`
 
 Bootstrap a workspace with `scripts/init_dataset_*.sh`. Reuse these in bug
 reports and reproductions where possible.
+
+`seoul_bull_sculpture` also carries a reference reconstruction,
+`seoul_bull_sculpture_ground_truth.sfmr`, in metres. Its directory has a
+`.sfm-workspace.json`, so the file opens in place:
+
+```bash
+pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr
+```
+
+It is a minimal file with embedded patches and needs no `.sift` files. The
+scale comes from three GPS fixes. Work in a
+bootstrapped workspace rather than running `sfm sift` or a solve in that
+directory, which would write their output into `test-data`.
 
 ## Commit style
 

@@ -139,6 +139,15 @@ deleting the lines.
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
   `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
   @ 480×480, with `rig_config.json`). Bootstrap with `scripts/init_dataset_*.sh`.
+  `seoul_bull_sculpture` also holds `seoul_bull_sculpture_ground_truth.sfmr`,
+  a reference reconstruction of its 17 images, in metres. A
+  `.sfm-workspace.json` beside the images makes that directory its workspace,
+  so it opens in place (`pixi run gui --
+  test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`).
+  It is a minimal file with embedded patches, so it needs no `.sift` files; its
+  scale comes from three GPS fixes. Don't run
+  `sfm sift` or a solve in that directory: the marker would put their output
+  in `test-data`.
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `suggest-next-steps`). See "Quality reports" below.

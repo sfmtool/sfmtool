@@ -23,3 +23,6 @@ Cargo.toml text eol=lf
 # Windows runners, reads a CRLF line ending as a stray `\r` in every command.
 # CI runs `scripts/ci_prune_caches.sh` on Windows, so it has to stay LF there.
 *.sh text eol=lf
+
+# The .sfmr reconstruction file format is binary
+*.sfmr binary
