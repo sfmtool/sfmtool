@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
+SEOUL_BULL_DIR = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
+SEOUL_BULL_GROUND_TRUTH = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth.sfmr"
 
 
 @pytest.fixture
@@ -241,6 +243,40 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     filtered.save(sfmr_path, "drop-camera-coincident-points")
 
 
+def _cluster_match_workspace(
+    workspace_dir: Path,
+    image_paths: list[Path],
+    *,
+    max_num_features: int | None = None,
+    cluster_d: int = 10,
+) -> Path:
+    """Initialize a workspace, extract SIFT and cluster-match it; return the file.
+
+    The deterministic front half of every fixture build: ``sfm ws init`` with the
+    sfmtool SIFT backend, then ``sfm match --cluster`` (which extracts any missing
+    ``.sift`` files first) to ``matches/recon-clusters.matches``. Neither step
+    touches COLMAP.
+    """
+    from sfmtool.feature_match._run import _run_matching
+
+    init_workspace(
+        workspace_dir, feature_tool="sfmtool", max_num_features=max_num_features
+    )
+
+    clusters_file = workspace_dir / "matches" / "recon-clusters.matches"
+    # _run_matching extracts any missing .sift files before matching.
+    _run_matching(
+        [Path(p) for p in image_paths],
+        workspace_dir,
+        matching_method="cluster",
+        max_feature_count=None,
+        output_path=str(clusters_file),
+        camera_model=None,
+        cluster_d=cluster_d,
+    )
+    return clusters_file
+
+
 def build_cluster_reconstruction(
     workspace_dir: Path,
     image_paths: list[Path],
@@ -283,21 +319,11 @@ def build_cluster_reconstruction(
     quietly lacks the property they assert.
     """
     from sfmtool.feature_match._derive_pairs import _run_derive_pairs
-    from sfmtool.feature_match._run import _run_matching
 
-    init_workspace(
-        workspace_dir, feature_tool="sfmtool", max_num_features=max_num_features
-    )
-
-    clusters_file = workspace_dir / "matches" / "recon-clusters.matches"
-    # _run_matching extracts any missing .sift files before matching.
-    _run_matching(
-        [Path(p) for p in image_paths],
+    clusters_file = _cluster_match_workspace(
         workspace_dir,
-        matching_method="cluster",
-        max_feature_count=None,
-        output_path=str(clusters_file),
-        camera_model=None,
+        image_paths,
+        max_num_features=max_num_features,
         cluster_d=cluster_d,
     )
 
@@ -375,9 +401,255 @@ def build_cluster_reconstruction(
     return output_sfm_file
 
 
+def _triangulate_clusters_at_poses(
+    clusters: dict,
+    reference: "SfmrReconstruction",
+    *,
+    bar_px: float,
+    min_angle_deg: float,
+    max_rounds: int = 10,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Triangulate a clusters ``.matches`` dict at ``reference``'s fixed geometry.
+
+    Each cluster is a candidate track. Its members are mapped onto
+    ``reference``'s images by basename (a reference written beside its images
+    stores bare names, a workspace's matches store workspace-relative ones), and
+    the tracks are solved with ``triangulate_points`` at the reference's one
+    camera and its poses, under the angular floor and the cheirality rule. Each
+    round then keeps, per track, the members that reproject within ``bar_px``
+    of the solved point, at most one per image (the closest), and drops any
+    track left with fewer than two images; the survivors are solved again. The member set only ever shrinks, so the loop stops at the
+    first round that changes nothing, where every kept observation is within the
+    bar of the point solved from exactly those observations.
+
+    Returns ``(positions, point_indexes, image_indexes, feature_indexes, uv)``:
+    ``(P, 3)`` finite positions, then per-observation arrays sorted by point and
+    then image, with image indexes into ``reference``'s image order.
+    """
+    from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
+
+    cameras = reference.cameras
+    if len(cameras) != 1:
+        raise ValueError(f"expected a one-camera reference, got {len(cameras)}")
+    camera = cameras[0]
+    quats = np.asarray(reference.quaternions_wxyz, dtype=np.float64)
+    trans = np.asarray(reference.translations, dtype=np.float64)
+
+    reference_index = {Path(n).name: i for i, n in enumerate(reference.image_names)}
+    matches_to_reference = np.array(
+        [reference_index[Path(n).name] for n in clusters["image_names"]],
+        dtype=np.int64,
+    )
+
+    starts = np.asarray(clusters["cluster_starts"], dtype=np.int64)
+    cluster_count = len(starts) - 1
+    member_cluster = np.repeat(np.arange(cluster_count), np.diff(starts))
+    member_image = matches_to_reference[np.asarray(clusters["member_images"])]
+    member_feature = np.asarray(clusters["member_features"], dtype=np.int64)
+    member_uv = np.asarray(clusters["member_positions"], dtype=np.float64)
+
+    finite_code = VERDICT_CODES["finite"]
+    active = np.ones(len(member_cluster), dtype=bool)
+    for _round in range(max_rounds):
+        out = triangulate_points(
+            uv=np.ascontiguousarray(member_uv[active]),
+            obs_image=member_image[active].astype(np.uint32),
+            obs_point=member_cluster[active].astype(np.uint32),
+            camera=camera,
+            quaternions_wxyz=quats,
+            translations=trans,
+            n_points=cluster_count,
+            floor_rad=np.deg2rad(min_angle_deg),
+            cheirality=True,
+        )
+        xyz = np.asarray(out["xyzw"])[:, :3]
+        solved = np.asarray(out["verdicts"]) == finite_code
+
+        # Reproject every still-active member through its image's pose.
+        idx = np.flatnonzero(active & solved[member_cluster])
+        img = member_image[idx]
+        cam_pt = (
+            _rotate_by_quaternion(quats[img], xyz[member_cluster[idx]]) + trans[img]
+        )
+        # Canonical cameras look down -Z: a member at z >= 0 is behind its camera.
+        in_front = cam_pt[:, 2] < 0.0
+        rays = cam_pt / np.linalg.norm(cam_pt, axis=1, keepdims=True)
+        pred = np.asarray(camera.ray_to_pixel_batch(np.ascontiguousarray(rays)))
+        err = np.linalg.norm(pred - member_uv[idx], axis=1)
+        ok = in_front & np.isfinite(err) & (err <= bar_px)
+        idx, err = idx[ok], err[ok]
+
+        # One member per (track, image): the closest; ties break on member order.
+        order = np.lexsort((idx, err, member_image[idx], member_cluster[idx]))
+        idx = idx[order]
+        key = member_cluster[idx] * len(quats) + member_image[idx]
+        _, first = np.unique(key, return_index=True)
+        idx = idx[first]
+
+        # A track needs two images to stay a track.
+        views = np.bincount(member_cluster[idx], minlength=cluster_count)
+        idx = idx[views[member_cluster[idx]] >= 2]
+
+        new_active = np.zeros_like(active)
+        new_active[idx] = True
+        if np.array_equal(new_active, active):
+            break
+        active = new_active
+    else:
+        raise RuntimeError(
+            f"cluster triangulation did not settle in {max_rounds} rounds"
+        )
+
+    kept = np.flatnonzero(active)
+    kept = kept[np.lexsort((member_image[kept], member_cluster[kept]))]
+    point_clusters, point_indexes = np.unique(member_cluster[kept], return_inverse=True)
+    return (
+        xyz[point_clusters],
+        point_indexes,
+        member_image[kept],
+        member_feature[kept],
+        member_uv[kept],
+    )
+
+
+def _mean_colors_at(
+    image_paths: list[Path], image_indexes, point_indexes, uv, point_count
+):
+    """Per-point mean RGB of each observation's pixel, as ``(P, 3)`` uint8."""
+    import cv2
+
+    sums = np.zeros((point_count, 3), dtype=np.float64)
+    for i, path in enumerate(image_paths):
+        sel = np.flatnonzero(image_indexes == i)
+        if len(sel) == 0:
+            continue
+        rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        col = np.clip(np.floor(uv[sel, 0]).astype(np.int64), 0, w - 1)
+        row = np.clip(np.floor(uv[sel, 1]).astype(np.int64), 0, h - 1)
+        np.add.at(sums, point_indexes[sel], rgb[row, col].astype(np.float64))
+    counts = np.bincount(point_indexes, minlength=point_count)[:, None]
+    return np.round(sums / np.maximum(counts, 1)).astype(np.uint8)
+
+
+def build_reconstruction_at_poses(
+    workspace_dir: Path,
+    image_paths: list[Path],
+    reference_sfmr: Path,
+    output_sfm_file: Path,
+    *,
+    cluster_d: int = 10,
+    bar_px: float = 2.0,
+    min_angle_deg: float = 1.0,
+) -> Path:
+    """Build a SIFT-backed ``.sfmr`` at a reference's cameras and poses, no solve.
+
+    Runs the same workspace setup and cluster matching as
+    :func:`build_cluster_reconstruction`, then, instead of deriving pairs and
+    running a mapper, triangulates the cluster tracks at ``reference_sfmr``'s
+    fixed intrinsics and image poses (see :func:`_triangulate_clusters_at_poses`
+    for the gating). Every step is deterministic, so the same inputs build the
+    same reconstruction every time.
+
+    The output is an ordinary ``sift_files`` reconstruction: its observations
+    index the workspace's ``.sift`` files, its images are the reference's in the
+    reference's order (matched by basename), its camera and pose columns are the
+    reference's verbatim, and it carries the reference's ``world_space_unit``.
+    Only finite points are written; a track too thin to place is dropped rather
+    than kept as a point at infinity.
+    """
+    from sfmtool._sfmtool.io import read_matches
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+    from sfmtool._workspace import load_workspace_config
+    from sfmtool.colmap.io import (
+        _build_sfmr_data_dict,
+        _resolve_workspace_and_sift,
+        build_metadata,
+        finite_positions_xyzw,
+    )
+
+    reference = SfmrReconstruction.load(reference_sfmr)
+    clusters_file = _cluster_match_workspace(
+        workspace_dir, image_paths, cluster_d=cluster_d
+    )
+    clusters = read_matches(clusters_file)
+    positions, point_indexes, image_indexes, feature_indexes, uv = (
+        _triangulate_clusters_at_poses(
+            clusters, reference, bar_px=bar_px, min_angle_deg=min_angle_deg
+        )
+    )
+    point_count = len(positions)
+    if point_count == 0:
+        raise RuntimeError(f"no cluster track of {clusters_file} triangulated")
+
+    # The reference's image order, spelled as the workspace-relative names the
+    # matches file records.
+    by_basename = {Path(n).name: n for n in clusters["image_names"]}
+    workspace_names = [by_basename[Path(n).name] for n in reference.image_names]
+    (
+        workspace_dir,
+        _contents,
+        resolved_names,
+        feature_tool_hashes,
+        sift_content_hashes,
+        thumbnails,
+    ) = _resolve_workspace_and_sift(workspace_names, workspace_dir)
+
+    colors = _mean_colors_at(
+        [workspace_dir / n for n in resolved_names],
+        image_indexes,
+        point_indexes,
+        uv,
+        point_count,
+    )
+    output_sfm_file = Path(output_sfm_file)
+    metadata = build_metadata(
+        workspace_dir=workspace_dir,
+        output_path=output_sfm_file,
+        workspace_config=load_workspace_config(workspace_dir),
+        operation="triangulate_at_reference_poses",
+        tool_name="sfmtool",
+        tool_options={
+            "reference": reference_sfmr.name,
+            "cluster_d": cluster_d,
+            "bar_px": bar_px,
+            "min_angle_deg": min_angle_deg,
+        },
+        image_count=reference.image_count,
+        point_count=point_count,
+        observation_count=len(point_indexes),
+        camera_count=reference.camera_count,
+        world_space_unit=reference.world_space_unit,
+    )
+    data = _build_sfmr_data_dict(
+        cameras=list(reference.cameras),
+        image_names=resolved_names,
+        camera_indexes=np.asarray(reference.camera_indexes),
+        quaternions_wxyz=np.asarray(reference.quaternions_wxyz),
+        translations_xyz=np.asarray(reference.translations),
+        positions_xyzw=finite_positions_xyzw(positions),
+        colors_rgb=colors,
+        # from_data recomputes these from the .sift files.
+        reprojection_errors=np.zeros(point_count, dtype=np.float32),
+        track_image_indexes=image_indexes,
+        track_feature_indexes=feature_indexes,
+        point_indexes=point_indexes,
+        observation_counts=np.bincount(point_indexes, minlength=point_count),
+        feature_tool_hashes=feature_tool_hashes,
+        sift_content_hashes=sift_content_hashes,
+        thumbnails=thumbnails,
+        metadata=metadata,
+    )
+    recon = SfmrReconstruction.from_data(workspace_dir, data)
+    recon.save(output_sfm_file)
+    return output_sfm_file
+
+
 @pytest.fixture(scope="session")
 def seoul_bull_workspace_once_deprecated(tmp_path_factory) -> Path:
     """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
+
+    Deprecated (randomized solve, flaky): use :func:`seoul_bull_workspace_once`.
 
     Mirrors ``scripts/init_dataset_seoul_bull.sh``: sfmtool SIFT + track-cluster
     matching + incremental SfM. The fixture carries calibrated intrinsics and
@@ -429,7 +701,10 @@ def seoul_bull_workspace_once_deprecated(tmp_path_factory) -> Path:
 def seoul_bull_workspace_deprecated(
     seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
 ) -> Path:
-    """Per-test isolation of the 17-image .sfmr reconstruction."""
+    """Per-test isolation of the 17-image .sfmr reconstruction.
+
+    Deprecated (randomized solve, flaky): use :func:`seoul_bull_workspace`.
+    """
     source_workspace_dir = seoul_bull_workspace_once_deprecated.parent
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
@@ -441,6 +716,8 @@ def seoul_bull_sfmr_only_deprecated(
     seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
 ) -> Path:
     """Per-test copy of *only* the 17-image ``.sfmr`` (plus the workspace marker).
+
+    Deprecated (randomized solve, flaky): use :func:`seoul_bull_ground_truth_sfmr`.
 
     For tests that just ``SfmrReconstruction.load`` the reconstruction and read
     its geometry (or apply geometry-only transforms / alignment), copying the
@@ -459,6 +736,70 @@ def seoul_bull_sfmr_only_deprecated(
     if marker.exists():
         shutil.copy(marker, workspace_dir / marker.name)
     return workspace_dir / src.name
+
+
+@pytest.fixture
+def seoul_bull_ground_truth_sfmr(tmp_path_factory) -> Path:
+    """Per-test copy of the checked-in seoul_bull ground-truth ``.sfmr``.
+
+    The reference reconstruction of all 17 images (one SIMPLE_RADIAL camera,
+    metres, some points at infinity), copied with its ``.sfm-workspace.json``
+    marker into a fresh tmp dir so it loads as-is and resolves its workspace
+    there. Its features are embedded patches (no ``.sift`` files, so
+    ``track_feature_indexes`` is ``None``) and it sits beside no images. For a
+    SIFT-backed workspace at the same poses use :func:`seoul_bull_workspace`.
+    """
+    workspace_dir = tmp_path_factory.mktemp("seoul_bull_ground_truth")
+    shutil.copy(SEOUL_BULL_GROUND_TRUTH, workspace_dir / SEOUL_BULL_GROUND_TRUTH.name)
+    marker = SEOUL_BULL_DIR / ".sfm-workspace.json"
+    shutil.copy(marker, workspace_dir / marker.name)
+    return workspace_dir / SEOUL_BULL_GROUND_TRUTH.name
+
+
+@pytest.fixture(scope="session")
+def seoul_bull_workspace_once(tmp_path_factory) -> Path:
+    """Session-scoped fixture: a SIFT-backed 17-image workspace at ground-truth poses.
+
+    It has the layout of :func:`seoul_bull_workspace_once_deprecated`: images in
+    ``test_17_image/``, ``camera_config.json`` at the workspace root, sfmtool
+    SIFT and a clusters ``.matches`` under ``matches/``. There is no solve; the
+    cluster tracks are triangulated at the checked-in ground truth's camera and
+    poses (:func:`build_reconstruction_at_poses`), so every build gives the same
+    reconstruction. Returns the ``seoul_bull.sfmr`` path, an ordinary
+    ``sift_files`` reconstruction with all 17 images registered, finite points
+    only, in metres.
+    """
+    image_files = sorted(SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"))
+    workspace_dir = tmp_path_factory.mktemp("seoul_bull_workspace")
+    image_dir = workspace_dir / "test_17_image"
+    image_dir.mkdir()
+
+    img_paths = []
+    for img_file in image_files:
+        dest_path = image_dir / img_file.name
+        shutil.copy(img_file, dest_path)
+        img_paths.append(dest_path)
+    # At the workspace root, as in the deprecated fixture, so a test that copies
+    # just the image directory starts with an unconfigured workspace.
+    shutil.copy(
+        SEOUL_BULL_DIR / "camera_config.json", workspace_dir / "camera_config.json"
+    )
+
+    return build_reconstruction_at_poses(
+        workspace_dir,
+        img_paths,
+        SEOUL_BULL_GROUND_TRUTH,
+        workspace_dir / "seoul_bull.sfmr",
+    )
+
+
+@pytest.fixture
+def seoul_bull_workspace(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
+    """Per-test isolation of :func:`seoul_bull_workspace_once`'s whole workspace."""
+    source_workspace_dir = seoul_bull_workspace_once.parent
+    workspace_dir = tmp_path_factory.mktemp("seoul_bull_workspace")
+    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / seoul_bull_workspace_once.name
 
 
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
