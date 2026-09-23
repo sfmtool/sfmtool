@@ -2156,16 +2156,19 @@ located rather than what they say.
 A `sift_files` reconstruction names each observation by a feature index into a
 `.sift` file beside the workspace; an `embedded_patches` one carries a `(u, v)`
 patch frame per point and a keypoint per observation inline. This is the
-**minimal** conversion between them, the one `sfm xform --to-embedded-patches`
-runs with that command's own defaults
+same frame and keypoint conversion as `sfm xform --to-embedded-patches`
+with that command's own defaults
 ([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)):
 each point gets a frame from its mean viewing direction sized at `2.5 x` the
 median projected keypoint scale across its views, each observation's keypoint is
 copied verbatim from its `.sift` detection, and each image's identity hash is
-read from the `.sift` metadata. No photometric step runs and no reference bitmap
-is fused, so the node afterwards reports `feature_source:
-"embedded_patches"` and `has_patch_data: false` -- the frames are there and the
-textures the surfel renderer needs are not.
+read from the `.sift` metadata. No photometric adaptation runs. The viewer then
+fuses reference bitmaps at those stored frames and keypoints from readable
+photographs, using the same render-only path as file opening. The result
+reports `feature_source: "embedded_patches"` and, when at least one photograph
+can be read, `has_patch_data: true`. If none can be read, the conversion still
+succeeds without bitmaps and reports `has_patch_data: false`. A save persists
+the conversion's bitmaps, unlike display-only bitmaps made when opening a file.
 
 Every point keeps its index, its position and its track, so a point id a caller
 is holding still names the same point and the selection does not move. The

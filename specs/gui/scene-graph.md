@@ -360,12 +360,13 @@ fixed-height for virtualization.
   otherwise. The gate is `AppState::build_sift_index_refusal`, which the wire's
   `build_sift_index` and the operation itself also ask, so the greyed entry and
   a call that asks anyway give one answer.
-- **`Convert to Embedded Patches`** runs the minimal `sift_files` → `embedded_patches`
+- **`Convert to Embedded Patches`** runs the `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
   ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
   its mean viewing direction, each observation's `.sift` keypoint carried
-  inline, each image's identity hash read from the `.sift` metadata, and no
-  photometric step
+  inline, each image's identity hash read from the `.sift` metadata, and a
+  render-only bitmap fuse from readable photographs, with no photometric
+  adaptation
   ([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)).
   It is **live only on a node whose observations are `sift_files` and that
   nothing is running on**, and
@@ -376,8 +377,8 @@ fixed-height for virtualization.
   entry and a call that asks anyway give one answer. The test is the observation
   source and not `SceneNode::has_patch_data`: that answers the narrower question
   of whether the node also carries the reference bitmaps the surfel renderer
-  textures a patch with, which this conversion does not produce, so the
-  `Patches` row below does not appear after one.
+  textures a patch with. The conversion produces them when photographs are
+  available, so the `Patches` row appears after one in that case.
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
   Its Camera Images and Points groups start *collapsed* — the image list is the

@@ -89,8 +89,7 @@ pub(crate) fn convert_refusal(
     }
     // The observation source, not `SceneNode::has_patch_data`: that answers
     // whether the node carries reference *bitmaps* to texture its surfels
-    // with, which this conversion does not produce and which the surfel
-    // renderer is the one reader of.
+    // with; this conversion may produce them when photographs are available.
     node.recon().point_set.feature_indexes().is_none().then(|| {
         format!(
             "{} is already an embedded_patches reconstruction.",
@@ -1321,13 +1320,15 @@ impl AppState {
     /// Start converting `id`'s current value from `sift_files` to
     /// `embedded_patches` on a worker thread.
     ///
-    /// A bulk edit, and the minimal conversion: every point keeps its index, its
+    /// A bulk edit: every point keeps its index, its
     /// position and its track, and what changes is how each observation is
     /// located -- a `(u, v)` patch frame per point from the mean viewing
     /// direction, each observation's keypoint copied verbatim from its `.sift`
     /// detection, and each image's identity hash read from the `.sift`
-    /// metadata. It is `sfm xform --to-embedded-patches` with that command's
-    /// own defaults ([`CONVERSION_EXTENT`]).
+    /// metadata. It uses `sfm xform --to-embedded-patches`'s frame defaults
+    /// ([`CONVERSION_EXTENT`]), then renders the patch bitmap column from the
+    /// available photographs. Unlike the display-only bitmaps made on open,
+    /// this column belongs to the new version and is saved with it.
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
@@ -1389,10 +1390,10 @@ impl AppState {
                 None => &edited.base,
             };
 
-            // The kernel's own three stages nest directly under the
-            // operation's, since this `Progress` is at the top of it.
-            let converted =
-                match source.to_embedded_patches(CONVERSION_NORMAL, CONVERSION_EXTENT, progress) {
+            let [conversion, bitmaps] = progress.split([1.0, 1.0]);
+            let mut converted =
+                match source.to_embedded_patches(CONVERSION_NORMAL, CONVERSION_EXTENT, &conversion)
+                {
                     Ok(converted) => converted,
                     // The one error that is not a refusal: the operation was asked
                     // to stop and did, which the log words as a cancellation.
@@ -1401,6 +1402,15 @@ impl AppState {
                     }
                     Err(e) => return Finished::Failed(refuse(e.to_string())),
                 };
+            conversion.set_fraction(1.0);
+            let bitmap_phase = bitmaps.phase("patch bitmaps");
+            match super::open::render_patch_bitmaps(&converted, &bitmap_phase) {
+                Ok(Some(column)) => {
+                    converted.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column));
+                }
+                Ok(None) => {}
+                Err(_) => return Finished::Cancelled,
+            }
 
             // The identity, stated rather than scanned. The conversion keeps
             // every point at its own index, and `RowMap::by_scan` could not

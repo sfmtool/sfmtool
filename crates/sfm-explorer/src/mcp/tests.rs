@@ -5182,8 +5182,8 @@ fn convert_to_embedded_patches_defers_and_flips_the_feature_source() {
     let after = call(&mut state, &mut viewer, "get_scene", json!({}));
     let node = &after["scene"][0];
     assert_eq!(node["feature_source"], json!("embedded_patches"), "{after}");
-    // The minimal conversion fuses no reference bitmap, so the narrower field
-    // beside it does not move.
+    // This fixture has no photographs to fuse, so the narrower field beside
+    // the feature source does not move.
     assert_eq!(node["has_patch_data"], json!(false), "{after}");
 }
 

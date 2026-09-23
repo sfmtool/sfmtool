@@ -1336,10 +1336,48 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
             "point {point} came from elsewhere"
         );
     }
-    // The frames are there and the bitmaps are not: the minimal conversion
-    // fuses no reference texture, so the surfel renderer still has nothing to
-    // draw.
+    // With no photographs in this fixture there is nothing to fuse, but the
+    // conversion still produces its frames and inline keypoints.
     assert!(!state.scene[0].has_patch_data());
+}
+
+#[test]
+fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let photograph =
+        image::RgbImage::from_pixel(camera.width, camera.height, image::Rgb([40, 80, 120]));
+    // Two readable views suffice for the first point's fuse. The other images
+    // are deliberately absent, as they may be when a workspace has moved.
+    for image in &state.scene[0].recon().image_table.images[..2] {
+        photograph.save(dir.path().join(&image.name)).unwrap();
+    }
+
+    state.start_convert_to_embedded_patches(id).unwrap();
+    state.finish_background_task();
+
+    let recon = state.scene[0].recon();
+    let bitmaps = recon
+        .point_set
+        .patch_bitmaps_y_x_rgba
+        .as_ref()
+        .expect("the conversion rendered a bitmap column");
+    assert_eq!(bitmaps.shape()[0], recon.point_count());
+    assert!(bitmaps.iter().any(|&channel| channel != 0));
+    assert!(!recon.point_set.patch_bitmaps_for_display);
+    assert!(state.scene[0].has_patch_data());
+
+    let saved = dir.path().join("converted.sfmr");
+    std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
+    recon.save(&saved).unwrap();
+    let reloaded = SfmrReconstruction::load(&saved, &sfmtool_core::progress::Progress::none())
+        .expect("the bitmaps are stored, not display-only");
+    assert_eq!(
+        reloaded.point_set.patch_bitmaps_y_x_rgba.as_ref(),
+        Some(bitmaps)
+    );
+    assert!(!reloaded.point_set.patch_bitmaps_for_display);
 }
 
 /// The entry says what it did, with the two counts, and the sentence ends on

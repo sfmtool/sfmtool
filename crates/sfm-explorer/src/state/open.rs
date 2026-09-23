@@ -290,10 +290,12 @@ fn load_for_display(path: &Path, progress: &Progress<'_>) -> Result<Loaded, Stop
 /// read and pyramided in parallel, and `fuse`, the whole-cloud form of the one
 /// fuse the bench commit and `--add-patch-bitmaps` use. A photograph that
 /// cannot be read, or is not the size its camera says, is left out of every
-/// patch's views rather than failing the open; a point that two readable views
-/// do not see gets a zero row. `Ok(None)` when not one photograph could be
-/// read, since a column of zero rows would draw nothing.
-fn render_patch_bitmaps(
+/// patch's views rather than failing the operation; a point that two readable
+/// views do not see gets a zero row. `Ok(None)` when not one photograph could
+/// be read, since a column of zero rows would draw nothing. The conversion
+/// worker also calls this fuse, but keeps the result as a stored column rather
+/// than marking it for display only.
+pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,
     progress: &Progress<'_>,
 ) -> Result<Option<ndarray::Array4<u8>>, Cancelled> {

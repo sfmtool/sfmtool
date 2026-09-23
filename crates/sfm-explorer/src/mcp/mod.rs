@@ -277,7 +277,8 @@ pub(crate) enum Command {
         release_focal: bool,
     },
     /// Convert one node's observations from `sift_files` to
-    /// `embedded_patches`, the minimal conversion with no photometric step.
+    /// `embedded_patches`, then render bitmaps from readable photographs
+    /// without photometric adaptation.
     ConvertToEmbeddedPatches {
         reconstruction_label: String,
     },
