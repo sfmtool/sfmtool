@@ -575,8 +575,12 @@ impl Viewer3D {
         // not disarm the fly keys.
         let keyboard_free = !ui.ctx().egui_wants_keyboard_input();
 
-        // Check fly key state early — used by drag handling and supernova suppression
+        // Check fly key state early — used by drag handling and supernova suppression.
+        // With Ctrl/Cmd down the letter belongs to a shortcut (Ctrl+S saves,
+        // Ctrl+D duplicates), and the `key_down` egui still reports for it must
+        // not also move the camera. Shift stays free: it is the fly sprint.
         self.fly_keys_held = keyboard_free
+            && ui.input(|i| !(i.modifiers.command || i.modifiers.ctrl))
             && ui.input(|i| {
                 i.key_down(egui::Key::W)
                     || i.key_down(egui::Key::A)

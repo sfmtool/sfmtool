@@ -579,7 +579,9 @@ fitted to one piece of surface can be slid to the piece beside it rather than
 built again from a pixel
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
 "Duplicating"). The copy drops only the origin, which makes its commit create a
-point, so its header reads *new*.
+point, so its header reads *new*. Ctrl+D (Cmd+D on macOS) does the same from
+anywhere in the window while a track is active on the selected node's bench;
+with none active the key is left alone.
 
 **Evaluate and Fit are two buttons because they are two questions.** *Evaluate*
 measures every observation where it sits and **moves nothing**, so a person

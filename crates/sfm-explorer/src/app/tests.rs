@@ -259,6 +259,10 @@ impl Parts {
         state.append_node(crate::scene::SceneNode::demo(
             sfmtool_core::SfmrReconstruction::demo(8),
         ));
+        Self::with_state(state)
+    }
+
+    fn with_state(state: AppState) -> Self {
         Parts {
             state,
             viewer_3d: crate::viewer_3d::Viewer3D::new(),
@@ -282,6 +286,11 @@ impl Parts {
     /// `typing` puts the keyboard where a text field would, which is the state
     /// `egui_wants_keyboard_input` reports and every accelerator is gated on.
     fn press(&mut self, key: egui::Key, typing: bool) {
+        self.press_with(key, egui::Modifiers::NONE, typing);
+    }
+
+    /// [`Parts::press`] with `modifiers` held.
+    fn press_with(&mut self, key: egui::Key, modifiers: egui::Modifiers, typing: bool) {
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -293,7 +302,7 @@ impl Parts {
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             }],
             ..Default::default()
         };
@@ -381,4 +390,42 @@ fn the_step_keys_do_nothing_while_a_text_field_holds_the_keyboard() {
         Some(ImageRef::new(id, 0)),
         "a typed key stepped the selection"
     );
+}
+
+// ── Ctrl+D, Track View's *Duplicate* ────────────────────────────────────
+
+/// With a track active on the bench, Ctrl+D puts a copy beside it and makes
+/// the copy active, as the toolbar's *Duplicate* does.
+#[test]
+fn ctrl_d_duplicates_the_active_track() {
+    let (mut state, id) = edits::adjustable_state();
+    let point = PointRef::new(id, 11);
+    super::apply_point_click(&mut state, point, false);
+    super::apply_point_click(&mut state, point, true);
+    let original = crate::bench::active_track_label(state.bench(id).unwrap())
+        .expect("the double-click made the staged track active")
+        .to_string();
+    let mut parts = Parts::with_state(state);
+
+    parts.press_with(egui::Key::D, egui::Modifiers::COMMAND, false);
+
+    let bench = parts.state.bench(id).unwrap();
+    assert_eq!(bench.entries().len(), 2, "Ctrl+D put no copy on the bench");
+    let copy = crate::bench::active_track_label(bench).unwrap().to_string();
+    assert_ne!(copy, original, "the copy is not the active track");
+    let rows = texts(&parts.state);
+    let row = format!("Duplicated {original} as {copy} ");
+    assert!(rows.iter().any(|t| t.starts_with(&row)), "{rows:?}");
+}
+
+/// With nothing active on the bench there is nothing to duplicate, and Ctrl+D
+/// writes nothing.
+#[test]
+fn ctrl_d_does_nothing_without_an_active_track() {
+    let mut parts = Parts::new();
+    let before = texts(&parts.state);
+
+    parts.press_with(egui::Key::D, egui::Modifiers::COMMAND, false);
+
+    assert_eq!(texts(&parts.state), before);
 }

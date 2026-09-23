@@ -408,7 +408,7 @@ impl TrackEdit {
                 busy.clone(),
                 "Put a copy of this track on the bench and work on that: a patch \
                  already fitted to one piece of surface is most of the way to the \
-                 piece beside it",
+                 piece beside it (Ctrl+D)",
             ) {
                 response.duplicate = true;
             }

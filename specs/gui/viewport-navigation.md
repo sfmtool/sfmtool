@@ -312,6 +312,11 @@ whatever is in front of you at the current target distance.
 Speed scales with target distance — moving fast when far from things, slow
 when close. Shift acts as a sprint multiplier (3×) for quick repositioning.
 
+With Ctrl/Cmd down a letter belongs to a shortcut instead (Ctrl+S saves, Ctrl+D
+duplicates the active bench track), and no fly key moves the camera, so saving
+does not also fly backward. Shift and Alt are not reserved: Shift is the sprint,
+and Alt shows the target, which is useful while flying.
+
 Any fly key press also exits camera view mode, so you can start flying
 immediately from a camera view.
 
