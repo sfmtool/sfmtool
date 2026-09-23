@@ -100,6 +100,46 @@ def _parse_opt_int(value: str) -> int | None:
     return int(value)
 
 
+def _parse_kv_params(
+    param: str, option_name: str, keys: dict[str, Callable[[str], object]]
+) -> dict:
+    """Parse one optional comma-separated ``key=value`` option's overrides."""
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            # Tolerate empty segments, including a bare option or trailing comma.
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid {option_name} token '{token}': expected key=value"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise click.UsageError(f"Invalid {option_name} token '{token}': empty key")
+        if key not in keys:
+            raise click.UsageError(
+                f"Unknown {option_name} key '{key}' "
+                f"(expected one of: {', '.join(sorted(keys))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate {option_name} key '{key}'")
+        caster = keys[key]
+        if caster is str:
+            kwargs[key] = value
+        else:
+            try:
+                kwargs[key] = caster(value)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid value for {option_name} key '{key}': "
+                    f"'{value}' is not a valid {caster.__name__}"
+                )
+    return kwargs
+
+
 # Each --refine-normals key maps to a caster for its value; the
 # RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
 # PatchCloud.refine_normals binding parameters. (Frame-sizing / cloud-building
@@ -135,44 +175,9 @@ def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
     range/enum validation is the transform constructor's job (its ``ValueError``
     is re-raised as ``UsageError`` by the caller).
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            # Tolerate empty segments (e.g. a trailing comma); a bare
-            # ``--refine-normals=`` likewise yields no overrides.
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --refine-normals token '{token}': expected key=value"
-            )
-        key, value = token.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise click.UsageError(
-                f"Invalid --refine-normals token '{token}': empty key"
-            )
-        if key not in _REFINE_NORMALS_KEYS:
-            raise click.UsageError(
-                f"Unknown --refine-normals key '{key}' "
-                f"(expected one of: {', '.join(sorted(_REFINE_NORMALS_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --refine-normals key '{key}'")
-        caster = _REFINE_NORMALS_KEYS[key]
-        if caster is str:
-            kwargs[key] = value
-        else:
-            try:
-                kwargs[key] = caster(value)
-            except ValueError:
-                raise click.UsageError(
-                    f"Invalid value for --refine-normals key '{key}': "
-                    f"'{value}' is not a valid {caster.__name__}"
-                )
-
-    return RefineNormalsTransform(**kwargs)
+    return RefineNormalsTransform(
+        **_parse_kv_params(param, "--refine-normals", _REFINE_NORMALS_KEYS)
+    )
 
 
 # Each --refine-keypoints key maps to a caster for its value; the
@@ -204,44 +209,9 @@ def parse_refine_keypoints_params(param: str) -> RefineKeypointsTransform:
     ``click.UsageError``; range/enum validation is the transform constructor's
     job (its ``ValueError`` is re-raised as ``UsageError`` by the caller).
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            # Tolerate empty segments (e.g. a trailing comma); a bare
-            # ``--refine-keypoints=`` likewise yields no overrides.
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --refine-keypoints token '{token}': expected key=value"
-            )
-        key, value = token.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise click.UsageError(
-                f"Invalid --refine-keypoints token '{token}': empty key"
-            )
-        if key not in _REFINE_KEYPOINTS_KEYS:
-            raise click.UsageError(
-                f"Unknown --refine-keypoints key '{key}' "
-                f"(expected one of: {', '.join(sorted(_REFINE_KEYPOINTS_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --refine-keypoints key '{key}'")
-        caster = _REFINE_KEYPOINTS_KEYS[key]
-        if caster is str:
-            kwargs[key] = value
-        else:
-            try:
-                kwargs[key] = caster(value)
-            except ValueError:
-                raise click.UsageError(
-                    f"Invalid value for --refine-keypoints key '{key}': "
-                    f"'{value}' is not a valid {caster.__name__}"
-                )
-
-    return RefineKeypointsTransform(**kwargs)
+    return RefineKeypointsTransform(
+        **_parse_kv_params(param, "--refine-keypoints", _REFINE_KEYPOINTS_KEYS)
+    )
 
 
 # The two --add-patch-bitmaps keys. The other sub-pixel parameters tune a solve
@@ -259,36 +229,9 @@ def parse_add_patch_bitmaps_params(param: str) -> AddPatchBitmapsTransform:
     unparseable values raise ``click.UsageError``; range and enum validation is
     the transform constructor's.
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --add-patch-bitmaps token '{token}': expected key=value"
-            )
-        key, value = (part.strip() for part in token.split("=", 1))
-        if not key:
-            raise click.UsageError(
-                f"Invalid --add-patch-bitmaps token '{token}': empty key"
-            )
-        if key not in _ADD_PATCH_BITMAPS_KEYS:
-            raise click.UsageError(
-                f"Unknown --add-patch-bitmaps key '{key}' "
-                f"(expected one of: {', '.join(sorted(_ADD_PATCH_BITMAPS_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --add-patch-bitmaps key '{key}'")
-        caster = _ADD_PATCH_BITMAPS_KEYS[key]
-        try:
-            kwargs[key] = caster(value)
-        except ValueError:
-            raise click.UsageError(
-                f"Invalid value for --add-patch-bitmaps key '{key}': "
-                f"'{value}' is not a valid {caster.__name__}"
-            )
-    return AddPatchBitmapsTransform(**kwargs)
+    return AddPatchBitmapsTransform(
+        **_parse_kv_params(param, "--add-patch-bitmaps", _ADD_PATCH_BITMAPS_KEYS)
+    )
 
 
 # The one --minimal key. ``wspath`` is the command-line spelling of the stated
@@ -306,26 +249,7 @@ def parse_minimal_params(param: str) -> MinimalTransform:
     save does. Unknown keys, malformed tokens and empty keys raise
     ``click.UsageError``.
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --minimal token '{token}': expected key=value"
-            )
-        key, value = (part.strip() for part in token.split("=", 1))
-        if not key:
-            raise click.UsageError(f"Invalid --minimal token '{token}': empty key")
-        if key not in _MINIMAL_KEYS:
-            raise click.UsageError(
-                f"Unknown --minimal key '{key}' "
-                f"(expected one of: {', '.join(sorted(_MINIMAL_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --minimal key '{key}'")
-        kwargs[key] = value
+    kwargs = _parse_kv_params(param, "--minimal", _MINIMAL_KEYS)
     return MinimalTransform(workspace_path=kwargs.get("wspath"))
 
 
@@ -365,44 +289,9 @@ def parse_localize_keypoints_params(param: str) -> LocalizeKeypointsTransform:
     constructor's job (its ``ValueError`` is re-raised as ``UsageError`` by the
     caller).
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            # Tolerate empty segments (e.g. a trailing comma); a bare
-            # ``--localize-keypoints=`` likewise yields no overrides.
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --localize-keypoints token '{token}': expected key=value"
-            )
-        key, value = token.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise click.UsageError(
-                f"Invalid --localize-keypoints token '{token}': empty key"
-            )
-        if key not in _LOCALIZE_KEYPOINTS_KEYS:
-            raise click.UsageError(
-                f"Unknown --localize-keypoints key '{key}' "
-                f"(expected one of: {', '.join(sorted(_LOCALIZE_KEYPOINTS_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --localize-keypoints key '{key}'")
-        caster = _LOCALIZE_KEYPOINTS_KEYS[key]
-        if caster is str:
-            kwargs[key] = value
-        else:
-            try:
-                kwargs[key] = caster(value)
-            except ValueError:
-                raise click.UsageError(
-                    f"Invalid value for --localize-keypoints key '{key}': "
-                    f"'{value}' is not a valid {caster.__name__}"
-                )
-
-    return LocalizeKeypointsTransform(**kwargs)
+    return LocalizeKeypointsTransform(
+        **_parse_kv_params(param, "--localize-keypoints", _LOCALIZE_KEYPOINTS_KEYS)
+    )
 
 
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns
@@ -424,42 +313,9 @@ def parse_to_embedded_patches_params(param: str) -> ToEmbeddedPatchesTransform:
     unparseable values raise ``click.UsageError``; range/enum validation is the
     transform constructor's job.
     """
-    kwargs: dict = {}
-    for token in param.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        if "=" not in token:
-            raise click.UsageError(
-                f"Invalid --to-embedded-patches token '{token}': expected key=value"
-            )
-        key, value = token.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise click.UsageError(
-                f"Invalid --to-embedded-patches token '{token}': empty key"
-            )
-        if key not in _TO_EMBEDDED_PATCHES_KEYS:
-            raise click.UsageError(
-                f"Unknown --to-embedded-patches key '{key}' "
-                f"(expected one of: {', '.join(sorted(_TO_EMBEDDED_PATCHES_KEYS))})"
-            )
-        if key in kwargs:
-            raise click.UsageError(f"Duplicate --to-embedded-patches key '{key}'")
-        caster = _TO_EMBEDDED_PATCHES_KEYS[key]
-        if caster is str:
-            kwargs[key] = value
-        else:
-            try:
-                kwargs[key] = caster(value)
-            except ValueError:
-                raise click.UsageError(
-                    f"Invalid value for --to-embedded-patches key '{key}': "
-                    f"'{value}' is not a valid {caster.__name__}"
-                )
-
-    return ToEmbeddedPatchesTransform(**kwargs)
+    return ToEmbeddedPatchesTransform(
+        **_parse_kv_params(param, "--to-embedded-patches", _TO_EMBEDDED_PATCHES_KEYS)
+    )
 
 
 def auto_output_path(input_path: Path, suffix: str = "transformed") -> Path:
