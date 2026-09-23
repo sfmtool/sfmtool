@@ -4,7 +4,7 @@
 """End-to-end tests for the ``sfm embed-patches`` command and the ``embed_patches``
 orchestration (steps 1-7 of the sift_files -> embedded_patches pipeline).
 
-Runs the real photometric kernels on the ``seoul_bull_workspace_deprecated`` fixture (which
+Runs the real photometric kernels on the ``seoul_bull_workspace`` fixture (which
 carries the ``.sift`` files + source images) at a low patch resolution to keep the
 end-to-end cost reasonable. See ``specs/cli/reconstruction/embed-patches-command.md`` and
 ``specs/core/patch/sift-to-patch-reconstruction.md``.
@@ -28,10 +28,10 @@ from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.io import verify_sfmr
 from sfmtool.cli import main
 
+from .conftest import rotation_matrices
 
-def test_embed_patches_cli_round_trips(
-    monkeypatch, seoul_bull_workspace_deprecated, tmp_path
-):
+
+def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_path):
     """The CLI converts sift_files -> embedded_patches and the output loads + verifies
     with no .sift companion."""
     real = ep.embed_patches
@@ -41,7 +41,7 @@ def test_embed_patches_cli_round_trips(
         lambda recon, images, **kw: real(recon, images, **{**kw, "resolution": 12}),
     )
     out = tmp_path / "out.sfmr"
-    args = ["embed-patches", str(seoul_bull_workspace_deprecated), str(out)]
+    args = ["embed-patches", str(seoul_bull_workspace), str(out)]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
@@ -59,9 +59,7 @@ def test_embed_patches_cli_round_trips(
     assert len(reloaded.image_file_hashes) == reloaded.image_count
 
 
-def test_embed_patches_default_output_path(
-    monkeypatch, seoul_bull_workspace_deprecated
-):
+def test_embed_patches_default_output_path(monkeypatch, seoul_bull_workspace):
     """Omitting OUTPUT writes <stem>-embedded.sfmr next to the input."""
     real = ep.embed_patches
     monkeypatch.setattr(
@@ -69,7 +67,7 @@ def test_embed_patches_default_output_path(
         "embed_patches",
         lambda recon, images, **kw: real(recon, images, **{**kw, "resolution": 12}),
     )
-    src = Path(seoul_bull_workspace_deprecated)
+    src = Path(seoul_bull_workspace)
     expected = src.with_name(f"{src.stem}-embedded.sfmr")
     try:
         args = ["embed-patches", str(src)]
@@ -84,12 +82,10 @@ def test_embed_patches_default_output_path(
         expected.unlink(missing_ok=True)
 
 
-def test_embed_patches_rejects_already_embedded(
-    seoul_bull_workspace_deprecated, tmp_path
-):
+def test_embed_patches_rejects_already_embedded(seoul_bull_workspace, tmp_path):
     """Running on an already-embedded reconstruction errors (nothing to convert)."""
     # Build a cheap embedded_patches input via the non-photometric baseline.
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     emb = recon.to_embedded_patches()
     embedded_path = tmp_path / "embedded.sfmr"
     emb.save(str(embedded_path), operation="xform")
@@ -101,10 +97,10 @@ def test_embed_patches_rejects_already_embedded(
     assert "already embedded_patches" in result.output
 
 
-def test_image_file_hashes_from_sift_matches_metadata(seoul_bull_workspace_deprecated):
+def test_image_file_hashes_from_sift_matches_metadata(seoul_bull_workspace):
     """image_file_hashes_from_sift reads the .sift image_file_xxh128 (16 bytes),
     matching the value re-hashing the image bytes would produce."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     from_sift = image_file_hashes_from_sift(recon)
     assert len(from_sift) == recon.image_count
     assert all(isinstance(h, bytes) and len(h) == 16 for h in from_sift)
@@ -113,7 +109,7 @@ def test_image_file_hashes_from_sift_matches_metadata(seoul_bull_workspace_depre
     assert from_sift == image_file_hashes_from_images(recon)
 
 
-def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace_deprecated):
+def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     """The full orchestration runs on an infinity-bearing input (feature_size
     sizing doesn't choke on w=0 points) and produces a valid embedded_patches
     reconstruction; any surviving infinity point stays at infinity. Every kept
@@ -122,15 +118,20 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace_deprecate
     infinity points get a fused consensus texture, not a zero row."""
     import cv2
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
-    # Turn one well-observed point into a point at infinity.
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    # Turn one well-observed point into a point at infinity, in the direction the
+    # cameras see it: from the centroid of the camera centres, so the direction
+    # lands in some image whatever the frame's origin.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )
     pi = int(np.argmax(counts))
-    xyz = pos[pi, :3]
-    pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
+    centres = -np.einsum(
+        "nji,nj->ni", rotation_matrices(recon), np.asarray(recon.translations)
+    )
+    ray = pos[pi, :3] - centres.mean(axis=0)
+    pos[pi] = np.append(ray / np.linalg.norm(ray), 0.0)
     recon = recon.clone_with_changes(positions=pos)
     assert bool(np.asarray(recon.point_is_at_infinity)[pi])
 
@@ -160,7 +161,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace_deprecate
 
 
 def test_embed_patches_sources_hashes_from_embedded_not_sift(
-    monkeypatch, seoul_bull_workspace_deprecated
+    monkeypatch, seoul_bull_workspace
 ):
     """The re-layered pipeline's only ``.sift`` read is the ``to_embedded_patches``
     bridge; it sources image hashes from the embedded recon, not by re-reading the
@@ -173,7 +174,7 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
 
     monkeypatch.setattr(pc, "image_file_hashes_from_sift", _boom)
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
         np.ascontiguousarray(
@@ -192,7 +193,7 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
 
 
 def test_embed_patches_refine_anchors_on_stored_keypoints(
-    monkeypatch, seoul_bull_workspace_deprecated
+    monkeypatch, seoul_bull_workspace
 ):
     """The re-layer's intent: normal refinement runs with use_stored_keypoints=True
     (anchoring on the carried-in SIFT detections), not the reprojected center.
@@ -210,7 +211,7 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
 
     monkeypatch.setattr(PatchCloud, "refine_normals", spy)
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
         np.ascontiguousarray(
@@ -225,7 +226,7 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
 
 
 def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
-    monkeypatch, seoul_bull_workspace_deprecated, tmp_path
+    monkeypatch, seoul_bull_workspace, tmp_path
 ):
     """End-to-end CLI plumbing for the two new opt-in knobs: the values
     parsed from the command line reach `embed_patches`'s kwargs. Spying on
@@ -249,7 +250,7 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
     out = tmp_path / "out.sfmr"
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(out),
         "--subpixel",
         "2",
@@ -272,7 +273,7 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
     assert captured["fronto_prior_weight"] == 0.05
 
 
-def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace_deprecated):
+def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
     """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
     (see specs/core/patch/patch-normal-refine-view-subset.md): every observation stays
     in the output and the consensus bitmaps are still fused over the full view
@@ -280,10 +281,10 @@ def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace_depreca
     observation counts) as the all-views default — within a hair's tolerance:
     the cap never drops an observation itself, but the slightly different
     round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision
-    (observed: 1 observation in ~4800 on this fixture)."""
+    (observed: 10 observations in ~10000 on this fixture)."""
     import cv2
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
         np.ascontiguousarray(
@@ -312,7 +313,7 @@ def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace_depreca
 
 
 def test_embed_patches_cli_refine_max_views_forwards(
-    monkeypatch, seoul_bull_workspace_deprecated, tmp_path
+    monkeypatch, seoul_bull_workspace, tmp_path
 ):
     """`--refine-max-views` parses (IntRange >= 0) and reaches `embed_patches` as
     the `max_refine_views` kwarg; the capped end-to-end run succeeds."""
@@ -328,7 +329,7 @@ def test_embed_patches_cli_refine_max_views_forwards(
     out = tmp_path / "out.sfmr"
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(out),
         "--refine-max-views",
         "5",
@@ -342,7 +343,7 @@ def test_embed_patches_cli_refine_max_views_forwards(
     # A negative cap is rejected up front by the IntRange.
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(tmp_path / "out2.sfmr"),
         "--refine-max-views",
         "-1",
@@ -353,14 +354,12 @@ def test_embed_patches_cli_refine_max_views_forwards(
     assert "refine-max-views" in result.output.lower()
 
 
-def test_embed_patches_cli_rejects_bad_subpixel(
-    seoul_bull_workspace_deprecated, tmp_path
-):
+def test_embed_patches_cli_rejects_bad_subpixel(seoul_bull_workspace, tmp_path):
     """`--subpixel` is a non-negative integer; a non-integer (or negative) value
     errors out before any work happens."""
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(tmp_path / "out.sfmr"),
         "--subpixel",
         "lk",  # no longer a valid value — it's an int now
@@ -371,7 +370,7 @@ def test_embed_patches_cli_rejects_bad_subpixel(
     assert "subpixel" in result.output.lower()
 
 
-def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace_deprecated):
+def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     """Regression (channel order): the stored ``patch_bitmaps_y_x_rgba`` is RGB,
     not BGR — so the GUI, which uploads channel 0 as red, shows true colours.
 
@@ -388,7 +387,7 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace_deprecated):
     from sfmtool._embed_patches import embed_patches
     from sfmtool._workspace_image import read_workspace_image
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
 
     # Repaint each source image: red + green carry the grayscale texture, blue is
@@ -425,7 +424,7 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace_deprecated):
 
 
 def test_embed_patches_localize_basis_views_keeps_observations(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
     """`localize_basis_views` caps only the localizer's consensus *membership*
     (see specs/core/patch/keypoint-localization-consensus-basis.md): every admitted
@@ -434,7 +433,7 @@ def test_embed_patches_localize_basis_views_keeps_observations(
     sets are at or under the cap and take the bit-identical uncapped path."""
     import cv2
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
         np.ascontiguousarray(
@@ -461,7 +460,7 @@ def test_embed_patches_localize_basis_views_keeps_observations(
 
 
 def test_embed_patches_cli_localize_basis_views_forwards(
-    monkeypatch, seoul_bull_workspace_deprecated, tmp_path
+    monkeypatch, seoul_bull_workspace, tmp_path
 ):
     """`--localize-basis-views` parses (IntRange >= 0) and reaches
     `embed_patches` as the `localize_basis_views` kwarg."""
@@ -477,7 +476,7 @@ def test_embed_patches_cli_localize_basis_views_forwards(
     out = tmp_path / "basis.sfmr"
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(out),
         "--localize-basis-views",
         "6",
@@ -490,7 +489,7 @@ def test_embed_patches_cli_localize_basis_views_forwards(
 
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(tmp_path / "basis2.sfmr"),
         "--localize-basis-views",
         "-1",
@@ -502,12 +501,12 @@ def test_embed_patches_cli_localize_basis_views_forwards(
 
 
 def test_embed_patches_cli_absolute_localizer_gates_forward(
-    monkeypatch, seoul_bull_workspace_deprecated, tmp_path
+    monkeypatch, seoul_bull_workspace, tmp_path
 ):
     """`--min-absolute-zncc` and `--max-member-keypoint-uncertainty` parse and
     reach `embed_patches` as their matching kwargs, and the written file records
     them in its own `tool_options` (the merge would otherwise leave only the
-    upstream solve's options there)."""
+    upstream operation's options there)."""
     captured: dict = {}
     real = ep.embed_patches
 
@@ -525,7 +524,7 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
     out = tmp_path / "gates.sfmr"
     args = [
         "embed-patches",
-        str(seoul_bull_workspace_deprecated),
+        str(seoul_bull_workspace),
         str(out),
         "--min-absolute-zncc",
         "0.25",

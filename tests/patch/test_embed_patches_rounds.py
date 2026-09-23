@@ -19,7 +19,7 @@ from .conftest import load_images
 
 
 def test_embed_patches_default_is_two_rounds_one_sweep(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
+    seoul_bull_workspace: Path, tmp_path: Path
 ):
     """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
     bit-for-bit equivalent to passing ``subpixel=1, rounds=2``. Pins the default so
@@ -32,7 +32,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
     images = load_images(recon)
 
@@ -52,7 +52,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
 
 
 def test_embed_patches_subpixel_lk_round_trips(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
+    seoul_bull_workspace: Path, tmp_path: Path
 ):
     """``embed_patches(subpixel=1)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
@@ -61,7 +61,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
 
     # Pin rounds=1 so the subpixel pass is the terminal step: it feeds nothing
@@ -91,15 +91,12 @@ def test_embed_patches_subpixel_lk_round_trips(
     #   seeds for the baseline, the LK-refined keypoints here. Refinement can
     #   flip a marginal consensus from invalid to valid, RESCUING a point the
     #   baseline culls. (`embed_patches` itself is deterministic — 4/4
-    #   bit-identical repeat runs on a fixed solve — so a grown count is this
-    #   rescue, not run-to-run jitter.)
+    #   bit-identical repeat runs on a fixed reconstruction, so a grown count
+    #   is this rescue, not run-to-run jitter.)
     #
-    # Do not require the counts to be *equal* either. The fixture re-solves
-    # the reconstruction every session and the solve is not reproducible
-    # (COLMAP's geometric verification during matching is nondeterministic),
-    # so whether a marginal point clears those gates varies run to run.
-    # Measured over 45 solves: 39 identical and 6 that culled exactly one
-    # two-view point; a later CI solve rescued one (937 vs 936).
+    # Do not require the counts to be *equal* either: which marginal points
+    # clear those gates is a property of the input geometry, not of the wiring
+    # this test pins. The bound says the pass stays a local refinement.
     assert abs(refined.point_count - baseline.point_count) <= 2, (
         f"subpixel moved the point count by "
         f"{refined.point_count - baseline.point_count} "
@@ -138,7 +135,7 @@ def test_embed_patches_subpixel_lk_round_trips(
 
 
 def test_embed_patches_multiple_rounds_round_trips(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
+    seoul_bull_workspace: Path, tmp_path: Path
 ):
     """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
     round into the next and re-pruning grazing observations. The output is a valid
@@ -147,7 +144,7 @@ def test_embed_patches_multiple_rounds_round_trips(
     once per round."""
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertions

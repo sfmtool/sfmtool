@@ -18,8 +18,8 @@ from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
 
-def test_feature_size_success_path(seoul_bull_workspace_deprecated: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+def test_feature_size_success_path(seoul_bull_workspace: Path):
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     cloud = PatchCloud.from_reconstruction(
         recon, extent="feature_size", extent_value=5.0
     )
@@ -37,9 +37,9 @@ def test_feature_size_success_path(seoul_bull_workspace_deprecated: Path):
 
 
 def test_feature_size_scales_linearly_with_factor(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     cloud5 = PatchCloud.from_reconstruction(
         recon, extent="feature_size", extent_value=5.0
     )
@@ -56,10 +56,10 @@ def test_feature_size_scales_linearly_with_factor(
 
 
 def test_from_reconstruction_excludes_or_includes_points_at_infinity(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """exclude_points_at_infinity gates whether infinity points get a frame."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count

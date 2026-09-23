@@ -73,8 +73,8 @@ def _seoul_bull_rig_and_sources(
 
 
 @pytest.fixture
-def seoul_bull_rig_and_sources(seoul_bull_workspace_deprecated: Path):
-    return _seoul_bull_rig_and_sources(seoul_bull_workspace_deprecated)
+def seoul_bull_rig_and_sources(seoul_bull_workspace: Path):
+    return _seoul_bull_rig_and_sources(seoul_bull_workspace)
 
 
 def _monolithic_atlas(rig, sources, dtype: str) -> np.ndarray:

@@ -23,9 +23,9 @@ from .conftest import load_images, sample_point_ids
 
 
 def test_use_stored_keypoints_runs_on_embedded_patches(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
-    sift_recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     assert recon.feature_source == "embedded_patches"
     images = load_images(recon)
@@ -60,12 +60,13 @@ def test_use_stored_keypoints_runs_on_embedded_patches(
 
 
 def test_use_stored_keypoints_differs_from_centered(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     # Anchoring at the stored detection keypoints should move at least some
-    # refined results relative to the point-centered refine (the solve carries
-    # nonzero reprojection error, so the keypoints sit off the projected center).
-    sift_recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    # refined results relative to the point-centered refine (the observations
+    # carry nonzero reprojection error, so the keypoints sit off the projected
+    # center).
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     images = load_images(recon)
     point_ids = None
@@ -100,13 +101,13 @@ def test_use_stored_keypoints_differs_from_centered(
 
 
 def test_use_stored_keypoints_default_true_on_embedded_uses_stored(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """The default (``use_stored_keypoints=True``) on an embedded_patches recon
     anchors at the inline stored keypoints — bit-equal to passing
     ``use_stored_keypoints=True`` explicitly. Pins the default value to True
     so a code flip can't silently change anchor source."""
-    sift_recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     images = load_images(recon)
 
@@ -132,14 +133,14 @@ def test_use_stored_keypoints_default_true_on_embedded_uses_stored(
 
 
 def test_use_stored_keypoints_default_true_on_sift_files_falls_back_to_projection(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """The default (``use_stored_keypoints=True``) on a sift-files recon
     silently falls back per-view to the reprojected center (the recon has no
     inline keypoints to anchor on) — bit-equal to passing
     ``use_stored_keypoints=False`` explicitly. No error: ``True`` is a
     request, not a requirement."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
 
     images = load_images(recon)
@@ -165,7 +166,7 @@ def test_use_stored_keypoints_default_true_on_sift_files_falls_back_to_projectio
 
 
 def test_stored_keypoints_at_reprojection_match_centered(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     # Provable mapping guard: overwrite every stored keypoint with its own
     # observation's reprojection of the point center. Anchoring on those (zero
@@ -175,7 +176,7 @@ def test_stored_keypoints_at_reprojection_match_centered(
     # perturbs normals) cannot detect.
     from sfmtool._sfmtool.geometry import RigidTransform
 
-    sift_recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     images = load_images(recon)
 
@@ -228,10 +229,9 @@ def test_stored_keypoints_at_reprojection_match_centered(
     # every point, so the bulk must match to float precision. The max bound only
     # guards against a systematic offset and must leave room for a rare grazing
     # -view straggler whose float32 reprojection anchor rounds to a sub-pixel
-    # offset the refine amplifies — measured up to 9.4e-2 (one point of 120,
-    # q97 at 2.8e-16, on one CI fixture solve), varying with the
-    # platform-specific COLMAP geometry. 0.5 stays half the ≈ 1 mis-mapping
-    # signature while no realistic straggler reaches it.
+    # offset the refine amplifies. On other geometry of this dataset one point
+    # of 120 has reached 9.4e-2 with q97 at 2.8e-16. 0.5 stays half the ≈ 1
+    # mis-mapping signature while no realistic straggler reaches it.
     dots = np.einsum("ij,ij->i", centered["normal"], anchored["normal"])
     dev = np.abs(dots - 1.0)
     assert np.quantile(dev, 0.97) < 1e-3 and np.max(dev) < 0.5, (
@@ -240,12 +240,12 @@ def test_stored_keypoints_at_reprojection_match_centered(
     )
 
 
-def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace_deprecated: Path):
+def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
     # view_indices override + use_stored_keypoints: track images resolve to a
     # stored keypoint; a non-track image added per patch resolves to None (left
     # centered). Exercises the mixed Some/None path through the binding's
     # (point, image) -> keypoint map.
-    sift_recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(

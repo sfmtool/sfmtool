@@ -3,7 +3,7 @@
 
 """Integration test for ``PatchCloud.select_views`` against real reconstructions.
 
-Builds a patch cloud from a solved reconstruction and runs photometric
+Builds a patch cloud from a real reconstruction and runs photometric
 patch-view selection over its real ``.sift``-derived patches and source images —
 the multi-view rendering path the Rust unit tests can't exercise without on-disk
 images. See ``specs/core/patch/patch-view-selection.md``.
@@ -76,10 +76,10 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
 
 
 def test_select_views_superset_of_track_on_convex_dataset(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """On the convex seoul_bull case the selected set contains the whole track."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
@@ -126,10 +126,10 @@ def test_select_views_superset_of_track_on_convex_dataset(
 
 
 def test_select_views_self_agreement_and_threshold(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """Where a reference was built, admitted candidates clear the relative bar."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -193,7 +193,7 @@ def test_select_views_runs_on_nonconvex_fisheye_rig(kerry_park_workspace: Path):
 
 
 def test_select_views_rejects_some_geometrically_visible_candidate(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """Selection is not a rubber stamp: across the sample at least one
     geometrically-visible candidate (beyond the always-admitted track) is vetted
@@ -207,7 +207,7 @@ def test_select_views_rejects_some_geometrically_visible_candidate(
     frame edge). The load-bearing invariant is that some visible non-track
     candidate is rejected; admitted views are otherwise covered by the cheirality
     and threshold tests."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -351,7 +351,7 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     assert checked > 0, "no admitted infinity views were checked"
 
 
-def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace_deprecated: Path):
+def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace: Path):
     """``keypoint_anchor`` defaults to OFF and changes the numbers when turned on.
 
     Anchoring changes the reference every score is taken against, so callers that
@@ -363,7 +363,7 @@ def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace_deprecated:
     """
     from sfmtool import _embed_patches as ep
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     emb = ep.embed_patches(recon, images, resolution=12)
     # The embedded recon carries its own cloud; rebuilding one would need the

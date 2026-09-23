@@ -270,17 +270,15 @@ class TestRealReconstruction:
     """
 
     def _setup(
-        self, seoul_bull_workspace_deprecated
+        self, seoul_bull_workspace
     ) -> tuple[SfmrReconstruction, int, int, np.ndarray]:
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         assert recon.image_count == 17
         # Use neighbouring images — they typically share many 3D points.
         return recon, 0, 1, recon.positions
 
-    def test_per_point_reprojection(self, seoul_bull_workspace_deprecated):
-        recon, src_idx, dst_idx, positions = self._setup(
-            seoul_bull_workspace_deprecated
-        )
+    def test_per_point_reprojection(self, seoul_bull_workspace):
+        recon, src_idx, dst_idx, positions = self._setup(seoul_bull_workspace)
         src_cam = recon.cameras[recon.camera_indexes[src_idx]]
         dst_cam = recon.cameras[recon.camera_indexes[dst_idx]]
         src_pose = _pose_from_image(recon, src_idx)
@@ -363,14 +361,10 @@ class TestRealReconstruction:
             f"max per-point reprojection error: {np.max(errors):.3f} px; errors={errors}"
         )
 
-    def test_rotation_only_vs_pose_diverge_for_nearby_scene(
-        self, seoul_bull_workspace_deprecated
-    ):
+    def test_rotation_only_vs_pose_diverge_for_nearby_scene(self, seoul_bull_workspace):
         """At scene-comparable baselines, the rotation-only approximation
         disagrees with the exact pose-aware formulation by many pixels."""
-        recon, src_idx, dst_idx, positions = self._setup(
-            seoul_bull_workspace_deprecated
-        )
+        recon, src_idx, dst_idx, positions = self._setup(seoul_bull_workspace)
         src_cam = recon.cameras[recon.camera_indexes[src_idx]]
         dst_cam = recon.cameras[recon.camera_indexes[dst_idx]]
         src_pose = _pose_from_image(recon, src_idx)
@@ -390,8 +384,8 @@ class TestRealReconstruction:
         dst_center = np.asarray(dst_pose.inverse_translation_origin())
         baseline = float(np.linalg.norm(src_center - dst_center))
 
-        # On seoul_bull baseline (~0.6) is comparable to scene depth
-        # (~6) — r/B ≈ 10 — so a rotation-only approximation is already
+        # On seoul_bull the baseline (~0.3 m) is comparable to scene depth
+        # (~3 m), r/B ≈ 10, so a rotation-only approximation is already
         # off by tens of pixels. Use depth = scene-median radial distance:
         # this is the "best" depth for a sphere approximation, and the
         # rotation-only formula ignoring translation still disagrees with
@@ -420,7 +414,7 @@ class TestRealReconstruction:
 
     def test_remap_real_image(
         self,
-        seoul_bull_workspace_deprecated,
+        seoul_bull_workspace,
     ):
         """Build a warp between two real images and remap the source image.
 
@@ -432,7 +426,7 @@ class TestRealReconstruction:
         """
         import cv2
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         src_idx, dst_idx = 0, 1
 
         src_cam = recon.cameras[recon.camera_indexes[src_idx]]
@@ -449,7 +443,7 @@ class TestRealReconstruction:
         ]
         depth = float(np.median(rs))
 
-        workspace = Path(seoul_bull_workspace_deprecated).parent
+        workspace = Path(seoul_bull_workspace).parent
         image_name = recon.image_names[src_idx]
         image_path = workspace / image_name
         image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
@@ -476,13 +470,13 @@ class TestRealReconstruction:
             f"src image, got {non_zero_frac:.2f}"
         )
 
-    def test_equirect_destination_from_pinhole(self, seoul_bull_workspace_deprecated):
+    def test_equirect_destination_from_pinhole(self, seoul_bull_workspace):
         """Render a pinhole source image into an equirectangular destination
         at a specific pose, using a scene-comparable depth. At least one
         back-projection lane (the src camera's FOV) should land valid
         pixels; everything outside that FOV is NaN.
         """
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         src_idx = 0
         src_cam = recon.cameras[recon.camera_indexes[src_idx]]
         src_pose = _pose_from_image(recon, src_idx)
