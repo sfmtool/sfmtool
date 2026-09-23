@@ -16,11 +16,11 @@ R = 12
 
 
 @pytest.fixture(scope="module")
-def embedded_with_bitmaps(seoul_bull_workspace_once_deprecated) -> SfmrReconstruction:
+def embedded_with_bitmaps(seoul_bull_workspace_once) -> SfmrReconstruction:
     """An ``embedded_patches`` recon carrying per-point consensus bitmaps."""
-    recon = SfmrReconstruction.load(
-        seoul_bull_workspace_once_deprecated
-    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
     return RefineKeypointsTransform(bitmaps=True, resolution=R, max_gn_steps=3).apply(
         recon
     )
@@ -83,11 +83,11 @@ def test_keeps_unscorable_points(embedded_with_bitmaps):
     assert out.point_count >= n_nan
 
 
-def test_requires_patch_bitmaps(seoul_bull_workspace_once_deprecated):
+def test_requires_patch_bitmaps(seoul_bull_workspace_once):
     """Filtering an embedded recon with no bitmaps is a clear error."""
-    recon = SfmrReconstruction.load(
-        seoul_bull_workspace_once_deprecated
-    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
     assert recon.patch_bitmaps is None
     with pytest.raises(ValueError, match="patch bitmaps"):
         FilterByLocalizabilityTransform(threshold=1.0).apply(recon)

@@ -6,8 +6,8 @@
 These exercise the additive ``--find-points-at-infinity`` transform, which
 appends new points and tracks, and the ``--classify-points-at-infinity``
 reclassifier. Both read the workspace ``.sift`` files, so they use the
-``seoul_bull_workspace_deprecated`` fixture (a real solve with sift
-artifacts on disk). See specs/cli/reconstruction/xform/find-points-at-infinity.md.
+``seoul_bull_workspace`` fixture (a reconstruction with its ``.sift``
+files on disk). See specs/cli/reconstruction/xform/find-points-at-infinity.md.
 """
 
 from unittest.mock import patch
@@ -35,9 +35,9 @@ def test_constructor_validation():
         FindPointsAtInfinityTransform(0.1, 300.0, 1)
 
 
-def test_find_is_additive_and_consistent(seoul_bull_workspace_deprecated):
+def test_find_is_additive_and_consistent(seoul_bull_workspace):
     """Find appends points/tracks, keeps integrity, and yields w=0 points."""
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
 
     result = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
         original
@@ -61,7 +61,7 @@ def test_find_is_additive_and_consistent(seoul_bull_workspace_deprecated):
     )
 
 
-def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace_deprecated):
+def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace):
     """Discovered points carry a real, inline-computed reprojection error.
 
     A point at infinity still projects its bearing (rotation + intrinsics), so
@@ -69,7 +69,7 @@ def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace_deprecated
     track was built from rather than leaving a 0.0 placeholder. This is what
     lets the reprojection-error filter score discovered infinity points.
     """
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
     n0 = original.point_count
 
     result = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
@@ -91,9 +91,9 @@ def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace_deprecated
     assert float(np.median(inf_errors)) < 10.0
 
 
-def test_min_views_three_yields_fewer(seoul_bull_workspace_deprecated):
+def test_min_views_three_yields_fewer(seoul_bull_workspace):
     """Requiring 3 views finds no more new points than requiring 2."""
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
 
     two = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
         original
@@ -107,9 +107,9 @@ def test_min_views_three_yields_fewer(seoul_bull_workspace_deprecated):
     assert new_two >= new_three
 
 
-def test_classify_preserves_point_count(seoul_bull_workspace_deprecated):
+def test_classify_preserves_point_count(seoul_bull_workspace):
     """Classify only relabels existing points, so the count is unchanged."""
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
 
     result = ClassifyPointsAtInfinityTransform(1.0).apply(original)
 
@@ -119,14 +119,14 @@ def test_classify_preserves_point_count(seoul_bull_workspace_deprecated):
     )
 
 
-def test_find_no_duplicate_observations(seoul_bull_workspace_deprecated):
+def test_find_no_duplicate_observations(seoul_bull_workspace):
     """A 2D feature observes at most one 3D point.
 
     Discovery must skip keypoints already assigned to an existing point;
     reusing one would make a feature belong to two points, which the .sfmr
     list tolerates but COLMAP export (and bundle adjustment) rejects.
     """
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
     result = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
         original
     )
@@ -143,14 +143,14 @@ def test_find_no_duplicate_observations(seoul_bull_workspace_deprecated):
 
 
 def test_found_reconstruction_survives_bundle_adjust(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
     """Discovered tracks export to COLMAP and bundle-adjust cleanly.
 
     Regression for the one-feature-two-points collision that crashed
     ``read_binary`` during the materialize -> BA -> reclassify round trip.
     """
-    original = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    original = SfmrReconstruction.load(seoul_bull_workspace)
     found = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
         original
     )
@@ -166,11 +166,11 @@ def test_found_reconstruction_survives_bundle_adjust(
     )
 
 
-def test_cli_find_points_at_infinity(seoul_bull_workspace_deprecated):
+def test_cli_find_points_at_infinity(seoul_bull_workspace):
     """End-to-end CLI run adds points; the sys.argv reparse needs patching."""
     # The fixture is already per-test isolated, and its .sfmr sits beside its
     # workspace, so the relative .sift paths resolve. Write the output there.
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("with_infinity.sfmr")
 
     args = [

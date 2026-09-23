@@ -209,14 +209,14 @@ def _embedded(workspace) -> SfmrReconstruction:
     )
 
 
-def test_localize_keypoints_structural_cull(seoul_bull_workspace_deprecated, tmp_path):
+def test_localize_keypoints_structural_cull(seoul_bull_workspace, tmp_path):
     """The key property: the output is a valid, re-loadable embedded_patches
     recon whose point/observation counts are <= the input's, with every
     surviving point keeping at least ``min_views`` observations. The track
     arrays are rebuilt, so no byte-identity is asserted."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     obs_before = len(np.asarray(recon.track_point_indexes))
 
     out = _modest_params().apply(recon)
@@ -250,10 +250,10 @@ def test_localize_keypoints_structural_cull(seoul_bull_workspace_deprecated, tmp
     )
 
 
-def test_localize_keypoints_min_views_respected(seoul_bull_workspace_deprecated):
+def test_localize_keypoints_min_views_respected(seoul_bull_workspace):
     """A higher ``min_views`` culls at least as many points as the default,
     and every survivor meets the raised floor."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     out_default = _modest_params().apply(recon)
     out_strict = _modest_params(min_views=4).apply(recon)
@@ -262,9 +262,9 @@ def test_localize_keypoints_min_views_respected(seoul_bull_workspace_deprecated)
     assert (np.asarray(out_strict.observation_counts) >= 4).all()
 
 
-def test_localize_keypoints_stay_in_frame(seoul_bull_workspace_deprecated):
+def test_localize_keypoints_stay_in_frame(seoul_bull_workspace):
     """Localized keypoints are within each image's [0, width) x [0, height)."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     out = _modest_params().apply(recon)
 
@@ -280,14 +280,14 @@ def test_localize_keypoints_stay_in_frame(seoul_bull_workspace_deprecated):
     assert (kxy[:, 1] < heights[im]).all()
 
 
-def test_localize_keypoints_drops_bitmaps(seoul_bull_workspace_deprecated):
+def test_localize_keypoints_drops_bitmaps(seoul_bull_workspace):
     """The output keeps patch frames but no bitmaps — the localizer renders
     none, and stored ones would be stale after the keypoints move and views
     drop (re-run --refine-keypoints to regenerate; it renders bitmaps by
     default)."""
     from sfmtool.xform import RefineKeypointsTransform
 
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     # Attach bitmaps first so the drop is observable.
     with_bitmaps = RefineKeypointsTransform(
         bitmaps=True, resolution=12, max_gn_steps=1
@@ -301,9 +301,9 @@ def test_localize_keypoints_drops_bitmaps(seoul_bull_workspace_deprecated):
     assert len(out.patches) == out.point_count
 
 
-def test_localize_keypoints_prints_summary(seoul_bull_workspace_deprecated, capsys):
+def test_localize_keypoints_prints_summary(seoul_bull_workspace, capsys):
     """The summary reports the structural point/observation shrink."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     _modest_params().apply(recon)
     summary = capsys.readouterr().out
     assert "Localized keypoints:" in summary
@@ -311,8 +311,8 @@ def test_localize_keypoints_prints_summary(seoul_bull_workspace_deprecated, caps
     assert "observations" in summary
 
 
-def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
-    recon = _embedded(seoul_bull_workspace_deprecated)
+def test_missing_image_is_hard_error(seoul_bull_workspace):
+    recon = _embedded(seoul_bull_workspace)
     from pathlib import Path
 
     img = Path(recon.workspace_dir) / recon.image_names[0]
@@ -321,11 +321,11 @@ def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
         _modest_params().apply(recon)
 
 
-def test_cli_localize_keypoints(seoul_bull_workspace_deprecated):
+def test_cli_localize_keypoints(seoul_bull_workspace):
     """End-to-end CLI run: convert then localize in one chain; the output is a
     valid embedded_patches recon with shrunk (or equal) counts and no bitmaps.
     The sys.argv reparse needs patching."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("localized_kpts.sfmr")
 
     args = [
@@ -351,11 +351,11 @@ def test_cli_localize_keypoints(seoul_bull_workspace_deprecated):
     assert localized.patches is not None
 
 
-def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace_deprecated):
+def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
     """``--localize-keypoints`` on a sift_files recon is rejected up front
     (before any image load or search) with a pointer to the conversion
     bridge."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("rejected_localize.sfmr")
 
     args = [
@@ -382,12 +382,12 @@ def test_parse_basis_max_views():
         parse_localize_keypoints_params("basis_max_views=-1")
 
 
-def test_localize_keypoints_basis_cap_round_trips(seoul_bull_workspace_deprecated):
+def test_localize_keypoints_basis_cap_round_trips(seoul_bull_workspace):
     """A capped run produces the same kind of output as the uncapped one: a
     valid embedded_patches recon whose points/observations do not exceed the
     input's. The cap changes only which views congeal — every observation is
     still localized — so the counts stay in the uncapped run's neighbourhood."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     out_uncapped = _modest_params().apply(recon)
     out_capped = _modest_params(basis_max_views=4).apply(recon)

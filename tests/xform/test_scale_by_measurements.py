@@ -88,27 +88,20 @@ def _pick_separated_pair(positions):
 
 
 class TestWorkspaceSearchFallback:
-    def test_finds_source_by_hash_prefix(self, seoul_bull_sfmr_only_deprecated):
+    def test_finds_source_by_hash_prefix(self, seoul_bull_sfmr_only):
         """find_sfmr_by_content_hash locates a saved recon by its prefix."""
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         prefix = recon.content_xxh128[:8].lower()
 
-        found = find_sfmr_by_content_hash(
-            seoul_bull_sfmr_only_deprecated.parent, prefix
-        )
+        found = find_sfmr_by_content_hash(seoul_bull_sfmr_only.parent, prefix)
         assert found is not None
         assert SfmrReconstruction.load(found).content_xxh128 == recon.content_xxh128
 
         assert (
-            find_sfmr_by_content_hash(
-                seoul_bull_sfmr_only_deprecated.parent, "ffffffff"
-            )
-            is None
+            find_sfmr_by_content_hash(seoul_bull_sfmr_only.parent, "ffffffff") is None
         )
 
-    def test_apply_resolves_source_via_workspace(
-        self, seoul_bull_sfmr_only_deprecated, tmp_path
-    ):
+    def test_apply_resolves_source_via_workspace(self, seoul_bull_sfmr_only, tmp_path):
         """A measurements file with no ``sfmr`` field resolves via the search.
 
         The input reconstruction is a scaled copy of the source (different
@@ -116,7 +109,7 @@ class TestWorkspaceSearchFallback:
         take the cross-reconstruction path and the source is located by scanning
         the workspace.
         """
-        source = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        source = SfmrReconstruction.load(seoul_bull_sfmr_only)
 
         # Workspace holds both the source and a half-scale input; the yaml lives
         # alongside them so the search base resolves to this directory.
@@ -162,11 +155,9 @@ class TestWorkspaceSearchFallback:
         )
         assert out.world_space_unit == "mm"
 
-    def test_missing_source_raises_helpful_error(
-        self, seoul_bull_sfmr_only_deprecated, tmp_path
-    ):
+    def test_missing_source_raises_helpful_error(self, seoul_bull_sfmr_only, tmp_path):
         """A hash prefix present nowhere in the workspace errors clearly."""
-        source = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        source = SfmrReconstruction.load(seoul_bull_sfmr_only)
         i, j = _pick_separated_pair(source.positions)
 
         workspace = tmp_path / "ws"
@@ -203,15 +194,18 @@ class TestEmbeddedPatches:
         return embedded
 
     def test_point_ids_from_the_same_file_need_no_feature_indexes(
-        self, seoul_bull_workspace_deprecated, tmp_path
+        self, seoul_bull_workspace, tmp_path
     ):
-        recon = self._embedded(seoul_bull_workspace_deprecated, tmp_path)
+        recon = self._embedded(seoul_bull_workspace, tmp_path)
         prefix = recon.content_xxh128[:8].lower()
         i, j = _pick_separated_pair(recon.positions)
         dist = float(np.linalg.norm(recon.positions[i] - recon.positions[j]))
         yaml_path = tmp_path / "measurements.yaml"
+        # The fixture is already in metres, so ask for millimetres to see the
+        # transform set the unit rather than inherit it.
+        assert recon.world_space_unit == "m"
         yaml_path.write_text(
-            "unit: m\n"
+            "unit: mm\n"
             "measurements:\n"
             f"  - point_a: pt3d_{prefix}_{i}\n"
             f"    point_b: pt3d_{prefix}_{j}\n"
@@ -222,12 +216,12 @@ class TestEmbeddedPatches:
         out = transform.apply(recon)
 
         assert transform._scale_factor == pytest.approx(2.0 / dist, rel=1e-6)
-        assert out.world_space_unit == "m"
+        assert out.world_space_unit == "mm"
 
     def test_point_ids_from_another_file_say_why_they_cannot_resolve(
-        self, seoul_bull_workspace_deprecated, tmp_path
+        self, seoul_bull_workspace, tmp_path
     ):
-        recon = self._embedded(seoul_bull_workspace_deprecated, tmp_path)
+        recon = self._embedded(seoul_bull_workspace, tmp_path)
         yaml_path = tmp_path / "measurements.yaml"
         yaml_path.write_text(
             "unit: m\n"

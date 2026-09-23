@@ -198,16 +198,14 @@ def _embedded(workspace) -> SfmrReconstruction:
     )
 
 
-def test_refine_keypoints_structural_invariance(
-    seoul_bull_workspace_deprecated, tmp_path
-):
+def test_refine_keypoints_structural_invariance(seoul_bull_workspace, tmp_path):
     """The key property: only ``keypoints_xy`` values change — the track
     arrays, observation counts, point count, positions, and normals are
     identical to the input's; and the result still saves cleanly (the in-frame
     clamp keeps the writer's keypoint checks green)."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     orig_track_images = np.asarray(recon.track_image_indexes).copy()
     orig_track_points = np.asarray(recon.track_point_indexes).copy()
     orig_obs_counts = np.asarray(recon.observation_counts).copy()
@@ -245,9 +243,9 @@ def test_refine_keypoints_structural_invariance(
     np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), new_keypoints)
 
 
-def test_refine_keypoints_stay_in_frame(seoul_bull_workspace_deprecated):
+def test_refine_keypoints_stay_in_frame(seoul_bull_workspace):
     """Refined keypoints are within each image's [0, width) x [0, height)."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     out = _modest_params().apply(recon)
 
@@ -263,11 +261,11 @@ def test_refine_keypoints_stay_in_frame(seoul_bull_workspace_deprecated):
     assert (kxy[:, 1] < heights[im]).all()
 
 
-def test_refine_keypoints_bitmaps(seoul_bull_workspace_deprecated):
+def test_refine_keypoints_bitmaps(seoul_bull_workspace):
     """``bitmaps`` defaults on: a refine with ``bitmaps`` left unset attaches a
     ``(point_count, R, R, 4)`` uint8 texture array (so the output is
     self-contained); ``bitmaps=false`` opts out and attaches none."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     # Opt-out: no texture array is attached.
     plain = _modest_params(bitmaps=False).apply(recon)
@@ -286,17 +284,17 @@ def test_refine_keypoints_bitmaps(seoul_bull_workspace_deprecated):
     assert bitmaps.any()
 
 
-def test_refine_keypoints_prints_summary(seoul_bull_workspace_deprecated, capsys):
+def test_refine_keypoints_prints_summary(seoul_bull_workspace, capsys):
     """The one-line summary reports the refined-view count and mean offset."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     _modest_params().apply(recon)
     summary = capsys.readouterr().out
     assert "Refined" in summary
     assert "keypoints" in summary
 
 
-def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
-    recon = _embedded(seoul_bull_workspace_deprecated)
+def test_missing_image_is_hard_error(seoul_bull_workspace):
+    recon = _embedded(seoul_bull_workspace)
     from pathlib import Path
 
     img = Path(recon.workspace_dir) / recon.image_names[0]
@@ -305,13 +303,13 @@ def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
         _modest_params().apply(recon)
 
 
-def test_cli_refine_keypoints(seoul_bull_workspace_deprecated):
+def test_cli_refine_keypoints(seoul_bull_workspace):
     """End-to-end CLI run rewrites keypoints without touching the structure;
     the sys.argv reparse needs patching.
 
     ``--refine-keypoints`` requires embedded_patches, so the run converts first
     in the same pipeline (``--to-embedded-patches --refine-keypoints``)."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined_kpts.sfmr")
 
     args = [
@@ -344,7 +342,7 @@ def test_cli_refine_keypoints(seoul_bull_workspace_deprecated):
     )
 
 
-def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace_deprecated):
+def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace):
     """A bare --refine-keypoints followed by another option runs the defaults
     and leaves the following option intact (optional-value tokenization).
 
@@ -352,7 +350,7 @@ def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace_depr
     expensive default-resolution refinement is stubbed out: what matters is
     that the bare option parsed to the documented defaults and did not swallow
     the trailing ``--scale 2.0`` as its value."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined_kpts_bare.sfmr")
 
     args = [
@@ -398,11 +396,11 @@ def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace_depr
     )
 
 
-def test_refine_keypoints_rejects_sift_files(seoul_bull_workspace_deprecated):
+def test_refine_keypoints_rejects_sift_files(seoul_bull_workspace):
     """``--refine-keypoints`` on a sift_files recon is rejected up front
     (before any image load or refinement) with a pointer to the conversion
     bridge."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("rejected_kpts.sfmr")
 
     args = [

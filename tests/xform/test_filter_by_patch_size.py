@@ -11,11 +11,11 @@ from sfmtool.xform import FilterByPatchSizeTransform
 
 
 @pytest.fixture(scope="module")
-def embedded_recon(seoul_bull_workspace_once_deprecated) -> SfmrReconstruction:
+def embedded_recon(seoul_bull_workspace_once) -> SfmrReconstruction:
     """An ``embedded_patches`` recon carrying per-point patch frames."""
-    return SfmrReconstruction.load(
-        seoul_bull_workspace_once_deprecated
-    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    return SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
 
 
 def _patch_sizes(recon: SfmrReconstruction) -> np.ndarray:
@@ -68,9 +68,9 @@ def test_description():
     assert "3.00" in desc
 
 
-def test_requires_embedded_patches(seoul_bull_workspace_once_deprecated):
+def test_requires_embedded_patches(seoul_bull_workspace_once):
     """Filtering a sift_files recon (no patch frames) is a clear, actionable error."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
     assert recon.patches is None
     with pytest.raises(ValueError, match="embedded_patches"):
         FilterByPatchSizeTransform(multiplier=3.0).apply(recon)

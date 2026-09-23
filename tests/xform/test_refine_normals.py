@@ -236,9 +236,9 @@ def _embedded(workspace) -> SfmrReconstruction:
 
 
 def test_refine_normals_preserves_points_and_improves(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     original_normals = np.asarray(recon.normals).copy()
     original_positions = np.asarray(recon.positions).copy()
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
@@ -268,7 +268,7 @@ def test_refine_normals_preserves_points_and_improves(
 
 
 def test_refine_normals_persists_patch_cloud_round_trips(
-    seoul_bull_workspace_deprecated, tmp_path
+    seoul_bull_workspace, tmp_path
 ):
     """On an ``embedded_patches`` recon, refine-normals always re-persists the
     refined patch cloud (its ``u``/``v`` frame now matches the refined normal),
@@ -277,7 +277,7 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     with the rewritten normals); there is no opt-out knob."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
 
     out = _modest_params().apply(recon)
     cloud = out.patches
@@ -315,16 +315,14 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     np.testing.assert_allclose(after.normal, normals[pid], atol=1e-5)
 
 
-def test_refine_normals_bitmaps_default_and_optout(
-    seoul_bull_workspace_deprecated, tmp_path
-):
+def test_refine_normals_bitmaps_default_and_optout(seoul_bull_workspace, tmp_path):
     """``bitmaps`` defaults on: a refine with ``bitmaps`` left unset attaches
     per-point RGBA patch textures (so the output is self-contained) that survive
     a save/load round trip and pass ``verify_sfmr``; ``bitmaps=false`` opts out
     (the frame is still re-persisted, but no textures are rendered)."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     npoints = len(np.asarray(recon.positions))
 
     # Opt-out: no bitmap array is attached.
@@ -358,18 +356,16 @@ def test_refine_normals_bitmaps_default_and_optout(
     np.testing.assert_array_equal(reloaded.patch_bitmaps, bitmaps)
 
 
-def test_refine_normals_does_not_lower_consensus(
-    seoul_bull_workspace_deprecated, capsys
-):
+def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):
     """The summary reports a non-negative mean Φ delta."""
-    recon = _embedded(seoul_bull_workspace_deprecated)
+    recon = _embedded(seoul_bull_workspace)
     _modest_params().apply(recon)
     summary = capsys.readouterr().out
     assert "Refined" in summary
 
 
-def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+def test_missing_image_is_hard_error(seoul_bull_workspace):
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Remove a source image so loading fails.
     from pathlib import Path
 
@@ -379,12 +375,12 @@ def test_missing_image_is_hard_error(seoul_bull_workspace_deprecated):
         _modest_params().apply(recon)
 
 
-def test_cli_refine_normals(seoul_bull_workspace_deprecated):
+def test_cli_refine_normals(seoul_bull_workspace):
     """End-to-end CLI run rewrites normals; the sys.argv reparse needs patching.
 
     ``--refine-normals`` requires embedded_patches, so the run converts first in
     the same pipeline (``--to-embedded-patches --refine-normals``)."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined.sfmr")
 
     args = [
@@ -411,7 +407,7 @@ def test_cli_refine_normals(seoul_bull_workspace_deprecated):
 
 
 def test_cli_refine_normals_bare_before_other_option(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
     """A bare --refine-normals followed by another option runs the defaults
     and leaves the following option intact (optional-value tokenization).
@@ -422,7 +418,7 @@ def test_cli_refine_normals_bare_before_other_option(
     trailing ``--scale 2.0`` as its value. Real refinement execution is covered
     by ``test_cli_refine_normals`` and the library integration tests.
     """
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined_bare.sfmr")
 
     # --refine-normals (bare) then --scale: the scale must still be parsed as
@@ -472,10 +468,10 @@ def test_cli_refine_normals_bare_before_other_option(
     )
 
 
-def test_refine_normals_rejects_sift_files(seoul_bull_workspace_deprecated):
+def test_refine_normals_rejects_sift_files(seoul_bull_workspace):
     """``--refine-normals`` on a sift_files recon is rejected up front (before
     any image load or refinement) with a pointer to the conversion bridge."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("rejected.sfmr")
 
     args = [
@@ -492,11 +488,11 @@ def test_refine_normals_rejects_sift_files(seoul_bull_workspace_deprecated):
     assert not output_sfmr.exists()
 
 
-def test_refine_normals_rejects_wrong_chain_order(seoul_bull_workspace_deprecated):
+def test_refine_normals_rejects_wrong_chain_order(seoul_bull_workspace):
     """The gate is per-step against the *current* recon, so ``--refine-normals``
     *before* ``--to-embedded-patches`` is rejected (the conversion hasn't run
     yet) — only the convert-then-refine order works."""
-    input_sfmr = seoul_bull_workspace_deprecated
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("wrong_order.sfmr")
 
     args = [

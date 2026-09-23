@@ -50,9 +50,9 @@ def _inject_infinity(recon: SfmrReconstruction, indices) -> SfmrReconstruction:
 
 
 def test_reprojection_filter_scores_infinity_points(
-    seoul_bull_sfmr_only_deprecated,
+    seoul_bull_sfmr_only,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     indices = list(range(5))
 
     # A point at infinity has a well-defined reprojection error, so it is scored
@@ -76,9 +76,9 @@ def test_reprojection_filter_scores_infinity_points(
 
 
 def test_short_tracks_filter_scores_infinity_points(
-    seoul_bull_sfmr_only_deprecated,
+    seoul_bull_sfmr_only,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     # Turn the shortest-track points into points at infinity.
     short_idx = np.flatnonzero(recon.observation_counts <= 3)[:5]
     assert len(short_idx) >= 1
@@ -93,9 +93,9 @@ def test_short_tracks_filter_scores_infinity_points(
 
 
 def test_narrow_tracks_filter_keeps_infinity_points(
-    seoul_bull_sfmr_only_deprecated,
+    seoul_bull_sfmr_only,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     recon = _inject_infinity(recon, range(5))
 
     result = RemoveNarrowTracksFilter(min_angle_rad=np.radians(2.0)).apply(recon)
@@ -104,9 +104,9 @@ def test_narrow_tracks_filter_keeps_infinity_points(
 
 
 def test_isolated_filter_keeps_infinity_points(
-    seoul_bull_sfmr_only_deprecated,
+    seoul_bull_sfmr_only,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     recon = _inject_infinity(recon, range(5))
 
     result = RemoveIsolatedPointsFilter(factor=2.0, value_spec="median").apply(recon)
@@ -115,9 +115,9 @@ def test_isolated_filter_keeps_infinity_points(
 
 
 def test_bundle_adjust_handles_infinity_points(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = _inject_infinity(recon, range(5))
     assert int(recon.point_is_at_infinity.sum()) == 5
 

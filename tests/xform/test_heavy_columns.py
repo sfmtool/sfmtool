@@ -53,12 +53,12 @@ def _xform(input_path: Path, output_path: Path, *steps: str):
 
 
 @pytest.fixture
-def embedded_sfmr(seoul_bull_workspace_deprecated) -> Path:
+def embedded_sfmr(seoul_bull_workspace) -> Path:
     """An ``embedded_patches`` reconstruction carrying thumbnails (copied from
-    the ``.sift`` files by the solve) and 16x16 patch bitmaps."""
-    out = seoul_bull_workspace_deprecated.with_name("embedded.sfmr")
+    the ``.sift`` files when the fixture was built) and 16x16 patch bitmaps."""
+    out = seoul_bull_workspace.with_name("embedded.sfmr")
     _xform(
-        seoul_bull_workspace_deprecated,
+        seoul_bull_workspace,
         out,
         "--to-embedded-patches",
         "--add-patch-bitmaps",
@@ -177,9 +177,9 @@ def test_add_thumbnails_from_the_photographs_reproduces_the_bytes(embedded_sfmr)
 
 
 def test_add_thumbnails_on_sift_files_reproduces_the_bytes(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     original = np.asarray(recon.thumbnails_y_x_rgb).copy()
     rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
     np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
@@ -292,10 +292,8 @@ def test_drop_patch_bitmaps_keeps_frames_and_normals(embedded_sfmr, tmp_path):
     )
 
 
-def test_drop_patch_bitmaps_is_a_no_op_without_them(
-    seoul_bull_workspace_deprecated, capsys
-):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+def test_drop_patch_bitmaps_is_a_no_op_without_them(seoul_bull_workspace, capsys):
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     out = DropPatchBitmapsTransform().apply(recon)
     assert "No patch bitmaps to drop" in capsys.readouterr().out
     assert out.point_count == recon.point_count
@@ -345,11 +343,11 @@ def test_add_patch_bitmaps_is_a_no_op_when_present(embedded_sfmr, capsys):
     assert out.patch_bitmap_resolution == 16
 
 
-def test_add_patch_bitmaps_requires_embedded_patches(seoul_bull_workspace_deprecated):
+def test_add_patch_bitmaps_requires_embedded_patches(seoul_bull_workspace):
     args = [
         "xform",
-        str(seoul_bull_workspace_deprecated),
-        str(seoul_bull_workspace_deprecated.with_name("out.sfmr")),
+        str(seoul_bull_workspace),
+        str(seoul_bull_workspace.with_name("out.sfmr")),
         "--add-patch-bitmaps",
     ]
     with patch("sys.argv", ["sfm"] + args):
