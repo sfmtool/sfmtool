@@ -43,7 +43,7 @@ use sfmtool_core::bench::BenchItem;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
-use crate::action_log::{Actor, Kind};
+use crate::action_log::{version_step_text, Actor, Kind};
 use crate::document::PointMap;
 use crate::progress::{Collector, Detail};
 use crate::scene::ReconId;
@@ -760,7 +760,7 @@ impl AppState {
                     let node = self.scene[index].id;
                     self.follow_selection_forward(node);
                     installed = Some(node);
-                    Ok(format!("{text} ({parent} → {serial})"))
+                    Ok(version_step_text(&text, parent, serial))
                 }
             },
             // A report lands on the item it measured, wherever the cursor has
@@ -796,7 +796,7 @@ impl AppState {
                             let parent =
                                 crate::state::edits::version_before(&self.scene[index], serial);
                             installed = Some(self.scene[index].id);
-                            Ok(format!("{text} ({parent} → {serial})"))
+                            Ok(version_step_text(&text, parent, serial))
                         }
                     }
                 }

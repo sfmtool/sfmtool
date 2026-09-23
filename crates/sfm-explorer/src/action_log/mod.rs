@@ -1275,3 +1275,12 @@ pub(crate) fn tint_text(label: &str, tint: crate::scene::NodeTint) -> String {
     };
     format!("Tint of {label}: {name}")
 }
+
+/// Append the version transition to an edit or bench action's text.
+pub(crate) fn version_step_text(
+    body: &str,
+    parent: crate::document::VersionSerial,
+    serial: crate::document::VersionSerial,
+) -> String {
+    format!("{body} ({parent} → {serial})")
+}

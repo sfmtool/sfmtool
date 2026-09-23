@@ -43,7 +43,7 @@ use sfmtool_core::bench::{
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
 
-use crate::action_log::Kind;
+use crate::action_log::{version_step_text, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::version_before;
@@ -1052,7 +1052,7 @@ impl AppState {
         );
         let parent = version_before(node, serial);
         self.action_log
-            .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+            .record(Kind::Edit, version_step_text(&text, parent, serial));
         // After the row the edit wrote, because that is the order the two
         // happened in: the point the selection moves to is a row of the version
         // the line above just announced.
@@ -1741,7 +1741,7 @@ impl AppState {
         let serial = node.history.push_bench(Arc::new(bench), text.clone());
         let parent = version_before(node, serial);
         self.action_log
-            .record(Kind::Bench, format!("{text} ({parent} → {serial})"));
+            .record(Kind::Bench, version_step_text(&text, parent, serial));
     }
 
     /// The node, its bench and the track a step on one item acts on.

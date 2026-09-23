@@ -42,7 +42,7 @@ use sfmtool_core::reconstruction::triangulation::{
 };
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
-use crate::action_log::Kind;
+use crate::action_log::{version_step_text, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::document::{PointMap, VersionSerial};
 use crate::progress::Collector;
@@ -399,7 +399,7 @@ impl AppState {
         let parent = version_before(node, serial);
         self.follow_selection_forward(point.recon);
         self.action_log
-            .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+            .record(Kind::Edit, version_step_text(&text, parent, serial));
         Ok(())
     }
 
@@ -530,7 +530,11 @@ impl AppState {
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(point.recon);
-        Ok(format!("{text}{verdict} ({parent} → {serial})"))
+        Ok(version_step_text(
+            &format!("{text}{verdict}"),
+            parent,
+            serial,
+        ))
     }
 
     /// Start a retriangulation of every point of `id` on a worker thread.
@@ -858,7 +862,7 @@ impl AppState {
         self.action_log.record_done(
             Kind::Edit,
             started,
-            format!("{text} ({parent} → {serial})"),
+            version_step_text(&text, parent, serial),
             collector.take(),
         );
         Ok(())
@@ -1002,9 +1006,10 @@ impl AppState {
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(source);
-        Ok(format!(
-            "{text}: {} ({parent} → {serial})",
-            crate::resect::outcome_summary(&report)
+        Ok(version_step_text(
+            &format!("{text}: {}", crate::resect::outcome_summary(&report)),
+            parent,
+            serial,
         ))
     }
 
@@ -1148,7 +1153,11 @@ impl AppState {
             }
             _ => String::new(),
         };
-        Ok(format!("{text}{residual} ({parent} → {serial})"))
+        Ok(version_step_text(
+            &format!("{text}{residual}"),
+            parent,
+            serial,
+        ))
     }
 
     /// Start a bundle adjustment of `id`'s current value on a worker thread.
@@ -1460,7 +1469,7 @@ impl AppState {
         self.action_log.record_done(
             Kind::Edit,
             started,
-            format!("Undo: {undone_label} ({undone} → {now})"),
+            version_step_text(&format!("Undo: {undone_label}"), undone, now),
             collector.take(),
         );
         Ok(())
@@ -1502,7 +1511,7 @@ impl AppState {
         self.action_log.record_done(
             Kind::Edit,
             started,
-            format!("Redo: {redone_label} ({from} → {redone})"),
+            version_step_text(&format!("Redo: {redone_label}"), from, redone),
             collector.take(),
         );
         Ok(())
@@ -1584,7 +1593,7 @@ impl AppState {
         self.action_log.record_done(
             Kind::Edit,
             started,
-            format!("Go to: {label} ({from} → {to})"),
+            version_step_text(&format!("Go to: {label}"), from, to),
             collector.take(),
         );
         Ok(())

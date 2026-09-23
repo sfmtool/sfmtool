@@ -263,6 +263,7 @@ requests only**
 
 **The version-transition sentence is hand-composed at 11 sites, next to the module
 built to prevent exactly that**
+> _Status (2026-09-22): Done — shared `version_step_text` now formats version transitions for edits, background completions, bench steps, Undo, Redo, and Go to._
 - Location: `crates/sfm-explorer/src/state/edits.rs` 115, 245, 317, 421, 553, 701, 846,
   1032, 1072, 1148 and `background/mod.rs:525`; the abstraction that should own it is
   `action_log/mod.rs` **1197–1242**
