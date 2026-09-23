@@ -246,12 +246,12 @@ def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
     return recon.clone_with_changes(quaternions_wxyz=quats, translations=trans)
 
 
-def test_recon_no_discontinuity(seoul_bull_workspace):
+def test_recon_no_discontinuity(seoul_bull_workspace_deprecated):
     """Unmodified reconstruction has no discontinuities."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     results = analyze_reconstruction(recon)
     assert len(results) == 1
     assert len(results[0]["core_edges"]) == 0
@@ -297,37 +297,37 @@ def _assert_break_detected_at_10_11(results, evidence_kind):
     assert frames(next(iter(core_edges))) in {(9, 10), (10, 11), (11, 12)}
 
 
-def test_recon_translation_discontinuity(seoul_bull_workspace):
+def test_recon_translation_discontinuity(seoul_bull_workspace_deprecated):
     """A large translation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
-        seoul_bull_workspace,
+        seoul_bull_workspace_deprecated,
         translate=[50.0, 0.0, 0.0],
     )
     results = analyze_reconstruction(recon)
     _assert_break_detected_at_10_11(results, ".t")
 
 
-def test_recon_rotation_discontinuity(seoul_bull_workspace):
+def test_recon_rotation_discontinuity(seoul_bull_workspace_deprecated):
     """A large rotation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
-        seoul_bull_workspace,
+        seoul_bull_workspace_deprecated,
         rotate_deg=90.0,
     )
     results = analyze_reconstruction(recon)
     _assert_break_detected_at_10_11(results, ".r")
 
 
-def test_recon_cli_with_sfmr(runner, seoul_bull_workspace):
+def test_recon_cli_with_sfmr(runner, seoul_bull_workspace_deprecated):
     """The CLI accepts a .sfmr file and produces reconstruction analysis output."""
     result = runner.invoke(
         main,
-        ["motion", str(seoul_bull_workspace)],
+        ["motion", str(seoul_bull_workspace_deprecated)],
     )
     assert result.exit_code == 0, result.output
     assert "Reconstruction:" in result.output
@@ -335,13 +335,13 @@ def test_recon_cli_with_sfmr(runner, seoul_bull_workspace):
     assert "seoul_bull_sculpture" in result.output
 
 
-def test_recon_cli_with_range(runner, seoul_bull_workspace):
+def test_recon_cli_with_range(runner, seoul_bull_workspace_deprecated):
     """The CLI --range flag filters images in reconstruction mode."""
     result = runner.invoke(
         main,
         [
             "motion",
-            str(seoul_bull_workspace),
+            str(seoul_bull_workspace_deprecated),
             "-r",
             "1-10",
         ],

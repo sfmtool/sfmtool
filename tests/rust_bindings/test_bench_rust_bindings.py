@@ -37,13 +37,13 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruc
 
 
 @pytest.fixture(scope="module")
-def embedded(seoul_bull_workspace_once):
+def embedded(seoul_bull_workspace_once_deprecated):
     """The 17-image solve as an ``embedded_patches`` reconstruction.
 
     A track is committed back as a keypoint per observation, which is what
     ``embedded_patches`` stores and what ``sift_files`` has no room for.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
     return recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
 
 
@@ -680,11 +680,11 @@ class TestCommitting:
             commit(edited, track)
 
     def test_a_sift_files_reconstruction_refuses(
-        self, edited, long_track_point, seoul_bull_workspace_once
+        self, edited, long_track_point, seoul_bull_workspace_once_deprecated
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         sift_files = EditedReconstruction(
-            SfmrReconstruction.load(seoul_bull_workspace_once)
+            SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
         )
         with pytest.raises(ValueError, match="embedded_patches"):
             commit(sift_files, track)

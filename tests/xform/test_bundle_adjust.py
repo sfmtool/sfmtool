@@ -16,18 +16,20 @@ from sfmtool.xform import (
 from .conftest import apply_transforms_to_file, load_reconstruction_data
 
 
-def test_bundle_adjust_transform(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_transform(seoul_bull_workspace_deprecated, tmp_path):
     """Test that bundle adjustment works."""
     output_path = tmp_path / "bundle_adjusted.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    result = apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_workspace_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["point_count"] == original["point_count"]
@@ -35,7 +37,7 @@ def test_bundle_adjust_transform(seoul_bull_workspace, tmp_path):
     assert len(adjusted["quaternions_wxyz"]) > 0
 
 
-def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_with_filter(seoul_bull_workspace_deprecated, tmp_path):
     """Test bundle adjustment combined with filtering."""
     output_path = tmp_path / "filtered_and_adjusted.sfmr"
 
@@ -44,47 +46,53 @@ def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
         BundleAdjustTransform(),
     ]
 
-    result = apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_workspace_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     result_data = load_reconstruction_data(output_path)
 
     assert result_data["point_count"] < original["point_count"]
     assert np.all(result_data["observation_counts"] > 2)
 
 
-def test_bundle_adjust_preserves_image_count(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_preserves_image_count(seoul_bull_workspace_deprecated, tmp_path):
     """Test that BA preserves the number of images."""
     output_path = tmp_path / "ba_images.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["image_count"] == original["image_count"]
 
 
-def test_bundle_adjust_preserves_observation_count(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_preserves_observation_count(
+    seoul_bull_workspace_deprecated, tmp_path
+):
     """Test that BA preserves the observation count."""
     output_path = tmp_path / "ba_observations.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["observation_count"] == original["observation_count"]
 
 
-def test_bundle_adjust_quaternion_consistency(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_quaternion_consistency(
+    seoul_bull_workspace_deprecated, tmp_path
+):
     """Test that BA preserves quaternion ordering (xyzw->wxyz conversion).
 
     Regression test: pycolmap returns quaternions in xyzw order, but our
@@ -94,9 +102,9 @@ def test_bundle_adjust_quaternion_consistency(seoul_bull_workspace, tmp_path):
     output_path = tmp_path / "ba_quat_check.sfmr"
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     adjusted = load_reconstruction_data(output_path)
 
     # Compute camera centers from quaternions and translations
@@ -128,20 +136,20 @@ def test_bundle_adjust_quaternion_consistency(seoul_bull_workspace, tmp_path):
     )
 
 
-def test_bundle_adjust_no_rig_data(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_no_rig_data(seoul_bull_workspace_deprecated, tmp_path):
     """Test that BA on a non-rig reconstruction doesn't add spurious rig data."""
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     output_path = tmp_path / "ba_no_rig.sfmr"
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
     adjusted = SfmrReconstruction.load(output_path)
     assert adjusted.rig_frame_data is None
 
 
-def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace_deprecated, tmp_path):
     """Test that BA preserves rig_frame_data through the round-trip.
 
     Regression test: before the fix, _reconstruction_to_data did not call
@@ -149,7 +157,7 @@ def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
     """
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     image_count = recon.image_count
 
     # Create a 2-sensor rig by duplicating the camera (each sensor needs a
@@ -225,7 +233,7 @@ def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
     assert len(rfd["image_sensor_indexes"]) == image_count
 
 
-def test_bundle_adjust_embedded_patches(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_embedded_patches(seoul_bull_workspace_deprecated, tmp_path):
     """BA runs on an embedded_patches recon and stays in that mode.
 
     An embedded_patches reconstruction carries its 2D observations inline
@@ -235,9 +243,9 @@ def test_bundle_adjust_embedded_patches(seoul_bull_workspace, tmp_path):
     output_path = tmp_path / "embedded_ba.sfmr"
 
     transforms = [ToEmbeddedPatchesTransform(), BundleAdjustTransform()]
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     adjusted = SfmrReconstruction.load(output_path)
 
     # Stays embedded, with inline keypoints parallel to the tracks.
@@ -257,7 +265,7 @@ def test_bundle_adjust_embedded_patches(seoul_bull_workspace, tmp_path):
     assert np.isfinite(kp).all()
 
 
-def test_bundle_adjust_embedded_matches_sift(seoul_bull_workspace, tmp_path):
+def test_bundle_adjust_embedded_matches_sift(seoul_bull_workspace_deprecated, tmp_path):
     """BA on a minimally-converted embedded recon matches the sift-path result.
 
     ToEmbeddedPatchesTransform copies each observation's keypoint verbatim from
@@ -267,9 +275,11 @@ def test_bundle_adjust_embedded_matches_sift(seoul_bull_workspace, tmp_path):
     sift_out = tmp_path / "sift_ba.sfmr"
     embedded_out = tmp_path / "embedded_ba.sfmr"
 
-    apply_transforms_to_file(seoul_bull_workspace, sift_out, [BundleAdjustTransform()])
     apply_transforms_to_file(
-        seoul_bull_workspace,
+        seoul_bull_workspace_deprecated, sift_out, [BundleAdjustTransform()]
+    )
+    apply_transforms_to_file(
+        seoul_bull_workspace_deprecated,
         embedded_out,
         [ToEmbeddedPatchesTransform(), BundleAdjustTransform()],
     )

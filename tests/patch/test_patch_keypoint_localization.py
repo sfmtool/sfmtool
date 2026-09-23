@@ -46,8 +46,8 @@ def _view_sets_from_selection(cloud, recon, images, sample):
     return {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
 
 
-def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+def test_localize_keypoints_convex_dataset(seoul_bull_workspace_deprecated: Path):
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -133,9 +133,9 @@ def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
         assert np.all(views >= 0) and np.all(views < len(images))
 
 
-def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
+def test_localize_keypoints_defaults_to_track(seoul_bull_workspace_deprecated: Path):
     """With no view_sets, each point congeals over its track; kept ⊆ track."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -170,12 +170,14 @@ def _tracks(recon) -> dict[int, set[int]]:
     return out
 
 
-def test_localize_keypoints_view_sets_override_is_honored(seoul_bull_workspace: Path):
+def test_localize_keypoints_view_sets_override_is_honored(
+    seoul_bull_workspace_deprecated: Path,
+):
     """A strict-subset override is actually applied — not silently replaced by the
     track. We find a point whose view ``v`` survives congealing over its full track,
     then re-run that point with ``v`` removed from the override and assert ``v`` is
     gone (and a point left uncovered keeps falling back to its track)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -265,11 +267,11 @@ def test_localize_keypoints_grazing_cutoff_drops_views(kerry_park_workspace: Pat
 
 
 def test_localize_keypoints_empty_view_set_yields_empty_arrays(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """An empty view_set override yields a well-formed empty result (the binding's
     explicit (0, 2) keypoints array, not a column-inference failure)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -286,12 +288,12 @@ def test_localize_keypoints_empty_view_set_yields_empty_arrays(
 
 
 def test_localize_keypoints_rejects_out_of_range_view_index(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """An out-of-range image index in view_sets is a clean ValueError, not a panic."""
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -310,10 +312,12 @@ def _selection(cloud, recon, images, sample):
     return {int(r["point_index"]): r for r in sel}
 
 
-def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
+def test_select_views_reports_the_track_view_count(
+    seoul_bull_workspace_deprecated: Path,
+):
     """``track_view_count`` splits ``admitted`` into track views then vetted
     candidates — the provenance split the localizer's basis pick consumes."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -336,11 +340,13 @@ def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
         assert set(adm[t:]).isdisjoint(by_pid.get(pid, set()))
 
 
-def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace: Path):
+def test_localize_keypoints_basis_cap_off_matches_uncapped(
+    seoul_bull_workspace_deprecated: Path,
+):
     """``basis_max_views=0`` (and a cap above the view count) is the uncapped
     path, byte-for-byte, even with scores supplied. The default is the capped
     ``8``, so the uncapped reference passes ``basis_max_views=0`` explicitly."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -385,10 +391,12 @@ def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace:
             assert np.all(np.asarray(b["is_basis"]))
 
 
-def test_localize_keypoints_basis_cap_keeps_the_contract(seoul_bull_workspace: Path):
+def test_localize_keypoints_basis_cap_keeps_the_contract(
+    seoul_bull_workspace_deprecated: Path,
+):
     """A biting cap still localizes every admitted view it does not gate out, in
     input order, with parallel arrays and a well-formed basis/tail split."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -434,12 +442,14 @@ def test_localize_keypoints_basis_cap_keeps_the_contract(seoul_bull_workspace: P
     assert saw_tail, "no point exercised the tail path"
 
 
-def test_localize_keypoints_rejects_mismatched_view_scores(seoul_bull_workspace: Path):
+def test_localize_keypoints_rejects_mismatched_view_scores(
+    seoul_bull_workspace_deprecated: Path,
+):
     """A ``view_scores`` list that is not parallel to the point's view set is a
     clean ValueError rather than a silently mis-ranked basis."""
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -457,10 +467,12 @@ def test_localize_keypoints_rejects_mismatched_view_scores(seoul_bull_workspace:
         )
 
 
-def test_localize_keypoints_rejects_unknown_basis_pick(seoul_bull_workspace: Path):
+def test_localize_keypoints_rejects_unknown_basis_pick(
+    seoul_bull_workspace_deprecated: Path,
+):
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -491,12 +503,14 @@ def _seeded_run(cloud, recon, images, view_sets, sample, seeds):
     }
 
 
-def test_localize_keypoints_per_view_optional_seeds(seoul_bull_workspace: Path):
+def test_localize_keypoints_per_view_optional_seeds(
+    seoul_bull_workspace_deprecated: Path,
+):
     """``starting_keypoints`` takes a per-view ``None``: that view seeds at the
     point's projection while its siblings keep their explicit seeds. An all-``None``
     table therefore reproduces the unseeded run, and displacing one view's seed
     moves only what a seed can move."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -559,14 +573,14 @@ def test_localize_keypoints_per_view_optional_seeds(seoul_bull_workspace: Path):
 
 
 def test_localize_keypoints_rejects_mismatched_starting_keypoints(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The parallel-length check is unchanged by the per-view ``None``: a seed
     list that is not parallel to the point's view set is still a clean
     ValueError."""
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -584,13 +598,13 @@ def test_localize_keypoints_rejects_mismatched_starting_keypoints(
 
 
 def test_localize_keypoints_chunked_with_whole_cloud_view_scores(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The natural caller pattern: run ``select_views`` once over the whole
     cloud, then localize in chunks with ``point_indexes``. The score map still
     covers every point, so the parallel-length check must run against each
     point's own view set — not against the sets ``point_indexes`` cleared."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -662,7 +676,7 @@ def _healthy_two_view_point(recon, cloud, images) -> tuple[int, list[int]]:
 
 
 def test_localize_keypoints_flat_member_culls_a_two_view_point(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """A two-view point whose second member renders a textureless tile is left
     below ``min_views`` under the defaults, and keeps both views once the two
@@ -675,7 +689,7 @@ def test_localize_keypoints_flat_member_culls_a_two_view_point(
     flat tile on its own content instead -- the member-level counterpart of the
     per-point consensus cull.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=11.0

@@ -48,9 +48,9 @@ KEYS = {
 
 
 @pytest.fixture(scope="module")
-def scene(seoul_bull_workspace_once: Path):
+def scene(seoul_bull_workspace_once_deprecated: Path):
     """A patch cloud, its reconstruction and its images (built once)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0

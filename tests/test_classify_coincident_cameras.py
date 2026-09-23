@@ -13,7 +13,7 @@ sizing (``to_embedded_patches``), whose ``σ·d/f`` world size vanishes at zero
 viewing distance ``d``.
 
 This needs on-disk ``.sift`` files (the bearing is unprojected from the stored
-keypoints), so it lives on the Python side over the ``seoul_bull_workspace``
+keypoints), so it lives on the Python side over the ``seoul_bull_workspace_deprecated``
 fixture rather than as a Rust unit test.
 """
 
@@ -105,8 +105,10 @@ def _pick_point_with_observer_count(recon: SfmrReconstruction, count: int) -> in
     return int(candidates[0])
 
 
-def test_coincident_cameras_classified_as_infinity(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+def test_coincident_cameras_classified_as_infinity(
+    seoul_bull_workspace_deprecated: Path,
+):
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     pidx = _pick_point_with_observer_count(recon, 2)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
@@ -129,11 +131,11 @@ def test_coincident_cameras_classified_as_infinity(seoul_bull_workspace: Path):
 
 
 def test_coincident_cameras_unblock_feature_size_embedding(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """A point coincident with its cameras breaks FeatureSize sizing (``d≈0``);
     classifying it to infinity fixes ``to_embedded_patches``."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     pidx = _pick_point_with_observer_count(recon, 2)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
@@ -153,10 +155,10 @@ def test_coincident_cameras_unblock_feature_size_embedding(
     assert bool(np.asarray(embedded.point_is_at_infinity)[pidx])
 
 
-def test_spread_cameras_are_not_demoted(seoul_bull_workspace: Path):
+def test_spread_cameras_are_not_demoted(seoul_bull_workspace_deprecated: Path):
     """The baseline gate is tight: an ordinary well-triangulated point (real
     baseline) is left finite — the branch only fires on a near-perfect collapse."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     before_inf = int(np.count_nonzero(recon.point_is_at_infinity))
     classified = recon.classify_points_at_infinity(1.0)
     after_inf = int(np.count_nonzero(classified.point_is_at_infinity))

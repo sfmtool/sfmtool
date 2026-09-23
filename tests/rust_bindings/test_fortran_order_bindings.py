@@ -163,10 +163,12 @@ class TestReconstructionCloneRoundTrip:
     ``PanicException`` surfacing from a crate the caller never touched.
     """
 
-    def test_fortran_thumbnails_round_trip(self, seoul_bull_workspace, tmp_path):
+    def test_fortran_thumbnails_round_trip(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         thumbs = np.asarray(recon.thumbnails_y_x_rgb)
         c, f = _both_orders(thumbs)
 
@@ -180,14 +182,16 @@ class TestReconstructionCloneRoundTrip:
             np.asarray(SfmrReconstruction.load(out_c).thumbnails_y_x_rgb),
         )
 
-    def test_fortran_keypoints_round_trip(self, seoul_bull_workspace, tmp_path):
+    def test_fortran_keypoints_round_trip(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-        # `seoul_bull_workspace` is always feature_source="sift_files", whose
+        # `seoul_bull_workspace_deprecated` is always feature_source="sift_files", whose
         # `keypoints_xy` is None — embedding patches is what materializes it.
-        recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-            normal="mean_viewing", extent_value=5.0
-        )
+        recon = SfmrReconstruction.load(
+            seoul_bull_workspace_deprecated
+        ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
         assert recon.keypoints_xy is not None, "fixture no longer carries keypoints"
         c, f = _both_orders(np.asarray(recon.keypoints_xy))
 
@@ -197,7 +201,9 @@ class TestReconstructionCloneRoundTrip:
             np.asarray(SfmrReconstruction.load(out).keypoints_xy), c
         )
 
-    def test_fortran_2d_kwargs_round_trip(self, seoul_bull_workspace, tmp_path):
+    def test_fortran_2d_kwargs_round_trip(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """The five `to_contiguous!`-converted 2-D kwargs, which had no test.
 
         The C- and F-ordered clones travel the same clone + save + load path and
@@ -209,7 +215,7 @@ class TestReconstructionCloneRoundTrip:
         """
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         fields = {
             "positions": np.asarray(recon.positions),
             "colors": np.asarray(recon.colors),
@@ -254,10 +260,12 @@ class TestNegativeStride:
     1-D as readily as at 2-D.
     """
 
-    def test_reversed_1d_field_round_trips(self, seoul_bull_workspace, tmp_path):
+    def test_reversed_1d_field_round_trips(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         errors = np.asarray(recon.errors)
         reversed_view = errors[::-1]
         assert not reversed_view.flags["C_CONTIGUOUS"]
@@ -270,10 +278,12 @@ class TestNegativeStride:
             np.asarray(SfmrReconstruction.load(out).errors), reversed_view
         )
 
-    def test_reversed_2d_thumbnails_round_trip(self, seoul_bull_workspace, tmp_path):
+    def test_reversed_2d_thumbnails_round_trip(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         thumbs = np.asarray(recon.thumbnails_y_x_rgb)
         reversed_view = thumbs[::-1]
         assert not reversed_view.flags["C_CONTIGUOUS"]

@@ -24,18 +24,20 @@ from .conftest import apply_transforms_to_file, load_reconstruction_data
 # =============================================================================
 
 
-def test_rotate_transform(seoul_bull_sfmr_only, tmp_path):
+def test_rotate_transform(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that rotation transform works."""
     output_path = tmp_path / "rotated.sfmr"
 
     transforms = [RotateTransform(np.array([0, 1, 0]), np.radians(90))]
 
-    result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_sfmr_only_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] == original["point_count"]
@@ -48,29 +50,29 @@ def test_zero_rotation_axis_raises_error():
         RotateTransform(np.array([0, 0, 0]), np.radians(90))
 
 
-def test_rotate_transform_identity(seoul_bull_sfmr_only, tmp_path):
+def test_rotate_transform_identity(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that zero-angle rotation preserves positions."""
     output_path = tmp_path / "rotated_identity.sfmr"
 
     transforms = [RotateTransform(np.array([0, 1, 0]), 0.0)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert np.allclose(transformed["positions"], original["positions"], atol=1e-6)
 
 
-def test_rotate_transform_180_degrees(seoul_bull_sfmr_only, tmp_path):
+def test_rotate_transform_180_degrees(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test 180 degree rotation around Z axis."""
     output_path = tmp_path / "rotated_180.sfmr"
 
     transforms = [RotateTransform(np.array([0, 0, 1]), np.radians(180))]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     # For 180 degree rotation around Z: (x, y, z) -> (-x, -y, z)
@@ -86,18 +88,20 @@ def test_rotate_transform_180_degrees(seoul_bull_sfmr_only, tmp_path):
 # =============================================================================
 
 
-def test_translate_transform(seoul_bull_sfmr_only, tmp_path):
+def test_translate_transform(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that translation transform works."""
     output_path = tmp_path / "translated.sfmr"
 
     transforms = [TranslateTransform(np.array([1, 2, 3]))]
 
-    result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_sfmr_only_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] == original["point_count"]
@@ -106,30 +110,30 @@ def test_translate_transform(seoul_bull_sfmr_only, tmp_path):
     assert np.allclose(transformed["positions"], expected_positions, atol=1e-6)
 
 
-def test_translate_transform_zero(seoul_bull_sfmr_only, tmp_path):
+def test_translate_transform_zero(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that zero translation preserves positions."""
     output_path = tmp_path / "translated_zero.sfmr"
 
     transforms = [TranslateTransform(np.array([0, 0, 0]))]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert np.allclose(transformed["positions"], original["positions"], atol=1e-6)
 
 
-def test_translate_transform_negative(seoul_bull_sfmr_only, tmp_path):
+def test_translate_transform_negative(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test translation with negative values."""
     output_path = tmp_path / "translated_negative.sfmr"
 
     translation = np.array([-5.5, -10.0, -2.5])
     transforms = [TranslateTransform(translation)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     expected_positions = original["positions"] + translation
@@ -141,18 +145,20 @@ def test_translate_transform_negative(seoul_bull_sfmr_only, tmp_path):
 # =============================================================================
 
 
-def test_scale_transform(seoul_bull_sfmr_only, tmp_path):
+def test_scale_transform(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that scale transform works."""
     output_path = tmp_path / "scaled.sfmr"
 
     transforms = [ScaleTransform(2.0)]
 
-    result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_sfmr_only_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] == original["point_count"]
@@ -170,29 +176,29 @@ def test_invalid_scale_raises_error():
         ScaleTransform(-1.0)
 
 
-def test_scale_transform_unit(seoul_bull_sfmr_only, tmp_path):
+def test_scale_transform_unit(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that scale of 1.0 preserves positions."""
     output_path = tmp_path / "scaled_unit.sfmr"
 
     transforms = [ScaleTransform(1.0)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert np.allclose(transformed["positions"], original["positions"], atol=1e-6)
 
 
-def test_scale_transform_fractional(seoul_bull_sfmr_only, tmp_path):
+def test_scale_transform_fractional(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test scaling with a fractional value."""
     output_path = tmp_path / "scaled_half.sfmr"
 
     transforms = [ScaleTransform(0.5)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     expected_positions = original["positions"] * 0.5
@@ -216,7 +222,9 @@ def _depth_lengths(recon) -> np.ndarray:
     return np.array(rows, dtype=np.float64)
 
 
-def test_scale_transform_scales_the_depth_statistics(seoul_bull_sfmr_only, tmp_path):
+def test_scale_transform_scales_the_depth_statistics(
+    seoul_bull_sfmr_only_deprecated, tmp_path
+):
     """A scale moves every stored depth by the same factor, before any write.
 
     The in-memory value is what a caller reads straight after the transform, so
@@ -224,7 +232,7 @@ def test_scale_transform_scales_the_depth_statistics(seoul_bull_sfmr_only, tmp_p
     histogram counts stay: equal buckets between scaled bounds hold every
     scaled depth in the bucket it was already in.
     """
-    original = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    original = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     scaled = apply_transforms(original, [ScaleTransform(0.25)])
 
     before = _depth_lengths(original)
@@ -248,16 +256,16 @@ def test_scale_transform_scales_the_depth_statistics(seoul_bull_sfmr_only, tmp_p
 # =============================================================================
 
 
-def test_similarity_transform_identity(seoul_bull_sfmr_only, tmp_path):
+def test_similarity_transform_identity(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that identity similarity transform preserves reconstruction."""
     output_path = tmp_path / "similarity_identity.sfmr"
 
     identity = Se3Transform()
     transforms = [SimilarityTransform(identity)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert np.allclose(transformed["positions"], original["positions"], atol=1e-6)
@@ -267,23 +275,25 @@ def test_similarity_transform_identity(seoul_bull_sfmr_only, tmp_path):
     assert np.allclose(transformed["translations"], original["translations"], atol=1e-6)
 
 
-def test_similarity_transform_scale_only(seoul_bull_sfmr_only, tmp_path):
+def test_similarity_transform_scale_only(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test similarity transform with scale only."""
     output_path = tmp_path / "similarity_scaled.sfmr"
 
     transform = Se3Transform(scale=2.0)
     transforms = [SimilarityTransform(transform)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     expected_positions = original["positions"] * 2.0
     assert np.allclose(transformed["positions"], expected_positions, atol=1e-6)
 
 
-def test_similarity_transform_translation_only(seoul_bull_sfmr_only, tmp_path):
+def test_similarity_transform_translation_only(
+    seoul_bull_sfmr_only_deprecated, tmp_path
+):
     """Test similarity transform with translation only."""
     output_path = tmp_path / "similarity_translated.sfmr"
 
@@ -291,16 +301,16 @@ def test_similarity_transform_translation_only(seoul_bull_sfmr_only, tmp_path):
     transform = Se3Transform(translation=translation)
     transforms = [SimilarityTransform(transform)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     expected_positions = original["positions"] + translation
     assert np.allclose(transformed["positions"], expected_positions, atol=1e-6)
 
 
-def test_similarity_transform_combined(seoul_bull_sfmr_only, tmp_path):
+def test_similarity_transform_combined(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test similarity transform with rotation, translation, and scale combined."""
     output_path = tmp_path / "similarity_combined.sfmr"
 
@@ -314,9 +324,9 @@ def test_similarity_transform_combined(seoul_bull_sfmr_only, tmp_path):
     )
     transforms = [SimilarityTransform(transform)]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] == original["point_count"]
@@ -343,7 +353,7 @@ def test_similarity_transform_description():
 # =============================================================================
 
 
-def test_order_matters(seoul_bull_sfmr_only, tmp_path):
+def test_order_matters(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that transformation order matters (rotate-translate vs translate-rotate)."""
     output1_path = tmp_path / "rotate_then_translate.sfmr"
     output2_path = tmp_path / "translate_then_rotate.sfmr"
@@ -358,8 +368,8 @@ def test_order_matters(seoul_bull_sfmr_only, tmp_path):
         RotateTransform(np.array([0, 1, 0]), np.radians(90)),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output1_path, transforms1)
-    apply_transforms_to_file(seoul_bull_sfmr_only, output2_path, transforms2)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output1_path, transforms1)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output2_path, transforms2)
 
     result1 = load_reconstruction_data(output1_path)
     result2 = load_reconstruction_data(output2_path)
@@ -367,7 +377,9 @@ def test_order_matters(seoul_bull_sfmr_only, tmp_path):
     assert not np.allclose(result1["positions"], result2["positions"])
 
 
-def test_scale_then_translate_vs_translate_then_scale(seoul_bull_sfmr_only, tmp_path):
+def test_scale_then_translate_vs_translate_then_scale(
+    seoul_bull_sfmr_only_deprecated, tmp_path
+):
     """Test that scale-translate vs translate-scale produce different results."""
     output1_path = tmp_path / "scale_then_translate.sfmr"
     output2_path = tmp_path / "translate_then_scale.sfmr"
@@ -382,8 +394,8 @@ def test_scale_then_translate_vs_translate_then_scale(seoul_bull_sfmr_only, tmp_
         ScaleTransform(2.0),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output1_path, transforms1)
-    apply_transforms_to_file(seoul_bull_sfmr_only, output2_path, transforms2)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output1_path, transforms1)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output2_path, transforms2)
 
     result1 = load_reconstruction_data(output1_path)
     result2 = load_reconstruction_data(output2_path)

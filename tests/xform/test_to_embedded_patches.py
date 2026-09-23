@@ -7,7 +7,7 @@
 
 The conversion copies each observation's keypoint and each image's identity hash
 straight from the ``.sift`` files (no photometric adaptation), so it runs against
-the full ``seoul_bull_workspace`` fixture (which carries the ``.sift`` files). See
+the full ``seoul_bull_workspace_deprecated`` fixture (which carries the ``.sift`` files). See
 ``specs/core/patch/sift-to-patch-reconstruction.md``.
 """
 
@@ -28,9 +28,9 @@ from .conftest import apply_transforms_to_file
 
 
 def test_to_embedded_patches_copies_sift_keypoints(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     assert recon.feature_source == "sift_files"
 
     emb = recon.to_embedded_patches()  # mean_viewing normal, feature_size extent
@@ -83,10 +83,10 @@ def test_to_embedded_patches_copies_sift_keypoints(
 
 
 def test_to_embedded_patches_frames_points_at_infinity(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
     """Points at infinity are kept and get a tangent-sphere frame (normal -d)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     # Turn one point into a point at infinity: keep its direction, set w = 0.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
     counts = np.bincount(
@@ -135,14 +135,14 @@ def test_to_embedded_patches_frames_points_at_infinity(
 
 
 def test_apply_halves_full_cli_extent_to_library_half_extent(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """``apply`` must convert the full CLI ``extent_value`` to the library
     half-extent (divide by 2). With ``extent=fixed`` the world half-extent is
     exactly the library value, so a full CLI size of ``W`` must yield patches
     whose ``half_extent`` is ``W / 2``. (This sizing used to live on
     ``--refine-normals``; it now happens only here.)"""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     full_size = 0.1
     out = ToEmbeddedPatchesTransform(extent="fixed", extent_value=full_size).apply(
         recon
@@ -153,26 +153,32 @@ def test_apply_halves_full_cli_extent_to_library_half_extent(
     np.testing.assert_allclose(half, full_size / 2.0, rtol=1e-6)
 
 
-def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace: Path):
+def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace_deprecated: Path):
     """The CLI ``pixel_size`` policy must reach the library (whose policy is
     named ``pixel_radius``); a broken mapping would raise ``unknown extent
     policy`` from the binding."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     out = ToEmbeddedPatchesTransform(extent="pixel_size", extent_value=8.0).apply(recon)
     assert out.patches is not None and len(out.patches) > 0
 
 
-def test_to_embedded_patches_rejects_already_embedded(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+def test_to_embedded_patches_rejects_already_embedded(
+    seoul_bull_workspace_deprecated: Path,
+):
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     emb = recon.to_embedded_patches()
     with pytest.raises(ValueError, match="already embedded_patches"):
         emb.to_embedded_patches()
 
 
-def test_to_embedded_patches_xform_op(seoul_bull_workspace: Path, tmp_path: Path):
+def test_to_embedded_patches_xform_op(
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
+):
     """The transform produces the same embedded_patches result through the chain."""
     out = tmp_path / "out.sfmr"
-    apply_transforms_to_file(seoul_bull_workspace, out, [ToEmbeddedPatchesTransform()])
+    apply_transforms_to_file(
+        seoul_bull_workspace_deprecated, out, [ToEmbeddedPatchesTransform()]
+    )
     valid, errors = verify_sfmr(str(out))
     assert valid, f"integrity check failed: {errors}"
     recon = SfmrReconstruction.load(str(out))
@@ -181,11 +187,13 @@ def test_to_embedded_patches_xform_op(seoul_bull_workspace: Path, tmp_path: Path
     assert recon.patches is not None
 
 
-def test_xform_to_embedded_patches_cli(seoul_bull_workspace: Path, tmp_path: Path):
+def test_xform_to_embedded_patches_cli(
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
+):
     out = tmp_path / "cli.sfmr"
     args = [
         "xform",
-        str(seoul_bull_workspace),
+        str(seoul_bull_workspace_deprecated),
         str(out),
         "--to-embedded-patches",
         "extent=fixed,extent_value=1.0",

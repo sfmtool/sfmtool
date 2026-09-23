@@ -376,7 +376,7 @@ def build_cluster_reconstruction(
 
 
 @pytest.fixture(scope="session")
-def seoul_bull_workspace_once(tmp_path_factory) -> Path:
+def seoul_bull_workspace_once_deprecated(tmp_path_factory) -> Path:
     """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
 
     Mirrors ``scripts/init_dataset_seoul_bull.sh``: sfmtool SIFT + track-cluster
@@ -426,16 +426,20 @@ def seoul_bull_workspace_once(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def seoul_bull_workspace(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
+def seoul_bull_workspace_deprecated(
+    seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
+) -> Path:
     """Per-test isolation of the 17-image .sfmr reconstruction."""
-    source_workspace_dir = seoul_bull_workspace_once.parent
+    source_workspace_dir = seoul_bull_workspace_once_deprecated.parent
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / seoul_bull_workspace_once.name
+    return workspace_dir / seoul_bull_workspace_once_deprecated.name
 
 
 @pytest.fixture
-def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
+def seoul_bull_sfmr_only_deprecated(
+    seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
+) -> Path:
     """Per-test copy of *only* the 17-image ``.sfmr`` (plus the workspace marker).
 
     For tests that just ``SfmrReconstruction.load`` the reconstruction and read
@@ -446,9 +450,9 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
     an isolated tmp dir, so the reconstruction resolves its workspace to *that*
     dir (not the shared session workspace) and any source-image / ``.sift``
     access fails loudly. Tests that need the source images or ``.sift`` files must
-    use the full :func:`seoul_bull_workspace` instead.
+    use the full :func:`seoul_bull_workspace_deprecated` instead.
     """
-    src = seoul_bull_workspace_once
+    src = seoul_bull_workspace_once_deprecated
     workspace_dir = tmp_path_factory.mktemp("sfmr_only_17_images")
     shutil.copy(src, workspace_dir / src.name)
     marker = src.parent / ".sfm-workspace.json"

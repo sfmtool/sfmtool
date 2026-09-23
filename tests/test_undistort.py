@@ -93,9 +93,9 @@ def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
 
 
 class TestUndistortReconstructionImages:
-    def test_basic_undistortion(self, seoul_bull_workspace, tmp_path):
+    def test_basic_undistortion(self, seoul_bull_workspace_deprecated, tmp_path):
         """Test undistorting images from a reconstruction."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
         output_dir = tmp_path / "undistorted"
 
@@ -133,9 +133,9 @@ class TestUndistortReconstructionImages:
             assert img is not None, f"Failed to load undistorted image: {image_name}"
             assert img.shape[0] > 0 and img.shape[1] > 0
 
-    def test_fit_outside(self, seoul_bull_workspace, tmp_path):
+    def test_fit_outside(self, seoul_bull_workspace_deprecated, tmp_path):
         """Test undistortion with fit=outside produces valid output."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
         output_dir = tmp_path / "undistorted_outside"
 
@@ -150,9 +150,11 @@ class TestUndistortReconstructionImages:
         for cam in undist_recon.cameras:
             assert cam.model == "PINHOLE"
 
-    def test_points_at_infinity_materialized(self, seoul_bull_workspace, tmp_path):
+    def test_points_at_infinity_materialized(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """Undistortion materialises w=0 points to finite landmarks."""
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) > 0
         # Turn the first point into a point at infinity (w = 0).
@@ -168,9 +170,9 @@ class TestUndistortReconstructionImages:
         undist_recon = SfmrReconstruction.load(Path(sfmr_out_path))
         assert not np.asarray(undist_recon.point_is_at_infinity).any()
 
-    def test_progress_callback(self, seoul_bull_workspace, tmp_path):
+    def test_progress_callback(self, seoul_bull_workspace_deprecated, tmp_path):
         """Test that progress callback is called correctly."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
         output_dir = tmp_path / "undistorted"
 
@@ -194,9 +196,11 @@ class TestUndistortReconstructionImages:
                 prev_current = progress_calls[i - 1][0]
                 assert current >= prev_current
 
-    def test_image_dimensions_preserved(self, seoul_bull_workspace, tmp_path):
+    def test_image_dimensions_preserved(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """Test that undistorted images maintain reasonable dimensions."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
         output_dir = tmp_path / "undistorted"
 
@@ -220,9 +224,9 @@ class TestUndistortReconstructionImages:
                 assert cam.width == orig_width
                 assert cam.height == orig_height
 
-    def test_actually_modifies_images(self, seoul_bull_workspace, tmp_path):
+    def test_actually_modifies_images(self, seoul_bull_workspace_deprecated, tmp_path):
         """Test that undistortion actually modifies pixel values for distorted cameras."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
         output_dir = tmp_path / "undistorted"
 
@@ -252,10 +256,10 @@ class TestUndistortReconstructionImages:
         assert pixel_diff > 0.1, "Expected pixel differences after undistortion"
 
     def test_inside_and_outside_produce_different_focals(
-        self, seoul_bull_workspace, tmp_path
+        self, seoul_bull_workspace_deprecated, tmp_path
     ):
         """Test that inside and outside fit modes produce different focal lengths."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon = SfmrReconstruction.load(sfmr_path)
 
         cameras = recon.cameras
@@ -292,9 +296,9 @@ class TestUndistortReconstructionImages:
 
 
 class TestUndistortWorkspace:
-    def test_workspace_created(self, seoul_bull_workspace, tmp_path):
+    def test_workspace_created(self, seoul_bull_workspace_deprecated, tmp_path):
         """Workspace config exists with correct feature_tool."""
-        _, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, output_dir, _, _ = _run_undistort(seoul_bull_workspace_deprecated, tmp_path)
         config_path = output_dir / ".sfm-workspace.json"
         assert config_path.exists()
 
@@ -306,10 +310,10 @@ class TestUndistortWorkspace:
         assert "feature_prefix_dir" in config
         assert config["feature_type"] == "sift-sfmtool-undistort"
 
-    def test_sfmr_output(self, seoul_bull_workspace, tmp_path):
+    def test_sfmr_output(self, seoul_bull_workspace_deprecated, tmp_path):
         """.sfmr exists, is loadable, has pinhole cameras and same image count."""
         recon, output_dir, sfmr_path, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
+            seoul_bull_workspace_deprecated, tmp_path
         )
 
         assert sfmr_path is not None
@@ -325,10 +329,10 @@ class TestUndistortWorkspace:
         for cam in undistorted_recon.cameras:
             assert cam.model == "PINHOLE"
 
-    def test_sift_files_created(self, seoul_bull_workspace, tmp_path):
+    def test_sift_files_created(self, seoul_bull_workspace_deprecated, tmp_path):
         """One .sift file per image, readable."""
         recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
+            seoul_bull_workspace_deprecated, tmp_path
         )
 
         with open(output_dir / ".sfm-workspace.json") as f:
@@ -352,10 +356,12 @@ class TestUndistortWorkspace:
                 assert positions.ndim == 2
                 assert positions.shape[1] == 2
 
-    def test_feature_positions_in_bounds(self, seoul_bull_workspace, tmp_path):
+    def test_feature_positions_in_bounds(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """All feature positions are within pinhole image dimensions."""
         recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
+            seoul_bull_workspace_deprecated, tmp_path
         )
 
         with open(output_dir / ".sfm-workspace.json") as f:
@@ -382,11 +388,11 @@ class TestUndistortWorkspace:
                 assert np.all(positions[:, 1] >= 0)
                 assert np.all(positions[:, 1] < cam.height)
 
-    def test_affine_shapes_transformed(self, seoul_bull_workspace, tmp_path):
+    def test_affine_shapes_transformed(self, seoul_bull_workspace_deprecated, tmp_path):
         """Affine shapes differ from source (transformation applied)."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
@@ -429,11 +435,13 @@ class TestUndistortWorkspace:
                     src_shapes[:min_len], undist_shapes[:min_len], atol=1e-6
                 )
 
-    def test_feature_count_leq_original(self, seoul_bull_workspace, tmp_path):
+    def test_feature_count_leq_original(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """Undistorted features <= original feature count per image."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
@@ -465,11 +473,11 @@ class TestUndistortWorkspace:
 
             assert undist_count <= src_count
 
-    def test_descriptors_unchanged(self, seoul_bull_workspace, tmp_path):
+    def test_descriptors_unchanged(self, seoul_bull_workspace_deprecated, tmp_path):
         """Surviving descriptors match source descriptors."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
         recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
@@ -514,10 +522,10 @@ class TestUndistortWorkspace:
                     break
             assert found, "First undistorted descriptor not found in source"
 
-    def test_tracks_valid(self, seoul_bull_workspace, tmp_path):
+    def test_tracks_valid(self, seoul_bull_workspace_deprecated, tmp_path):
         """Track feature indexes are valid, observation counts sum matches."""
         recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
+            seoul_bull_workspace_deprecated, tmp_path
         )
 
         track_img_idxs = np.asarray(undistorted_recon.track_image_indexes)
@@ -539,16 +547,20 @@ class TestUndistortWorkspace:
         )
         np.testing.assert_array_equal(obs_counts, computed_counts)
 
-    def test_no_orphan_points(self, seoul_bull_workspace, tmp_path):
+    def test_no_orphan_points(self, seoul_bull_workspace_deprecated, tmp_path):
         """Every 3D point has at least one observation."""
-        _, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, _, _, undistorted_recon = _run_undistort(
+            seoul_bull_workspace_deprecated, tmp_path
+        )
 
         obs_counts = np.asarray(undistorted_recon.observation_counts)
         assert np.all(obs_counts > 0), "Found 3D points with zero observations"
 
-    def test_poses_preserved(self, seoul_bull_workspace, tmp_path):
+    def test_poses_preserved(self, seoul_bull_workspace_deprecated, tmp_path):
         """Quaternions and translations are unchanged by undistortion."""
-        recon, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, _, _, undistorted_recon = _run_undistort(
+            seoul_bull_workspace_deprecated, tmp_path
+        )
 
         np.testing.assert_array_almost_equal(
             np.asarray(recon.quaternions_wxyz),
@@ -561,9 +573,11 @@ class TestUndistortWorkspace:
             decimal=10,
         )
 
-    def test_3d_points_subset(self, seoul_bull_workspace, tmp_path):
+    def test_3d_points_subset(self, seoul_bull_workspace_deprecated, tmp_path):
         """Output 3D points are a subset of input 3D points."""
-        recon, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, _, _, undistorted_recon = _run_undistort(
+            seoul_bull_workspace_deprecated, tmp_path
+        )
 
         assert undistorted_recon.point_count <= recon.point_count
 
@@ -575,9 +589,11 @@ class TestUndistortWorkspace:
             dists = np.linalg.norm(src_positions - pos, axis=1)
             assert np.min(dists) < 1e-10, f"Output point {pos} not found in input"
 
-    def test_thumbnail_128x128(self, seoul_bull_workspace, tmp_path):
+    def test_thumbnail_128x128(self, seoul_bull_workspace_deprecated, tmp_path):
         """Thumbnails in .sift files are 128x128x3."""
-        recon, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, output_dir, _, _ = _run_undistort(
+            seoul_bull_workspace_deprecated, tmp_path
+        )
 
         with open(output_dir / ".sfm-workspace.json") as f:
             config = json.load(f)
@@ -598,9 +614,11 @@ class TestUndistortWorkspace:
         assert thumbnail.shape == (128, 128, 3)
         assert thumbnail.dtype == np.uint8
 
-    def test_camera_indexes_valid(self, seoul_bull_workspace, tmp_path):
+    def test_camera_indexes_valid(self, seoul_bull_workspace_deprecated, tmp_path):
         """All camera_indexes reference valid cameras."""
-        _, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, _, _, undistorted_recon = _run_undistort(
+            seoul_bull_workspace_deprecated, tmp_path
+        )
 
         cam_indexes = np.asarray(undistorted_recon.camera_indexes)
         num_cameras = undistorted_recon.camera_count
@@ -613,9 +631,9 @@ class TestUndistortWorkspace:
 
 
 class TestUndistortE2E:
-    def test_undistort_command(self, seoul_bull_workspace, tmp_path):
+    def test_undistort_command(self, seoul_bull_workspace_deprecated, tmp_path):
         """Run the undistort command on a real reconstruction."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
 
         runner = CliRunner()
         result = runner.invoke(main, ["undistort", str(sfmr_path)])
@@ -630,9 +648,11 @@ class TestUndistortE2E:
         if output_dir.exists():
             shutil.rmtree(output_dir)
 
-    def test_undistort_command_fit_outside(self, seoul_bull_workspace, tmp_path):
+    def test_undistort_command_fit_outside(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """Run the undistort command with --fit outside."""
-        sfmr_path = seoul_bull_workspace
+        sfmr_path = seoul_bull_workspace_deprecated
 
         runner = CliRunner()
         result = runner.invoke(main, ["undistort", str(sfmr_path), "--fit", "outside"])

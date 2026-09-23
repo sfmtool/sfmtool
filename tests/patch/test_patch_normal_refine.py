@@ -23,9 +23,9 @@ from .conftest import load_images, sample_point_ids
 
 
 def test_refine_normals_improves_consensus(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
@@ -83,10 +83,10 @@ def test_refine_normals_improves_consensus(
     assert np.nanmax(moved) > 1e-4
 
 
-def test_bilinear_mip_sampler_runs_end_to_end(seoul_bull_workspace: Path):
+def test_bilinear_mip_sampler_runs_end_to_end(seoul_bull_workspace_deprecated: Path):
     """``sampler="bilinear_mip"`` is accepted by the binding and carries a
     refinement end-to-end (unknown samplers are still rejected)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -112,9 +112,9 @@ def test_bilinear_mip_sampler_runs_end_to_end(seoul_bull_workspace: Path):
         cloud.refine_normals(recon, images, point_indexes=sample, sampler="bogus")
 
 
-def test_confidence_is_opt_in(seoul_bull_workspace: Path):
+def test_confidence_is_opt_in(seoul_bull_workspace_deprecated: Path):
     """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     sample = sample_point_ids(
         PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0),
@@ -149,9 +149,9 @@ def test_confidence_is_opt_in(seoul_bull_workspace: Path):
     assert np.all(np.isfinite(on[scored])) and np.all(on[scored] >= 0.0)
 
 
-def test_render_bitmaps_scatters_to_points(seoul_bull_workspace: Path):
+def test_render_bitmaps_scatters_to_points(seoul_bull_workspace_deprecated: Path):
     """``render_bitmaps`` returns a per-3D-point RGBA bitmap array."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
@@ -191,9 +191,11 @@ def test_render_bitmaps_scatters_to_points(seoul_bull_workspace: Path):
     assert alpha[filled].max() > 0
 
 
-def test_render_bitmaps_round_trips_through_sfmr(seoul_bull_workspace: Path, tmp_path):
+def test_render_bitmaps_round_trips_through_sfmr(
+    seoul_bull_workspace_deprecated: Path, tmp_path
+):
     """Attached bitmaps survive a save / load of the .sfmr."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
@@ -226,10 +228,10 @@ def test_render_bitmaps_round_trips_through_sfmr(seoul_bull_workspace: Path, tmp
     assert recon.patch_bitmaps is None
 
 
-def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
+def test_view_indices_override_expands_view_set(seoul_bull_workspace_deprecated: Path):
     """``view_indices`` refines each patch over an explicit view set, overriding
     the track observations — the hook for MVS-style all-visible-view refinement."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     n_images = len(images)
 
@@ -260,9 +262,9 @@ def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
     assert bool((exp_vvc > base_vvc).any())
 
 
-def test_view_indices_validation(seoul_bull_workspace: Path):
+def test_view_indices_validation(seoul_bull_workspace_deprecated: Path):
     """``view_indices`` must be parallel to the cloud and reference real images."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(recon, normal="stored", extent_value=5.0)
 
@@ -274,10 +276,10 @@ def test_view_indices_validation(seoul_bull_workspace: Path):
         cloud.refine_normals(recon, images, view_indices=out_of_range)
 
 
-def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
+def test_view_indices_dedupes_repeated_views(seoul_bull_workspace_deprecated: Path):
     """Repeated views within a patch are ignored, so a duplicated index gives the
     same result (and view count) as listing each view once."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     n_images = len(images)
     common = dict(resolution=12, init_steps=5, refine_levels=2)
@@ -323,7 +325,7 @@ def _refine(recon, images, cache, cache_supersample, point_indexes):
 
 
 def test_fronto_cache_matches_source_rendering(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The fronto-parallel cache reproduces the source-render refinement.
 
@@ -331,7 +333,7 @@ def test_fronto_cache_matches_source_rendering(
     Φ-equivalent (the angular tail is ambiguity, not error) and must not drop a
     meaningful fraction of the scored points.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     sample = sample_point_ids(
         PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0),
@@ -427,11 +429,11 @@ def test_fronto_cache_handles_fisheye_distortion(
 
 
 def test_refine_normals_cache_validation(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -444,7 +446,7 @@ def test_refine_normals_cache_validation(
 
 
 def test_refine_normals_image_pyramid_set_matches_list(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """A prebuilt ``ImagePyramidSet`` is a drop-in for the numpy image list:
     the pyramids are built with the same levels/downsample, so refine_normals
@@ -453,7 +455,7 @@ def test_refine_normals_image_pyramid_set_matches_list(
 
     from sfmtool._sfmtool.patches import ImagePyramidSet
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     pyramids = ImagePyramidSet(recon, images)
     assert len(pyramids) == len(images)

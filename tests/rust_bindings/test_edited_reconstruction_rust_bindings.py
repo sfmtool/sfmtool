@@ -18,8 +18,8 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruc
 
 
 @pytest.fixture
-def base(seoul_bull_sfmr_only):
-    return SfmrReconstruction.load(seoul_bull_sfmr_only)
+def base(seoul_bull_sfmr_only_deprecated):
+    return SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
 
 
 @pytest.fixture
@@ -224,8 +224,8 @@ class TestResectImageInPlace:
     """The bulk edit: one image re-posed against structure held out from it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+    def embedded(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_an_image_past_the_table_is_refused(self, embedded):
@@ -274,8 +274,8 @@ class TestBundleAdjust:
     """The bulk edit that moves every pose and every point at once."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+    def embedded(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_the_poses_move_and_the_residuals_do_not_get_worse(self, embedded):
@@ -318,8 +318,8 @@ class TestMoveCamera:
     """The bulk edit: one image put at a pose, and its tracks settled around it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+    def embedded(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_an_image_past_the_table_is_refused(self, embedded):
@@ -406,8 +406,8 @@ class TestPruneCoveredObservations:
     """The bulk edit: a coarse observation handed over to the finer feature."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+    def embedded(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_a_value_with_no_patch_frames_is_refused(self, base):

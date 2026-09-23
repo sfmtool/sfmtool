@@ -19,7 +19,7 @@ from sfmtool.xform import (
 from .conftest import apply_transforms_to_file, load_reconstruction_data
 
 
-def test_transform_chain(seoul_bull_sfmr_only, tmp_path):
+def test_transform_chain(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that multiple transformations can be chained."""
     output_path = tmp_path / "chained.sfmr"
 
@@ -30,19 +30,21 @@ def test_transform_chain(seoul_bull_sfmr_only, tmp_path):
         ScaleTransform(2.0),
     ]
 
-    result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_sfmr_only_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] < original["point_count"]
     assert np.all(transformed["observation_counts"] > 2)
 
 
-def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
+def test_filter_then_transform_chain(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test chaining multiple filters followed by transforms."""
     output_path = tmp_path / "multi_filter_chain.sfmr"
 
@@ -52,9 +54,9 @@ def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
         ScaleTransform(0.5),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert result["point_count"] < original["point_count"]
@@ -62,7 +64,9 @@ def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
     assert np.all(result["errors"] <= 5.0)
 
 
-def test_range_filter_chain_with_other_transforms(seoul_bull_sfmr_only, tmp_path):
+def test_range_filter_chain_with_other_transforms(
+    seoul_bull_sfmr_only_deprecated, tmp_path
+):
     """Test that range filter can be chained with other transforms."""
     output_path = tmp_path / "range_chain.sfmr"
 
@@ -73,12 +77,14 @@ def test_range_filter_chain_with_other_transforms(seoul_bull_sfmr_only, tmp_path
         ScaleTransform(2.0),
     ]
 
-    result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    result = apply_transforms_to_file(
+        seoul_bull_sfmr_only_deprecated, output_path, transforms
+    )
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["image_count"] == 10
@@ -86,7 +92,7 @@ def test_range_filter_chain_with_other_transforms(seoul_bull_sfmr_only, tmp_path
     assert np.all(filtered["observation_counts"] > 2)
 
 
-def test_complex_pipeline(seoul_bull_sfmr_only, tmp_path):
+def test_complex_pipeline(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test a complex multi-step pipeline."""
     output_path = tmp_path / "complex_pipeline.sfmr"
 
@@ -98,7 +104,7 @@ def test_complex_pipeline(seoul_bull_sfmr_only, tmp_path):
         ScaleTransform(1.5),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
     result = load_reconstruction_data(output_path)
 
@@ -106,15 +112,15 @@ def test_complex_pipeline(seoul_bull_sfmr_only, tmp_path):
     assert np.all(result["observation_counts"] > 2)
 
 
-def test_empty_transform_list(seoul_bull_sfmr_only, tmp_path):
+def test_empty_transform_list(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test that empty transform list preserves reconstruction."""
     output_path = tmp_path / "no_transforms.sfmr"
 
     transforms = []
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert result["point_count"] == original["point_count"]
@@ -122,7 +128,7 @@ def test_empty_transform_list(seoul_bull_sfmr_only, tmp_path):
     assert np.allclose(result["positions"], original["positions"])
 
 
-def test_transforms_after_bundle_adjust(seoul_bull_workspace, tmp_path):
+def test_transforms_after_bundle_adjust(seoul_bull_workspace_deprecated, tmp_path):
     """Test that transforms work correctly after bundle adjustment."""
     output_path = tmp_path / "ba_then_transform.sfmr"
 
@@ -132,16 +138,16 @@ def test_transforms_after_bundle_adjust(seoul_bull_workspace, tmp_path):
         TranslateTransform(np.array([1, 1, 1])),
     ]
 
-    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_workspace_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert result["point_count"] == original["point_count"]
     assert result["image_count"] == original["image_count"]
 
 
-def test_multiple_scales(seoul_bull_sfmr_only, tmp_path):
+def test_multiple_scales(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test applying multiple scale transforms in sequence."""
     output_path = tmp_path / "multi_scale.sfmr"
 
@@ -151,15 +157,15 @@ def test_multiple_scales(seoul_bull_sfmr_only, tmp_path):
         ScaleTransform(0.5),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert np.allclose(result["positions"], original["positions"], atol=1e-6)
 
 
-def test_multiple_translations(seoul_bull_sfmr_only, tmp_path):
+def test_multiple_translations(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test applying multiple translations in sequence."""
     output_path = tmp_path / "multi_translate.sfmr"
 
@@ -169,15 +175,15 @@ def test_multiple_translations(seoul_bull_sfmr_only, tmp_path):
         TranslateTransform(np.array([-1, -2, -3])),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert np.allclose(result["positions"], original["positions"], atol=1e-6)
 
 
-def test_all_filters_combined(seoul_bull_sfmr_only, tmp_path):
+def test_all_filters_combined(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Test combining all filter types."""
     from sfmtool.xform import RemoveIsolatedPointsFilter, RemoveNarrowTracksFilter
 
@@ -191,9 +197,9 @@ def test_all_filters_combined(seoul_bull_sfmr_only, tmp_path):
         RemoveIsolatedPointsFilter(factor=10.0, value_spec="median"),
     ]
 
-    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
+    apply_transforms_to_file(seoul_bull_sfmr_only_deprecated, output_path, transforms)
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     result = load_reconstruction_data(output_path)
 
     assert result["image_count"] == 15  # 2-16 inclusive

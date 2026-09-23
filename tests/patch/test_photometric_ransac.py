@@ -5,7 +5,7 @@
 
 End-to-end behaviour of ``refine_photometric_ransac`` driven via PyO3
 against a real reconstruction. Uses the shared
-``seoul_bull_workspace`` fixture; COLMAP's incremental
+``seoul_bull_workspace_deprecated`` fixture; COLMAP's incremental
 SfM is non-deterministic even with a fixed seed (multi-threaded BA), so
 assertions here are self-relative or generous lower bounds rather than
 absolute numerical targets.
@@ -128,15 +128,15 @@ def _row_mean_lum_at_level(
 
 
 @pytest.fixture
-def seoul_bull_stack(seoul_bull_workspace: Path):
+def seoul_bull_stack(seoul_bull_workspace_deprecated: Path):
     """Build the seoul_bull stack from the shared 17-image reconstruction."""
-    return _build_seoul_bull_stack(seoul_bull_workspace)
+    return _build_seoul_bull_stack(seoul_bull_workspace_deprecated)
 
 
 @pytest.fixture
-def seoul_bull_stack_f16(seoul_bull_workspace: Path):
+def seoul_bull_stack_f16(seoul_bull_workspace_deprecated: Path):
     """The seoul_bull stack with half-precision pixel storage."""
-    return _build_seoul_bull_stack(seoul_bull_workspace, dtype="float16")
+    return _build_seoul_bull_stack(seoul_bull_workspace_deprecated, dtype="float16")
 
 
 class TestRefinePhotometricRansacSeoulBull:

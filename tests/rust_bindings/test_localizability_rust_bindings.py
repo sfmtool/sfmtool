@@ -22,12 +22,12 @@ SIGMA_NOISE = 3.0
 
 
 @pytest.fixture(scope="module")
-def embedded_with_bitmaps(seoul_bull_workspace_once) -> SfmrReconstruction:
+def embedded_with_bitmaps(seoul_bull_workspace_once_deprecated) -> SfmrReconstruction:
     """An ``embedded_patches`` recon carrying per-point consensus ``patch_bitmaps``
     (rendered by a cheap sub-pixel refine pass)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
-        normal="mean_viewing", extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_once_deprecated
+    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     out = RefineKeypointsTransform(bitmaps=True, resolution=R, max_gn_steps=3).apply(
         recon
     )

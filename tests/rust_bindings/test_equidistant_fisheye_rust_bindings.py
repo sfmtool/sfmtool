@@ -123,9 +123,9 @@ def test_matches_the_simple_radial_fisheye_k1_zero_convention():
     )
 
 
-def test_sfmr_storage_round_trip(seoul_bull_sfmr_only, tmp_path):
+def test_sfmr_storage_round_trip(seoul_bull_sfmr_only_deprecated, tmp_path):
     """`.sfmr` stores the native model name verbatim, like EQUIRECTANGULAR."""
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     cam = CameraIntrinsics.from_dict(
         dict(
             EQUIDISTANT,

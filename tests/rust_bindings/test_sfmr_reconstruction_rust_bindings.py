@@ -14,8 +14,8 @@ from sfmtool._sfmtool.patches import PatchCloud
 
 
 class TestHomogeneousPointAccessors:
-    def test_finite_reconstruction_accessors(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_finite_reconstruction_accessors(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         m = len(recon.positions)
         assert m > 0
 
@@ -34,8 +34,10 @@ class TestHomogeneousPointAccessors:
         assert np.array_equal(positions_xyzw[:, 3], np.ones(m))
         assert np.array_equal(positions_xyzw[:, :3], positions)
 
-    def test_clone_with_changes_homogeneous_positions(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_with_changes_homogeneous_positions(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) >= 2
 
@@ -54,9 +56,9 @@ class TestHomogeneousPointAccessors:
         np.testing.assert_allclose(clone.positions[0], [0.0, 0.0, 1.0])
 
     def test_clone_with_changes_rejects_all_zero_homogeneous_coordinate(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) > 0
         # (0, 0, 0, 0) is no point at all: w = 0 with a zero direction.
@@ -66,9 +68,9 @@ class TestHomogeneousPointAccessors:
             recon.clone_with_changes(positions=positions_xyzw)
 
     def test_clone_with_changes_euclidean_positions_stay_finite(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # An (N, 3) Euclidean array keeps every point finite (w = 1).
         clone = recon.clone_with_changes(positions=recon.positions)
         assert not clone.point_is_at_infinity.any()
@@ -76,8 +78,8 @@ class TestHomogeneousPointAccessors:
 
 
 class TestInfinityConversions:
-    def test_classify_preserves_point_count(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_classify_preserves_point_count(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         classified = recon.classify_points_at_infinity()
         # Reclassification never adds or drops points or observations.
         assert classified.point_count == recon.point_count
@@ -86,8 +88,8 @@ class TestInfinityConversions:
             classified.point_is_at_infinity.sum()
         )
 
-    def test_classify_detects_a_far_point(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_classify_detects_a_far_point(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # Pick a well-observed point and push it far away so its observation
         # rays become parallel — its parallax collapses below the noise floor.
         idx = int(np.argmax(recon.observation_counts))
@@ -107,8 +109,8 @@ class TestInfinityConversions:
             np.linalg.norm(classified.positions[idx]), 1.0, atol=1e-9
         )
 
-    def test_classify_noise_floor_is_monotone(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_classify_noise_floor_is_monotone(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # A larger noise floor can only classify a superset of points.
         strict = recon.classify_points_at_infinity(noise_floor_px=0.01)
         loose = recon.classify_points_at_infinity(noise_floor_px=1.0e4)
@@ -116,8 +118,10 @@ class TestInfinityConversions:
         assert strict.infinity_point_count == int(strict.point_is_at_infinity.sum())
         assert loose.infinity_point_count == int(loose.point_is_at_infinity.sum())
 
-    def test_materialize_makes_every_point_finite(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_materialize_makes_every_point_finite(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         positions = recon.positions_xyzw.copy()
         n_infinity = min(5, len(positions))
         for i in range(n_infinity):
@@ -133,8 +137,10 @@ class TestInfinityConversions:
         assert np.all(np.isfinite(materialized.positions))
         assert materialized.infinity_point_count == 0
 
-    def test_materialize_leaves_finite_points_unchanged(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_materialize_leaves_finite_points_unchanged(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # No points at infinity — materialise is a no-op on the positions.
         materialized = recon.materialize_points_at_infinity()
         np.testing.assert_array_equal(materialized.positions, recon.positions)
@@ -142,13 +148,13 @@ class TestInfinityConversions:
 
 
 class TestWorldSpaceUnit:
-    def test_default_is_none(self, seoul_bull_sfmr_only):
+    def test_default_is_none(self, seoul_bull_sfmr_only_deprecated):
         # A freshly solved reconstruction is in arbitrary units.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.world_space_unit is None
 
-    def test_clone_sets_and_clears_unit(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_sets_and_clears_unit(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
 
         scaled = recon.clone_with_changes(world_space_unit="m")
         assert scaled.world_space_unit == "m"
@@ -158,8 +164,10 @@ class TestWorldSpaceUnit:
         cleared = scaled.clone_with_changes(world_space_unit=None)
         assert cleared.world_space_unit is None
 
-    def test_unit_survives_save_load_roundtrip(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_unit_survives_save_load_roundtrip(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         scaled = recon.clone_with_changes(world_space_unit="mm")
 
         out_path = tmp_path / "scaled.sfmr"
@@ -170,15 +178,15 @@ class TestWorldSpaceUnit:
 
 
 class TestOptionalNormals:
-    def test_default_has_normals(self, seoul_bull_sfmr_only):
+    def test_default_has_normals(self, seoul_bull_sfmr_only_deprecated):
         # A solved reconstruction carries (auto-computed) normals.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.has_normals is True
 
-    def test_clear_normals_round_trips(self, seoul_bull_sfmr_only, tmp_path):
+    def test_clear_normals_round_trips(self, seoul_bull_sfmr_only_deprecated, tmp_path):
         import numpy as np
 
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
 
         # Opt out of normals entirely.
         no_normals = recon.clone_with_changes(normals=None)
@@ -204,10 +212,10 @@ class TestOptionalNormals:
             names = zf.namelist()
         assert not any("normals_xyz" in n for n in names)
 
-    def test_set_normals_marks_present(self, seoul_bull_sfmr_only):
+    def test_set_normals_marks_present(self, seoul_bull_sfmr_only_deprecated):
         import numpy as np
 
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         cleared = recon.clone_with_changes(normals=None)
         assert cleared.has_normals is False
 
@@ -222,14 +230,16 @@ class TestOptionalNormals:
 class TestNormalConfidence:
     """The optional per-point `points3d/normal_confidence` column."""
 
-    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only):
+    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only_deprecated):
         # A file written before the section existed carries no confidence
         # information at all — which is not the same as "all confident".
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.normal_confidence is None
 
-    def test_clone_save_load_round_trip(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_save_load_round_trip(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         n = recon.point_count
 
         # Current writers emit only the two ends of the scale.
@@ -257,10 +267,10 @@ class TestNormalConfidence:
             names = zf.namelist()
         assert any(n.startswith("points3d/normal_confidence.") for n in names)
 
-    def test_none_clears_the_column(self, seoul_bull_sfmr_only, tmp_path):
+    def test_none_clears_the_column(self, seoul_bull_sfmr_only_deprecated, tmp_path):
         # `None` drops the column outright, matching the `normals=None` idiom;
         # omitting the kwarg preserves whatever the source carried.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         confidence = np.full(recon.point_count, 255, dtype=np.uint8)
         with_confidence = recon.clone_with_changes(normal_confidence=confidence)
 
@@ -280,14 +290,14 @@ class TestNormalConfidence:
             names = zf.namelist()
         assert not any("normal_confidence" in n for n in names)
 
-    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         bad = np.zeros(recon.point_count, dtype=np.float32)
         with pytest.raises(TypeError, match="normal_confidence"):
             recon.clone_with_changes(normal_confidence=bad)
 
-    def test_wrong_length_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_wrong_length_rejected(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         bad = np.zeros(recon.point_count - 1, dtype=np.uint8)
         with pytest.raises(ValueError, match="must match point count"):
             recon.clone_with_changes(normal_confidence=bad)
@@ -296,15 +306,17 @@ class TestNormalConfidence:
 class TestObservationConfidence:
     """The optional per-observation `tracks/observation_confidence` column."""
 
-    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only):
+    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only_deprecated):
         # A file written before the section existed carries no confidence
         # information at all — which is not the same as "every observation is
         # sharp".
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.observation_confidence is None
 
-    def test_clone_save_load_round_trip(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_save_load_round_trip(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         m = len(np.asarray(recon.track_point_indexes))
 
         # `0` is the reserved "no data-derived support" code; measured values
@@ -332,8 +344,8 @@ class TestObservationConfidence:
             names = zf.namelist()
         assert any(n.startswith("tracks/observation_confidence.") for n in names)
 
-    def test_none_clears_the_column(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_none_clears_the_column(self, seoul_bull_sfmr_only_deprecated, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         m = len(np.asarray(recon.track_point_indexes))
         confidence = np.full(m, 200, dtype=np.uint8)
         with_confidence = recon.clone_with_changes(observation_confidence=confidence)
@@ -354,16 +366,16 @@ class TestObservationConfidence:
             names = zf.namelist()
         assert not any("observation_confidence" in n for n in names)
 
-    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         m = len(np.asarray(recon.track_point_indexes))
         with pytest.raises(TypeError, match="observation_confidence"):
             recon.clone_with_changes(
                 observation_confidence=np.zeros(m, dtype=np.float32)
             )
 
-    def test_wrong_length_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_wrong_length_rejected(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         m = len(np.asarray(recon.track_point_indexes))
         with pytest.raises(ValueError, match="must match observation count"):
             recon.clone_with_changes(
@@ -371,12 +383,12 @@ class TestObservationConfidence:
             )
 
     def test_point_filter_selects_observation_rows_not_point_rows(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
         # The column is per OBSERVATION, so a point cull must take the rows of
         # the culled points' observations — not the point-indexed selection the
         # per-point columns take.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         ti = np.asarray(recon.track_point_indexes).astype(np.int64)
         m = len(ti)
         confidence = (np.arange(m) % 254 + 1).astype(np.uint8)
@@ -395,14 +407,16 @@ class TestObservationConfidence:
 class TestEmbeddedPatches:
     """Format v4 embedded_patches: read accessors and the clone path."""
 
-    def test_sift_files_defaults(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_sift_files_defaults(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.feature_source == "sift_files"
         assert recon.keypoints_xy is None
         assert recon.image_file_hashes is None
 
-    def test_clone_to_embedded_round_trips(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_to_embedded_round_trips(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
         n_img = len(recon.image_names)
 
@@ -441,8 +455,10 @@ class TestEmbeddedPatches:
         np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), keypoints)
         assert reloaded.image_file_hashes == img_hashes
 
-    def test_clone_keypoints_wrong_length_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_keypoints_wrong_length_rejected(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         bad = np.zeros((3, 2), dtype=np.float32)  # not observation_count rows
         with pytest.raises(ValueError, match="observation count"):
             recon.clone_with_changes(keypoints_xy=bad)
@@ -459,10 +475,10 @@ class TestEmbeddedPatches:
             image_file_hashes=img_hashes,
         )
 
-    def test_embedded_sift_only_getters_are_none(self, seoul_bull_sfmr_only):
+    def test_embedded_sift_only_getters_are_none(self, seoul_bull_sfmr_only_deprecated):
         # The sift_files-only columns report None (not an empty array) in
         # embedded mode, matching keypoints_xy/image_file_hashes in sift mode.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # sift_files mode: these are present, the embedded ones are None.
         assert recon.track_feature_indexes is not None
         assert recon.feature_tool_hashes is not None
@@ -475,10 +491,14 @@ class TestEmbeddedPatches:
         assert embedded.image_file_hashes is not None
         assert embedded.keypoints_xy is not None
 
-    def test_clone_embedded_to_sift_files_rejected(self, seoul_bull_sfmr_only):
+    def test_clone_embedded_to_sift_files_rejected(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
         # Embedded → sift_files has no source for per-observation feature
         # indices, so the conversion is refused.
-        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        embedded = self._make_embedded(
+            SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        )
         n_img = len(embedded.image_names)
         hashes = [bytes(16) for _ in range(n_img)]
         with pytest.raises(
@@ -490,8 +510,10 @@ class TestEmbeddedPatches:
                 sift_content_hashes=hashes,
             )
 
-    def test_clone_to_embedded_requires_image_file_hashes(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_to_embedded_requires_image_file_hashes(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
         keypoints = np.zeros((n_obs, 2), dtype=np.float32)
         with pytest.raises(
@@ -502,18 +524,22 @@ class TestEmbeddedPatches:
                 keypoints_xy=keypoints,
             )
 
-    def test_clone_unknown_feature_source_rejected(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_unknown_feature_source_rejected(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         with pytest.raises(ValueError, match="unknown feature_source"):
             recon.clone_with_changes(feature_source="bogus")
 
     def test_clone_embedded_track_replacement_without_keypoints_rejected(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
         # Replacing the tracks of an embedded recon changes the observation
         # count; without a matching keypoints_xy the columns would desync, so
         # the final validation must reject it.
-        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        embedded = self._make_embedded(
+            SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        )
         n_new = int(np.asarray(embedded.track_image_indexes).shape[0]) + 2
         img_idx = np.zeros(n_new, dtype=np.uint32)
         feat_idx = np.zeros(n_new, dtype=np.uint32)
@@ -526,12 +552,14 @@ class TestEmbeddedPatches:
             )
 
     def test_clone_embedded_track_and_keypoints_replacement_to_new_size(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
         # Replacing tracks AND keypoints together to a new observation count is
         # accepted: the keypoint row count is validated against the *new* track
         # count, not the old one.
-        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        embedded = self._make_embedded(
+            SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        )
         n_new = int(np.asarray(embedded.track_image_indexes).shape[0]) + 2
         img_idx = np.zeros(n_new, dtype=np.uint32)
         feat_idx = np.zeros(n_new, dtype=np.uint32)
@@ -547,11 +575,11 @@ class TestEmbeddedPatches:
         assert np.asarray(out.keypoints_xy).shape == (n_new, 2)
 
     def test_clone_track_replacement_recomputes_observation_counts(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
         # Replacing tracks recomputes observation_counts from the new tracks
         # (grouped by point) instead of leaving the old per-point counts stale.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # Point 0 gets 3 observations, point 1 gets 1; all later points get 0.
         img_idx = np.array([0, 1, 2, 0], dtype=np.uint32)
         feat_idx = np.array([0, 1, 2, 3], dtype=np.uint32)
@@ -569,9 +597,9 @@ class TestEmbeddedPatches:
         assert int(counts.sum()) == out.observation_count == 4
 
     def test_clone_track_replacement_rejects_out_of_range_point(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         bad_pt = recon.point_count  # one past the last valid point index
         img_idx = np.array([0], dtype=np.uint32)
         feat_idx = np.array([0], dtype=np.uint32)
@@ -584,14 +612,14 @@ class TestEmbeddedPatches:
             )
 
     def test_clone_multipoint_track_replacement_survives_round_trip(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
         # End-to-end: replace the points and tracks with a multi-point,
         # point-grouped layout, then save and reload. The recomputed
         # observation_counts must drive offsets that keep the tracks consistent
         # across the format round trip. (Also exercises the points-resize +
         # track-replacement interaction: the point-index bound is the new count.)
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         # Three points (the format requires every point to be observed) with
         # 2/3/1 observations, grouped contiguously by point.
         positions = np.array(
@@ -636,21 +664,23 @@ class TestSiftFilesInlineKeypoints:
         keypoints[:, 1] %= height
         return keypoints
 
-    def test_from_data_save_load_keeps_the_column(self, seoul_bull_sfmr_only, tmp_path):
+    def test_from_data_save_load_keeps_the_column(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
         from sfmtool._sfmtool.io import read_sfmr
 
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         keypoints = self._in_bounds_keypoints(recon)
-        workspace_dir = seoul_bull_sfmr_only.parent
+        workspace_dir = seoul_bull_sfmr_only_deprecated.parent
 
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         # This fixture copies the `.sfmr` alone, so nothing can resolve a
         # `.sift`: without the inline column `from_data` cannot recompute the
         # point errors at all.
         with pytest.raises(OSError):
             SfmrReconstruction.from_data(workspace_dir, data)
 
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         data["keypoints_xy"] = keypoints
         built = SfmrReconstruction.from_data(workspace_dir, data)
         assert built.feature_source == "sift_files"
@@ -669,9 +699,9 @@ class TestSiftFilesInlineKeypoints:
         assert reloaded.image_file_hashes is None
 
     def test_clone_with_changes_sets_the_column_in_sift_files_mode(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         keypoints = self._in_bounds_keypoints(recon)
 
         out = recon.clone_with_changes(keypoints_xy=keypoints)
@@ -684,9 +714,9 @@ class TestSiftFilesInlineKeypoints:
         np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), keypoints)
 
     def test_point_filter_selects_the_inline_rows_in_lockstep(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         keypoints = self._in_bounds_keypoints(recon)
         inline = recon.clone_with_changes(keypoints_xy=keypoints)
 
@@ -707,9 +737,9 @@ class TestSaveTimestamp:
     """``save`` takes its timestamp from the writer, and it is not hashed."""
 
     def test_metadata_timestamp_is_the_one_written(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         first = tmp_path / "first.sfmr"
         recon.save(first, operation="xform")
 
@@ -733,9 +763,9 @@ class TestStatedWorkspacePath:
     """``save(workspace_path=...)`` records that path instead of measuring one."""
 
     def test_the_stated_path_is_what_the_file_records(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         out = tmp_path / "stated.sfmr"
         recon.save(out, operation="xform", workspace_path=".")
         assert read_sfmr_metadata(out)["workspace"]["relative_path"] == "."
@@ -752,9 +782,9 @@ class TestStatedWorkspacePath:
         )
 
     def test_a_stated_path_without_an_operation_is_refused(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         out = tmp_path / "unstamped.sfmr"
         with pytest.raises(ValueError, match="stamped save"):
             recon.save(out, workspace_path=".")

@@ -11,16 +11,16 @@ from sfmtool.xform import SwitchCameraModelTransform
 from .conftest import apply_transforms_to_file
 
 
-def test_switch_simple_radial_to_radial(seoul_bull_sfmr_only, tmp_path):
+def test_switch_simple_radial_to_radial(seoul_bull_sfmr_only_deprecated, tmp_path):
     """The motivating case: upgrade SIMPLE_RADIAL → RADIAL to expose a k2
     term for bundle adjustment to refine."""
-    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     # The 17-image solve uses SIMPLE_RADIAL by default.
     assert all(c.model == "SIMPLE_RADIAL" for c in source_recon.cameras)
 
     output_path = tmp_path / "radial.sfmr"
     apply_transforms_to_file(
-        seoul_bull_sfmr_only,
+        seoul_bull_sfmr_only_deprecated,
         output_path,
         [SwitchCameraModelTransform("RADIAL")],
     )
@@ -47,18 +47,18 @@ def test_switch_simple_radial_to_radial(seoul_bull_sfmr_only, tmp_path):
 
 
 def test_switch_simple_radial_to_opencv_pads_new_params_with_zero(
-    seoul_bull_sfmr_only, tmp_path
+    seoul_bull_sfmr_only_deprecated, tmp_path
 ):
     """Converting to a split-focal model duplicates focal_length into fx/fy
     and zeros out k2/p1/p2."""
     output_path = tmp_path / "opencv.sfmr"
     apply_transforms_to_file(
-        seoul_bull_sfmr_only,
+        seoul_bull_sfmr_only_deprecated,
         output_path,
         [SwitchCameraModelTransform("OPENCV")],
     )
 
-    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     result = SfmrReconstruction.load(output_path)
 
     for src, dst in zip(source_recon.cameras, result.cameras):
@@ -88,7 +88,7 @@ def test_switch_is_case_insensitive():
     SwitchCameraModelTransform("RADIAL")
 
 
-def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only, tmp_path):
+def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only_deprecated, tmp_path):
     """Only cameras change; points, poses, and observations are untouched."""
     import numpy as np
 
@@ -96,12 +96,12 @@ def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only, tmp_path):
 
     output_path = tmp_path / "switched.sfmr"
     apply_transforms_to_file(
-        seoul_bull_sfmr_only,
+        seoul_bull_sfmr_only_deprecated,
         output_path,
         [SwitchCameraModelTransform("RADIAL")],
     )
 
-    original = load_reconstruction_data(seoul_bull_sfmr_only)
+    original = load_reconstruction_data(seoul_bull_sfmr_only_deprecated)
     switched = load_reconstruction_data(output_path)
 
     assert switched["image_count"] == original["image_count"]
@@ -117,7 +117,9 @@ def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only, tmp_path):
     )
 
 
-def test_switch_from_equidistant_fisheye_source(seoul_bull_sfmr_only, tmp_path):
+def test_switch_from_equidistant_fisheye_source(
+    seoul_bull_sfmr_only_deprecated, tmp_path
+):
     """An sfmtool-native model works as a SOURCE without being a target.
 
     The transform reads the source's parameters generically (`to_dict`), so
@@ -126,7 +128,7 @@ def test_switch_from_equidistant_fisheye_source(seoul_bull_sfmr_only, tmp_path):
     """
     from sfmtool._sfmtool.geometry import CameraIntrinsics
 
-    source = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    source = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     equidistant = [
         CameraIntrinsics.from_dict(
             {

@@ -62,17 +62,17 @@ def test_from_halfvec_arrays_round_trips_a_cloud():
     assert np.allclose(np.asarray(p0.u_axis) * p0.half_extent[0], [2.0, 0.0, 0.0])
 
 
-def test_image_file_hashes_from_images_shape(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+def test_image_file_hashes_from_images_shape(seoul_bull_workspace_deprecated: Path):
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     hashes = image_file_hashes_from_images(recon)
     assert len(hashes) == recon.image_count
     assert all(isinstance(h, bytes) and len(h) == 16 for h in hashes)
 
 
 def test_compact_to_embedded_patches_round_trip(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     assert recon.feature_source == "sift_files"
     images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
@@ -166,7 +166,7 @@ def _normal_frame_angles_deg(recon) -> np.ndarray:
 
 
 def test_compact_normals_match_the_written_patch_frame(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
     """Regression: the compaction must store the normal of the cloud it *writes*.
 
@@ -176,7 +176,7 @@ def test_compact_normals_match_the_written_patch_frame(
     ``normalize(u × v)`` of the stored frame). Assert the format's finite-patch
     coherence on the compacted recon, and again after a ``.sfmr`` round trip.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
@@ -214,9 +214,9 @@ def test_compact_normals_match_the_written_patch_frame(
     assert _normal_frame_angles_deg(SfmrReconstruction.load(str(out))).max() < 1e-3
 
 
-def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
+def test_compact_min_views_culls_points(seoul_bull_workspace_deprecated: Path):
     """Raising min_views drops more points (and never keeps an under-supported one)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
@@ -231,13 +231,13 @@ def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
     assert np.asarray(low.observation_counts).min() >= 2
 
 
-def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
+def test_compact_preserves_points_at_infinity(seoul_bull_workspace_deprecated: Path):
     """A point at infinity (w = 0) with enough covering views produces a real
     cross-view **consensus bitmap** in the sub-pixel refiner (it is refined, not
     skipped), passes the uniform validity cull — there is no infinity exemption
     any more — and stays at infinity through compaction, carrying that bitmap
     (nonzero alpha) instead of the zero row the old pipeline stored."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     # Turn one well-observed point into a point at infinity.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
@@ -366,12 +366,14 @@ def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0
     return uv
 
 
-def test_compact_drops_points_without_consensus_bitmap(seoul_bull_workspace: Path):
+def test_compact_drops_points_without_consensus_bitmap(
+    seoul_bull_workspace_deprecated: Path,
+):
     """The validity mask is a hard cull: a point with enough kept views but no
     valid consensus bitmap (``valid[pid] == False`` — the refiner produced no
     representative) is dropped by the final compact instead of being kept with an
     all-black bitmap."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)

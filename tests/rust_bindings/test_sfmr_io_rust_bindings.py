@@ -112,8 +112,8 @@ def _embedded_patches_sfmr(recon: SfmrReconstruction, path):
 
 
 @pytest.fixture
-def embedded_patches_sfmr(seoul_bull_sfmr_only, tmp_path):
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+def embedded_patches_sfmr(seoul_bull_sfmr_only_deprecated, tmp_path):
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
     return _embedded_patches_sfmr(recon, tmp_path / "embedded.sfmr")
 
 
@@ -162,8 +162,10 @@ class TestDictRoundTrip:
         ):
             assert reloaded[key].tobytes() == data[key].tobytes(), key
 
-    def test_sift_files_columns_survive(self, seoul_bull_sfmr_only, tmp_path):
-        data = read_sfmr(seoul_bull_sfmr_only)
+    def test_sift_files_columns_survive(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         assert data["metadata"]["feature_source"] == "sift_files"
         # A sift_files file carries no patch frame; the keys are present as None.
         for key in (
@@ -245,10 +247,10 @@ def _constraint_columns(positions_xyzw, n_img):
 
 
 class TestPointConstraints:
-    def test_dict_round_trip(self, seoul_bull_sfmr_only, tmp_path):
+    def test_dict_round_trip(self, seoul_bull_sfmr_only_deprecated, tmp_path):
         # The three columns go out through `write_sfmr` and come back through
         # `read_sfmr` unchanged, and the file still verifies.
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         assert data["point_constraints"] is None
         (constraints, distance, reference), held, ranged = _constraint_columns(
             data["positions_xyzw"], len(data["image_names"])
@@ -274,9 +276,11 @@ class TestPointConstraints:
         assert POINT_CONSTRAINT_NAMES[codes[held]] == "held"
         assert POINT_CONSTRAINT_NAMES[codes[ranged]] == "ranged"
 
-    def test_all_free_columns_are_dropped(self, seoul_bull_sfmr_only, tmp_path):
+    def test_all_free_columns_are_dropped(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
         # An all-free set says what carrying no set says, so it is not written.
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         n = data["positions_xyzw"].shape[0]
         data["point_constraints"] = np.zeros(n, dtype=np.uint8)
         data["constraint_distances"] = np.full(n, np.nan)
@@ -288,8 +292,10 @@ class TestPointConstraints:
         write_sfmr(out, data, skip_recompute_depth_stats=True)
         assert read_sfmr(out)["point_constraints"] is None
 
-    def test_finite_distance_needs_a_real_image(self, seoul_bull_sfmr_only, tmp_path):
-        data = read_sfmr(seoul_bull_sfmr_only)
+    def test_finite_distance_needs_a_real_image(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         (constraints, distance, reference), _held, ranged = _constraint_columns(
             data["positions_xyzw"], len(data["image_names"])
         )
@@ -300,8 +306,10 @@ class TestPointConstraints:
         with pytest.raises(OSError, match="past the"):
             write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
 
-    def test_columns_survive_a_point_filter(self, seoul_bull_sfmr_only, tmp_path):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_columns_survive_a_point_filter(
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         (constraints, distance, reference), held, ranged = _constraint_columns(
             np.asarray(recon.positions_xyzw), len(recon.image_names)
         )
@@ -326,8 +334,10 @@ class TestPointConstraints:
             0,
         ]
 
-    def test_dropping_the_referenced_image_frees_the_point(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_dropping_the_referenced_image_frees_the_point(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         (constraints, distance, reference), held, ranged = _constraint_columns(
             np.asarray(recon.positions_xyzw), len(recon.image_names)
         )
@@ -358,19 +368,19 @@ class TestPointConstraints:
         # A held point names no image, so the same subset leaves it held.
         assert np.asarray(dropped.point_constraints)[held] == _HELD
 
-    def test_the_triple_must_be_passed_together(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_the_triple_must_be_passed_together(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         with pytest.raises(ValueError, match="passed together"):
             recon.clone_with_changes(
                 point_constraints=np.zeros(recon.point_count, dtype=np.uint8)
             )
 
     def test_a_code_outside_the_numbering_is_refused(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
         # The codes are the canonical numbering, so a column carrying anything
         # else has no name and is not written.
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         (constraints, distance, reference), _held, _ranged = _constraint_columns(
             data["positions_xyzw"], len(data["image_names"])
         )
@@ -387,15 +397,15 @@ class TestSharedColumnsAreReadOnly:
     the reconstruction shares, so the view is read-only: a write from Python
     would land in every sharer at once."""
 
-    def test_thumbnails_view_is_read_only(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_thumbnails_view_is_read_only(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         view = recon.thumbnails_y_x_rgb
         assert not view.flags.writeable
         with pytest.raises(ValueError, match="read-only"):
             view[0, 0, 0, 0] = 1
 
-    def test_a_write_to_a_copy_reaches_no_clone(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_a_write_to_a_copy_reaches_no_clone(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         clone = recon.clone_with_changes()
         before = np.asarray(recon.thumbnails_y_x_rgb).copy()
         edited = recon.thumbnails_y_x_rgb.copy()
@@ -412,15 +422,15 @@ class TestLineage:
     ``metadata()`` and ``read_sfmr``'s ``metadata`` dict."""
 
     def test_metadata_has_no_lineage_key_without_an_ancestor(
-        self, seoul_bull_sfmr_only
+        self, seoul_bull_sfmr_only_deprecated
     ):
         # The ordinary state: nothing was edited into this file, so it records
         # no ancestor and the key is absent rather than an empty list.
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert "lineage" not in recon.metadata()
 
     def test_lineage_round_trips_and_shows_up_in_metadata(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
         lineage = [
             {
@@ -439,7 +449,7 @@ class TestLineage:
                 "map": {"form": "dense", "rows": [0, None]},
             },
         ]
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         data["metadata"]["lineage"] = lineage
 
         out = tmp_path / "with_lineage.sfmr"
@@ -456,8 +466,10 @@ class TestOptionalThumbnails:
     every binding hands that absence through as ``None`` rather than filling
     it in."""
 
-    def test_clone_with_changes_none_drops_the_column(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_clone_with_changes_none_drops_the_column(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.thumbnails_y_x_rgb is not None
         bare = recon.clone_with_changes(thumbnails_y_x_rgb=None)
         assert bare.thumbnails_y_x_rgb is None
@@ -469,9 +481,9 @@ class TestOptionalThumbnails:
         assert recon.thumbnails_y_x_rgb is not None
 
     def test_a_save_without_thumbnails_loads_without_them(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         out = tmp_path / "bare.sfmr"
         recon.clone_with_changes(thumbnails_y_x_rgb=None).save(out)
         loaded = SfmrReconstruction.load(out)
@@ -481,9 +493,9 @@ class TestOptionalThumbnails:
         assert ok, errors
 
     def test_read_and_write_sfmr_accept_the_absent_column(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        data = read_sfmr(seoul_bull_sfmr_only)
+        data = read_sfmr(seoul_bull_sfmr_only_deprecated)
         original = data["thumbnails_y_x_rgb"]
         data["thumbnails_y_x_rgb"] = None
         out = tmp_path / "bare.sfmr"
@@ -501,15 +513,17 @@ class TestOptionalThumbnails:
             read_sfmr(tmp_path / "back.sfmr")["thumbnails_y_x_rgb"], original
         )
 
-    def test_a_wrong_shaped_column_is_refused(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_a_wrong_shaped_column_is_refused(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         with pytest.raises(ValueError, match="thumbnails_y_x_rgb"):
             recon.clone_with_changes(
                 thumbnails_y_x_rgb=np.zeros((recon.image_count, 64, 64, 3), np.uint8)
             )
 
-    def test_patch_bitmap_resolution_reads_no_pixels(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    def test_patch_bitmap_resolution_reads_no_pixels(
+        self, seoul_bull_sfmr_only_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         assert recon.patch_bitmap_resolution is None
 
 
@@ -519,9 +533,9 @@ class TestMinimalSave:
     Save As Minimal shares, after the stamp every ``operation`` save writes."""
 
     def test_a_minimal_save_records_no_machine_and_no_history(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         workspace = Path(recon.workspace_dir)
         out = tmp_path / "published" / "minimal.sfmr"
         out.parent.mkdir()
@@ -542,9 +556,9 @@ class TestMinimalSave:
         assert Path(loaded.workspace_dir) == workspace
 
     def test_an_ordinary_save_keeps_the_path_and_merges_the_options(
-        self, seoul_bull_sfmr_only, tmp_path
+        self, seoul_bull_sfmr_only_deprecated, tmp_path
     ):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
         inherited = dict(recon.metadata()["tool_options"])
         out = tmp_path / "ordinary.sfmr"
         recon.save(out, operation="xform", tool_options={"transforms": ["Nothing"]})

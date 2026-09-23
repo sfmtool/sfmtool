@@ -325,8 +325,10 @@ def _assert_clouds_equal(a, b):
 
 
 class TestReconstructionEquivalence:
-    def test_from_tracks_matches_from_reconstruction(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+    def test_from_tracks_matches_from_reconstruction(
+        self, seoul_bull_workspace_deprecated
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         # PixelRadius + mean_viewing need no `.sift` scales or stored normals, so
         # the two clouds are geometry-only and must be patch-for-patch identical.
         kwargs = dict(
@@ -346,10 +348,12 @@ class TestReconstructionEquivalence:
         )
         _assert_clouds_equal(cloud_recon, cloud_tracks)
 
-    def test_localize_keypoints_matches_across_modes(self, seoul_bull_workspace):
+    def test_localize_keypoints_matches_across_modes(
+        self, seoul_bull_workspace_deprecated
+    ):
         from sfmtool.xform._images import load_workspace_images
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         images = load_workspace_images(recon)
 
         kwargs = dict(
@@ -399,10 +403,12 @@ class TestReconstructionEquivalence:
                 atol=1e-12,
             )
 
-    def test_select_views_candidate_override_in_recon_mode(self, seoul_bull_workspace):
+    def test_select_views_candidate_override_in_recon_mode(
+        self, seoul_bull_workspace_deprecated
+    ):
         from sfmtool.xform._images import load_workspace_images
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
         images = load_workspace_images(recon)
         cloud = PatchCloud.from_reconstruction(
             recon, normal="mean_viewing", extent="pixel_radius", extent_value=4.0

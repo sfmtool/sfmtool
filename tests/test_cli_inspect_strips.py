@@ -24,35 +24,35 @@ def _invoke(args: list[str]):
 class TestInspectStripsParsing:
     """parse_point_specs: id/range grammar, ordering, validation."""
 
-    def test_range_and_index_ordered_deduped(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+    def test_range_and_index_ordered_deduped(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         # Listed order is preserved; the overlapping single index is de-duped.
         result = parse_point_specs(recon, ["3-5", "10", "4"])
         assert result == [3, 4, 5, 10]
 
-    def test_point_id_hash_match(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+    def test_point_id_hash_match(self, seoul_bull_workspace_deprecated):
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         pid = f"pt3d_{recon.content_xxh128[:8].lower()}_7"
         assert parse_point_specs(recon, [pid]) == [7]
 
-    def test_point_id_hash_mismatch_errors(self, seoul_bull_workspace):
+    def test_point_id_hash_mismatch_errors(self, seoul_bull_workspace_deprecated):
         import click
 
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         with pytest.raises(click.UsageError, match="not for this reconstruction"):
             parse_point_specs(recon, ["pt3d_deadbeef_7"])
 
-    def test_out_of_range_errors(self, seoul_bull_workspace):
+    def test_out_of_range_errors(self, seoul_bull_workspace_deprecated):
         import click
 
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         with pytest.raises(click.UsageError, match="out of range"):
             parse_point_specs(recon, [str(recon.point_count)])
 
-    def test_invalid_spec_errors(self, seoul_bull_workspace):
+    def test_invalid_spec_errors(self, seoul_bull_workspace_deprecated):
         import click
 
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         with pytest.raises(click.UsageError, match="invalid point spec"):
             parse_point_specs(recon, ["not-a-spec"])
 
@@ -60,26 +60,30 @@ class TestInspectStripsParsing:
 class TestInspectStripsCli:
     """End-to-end CLI rendering for both feature sources."""
 
-    def test_sift_files_writes_montage(self, seoul_bull_workspace, tmp_path):
+    def test_sift_files_writes_montage(self, seoul_bull_workspace_deprecated, tmp_path):
         out = tmp_path / "strips.png"
-        result = _invoke([str(seoul_bull_workspace), "0-5", "-o", str(out)])
+        result = _invoke([str(seoul_bull_workspace_deprecated), "0-5", "-o", str(out)])
         assert result.exit_code == 0, result.output
         assert "--strips: wrote" in result.output
         assert out.exists() and out.stat().st_size > 0
 
-    def test_point_id_argument(self, seoul_bull_workspace, tmp_path):
+    def test_point_id_argument(self, seoul_bull_workspace_deprecated, tmp_path):
         out = tmp_path / "strips.png"
-        pid = f"pt3d_{_hash8(seoul_bull_workspace)}_12"
-        result = _invoke([str(seoul_bull_workspace), pid, "0-2", "-o", str(out)])
+        pid = f"pt3d_{_hash8(seoul_bull_workspace_deprecated)}_12"
+        result = _invoke(
+            [str(seoul_bull_workspace_deprecated), pid, "0-2", "-o", str(out)]
+        )
         assert result.exit_code == 0, result.output
         assert out.exists()
 
-    def test_embedded_patches_rendered_as_is(self, seoul_bull_workspace, tmp_path):
+    def test_embedded_patches_rendered_as_is(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         # Convert to embedded_patches (reads .sift), saved back into the workspace
         # so its images still resolve, then render the stored data as is.
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         emb = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-        emb_path = seoul_bull_workspace.parent / "embedded.sfmr"
+        emb_path = seoul_bull_workspace_deprecated.parent / "embedded.sfmr"
         emb.save(str(emb_path), operation="test")
 
         out = tmp_path / "strips.png"
@@ -88,13 +92,13 @@ class TestInspectStripsCli:
         assert "embedded_patches" in result.output
         assert out.exists() and out.stat().st_size > 0
 
-    def test_infinity_point_rendered(self, seoul_bull_workspace, tmp_path):
+    def test_infinity_point_rendered(self, seoul_bull_workspace_deprecated, tmp_path):
         # Park the most-observed point at infinity (w=0, direction along its
         # current position) and render it: the strip view must handle it via the
         # tangent-sphere infinity patch rather than skipping or crashing.
         import numpy as np
 
-        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
         counts = np.bincount(
             np.asarray(recon.track_point_indexes), minlength=recon.point_count
         )
@@ -103,7 +107,7 @@ class TestInspectStripsCli:
         direction = xyzw[idx, :3] / np.linalg.norm(xyzw[idx, :3])
         xyzw[idx] = [*direction, 0.0]
         modified = recon.clone_with_changes(positions=xyzw)
-        inf_path = seoul_bull_workspace.parent / "with_inf.sfmr"
+        inf_path = seoul_bull_workspace_deprecated.parent / "with_inf.sfmr"
         modified.save(str(inf_path), operation="test")
         assert np.asarray(SfmrReconstruction.load(str(inf_path)).point_is_at_infinity)[
             idx
@@ -114,15 +118,17 @@ class TestInspectStripsCli:
         assert result.exit_code == 0, result.output
         assert out.exists() and out.stat().st_size > 0
 
-    def test_default_output_path(self, seoul_bull_workspace, tmp_path, monkeypatch):
+    def test_default_output_path(
+        self, seoul_bull_workspace_deprecated, tmp_path, monkeypatch
+    ):
         monkeypatch.chdir(tmp_path)
-        result = _invoke([str(seoul_bull_workspace), "0-2"])
+        result = _invoke([str(seoul_bull_workspace_deprecated), "0-2"])
         assert result.exit_code == 0, result.output
-        expected = tmp_path / f"{seoul_bull_workspace.stem}_strips.png"
+        expected = tmp_path / f"{seoul_bull_workspace_deprecated.stem}_strips.png"
         assert expected.exists()
 
-    def test_hash_mismatch_cli_error(self, seoul_bull_workspace, tmp_path):
-        result = _invoke([str(seoul_bull_workspace), "pt3d_deadbeef_1"])
+    def test_hash_mismatch_cli_error(self, seoul_bull_workspace_deprecated, tmp_path):
+        result = _invoke([str(seoul_bull_workspace_deprecated), "pt3d_deadbeef_1"])
         assert result.exit_code != 0
         assert "not for this reconstruction" in result.output
 
@@ -133,21 +139,21 @@ class TestInspectStripsCli:
         assert result.exit_code != 0
         assert "requires an existing .sfmr" in result.output
 
-    def test_needs_a_point(self, seoul_bull_workspace):
-        result = _invoke([str(seoul_bull_workspace)])
+    def test_needs_a_point(self, seoul_bull_workspace_deprecated):
+        result = _invoke([str(seoul_bull_workspace_deprecated)])
         assert result.exit_code != 0
         assert "needs at least one point" in result.output
 
 
-def test_strips_options_rejected_without_flag(seoul_bull_sfmr_only):
+def test_strips_options_rejected_without_flag(seoul_bull_sfmr_only_deprecated):
     result = CliRunner().invoke(
-        main, ["inspect", str(seoul_bull_sfmr_only), "-o", "x.png"]
+        main, ["inspect", str(seoul_bull_sfmr_only_deprecated), "-o", "x.png"]
     )
     assert result.exit_code != 0
     assert "only valid with --strips" in result.output
 
 
-def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
+def test_normal_offsets_obliquity_geometry(seoul_bull_workspace_deprecated):
     """The per-view obliquity offset is the tangential part of the unit vector
     toward the camera: 0 fronto-parallel, sin(theta) at angle theta, 1 grazing;
     None at infinity."""
@@ -158,13 +164,13 @@ def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
     from sfmtool.strips._solve import _SolveStrips
     from sfmtool._sfmtool.patches import OrientedPatch
 
-    recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+    recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
     emb = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    emb_path = seoul_bull_workspace.parent / "embedded_geom.sfmr"
+    emb_path = seoul_bull_workspace_deprecated.parent / "embedded_geom.sfmr"
     emb.save(str(emb_path), operation="test")
     engine = _SolveStrips(
         SfmrReconstruction.load(str(emb_path)),
-        seoul_bull_workspace.parent,
+        seoul_bull_workspace_deprecated.parent,
         patch=32,
         extent_factor=5.0,
     )

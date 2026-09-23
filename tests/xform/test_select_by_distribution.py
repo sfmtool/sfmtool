@@ -57,26 +57,26 @@ def test_description():
     )
 
 
-def test_keeps_requested_count(seoul_bull_workspace, tmp_path):
+def test_keeps_requested_count(seoul_bull_workspace_deprecated, tmp_path):
     output_path = tmp_path / "selected.sfmr"
     apply_transforms_to_file(
-        seoul_bull_workspace,
+        seoul_bull_workspace_deprecated,
         output_path,
         [SelectByDistributionFilter(8)],
     )
     result = load_reconstruction_data(output_path)
-    original = load_reconstruction_data(seoul_bull_workspace)
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     assert result["image_count"] == 8
     assert set(result["image_names"]).issubset(set(original["image_names"]))
     assert 0 < result["point_count"] <= original["point_count"]
 
 
-def test_count_at_least_unit_count_is_noop(seoul_bull_workspace, tmp_path):
-    original = load_reconstruction_data(seoul_bull_workspace)
+def test_count_at_least_unit_count_is_noop(seoul_bull_workspace_deprecated, tmp_path):
+    original = load_reconstruction_data(seoul_bull_workspace_deprecated)
     for count in (17, 100):
         out = tmp_path / f"noop_{count}.sfmr"
         apply_transforms_to_file(
-            seoul_bull_workspace,
+            seoul_bull_workspace_deprecated,
             out,
             [SelectByDistributionFilter(count)],
         )
@@ -85,14 +85,14 @@ def test_count_at_least_unit_count_is_noop(seoul_bull_workspace, tmp_path):
         assert result["point_count"] == original["point_count"]
 
 
-def test_deterministic(seoul_bull_workspace, tmp_path):
+def test_deterministic(seoul_bull_workspace_deprecated, tmp_path):
     out_a = tmp_path / "a.sfmr"
     out_b = tmp_path / "b.sfmr"
     apply_transforms_to_file(
-        seoul_bull_workspace, out_a, [SelectByDistributionFilter(7)]
+        seoul_bull_workspace_deprecated, out_a, [SelectByDistributionFilter(7)]
     )
     apply_transforms_to_file(
-        seoul_bull_workspace, out_b, [SelectByDistributionFilter(7)]
+        seoul_bull_workspace_deprecated, out_b, [SelectByDistributionFilter(7)]
     )
     assert (
         load_reconstruction_data(out_a)["image_names"]
@@ -100,21 +100,25 @@ def test_deterministic(seoul_bull_workspace, tmp_path):
     )
 
 
-def test_selection_is_well_triangulated(seoul_bull_workspace, tmp_path):
+def test_selection_is_well_triangulated(seoul_bull_workspace_deprecated, tmp_path):
     """The kept subset should leave a healthy fraction of its points triangulated
     across a real baseline (the whole point of the filter)."""
     out = tmp_path / "dist.sfmr"
-    apply_transforms_to_file(seoul_bull_workspace, out, [SelectByDistributionFilter(8)])
+    apply_transforms_to_file(
+        seoul_bull_workspace_deprecated, out, [SelectByDistributionFilter(8)]
+    )
     angles = _max_triangulation_angles_deg(out)
     assert angles.size > 0
     # A meaningful share of points sees >= 10 deg of parallax.
     assert np.mean(angles >= 10.0) >= 0.25
 
 
-def test_chaining_with_filter_and_bundle_adjust(seoul_bull_workspace, tmp_path):
+def test_chaining_with_filter_and_bundle_adjust(
+    seoul_bull_workspace_deprecated, tmp_path
+):
     output_path = tmp_path / "chained.sfmr"
     apply_transforms_to_file(
-        seoul_bull_workspace,
+        seoul_bull_workspace_deprecated,
         output_path,
         [
             SelectByDistributionFilter(10),

@@ -39,14 +39,16 @@ def _project(recon, point_xyz: np.ndarray, image_idx: int):
     return np.asarray(cam.project(x_cam[0] / -x_cam[2], x_cam[1] / -x_cam[2]))
 
 
-def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: Path):
+def test_refine_keypoints_array_contract_and_never_worse(
+    seoul_bull_workspace_deprecated: Path,
+):
     # `refine_keypoints` requires starting keypoints (a local refiner needs to
     # seed in the basin of the true optimum, and the projection isn't a "real"
     # keypoint). Embed first so the recon carries inline per-observation
     # keypoints that the default seeding can use.
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None and len(cloud) > 0
@@ -120,12 +122,12 @@ def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: P
     assert improved_any, "refinement never improved any view's ECC score"
 
 
-def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
+def test_refine_keypoints_defaults_to_track(seoul_bull_workspace_deprecated: Path):
     """With no view_sets, each point refines over its track; the view set is the
     track's views, in order, unchanged by the local refiner."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
@@ -144,11 +146,11 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
 
 
 def test_refine_keypoints_empty_view_set_yields_empty_arrays(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
@@ -163,12 +165,14 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     assert np.asarray(res[0]["scores"]).shape == (0,)
 
 
-def test_refine_keypoints_rejects_out_of_range_view_index(seoul_bull_workspace: Path):
+def test_refine_keypoints_rejects_out_of_range_view_index(
+    seoul_bull_workspace_deprecated: Path,
+):
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
@@ -181,7 +185,7 @@ def test_refine_keypoints_rejects_out_of_range_view_index(seoul_bull_workspace: 
 
 
 def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The strict requirement: a local refiner needs starting keypoints. A
     sift-files recon without explicit `starting_keypoints` errors fast — before
@@ -189,7 +193,7 @@ def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
     projection."""
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     assert recon.feature_source == "sift_files"
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
@@ -203,7 +207,9 @@ def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
         cloud.refine_keypoints(recon, [], resolution=12)
 
 
-def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
+def test_refine_keypoints_honors_starting_keypoints(
+    seoul_bull_workspace_deprecated: Path,
+):
     """``starting_keypoints`` shifts the GN seed off the recon's default
     inline stored keypoint: a refinement seeded ~0.5 px away lands somewhere
     subtly different from the stored-seeded refinement, because GN's basin
@@ -216,9 +222,9 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     """
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
@@ -342,14 +348,14 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
 
 
 def test_refine_keypoints_default_seeds_from_embedded_recon(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """On an embedded_patches recon, the default (``starting_keypoints=None``)
     seeds each view at that observation's inline keypoint — not the projection.
     A zero-step "seed only" refinement reproduces the recon's stored keypoints
     bit-for-bit, confirming the seed source.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     emb = recon.to_embedded_patches(extent_value=5.0)
     images = load_images(emb)
     cloud = emb.patches
@@ -390,7 +396,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
 
 
 def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The third branch of the seed-source ladder: on an embedded_patches recon,
     a view that's in the refiner's view set but NOT in the point's SIFT track
@@ -399,7 +405,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     inline keypoint (covered by the test above); this one pins the per-view
     fall-through within the recon-default branch.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     emb = recon.to_embedded_patches(extent_value=5.0)
     images = load_images(emb)
     cloud = emb.patches
@@ -476,7 +482,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
 
 
 def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """The override branch of the seed-source ladder on an embedded_patches
     recon: explicit ``starting_keypoints`` for a point silence the recon-default
@@ -485,9 +491,9 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
     keypoints for overridden points must equal the override, not the stored
     inline keypoint.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
@@ -540,16 +546,16 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
 
 
 def test_refine_keypoints_render_bitmaps_returns_consensus_bitmaps(
-    seoul_bull_workspace: Path,
+    seoul_bull_workspace_deprecated: Path,
 ):
     """``render_bitmaps=True`` adds a per-point ``bitmap``: an ``(R, R, 4)`` uint8
     consensus texture fused at the final keypoints for a point with a valid
     cross-view consensus, or ``None`` for one without (fewer than two usable
     views — the culled-point signal). Without the flag the key is absent, so the
     existing return shape is preserved."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
-        extent_value=5.0
-    )
+    recon = SfmrReconstruction.load(
+        seoul_bull_workspace_deprecated
+    ).to_embedded_patches(extent_value=5.0)
     images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None

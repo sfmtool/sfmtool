@@ -19,7 +19,7 @@ from .conftest import load_images
 
 
 def test_embed_patches_default_is_two_rounds_one_sweep(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
     """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
     bit-for-bit equivalent to passing ``subpixel=1, rounds=2``. Pins the default so
@@ -32,7 +32,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     assert recon.feature_source == "sift_files"
     images = load_images(recon)
 
@@ -52,7 +52,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
 
 
 def test_embed_patches_subpixel_lk_round_trips(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
     """``embed_patches(subpixel=1)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
@@ -61,7 +61,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
 
     # Pin rounds=1 so the subpixel pass is the terminal step: it feeds nothing
@@ -138,7 +138,7 @@ def test_embed_patches_subpixel_lk_round_trips(
 
 
 def test_embed_patches_multiple_rounds_round_trips(
-    seoul_bull_workspace: Path, tmp_path: Path
+    seoul_bull_workspace_deprecated: Path, tmp_path: Path
 ):
     """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
     round into the next and re-pruning grazing observations. The output is a valid
@@ -147,7 +147,7 @@ def test_embed_patches_multiple_rounds_round_trips(
     once per round."""
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
     images = load_images(recon)
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertions

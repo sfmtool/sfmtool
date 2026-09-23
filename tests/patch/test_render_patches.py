@@ -91,13 +91,13 @@ def _attach_patches_with_infinity(sfmr_path):
 
 
 class TestCollectPatches:
-    def test_no_patches_raises(self, seoul_bull_sfmr_only):
-        recon = SfmrReconstruction.load(str(seoul_bull_sfmr_only))
+    def test_no_patches_raises(self, seoul_bull_sfmr_only_deprecated):
+        recon = SfmrReconstruction.load(str(seoul_bull_sfmr_only_deprecated))
         with pytest.raises(PatchRenderError, match="no patch cloud"):
             collect_patches(recon)
 
-    def test_returns_parallel_arrays(self, seoul_bull_workspace):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_returns_parallel_arrays(self, seoul_bull_workspace_deprecated):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         centers, u_vec, v_vec, normals, point_ids, w = collect_patches(recon)
         n = len(centers)
@@ -107,8 +107,8 @@ class TestCollectPatches:
         assert point_ids.shape == (n,)
         assert w.shape == (n,)
 
-    def test_reports_w_for_points_at_infinity(self, seoul_bull_workspace):
-        patched, pi = _attach_patches_with_infinity(seoul_bull_workspace)
+    def test_reports_w_for_points_at_infinity(self, seoul_bull_workspace_deprecated):
+        patched, pi = _attach_patches_with_infinity(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         _, _, _, _, point_ids, w = collect_patches(recon)
         # Exactly the injected infinity point's patch is flagged w == 0; the rest
@@ -118,10 +118,12 @@ class TestCollectPatches:
         assert int(point_ids[inf_rows][0]) == pi
         assert np.all(w[~inf_rows] == 1.0)
 
-    def test_renders_points_at_infinity(self, seoul_bull_workspace, tmp_path):
+    def test_renders_points_at_infinity(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
         """The renderer composites a w == 0 patch (direction corners projected as
         rays, no translation) without crashing or culling it as behind-camera."""
-        patched, _ = _attach_patches_with_infinity(seoul_bull_workspace)
+        patched, _ = _attach_patches_with_infinity(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon, tmp_path / "inf", mode="flat", backface_cull=True
@@ -132,8 +134,8 @@ class TestCollectPatches:
 
 class TestRenderPatches:
     @pytest.mark.parametrize("mode", ["normal", "flat", "wire"])
-    def test_modes_write_images(self, seoul_bull_workspace, tmp_path, mode):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_modes_write_images(self, seoul_bull_workspace_deprecated, tmp_path, mode):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         out = tmp_path / mode
         results = render_patches(recon, out, mode=mode, image_filter=["_08"])
@@ -143,14 +145,14 @@ class TestRenderPatches:
         img = cv2.imread(str(path))
         assert img is not None and img.size > 0
 
-    def test_texture_requires_bitmaps(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace, with_bitmaps=False)
+    def test_texture_requires_bitmaps(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated, with_bitmaps=False)
         recon = SfmrReconstruction.load(str(patched))
         with pytest.raises(PatchRenderError, match="bitmaps"):
             render_patches(recon, tmp_path / "tex", mode="texture")
 
-    def test_texture_opaque_threshold(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace, with_bitmaps=True)
+    def test_texture_opaque_threshold(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated, with_bitmaps=True)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon,
@@ -161,9 +163,9 @@ class TestRenderPatches:
         )
         assert results and results[0][1] > 0
 
-    def test_texture_non_opaque(self, seoul_bull_workspace, tmp_path):
+    def test_texture_non_opaque(self, seoul_bull_workspace_deprecated, tmp_path):
         # Exercises the confidence-alpha (warped_a / 255) compositing branch.
-        patched = _attach_patches(seoul_bull_workspace, with_bitmaps=True)
+        patched = _attach_patches(seoul_bull_workspace_deprecated, with_bitmaps=True)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon, tmp_path / "tex", mode="texture", image_filter=["_08"]
@@ -171,13 +173,13 @@ class TestRenderPatches:
         assert results and results[0][1] > 0
 
     def test_opaque_threshold_drops_low_confidence(
-        self, seoul_bull_workspace, tmp_path
+        self, seoul_bull_workspace_deprecated, tmp_path
     ):
         # Bitmaps with alpha=20 (~0.078). A threshold above that paints nothing;
         # a threshold below it paints. (n_drawn counts patches, not texels, so
         # compare the rendered pixels against the untouched source.)
         patched = _attach_patches(
-            seoul_bull_workspace, with_bitmaps=True, bitmap_alpha=20
+            seoul_bull_workspace_deprecated, with_bitmaps=True, bitmap_alpha=20
         )
         recon = SfmrReconstruction.load(str(patched))
         below = render_patches(
@@ -201,10 +203,10 @@ class TestRenderPatches:
         assert np.any(painted != source)  # below-threshold confidence is drawn
         assert np.array_equal(dropped, source)  # above-threshold drops everything
 
-    def test_flat_actually_composites(self, seoul_bull_workspace, tmp_path):
+    def test_flat_actually_composites(self, seoul_bull_workspace_deprecated, tmp_path):
         # The rendered frame must differ from the untouched source image,
         # locking in that patches are drawn (and the corner/channel handling).
-        patched = _attach_patches(seoul_bull_workspace)
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon, tmp_path / "f", mode="flat", image_filter=["_08"]
@@ -215,8 +217,10 @@ class TestRenderPatches:
         assert rendered.shape == source.shape
         assert np.any(rendered != source)
 
-    def test_backface_cull_reduces_count(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_backface_cull_reduces_count(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         culled = render_patches(
             recon, tmp_path / "c", mode="wire", backface_cull=True, image_filter=["_08"]
@@ -230,8 +234,8 @@ class TestRenderPatches:
         )
         assert uncull[0][1] > culled[0][1]
 
-    def test_upscale_enlarges_output(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_upscale_enlarges_output(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         r1 = render_patches(recon, tmp_path / "a", mode="wire", image_filter=["_08"])
         r3 = render_patches(
@@ -242,18 +246,18 @@ class TestRenderPatches:
         assert big.shape[0] == small.shape[0] * 3
         assert big.shape[1] == small.shape[1] * 3
 
-    def test_image_filter_no_match(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_image_filter_no_match(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon, tmp_path / "z", mode="wire", image_filter=["nope"]
         )
         assert results == []
 
-    def test_border_color_is_rgb(self, seoul_bull_workspace, tmp_path):
+    def test_border_color_is_rgb(self, seoul_bull_workspace_deprecated, tmp_path):
         # --border-color is R,G,B: a red (255,0,0) request must paint red
         # borders, not blue (which is what BGR-ordering would produce).
-        patched = _attach_patches(seoul_bull_workspace)
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         results = render_patches(
             recon,
@@ -270,8 +274,8 @@ class TestRenderPatches:
         assert red.any()
         assert not blue.any()
 
-    def test_unknown_mode_raises(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_unknown_mode_raises(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         recon = SfmrReconstruction.load(str(patched))
         with pytest.raises(PatchRenderError, match="unknown mode"):
             render_patches(recon, tmp_path / "z", mode="bogus")
@@ -314,14 +318,14 @@ class TestRenderPatchesCLI:
         result = CliRunner().invoke(main, ["render-patches", "dummy.sfmr"])
         assert result.exit_code != 0
 
-    def test_rejects_sift_files(self, seoul_bull_sfmr_only, tmp_path):
+    def test_rejects_sift_files(self, seoul_bull_sfmr_only_deprecated, tmp_path):
         """A sift_files recon is rejected up front (the surfel precondition),
         with a pointer to the conversion bridge."""
         result = CliRunner().invoke(
             main,
             [
                 "render-patches",
-                str(seoul_bull_sfmr_only),
+                str(seoul_bull_sfmr_only_deprecated),
                 "-o",
                 str(tmp_path / "out"),
                 "--mode",
@@ -331,8 +335,8 @@ class TestRenderPatchesCLI:
         assert result.exit_code != 0
         assert "embedded_patches" in result.output
 
-    def test_bad_border_color(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+    def test_bad_border_color(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _attach_patches(seoul_bull_workspace_deprecated)
         result = CliRunner().invoke(
             main,
             [
@@ -348,8 +352,10 @@ class TestRenderPatchesCLI:
         )
         assert result.exit_code != 0
 
-    def test_opaque_out_of_range_rejected(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace, with_bitmaps=True)
+    def test_opaque_out_of_range_rejected(
+        self, seoul_bull_workspace_deprecated, tmp_path
+    ):
+        patched = _attach_patches(seoul_bull_workspace_deprecated, with_bitmaps=True)
         result = CliRunner().invoke(
             main,
             [
@@ -366,8 +372,8 @@ class TestRenderPatchesCLI:
         assert result.exit_code != 0
         assert "between 0 and 1" in result.output
 
-    def test_bare_opaque_defaults(self, seoul_bull_workspace, tmp_path):
-        patched = _embed(seoul_bull_workspace, with_bitmaps=True)
+    def test_bare_opaque_defaults(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _embed(seoul_bull_workspace_deprecated, with_bitmaps=True)
         out = tmp_path / "out"
         result = CliRunner().invoke(
             main,
@@ -384,8 +390,8 @@ class TestRenderPatchesCLI:
         assert result.exit_code == 0, result.output
         assert list(out.glob("*_texture.png"))
 
-    def test_e2e_wire(self, seoul_bull_workspace, tmp_path):
-        patched = _embed(seoul_bull_workspace)
+    def test_e2e_wire(self, seoul_bull_workspace_deprecated, tmp_path):
+        patched = _embed(seoul_bull_workspace_deprecated)
         out = tmp_path / "out"
         result = CliRunner().invoke(
             main,
