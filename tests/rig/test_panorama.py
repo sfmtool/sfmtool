@@ -50,8 +50,8 @@ def _write_generic_camrig(path):
 
 
 @pytest.fixture
-def recon_17(seoul_bull_workspace_deprecated):
-    return SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+def recon_17(seoul_bull_workspace):
+    return SfmrReconstruction.load(seoul_bull_workspace)
 
 
 class TestPanoramaCLI:
@@ -233,8 +233,8 @@ class TestLoadPanoramaRig:
 class TestPanoramaE2E:
     """End-to-end render using the Seoul Bull dataset."""
 
-    def test_renders_panorama(self, seoul_bull_workspace_deprecated, tmp_path):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_renders_panorama(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         output_path = tmp_path / "pano.png"
 
         runner = CliRunner()
@@ -259,8 +259,8 @@ class TestPanoramaE2E:
         # height = width / 2
         assert img.shape[:2] == (128, 256)
 
-    def test_renders_with_range(self, seoul_bull_workspace_deprecated, tmp_path):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_renders_with_range(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(sfmr_path)
         nums = sorted(
             {
@@ -292,8 +292,8 @@ class TestPanoramaE2E:
         assert "Selected 4 of 17" in result.output
         assert output_path.exists()
 
-    def test_renders_near_image(self, seoul_bull_workspace_deprecated, tmp_path):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_renders_near_image(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(sfmr_path)
         ref = list(recon.image_names)[0]
         output_path = tmp_path / "pano_near.png"
@@ -320,8 +320,8 @@ class TestPanoramaE2E:
         assert "Selected 6 of 17" in result.output
         assert output_path.exists()
 
-    def test_renders_with_camrig(self, seoul_bull_workspace_deprecated, tmp_path):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_renders_with_camrig(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         camrig_path = tmp_path / "tiles.camrig"
         n_tiles = _write_spherical_tiles_camrig(camrig_path, n=48, equirect_width=128)
         output_path = tmp_path / "pano_camrig.png"
@@ -350,10 +350,8 @@ class TestPanoramaE2E:
         assert img is not None
         assert img.shape[:2] == (128, 256)
 
-    def test_camrig_takes_precedence_over_n_tiles(
-        self, seoul_bull_workspace_deprecated, tmp_path
-    ):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_camrig_takes_precedence_over_n_tiles(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         camrig_path = tmp_path / "tiles.camrig"
         n_tiles = _write_spherical_tiles_camrig(camrig_path, n=40, equirect_width=128)
         output_path = tmp_path / "pano_precedence.png"
@@ -379,10 +377,8 @@ class TestPanoramaE2E:
         assert f"tiles={n_tiles}" in result.output
         assert "tiles=999" not in result.output
 
-    def test_non_spherical_camrig_rejected(
-        self, seoul_bull_workspace_deprecated, tmp_path
-    ):
-        sfmr_path = seoul_bull_workspace_deprecated
+    def test_non_spherical_camrig_rejected(self, seoul_bull_workspace, tmp_path):
+        sfmr_path = seoul_bull_workspace
         camrig_path = tmp_path / "generic.camrig"
         _write_generic_camrig(camrig_path)
 

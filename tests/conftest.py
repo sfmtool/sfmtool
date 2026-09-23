@@ -645,99 +645,6 @@ def build_reconstruction_at_poses(
     return output_sfm_file
 
 
-@pytest.fixture(scope="session")
-def seoul_bull_workspace_once_deprecated(tmp_path_factory) -> Path:
-    """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
-
-    Deprecated (randomized solve, flaky): use :func:`seoul_bull_workspace_once`.
-
-    Mirrors ``scripts/init_dataset_seoul_bull.sh``: sfmtool SIFT + track-cluster
-    matching + incremental SfM. The fixture carries calibrated intrinsics and
-    keeps the most complete sub-reconstruction, so the cluster matcher's default
-    floor registers all 17 of these small 270x480 images without the wide
-    ``d=28`` (and the resulting tracks stay longer).
-    """
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-
-    data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
-    image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
-    workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
-    image_dir = workspace_dir / "test_17_image"
-    image_dir.mkdir(exist_ok=True)
-
-    img_paths = []
-    for img_file in image_files:
-        dest_path = image_dir / img_file.name
-        shutil.copy(img_file, dest_path)
-        img_paths.append(dest_path)
-
-    # Place camera_config.json at the workspace root so tests that copy just
-    # the image directory (e.g. test_cam_cp_roundtrip_into_solve) start with
-    # an unconfigured workspace; the closest-ancestor resolver still finds it
-    # for solves that run on the original workspace.
-    shutil.copy(data_dir / "camera_config.json", workspace_dir / "camera_config.json")
-
-    expected_image_count = len(image_files)
-    output_sfm_file = workspace_dir / "seoul_bull.sfmr"
-    sfmr_path = build_cluster_reconstruction(
-        workspace_dir,
-        img_paths,
-        output_sfm_file,
-        incremental=True,
-        random_seed=42,
-        expected_image_count=expected_image_count,
-    )
-
-    recon = SfmrReconstruction.load(sfmr_path)
-    if recon.image_count != expected_image_count:
-        raise RuntimeError(
-            f"seoul_bull cluster solve registered {recon.image_count}/"
-            f"{expected_image_count} images (all {expected_image_count} required)."
-        )
-    return sfmr_path
-
-
-@pytest.fixture
-def seoul_bull_workspace_deprecated(
-    seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
-) -> Path:
-    """Per-test isolation of the 17-image .sfmr reconstruction.
-
-    Deprecated (randomized solve, flaky): use :func:`seoul_bull_workspace`.
-    """
-    source_workspace_dir = seoul_bull_workspace_once_deprecated.parent
-    workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
-    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / seoul_bull_workspace_once_deprecated.name
-
-
-@pytest.fixture
-def seoul_bull_sfmr_only_deprecated(
-    seoul_bull_workspace_once_deprecated: Path, tmp_path_factory
-) -> Path:
-    """Per-test copy of *only* the 17-image ``.sfmr`` (plus the workspace marker).
-
-    Deprecated (randomized solve, flaky): use :func:`seoul_bull_sfmr_only`.
-
-    For tests that just ``SfmrReconstruction.load`` the reconstruction and read
-    its geometry (or apply geometry-only transforms / alignment), copying the
-    whole solved workspace — 17 images, every ``.sift`` file, the COLMAP db and
-    the match cache — is wasted I/O that dominates the suite's file-copy time.
-    This copies the single ``.sfmr`` plus the ``.sfm-workspace.json`` marker into
-    an isolated tmp dir, so the reconstruction resolves its workspace to *that*
-    dir (not the shared session workspace) and any source-image / ``.sift``
-    access fails loudly. Tests that need the source images or ``.sift`` files must
-    use the full :func:`seoul_bull_workspace_deprecated` instead.
-    """
-    src = seoul_bull_workspace_once_deprecated
-    workspace_dir = tmp_path_factory.mktemp("sfmr_only_17_images")
-    shutil.copy(src, workspace_dir / src.name)
-    marker = src.parent / ".sfm-workspace.json"
-    if marker.exists():
-        shutil.copy(marker, workspace_dir / marker.name)
-    return workspace_dir / src.name
-
-
 @pytest.fixture
 def seoul_bull_ground_truth_sfmr(tmp_path_factory) -> Path:
     """Per-test copy of the checked-in seoul_bull ground-truth ``.sfmr``.
@@ -760,9 +667,9 @@ def seoul_bull_ground_truth_sfmr(tmp_path_factory) -> Path:
 def seoul_bull_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped fixture: a SIFT-backed 17-image workspace at ground-truth poses.
 
-    It has the layout of :func:`seoul_bull_workspace_once_deprecated`: images in
-    ``test_17_image/``, ``camera_config.json`` at the workspace root, sfmtool
-    SIFT and a clusters ``.matches`` under ``matches/``. There is no solve; the
+    Images sit in ``test_17_image/`` with ``camera_config.json`` at the
+    workspace root, beside sfmtool SIFT and a clusters ``.matches`` under
+    ``matches/``. There is no solve; the
     cluster tracks are triangulated at the checked-in ground truth's camera and
     poses (:func:`build_reconstruction_at_poses`), so every build gives the same
     reconstruction. Returns the ``seoul_bull.sfmr`` path, an ordinary
@@ -779,8 +686,8 @@ def seoul_bull_workspace_once(tmp_path_factory) -> Path:
         dest_path = image_dir / img_file.name
         shutil.copy(img_file, dest_path)
         img_paths.append(dest_path)
-    # At the workspace root, as in the deprecated fixture, so a test that copies
-    # just the image directory starts with an unconfigured workspace.
+    # At the workspace root, so a test that copies just the image directory
+    # starts with an unconfigured workspace.
     shutil.copy(
         SEOUL_BULL_DIR / "camera_config.json", workspace_dir / "camera_config.json"
     )

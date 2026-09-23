@@ -13,7 +13,7 @@ sizing (``to_embedded_patches``), whose ``σ·d/f`` world size vanishes at zero
 viewing distance ``d``.
 
 This needs on-disk ``.sift`` files (the bearing is unprojected from the stored
-keypoints), so it lives on the Python side over the ``seoul_bull_workspace_deprecated``
+keypoints), so it lives on the Python side over the ``seoul_bull_workspace``
 fixture rather than as a Rust unit test.
 """
 
@@ -106,13 +106,13 @@ def _pick_point_with_observer_count(recon: SfmrReconstruction, count: int) -> in
 
 
 def test_coincident_cameras_classified_as_infinity(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     pidx = _pick_point_with_observer_count(recon, 2)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
-    # The point is finite before classification (the solve placed it at a
+    # The point is finite before classification (triangulation placed it at a
     # position), but its cameras all sit at one optical centre.
     assert not bool(np.asarray(collapsed.point_is_at_infinity)[pidx])
 
@@ -131,11 +131,11 @@ def test_coincident_cameras_classified_as_infinity(
 
 
 def test_coincident_cameras_unblock_feature_size_embedding(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """A point coincident with its cameras breaks FeatureSize sizing (``d≈0``);
     classifying it to infinity fixes ``to_embedded_patches``."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     pidx = _pick_point_with_observer_count(recon, 2)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
@@ -155,10 +155,10 @@ def test_coincident_cameras_unblock_feature_size_embedding(
     assert bool(np.asarray(embedded.point_is_at_infinity)[pidx])
 
 
-def test_spread_cameras_are_not_demoted(seoul_bull_workspace_deprecated: Path):
+def test_spread_cameras_are_not_demoted(seoul_bull_workspace: Path):
     """The baseline gate is tight: an ordinary well-triangulated point (real
     baseline) is left finite — the branch only fires on a near-perfect collapse."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     before_inf = int(np.count_nonzero(recon.point_is_at_infinity))
     classified = recon.classify_points_at_infinity(1.0)
     after_inf = int(np.count_nonzero(classified.point_is_at_infinity))

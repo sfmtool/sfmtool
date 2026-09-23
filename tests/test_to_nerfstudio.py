@@ -100,10 +100,10 @@ def _undistort_to_pinhole(sfmr_path: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def pinhole_sfmr_17_images_once(
-    seoul_bull_workspace_once_deprecated,
+    seoul_bull_workspace_once,
 ) -> Path:
     """Session-scoped pinhole .sfmr (undistort runs once for the whole suite)."""
-    return _undistort_to_pinhole(seoul_bull_workspace_once_deprecated)
+    return _undistort_to_pinhole(seoul_bull_workspace_once)
 
 
 @pytest.fixture
@@ -136,13 +136,13 @@ class TestToNerfstudioCLI:
         result = runner.invoke(main, ["to-nerfstudio", str(tmp_path / "missing.sfmr")])
         assert result.exit_code != 0
 
-    def test_distorted_input_rejected(self, seoul_bull_workspace_deprecated, tmp_path):
+    def test_distorted_input_rejected(self, seoul_bull_workspace, tmp_path):
         runner = CliRunner()
         result = runner.invoke(
             main,
             [
                 "to-nerfstudio",
-                str(seoul_bull_workspace_deprecated),
+                str(seoul_bull_workspace),
                 str(tmp_path / "ns_out"),
             ],
         )

@@ -246,39 +246,30 @@ def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
     return recon.clone_with_changes(quaternions_wxyz=quats, translations=trans)
 
 
-def test_recon_no_discontinuity(seoul_bull_workspace_deprecated):
+def test_recon_no_discontinuity(seoul_bull_workspace):
     """Unmodified reconstruction has no discontinuities."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     results = analyze_reconstruction(recon)
     assert len(results) == 1
     assert len(results[0]["core_edges"]) == 0
 
 
 def _assert_break_detected_at_10_11(results, evidence_kind):
-    """Assert the 10->11 break is detected, tolerating the core-edge tie.
+    """Assert the 10->11 break is detected and chosen as the core edge.
 
     ``_make_discontinuous_recon`` breaks the sequence between frames 10 and
     11, so edge (10, 11) must carry evidence of kind ``evidence_kind``
-    (``.r`` rotation / ``.t`` translation). Its neighbours get flagged too —
-    even the nearest extrapolation points straddle the break — and
+    (``.r`` rotation / ``.t`` translation). Its neighbours get flagged too,
+    since even the nearest extrapolation points straddle the break, and
     ``_select_core_edges`` keeps only one edge per cluster, ranked by flag
-    count then by fewest shared 3D points.
-
-    Both of those rankings can move, because the fixture re-solves the
-    reconstruction every session and the solve is not reproducible: COLMAP's
-    geometric verification during matching is nondeterministic, so the
-    ``.matches`` differ run to run and so does the reconstruction (130 solves
-    measured, 130 distinct geometries). Frame 11's ``L.t`` flag sits right on
-    its threshold and dropped out in 7 of those 130, tying (10, 11) with
-    (9, 10) at two flags each and handing the core edge to (9, 10).
-
-    Asserting the core edge is exactly (10, 11) therefore fails ~5% of the
-    time on every platform. Edge (10, 11) was *flagged* in all 130 runs, so
-    assert that — it is the stronger claim anyway ("the true break is
-    detected") — and only require the core edge to land within one frame.
+    count then by fewest shared 3D points. The true break collects evidence
+    from both sides (frame 10's ``R`` and frame 11's ``L`` extrapolations)
+    while each neighbour collects it from one side only, so (10, 11) must win
+    that ranking. The fixture's poses are the ground truth's, fixed on every
+    run, so the ranking is deterministic.
     """
     assert len(results) == 1
     seq_frm = results[0]["seq_frame_numbers"]
@@ -291,43 +282,40 @@ def _assert_break_detected_at_10_11(results, evidence_kind):
     assert any(evidence_kind in e for e in flagged[(10, 11)]), flagged[(10, 11)]
 
     core_edges = results[0]["core_edges"]
-    assert len(core_edges) == 1, (
-        f"expected one cluster, got {sorted(map(frames, core_edges))}"
-    )
-    assert frames(next(iter(core_edges))) in {(9, 10), (10, 11), (11, 12)}
+    assert sorted(map(frames, core_edges)) == [(10, 11)]
 
 
-def test_recon_translation_discontinuity(seoul_bull_workspace_deprecated):
+def test_recon_translation_discontinuity(seoul_bull_workspace):
     """A large translation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
-        seoul_bull_workspace_deprecated,
+        seoul_bull_workspace,
         translate=[50.0, 0.0, 0.0],
     )
     results = analyze_reconstruction(recon)
     _assert_break_detected_at_10_11(results, ".t")
 
 
-def test_recon_rotation_discontinuity(seoul_bull_workspace_deprecated):
+def test_recon_rotation_discontinuity(seoul_bull_workspace):
     """A large rotation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
     from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
-        seoul_bull_workspace_deprecated,
+        seoul_bull_workspace,
         rotate_deg=90.0,
     )
     results = analyze_reconstruction(recon)
     _assert_break_detected_at_10_11(results, ".r")
 
 
-def test_recon_cli_with_sfmr(runner, seoul_bull_workspace_deprecated):
+def test_recon_cli_with_sfmr(runner, seoul_bull_workspace):
     """The CLI accepts a .sfmr file and produces reconstruction analysis output."""
     result = runner.invoke(
         main,
-        ["motion", str(seoul_bull_workspace_deprecated)],
+        ["motion", str(seoul_bull_workspace)],
     )
     assert result.exit_code == 0, result.output
     assert "Reconstruction:" in result.output
@@ -335,13 +323,13 @@ def test_recon_cli_with_sfmr(runner, seoul_bull_workspace_deprecated):
     assert "seoul_bull_sculpture" in result.output
 
 
-def test_recon_cli_with_range(runner, seoul_bull_workspace_deprecated):
+def test_recon_cli_with_range(runner, seoul_bull_workspace):
     """The CLI --range flag filters images in reconstruction mode."""
     result = runner.invoke(
         main,
         [
             "motion",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             "-r",
             "1-10",
         ],

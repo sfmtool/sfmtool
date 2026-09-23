@@ -140,9 +140,9 @@ class TestFromColmapBinCLI:
 
 
 class TestToColmapBinE2E:
-    def test_export_reconstruction(self, tmp_path, seoul_bull_workspace_deprecated):
+    def test_export_reconstruction(self, tmp_path, seoul_bull_workspace):
         """Export a .sfmr to COLMAP binary format."""
-        sfmr_path = seoul_bull_workspace_deprecated
+        sfmr_path = seoul_bull_workspace
 
         output_dir = tmp_path / "colmap_output"
         runner = CliRunner()
@@ -152,15 +152,13 @@ class TestToColmapBinE2E:
         assert (output_dir / "images.bin").exists()
         assert (output_dir / "points3D.bin").exists()
 
-    def test_points_at_infinity_materialized(
-        self, tmp_path, seoul_bull_workspace_deprecated
-    ):
+    def test_points_at_infinity_materialized(self, tmp_path, seoul_bull_workspace):
         """COLMAP binary export materialises w=0 points to finite landmarks."""
         from sfmtool.colmap.io import save_colmap_binary
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._sfmtool.io import read_colmap_binary
 
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) > 0
         # Turn the first point into a point at infinity (w = 0).
@@ -177,13 +175,13 @@ class TestToColmapBinE2E:
         assert np.all(np.isfinite(positions))
 
     def test_range_subsets_images_and_keeps_all_points(
-        self, tmp_path, seoul_bull_workspace_deprecated
+        self, tmp_path, seoul_bull_workspace
     ):
         """--range keeps only the requested images but retains every 3D point."""
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._sfmtool.io import read_colmap_binary
 
-        sfmr_path = seoul_bull_workspace_deprecated
+        sfmr_path = seoul_bull_workspace
         original = SfmrReconstruction.load(sfmr_path)
         original_point_count = len(original.positions)
 
@@ -204,13 +202,13 @@ class TestToColmapBinE2E:
         assert any(c == 0 for c in data["observation_counts"])
 
     def test_range_with_filter_points_drops_orphans(
-        self, tmp_path, seoul_bull_workspace_deprecated
+        self, tmp_path, seoul_bull_workspace
     ):
         """--filter-points removes 3D points left with no observations."""
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._sfmtool.io import read_colmap_binary
 
-        sfmr_path = seoul_bull_workspace_deprecated
+        sfmr_path = seoul_bull_workspace
         original = SfmrReconstruction.load(sfmr_path)
         original_point_count = len(original.positions)
 
@@ -235,11 +233,9 @@ class TestToColmapBinE2E:
         assert len(data["positions_xyz"]) < original_point_count
         assert all(c >= 1 for c in data["observation_counts"])
 
-    def test_filter_points_without_range_errors(
-        self, tmp_path, seoul_bull_workspace_deprecated
-    ):
+    def test_filter_points_without_range_errors(self, tmp_path, seoul_bull_workspace):
         """--filter-points without --range is a usage error."""
-        sfmr_path = seoul_bull_workspace_deprecated
+        sfmr_path = seoul_bull_workspace
         output_dir = tmp_path / "colmap_output"
         runner = CliRunner()
         result = runner.invoke(
@@ -250,11 +246,9 @@ class TestToColmapBinE2E:
         assert "--filter-points" in result.output
         assert "--range" in result.output
 
-    def test_range_with_no_matches_errors(
-        self, tmp_path, seoul_bull_workspace_deprecated
-    ):
+    def test_range_with_no_matches_errors(self, tmp_path, seoul_bull_workspace):
         """A range that matches no image lists the available file numbers."""
-        sfmr_path = seoul_bull_workspace_deprecated
+        sfmr_path = seoul_bull_workspace
         output_dir = tmp_path / "colmap_output"
         runner = CliRunner()
         result = runner.invoke(

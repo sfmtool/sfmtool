@@ -94,8 +94,8 @@ class TestEstimateAlignment:
 
 
 class TestHelperFunctions:
-    def test_get_reconstruction_images(self, seoul_bull_sfmr_only_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    def test_get_reconstruction_images(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         images = _get_reconstruction_images(recon)
         assert len(images) == 17
         assert all(isinstance(v, str) for v in images.values())
@@ -112,8 +112,8 @@ class TestHelperFunctions:
         shared = _find_shared_images(a, b)
         assert shared == set()
 
-    def test_build_connectivity_graph(self, seoul_bull_sfmr_only_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    def test_build_connectivity_graph(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         graph = _build_connectivity_graph([recon, recon])
         assert 1 in graph[0]
         assert 0 in graph[1]
@@ -128,9 +128,9 @@ class TestHelperFunctions:
 class TestAlignReconstructionsPoints:
     """Test align_reconstructions with point-based method."""
 
-    def test_align_transformed_recovery(self, seoul_bull_sfmr_only_deprecated):
+    def test_align_transformed_recovery(self, seoul_bull_sfmr_only):
         """Alignment should recover the inverse of an applied transform."""
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
         transformed = apply_transforms(recon, [SimilarityTransform(transform)])
 
@@ -143,9 +143,9 @@ class TestAlignReconstructionsPoints:
         assert result.aligned[0] is not None
         assert result.total_shared_images == 17
 
-    def test_align_identical(self, seoul_bull_sfmr_only_deprecated):
+    def test_align_identical(self, seoul_bull_sfmr_only):
         """Aligning identical reconstructions should succeed with near-zero error."""
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         result = align_reconstructions(
             reference=recon,
             to_align=[recon],
@@ -153,9 +153,9 @@ class TestAlignReconstructionsPoints:
         )
         assert result.aligned[0] is not None
 
-    def test_align_no_shared_images(self, seoul_bull_sfmr_only_deprecated):
+    def test_align_no_shared_images(self, seoul_bull_sfmr_only):
         """Aligning reconstructions with no shared images should fail gracefully."""
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         # Filter to disjoint image sets
         subset1 = apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-5"))])
         subset2 = apply_transforms(recon, [IncludeRangeFilter(RangeExpr("10-17"))])
@@ -172,13 +172,11 @@ class TestAlignPointsAtInfinity:
     """Point alignment must ignore points at infinity (directions, not metric
     locations) so they cannot corrupt the similarity fit."""
 
-    def test_correspondences_exclude_points_at_infinity(
-        self, seoul_bull_sfmr_only_deprecated
-    ):
+    def test_correspondences_exclude_points_at_infinity(self, seoul_bull_sfmr_only):
         """find_point_correspondences drops pairs where either point is w=0."""
         from sfmtool._point_correspondence import find_point_correspondences
 
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         shared = [(i, i) for i in range(recon.image_count)]
 
         corr_all, _, _ = find_point_correspondences(recon, recon, shared)
@@ -205,11 +203,9 @@ class TestAlignPointsAtInfinity:
         # Exactly the infinity points were removed vs. the all-finite run.
         assert len(corr_inf) == len(corr_all) - len(inf_ids & set(corr_all.keys()))
 
-    def test_align_succeeds_with_shared_infinity_points(
-        self, seoul_bull_sfmr_only_deprecated
-    ):
+    def test_align_succeeds_with_shared_infinity_points(self, seoul_bull_sfmr_only):
         """Point alignment runs cleanly when shared w=0 points are present."""
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
         xyzw[:20, 3] = 0.0
         inf_recon = recon.clone_with_changes(positions=xyzw)
@@ -227,8 +223,8 @@ class TestAlignPointsAtInfinity:
 class TestAlignReconstructionsCameras:
     """Test align_reconstructions with camera-based method."""
 
-    def test_align_transformed_recovery(self, seoul_bull_sfmr_only_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+    def test_align_transformed_recovery(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
         transformed = apply_transforms(recon, [SimilarityTransform(transform)])
 
@@ -247,9 +243,9 @@ class TestAlignReconstructionsCameras:
 
 
 class TestAlignCLI:
-    def test_align_points_default(self, seoul_bull_sfmr_only_deprecated, tmp_path):
+    def test_align_points_default(self, seoul_bull_sfmr_only, tmp_path):
         """Default align (points) succeeds and produces output."""
-        ref = seoul_bull_sfmr_only_deprecated
+        ref = seoul_bull_sfmr_only
         workspace = ref.parent
 
         transform = Se3Transform(translation=[3, 0, 0], scale=1.5)
@@ -276,8 +272,8 @@ class TestAlignCLI:
         assert (output_dir / ref.name).exists()
         assert (output_dir / target_path.name).exists()
 
-    def test_align_cameras_method(self, seoul_bull_sfmr_only_deprecated, tmp_path):
-        ref = seoul_bull_sfmr_only_deprecated
+    def test_align_cameras_method(self, seoul_bull_sfmr_only, tmp_path):
+        ref = seoul_bull_sfmr_only
         workspace = ref.parent
 
         transform = Se3Transform(translation=[2, 1, 0], scale=1.2)
@@ -374,11 +370,9 @@ class TestAlignCLI:
         assert result.exit_code != 0
         assert "overwrite each other" in result.output
 
-    def test_aligned_positions_close_to_reference(
-        self, seoul_bull_sfmr_only_deprecated, tmp_path
-    ):
+    def test_aligned_positions_close_to_reference(self, seoul_bull_sfmr_only, tmp_path):
         """After alignment, camera positions should be close to the reference."""
-        ref = seoul_bull_sfmr_only_deprecated
+        ref = seoul_bull_sfmr_only
         workspace = ref.parent
 
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)

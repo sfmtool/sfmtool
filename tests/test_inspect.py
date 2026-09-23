@@ -48,9 +48,9 @@ def test_print_tool_options_empty_prints_nothing(capsys):
 # ── .sfmr reconstructions ────────────────────────────────────────────────────
 
 
-def test_inspect_sfmr_default(seoul_bull_workspace_deprecated):
+def test_inspect_sfmr_default(seoul_bull_workspace):
     """Default inspect of a .sfmr prints the compact summary block."""
-    sfmr_path = str(seoul_bull_workspace_deprecated)
+    sfmr_path = str(seoul_bull_workspace)
     result = CliRunner().invoke(main, ["inspect", sfmr_path])
     assert result.exit_code == 0, result.output
 
@@ -63,9 +63,9 @@ def test_inspect_sfmr_default(seoul_bull_workspace_deprecated):
     assert "OK" in out
 
 
-def test_inspect_sfmr_verbose(seoul_bull_workspace_deprecated):
+def test_inspect_sfmr_verbose(seoul_bull_workspace):
     """Verbose inspect of a .sfmr prints the full report."""
-    sfmr_path = str(seoul_bull_workspace_deprecated)
+    sfmr_path = str(seoul_bull_workspace)
     result = CliRunner().invoke(main, ["inspect", "-v", sfmr_path])
     assert result.exit_code == 0, result.output
 
@@ -80,12 +80,12 @@ def test_inspect_sfmr_verbose(seoul_bull_workspace_deprecated):
 
 
 def test_inspect_sfmr_verbose_with_points_at_infinity(
-    seoul_bull_workspace_deprecated, tmp_path: Path
+    seoul_bull_workspace, tmp_path: Path
 ):
     """A point at infinity (w=0) projects its bearing to a finite pixel, so it
     has a well-defined reprojection error. Verbose inspect must report finite
     error stats (no inf) rather than crashing in the histogram range."""
-    recon = SfmrReconstruction.load(str(seoul_bull_workspace_deprecated))
+    recon = SfmrReconstruction.load(str(seoul_bull_workspace))
 
     # Mark the first point as at infinity: homogeneous w=0 (a bearing direction).
     xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
@@ -116,9 +116,9 @@ def _find_sift_file(workspace_dir: Path) -> Path:
     return sift_files[0]
 
 
-def test_inspect_sift_default(seoul_bull_workspace_deprecated):
+def test_inspect_sift_default(seoul_bull_workspace):
     """Default inspect of a .sift prints the compact summary block."""
-    sift_path = _find_sift_file(seoul_bull_workspace_deprecated.parent)
+    sift_path = _find_sift_file(seoul_bull_workspace.parent)
     result = CliRunner().invoke(main, ["inspect", str(sift_path)])
     assert result.exit_code == 0, result.output
 
@@ -129,9 +129,9 @@ def test_inspect_sift_default(seoul_bull_workspace_deprecated):
     assert "Integrity:" in out
 
 
-def test_inspect_sift_verbose(seoul_bull_workspace_deprecated):
+def test_inspect_sift_verbose(seoul_bull_workspace):
     """Verbose inspect of a .sift prints hashes and top features."""
-    sift_path = _find_sift_file(seoul_bull_workspace_deprecated.parent)
+    sift_path = _find_sift_file(seoul_bull_workspace.parent)
     result = CliRunner().invoke(main, ["inspect", "-v", str(sift_path)])
     assert result.exit_code == 0, result.output
 
@@ -143,9 +143,9 @@ def test_inspect_sift_verbose(seoul_bull_workspace_deprecated):
 # ── .matches files ───────────────────────────────────────────────────────────
 
 
-def test_inspect_matches(seoul_bull_workspace_deprecated, tmp_path: Path):
+def test_inspect_matches(seoul_bull_workspace, tmp_path: Path):
     """Inspect a .matches file produced by exhaustive matching."""
-    image_dir = seoul_bull_workspace_deprecated.parent / "test_17_image"
+    image_dir = seoul_bull_workspace.parent / "test_17_image"
     matches_path = tmp_path / "test.matches"
     match_result = CliRunner().invoke(
         main, ["match", "--exhaustive", str(image_dir), "-o", str(matches_path)]
@@ -258,9 +258,9 @@ def _point_id(sfmr_path, index):
     return f"pt3d_{recon.content_xxh128[:8]}_{index}"
 
 
-def test_inspect_point_summary(seoul_bull_workspace_deprecated):
+def test_inspect_point_summary(seoul_bull_workspace):
     """A pt3d_ ID resolves to its .sfmr and prints the point summary."""
-    sfmr = seoul_bull_workspace_deprecated
+    sfmr = seoul_bull_workspace
     point_id = _point_id(sfmr, 0)
     result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent)])
     assert result.exit_code == 0, result.output
@@ -269,9 +269,9 @@ def test_inspect_point_summary(seoul_bull_workspace_deprecated):
     assert sfmr.name in result.output
 
 
-def test_inspect_point_verbose(seoul_bull_workspace_deprecated):
+def test_inspect_point_verbose(seoul_bull_workspace):
     """--verbose adds the full triangulation analysis."""
-    sfmr = seoul_bull_workspace_deprecated
+    sfmr = seoul_bull_workspace
     point_id = _point_id(sfmr, 0)
     result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent), "-v"])
     assert result.exit_code == 0, result.output
@@ -280,17 +280,17 @@ def test_inspect_point_verbose(seoul_bull_workspace_deprecated):
     assert "incidence" in result.output
 
 
-def test_inspect_point_unknown_hash(seoul_bull_workspace_deprecated):
+def test_inspect_point_unknown_hash(seoul_bull_workspace):
     """A hash matching no .sfmr is a clear error."""
-    sfmr = seoul_bull_workspace_deprecated
+    sfmr = seoul_bull_workspace
     result = CliRunner().invoke(main, ["inspect", "pt3d_deadbeef_0", str(sfmr.parent)])
     assert result.exit_code != 0
     assert "no .sfmr" in result.output
 
 
-def test_inspect_point_index_out_of_range(seoul_bull_workspace_deprecated):
+def test_inspect_point_index_out_of_range(seoul_bull_workspace):
     """An index beyond the point count is rejected."""
-    sfmr = seoul_bull_workspace_deprecated
+    sfmr = seoul_bull_workspace
     point_id = _point_id(sfmr, 10_000_000)
     result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent)])
     assert result.exit_code != 0
@@ -298,10 +298,10 @@ def test_inspect_point_index_out_of_range(seoul_bull_workspace_deprecated):
 
 
 def test_inspect_workspace_arg_rejected_for_file(
-    seoul_bull_workspace_deprecated,
+    seoul_bull_workspace,
 ):
     """The second (workspace) argument is only valid with a point ID."""
-    sfmr = seoul_bull_workspace_deprecated
+    sfmr = seoul_bull_workspace
     result = CliRunner().invoke(main, ["inspect", str(sfmr), str(sfmr.parent)])
     assert result.exit_code != 0
     assert "point ID" in result.output

@@ -20,14 +20,12 @@ from .conftest import _IMAGE_DATA
 _KERRY_PARK_CAMRIG = _IMAGE_DATA / "kerry_park" / "kerry_park.camrig"
 
 
-def test_cp_sfmr_single_camera_default(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
-):
+def test_cp_sfmr_single_camera_default(seoul_bull_workspace: Path, tmp_path: Path):
     """A rig-less .sfmr with one camera defaults to copying that camera."""
     out = tmp_path / "cam.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "cp", str(seoul_bull_workspace_deprecated), str(out)],
+        ["camrig", "cp", str(seoul_bull_workspace), str(out)],
     )
     assert result.exit_code == 0, result.output
     assert out.exists()
@@ -44,9 +42,7 @@ def test_cp_sfmr_single_camera_default(
     assert len(data["sensor_image_patterns"]) == 1
 
 
-def test_cp_sfmr_camera_explicit_pattern(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
-):
+def test_cp_sfmr_camera_explicit_pattern(seoul_bull_workspace: Path, tmp_path: Path):
     """`--pattern` overrides the inferred single-sensor image pattern."""
     out = tmp_path / "cam.camrig"
     result = CliRunner().invoke(
@@ -54,7 +50,7 @@ def test_cp_sfmr_camera_explicit_pattern(
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--camera",
             "0",
@@ -68,14 +64,14 @@ def test_cp_sfmr_camera_explicit_pattern(
 
 
 def test_cp_sfmr_camera_roundtrips_into_resolver(
-    seoul_bull_workspace_deprecated: Path,
+    seoul_bull_workspace: Path,
 ):
     """A .camrig harvested by `cp` is discoverable by the solve resolver."""
-    workspace = seoul_bull_workspace_deprecated.parent
+    workspace = seoul_bull_workspace.parent
     out = workspace / "harvested.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "cp", str(seoul_bull_workspace_deprecated), str(out)],
+        ["camrig", "cp", str(seoul_bull_workspace), str(out)],
     )
     assert result.exit_code == 0, result.output
 
@@ -189,7 +185,7 @@ def test_cp_rejects_sensors_out_of_range(tmp_path: Path):
     assert "outside the valid range" in result.output
 
 
-def test_cp_name_override(seoul_bull_workspace_deprecated: Path, tmp_path: Path):
+def test_cp_name_override(seoul_bull_workspace: Path, tmp_path: Path):
     """`--name` sets the rig name stored in the output `.camrig`."""
     out = tmp_path / "cam.camrig"
     result = CliRunner().invoke(
@@ -197,7 +193,7 @@ def test_cp_name_override(seoul_bull_workspace_deprecated: Path, tmp_path: Path)
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--name",
             "harvested-rig",
@@ -229,16 +225,14 @@ def test_cp_rejects_rig_on_camrig(tmp_path: Path):
     assert "--rig applies to a .sfmr" in result.output
 
 
-def test_cp_rejects_sensors_on_sfmr(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
-):
+def test_cp_rejects_sensors_on_sfmr(seoul_bull_workspace: Path, tmp_path: Path):
     out = tmp_path / "x.camrig"
     result = CliRunner().invoke(
         main,
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--sensors",
             "0",
@@ -248,16 +242,14 @@ def test_cp_rejects_sensors_on_sfmr(
     assert "--sensors applies to a .camrig" in result.output
 
 
-def test_cp_rejects_pattern_without_camera(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
-):
+def test_cp_rejects_pattern_without_camera(seoul_bull_workspace: Path, tmp_path: Path):
     out = tmp_path / "x.camrig"
     result = CliRunner().invoke(
         main,
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--pattern",
             "*.jpg",
@@ -267,16 +259,14 @@ def test_cp_rejects_pattern_without_camera(
     assert "--pattern applies only with --camera" in result.output
 
 
-def test_cp_rejects_rig_and_camera(
-    seoul_bull_workspace_deprecated: Path, tmp_path: Path
-):
+def test_cp_rejects_rig_and_camera(seoul_bull_workspace: Path, tmp_path: Path):
     out = tmp_path / "x.camrig"
     result = CliRunner().invoke(
         main,
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--rig",
             "0",
@@ -297,14 +287,14 @@ def test_cp_rejects_non_recon_source(tmp_path: Path):
     assert "must be a .sfmr or .camrig" in result.output
 
 
-def test_cp_camera_out_of_range(seoul_bull_workspace_deprecated: Path, tmp_path: Path):
+def test_cp_camera_out_of_range(seoul_bull_workspace: Path, tmp_path: Path):
     out = tmp_path / "x.camrig"
     result = CliRunner().invoke(
         main,
         [
             "camrig",
             "cp",
-            str(seoul_bull_workspace_deprecated),
+            str(seoul_bull_workspace),
             str(out),
             "--camera",
             "99",

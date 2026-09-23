@@ -3,6 +3,7 @@
 
 """Tests for the per-image metrics analysis module."""
 
+import numpy as np
 import pytest
 
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
@@ -10,8 +11,8 @@ from sfmtool.analyze.metrics import _compute_per_image_metrics, print_metrics_an
 
 
 @pytest.fixture
-def rust_recon(seoul_bull_workspace_deprecated):
-    return SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+def rust_recon(seoul_bull_workspace):
+    return SfmrReconstruction.load(seoul_bull_workspace)
 
 
 @pytest.fixture
@@ -47,14 +48,21 @@ class TestComputePerImageMetrics:
         for entry in per_image:
             assert entry["max_error"] > 1.0
 
-    def test_mean_track_length_around_four(self, per_image):
+    def test_mean_track_length_matches_tracks(self, per_image, rust_recon):
+        # Each image's mean track length is the mean observation count of the
+        # points it sees, counted here straight from the track arrays.
+        track_point_indexes = rust_recon.track_point_indexes
+        lengths = np.bincount(track_point_indexes, minlength=rust_recon.point_count)
         for entry in per_image:
-            assert 3.0 <= entry["mean_track_length"] <= 5.0
+            in_image = rust_recon.track_image_indexes == entry["image_index"]
+            expected = lengths[track_point_indexes[in_image]].mean()
+            assert entry["mean_track_length"] == pytest.approx(expected)
+            assert 2.0 <= entry["mean_track_length"] <= rust_recon.image_count
 
 
 class TestPrintMetricsAnalysis:
-    def test_header_and_table(self, seoul_bull_workspace_deprecated, capsys):
-        print_metrics_analysis(seoul_bull_workspace_deprecated, recon_name="test.sfmr")
+    def test_header_and_table(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, recon_name="test.sfmr")
         captured = capsys.readouterr()
 
         assert "Per-image metrics analysis for: test.sfmr" in captured.out
@@ -73,10 +81,8 @@ class TestPrintMetricsAnalysis:
         assert "1.5x reconstruction median" in captured.out
         assert "no observations" in captured.out
 
-    def test_sorted_descending_by_mean_error(
-        self, seoul_bull_workspace_deprecated, capsys
-    ):
-        print_metrics_analysis(seoul_bull_workspace_deprecated)
+    def test_sorted_descending_by_mean_error(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace)
         captured = capsys.readouterr()
 
         lines = [
@@ -96,17 +102,15 @@ class TestPrintMetricsAnalysis:
 
         assert errors == sorted(errors, reverse=True)
 
-    def test_recon_name(self, seoul_bull_workspace_deprecated, capsys):
-        print_metrics_analysis(
-            seoul_bull_workspace_deprecated, recon_name="custom.sfmr"
-        )
+    def test_recon_name(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, recon_name="custom.sfmr")
         assert "custom.sfmr" in capsys.readouterr().out
 
-        print_metrics_analysis(seoul_bull_workspace_deprecated)
-        assert seoul_bull_workspace_deprecated.name in capsys.readouterr().out
+        print_metrics_analysis(seoul_bull_workspace)
+        assert seoul_bull_workspace.name in capsys.readouterr().out
 
-    def test_range_filter(self, seoul_bull_workspace_deprecated, capsys):
-        print_metrics_analysis(seoul_bull_workspace_deprecated, range_expr="1-5")
+    def test_range_filter(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, range_expr="1-5")
         captured = capsys.readouterr()
 
         lines = [
