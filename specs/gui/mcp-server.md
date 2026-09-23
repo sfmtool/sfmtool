@@ -208,7 +208,7 @@ That costs a few characters per call and buys the only thing that matters here
 prose, and a human reading the agent's transcript can tell what it did. Tool
 names and argument names *are* the API: they live in client configs and in the
 prompts people write against them, so a name is far more expensive to change
-than to choose. `mcp::tests::the_wire_vocabulary_holds_across_the_catalog`
+than to choose. `mcp::tests::catalog::the_wire_vocabulary_holds_across_the_catalog`
 asserts the rule over the whole catalog rather than leaving it to review.
 
 #### `reconstruction`
@@ -2748,7 +2748,7 @@ testable without a window:
 
 | Module | What it owns |
 |--------|--------------|
-| `tools` | The tool table and the wire parse: names, descriptions, `inputSchema`, and JSON arguments to a `Command` |
+| `tools` | The wire parse from JSON arguments to a `Command`; its `catalog` child groups tool names, descriptions, and `inputSchema` by reads, viewer controls, edits, bench, and background/screenshot tools while preserving `tools/list` order |
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
 | `display` | The `image_detail_display` document: its render, the parse of a change into `ImageDetailDisplayChange`, and the apply — over the two settings structs and the diff-and-record function in `crate::state` that the toolbar shares, unconditional because the human's changes are logged in every build |
@@ -3121,7 +3121,11 @@ shaped to avoid.
 
 ## Testing
 
-`crates/sfm-explorer/src/mcp/tests.rs`, headless, no GPU, no window — which is
+`crates/sfm-explorer/src/mcp/tests.rs` supplies shared headless fixtures; its
+`tests/` children group the 230 checks by read, display, view, write, log,
+layout, catalog, server, edit, bench, and render concerns. The catalog child
+keeps the exact name/classification and schema/parser fixtures together. These
+tests need no GPU or window — which is
 what the `apply_with_window(&mut AppState, &mut Viewer3D, &mut dyn WindowHost,
 …)` signature is for. The fixture is a two-reconstruction scene whose
 reconstructions each resolve to **two** intrinsics records, because a
