@@ -20,7 +20,7 @@
 //! that writes a minimal copy of a value in one go.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::SfmrReconstruction;
 
@@ -42,8 +42,11 @@ impl SfmrReconstruction {
     /// from the arrays, and recomputes both workspace paths: `relative_path`
     /// from `path`'s directory to [`Self::workspace_dir`], in POSIX form, and
     /// `absolute_path` as the workspace directory itself. A relative `path` is
-    /// taken against the current directory. `relative_path` is left as it was
-    /// when no relative path exists between the two (different drives, say).
+    /// taken against the current directory. Both directories are resolved to
+    /// their real locations first, where they exist, so a symlinked or aliased
+    /// output turns into a step or two rather than a walk from the filesystem
+    /// root. `relative_path` is left as it was when no relative path exists
+    /// between the two (different drives, say).
     ///
     /// # Example
     ///
@@ -74,7 +77,8 @@ impl SfmrReconstruction {
 
         let output = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         if let Some(parent) = output.parent() {
-            if let Some(relative) = pathdiff::diff_paths(&self.workspace_dir, parent) {
+            let (workspace, parent) = comparable(&self.workspace_dir, parent);
+            if let Some(relative) = pathdiff::diff_paths(workspace, parent) {
                 meta.workspace.relative_path = relative.to_string_lossy().replace('\\', "/");
             }
         }
@@ -137,6 +141,26 @@ impl SfmrReconstruction {
         minimal.clear_minimal_metadata();
         minimal.metadata.tool_options = tool_options;
         minimal
+    }
+}
+
+/// The two paths a save diffs, in one form, so the diff between them means
+/// something.
+///
+/// A reader resolves the workspace from a canonicalized `.sfmr` directory, so
+/// both sides are canonicalized here where they can be. With one side resolved
+/// and the other not, the two share only the filesystem root on a host whose
+/// temporary directory is a symlink (`/var` to `/private/var`) or a short 8.3
+/// alias (`RUNNER~1` for `runneradmin`), and the relative path comes out as a
+/// walk from that root rather than the step or two it is. Canonicalizing needs
+/// the directory to exist, and the output's does not have to yet, so a pair
+/// where either side is missing stays lexical: the two agreeing matters more
+/// than either being resolved. Only the relative result is kept, so a verbatim
+/// `\\?\` prefix on Windows never reaches the metadata.
+fn comparable(to: &Path, from: &Path) -> (PathBuf, PathBuf) {
+    match (std::fs::canonicalize(to), std::fs::canonicalize(from)) {
+        (Ok(to), Ok(from)) => (to, from),
+        _ => (to.to_path_buf(), from.to_path_buf()),
     }
 }
 

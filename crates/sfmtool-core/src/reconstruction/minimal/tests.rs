@@ -114,6 +114,26 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     assert!(read.metadata.lineage.is_empty());
 }
 
+/// A workspace reached by a path that is not its real one: the relative path is
+/// still the step between the two directories, not a walk from the root. A host
+/// whose temporary directory is a symlink or a short alias hands the two sides
+/// in different forms, which is the same situation as an unresolved component
+/// here.
+#[test]
+fn the_relative_path_is_resolved_before_it_is_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("ws");
+    let mut recon = heavy(&workspace);
+    // The same directory, named through a detour that only resolving removes.
+    recon.workspace_dir = workspace.join("sub").join("..");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    let out = dir.path().join("published");
+    std::fs::create_dir_all(&out).unwrap();
+    recon.stamp_save(&out.join("a.sfmr"), &STAMP);
+
+    assert_eq!(recon.metadata.workspace.relative_path, "../ws");
+}
+
 /// The same value written minimal from two machines' worth of absolute paths,
 /// to the same place relative to its workspace, is the same content.
 #[test]
