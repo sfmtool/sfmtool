@@ -18,8 +18,8 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruc
 
 
 @pytest.fixture
-def base(seoul_bull_sfmr_only_deprecated):
-    return SfmrReconstruction.load(seoul_bull_sfmr_only_deprecated)
+def base(seoul_bull_sfmr_only):
+    return SfmrReconstruction.load(seoul_bull_sfmr_only)
 
 
 @pytest.fixture
@@ -224,8 +224,8 @@ class TestResectImageInPlace:
     """The bulk edit: one image re-posed against structure held out from it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_an_image_past_the_table_is_refused(self, embedded):
@@ -234,7 +234,7 @@ class TestResectImageInPlace:
 
     def test_the_resected_image_moves_and_the_others_stand(self, embedded):
         before = embedded.materialize()[0]
-        # Which images this capture corroborates is a property of its solve, so
+        # Which images this capture corroborates is a property of its tracks, so
         # the first one the estimate accepts is the one the assertions run on.
         for image in range(before.image_count):
             try:
@@ -274,8 +274,8 @@ class TestBundleAdjust:
     """The bulk edit that moves every pose and every point at once."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_the_poses_move_and_the_residuals_do_not_get_worse(self, embedded):
@@ -318,8 +318,8 @@ class TestMoveCamera:
     """The bulk edit: one image put at a pose, and its tracks settled around it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_an_image_past_the_table_is_refused(self, embedded):
@@ -406,8 +406,8 @@ class TestPruneCoveredObservations:
     """The bulk edit: a coarse observation handed over to the finer feature."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace_deprecated):
-        recon = SfmrReconstruction.load(seoul_bull_workspace_deprecated)
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         return EditedReconstruction(recon.to_embedded_patches())
 
     def test_a_value_with_no_patch_frames_is_refused(self, base):
@@ -455,7 +455,7 @@ class TestPruneCoveredObservations:
 
     def test_a_prune_that_retires_nothing_hands_the_value_back(self, embedded):
         # No feature is a billion times finer than another, so the scale test
-        # passes no pair whatever this platform's solve put where. A small
+        # passes no pair wherever the features sit. A small
         # footprint alone does not promise that: two detections of one corner
         # at different scales sit at almost the same pixel.
         after, report = embedded.prune_covered_observations(ratio=1e9)

@@ -37,13 +37,13 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruc
 
 
 @pytest.fixture(scope="module")
-def embedded(seoul_bull_workspace_once_deprecated):
-    """The 17-image solve as an ``embedded_patches`` reconstruction.
+def embedded(seoul_bull_workspace_once):
+    """The 17-image reconstruction, converted to ``embedded_patches``.
 
     A track is committed back as a keypoint per observation, which is what
     ``embedded_patches`` stores and what ``sift_files`` has no room for.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
     return recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
 
 
@@ -75,7 +75,7 @@ def long_track_point(embedded):
     saw is the specimen every step here is interesting on, and the fixture's
     shortest tracks carry patch frames whose tiles run off the photographs they
     would be read in, which is a fact about ``to_embedded_patches`` on a
-    17-image toy solve rather than about the steps under test.
+    17-image toy reconstruction rather than about the steps under test.
     """
     counts = np.asarray(embedded.observation_counts)
     if counts.size == 0 or counts.max() < 3:
@@ -680,11 +680,11 @@ class TestCommitting:
             commit(edited, track)
 
     def test_a_sift_files_reconstruction_refuses(
-        self, edited, long_track_point, seoul_bull_workspace_once_deprecated
+        self, edited, long_track_point, seoul_bull_workspace_once
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         sift_files = EditedReconstruction(
-            SfmrReconstruction.load(seoul_bull_workspace_once_deprecated)
+            SfmrReconstruction.load(seoul_bull_workspace_once)
         )
         with pytest.raises(ValueError, match="embedded_patches"):
             commit(sift_files, track)

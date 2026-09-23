@@ -717,7 +717,7 @@ def seoul_bull_sfmr_only_deprecated(
 ) -> Path:
     """Per-test copy of *only* the 17-image ``.sfmr`` (plus the workspace marker).
 
-    Deprecated (randomized solve, flaky): use :func:`seoul_bull_ground_truth_sfmr`.
+    Deprecated (randomized solve, flaky): use :func:`seoul_bull_sfmr_only`.
 
     For tests that just ``SfmrReconstruction.load`` the reconstruction and read
     its geometry (or apply geometry-only transforms / alignment), copying the
@@ -800,6 +800,30 @@ def seoul_bull_workspace(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
     workspace_dir = tmp_path_factory.mktemp("seoul_bull_workspace")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
     return workspace_dir / seoul_bull_workspace_once.name
+
+
+@pytest.fixture
+def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
+    """Per-test copy of *only* :func:`seoul_bull_workspace_once`'s ``.sfmr``.
+
+    The workspace marker comes along with it.
+
+    For tests that just ``SfmrReconstruction.load`` the reconstruction and read
+    its geometry (or apply geometry-only transforms / alignment), copying the
+    whole workspace (17 images, every ``.sift`` file and the match cache) is
+    wasted I/O. This copies the single ``.sfmr`` plus the ``.sfm-workspace.json``
+    marker into an isolated tmp dir, so the reconstruction resolves its
+    workspace to *that* dir (not the shared session workspace) and any
+    source-image or ``.sift`` access fails loudly. Tests that need the source
+    images or ``.sift`` files must use the full :func:`seoul_bull_workspace`.
+    """
+    src = seoul_bull_workspace_once
+    workspace_dir = tmp_path_factory.mktemp("seoul_bull_sfmr_only")
+    shutil.copy(src, workspace_dir / src.name)
+    marker = src.parent / ".sfm-workspace.json"
+    if marker.exists():
+        shutil.copy(marker, workspace_dir / marker.name)
+    return workspace_dir / src.name
 
 
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
