@@ -149,18 +149,21 @@ pub struct SceneNode {
     pub show_patches: bool,
     pub show_points_at_infinity: bool,
     pub tint: NodeTint,              // Original | Tint(&'static TintColor)
-    /// Similarity transform (uniform scale · rotation · translation) mapping
-    /// this node's native coordinates into the shared world space. Identity on
-    /// load. Set by the "Align to…" operation; see "Node Transforms and
-    /// Alignment" below.
-    pub transform: Se3Transform,
+}
+
+impl SceneNode {
+    /// The display transform: the similarity (uniform scale · rotation ·
+    /// translation) mapping this node's native coordinates into the shared
+    /// world space. Identity on load. Held on the version at the history's
+    /// cursor and read-only here; see "Node Transforms and Alignment" below.
+    pub fn transform(&self) -> &Se3Transform;
 }
 ```
 
 The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
 five display flags plus `interactive` and `tint` onto the node's GPU bundle as a
-`NodeDisplay`, and the `transform` alongside them; the draw loop and per-recon
-uniform write consult only the bundle.
+`NodeDisplay`, and the display transform alongside them; the draw loop and
+per-recon uniform write consult only the bundle.
 
 `AppState` replaces its single slot with:
 
@@ -300,7 +303,7 @@ fixed-height for virtualization.
   refusal uses ([saving.md](saving.md)).
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
-  `Tint ▸` (Original / palette of distinguishable colors),
+  `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
   `Build SIFT Index`, `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
@@ -528,6 +531,7 @@ pub struct SceneGraphResponse {
     pub select_recon: Option<ReconId>,
     pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target
     pub reset_transform: Option<ReconId>,
+    pub bake_transform: Option<ReconId>,
     pub zoom_to_node: Option<ReconId>,
     pub toggle_solo: Option<ReconId>,
     pub close_node: Option<ReconId>,
@@ -823,12 +827,15 @@ The hover overlay gains recon context when more than one file is loaded:
 ## Node Transforms and Alignment
 
 Comparing reconstructions usually means putting them into one frame first.
-Every node therefore carries a similarity transform, and the Scene panel
-exposes an **Align to…** operation that computes it.
+Every node therefore carries a similarity transform, its **display transform**,
+and the Scene panel exposes an **Align to…** operation that computes it. The 3D
+viewport's patch menu sets it from a surface in the scene instead
+([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The patch menu"), and
+**Bake Transform** writes it into the reconstruction.
 
 ### The transform
 
-`SceneNode::transform` is an `Se3Transform`
+`SceneNode::transform()` is an `Se3Transform`
 (`sfmtool-core::geometry::se3_transform`, applied as
 `p' = scale · (R · p) + t`) — the same type the core alignment estimator
 returns. It maps the node's native coordinates into the shared world space,
@@ -863,18 +870,54 @@ Where it applies:
   handles this with no special-casing.
 - **Picking** is unaffected — pick IDs are index-based, not position-based.
 
-The transform is **view state only**: it never mutates the
-`SfmrReconstruction` in memory nor the `.sfmr` on disk. Baking a transform
-into a file remains `sfm xform`'s job; a "Save Aligned Copy…" export from the
-GUI is a future direction.
+**A display transform is view state until a bake is asked for, and the bake is
+the one door between the two.** Nothing that sets a transform touches the
+reconstruction or the disk. A transform is nonetheless part of the node's
+timeline: every version records the transform in force as its third half, beside
+the value and the bench ([document-model.md](document-model.md)), so undo and
+redo put the framing back along with the geometry. `Bake Transform` is the single
+operation that crosses, and it crosses by making a version like any other edit:
+listed in the Edit History panel, undone by `Ctrl+Z`, and written only by a
+save ([edits/bake-transform.md](edits/bake-transform.md)).
+
+Setting a transform, by any of the ways there are to set one, is a **reframe**:
+one version whose value half is `None`, so it shares its predecessor's document
+serial and the node does not go dirty. `Align to…`, `Reset Transform`, the four
+patch entries and the wire's `set_reconstruction_transform` all push one, so
+each is stepped back by `Ctrl+Z` and listed in the Edit History panel. The
+transform stays out of the dirty marker, out of the content hash and out of
+every save: reopening a file starts at the identity.
+
+| | Reframing | Baking |
+|---|---|---|
+| What moves | where the node is drawn | the reconstruction's own numbers |
+| Version pushed | one | one |
+| The value half of that version | none: shares its predecessor's document serial | a whole new base |
+| Dirty marker | untouched | set |
+| Stepped back by | `Ctrl+Z` | `Ctrl+Z` |
+| Reaches a save | no | yes |
+| Content hash | unaffected | recomputed by the save |
+| Action Log kind | `Scene` | `Edit` |
+
+The third row and the sixth carry the distinction; everything else about the two
+is the same, because the timeline is one timeline. The Action Log kind of a
+reframe stays `Scene` for the reason a bench step's is `Bench`: pushing a
+version does not make a step an edit.
+
+The field lives on the history rather than on the node, and the node offers it
+read-only. An assignment that skipped the push would be invisible until someone
+pressed `Ctrl+Z`, so there is none to make: `History::push_transform` is the
+reframe, `History::push_pair` with a transform is the bake, and nothing else
+writes one.
 
 ### Align to…
 
 Context menu on a reconstruction row: `Align to ▸ <other loaded node>`.
 Computes the similarity mapping this node (source) onto the chosen node
-(target), then sets `source.transform = target.transform ∘ T_fit` — the fit
+(target), then reframes the source to `target.transform ∘ T_fit` — the fit
 lands in the target's *currently displayed* frame, so aligning C→B after B→A
-chains as expected. The target node is never modified.
+chains as expected. The target node is never modified, and a source a background
+task holds is refused, since a version cannot be pushed onto it.
 
 The whole fit lives in
 `sfmtool-core::analysis::alignment::reconstructions::align_reconstructions` —
@@ -951,15 +994,28 @@ a list of what was toggled and when.
 kept count in camera mode (which runs no RANSAC); the RMS is over that same
 subset, recovered under the final transform, and is in the **target's** units.
 
-`Reset Transform` returns a node to identity, and is greyed out for a node that
-is already in its own frame. Setting or resetting a transform recomputes the
+`Reset Transform` returns a node to identity, as a reframe, and
+`Bake Transform`, immediately below it, writes the transform into the
+reconstruction and returns the node to identity as one edit
+([edits/bake-transform.md](edits/bake-transform.md)): compute a transform,
+discard it, keep it. Both are greyed out, on the hover text *"This
+reconstruction is already in its own frame"*, for a node that is already in its
+own frame (`SceneNode::has_transform`, which compares exactly), and a busy node
+greys both first on its own sentence. The reset records
+`Reset transform of run_b (v3 → v4)`; the bake records
+`Baked transform of run_b: 37.4 deg, 1.284 scene units (v3 → v4)`, with
+`, x0.982` before the transition when the scale is not `1`.
+
+Setting or resetting a transform recomputes the
 union scene bounds, re-derives `length_scale`, re-uploads frustum geometry at
 the new per-node scale, and rebuilds the track rays — which also dissolves the
 shared-frustum-size compromise noted under Rendering once the nodes' scales
 agree. The upload phase notices by comparing: mirroring a node's transform onto
 its GPU bundle reports whether it differs from the one the bundle held, so what
 was last drawn is what is compared against and no counter has to be kept in step
-with the field it describes.
+with the field it describes. A transform restored by an undo or a redo is
+noticed by the same comparison and needs no signalling of its own. The viewport
+camera is left where it is across all of this.
 
 ---
 
@@ -1227,6 +1283,17 @@ bundle from `retain_nodes` on the next frame.
   the `length_scale` seed following a transform and returning on reset, track
   rays built through it, and the transform carried onto a node that replaces
   another.
+- **A reframe is a version and not a change**: after `Align to…` or a set, the
+  node can undo, is not dirty, and its new version shares its predecessor's
+  document serial; `Reset Transform` is undone back to the fit and the fit back
+  to the identity. Every version records the framing: reframe, delete a point,
+  and two undos give the reframed transform and then the original. A reframe
+  after an undo truncates the redo tail, as every push does. The patch menu's
+  four reframes and the bake are tested in the `display_transform` module
+  ([edits/bake-transform.md](edits/bake-transform.md) § "Testing").
+- **`Bake Transform` availability**: greyed on a node at identity, live once it
+  carries a transform, greyed again after the bake, beside `Reset Transform`
+  under the same rule.
 - **Tint**: the `Tint ▸` submenu offers `Original` plus every palette entry;
   picking one writes it to that node and no other, and the menu survives the
   pick so a second color is one click away; the swatch appears on the tinted row
@@ -1252,7 +1319,8 @@ bundle from `retain_nodes` on the next frame.
   Scene panel's rows reach a real window — including the row's solo toggle,
   since a third glyph button squeezed onto a row is exactly the kind of thing
   that lays out correctly under `Context::run_ui` and not in a window. The
-  context-menu check covers the flat entries only: a submenu button
+  context-menu check covers the flat entries only, `Bake Transform` among them
+  (greyed on the demo, which is still an entry in the tree): a submenu button
   (`Align to ▸`, `Tint ▸`) does not surface under the accessibility `button`
   role, and its contents exist only once opened. The multi-file title case stays
   a lib test: driving it through `ui_basic` would need two real `.sfmr` fixtures
@@ -1263,14 +1331,13 @@ bundle from `retain_nodes` on the next frame.
 
 ## Future Directions
 
-- **Transform tooling beyond `Align to…`**: a numeric transform editor
-  (inspect/tweak the fitted `Se3Transform`), a "Save Aligned Copy…" export
-  that bakes `node.transform` through the `sfm xform` machinery, and multi-way
-  alignment (align every node to one reference in a single action, mirroring
-  `sfm align`'s multi-way mode). The export is the one that needs a decision
-  rather than just work: it would break the invariant everything here holds to,
-  that a node transform is view state and never touches the reconstruction or
-  the disk.
+- **Transform tooling beyond `Align to…` and the patch menu**: a numeric
+  transform editor (inspect/tweak the fitted `Se3Transform`; the wire's
+  `set_reconstruction_transform` is the only way to set one by number today),
+  and multi-way alignment (align every node to one reference in a single action,
+  mirroring `sfm align`'s multi-way mode). A one-shot "Save Aligned Copy…" is
+  not among them: `Bake Transform` then `File > Save As` is two clicks and
+  leaves the intermediate state visible and undoable.
 - **Cross-reconstruction correspondence**: images with the same name/path in
   two nodes are "the same photo" — hover/selection echo across nodes
   (highlight the sibling frustum), side-by-side pose deltas, per-camera

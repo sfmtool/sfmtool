@@ -53,7 +53,7 @@ pub(crate) fn bench_of<'a>(
         node: id,
         track,
         edited: node.edited(),
-        transform: &node.transform,
+        transform: node.transform(),
         selected: None,
         busy: false,
     }

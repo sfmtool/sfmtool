@@ -6,7 +6,7 @@
 //!
 //! Three menus, one per row kind. The reconstruction row's
 //! ([`node_context_menu`]) carries the whole-node actions (select, zoom to fit,
-//! align, reset transform, tint, bundle adjust, retriangulate, prune covered
+//! align, reset and bake transform, tint, bundle adjust, retriangulate, prune covered
 //! observations, build the SIFT index, convert to embedded patches, close), the
 //! SIFT Index row's ([`sift_index_menu`]) carries the three ways to give a node
 //! an index or take one away, and the image row's ([`image_context_menu`])
@@ -46,13 +46,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     }
     ui.separator();
     show_align_menu(ui, node, out);
-    let reset = ui
-        .add_enabled(node.has_transform(), egui::Button::new("Reset Transform"))
-        .on_disabled_hover_text("This reconstruction is already in its own frame");
-    if out.hit(row_id(node.id, "reset_transform"), reset).clicked() {
-        out.response.reset_transform = Some(node.id);
-        ui.close();
-    }
+    show_transform_entries(ui, node, out);
     ui.separator();
     show_tint_menu(ui, node, out);
     ui.separator();
@@ -67,6 +61,45 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     if ui.button("Close").clicked() {
         out.response.close_node = Some(node.id);
+        ui.close();
+    }
+}
+
+/// What the entry that writes a node's display transform into its
+/// reconstruction is called, in the menu and in the tests that aim at it.
+pub(crate) const BAKE_TRANSFORM: &str = "Bake Transform";
+
+/// `Reset Transform` and `Bake Transform`, under `Align to ▸`: compute a
+/// transform, discard it, keep it.
+///
+/// Both push a version, so a busy node greys both on its own sentence first, as
+/// on every sibling entry that makes one; then both need a transform to act
+/// on, which is the one gate [`crate::scene::SceneNode::has_transform`] states.
+fn show_transform_entries(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = out.busy_refusal(node.id).map(str::to_string).or_else(|| {
+        (!node.has_transform()).then(|| crate::display_transform::IN_OWN_FRAME_HINT.to_string())
+    });
+    let reset = ui
+        .add_enabled(refusal.is_none(), egui::Button::new("Reset Transform"))
+        .on_disabled_hover_text(refusal.clone().unwrap_or_default())
+        .on_hover_text(
+            "Draw this reconstruction in its own frame again. Undo (Ctrl+Z) puts the transform \
+             back.",
+        );
+    if out.hit(row_id(node.id, "reset_transform"), reset).clicked() {
+        out.response.reset_transform = Some(node.id);
+        ui.close();
+    }
+    let bake = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(BAKE_TRANSFORM))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Write the transform this reconstruction is drawn under into its points and poses, \
+             and return it to its own frame, as one version. The picture does not move; a save \
+             then carries the new frame. Undo (Ctrl+Z) puts both back.",
+        );
+    if out.hit(row_id(node.id, "bake_transform"), bake).clicked() {
+        out.response.bake_transform = Some(node.id);
         ui.close();
     }
 }

@@ -1,24 +1,28 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The document model: a node's reconstruction and its bench as a sequence of
-//! value pairs with a cursor.
+//! The document model: a node's reconstruction, its bench and its display
+//! transform as a sequence of versions with a cursor.
 //!
 //! See `specs/gui/document-model.md`, `specs/gui/edit-history.md` and
 //! `specs/gui/bench.md`. A node ([`crate::scene::SceneNode`]) holds one
-//! [`History`]. A [`Version`] in it is a **pair** -- an
-//! [`EditedReconstruction`], a shared immutable base plus this version's point
-//! edits, and the [`Bench`] as it stood beside it -- under a serial that is
-//! minted once and never reused. An edit is a function from the value at the
-//! cursor to the next value; undo and redo move the cursor; a new edit at a
-//! cursor that is not at the end discards the versions after it.
+//! [`History`]. A [`Version`] in it has three halves, under a serial that is
+//! minted once and never reused: an [`EditedReconstruction`], which is a shared
+//! immutable base plus this version's point edits; the [`Bench`] as it stood
+//! beside it; and the display transform the node was drawn under. An edit is a function from the value at the cursor to the next
+//! value; undo and redo move the cursor; a new edit at a cursor that is not at
+//! the end discards the versions after it.
 //!
-//! A step changes one half or the other, and only a commit changes both: a
-//! document edit carries the bench along ([`History::push`]), a bench step
-//! carries the document value along ([`History::push_bench`]), and the commit
-//! states both ([`History::push_pair`]). One Undo therefore walks the pair,
-//! which is the whole reason the bench lives here rather than in a stack of its
-//! own.
+//! A step states only what it changed. A document edit carries the bench and
+//! the transform along ([`History::push`]), a bench step carries the value and
+//! the transform ([`History::push_bench`]), a reframe carries the value and the
+//! bench ([`History::push_transform`]), the commit states the value and the
+//! bench, and the bake states all three ([`History::push_pair`]). One Undo
+//! therefore walks all three at once, which is the whole reason the bench and
+//! the transform live here rather than in stacks of their own.
+//!
+//! The transform is view state that the timeline remembers, not data: it is in
+//! no save, no content hash and no dirty comparison.
 //!
 //! Two things are deliberately separate here:
 //!
@@ -39,7 +43,7 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use sfmtool_core::bench::{Bench, BenchItem};
-use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
 
 /// What one step did to point indexes, which is the core edits' own vocabulary:
 /// every edit that can be a step of a history answers in it, so a version keeps
@@ -110,7 +114,8 @@ pub struct CreatedPoints {
     pub indexes: Vec<u32>,
 }
 
-/// One version of a node's reconstruction and the bench beside it.
+/// One version of a node's reconstruction, the bench beside it and the display
+/// transform it was drawn under.
 pub struct Version {
     /// Minted once, never reused.
     pub serial: VersionSerial,
@@ -128,6 +133,12 @@ pub struct Version {
     /// or not the value is: a bench is a few tracks and the budget is about
     /// the reconstruction.
     pub bench: Arc<Bench>,
+    /// The display transform in force when this version was made.
+    ///
+    /// View state the timeline remembers: never written, never hashed, and no
+    /// part of what [`History::is_dirty`] compares. Kept whether or not the
+    /// value is, like the bench, for the same reason: it is eight floats.
+    pub transform: Se3Transform,
     /// The version whose document half this one shares, which is itself for a
     /// version that changed it.
     ///
@@ -187,6 +198,7 @@ impl History {
                 at: Timestamp::now(),
                 value: Some(value),
                 bench: Arc::new(Bench::new()),
+                transform: Se3Transform::identity(),
                 document_serial: serial,
                 unshared_bytes,
             }],
@@ -223,6 +235,25 @@ impl History {
     /// cursor.
     pub fn current_bench(&self) -> &Arc<Bench> {
         &self.versions[self.cursor].bench
+    }
+
+    /// The display transform the node is drawn under, which is the third half
+    /// of the version at the cursor.
+    ///
+    /// Read off that version rather than kept beside it, so undo, redo and a
+    /// jump restore it by moving the cursor and there is no second copy to
+    /// fall out of step.
+    pub fn transform(&self) -> &Se3Transform {
+        &self.versions[self.cursor].transform
+    }
+
+    /// The display transform at the cursor, mutably, for a fixture that is
+    /// still being built. Test-only: a reframe in the app is a
+    /// [`History::push_transform`], never a write.
+    #[cfg(test)]
+    pub fn transform_mut(&mut self) -> &mut Se3Transform {
+        let cursor = self.cursor;
+        &mut self.versions[cursor].transform
     }
 
     /// Whether the version at the cursor holds a document half other than the
@@ -393,8 +424,9 @@ impl History {
 
     /// Append `value` as the next version, discarding any redo tail.
     ///
-    /// A **document edit**: the bench at the cursor is carried along unchanged,
-    /// because the step did nothing to it. `map` says what the step did to
+    /// A **document edit**: the bench and the display transform at the cursor
+    /// are carried along unchanged, because the step did nothing to them. `map`
+    /// says what the step did to
     /// point indexes and is kept for good; `label` is the sentence the Action
     /// Log recorded. Returns the new version's serial.
     pub fn push(
@@ -419,7 +451,7 @@ impl History {
         created: Option<CreatedPoints>,
     ) -> VersionSerial {
         let bench = Arc::clone(&self.versions[self.cursor].bench);
-        self.push_pair(Some(value), bench, map, label, created)
+        self.push_pair(Some(value), bench, None, map, label, created)
     }
 
     /// Append the next version with `bench` in place of the one at the cursor
@@ -430,19 +462,52 @@ impl History {
     /// `Removed` -- the identity -- and a selection, an id copied before the
     /// step and an undo across it all resolve unchanged.
     pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>) -> VersionSerial {
-        self.push_pair(None, bench, PointMap::Removed(Vec::new()), label, None)
+        self.push_pair(
+            None,
+            bench,
+            None,
+            PointMap::Removed(Vec::new()),
+            label,
+            None,
+        )
     }
 
-    /// Append the next version stating **both** halves, which is what a commit
-    /// of a bench track does and nothing else does.
+    /// Append a version that states the display transform and nothing else.
+    ///
+    /// A **reframe**. The document half is untouched, so the version shares its
+    /// predecessor's document serial and a clean node stays clean; the bench at
+    /// the cursor is carried along; the map is the empty `Removed`, the
+    /// identity.
+    pub fn push_transform(
+        &mut self,
+        transform: Se3Transform,
+        label: impl Into<String>,
+    ) -> VersionSerial {
+        let bench = Arc::clone(&self.versions[self.cursor].bench);
+        self.push_pair(
+            None,
+            bench,
+            Some(transform),
+            PointMap::Removed(Vec::new()),
+            label,
+            None,
+        )
+    }
+
+    /// Append the next version stating as many of the three halves as the step
+    /// changed. A commit of a bench track is the only step that states two,
+    /// the value and the bench; a bake is the only one that states all three.
     ///
     /// `value` is `None` for a step that left the document half alone; such a
     /// version shares its predecessor's document serial, which is what keeps a
-    /// run of bench steps over a clean value clean.
+    /// run of bench steps, or of reframes, over a clean value clean.
+    /// `transform` is `None` to carry the display transform in force, so no
+    /// step that is not about the framing can record a different one.
     pub fn push_pair(
         &mut self,
         value: Option<EditedReconstruction>,
         bench: Arc<Bench>,
+        transform: Option<Se3Transform>,
         map: PointMap,
         label: impl Into<String>,
         created: Option<CreatedPoints>,
@@ -466,12 +531,14 @@ impl History {
         } else {
             self.versions[self.cursor].document_serial
         };
+        let transform = transform.unwrap_or_else(|| self.versions[self.cursor].transform.clone());
         self.versions.push(Version {
             serial,
             label: label.into(),
             at: Timestamp::now(),
             value: Some(value),
             bench,
+            transform,
             document_serial,
             unshared_bytes,
         });
@@ -498,6 +565,10 @@ impl History {
 
     /// Step the cursor back one version. `(undone, now)` serials, or `None`
     /// when there is nothing to undo.
+    ///
+    /// All three halves come back with the cursor, the display transform
+    /// included, which is what lets an undo of a bake leave the picture where
+    /// it was.
     pub fn undo(&mut self) -> Option<(VersionSerial, VersionSerial)> {
         if !self.can_undo() {
             return None;

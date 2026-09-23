@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-three tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty-seven
+Seventy-six tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -128,6 +128,9 @@ write, and one writes a file.
 | `select_point` | write | Select a 3D point |
 | `clear_selection` | write | Drop the selection, wholly or one kind of it |
 | `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
+| `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
+| `set_reconstruction_transform_from_patch` | write | Set it from the bench's active patch, in one of the four ways the viewport's patch menu offers |
+| `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
@@ -181,7 +184,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the fifty-seven writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -399,6 +402,11 @@ addressable. No arguments.
                    "show_patches": true, "show_points_at_infinity": true,
                    "tint": null },
       "transformed": false,               // SceneNode::has_transform
+      "transform": {                      // the display transform in force
+        "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
+        "translation": [0.0, 0.0, 0.0],
+        "scale": 1.0
+      },
       "feature_source": "sift_files",     // or "embedded_patches"
       "has_patch_data": false,            // narrower: the frames *and* the bitmaps
       "sift_index": {                     // the .kdf beside this node's .sfmr
@@ -496,6 +504,20 @@ that `scene::is_visible` owns and the draw loop uses. A reconstruction hidden by
 hand and one hidden by another's solo look identical in the viewport, and only
 the pair says which is which — which matters because ending a solo restores the
 first and not the second.
+
+**`transform` is the display transform in force, and it is always present.** It
+reads as the identity for a node that carries none, so an agent that wants the
+numbers never branches on `transformed` first. The field names are the code's,
+since the GUI has no words for them: `rotation`, `translation` and `scale` are
+`Se3Transform`'s own three fields, and `rotation_wxyz` carries the component
+order every other quaternion on this surface is in. `transformed` stays beside
+it because it is the rule the Scene panel greys `Reset Transform` and
+`Bake Transform` with, and one boolean is cheaper to poll than a comparison
+against the identity that would have to choose its own tolerance.
+
+`get_history`'s rows carry no transform. A reframe is a version like any other,
+and its `label` says what it was; the only transform anyone is looking at is the
+one at the cursor, and this block reports it.
 
 ### `list_camera_images` / `get_camera_image` / `get_camera_intrinsics` / `get_point`
 
@@ -689,6 +711,70 @@ reconstruction's own colours; an unknown name is an error listing the seven,
 rather than a free colour, for the reason the palette is fixed in the first
 place. The tint is resolved **before** any field is written, so a refused call
 has not applied the rest of itself on the way out.
+
+### `set_reconstruction_transform` / `set_reconstruction_transform_from_patch` / `bake_reconstruction_transform`
+
+```jsonc
+set_reconstruction_transform {
+  "reconstruction_label": "run_b",
+  "transform": { "rotation_wxyz": [1, 0, 0, 0], "translation": [0, 0, 0], "scale": 1.0 }
+}
+
+set_reconstruction_transform_from_patch {
+  "reconstruction_label": "run_b",
+  "mode": "align_normal_to_z"        // set_to_origin | align_normal_to_z |
+                                     // translate_to_origin | translate_to_xy_plane
+}
+
+bake_reconstruction_transform { "reconstruction_label": "run_b" }
+```
+
+The three set, frame from a patch, and bake a node's **display transform**
+([scene-graph.md](scene-graph.md) § "The transform"). Each is named for the part
+it acts on, the transform, addressed through the reconstruction that carries it.
+None of them is a bench tool: the second reads the bench's active patch and
+changes nothing on the bench, so none takes the `bench` infix.
+
+The first two push a **reframe**, a version whose value half is untouched, so
+the node does not go dirty, and record `Kind::Scene`. The third pushes an edit
+and records `Kind::Edit`. All three are refused while a background task holds
+the node, like every tool that pushes a version, and all three carry
+`destructiveHint: false`: a bake is undoable, and none of them touches a file.
+Each replies in the shape of an edit (§ "Editing reconstruction data"): the
+version at the cursor, `changed`, `dirty`, and the sentence the step recorded as
+`report`. `reconstruction_label` is required on all three, because each pushes a
+version and changes what a screenshot shows, and an agent that aimed one at
+whatever happened to be selected could not check that it landed where it meant.
+
+**The reset is `set_reconstruction_transform` with the identity**, not a tool of
+its own, in the way `set_solo` with `null` ends a solo. Given the identity it
+records the sentence the Scene panel's `Reset Transform` writes, so the log reads
+the same whoever asked, and on a node already at the identity it is refused as
+that entry is greyed. The rotation is normalised on arrival; a zero quaternion
+and a scale that is not positive and finite are refused at the parse.
+
+**The four patch actions are one tool with a `mode`.** They take the same
+arguments, return the same reply and refuse for the same reasons, and differ
+only in how much of the patch's frame the world adopts: all of it, its normal,
+its centre, or its height. `mode` takes the menu labels snake-cased, which keeps
+a label read off the screen directly usable in a call. The long name keeps clear
+of `frame_`, which on this surface is `set_view`'s verb for moving the viewport
+camera and so names the opposite half of the comparison. What each mode computes,
+and why Set to Origin is `Mᵀ` and Align Normal to Z turns about the patch, is in
+[viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The patch menu".
+
+Refusals name what is missing rather than answering with a no-op: no
+reconstruction of that label, nothing on its bench active, the active item a
+cluster, the active track without a patch frame, the track at infinity, a
+background task holding the node. `bake_reconstruction_transform` also refuses a
+node whose transform is the identity, which is the tool half of the greyed menu
+entry.
+
+Together they close the loop an agent needs: `get_bench_track` says where the
+patch is, `set_reconstruction_transform_from_patch` moves the world onto it,
+`get_scene` reports the transform that resulted, `screenshot` shows it, and
+`bake_reconstruction_transform` followed by `save_reconstruction` keeps it.
+`undo` steps back out of any of them, the transform included.
 
 ### `set_solo`
 
@@ -3304,11 +3390,19 @@ where a test hands no host over.
 - **The counts are the version's**: a commit that writes one observation fewer
   than the point it replaces moves `get_scene`'s `observations` by one, and an
   undo moves it back.
+- **The display transform round-trips**: `get_scene`'s `transform` reads as
+  the identity until `set_reconstruction_transform` sets it, then as what was
+  set, with `dirty` still false; an undo takes it back. Setting the identity on
+  a node already there is refused, as is a bake of one, and a zero quaternion
+  or a scale of zero is refused at the parse. The patch tool refuses a node with
+  nothing active on its bench and names the active item in its label once there
+  is one; a bake is one `Edit` row, leaves the transform at the identity and
+  the node dirty, and its undo restores the transform the bake consumed.
 - **The spec's own counts are read back**: the tool count, the number of reads
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-three tools**, fifteen of them reads and one of them
+- **The catalog is seventy-six tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

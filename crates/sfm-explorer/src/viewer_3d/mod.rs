@@ -218,17 +218,21 @@ pub struct Viewer3D {
     /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
     /// excludes it geometrically. `None` until the HUD has been built once.
     pub hud_rect: Option<Rect>,
-    /// The point the viewport's context menu stands on, recorded on the frame
-    /// the secondary click landed and read on every later frame the menu is
-    /// laid out over -- by which time the pointer has moved off the dot the
-    /// user named, and whatever the pick reports under it is somebody else's.
-    menu_point: Option<PointRef>,
-    /// What that menu asked of the app, drained by `dock.rs` after the frame.
+    /// What the viewport's context menu stands on, recorded on the frame the
+    /// secondary click landed and read on every later frame the menu is laid
+    /// out over -- by which time the pointer has moved off whatever the user
+    /// named, and whatever the pick reports under it is somebody else's.
+    menu_target: Option<MenuTarget>,
+    /// What the menu asked of the app about a point, drained by `app.rs` after
+    /// the frame.
     ///
     /// A single slot, because the two things it carries happen on different
     /// frames: a menu opens on the frame of the click and an entry is chosen on
     /// a later one.
     pub point_menu: Option<PointGesture>,
+    /// Which reframe the patch menu asked for, and on which node, drained by
+    /// `app.rs` after the frame for the reason [`Self::point_menu`] is.
+    pub(crate) patch_menu: Option<(ReconId, crate::display_transform::PatchReframe)>,
     /// The figure the bench's active track draws in the scene, as of the last
     /// frame this panel was shown, or `None` when there is nothing to draw.
     ///
@@ -251,7 +255,7 @@ pub struct Viewer3D {
     /// point menu's gesture is: both need the state mutably, and the state is
     /// borrowed out of for the whole of this call.
     pub(crate) bench_gesture: Option<bench_track::BenchGesture>,
-    /// Where each of the point menu's entries was drawn on the frame just
+    /// Where each of the context menu's entries was drawn on the frame just
     /// past, empty on a frame with no menu up.
     ///
     /// Recorded in the production path rather than behind a test flag, for the
@@ -271,6 +275,35 @@ pub const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
 /// What the entry that re-solves one point is called, in the menu and in the
 /// tests that aim at it.
 pub const RETRIANGULATE_POINT_LABEL: &str = "Retriangulate Point";
+
+/// What the patch menu's entry that adopts the patch's whole frame is called,
+/// in the menu and in the tests that aim at it.
+pub const SET_TO_ORIGIN_LABEL: &str = "Set to Origin";
+
+/// What the patch menu's entry that tips the patch's normal onto `+Z` is
+/// called.
+pub const ALIGN_NORMAL_TO_Z_LABEL: &str = "Align Normal to Z";
+
+/// What the patch menu's entry that moves the patch's centre to the origin is
+/// called.
+pub const TRANSLATE_TO_ORIGIN_LABEL: &str = "Translate to Origin";
+
+/// What the patch menu's entry that drops the patch's centre onto `z = 0` is
+/// called.
+pub const TRANSLATE_TO_XY_PLANE_LABEL: &str = "Translate to XY Plane";
+
+/// Why the patch menu's entries are greyed on a track at infinity.
+const PATCH_AT_INFINITY_HINT: &str =
+    "This track is at infinity: its patch is a bearing with no place, so it has no centre to move.";
+
+/// What the viewport's context menu stands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuTarget {
+    /// The bench's active patch, on the node whose figure was drawn.
+    Patch(ReconId),
+    /// A 3D point the pick reported under the cursor.
+    Point(PointRef),
+}
 
 impl Default for Viewer3D {
     fn default() -> Self {
@@ -310,8 +343,9 @@ impl Viewer3D {
             target_transition: None,
             hud_open: true,
             hud_rect: None,
-            menu_point: None,
+            menu_target: None,
             point_menu: None,
+            patch_menu: None,
             bench_figure: None,
             bench_drag: None,
             bench_gesture: None,
@@ -319,8 +353,8 @@ impl Viewer3D {
         }
     }
 
-    /// The point context menu: right-click a point's dot or its patch, and this
-    /// is what opens.
+    /// The viewport's context menu: right-click the bench's active patch, a
+    /// point's dot or a point's own patch, and this is what opens.
     ///
     /// **A right *click* opens it and a right *drag* does not.** The viewport's
     /// right-drag is its zoom, read from the raw platform button state in
@@ -329,32 +363,109 @@ impl Viewer3D {
     /// drag threshold is what tells a click from a drag, exactly as the Image
     /// Detail overlay's menu does.
     ///
-    /// The point is the one the pick reported under the cursor on the frame the
-    /// click landed, kept in [`Self::menu_point`] because the entries are laid
-    /// out on later frames by which time the pointer has moved. A secondary
-    /// click on anything else clears it, so no menu opens over empty space.
-    fn show_point_menu(
+    /// **One menu with two sets of entries**, never two popups: both would hang
+    /// off the one response this panel produces, and a popup takes its identity
+    /// from that response. Which set is decided when the click lands, and **the
+    /// patch wins**: the figure is drawn on top of the cloud, so a right-click
+    /// the square covers ([`bench_track::Handles::covers`]) means the square,
+    /// for the reason a primary click one of its handles catches does not reach
+    /// the points under it. Otherwise the point the pick reported is the
+    /// target.
+    ///
+    /// The target is latched in [`Self::menu_target`] because the entries are
+    /// laid out on later frames by which time the pointer has moved. A
+    /// secondary click on anything else clears it, so no menu opens over empty
+    /// space.
+    fn show_viewport_menu(
         &mut self,
         response: &egui::Response,
+        rect: Rect,
         hover_pick: Option<crate::scene_renderer::PickTarget>,
         busy: Option<&str>,
+        bench: Option<&bench_track::BenchTrack<'_>>,
     ) {
         if response.clicked_by(egui::PointerButton::Secondary) {
-            self.menu_point = match hover_pick {
-                Some(crate::scene_renderer::PickTarget::Point(point)) => Some(point),
+            let on_patch = bench
+                .zip(self.bench_figure.as_ref())
+                .zip(response.interact_pointer_pos())
+                .filter(|((_, figure), pos)| {
+                    bench_track::Handles::project(figure, &self.camera, rect, None).covers(*pos)
+                })
+                .map(|((bench, _), _)| bench.node);
+            self.menu_target = match (on_patch, hover_pick) {
+                (Some(node), _) => Some(MenuTarget::Patch(node)),
+                (None, Some(crate::scene_renderer::PickTarget::Point(point))) => {
+                    Some(MenuTarget::Point(point))
+                }
                 _ => None,
             };
             // Selecting on open rather than on choice: the menu is about this
             // point, and the panels beside the viewport should be saying so
             // while it stands open.
-            if let Some(point) = self.menu_point {
+            if let Some(MenuTarget::Point(point)) = self.menu_target {
                 self.point_menu = Some(PointGesture::Opened(point));
             }
         }
         self.menu_entry_rects.clear();
-        let Some(point) = self.menu_point else {
-            return;
-        };
+        match self.menu_target {
+            None => {}
+            Some(MenuTarget::Point(point)) => self.show_point_entries(response, point, busy),
+            Some(MenuTarget::Patch(node)) => {
+                // The patch as it stands now. A menu left up across an undo that
+                // took the patch away has nothing to stand on, and closes.
+                let placement = bench
+                    .filter(|bench| bench.node == node)
+                    .and_then(|bench| bench_track::placement_of(bench.track));
+                match placement {
+                    Some(placement) => {
+                        let refusal = busy.map(str::to_string).or_else(|| {
+                            (placement.w == 0.0).then(|| PATCH_AT_INFINITY_HINT.to_string())
+                        });
+                        self.show_patch_entries(response, node, refusal.as_deref());
+                    }
+                    None => self.menu_target = None,
+                }
+            }
+        }
+    }
+
+    /// The four reframes, on the node whose patch the menu opened on.
+    ///
+    /// Greyed with `refusal` rather than hidden when they cannot run, as every
+    /// other entry that makes a version is: a busy node, or a track at infinity,
+    /// whose patch is a bearing with no place.
+    fn show_patch_entries(
+        &mut self,
+        response: &egui::Response,
+        node: ReconId,
+        refusal: Option<&str>,
+    ) {
+        use crate::display_transform::PatchReframe;
+        let mut rects = Vec::with_capacity(PatchReframe::ALL.len());
+        crate::context_menu::on_secondary_click(response).show(|ui| {
+            for mode in PatchReframe::ALL {
+                let button = egui::Button::new(mode.label());
+                let entry = match refusal {
+                    None => ui.add(button).on_hover_text(mode.hint()),
+                    Some(why) => ui.add_enabled(false, button).on_disabled_hover_text(why),
+                };
+                rects.push((mode.label(), entry.rect));
+                if entry.clicked() {
+                    self.patch_menu = Some((node, mode));
+                    ui.close();
+                }
+            }
+        });
+        self.menu_entry_rects = rects;
+    }
+
+    /// The point's two entries.
+    fn show_point_entries(
+        &mut self,
+        response: &egui::Response,
+        point: PointRef,
+        busy: Option<&str>,
+    ) {
         let mut rects = Vec::with_capacity(2);
         crate::context_menu::on_secondary_click(response).show(|ui| {
             let mut entry = |ui: &mut egui::Ui, text: &'static str, hint: &str| -> bool {
@@ -543,7 +654,7 @@ impl Viewer3D {
         if !bench_owns_pointer {
             self.handle_click(ui, &response, rect);
         }
-        self.show_point_menu(&response, hover_pick, busy);
+        self.show_viewport_menu(&response, rect, hover_pick, busy, bench.as_ref());
 
         // Record mouse position in texture pixels for GPU depth readback
         let ppp = ui.ctx().pixels_per_point();
@@ -860,7 +971,7 @@ impl Viewer3D {
         let image = &reconstruction.image_table.images[img_idx];
         let camera = &reconstruction.image_table.cameras[image.camera_index as usize];
 
-        let (world_pose, end_position) = transformed_pose(image, &node.transform);
+        let (world_pose, end_position) = transformed_pose(image, node.transform());
         let r_world_from_cam = world_pose.inverse();
 
         // The image quaternion is a canonical +Y-up / −Z-forward camera
@@ -876,7 +987,7 @@ impl Viewer3D {
             .and_then(|stats| stats.observed.median_z)
             // A depth is a length in the node's own coordinates, so a scaled
             // node's median depth has to scale with it.
-            .map(|z| z * node.transform.scale)
+            .map(|z| z * node.transform().scale)
             .unwrap_or(self.camera.camera.target_distance);
 
         // world_up = up direction of the end orientation
@@ -922,7 +1033,7 @@ impl Viewer3D {
         let reconstruction = node.recon();
         let new_img_idx = new_image_ref.index();
         let new_image = &reconstruction.image_table.images[new_img_idx];
-        let (new_qwxyz, position) = transformed_pose(new_image, &node.transform);
+        let (new_qwxyz, position) = transformed_pose(new_image, node.transform());
 
         // Compute new orientation preserving relative viewing direction.
         //   new_orientation = orientation * old_r_world_from_cam * new_qwxyz
@@ -933,7 +1044,7 @@ impl Viewer3D {
             .images
             .get(new_img_idx)
             .and_then(|stats| stats.observed.median_z)
-            .map(|z| z * node.transform.scale)
+            .map(|z| z * node.transform().scale)
             .unwrap_or(self.camera.camera.target_distance);
 
         // Transform world_up through the relative rotation between cameras

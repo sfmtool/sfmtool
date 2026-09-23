@@ -79,7 +79,7 @@ fn measured() -> (AppState, Viewer3D, ReconId) {
 /// Give the node a display transform: a quarter turn about `z`, a shift and a
 /// scale, which is what an `Align to…` leaves behind.
 fn align(state: &mut AppState) {
-    state.scene[0].transform = Se3Transform::new(
+    *state.scene[0].history.transform_mut() = Se3Transform::new(
         RotQuaternion::from_axis_angle(Vector3::z(), std::f64::consts::FRAC_PI_2)
             .expect("a non-zero axis"),
         Vector3::new(2.0, -1.0, 0.5),
@@ -153,7 +153,7 @@ fn entering_an_aligned_node_snaps_through_its_transform() {
         "{degrees} deg, {distance}"
     );
     let drawn = state.scene[0]
-        .transform
+        .transform()
         .apply_to_point(&Point3::from(stored.translation));
     assert!(
         (viewer.camera.camera.position - drawn).norm() < 1e-9,
@@ -340,7 +340,7 @@ fn the_committed_pose_crosses_an_aligned_node_s_transform() {
     // reviewer put it.
     let landed = stored_pose(&state);
     let redrawn = state.scene[0]
-        .transform
+        .transform()
         .apply_to_point(&Point3::from(landed.translation));
     assert!(
         (redrawn - drawn_centre).norm() < 1e-9,
@@ -544,7 +544,7 @@ fn the_photograph_turns_with_the_camera_and_starts_at_the_node_s_own_transform()
 
     // At the snap the background is drawn exactly as it is with no lock at all.
     let at_entry = background_transform(&viewer, &state.scene[0]).expect("a held lock");
-    let (degrees, _) = apart(&at_entry, &state.scene[0].transform);
+    let (degrees, _) = apart(&at_entry, state.scene[0].transform());
     assert!(
         degrees < 1e-9,
         "the entry turned the photograph by {degrees}"
@@ -552,7 +552,7 @@ fn the_photograph_turns_with_the_camera_and_starts_at_the_node_s_own_transform()
 
     viewer.camera.nodal_pan(80.0, 0.0);
     let turned = background_transform(&viewer, &state.scene[0]).expect("a held lock");
-    let (degrees, _) = apart(&turned, &state.scene[0].transform);
+    let (degrees, _) = apart(&turned, state.scene[0].transform());
     assert!(degrees > 1.0, "the photograph stayed behind: {degrees} deg");
 }
 

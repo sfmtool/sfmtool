@@ -3607,6 +3607,25 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "set_reconstruction_display",
             json!({ "reconstruction_label": "alpha", "visible": true }),
         ),
+        (
+            "set_reconstruction_transform",
+            json!({
+                "reconstruction_label": "alpha",
+                "transform": {
+                    "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
+                    "translation": [0.0, 0.0, 0.0],
+                    "scale": 1.0,
+                },
+            }),
+        ),
+        (
+            "set_reconstruction_transform_from_patch",
+            json!({ "reconstruction_label": "alpha", "mode": "set_to_origin" }),
+        ),
+        (
+            "bake_reconstruction_transform",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
         ("set_solo", json!({ "reconstruction_label": "alpha" })),
         ("set_image_detail_display", json!({ "tracked_only": true })),
         ("set_timing_detail", json!({ "enabled": true })),
@@ -4088,15 +4107,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty-seven writes, the one that writes a file, and the
-    // one that hands back a picture.
-    assert_eq!(catalog.len(), 73, "the catalog has grown or shrunk");
+    // Fifteen reads, sixty writes, the one that writes a file, and the one
+    // that hands back a picture.
+    assert_eq!(catalog.len(), 76, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        57
+        60
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -10093,4 +10112,209 @@ fn a_view_set_after_a_layout_change_reports_the_panel_as_it_now_is() {
         [300.0, 200.0],
         "the pixel is off centre",
     );
+}
+
+// ── The display transform ───────────────────────────────────────────────
+//
+// The three tools that set, frame from a patch, and bake a node's display
+// transform. What each does to the picture is asserted in
+// `display_transform::tests`; these assert the boundary: the reply, the
+// `transform` block `get_scene` reports back, the refusals' words and that
+// undo walks the framing.
+
+/// `run_a`'s `transform` block, as `get_scene` reports it.
+fn transform_block(state: &mut AppState, viewer: &mut Viewer3D) -> Value {
+    let scene = call(state, viewer, "get_scene", json!({}));
+    scene["scene"][0]["transform"].clone()
+}
+
+/// The identity, as the wire spells it.
+fn identity_block() -> Value {
+    json!({
+        "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
+        "translation": [0.0, 0.0, 0.0],
+        "scale": 1.0,
+    })
+}
+
+/// A similarity with a turn, a shift and a scale, as the wire spells it.
+fn similarity_block() -> Value {
+    let half = 0.3_f64;
+    json!({
+        "rotation_wxyz": [half.cos(), 0.0, half.sin(), 0.0],
+        "translation": [1.5, -2.0, 0.25],
+        "scale": 1.25,
+    })
+}
+
+#[test]
+fn get_scene_reports_the_transform_block_and_a_set_lands_in_it() {
+    let (mut state, mut viewer) = benchable();
+    assert_eq!(transform_block(&mut state, &mut viewer), identity_block());
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a", "transform": similarity_block() }),
+    );
+
+    // A version of the framing and not a change to the data.
+    assert_eq!(reply["changed"], true);
+    assert_eq!(reply["dirty"], false);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Set transform of run_a: "), "{report}");
+    let block = transform_block(&mut state, &mut viewer);
+    let want = similarity_block();
+    for field in ["rotation_wxyz", "translation"] {
+        let (got, want) = (
+            block[field].as_array().unwrap(),
+            want[field].as_array().unwrap(),
+        );
+        for (g, w) in got.iter().zip(want) {
+            assert!(
+                (g.as_f64().unwrap() - w.as_f64().unwrap()).abs() < 1e-12,
+                "{block}"
+            );
+        }
+    }
+    assert_eq!(block["scale"], 1.25);
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(scene["scene"][0]["transformed"], true);
+
+    // Undo walks the framing back.
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(transform_block(&mut state, &mut viewer), identity_block());
+}
+
+#[test]
+fn setting_the_identity_is_the_reset_and_is_refused_where_there_is_nothing_to_reset() {
+    let (mut state, mut viewer) = benchable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a", "transform": identity_block() }),
+    );
+    assert!(error.0.contains("already in its own frame"), "{error}");
+    assert_eq!(version_count(&state), 1);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a", "transform": similarity_block() }),
+    );
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a", "transform": identity_block() }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Reset transform of run_a"), "{report}");
+}
+
+#[test]
+fn a_transform_that_is_not_a_similarity_is_refused_at_the_parse() {
+    let (mut state, mut viewer) = benchable();
+    for transform in [
+        json!({ "rotation_wxyz": [0.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0], "scale": 1.0 }),
+        json!({ "rotation_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0], "scale": 0.0 }),
+    ] {
+        refused_call(
+            &mut state,
+            &mut viewer,
+            "set_reconstruction_transform",
+            json!({ "reconstruction_label": "run_a", "transform": transform }),
+        );
+    }
+    assert_eq!(version_count(&state), 1);
+}
+
+#[test]
+fn set_reconstruction_transform_from_patch_frames_the_scene_on_the_active_patch() {
+    let (mut state, mut viewer) = benchable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform_from_patch",
+        json!({ "reconstruction_label": "run_a", "mode": "set_to_origin" }),
+    );
+    assert!(
+        error.0.contains("nothing on its bench is active"),
+        "{error}"
+    );
+
+    let item = on_the_bench(&mut state, &mut viewer);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform_from_patch",
+        json!({ "reconstruction_label": "run_a", "mode": "set_to_origin" }),
+    );
+    assert_eq!(reply["dirty"], false);
+    assert_eq!(
+        reply["label"],
+        format!("Set run_a to the frame of patch {item}")
+    );
+    assert_ne!(transform_block(&mut state, &mut viewer), identity_block());
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform_from_patch",
+        json!({ "reconstruction_label": "run_a", "mode": "frame" }),
+    );
+    assert!(error.0.contains("set_to_origin"), "{error}");
+}
+
+#[test]
+fn bake_reconstruction_transform_is_one_edit_and_undo_puts_the_framing_back() {
+    let (mut state, mut viewer) = benchable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "bake_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(error.0.contains("already in its own frame"), "{error}");
+    assert_eq!(failures(&state).len(), 1, "{:?}", rows(&state));
+
+    on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "set_reconstruction_transform_from_patch",
+        json!({ "reconstruction_label": "run_a", "mode": "align_normal_to_z" }),
+    );
+    let framed = transform_block(&mut state, &mut viewer);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "bake_reconstruction_transform",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(reply["changed"], true);
+    assert_eq!(reply["dirty"], true);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Baked transform of run_a: "), "{report}");
+    let last = rows(&state).pop().expect("a row");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+    assert_eq!(transform_block(&mut state, &mut viewer), identity_block());
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(transform_block(&mut state, &mut viewer), framed);
+    assert!(!state.scene[0].is_dirty());
 }

@@ -110,9 +110,12 @@ impl History {
     /// empty `Removed` -- the identity.
     pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>)
         -> VersionSerial;
-    /// Both halves at once, which only a commit states.
+    /// As many halves as the step changed: the value and the bench for a
+    /// commit, and the display transform as well for a bake. `None` carries
+    /// the one at the cursor.
     pub fn push_pair(&mut self, value: Option<EditedReconstruction>,
-                     bench: Arc<Bench>, map: PointMap, label: impl Into<String>,
+                     bench: Arc<Bench>, transform: Option<Se3Transform>,
+                     map: PointMap, label: impl Into<String>,
                      created: Option<CreatedPoints>) -> VersionSerial;
 
     pub fn current_bench(&self) -> &Arc<Bench>;
@@ -331,6 +334,16 @@ commit, which changes both, would have to appear in both or in neither.
 
 **Closing a node drops its bench with its history.** An item names images of one
 node and is meaningless without it.
+
+**A bake puts the bench's placements through the same transform** as the value,
+in the one version that states all three halves
+([`edits/bake-transform.md`](edits/bake-transform.md)). A track-stage item's
+placement and position are in the reconstruction's own coordinates, the same
+coordinates the bake rewrites, so a bake that left them alone would stand the
+active track's square in the old frame and the 3D viewer's figure would jump.
+The centre goes through the whole similarity, the axes are rotated and the
+half-extent is scaled; a track at infinity keeps the rotation alone; a
+cluster-stage item has no world geometry and keeps its `Arc`.
 
 ---
 

@@ -475,6 +475,93 @@ fn build_catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "set_reconstruction_transform",
+            description: "Set the display transform one reconstruction is drawn under: the \
+                          similarity from its own coordinates into the shared world, as \
+                          get_scene reports it in transform. The identity returns it to its own \
+                          frame, which is the Scene panel's Reset Transform. One version of the \
+                          reconstruction whose data is untouched, so the reconstruction does not \
+                          go dirty and undo steps back out of it; nothing reaches a file until \
+                          bake_reconstruction_transform writes the transform into the data and a \
+                          save writes that.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "transform",
+                        json!({
+                            "type": "object",
+                            "description":
+                                "The similarity p' = scale * (rotation p) + translation, from \
+                                 the reconstruction's own coordinates into the world.",
+                            "properties": {
+                                "rotation_wxyz": {
+                                    "type": "array",
+                                    "items": { "type": "number" },
+                                    "minItems": 4,
+                                    "maxItems": 4,
+                                    "description": "The rotation, WXYZ. Normalised on arrival.",
+                                },
+                                "translation": vec3_schema("The translation, in world units."),
+                                "scale": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "description": "The uniform scale.",
+                                },
+                            },
+                            "required": ["rotation_wxyz", "translation", "scale"],
+                            "additionalProperties": false,
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "set_reconstruction_transform_from_patch",
+            description: "Set one reconstruction's display transform from the active patch on \
+                          its bench, in one of the four ways the 3D viewport's patch menu offers: \
+                          set_to_origin draws the scene in the patch's own frame (centre at the \
+                          origin, u on +X, normal on +Z); align_normal_to_z tips the scene about \
+                          the patch's centre until its normal is +Z; translate_to_origin moves the \
+                          patch's centre to the origin; translate_to_xy_plane moves the scene \
+                          along Z alone so the patch's centre sits at z = 0. Each composes onto \
+                          the transform the reconstruction already carries and keeps its scale. \
+                          One version, like set_reconstruction_transform. Refused when nothing on \
+                          the bench is active, the active item is a cluster, the track has no \
+                          patch frame, or the track is at infinity.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "mode",
+                        json!({
+                            "type": "string",
+                            "enum": crate::display_transform::PatchReframe::ALL
+                                .map(|mode| mode.wire_name()),
+                            "description": "Which of the four, as the menu labels them, \
+                                            snake-cased.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "bake_reconstruction_transform",
+            description: "Write one reconstruction's display transform into its points, camera \
+                          poses and bench, and return it to its own frame, as one version. The \
+                          picture does not move: what changes is which side of the display the \
+                          numbers live on, so a save_reconstruction afterwards carries the new \
+                          frame. A bulk edit that renumbers nothing, and undo puts both the data \
+                          and the transform back. Refused on a reconstruction whose transform is \
+                          the identity.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
             name: "set_solo",
             description: "Draw only one reconstruction, or end the solo. At most one is soloed at \
                           a time and soloing a second moves the solo. Solo is independent of \
@@ -2456,6 +2543,55 @@ pub(crate) fn parse(
                 change,
             }
         }
+        "set_reconstruction_transform" => {
+            let transform = args
+                .map
+                .get("transform")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    args.error(
+                        "needs transform, an object carrying rotation_wxyz, translation and \
+                         scale.",
+                    )
+                })?;
+            let inner = Args {
+                tool: "set_reconstruction_transform.transform",
+                map: transform,
+            };
+            inner.reject_unknown(&["rotation_wxyz", "translation", "scale"])?;
+            let rotation_wxyz = inner.required_vec4("rotation_wxyz")?;
+            let translation = inner.required_vec3("translation")?;
+            let scale = inner.required_f64("scale")?;
+            if rotation_wxyz.iter().all(|c| *c == 0.0) {
+                return Err(inner.error("needs a rotation_wxyz with some length to normalise."));
+            }
+            if !(scale.is_finite() && scale > 0.0) {
+                return Err(inner.error(format!("needs a positive, finite scale, not {scale}.")));
+            }
+            Command::SetReconstructionTransform {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                rotation_wxyz,
+                translation,
+                scale,
+            }
+        }
+        "set_reconstruction_transform_from_patch" => {
+            let mode = args.required_string("mode")?;
+            let mode =
+                crate::display_transform::PatchReframe::from_wire_name(&mode).ok_or_else(|| {
+                    args.error(format!(
+                        "does not know the mode {mode:?}: expected set_to_origin, \
+                         align_normal_to_z, translate_to_origin or translate_to_xy_plane."
+                    ))
+                })?;
+            Command::SetReconstructionTransformFromPatch {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                mode,
+            }
+        }
+        "bake_reconstruction_transform" => Command::BakeReconstructionTransform {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
         "set_solo" => Command::SetSolo {
             reconstruction_label: args.optional_string("reconstruction_label")?,
         },

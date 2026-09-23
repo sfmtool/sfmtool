@@ -204,7 +204,7 @@ impl TabContext<'_> {
                     node: node.id,
                     track,
                     edited: node.edited(),
-                    transform: &node.transform,
+                    transform: node.transform(),
                     selected: *selected,
                     busy: busy.is_some(),
                 }
@@ -1052,8 +1052,17 @@ impl TabContext<'_> {
             // are keyed by indexes that now name other images.
             self.forget_recon(image.recon);
         }
+        // Both record their own outcome, refusals included, so the `Err` has
+        // nobody left to tell.
         if let Some(id) = response.reset_transform {
-            self.state.reset_node_transform(id);
+            let _ = self.state.reset_node_transform(id);
+        }
+        // A bulk edit: the value is a whole new base, so what the panels cached
+        // about its geometry describes a value the node no longer shows.
+        if let Some(id) = response.bake_transform {
+            if self.state.bake_node_transform(id).is_ok() {
+                self.forget_recon(id);
+            }
         }
         // A question first rather than a worker: the dialog it opens starts
         // the solve on `Run` (see `app/modals.rs`).

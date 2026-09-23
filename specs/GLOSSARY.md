@@ -69,6 +69,23 @@ it is `PatchEdit::Tilt`. Only the wire, whose namespace is flat, spells all
 three, as `tilt_bench_patch`. A name like `bench_track_frame` is three words
 where the context has already supplied two.
 
+## The scene's frame
+
+The vocabulary of a node's similarity transform in `crates/sfm-explorer/`, the
+viewer specs and the wire.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **display transform** | the similarity a node is *drawn* under, held on the version at the cursor so undo walks it, and never written to a file; `SceneNode::transform()` | `node transform` alone, `alignment`, `pose` | once a bake exists, "the node's transform" no longer says which side of the boundary a number is on, and the adjective is the whole distinction. It is on the timeline and still not data, which is exactly what *display* has to carry. `alignment` names how one is commonly computed and not what it is, and a node set straight from a patch was never aligned to anything. `pose` is a camera's |
+| **bake** | write a node's display transform into its reconstruction and return the node to its own frame, leaving the drawn scene where it is; `Bake Transform`, `bake_node_transform`, `bake_reconstruction_transform` | `apply`, `commit`, `flatten`, `freeze` | the word graphics and 3D tools already use for turning a view-time transform into stored data, so it arrives meaning the right thing. `apply` is what `apply_se3_transform` does to a value and cannot also name the version-pushing step around it; `commit` is taken by the bench, where it means writing a track into the reconstruction; `freeze` suggests something is being made read-only |
+| **reframe** | set a node's display transform, by any of the ways there are to set one: a version that moved the framing and no data; `History::push_transform`, `AppState::reframe_on_patch` | `align`, `snap`, `orient`, `frame` | prose needs one noun for such a version, and this is it. `Align to…` is taken and means fitting one reconstruction onto another, a solve over correspondences. **`frame` is taken on the wire**: `set_view` frames the scene by moving the viewport camera, which moves no reconstruction, so no function or tool here may be named `frame_…`. `snap` promises a quantized result and there is none |
+
+The patch menu's four labels (*Set to Origin*, *Align Normal to Z*, *Translate
+to Origin*, *Translate to XY Plane*) are settled and are not entries here: they
+are strings, and the constants that hold them in `viewer_3d` are the single
+definition the menu and the tests that aim at it share. The wire's `mode`
+spells each one snake-cased.
+
 ## Optional columns
 
 The verbs of the `sfm xform` step vocabulary and the binding keywords behind

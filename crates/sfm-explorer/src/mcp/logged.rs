@@ -40,6 +40,11 @@ impl Command {
             Command::SelectPoint { .. } => "select_point",
             Command::ClearSelection { .. } => "clear_selection",
             Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
+            Command::SetReconstructionTransform { .. } => "set_reconstruction_transform",
+            Command::SetReconstructionTransformFromPatch { .. } => {
+                "set_reconstruction_transform_from_patch"
+            }
+            Command::BakeReconstructionTransform { .. } => "bake_reconstruction_transform",
             Command::SetSolo { .. } => "set_solo",
             Command::GetImageDetailDisplay => "get_image_detail_display",
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
@@ -140,6 +145,9 @@ impl Command {
                 reconstruction_label,
                 ..
             }
+            | Command::BakeReconstructionTransform {
+                reconstruction_label,
+            }
             | Command::ConvertToEmbeddedPatches {
                 reconstruction_label,
             }
@@ -178,6 +186,11 @@ impl Command {
             Command::DeleteCameraImage {
                 reconstruction_label,
                 ..
+            }
+            // The bake installs a whole new base and renumbers nothing, which
+            // is the camera move's case.
+            | Command::BakeReconstructionTransform {
+                reconstruction_label,
             }
             | Command::MoveCameraImage {
                 reconstruction_label,
@@ -269,6 +282,7 @@ impl Command {
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImage { .. }
             | Command::BundleAdjust { .. }
+            | Command::BakeReconstructionTransform { .. }
             | Command::ConvertToEmbeddedPatches { .. }
             // The one bench step whose row is an `Edit`, because it is one
             // (`specs/gui/edits/commit-track.md`).
@@ -311,7 +325,12 @@ impl Command {
             | Command::SelectCameraIntrinsics { .. }
             | Command::SelectPoint { .. }
             | Command::ClearSelection { .. } => Kind::Selection,
-            Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
+            Command::SetReconstructionDisplay { .. }
+            | Command::SetSolo { .. }
+            // A reframe pushes a version and is still not an edit: nothing it
+            // does reaches the file, which is the bench step's case exactly.
+            | Command::SetReconstructionTransform { .. }
+            | Command::SetReconstructionTransformFromPatch { .. } => Kind::Scene,
             // The kind the HUD's own controls record under: the Image Detail
             // toolbar is the same sort of thing on a different panel, and the
             // Action Log toolbar's timing checkbox on a third.

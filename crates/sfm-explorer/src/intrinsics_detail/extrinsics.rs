@@ -66,7 +66,7 @@ impl Pose {
         let image = &node.recon().image_table.images[index];
         let transformed = frame == PoseFrame::NodeTransform && node.has_transform();
         let (quaternion, translation) = if transformed {
-            node.transform.apply_to_camera_pose(
+            node.transform().apply_to_camera_pose(
                 &RotQuaternion::from_nalgebra(image.quaternion_wxyz),
                 &image.translation_xyz,
             )

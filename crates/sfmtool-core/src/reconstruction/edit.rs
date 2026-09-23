@@ -64,6 +64,14 @@ impl SfmrReconstruction {
     ///
     /// Transforms all 3D point positions and camera poses. Returns a new
     /// reconstruction with the transformed data; `self` is not modified.
+    ///
+    /// The per-image depth statistics follow the scale: every stored depth is
+    /// a length, so its six length fields are multiplied by
+    /// `transform.scale`, and the histogram counts are carried unchanged,
+    /// which is exact because equal buckets between scaled bounds hold every
+    /// scaled depth in the bucket it was already in. The statistics are not
+    /// re-derived, since that re-derivation also rewrites every per-point
+    /// normal.
     pub fn apply_se3_transform(&self, transform: &crate::Se3Transform) -> Self {
         use crate::geometry::RotQuaternion;
 
@@ -168,6 +176,22 @@ impl SfmrReconstruction {
         let new_patch_u = transform_halfvec(&self.point_set.patch_u_halfvec_xyz);
         let new_patch_v = transform_halfvec(&self.point_set.patch_v_halfvec_xyz);
 
+        // A depth is a length: a similarity scales every one of them by `scale`,
+        // and the order statistics of a scaled set are the scaled order
+        // statistics. The counts, both the per-image ones and the histogram
+        // rows, are what that leaves alone.
+        let scale_depth = |z: Option<f64>| z.map(|z| z * transform.scale);
+        let mut depth_statistics = self.image_table.depth_statistics.clone();
+        for stats in depth_statistics.images.iter_mut() {
+            stats.histogram_min_z = scale_depth(stats.histogram_min_z);
+            stats.histogram_max_z = scale_depth(stats.histogram_max_z);
+            let observed = &mut stats.observed;
+            observed.min_z = scale_depth(observed.min_z);
+            observed.max_z = scale_depth(observed.max_z);
+            observed.median_z = scale_depth(observed.median_z);
+            observed.mean_z = scale_depth(observed.mean_z);
+        }
+
         let infinity_point_count = count_points_at_infinity(&new_points);
         SfmrReconstruction {
             // All other fields are unchanged
@@ -182,7 +206,7 @@ impl SfmrReconstruction {
                 // similarity of the scene does not touch, so the new value
                 // shares the old one's array rather than copying it.
                 thumbnails_y_x_rgb: self.image_table.thumbnails_y_x_rgb.clone(),
-                depth_statistics: self.image_table.depth_statistics.clone(),
+                depth_statistics,
                 depth_histogram_counts: self.image_table.depth_histogram_counts.clone(),
             },
             point_set: PointSet {

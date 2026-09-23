@@ -105,6 +105,12 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, sift_index
             "tint": tint_name(node),
         },
         "transformed": node.has_transform(),
+        // The display transform in force, always present and reading as the
+        // identity for a node that carries none, so an agent that wants the
+        // numbers never branches on `transformed` first. Named for
+        // `Se3Transform`'s own three fields, the rotation in the `_wxyz` order
+        // every other quaternion on this surface is in.
+        "transform": transform(node.transform()),
         // How every observation is located: `"sift_files"` names a feature in
         // a `.sift` file beside the workspace, `"embedded_patches"` carries a
         // keypoint inline against a per-point patch frame. It is what
@@ -121,6 +127,15 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, sift_index
         // reconstruction, so the scene entry is where an agent finds out
         // whether there is one and whether it is still good.
         "sift_index": sift_index,
+    })
+}
+
+/// A similarity as `set_reconstruction_transform` takes it back.
+fn transform(transform: &sfmtool_core::Se3Transform) -> Value {
+    json!({
+        "rotation_wxyz": transform.rotation.to_wxyz_array(),
+        "translation": vector(&transform.translation),
+        "scale": transform.scale,
     })
 }
 

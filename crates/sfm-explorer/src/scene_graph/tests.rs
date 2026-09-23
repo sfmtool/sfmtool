@@ -165,8 +165,9 @@ fn worst_display_error(node: &SceneNode, target: &SceneNode, target_frame: &Se3T
         .iter()
         .zip(target.recon().point_set.points.iter())
         .map(|(s, t)| {
-            (node.transform.apply_to_point(&s.position) - target_frame.apply_to_point(&t.position))
-                .norm()
+            (node.transform().apply_to_point(&s.position)
+                - target_frame.apply_to_point(&t.position))
+            .norm()
         })
         .fold(0.0, f64::max)
 }
@@ -1872,7 +1873,7 @@ fn an_align_lands_in_the_targets_currently_displayed_frame() {
         Vector3::new(-7.0, 3.0, 0.5),
         0.25,
     );
-    state.scene[0].transform = target_frame.clone();
+    *state.scene[0].history.transform_mut() = target_frame.clone();
 
     state.align_node(b, a, AlignOptions::default());
 
@@ -1894,7 +1895,7 @@ fn an_aligned_nodes_cameras_are_looked_through_where_they_are_drawn() {
     // transformed scene from an untransformed viewpoint.
     let (rotation, centre) = crate::viewer_3d::transformed_pose(
         &state.scene[1].recon().image_table.images[3],
-        &state.scene[1].transform,
+        state.scene[1].transform(),
     );
     let expected = &state.scene[0].recon().image_table.images[3];
     assert!(
@@ -1965,10 +1966,19 @@ fn resetting_a_transform_returns_the_node_to_its_own_frame() {
     state.align_node(b, a, AlignOptions::default());
     assert!(state.scene[1].has_transform());
 
-    state.reset_node_transform(b);
+    state
+        .reset_node_transform(b)
+        .expect("a node with a transform");
 
     assert!(!state.scene[1].has_transform());
-    assert_eq!(state.scene[1].transform.scale, 1.0);
+    assert_eq!(state.scene[1].transform().scale, 1.0);
+    // Both are versions of the node's framing, so the reset steps back to
+    // the fit and the fit steps back to the node's own frame.
+    state.undo(b).expect("undo the reset");
+    assert!(state.scene[1].has_transform());
+    state.undo(b).expect("undo the fit");
+    assert!(!state.scene[1].has_transform());
+    assert!(!state.scene[1].is_dirty());
 }
 
 // ── Node lifecycle (no frame needed) ────────────────────────────────────
@@ -2637,7 +2647,7 @@ fn the_camera_zoom_frames_only_its_own_images_through_the_node_transform() {
     let mut state = AppState::new();
     state.append_node(two_camera_node("/runs/rig.sfmr"));
     let transform = known_similarity();
-    state.scene[0].transform = transform.clone();
+    *state.scene[0].history.transform_mut() = transform.clone();
 
     let node = &state.scene[0];
     let centres = crate::scene::camera_world_centres(node, 1);

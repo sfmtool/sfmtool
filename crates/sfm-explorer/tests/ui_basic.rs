@@ -1718,6 +1718,9 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
             Expect::present("button", "Select"),
             Expect::present("button", "Zoom to Fit"),
             Expect::present("button", "Bundle Adjust..."),
+            // Greyed on the demo, which is in its own frame: a greyed entry is
+            // still in the tree, and still says the bake exists.
+            Expect::present("button", "Bake Transform"),
         ],
         CONTENT_TIMEOUT,
     )

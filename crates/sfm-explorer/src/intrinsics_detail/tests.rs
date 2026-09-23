@@ -90,7 +90,7 @@ fn two_camera_node() -> SceneNode {
 /// change, so a transform that is only partly applied cannot pass.
 fn transformed_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.transform = Se3Transform::new(
+    *node.history.transform_mut() = Se3Transform::new(
         RotQuaternion::from_axis_angle(Vector3::new(0.3, -0.7, 0.6), 0.9).unwrap(),
         Vector3::new(4.0, -2.5, 1.25),
         2.0,
@@ -464,14 +464,14 @@ fn the_transformed_pose_is_the_stored_pose_through_the_node_transform() {
     let moved = Pose::resolve(&node, 0, camera, PoseFrame::NodeTransform);
     assert!(!moved.transformed || stored.translation != moved.translation);
 
-    let (expected_q, expected_t) = node.transform.apply_to_camera_pose(
+    let (expected_q, expected_t) = node.transform().apply_to_camera_pose(
         &RotQuaternion::from_nalgebra(image.quaternion_wxyz),
         &image.translation_xyz,
     );
     assert!((moved.translation - expected_t).norm() < 1e-12);
     assert!((moved.rotation - expected_q.to_rotation_matrix()).norm() < 1e-12);
     // And the camera centre follows the transform's own action on a point.
-    let expected_centre = node.transform.apply_to_point(&stored.centre);
+    let expected_centre = node.transform().apply_to_point(&stored.centre);
     assert!((moved.centre - expected_centre).norm() < 1e-9);
 }
 

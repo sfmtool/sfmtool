@@ -191,6 +191,117 @@ fn se3_transform_scales_a_distance_with_the_scene() {
     assert!(c.constraint_distances[1].is_nan());
 }
 
+/// A demo reconstruction whose depth statistics are real rather than the
+/// demo's empty placeholders, with every normal then set to one direction the
+/// statistics pass would never produce, so a transform that re-derived them
+/// would be caught overwriting it.
+fn demo_with_depth_statistics() -> SfmrReconstruction {
+    let mut recon = SfmrReconstruction::demo(64);
+    recon.recompute_depth_statistics().unwrap();
+    let odd = nalgebra::Vector3::new(0.48f32, -0.6, 0.64);
+    for point in recon.point_set.points.iter_mut() {
+        point.normal = odd;
+    }
+    recon
+}
+
+/// The six length fields of one image's depth statistics, in a fixed order.
+fn depth_lengths(recon: &SfmrReconstruction, image: usize) -> [Option<f64>; 6] {
+    let stats = &recon.image_table.depth_statistics.images[image];
+    [
+        stats.histogram_min_z,
+        stats.histogram_max_z,
+        stats.observed.min_z,
+        stats.observed.max_z,
+        stats.observed.median_z,
+        stats.observed.mean_z,
+    ]
+}
+
+#[test]
+fn se3_transform_scales_the_depth_statistics_and_keeps_the_counts() {
+    let recon = demo_with_depth_statistics();
+    let scale = 2.5;
+    let rot = RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(V3::new(1.0, 2.0, -0.5)),
+        0.7,
+    ));
+    let out = recon.apply_se3_transform(&Se3Transform::new(
+        rot.clone(),
+        V3::new(-3.0, 0.5, 4.0),
+        scale,
+    ));
+
+    assert!(
+        (0..recon.image_table.images.len()).any(|i| depth_lengths(&recon, i)[2].is_some()),
+        "the fixture has depths to scale"
+    );
+    for i in 0..recon.image_table.images.len() {
+        for (before, after) in depth_lengths(&recon, i)
+            .into_iter()
+            .zip(depth_lengths(&out, i))
+        {
+            assert_eq!(before.map(|z| z * scale), after);
+        }
+        let (a, b) = (
+            &recon.image_table.depth_statistics.images[i].observed,
+            &out.image_table.depth_statistics.images[i].observed,
+        );
+        assert_eq!((a.count, a.infinity_count), (b.count, b.infinity_count));
+    }
+    assert_eq!(
+        recon.image_table.depth_histogram_counts,
+        out.image_table.depth_histogram_counts
+    );
+
+    // The multiplication is the answer a re-derivation from the transformed
+    // poses and points gives.
+    let mut rederived = out.clone();
+    rederived.recompute_depth_statistics().unwrap();
+    for i in 0..out.image_table.images.len() {
+        for (ours, theirs) in depth_lengths(&out, i)
+            .into_iter()
+            .zip(depth_lengths(&rederived, i))
+        {
+            match (ours, theirs) {
+                (Some(ours), Some(theirs)) => assert!(
+                    (ours - theirs).abs() <= 1e-9 * theirs.abs().max(1.0),
+                    "image {i}: {ours} vs re-derived {theirs}"
+                ),
+                (ours, theirs) => assert_eq!(ours, theirs),
+            }
+        }
+    }
+
+    // The normals were rotated and nothing else: the statistics pass would
+    // have replaced them with mean viewing directions.
+    let want = rot.rotate_vector(&V3::new(0.48, -0.6, 0.64));
+    for point in &out.point_set.points {
+        approx(point.normal.x as f64, want.x);
+        approx(point.normal.y as f64, want.y);
+        approx(point.normal.z as f64, want.z);
+    }
+}
+
+#[test]
+fn se3_transform_without_a_scale_leaves_the_depth_statistics_alone() {
+    let recon = demo_with_depth_statistics();
+    let rot = RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(&V3::y_axis(), 1.1));
+    for transform in [
+        Se3Transform::new(rot, V3::zeros(), 1.0),
+        Se3Transform::new(RotQuaternion::identity(), V3::new(5.0, -2.0, 1.0), 1.0),
+    ] {
+        let out = recon.apply_se3_transform(&transform);
+        for i in 0..recon.image_table.images.len() {
+            assert_eq!(depth_lengths(&recon, i), depth_lengths(&out, i));
+        }
+        assert_eq!(
+            recon.image_table.depth_histogram_counts,
+            out.image_table.depth_histogram_counts
+        );
+    }
+}
+
 #[test]
 fn subset_keeping_all_images_carries_the_patch_frame() {
     let recon = demo_with_patches();

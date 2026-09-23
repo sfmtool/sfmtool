@@ -1265,17 +1265,6 @@ impl AppState {
         }
     }
 
-    /// Return a node to its own frame.
-    pub fn reset_node_transform(&mut self, id: ReconId) {
-        let Some(node) = self.scene.iter_mut().find(|n| n.id == id) else {
-            return;
-        };
-        node.transform = sfmtool_core::Se3Transform::identity();
-        let label = node.label.clone();
-        self.action_log
-            .record(Kind::Scene, format!("Reset transform of {label}"));
-    }
-
     /// Look up a loaded node by id.
     pub fn node(&self, id: ReconId) -> Option<&SceneNode> {
         node_by_id(&self.scene, id)

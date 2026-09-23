@@ -160,6 +160,9 @@ pub struct SceneGraphResponse {
     pub align_node: Option<(ReconId, ReconId, AlignOptions)>,
     /// `Reset Transform` chosen — return this node to its own frame.
     pub reset_transform: Option<ReconId>,
+    /// `Bake Transform` chosen: write this node's display transform into its
+    /// reconstruction and return it to its own frame, as one version.
+    pub bake_transform: Option<ReconId>,
     /// `Convert to Embedded Patches` chosen from a reconstruction's context
     /// menu: give every point a patch frame and carry each observation's
     /// keypoint inline, as the node's next version. A bulk edit, and a long

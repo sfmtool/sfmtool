@@ -19,12 +19,16 @@ it and costs the size of the edit; a bulk edit -- one that changes the image
 table or the structure wholesale -- produces a new base, sharing the two heavy
 columns with the old one when it did not touch them.
 
-A version is a **pair**: that value, and the node's **bench** as it stood beside
+A version has three halves: that value; the node's **bench** as it stood beside
 it -- the things being worked on but not yet written into the reconstruction
-([bench.md](bench.md)). A document edit produces the next version with the same
-bench, a bench step produces it with the same value, and one step, the commit of
-a bench track, changes both. One cursor therefore walks both, and the person
-never has to know which of their steps touched the file.
+([bench.md](bench.md)); and the **display transform** the node was drawn under
+([scene-graph.md](scene-graph.md) § "The transform"). A document edit produces
+the next version with the same bench and transform, a bench step with the same
+value and transform, and a **reframe** with the same value and bench. The commit
+of a bench track states the value and the bench, and the bake of a transform
+states all three ([edits/bake-transform.md](edits/bake-transform.md)). One
+cursor therefore walks all three, and the person never has to know which of
+their steps touched the file.
 
 This spec describes what a node holds, the two kinds of edit, and how the
 renderer notices a change. The cursor's own semantics -- undo, redo, truncation,
@@ -37,9 +41,9 @@ value type under all of it is
 
 The node is [`SceneNode`](../../crates/sfm-explorer/src/scene.rs)
 ([scene-graph.md](scene-graph.md)). Its identity -- the `ReconId`, the label, the
-path, the eyes, the tint, the transform -- belongs to the node and survives every
-edit; what changes is the value it shows. That value lives in a `History`, in
-[document.rs](../../crates/sfm-explorer/src/document.rs).
+path, the eyes, the tint -- belongs to the node and survives every edit; what
+changes is the value it shows and the transform it is drawn under. Both live in
+a `History`, in [document.rs](../../crates/sfm-explorer/src/document.rs).
 
 ```rust
 pub struct History { /* versions, cursor, maps, the version on disk */ }
@@ -50,8 +54,12 @@ pub struct Version {
     pub at: jiff::Timestamp,
     /// `None` once the budget has released it.
     pub value: Option<EditedReconstruction>,
-    /// The other half of the pair, kept whether or not the value is.
+    /// The bench beside the value, kept whether or not the value is.
     pub bench: Arc<Bench>,
+    /// The display transform in force when the version was made: view state
+    /// the timeline remembers, never written, never hashed, and no part of
+    /// what `is_dirty` compares. Kept whether or not the value is.
+    pub transform: Se3Transform,
     /// The version whose document half this one shares, which is itself for a
     /// version that changed it.
     pub document_serial: VersionSerial,
@@ -62,17 +70,26 @@ impl History {
     pub fn new(base: SfmrReconstruction, label: impl Into<String>) -> Self;
     pub fn current(&self) -> &EditedReconstruction;
     pub fn current_bench(&self) -> &Arc<Bench>;
+    /// The display transform the node is drawn under: the one on the version
+    /// at the cursor.
+    pub fn transform(&self) -> &Se3Transform;
     pub fn current_version(&self) -> &Version;
     pub fn versions(&self) -> &[Version];
-    /// A document edit: the bench at the cursor is carried along.
+    /// A document edit: the bench and the transform at the cursor are carried
+    /// along.
     pub fn push(&mut self, value: EditedReconstruction, map: PointMap,
                 label: impl Into<String>) -> VersionSerial;
-    /// A bench step, and a commit, which states both halves
-    /// ([bench.md](bench.md)).
+    /// A bench step ([bench.md](bench.md)).
     pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>)
         -> VersionSerial;
+    /// A reframe: the transform stated, the value and the bench carried.
+    pub fn push_transform(&mut self, transform: Se3Transform,
+                          label: impl Into<String>) -> VersionSerial;
+    /// As many of the three halves as the step changed: `None` carries the one
+    /// at the cursor. A commit states two, a bake all three.
     pub fn push_pair(&mut self, value: Option<EditedReconstruction>,
-                     bench: Arc<Bench>, map: PointMap, label: impl Into<String>,
+                     bench: Arc<Bench>, transform: Option<Se3Transform>,
+                     map: PointMap, label: impl Into<String>,
                      created: Option<CreatedPoints>) -> VersionSerial;
     /// Whether the **document** half at the cursor is not the one on disk.
     pub fn is_dirty(&self) -> bool;
@@ -96,9 +113,32 @@ impl History {
 ```
 
 Node identity is the node's, not the value's: the `ReconId` names the node
-across every version, and the tint, the eyes, the transform, the solo, the
-selected reconstruction and the MCP label addressing all keep working through an
-edit without re-pointing. Nothing re-reads a node in place, either: `Open` on a
+across every version, and the tint, the eyes, the solo, the selected
+reconstruction and the MCP label addressing all keep working through an edit
+without re-pointing.
+
+**The display transform is the third half of a version**, and its rules follow
+from the one that put the bench there: a bake that pushed the transformed value
+and left the transform to be reset beside it would undo into a frame that is
+neither the one before the bake nor the one after.
+
+- **Every push captures the transform in force.** `push_pair` reads it off the
+  cursor whenever the step does not state one, so a point deletion records the
+  framing it was made under and no caller has to remember to pass it.
+- **A reframe states it and nothing else** (`push_transform`): the value half is
+  `None`, so the version shares its predecessor's document serial and a clean
+  node stays clean; the bench is carried; the map is the empty `Removed`, the
+  identity. Its unshared bytes are a bench step's.
+- **Undo, redo and a jump restore it** in the step that moves the cursor, since
+  `transform()` is read off the version the cursor lands on.
+- **It stays out of the dirty marker, the content hash and every save.** A save
+  writes the value at the cursor, and the value has never heard of the
+  transform, so `is_dirty`, `content_xxh128`, `to_minimal` and the `*` in the
+  tree row and the window title behave exactly as they would without it.
+- **A version whose value the budget released keeps its transform**, beside its
+  label and its map: it is eight floats, and the budget is about values.
+- **The node reads it and never writes it.** `SceneNode::transform()` delegates
+  to the history, so an assignment that skipped the push cannot be written. Nothing re-reads a node in place, either: `Open` on a
 path that is already loaded appends a second node for it, with a history of its
 own, so two nodes over one file are two independent documents.
 
@@ -431,6 +471,13 @@ that a point edit leaves the base the same `Arc` and moves the count by one, tha
 a bulk edit produces a new base with an empty overlay under the same `ReconId`,
 that a refused edit leaves the history alone, and what the Action Log records.
 
+`crates/sfm-explorer/src/display_transform/tests.rs` covers the third half: that
+a reframe is a version that leaves the node clean and shares its predecessor's
+document serial, that an ordinary edit records the framing in force so two undos
+across a reframe and a deletion give the reframed transform and then the
+original, that a reframe truncates the redo tail, and that an undo of a bake
+restores the value and the transform together.
+
 `crates/sfm-explorer/src/scene_renderer/upload/tests.rs` covers the upload path
 against a real `wgpu` device on the `noop` backend: that an unchanged base
 uploads nothing, that a point edit uploads nothing and moves only the mask, that
@@ -449,8 +496,11 @@ one of them is greyed.
   under a panel that reports what they are doing
   ([background-tasks.md](background-tasks.md)), and the value
   semantics above are what make that safe.
-- Undo of display state -- the eyes, the tint, the node transform, the panel
-  layout. Those are not versions of the reconstruction.
+- Undo of display state -- the eyes, the tint, the solo, the panel layout.
+  Those are not versions of the reconstruction. The display transform is the
+  one exception, and it is one because a bake crosses it into the value: it is
+  on the timeline so that an undo of the bake can put the framing back with the
+  data.
 - Persisting the history. Saving a node is proposed in
   [`../drafts/sfm-explorer-editing.md`](../drafts/sfm-explorer-editing.md); a
   save writes the value, not the versions.

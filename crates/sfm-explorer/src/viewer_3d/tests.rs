@@ -24,7 +24,10 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{Camera, SfmrReconstruction};
 
 use super::bench_track::{self, BenchGesture, HANDLE_HIT_RADIUS};
-use super::{Viewer3D, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL};
+use super::{
+    MenuTarget, Viewer3D, ALIGN_NORMAL_TO_Z_LABEL, EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL,
+    SET_TO_ORIGIN_LABEL, TRANSLATE_TO_ORIGIN_LABEL, TRANSLATE_TO_XY_PLANE_LABEL,
+};
 use crate::bench::geometry::{self, PatchEdit};
 use crate::platform::ScrollInput;
 use crate::scene::{PointRef, ReconId, SceneNode};
@@ -106,7 +109,7 @@ fn run_bench_frame(
                 node: node.id,
                 track,
                 edited: node.edited(),
-                transform: &node.transform,
+                transform: node.transform(),
                 selected,
                 busy,
             });
@@ -230,7 +233,7 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
         Some(PickTarget::Point(point)),
         None,
     );
-    assert_eq!(viewer.menu_point, Some(point));
+    assert_eq!(viewer.menu_target, Some(MenuTarget::Point(point)));
     // The gesture asks for the point to be selected, which is `dock.rs`'s to
     // carry out, and it asks before any entry is chosen.
     assert_eq!(viewer.point_menu, Some(PointGesture::Opened(point)));
@@ -246,7 +249,7 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
 fn a_right_click_on_nothing_opens_no_menu() {
     let (mut viewer, ctx, mut state) = settled();
     right_click(&mut viewer, &ctx, &mut state, None, None);
-    assert_eq!(viewer.menu_point, None);
+    assert_eq!(viewer.menu_target, None);
     assert_eq!(viewer.point_menu, None);
     assert!(viewer.menu_entry_rects.is_empty());
 }
@@ -287,7 +290,7 @@ fn a_right_drag_is_the_zoom_and_puts_no_menu_up() {
         None,
     );
     run_frame(&mut viewer, &ctx, &mut state, Vec::new(), away, pick, None);
-    assert_eq!(viewer.menu_point, None);
+    assert_eq!(viewer.menu_target, None);
     assert_eq!(viewer.point_menu, None);
 }
 
@@ -1766,4 +1769,180 @@ fn the_arrowheads_cursor_is_the_gesture_it_is_about_to_make() {
         // the point: the two are one gesture about two axes.
         assert_eq!(cursor, cursor_across(radius));
     }
+}
+
+// ---- The patch menu --------------------------------------------------------
+
+/// Somewhere inside the square and on none of its handles: halfway from the
+/// centre to a corner, which on a square this size is tens of pixels from the
+/// dot, the corners, the edges and the circles clustered at the centre.
+fn inside_the_square(staged: &Staged) -> egui::Pos2 {
+    let (centre, corner) = (dot(staged), corner(staged, 0));
+    centre + (corner - centre) * 0.5
+}
+
+/// Right-click at `at` with the staged track handed in and `pick` reported
+/// under the cursor, then settle a frame with the pointer somewhere else, so
+/// what is asserted is what the latch kept rather than what is under the
+/// pointer.
+fn right_click_on_bench(
+    staged: &mut Staged,
+    track: Option<&EditableTrack>,
+    at: egui::Pos2,
+    pick: Option<PickTarget>,
+    busy: Option<&str>,
+) {
+    staged.viewer.point_menu = None;
+    for (events, pointer) in [
+        (vec![egui::Event::PointerMoved(at)], at),
+        (vec![secondary(at, true)], at),
+        (vec![secondary(at, false)], at),
+        (vec![egui::Event::PointerMoved(EMPTY)], EMPTY),
+        (Vec::new(), EMPTY),
+    ] {
+        run_bench_frame(
+            &mut staged.viewer,
+            &staged.ctx,
+            &mut staged.state,
+            events,
+            pointer,
+            pick,
+            busy,
+            track.map(|track| (track, None, busy.is_some())),
+            &mut staged.rect,
+        );
+    }
+}
+
+/// The entries the menu laid out on the last frame, by label.
+fn offered(viewer: &Viewer3D) -> Vec<&'static str> {
+    viewer
+        .menu_entry_rects
+        .iter()
+        .map(|(text, _)| *text)
+        .collect()
+}
+
+#[test]
+fn a_right_click_on_the_square_opens_the_patch_menu_even_over_a_point() {
+    let mut staged = staged();
+    let track = staged.track();
+    let at = inside_the_square(&staged);
+    let point = PointRef::new(staged.id, 7);
+    right_click_on_bench(
+        &mut staged,
+        Some(&track),
+        at,
+        Some(PickTarget::Point(point)),
+        None,
+    );
+    assert_eq!(
+        staged.viewer.menu_target,
+        Some(MenuTarget::Patch(staged.id))
+    );
+    assert_eq!(
+        staged.viewer.point_menu, None,
+        "the point under it was not named"
+    );
+    // Laid out with the pointer long gone from the square: the latch held.
+    assert_eq!(
+        offered(&staged.viewer),
+        [
+            SET_TO_ORIGIN_LABEL,
+            ALIGN_NORMAL_TO_Z_LABEL,
+            TRANSLATE_TO_ORIGIN_LABEL,
+            TRANSLATE_TO_XY_PLANE_LABEL,
+        ]
+    );
+}
+
+#[test]
+fn a_right_click_on_a_point_away_from_the_square_opens_the_point_menu() {
+    let mut staged = staged();
+    let track = staged.track();
+    let point = PointRef::new(staged.id, 7);
+    right_click_on_bench(
+        &mut staged,
+        Some(&track),
+        EMPTY,
+        Some(PickTarget::Point(point)),
+        None,
+    );
+    assert_eq!(staged.viewer.menu_target, Some(MenuTarget::Point(point)));
+    assert_eq!(
+        offered(&staged.viewer),
+        [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]
+    );
+}
+
+#[test]
+fn a_right_click_on_empty_space_beside_the_square_opens_nothing() {
+    let mut staged = staged();
+    let track = staged.track();
+    right_click_on_bench(&mut staged, Some(&track), EMPTY, None, None);
+    assert_eq!(staged.viewer.menu_target, None);
+    assert!(staged.viewer.menu_entry_rects.is_empty());
+}
+
+#[test]
+fn with_no_active_track_the_square_is_not_there_to_click() {
+    let mut staged = staged();
+    let at = inside_the_square(&staged);
+    staged.viewer.bench_figure = None;
+    right_click_on_bench(&mut staged, None, at, None, None);
+    assert_eq!(staged.viewer.menu_target, None);
+    assert!(staged.viewer.menu_entry_rects.is_empty());
+}
+
+#[test]
+fn choosing_a_patch_entry_reports_the_node_and_the_reframe() {
+    let mut staged = staged();
+    let track = staged.track();
+    let at = inside_the_square(&staged);
+    right_click_on_bench(&mut staged, Some(&track), at, None, None);
+    let rect = staged
+        .viewer
+        .menu_entry_rects
+        .iter()
+        .find(|(text, _)| *text == ALIGN_NORMAL_TO_Z_LABEL)
+        .map(|(_, rect)| *rect)
+        .expect("the entry is up");
+    let on = rect.center();
+    for events in [
+        vec![egui::Event::PointerMoved(on)],
+        vec![primary(on, true)],
+        vec![primary(on, false)],
+    ] {
+        run_bench_frame(
+            &mut staged.viewer,
+            &staged.ctx,
+            &mut staged.state,
+            events,
+            on,
+            None,
+            None,
+            Some((&track, None, false)),
+            &mut staged.rect,
+        );
+    }
+    assert_eq!(
+        staged.viewer.patch_menu,
+        Some((
+            staged.id,
+            crate::display_transform::PatchReframe::AlignNormalToZ
+        ))
+    );
+}
+
+#[test]
+fn a_busy_node_greys_the_patch_entries() {
+    let mut staged = staged();
+    let track = staged.track();
+    let at = inside_the_square(&staged);
+    right_click_on_bench(&mut staged, Some(&track), at, None, Some("busy"));
+    assert_eq!(
+        staged.viewer.menu_target,
+        Some(MenuTarget::Patch(staged.id))
+    );
+    assert_eq!(offered(&staged.viewer).len(), 4, "greyed, not hidden");
 }

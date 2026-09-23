@@ -139,6 +139,24 @@ pub(crate) enum Command {
         reconstruction_label: String,
         change: DisplayChange,
     },
+    /// Set one node's display transform outright, as the three pieces of a
+    /// similarity the wire carries it in.
+    SetReconstructionTransform {
+        reconstruction_label: String,
+        rotation_wxyz: [f64; 4],
+        translation: [f64; 3],
+        scale: f64,
+    },
+    /// Set it from the bench's active patch, in one of the four ways the
+    /// viewport's patch menu offers.
+    SetReconstructionTransformFromPatch {
+        reconstruction_label: String,
+        mode: crate::display_transform::PatchReframe,
+    },
+    /// Write the display transform into the node's data, as one version.
+    BakeReconstructionTransform {
+        reconstruction_label: String,
+    },
     SetSolo {
         reconstruction_label: Option<String>,
     },
@@ -1047,6 +1065,32 @@ pub(crate) fn apply_with_window(
             state,
             &reconstruction_label,
             change,
+        )),
+        Command::SetReconstructionTransform {
+            reconstruction_label,
+            rotation_wxyz,
+            translation,
+            scale,
+        } => done(edit::set_reconstruction_transform(
+            state,
+            &reconstruction_label,
+            rotation_wxyz,
+            translation,
+            scale,
+        )),
+        Command::SetReconstructionTransformFromPatch {
+            reconstruction_label,
+            mode,
+        } => done(edit::set_reconstruction_transform_from_patch(
+            state,
+            &reconstruction_label,
+            mode,
+        )),
+        Command::BakeReconstructionTransform {
+            reconstruction_label,
+        } => done(edit::bake_reconstruction_transform(
+            state,
+            &reconstruction_label,
         )),
         Command::SetSolo {
             reconstruction_label,

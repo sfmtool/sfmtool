@@ -304,17 +304,6 @@ pub struct SceneNode {
     /// and the track orange stay themselves (see the shaders).
     pub tint: NodeTint,
 
-    /// Similarity transform (uniform scale · rotation · translation) mapping
-    /// this node's native coordinates into the shared world space. Identity on
-    /// load, set by the Scene panel's `Align to…`.
-    ///
-    /// **View state only**: it reaches the GPU as the per-recon `model` matrix
-    /// and the CPU world-space paths that mirror it (track rays, bounds,
-    /// camera-view entry), and never touches the [`SfmrReconstruction`] in
-    /// memory nor the `.sfmr` on disk. Baking a transform into a file stays
-    /// `sfm xform`'s job.
-    pub transform: Se3Transform,
-
     /// The thumbnails this node draws, or `None` when it has none to draw.
     ///
     /// The node's, not the value's: the file's own column when it carries
@@ -341,7 +330,6 @@ impl SceneNode {
             show_patches: true,
             show_points_at_infinity: true,
             tint: NodeTint::Original,
-            transform: Se3Transform::identity(),
             display_thumbnails,
         }
     }
@@ -461,15 +449,34 @@ impl SceneNode {
             && r.point_set.patch_bitmaps_y_x_rgba.is_some()
     }
 
+    /// The node's **display transform**: the similarity (uniform scale ·
+    /// rotation · translation) mapping its native coordinates into the shared
+    /// world space. Identity on load; set by `Align to…`, by the viewport's
+    /// patch menu and by the wire, and returned to the identity by `Reset
+    /// Transform` and by `Bake Transform`.
+    ///
+    /// Held on the version at the cursor, so undo and redo walk it with the
+    /// value and the bench, and read-only here: every change to it is a version
+    /// ([`crate::document::History::push_transform`]). It reaches the GPU as
+    /// the per-recon `model` matrix and the CPU world-space paths that mirror
+    /// it (track rays, bounds, camera-view entry), and never touches the
+    /// [`SfmrReconstruction`] nor the `.sfmr` on disk; the bake is the one
+    /// operation that writes it into the value.
+    pub fn transform(&self) -> &Se3Transform {
+        self.history.transform()
+    }
+
     /// Whether this node has been moved out of its own frame — i.e. its
     /// transform is not the identity.
     ///
-    /// Compared exactly rather than with a tolerance: the only two ways a
-    /// transform is set are `Align to…` (which never returns an exact identity
-    /// by accident) and `Reset Transform` (which assigns
-    /// [`Se3Transform::identity`] itself).
+    /// Compared exactly rather than with a tolerance: a fit never returns an
+    /// exact identity by accident, and a reset and a bake state
+    /// [`Se3Transform::identity`] themselves. A patch reframe followed by a bake
+    /// and the same reframe again lands on the identity only to rounding, so
+    /// such a node may still report `true`; an epsilon here would cost more
+    /// than that wart does.
     pub fn has_transform(&self) -> bool {
-        let t = &self.transform;
+        let t = self.transform();
         t.scale != 1.0
             || t.translation != nalgebra::Vector3::zeros()
             || t.rotation != sfmtool_core::RotQuaternion::identity()
@@ -546,7 +553,7 @@ pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
     edited
         .live_indexes()
         .filter_map(|i| edited.point(i))
-        .map(|view| node.transform.apply_to_point(&view.point().position))
+        .map(|view| node.transform().apply_to_point(&view.point().position))
         .collect()
 }
 
@@ -562,7 +569,7 @@ pub fn camera_world_centres(node: &SceneNode, index: usize) -> Vec<nalgebra::Poi
         .images
         .iter()
         .filter(|image| image.camera_index as usize == index)
-        .map(|image| node.transform.apply_to_point(&image.camera_center()))
+        .map(|image| node.transform().apply_to_point(&image.camera_center()))
         .collect()
 }
 

@@ -18,11 +18,29 @@ Edit History panel the list is read and walked in. What
 a version *is*, and how an edit is applied, is
 [document-model.md](document-model.md).
 
-A version is a pair -- the reconstruction value and the node's **bench**
-([bench.md](bench.md)) -- and everything below holds for both halves. A bench
-step is a version like any other: it appends, it truncates a redo tail, undo and
-redo walk it, and its map is the identity because point indexes are untouched.
-The one question asked of the document half alone is whether the node is dirty.
+A version has three halves, and everything below holds for all three: the
+reconstruction value, the node's **bench** ([bench.md](bench.md)), and the
+**display transform** the node is drawn under ([scene-graph.md](scene-graph.md)
+§ "The transform"). A bench step is a version like any other: it appends, it
+truncates a redo tail, undo and redo walk it, and its map is the identity
+because point indexes are untouched. So is a **reframe**, a step that sets the
+display transform and nothing else: `Align to…`, `Reset Transform`, the 3D
+viewport's patch menu and the wire's two transform setters each push one, and
+the panel lists it under the sentence the Action Log recorded. The one question
+asked of the document half alone is whether the node is dirty, which is why a
+reframe leaves the node clean.
+
+**Undo, redo and the panel's jump restore the framing** of the version they land
+on, in the step that moves the cursor: the node's transform is read off that
+version, so an undo of a bake puts back the value and the frame it was drawn in
+together, and the picture does not move.
+
+**A reframe truncates the redo tail**, because every push does. Undoing an edit,
+re-aiming the scene and then asking for a redo finds nothing to redo; a rule
+under which some pushes truncated and others did not would be harder to predict
+than this one. A nudge on the bench already spends a redo tail the same way.
+The orbit, the pan and the zoom are the viewport camera's and are versions of
+nothing.
 
 ## The cursor
 
@@ -366,6 +384,13 @@ a run of undos leaves it at across a point edit and a renumbering, one log entry
 naming the two serials, and the refusals -- a released version, a version behind
 a released one, the cursor's own version, and a serial belonging to another
 node -- each leaving the cursor and the log untouched.
+
+`crates/sfm-explorer/src/display_transform/tests.rs` covers the framing on the
+timeline: an undo of a reframe returning the transform before it, two undos
+across a reframe and a point deletion giving the reframed transform and then the
+original, a reframe after an undo leaving nothing to redo and the node clean,
+and an undo and a redo across a bake moving the value and the transform together
+while the picture holds still.
 
 `crates/sfm-explorer/src/edit_history_panel/tests.rs` runs the panel through
 `Context::run_ui` and reads the strings it painted: the rows in oldest-first

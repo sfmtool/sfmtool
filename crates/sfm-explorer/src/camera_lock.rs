@@ -175,8 +175,9 @@ pub(crate) fn pending_pose(viewer: &Viewer3D, node: &SceneNode) -> Se3Transform 
     // the node is *drawn* in, and `transformed_pose` builds that as
     // `q_node · q_transform⁻¹`; multiplying it back by the transform's rotation
     // is the division.
-    let cam_from_world = viewer.camera.camera.orientation * *node.transform.rotation.as_nalgebra();
-    let centre = match node.transform.inverse() {
+    let cam_from_world =
+        viewer.camera.camera.orientation * *node.transform().rotation.as_nalgebra();
+    let centre = match node.transform().inverse() {
         Ok(inverse) => inverse.apply_to_point(&viewer.camera.camera.position),
         Err(_) => viewer.camera.camera.position,
     };
@@ -451,8 +452,8 @@ pub(crate) fn background_transform(viewer: &Viewer3D, node: &SceneNode) -> Optio
     let rotation = (world_from_camera_stored * viewer.camera.camera.orientation).inverse();
     Some(Se3Transform::new(
         RotQuaternion::from_nalgebra(rotation),
-        node.transform.translation,
-        node.transform.scale,
+        node.transform().translation,
+        node.transform().scale,
     ))
 }
 
@@ -483,9 +484,9 @@ pub(crate) fn banner_lines(
 /// where the camera is, and the lens is not what is being moved.
 fn snap_to(viewer: &mut Viewer3D, pose: &Se3Transform, node: &SceneNode) {
     let cam_from_world =
-        pose.rotation.as_nalgebra().inverse() * node.transform.rotation.as_nalgebra().inverse();
+        pose.rotation.as_nalgebra().inverse() * node.transform().rotation.as_nalgebra().inverse();
     let centre = node
-        .transform
+        .transform()
         .apply_to_point(&Point3::from(pose.translation));
     viewer.cancel_transition();
     viewer.camera.camera.position = centre;

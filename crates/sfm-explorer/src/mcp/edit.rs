@@ -480,6 +480,46 @@ pub(super) fn background_reply(
     }))))
 }
 
+// ── The display transform ───────────────────────────────────────────────
+
+/// `set_reconstruction_transform`: one node's display transform set outright,
+/// as a reframe.
+///
+/// The same call the Scene panel's `Reset Transform` makes when the transform
+/// is the identity, so the log reads the same whoever asked.
+pub(super) fn set_reconstruction_transform(
+    state: &mut AppState,
+    label: &str,
+    rotation_wxyz: [f64; 4],
+    translation: [f64; 3],
+    scale: f64,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let transform = sfmtool_core::Se3Transform::new(
+        sfmtool_core::RotQuaternion::from_wxyz_array(rotation_wxyz),
+        nalgebra::Vector3::from_row_slice(&translation),
+        scale,
+    );
+    edited(state, id, |state| state.set_node_transform(id, transform))
+}
+
+/// `set_reconstruction_transform_from_patch`: the viewport patch menu's four
+/// entries, as one tool with a `mode`.
+pub(super) fn set_reconstruction_transform_from_patch(
+    state: &mut AppState,
+    label: &str,
+    mode: crate::display_transform::PatchReframe,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    edited(state, id, |state| state.reframe_on_patch(id, mode))
+}
+
+/// `bake_reconstruction_transform`: the Scene panel's `Bake Transform`.
+pub(super) fn bake_reconstruction_transform(state: &mut AppState, label: &str) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    edited(state, id, |state| state.bake_node_transform(id))
+}
+
 // ── What an edit and a cursor move answer with ──────────────────────────
 
 /// Run one edit and report the version it pushed.

@@ -731,6 +731,25 @@ impl Handles {
             .map(|_| Handle::Normal)
     }
 
+    /// Whether `pos` is anywhere on the square: on one of its handles, or
+    /// inside the quad its four projected corners bound.
+    ///
+    /// The reach a context menu takes, where [`Handles::hit`] is the reach a
+    /// drag takes: a person right-clicking the patch aims at the square and not
+    /// at its furniture. The corners are in [`CORNERS`] order, so the quad splits
+    /// into two triangles along one diagonal with no sorting. A square seen
+    /// edge-on is a segment, and its interior is nothing to aim at; the handles
+    /// still answer.
+    pub(crate) fn covers(&self, pos: Pos2) -> bool {
+        if self.hit(pos).is_some() {
+            return true;
+        }
+        let [Some(a), Some(b), Some(c), Some(d)] = self.corners else {
+            return false;
+        };
+        in_triangle(pos, a, b, c) || in_triangle(pos, a, c, d)
+    }
+
     /// The cursor `handle` asks for, with the square's own orientation **on
     /// screen** deciding which resize cursor an edge or a corner takes.
     ///
@@ -808,6 +827,20 @@ impl Handles {
             .fold(egui::Vec2::ZERO, |sum, at| sum + at.to_vec2());
         (!placed.is_empty()).then(|| (sum / placed.len() as f32).to_pos2())
     }
+}
+
+/// Whether `p` lies in the triangle `abc`, edges included, in panel px.
+///
+/// Every edge's cross product has to agree in sign with the others. A
+/// triangle with no area bounds nothing, which is what the edge-on square
+/// reduces to.
+fn in_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
+    let cross = |o: Pos2, x: Pos2, y: Pos2| (x - o).x * (y - o).y - (x - o).y * (y - o).x;
+    if cross(a, b, c).abs() < 1e-3 {
+        return false;
+    }
+    let sides = [cross(a, b, p), cross(b, c, p), cross(c, a, p)];
+    !(sides.iter().any(|s| *s < 0.0) && sides.iter().any(|s| *s > 0.0))
 }
 
 /// One of the bench's violets as the pass takes it.

@@ -42,10 +42,19 @@ impl AppState {
     /// never touched, and on any failure neither is the source: the transform is
     /// left exactly as it was and only the status line changes.
     ///
+    /// The answer is a **reframe**, one version of the source whose value is
+    /// untouched, so `Ctrl+Z` steps back out of it and the node does not go
+    /// dirty. A source a background task holds is refused, since a version
+    /// cannot be pushed onto it.
+    ///
     /// The fit runs synchronously. By-cameras is trivially small; by-points is a
     /// bounded RANSAC over the correspondences (see [`crate::align`]).
     pub fn align_node(&mut self, source: ReconId, target: ReconId, options: AlignOptions) {
         if source == target {
+            return;
+        }
+        if let Some(why) = self.busy_refusal(source) {
+            self.action_log.fail(Kind::Scene, why);
             return;
         }
         let (Some(si), Some(ti)) = (
@@ -63,9 +72,11 @@ impl AppState {
                 // `compose` applies the receiver first: the fit takes the source
                 // into the target's own coordinates, then the target's transform
                 // takes those into world space.
-                self.scene[si].transform = fit.transform.compose(&self.scene[ti].transform);
+                let next = fit.transform.compose(self.scene[ti].transform());
                 let message = align::success_message(&source_label, &target_label, &fit);
-                self.action_log.record(Kind::Scene, message);
+                if let Err(why) = self.push_reframe(source, next, message) {
+                    self.action_log.fail(Kind::Scene, why);
+                }
             }
             Err(reason) => {
                 let message = align::failure_message(&source_label, &target_label, &reason);

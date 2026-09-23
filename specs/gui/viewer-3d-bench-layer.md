@@ -434,6 +434,128 @@ The tangent plane is never edge-on, so the plane refusal cannot fire and the
 normal's is always on. The one refusal a track at infinity has is a pointer more
 than 85 degrees from the bearing, where the tangent point runs off to infinity.
 
+## The patch menu
+
+A right-click on the square opens a menu of four entries that put the world's
+frame onto the patch, so a wall, a table or a floor in the scene can be made the
+ground by eye. Each sets the node's **display transform**
+([scene-graph.md](scene-graph.md) § "The transform") and nothing else: it pushes
+one **reframe**, a version whose value half is untouched, labelled with the
+sentence the Action Log records. The node does not go dirty, nothing is written,
+and `Ctrl+Z` or `Reset Transform` steps back out of it; `Bake Transform` is what
+keeps it ([edits/bake-transform.md](edits/bake-transform.md)).
+
+The entries are
+[`display_transform::PatchReframe`](../../crates/sfm-explorer/src/display_transform.rs),
+applied by `AppState::reframe_on_patch`, which the wire's
+`set_reconstruction_transform_from_patch` also calls. Their labels are
+`pub const`s beside `EDIT_ON_BENCH_LABEL` in
+[viewer_3d/mod.rs](../../crates/sfm-explorer/src/viewer_3d/mod.rs), so the menu
+and the tests that aim at it cannot drift.
+
+| Entry | What it does | Hover text |
+|---|---|---|
+| **Set to Origin** | The patch's frame becomes the world frame: `X` along `u`, `Y` along `v`, `Z` along the outward normal, and the centre at the origin. | "Draw the scene in this patch's own frame: its centre at the origin, its normal along +Z." |
+| **Align Normal to Z** | Tips the scene about the patch's centre by the shortest rotation taking its normal to `+Z`. Position and heading are otherwise untouched. | "Tip the scene so this patch faces +Z, turning about the patch so it stays where it is." |
+| **Translate to Origin** | Moves the scene so the patch's centre is at the origin. Orientation untouched. | "Move the scene so this patch's centre is at the origin." |
+| **Translate to XY Plane** | Moves the scene along world `Z` alone, so the patch's centre lands at `z = 0`. | "Drop the scene along Z so this patch's centre sits on the ground plane." |
+
+Once the normal is `+Z`, **Translate to XY Plane** puts the patch's plane exactly
+on the `XY` plane, which makes **Align Normal to Z** followed by it the two-step
+way to lay a surface on the ground without moving it sideways. The log reads
+`Set run_b to the frame of patch tk104`, `Aligned run_b's patch tk104 normal to
++Z`, `Translated run_b's patch tk104 to the origin` and `Translated run_b's
+patch tk104 to the XY plane`, each followed by its version transition; the
+active item's label names the patch because it is what the Bench group and Track
+View show.
+
+### Which patch, and which node
+
+The square is the placement of the active item on the bench of
+`AppState::selected_recon`, at the track stage, and the viewport draws no other,
+so the patch a menu opens on is singular and so is the node it acts on. A
+cluster-stage item, a track with no patch and an empty bench draw no square and
+offer no menu. A track at infinity draws its square, and the four entries are
+drawn greyed on the hover text saying its patch is a bearing with no place:
+"the patch centre becomes the origin" names nothing there. A busy node greys
+all four on its own sentence, as every entry that makes a version is greyed.
+
+### One menu, with the patch winning
+
+The point menu and the patch menu hang off the one `egui::Response` the viewport
+produces, and `context_menu::on_secondary_click` takes the popup's identity from
+that response, so they are **one menu with two sets of entries**, decided when
+the click lands and latched in `Viewer3D::menu_target` (`MenuTarget::Patch` or
+`MenuTarget::Point`). The latch is kept because the entries are laid out on
+frames after the click, by which time the pointer has moved off whatever it
+named; a secondary click that claims neither clears it.
+
+**The patch wins.** On the frame of the click the figure's hit test runs first,
+and when it claims the pointer the pick is not consulted: the square is drawn on
+top of the cloud, and a right-click on it means the square, for the reason a
+primary click one of its handles catches does not reach the points under it.
+
+The reach is `Handles::covers` rather than `Handles::hit`. A handle's reach is a
+few pixels, which suits a drag and not a menu, since a person right-clicking the
+patch aims at the square and not at its furniture. `covers` is any handle plus
+the quad the four projected corners bound, split into two triangles along one
+diagonal; the corners are in `OrientedPatch::boundary` order, so nothing is
+sorted. A square seen edge-on is a segment and covers nothing inside, and its
+handles still answer.
+
+### What each entry computes
+
+Every entry reads the patch **in world coordinates**, after the transform the
+node already carries. With that transform `T0 = (R0, t0, s0)` and the placement
+in the node's own coordinates, `c = T0(c_own)`, `u = R0 u_own`,
+`v = R0 v_own` and `n = u × v`. The scale is dropped from the axes: `Se3Transform`
+carries a uniform scale, which stretches no direction relative to another, so
+the three stay orthonormal and right-handed. `PatchFrame::of` squares them up
+besides, keeping `u` and rebuilding `v` from the normal, because a stored frame
+is orthonormal only to the `f32` it was read from and a matrix that is not quite
+a rotation makes a quaternion that is not quite unit.
+
+With `M = [u v n]` as columns, `M⁻¹ = Mᵀ` and each entry is a map `A` acting in
+world space with `scale = 1`:
+
+| Entry | `rotation` | `translation` |
+|---|---|---|
+| Set to Origin | `Mᵀ` | `−Mᵀ c` |
+| Align Normal to Z | `R_z` | `c − R_z c` |
+| Translate to Origin | identity | `−c` |
+| Translate to XY Plane | identity | `(0, 0, −c_z)` |
+
+**Set to Origin is `Mᵀ` and not `M`.** A world point is
+`p = c + M·(a, b, d)`, so its coordinates on the patch's axes are
+`(a, b, d) = Mᵀ(p − c)`, which is `R = Mᵀ`, `t = −Mᵀc` in `Se3Transform`'s own
+form. `M` is the plausible wrong answer: it is still a rotation, wrong by exactly
+the transpose, and nothing downstream complains.
+
+**Align Normal to Z turns about the patch's centre**, `p' = c + R_z(p − c)`, so
+the surface the person asked to level stays under the cursor and everything else
+tips around it; about the world origin it would swing along an arc of radius
+`|c|`, usually out of view. `R_z` is `UnitQuaternion::rotation_between(n, +Z)`.
+That declines only for a normal at exactly `−Z`, where the half turn's axis is
+not determined, and the fallback is a half turn about the patch's own `u`, which
+takes `n` to `+Z`, leaves `u` alone and sends `v` to `−v`, so the heading a
+person sees in the square survives. A normal a fraction of a degree off `−Z` is
+not a special case: the answer's axis swings, and the patch still ends up facing
+`+Z`, which is what was asked.
+
+**The map composes after the transform the node already carries**, since that
+transform takes the node's coordinates into the world `A` acts on:
+`next = T0.compose(A)`, the shape `Align to…` writes. Applied to the placement's
+own centre it gives `Mᵀ(s0 R0 c_own + t0) − Mᵀc = 0`, and its rotation takes
+`u_own` to `Mᵀu = e_x`. The node keeps the scale it had, which is what "reframe,
+do not resize" means for a node that arrived under a similarity. A reversed
+composition is silent on a node at the identity, which is why every test of the
+four starts from one that is not.
+
+The frame on which an entry is clicked still draws the old figure; the choice is
+drained after the frame, and the next frame draws the figure from the new
+transform, which is the cadence every menu-driven change in the viewport runs
+on.
+
 ## Parameters
 
 Every value here is a constant of the module named beside it, not a setting.
@@ -513,7 +635,26 @@ moves the patch along its normal and orbits nothing; a view down the normal
 refuses the segment where the plane handles are at their best; an arrowhead drag
 tilts the patch and orbits nothing; an arrowhead close to the eye takes the
 press rather than orbiting; and the arrowhead's gesture is chosen at the press
-and does not change under it.
+and does not change under it. The patch menu is driven the same way: a
+secondary click inside the square opens the patch menu even with a point picked
+under it, and the four entries are laid out, named exactly, with the pointer
+already moved off the square, which is the latch holding; a secondary click on a
+point away from the square opens the point menu; one on empty space opens
+nothing; with no figure there is no square to click; choosing an entry reports
+the node and the reframe; and a busy node greys the four rather than hiding
+them.
+
+`display_transform/tests.rs` asserts what the four entries leave, on the
+resulting frame rather than on the transform's components, from a node already
+carrying a similarity with a scale of `2`: after Set to Origin the patch's world
+centre is the origin and its world `u`, `v`, `n` are `e_x`, `e_y`, `e_z` to
+`1e-12`; after Align Normal to Z its centre is where it was and its normal is
+`+Z`, including for a patch hundreds of units from the origin; a normal at
+exactly `−Z` (built directly, so `rotation_between` really declines) comes out at
+`+Z` with `u` kept and `v` negated; Translate to XY Plane touches `z` alone and
+leaves the rotation and the scale; Align Normal to Z then Translate to XY Plane
+puts all four corners on `z = 0`; every entry keeps the node's scale; and a
+bench with nothing active is refused and pushes nothing.
 
 ## Non-goals
 
@@ -524,6 +665,11 @@ and does not change under it.
   tree, or by ticking *Edit* in Track View over a selected point
   ([`track-view.md`](track-view.md)). With nothing active, which a bench holding
   items can be, the layer draws nothing.
+- **Putting the viewport on the patch.** The patch menu moves the world onto the
+  patch; the same geometry read the other way, which would move the viewport
+  camera and leave the reconstruction's frame alone, belongs to the viewport's
+  own vocabulary, and mixing the two in one menu would make its four entries
+  harder to read.
 - **A pick-buffer entry.** Hit-testing is on the CPU, against the figure the
   pass drew projected through the same camera, so occlusion does not enter into
   it: a handle drawn through the point cloud is grabbed like any other. The

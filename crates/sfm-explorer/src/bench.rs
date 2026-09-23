@@ -1046,6 +1046,7 @@ impl AppState {
         let serial = node.history.push_pair(
             Some(next),
             Arc::new(bench),
+            None,
             report.map.clone(),
             text.clone(),
             created,

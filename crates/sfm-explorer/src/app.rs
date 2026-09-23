@@ -525,7 +525,7 @@ impl App {
                 // it re-derives `length_scale` and re-sizes frustum geometry
                 // exactly as a fresh upload does. The mirror is where that is
                 // noticed: what the bundle held is what was last drawn.
-                transform_changed |= renderer.set_node_transform(node.id, node.transform.clone());
+                transform_changed |= renderer.set_node_transform(node.id, node.transform().clone());
             }
         }
 
@@ -572,7 +572,7 @@ impl App {
                     // is divided by the node's scale — what reaches the screen
                     // is `length_scale` in *world* units, whatever frame the
                     // node was solved in.
-                    let scale = node.transform.scale as f32;
+                    let scale = node.transform().scale as f32;
                     let node_length_scale = if scale > 0.0 && scale.is_finite() {
                         self.state.length_scale / scale
                     } else {
@@ -629,7 +629,7 @@ impl App {
                 // Liveness rather than a bound on the base's rows: a deleted
                 // point draws no rays, and an added one is past that bound.
                 Some((point, node)) if node.edited().point(point.point).is_some() => {
-                    let (id, recon, transform) = (node.id, node.recon(), node.transform.clone());
+                    let (id, recon, transform) = (node.id, node.recon(), node.transform().clone());
                     let edited = node.edited();
                     // Pre-populate SIFT cache for all images in the track
                     // (sift_files only; embedded_patches has no `.sift`
@@ -678,7 +678,7 @@ impl App {
                     // attached to it, so the mesh -- built around the *stored*
                     // pose -- is turned by the model matrix instead of rebuilt.
                     let transform = crate::camera_lock::background_transform(&self.viewer_3d, node)
-                        .unwrap_or_else(|| node.transform.clone());
+                        .unwrap_or_else(|| node.transform().clone());
                     self.scene_renderer
                         .upload_bg_image(device, queue, node.recon(), image);
                     Some(transform)
@@ -925,6 +925,11 @@ impl App {
                 // placeholder dock and be overwritten by the line above.
                 if let Some(request) = viewer_3d.point_menu.take() {
                     app_state.apply_point_gesture(request);
+                }
+                // The patch menu's reframe records its own outcome, refusals
+                // included.
+                if let Some((id, mode)) = viewer_3d.patch_menu.take() {
+                    let _ = app_state.reframe_on_patch(id, mode);
                 }
                 if let Some(request) = image_detail.take_point_gesture() {
                     app_state.apply_point_gesture(request);

@@ -24,6 +24,7 @@ mod close_prompt;
 mod colormap;
 mod context_menu;
 mod display_thumbnails;
+mod display_transform;
 mod dock;
 mod document;
 mod edit_history_panel;

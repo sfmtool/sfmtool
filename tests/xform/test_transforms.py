@@ -7,12 +7,14 @@ import numpy as np
 import pytest
 
 from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     RotateTransform,
     ScaleTransform,
     SimilarityTransform,
     TranslateTransform,
 )
+from sfmtool.xform import apply_transforms
 
 from .conftest import apply_transforms_to_file, load_reconstruction_data
 
@@ -195,6 +197,50 @@ def test_scale_transform_fractional(seoul_bull_sfmr_only, tmp_path):
 
     expected_positions = original["positions"] * 0.5
     assert np.allclose(transformed["positions"], expected_positions, atol=1e-6)
+
+
+def _depth_lengths(recon) -> np.ndarray:
+    """Each image's six stored depth lengths, NaN where a field is absent."""
+    rows = []
+    for image in recon.depth_statistics["images"]:
+        observed = image["observed"]
+        fields = [
+            image["histogram_min_z"],
+            image["histogram_max_z"],
+            observed["min_z"],
+            observed["max_z"],
+            observed["median_z"],
+            observed["mean_z"],
+        ]
+        rows.append([np.nan if value is None else value for value in fields])
+    return np.array(rows, dtype=np.float64)
+
+
+def test_scale_transform_scales_the_depth_statistics(seoul_bull_sfmr_only, tmp_path):
+    """A scale moves every stored depth by the same factor, before any write.
+
+    The in-memory value is what a caller reads straight after the transform, so
+    it has to describe the scaled scene rather than the one it came from. The
+    histogram counts stay: equal buckets between scaled bounds hold every
+    scaled depth in the bucket it was already in.
+    """
+    original = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    scaled = apply_transforms(original, [ScaleTransform(0.25)])
+
+    before = _depth_lengths(original)
+    after = _depth_lengths(scaled)
+    assert np.isfinite(before).any()
+    np.testing.assert_allclose(after, before * 0.25, rtol=1e-12, equal_nan=True)
+    np.testing.assert_array_equal(
+        scaled.depth_histogram_counts, original.depth_histogram_counts
+    )
+
+    # A write re-derives the statistics from the scaled geometry, and lands on
+    # the same lengths the multiplication gave.
+    output_path = tmp_path / "scaled_quarter.sfmr"
+    scaled.save(output_path, operation="xform_test")
+    rederived = _depth_lengths(SfmrReconstruction.load(output_path))
+    np.testing.assert_allclose(rederived, after, rtol=1e-6, equal_nan=True)
 
 
 # =============================================================================
