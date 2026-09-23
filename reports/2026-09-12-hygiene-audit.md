@@ -238,6 +238,7 @@ requests only**
   gets more expensive with every client written.
 
 **`mcp/mod.rs` carries six concerns and two of them contain no MCP**
+> _Status (2026-09-22): Done — moved command Action Log descriptions to `mcp/logged.rs`, panel screenshot geometry to `mcp/panel_rect.rs`, and the shared selection reply beside `render::selection`._
 - Location: `crates/sfm-explorer/src/mcp/mod.rs` (1643). Seams, several already drawn
   as banner comments: **74–535** the `Command` vocabulary and reply types; **537–917**
   `apply_with_window` dispatch; **918–1094** wire-handle resolution; **1095–1186**

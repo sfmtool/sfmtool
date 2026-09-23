@@ -15,8 +15,7 @@ use serde_json::json;
 
 use super::{
     render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, resolve_reconstruction,
-    selection_reply, CameraImageSel, CloseTarget, DisplayChange, JsonReply, SelectionScope,
-    ToolError,
+    CameraImageSel, CloseTarget, DisplayChange, JsonReply, SelectionScope, ToolError,
 };
 use crate::action_log::{interactive_text, tint_text, visibility_text, Kind, Layer};
 use crate::scene::{NodeTint, TINT_PALETTE};
@@ -88,7 +87,7 @@ pub(super) fn close_reconstruction(state: &mut AppState, target: CloseTarget) ->
 pub(super) fn select_reconstruction(state: &mut AppState, label: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     state.select_recon(id);
-    selection_reply(state)
+    render::selection_reply(state)
 }
 
 pub(super) fn select_camera_image(
@@ -99,7 +98,7 @@ pub(super) fn select_camera_image(
     let id = resolve_reconstruction(state, reconstruction_label)?;
     let image = resolve_camera_image(state, id, selector)?;
     state.select_image(Some(image));
-    selection_reply(state)
+    render::selection_reply(state)
 }
 
 pub(super) fn select_camera_intrinsics(
@@ -110,7 +109,7 @@ pub(super) fn select_camera_intrinsics(
     let id = resolve_reconstruction(state, reconstruction_label)?;
     let camera = resolve_camera_intrinsics(state, id, index)?;
     state.select_camera(Some(camera));
-    selection_reply(state)
+    render::selection_reply(state)
 }
 
 pub(super) fn select_point(
@@ -119,7 +118,7 @@ pub(super) fn select_point(
 ) -> JsonReply {
     let point = resolve_point(state, query)?;
     state.select_point(point);
-    selection_reply(state)
+    render::selection_reply(state)
 }
 
 pub(super) fn clear_selection(state: &mut AppState, scope: SelectionScope) -> JsonReply {
@@ -132,7 +131,7 @@ pub(super) fn clear_selection(state: &mut AppState, scope: SelectionScope) -> Js
         SelectionScope::CameraIntrinsics => state.select_camera(None),
         SelectionScope::Point => state.deselect_point(),
     }
-    selection_reply(state)
+    render::selection_reply(state)
 }
 
 pub(super) fn set_reconstruction_display(

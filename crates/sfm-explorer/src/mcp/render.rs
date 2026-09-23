@@ -169,6 +169,14 @@ pub(super) fn selection(state: &AppState) -> Value {
     })
 }
 
+/// The reply every selection tool returns: the resulting `selection` block.
+///
+/// All six return it after the fact, so the agent sees what the coupling
+/// rules in `AppState` did to its request.
+pub(super) fn selection_reply(state: &AppState) -> super::JsonReply {
+    Ok(json!({ "selection": selection(state) }))
+}
+
 /// The `view` block: the viewport camera's stored state, with everything
 /// computable from it under `derived`.
 ///
