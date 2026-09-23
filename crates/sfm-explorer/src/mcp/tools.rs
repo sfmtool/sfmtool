@@ -62,7 +62,7 @@ pub(crate) fn catalog() -> &'static [ToolSpec] {
 
 /// Build the [`Command`] a `tools/call` asked for.
 ///
-/// The schemas above are closed and typed, so a compliant client will not
+/// The schemas in `catalog` are closed and typed, so a compliant client will not
 /// reach most of these errors; they are here because a tool call arrives from
 /// whatever the agent actually sent, and "silently did something else" is the
 /// one answer this surface must never give.
