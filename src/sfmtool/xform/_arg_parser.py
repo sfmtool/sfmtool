@@ -140,6 +140,14 @@ def _parse_kv_params(
     return kwargs
 
 
+def _take_arg(args: list[str], i: int, option: str) -> tuple[str, int]:
+    """Return a required value and its index, preserving the missing-value error."""
+    if i + 1 >= len(args):
+        raise click.UsageError(f"{option} requires an argument")
+    i += 1
+    return args[i], i
+
+
 # Each --refine-normals key maps to a caster for its value; the
 # RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
 # PatchCloud.refine_normals binding parameters. (Frame-sizing / cloud-building
@@ -350,10 +358,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
         arg = args[i]
 
         if arg == "--rotate":
-            if i + 1 >= len(args):
-                raise click.UsageError("--rotate requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             parts = param.split(",")
             if len(parts) != 4:
@@ -373,10 +378,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(RotateTransform(axis, angle_rad))
 
         elif arg == "--translate":
-            if i + 1 >= len(args):
-                raise click.UsageError("--translate requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             parts = param.split(",")
             if len(parts) != 3:
@@ -395,10 +397,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(TranslateTransform(translation))
 
         elif arg == "--scale":
-            if i + 1 >= len(args):
-                raise click.UsageError("--scale requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 scale_factor = float(param)
@@ -408,10 +407,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(ScaleTransform(scale_factor))
 
         elif arg == "--remove-short-tracks":
-            if i + 1 >= len(args):
-                raise click.UsageError("--remove-short-tracks requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 max_size = int(param)
@@ -529,10 +525,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 raise click.UsageError(f"Invalid --to-embedded-patches parameter: {e}")
 
         elif arg == "--remove-narrow-tracks":
-            if i + 1 >= len(args):
-                raise click.UsageError("--remove-narrow-tracks requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 min_angle_rad = parse_angle(param)
@@ -544,10 +537,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(RemoveNarrowTracksFilter(min_angle_rad))
 
         elif arg == "--remove-isolated":
-            if i + 1 >= len(args):
-                raise click.UsageError("--remove-isolated requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             parts = param.split(",")
             if len(parts) != 2:
@@ -566,10 +556,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(RemoveIsolatedPointsFilter(factor, value_spec))
 
         elif arg == "--align-to":
-            if i + 1 >= len(args):
-                raise click.UsageError("--align-to requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             reference_path = Path(param)
             transforms.append(AlignToTransform(reference_path))
@@ -578,10 +565,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(AlignToInputTransform())
 
         elif arg == "--remove-large-features":
-            if i + 1 >= len(args):
-                raise click.UsageError("--remove-large-features requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 max_size = float(param)
@@ -593,12 +577,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(RemoveLargeFeaturesFilter(max_size))
 
         elif arg == "--filter-by-reprojection-error":
-            if i + 1 >= len(args):
-                raise click.UsageError(
-                    "--filter-by-reprojection-error requires an argument"
-                )
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 threshold = float(param)
@@ -610,12 +589,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(FilterByReprojectionErrorTransform(threshold))
 
         elif arg == "--filter-by-keypoint-uncertainty":
-            if i + 1 >= len(args):
-                raise click.UsageError(
-                    "--filter-by-keypoint-uncertainty requires an argument"
-                )
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 threshold = float(param)
@@ -632,10 +606,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 )
 
         elif arg == "--filter-by-patch-size":
-            if i + 1 >= len(args):
-                raise click.UsageError("--filter-by-patch-size requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 multiplier = float(param)
@@ -652,10 +623,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 )
 
         elif arg == "--include-range":
-            if i + 1 >= len(args):
-                raise click.UsageError("--include-range requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 range_expr = RangeExpr(param)
@@ -667,10 +635,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(IncludeRangeFilter(range_expr))
 
         elif arg == "--exclude-range":
-            if i + 1 >= len(args):
-                raise click.UsageError("--exclude-range requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 range_expr = RangeExpr(param)
@@ -682,10 +647,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(ExcludeRangeFilter(range_expr))
 
         elif arg == "--scale-by-measurements":
-            if i + 1 >= len(args):
-                raise click.UsageError("--scale-by-measurements requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             measurements_path = Path(param)
             if not measurements_path.exists():
@@ -696,22 +658,15 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(ScaleByMeasurementsTransform(measurements_path))
 
         elif arg == "--include-glob":
-            if i + 1 >= len(args):
-                raise click.UsageError("--include-glob requires an argument")
-            i += 1
-            transforms.append(IncludeGlobFilter(args[i]))
+            param, i = _take_arg(args, i, arg)
+            transforms.append(IncludeGlobFilter(param))
 
         elif arg == "--exclude-glob":
-            if i + 1 >= len(args):
-                raise click.UsageError("--exclude-glob requires an argument")
-            i += 1
-            transforms.append(ExcludeGlobFilter(args[i]))
+            param, i = _take_arg(args, i, arg)
+            transforms.append(ExcludeGlobFilter(param))
 
         elif arg == "--include-by-distribution":
-            if i + 1 >= len(args):
-                raise click.UsageError("--include-by-distribution requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             parts = param.split(",")
             try:
@@ -737,10 +692,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             transforms.append(SelectByDistributionFilter(count, verbose=verbose))
 
         elif arg == "--camera-model":
-            if i + 1 >= len(args):
-                raise click.UsageError("--camera-model requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 transforms.append(SwitchCameraModelTransform(param))
@@ -750,10 +702,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 )
 
         elif arg == "--find-points-at-infinity":
-            if i + 1 >= len(args):
-                raise click.UsageError("--find-points-at-infinity requires an argument")
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             parts = param.split(",")
             if not 1 <= len(parts) <= 4:
@@ -789,12 +738,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 )
 
         elif arg == "--classify-points-at-infinity":
-            if i + 1 >= len(args):
-                raise click.UsageError(
-                    "--classify-points-at-infinity requires an argument"
-                )
-            i += 1
-            param = args[i]
+            param, i = _take_arg(args, i, arg)
 
             try:
                 noise_floor_px = float(param)

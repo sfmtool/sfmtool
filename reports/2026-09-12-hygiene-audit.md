@@ -1297,6 +1297,7 @@ have already drifted**
 **`xform/_arg_parser.py`: a 440-line argv loop, a 20× repeated guard, and four functions
 that reduce to one**
 > _Status (2026-09-22): Partially done — all six current `key=value` option parsers now share `_parse_kv_params`, preserving their option-specific errors and constructor validation. The repeated argv guards and table-driven dispatch remain open._
+> _Status (2026-09-22): Partially done — the 20 required-value guards now share `_take_arg`; table-driven dispatch remains open._
 > _Carried forward. Re-verified, and the duplication is now proven byte-exact._
 - Location: `src/sfmtool/xform/_arg_parser.py` (**832**); `parse_transform_args`
   **393–832** (440); the `"--X requires an argument"` guard at 408, 431, 453, 466, 548,
