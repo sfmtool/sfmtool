@@ -40,6 +40,7 @@ mod platform;
 mod point_ids;
 mod progress;
 mod resect;
+mod save_minimal_prompt;
 mod scene;
 mod scene_graph;
 mod scene_renderer;

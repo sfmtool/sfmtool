@@ -475,7 +475,7 @@ sfm xform in.sfmr out.sfmr --drop-thumbnails
 sfm xform in.sfmr out.sfmr --drop-patch-bitmaps
 sfm xform in.sfmr out.sfmr --add-thumbnails
 sfm xform in.sfmr out.sfmr --add-patch-bitmaps [resolution=<R>,sampler=<S>]
-sfm xform in.sfmr out.sfmr --minimal
+sfm xform in.sfmr out.sfmr --minimal [wspath=<path>]
 ```
 
 An `--add-*` step is a no-op, with one printed line, on a reconstruction that
@@ -626,6 +626,35 @@ smallest file, and the `--add-*` steps rebuild both: the thumbnails from the
 `.sift` files or the photographs, the bitmaps from the photographs.
 A caller that wants the thumbnails kept writes `--minimal --add-thumbnails`.
 
+##### `--minimal wspath=<path>`: stating the workspace path
+
+The save measures `workspace.relative_path` from the output's directory to the
+workspace, resolving both directories to their real locations first so that a
+symlinked or aliased output gives the step or two between them rather than a walk
+from the filesystem root. `wspath=<path>` records `<path>` instead and measures
+nothing:
+
+```bash
+sfm xform in.sfmr ws/ground_truth.sfmr --minimal wspath=.
+```
+
+It is for a file whose home is not the directory it happens to be written from. A
+ground truth checked into a repository inside its own workspace records `.`,
+whether it was written there or staged elsewhere and moved in afterwards. The
+value is taken as written, with `\` turned into `/` because the field is POSIX, so
+nothing about it is interpreted: `wspath=.` is a file beside its workspace marker,
+and `wspath=` with nothing after it records an empty value, which the format reads
+as no path recorded.
+
+`wspath` is the only key `--minimal` takes. An unknown key, a token without `=`,
+an empty key and a repeated key are usage errors, the same grammar the other
+`[PARAMS]` options use. The statement belongs to the save, as the rest of the
+metadata part does, so the last `--minimal` in the chain that names one is what
+the output records, and the step's `tool_options.transforms` entry names it. The
+binding argument behind it is
+`SfmrReconstruction.save(..., workspace_path=<path>)`, which needs an `operation`
+because the stamp is what writes the field.
+
 **`--minimal` drops `lineage` entirely.** The output is a new file with no
 ancestry: it carries none of the input's entries and gains none for the input.
 Point IDs minted against the input or any earlier version therefore do not
@@ -638,7 +667,7 @@ What it clears and what it keeps:
 | Field | `--minimal` | Why |
 |---|---|---|
 | `metadata.json` `workspace.absolute_path` | **cleared** to `""` | Names one machine's filesystem, and sits in `metadata_xxh128`, so the same reconstruction written on two machines would hash differently. An empty value means none was recorded. |
-| `workspace.relative_path` | recomputed by the save, from the output's directory to the workspace, as every `xform` save does | It is how a reader finds the workspace from where the file is. |
+| `workspace.relative_path` | recomputed by the save, from the output's directory to the workspace, as every `xform` save does, or recorded as `wspath` states it | It is how a reader finds the workspace from where the file is. |
 | `workspace.contents` | kept | States which extractor and settings the features came from; `feature_prefix_dir` is how every `.sift`-reading step and the viewer's SIFT index build locate the features. |
 | `lineage` | **dropped**, and no entry added | Above. |
 | `tool_options` | **replaced** by `{"transforms": [...]}`, this invocation's own step list | An ordinary save *merges* its `transforms` record into the input's options, so a file accumulates the options of every operation behind it. The inherited keys describe an ancestor, which a root does not have. |
@@ -713,11 +742,16 @@ loaded once, transformed through the pipeline, and written once.
 The write is `SfmrReconstruction.save(path, operation="xform",
 tool_options={"transforms": [...]})`, which stamps `operation`, `tool`,
 `tool_version` and the counts, recomputes both workspace paths from the output's
-location, merges `transforms` into the inherited `tool_options`, and passes
+location, with both directories resolved to their real locations before the
+relative one is measured between them, merges `transforms` into the inherited
+`tool_options`, and passes
 `lineage` through unchanged. The stamp is `SfmrReconstruction::stamp_save` in
 sfmtool-core. With `minimal=True`, set when `--minimal` is in the chain, it then
 clears `absolute_path`, drops `lineage` and replaces `tool_options` through
-`clear_minimal_metadata` (see [`--minimal`](#--minimal)).
+`clear_minimal_metadata` (see [`--minimal`](#--minimal)). With
+`workspace_path=<path>`, set by `--minimal wspath=<path>`, the stamp records that
+path as `workspace.relative_path` and measures nothing
+(see [`--minimal wspath=<path>`](#--minimal-wspathpath-stating-the-workspace-path)).
 
 ### Rust primitives behind the operations
 
@@ -778,6 +812,10 @@ sfm xform rig.sfmr left_only.sfmr \
 
 # The smallest file for a repository, with the thumbnails kept
 sfm xform ground_truth.sfmr published/ground_truth.sfmr --minimal --add-thumbnails
+
+# The same for a file checked in inside its own workspace, which records the
+# workspace it sits in rather than the path it was written from
+sfm xform candidate.sfmr ws/ground_truth.sfmr --minimal wspath=.
 
 # Upgrade SIMPLE_RADIAL → RADIAL so bundle adjustment can refine k2
 

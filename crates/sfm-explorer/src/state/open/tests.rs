@@ -278,7 +278,9 @@ fn save_as_minimal_writes_the_minimal_file_and_leaves_the_node() {
     };
     let out = dir.join("published").join("recon.sfmr");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-    state.save_minimal_copy(id, &out).expect("a writable path");
+    state
+        .save_minimal_copy(id, &out, None)
+        .expect("a writable path");
 
     let written = sfmtool_sfmr_format::read_sfmr(&out).unwrap();
     assert!(written.thumbnails_y_x_rgb.is_none());
@@ -315,7 +317,9 @@ fn a_minimal_copy_over_the_nodes_own_file_is_refused() {
     let dir = temp_dir("minimal_own");
     let (mut state, id, path) = opened_and_edited(&dir);
     let before = std::fs::read(&path).unwrap();
-    let error = state.save_minimal_copy(id, &path).expect_err("refused");
+    let error = state
+        .save_minimal_copy(id, &path, None)
+        .expect_err("refused");
     assert!(
         error.contains("cannot replace the file it came from"),
         "{error}"

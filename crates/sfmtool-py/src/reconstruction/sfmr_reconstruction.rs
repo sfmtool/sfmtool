@@ -108,6 +108,13 @@ impl PySfmrReconstruction {
     ///         given here rather than merged into the inherited ones. What
     ///         ``sfm xform --minimal`` saves with. The in-memory value keeps
     ///         whatever the save wrote, like the other metadata a save stamps.
+    ///     workspace_path: Record this as ``workspace.relative_path`` instead of
+    ///         measuring it from the output's directory to the workspace. Given
+    ///         verbatim (``\`` turned into ``/``, since the field is POSIX), so
+    ///         ``"."`` is a file written beside its workspace marker and ``""``
+    ///         is no path recorded. Needs ``operation``, which is what makes the
+    ///         save a stamped one. What ``sfm xform --minimal wspath=<path>``
+    ///         passes.
     ///
     /// The write preserves the in-memory ``normals`` of every point that has one
     /// (recomputing only the missing/zero rows from geometry), so normals set via
@@ -116,7 +123,11 @@ impl PySfmrReconstruction {
     /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
     /// cloud is written as the per-point patch frame in ``points3d/`` (format
     /// version 3+).
-    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false))]
+    // Every argument is one Python keyword of the save's surface, so they are a
+    // list rather than a struct: a `SaveOptions` here would be a type the caller
+    // cannot name.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false, workspace_path=None))]
     fn save(
         &mut self,
         py: Python<'_>,
@@ -125,7 +136,17 @@ impl PySfmrReconstruction {
         tool_name: Option<&str>,
         tool_options: Option<&Bound<'_, PyDict>>,
         minimal: bool,
+        workspace_path: Option<&str>,
     ) -> PyResult<()> {
+        // The workspace path is one of the fields the stamp writes, so a save
+        // that states it and names no operation would drop it silently.
+        if workspace_path.is_some() && operation.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "The workspace path is recorded by a stamped save; pass operation \
+                 alongside workspace_path.",
+            ));
+        }
+
         // Update metadata if operation is provided. The stamp and the minimal
         // clearing are sfmtool-core's, the one definition the viewer's
         // Save As Minimal writes through too.
@@ -144,6 +165,7 @@ impl PySfmrReconstruction {
                     operation: op,
                     tool,
                     tool_version: &tool_version,
+                    workspace_path,
                 },
             );
         }

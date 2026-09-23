@@ -207,6 +207,9 @@ pub(crate) enum Command {
         path: Option<PathBuf>,
         /// Write a minimal copy to `path` instead, leaving the node as it is.
         minimal: bool,
+        /// State the `workspace.relative_path` the file records, rather than
+        /// measuring it; needs `path`.
+        workspace_path: Option<String>,
     },
     DeletePoint {
         reconstruction_label: String,
@@ -1082,11 +1085,13 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             path,
             minimal,
+            workspace_path,
         } => done(edit::save_reconstruction(
             state,
             &reconstruction_label,
             path.as_deref(),
             minimal,
+            workspace_path.as_deref(),
         )),
         Command::DeletePoint {
             reconstruction_label,

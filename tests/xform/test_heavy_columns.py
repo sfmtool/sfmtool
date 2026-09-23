@@ -34,6 +34,7 @@ from sfmtool.xform import (
 )
 from sfmtool.xform._arg_parser import (
     parse_add_patch_bitmaps_params,
+    parse_minimal_params,
     parse_transform_args,
 )
 from sfmtool.xform._images import load_workspace_images
@@ -110,6 +111,28 @@ def test_add_patch_bitmaps_params():
         parse_add_patch_bitmaps_params("resolution=1")
     with pytest.raises(ValueError):
         parse_add_patch_bitmaps_params("sampler=nearest")
+
+
+def test_minimal_params():
+    assert parse_minimal_params("").workspace_path is None
+    assert parse_minimal_params("wspath=.").workspace_path == "."
+    # The path is taken as written, so a nested one arrives whole.
+    assert parse_minimal_params("wspath=../ws").workspace_path == "../ws"
+    with pytest.raises(Exception, match="Unknown --minimal key"):
+        parse_minimal_params("workspace_path=.")
+    with pytest.raises(Exception, match="expected key=value"):
+        parse_minimal_params("wspath")
+    with pytest.raises(Exception, match="empty key"):
+        parse_minimal_params("=.")
+
+
+def test_minimal_takes_no_value_a_bare_one_or_a_joined_one():
+    bare = parse_transform_args(["--minimal", "--add-thumbnails"])
+    assert isinstance(bare[0], MinimalTransform)
+    assert bare[0].workspace_path is None
+    assert bare[1].restores_minimal
+    assert parse_transform_args(["--minimal", "wspath=."])[0].workspace_path == "."
+    assert parse_transform_args(["--minimal=wspath=."])[0].workspace_path == "."
 
 
 def test_add_patch_bitmaps_takes_a_bare_or_joined_value():
@@ -419,6 +442,39 @@ def test_minimal_twice_has_one_content_hash(embedded_sfmr):
         SfmrReconstruction.load(first).content_xxh128
         == SfmrReconstruction.load(second).content_xxh128
     )
+
+
+def test_minimal_states_the_workspace_path(embedded_sfmr):
+    # The motivating case: a ground truth written inside its own workspace, to be
+    # checked in there, records the workspace it sits in.
+    out = embedded_sfmr.parent / "ground_truth.sfmr"
+    _xform(embedded_sfmr, out, "--minimal", "wspath=.")
+
+    meta = read_sfmr_metadata(out)
+    assert meta["workspace"]["relative_path"] == "."
+    assert meta["workspace"]["absolute_path"] == ""
+    # The description is the record of the invocation, so it names the statement.
+    assert meta["tool_options"]["transforms"] == [
+        "Minimal (drop patch bitmaps and thumbnails; minimal metadata; "
+        "workspace path '.')"
+    ]
+    # The stated path alone finds the workspace.
+    loaded = Path(SfmrReconstruction.load(out).workspace_dir)
+    assert loaded.resolve() == embedded_sfmr.parent.resolve()
+
+
+def test_minimal_states_the_path_a_measurement_would_not_produce(embedded_sfmr):
+    # Written to a staging directory inside the workspace, for a file whose home
+    # is the workspace root: measuring would record "..", and the statement wins.
+    out = embedded_sfmr.parent / "staging" / "ground_truth.sfmr"
+    _xform(embedded_sfmr, out, "--minimal", "wspath=.")
+    assert read_sfmr_metadata(out)["workspace"]["relative_path"] == "."
+
+
+def test_minimal_with_a_joined_workspace_path(embedded_sfmr):
+    out = embedded_sfmr.parent / "joined.sfmr"
+    _xform(embedded_sfmr, out, "--minimal=wspath=.")
+    assert read_sfmr_metadata(out)["workspace"]["relative_path"] == "."
 
 
 # ── inspect ─────────────────────────────────────────────────────────────────

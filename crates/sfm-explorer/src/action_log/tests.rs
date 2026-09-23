@@ -1280,7 +1280,7 @@ fn every_operation_names_at_least_one_stage() {
         ("save as", |dir| {
             let (mut state, id) = opened_and_edited(dir);
             state
-                .save_node_as(id, &dir.join("other.sfmr"))
+                .save_node_as(id, &dir.join("other.sfmr"), None)
                 .expect("a writable path");
             state
         }),

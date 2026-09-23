@@ -155,13 +155,16 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
 )
 @click.option(
     "--minimal",
-    is_flag=True,
+    is_flag=False,
+    flag_value="",
     multiple=True,
     help=(
         "Write the smallest file that still holds the whole reconstruction: "
         "--drop-patch-bitmaps --drop-thumbnails at this position, and a save "
         "with an empty absolute workspace path, no lineage, and tool_options "
-        "holding only this invocation's transforms."
+        "holding only this invocation's transforms. Optional "
+        "'wspath=<path>' records that as the relative workspace path instead of "
+        "measuring one, e.g. wspath=. for an output written inside its workspace."
     ),
 )
 @click.option(
@@ -335,7 +338,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --drop-patch-bitmaps                Discard the per-point patch bitmaps (frames kept)
       --add-thumbnails                    Build thumbnails from the .sift files, else the photographs
       --add-patch-bitmaps [PARAMS]        Render patch bitmaps at the stored frames (reads source images)
-      --minimal                           Drop both, and save minimal metadata (for a file that travels)
+      --minimal [PARAMS]                  Drop both, and save minimal metadata (for a file that travels); wspath=<path> states the recorded workspace path
 
     \b
     Alignment:
@@ -393,6 +396,11 @@ def xform(ctx, input_path, output_path, **kwargs):
         # The smallest file for a repository, and the same with thumbnails kept
         sfm xform in.sfmr out.sfmr --minimal
         sfm xform in.sfmr out.sfmr --minimal --add-thumbnails
+
+    \b
+        # A ground truth checked in inside its own workspace, so the file records
+        # the workspace it sits in rather than the path it was written from
+        sfm xform in.sfmr ws/ground_truth.sfmr --minimal wspath=.
 
     \b
         # Re-render the patch bitmaps at a different resolution
@@ -480,7 +488,18 @@ def xform(ctx, input_path, output_path, **kwargs):
         # position would be undone.
         from ..xform import MinimalTransform
 
-        minimal = any(isinstance(t, MinimalTransform) for t in transforms)
+        minimal_steps = [t for t in transforms if isinstance(t, MinimalTransform)]
+        minimal = bool(minimal_steps)
+        # A stated workspace path belongs to the save too, so the last --minimal
+        # that names one is the one the output records.
+        workspace_path = next(
+            (
+                t.workspace_path
+                for t in reversed(minimal_steps)
+                if t.workspace_path is not None
+            ),
+            None,
+        )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         click.echo(f"\nWriting transformed reconstruction to: {output_path}")
@@ -489,6 +508,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             operation="xform",
             tool_options={"transforms": transform_descriptions},
             minimal=minimal,
+            workspace_path=workspace_path,
         )
 
         click.echo("\nTransformed reconstruction saved to:")

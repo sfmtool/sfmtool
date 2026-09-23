@@ -122,13 +122,25 @@ pub(super) fn jump_to_version(state: &mut AppState, label: &str, serial: &str) -
 ///
 /// `minimal: true` is `AppState::save_minimal_copy`, File > Save As Minimal:
 /// a copy written to the path given, which leaves the node where it was.
+///
+/// `workspace_path` states the `workspace.relative_path` the file records
+/// instead of the measured one, and needs a `path` for the same reason `minimal`
+/// does: a save over the node's own file leaves the file where it already is, so
+/// the path it records is already the right one.
 pub(super) fn save_reconstruction(
     state: &mut AppState,
     label: &str,
     path: Option<&Path>,
     minimal: bool,
+    workspace_path: Option<&str>,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
+    if workspace_path.is_some() && path.is_none() {
+        return Err(ToolError::new(
+            "A workspace path only means something for a file written elsewhere; \
+             pass path with workspace_path.",
+        ));
+    }
     if minimal {
         // An export: the node is not re-pointed and not marked clean, so the
         // reply names where the copy went and the version it holds.
@@ -137,7 +149,9 @@ pub(super) fn save_reconstruction(
                 "A minimal copy is written to a path of its own; pass path with minimal: true.",
             )
         })?;
-        state.save_minimal_copy(id, path).map_err(ToolError::new)?;
+        state
+            .save_minimal_copy(id, path, workspace_path)
+            .map_err(ToolError::new)?;
         let node = state.node(id).expect("just resolved");
         return Ok(json!({
             "reconstruction_label": node.label,
@@ -147,7 +161,7 @@ pub(super) fn save_reconstruction(
         }));
     }
     match path {
-        Some(path) => state.save_node_as(id, path),
+        Some(path) => state.save_node_as(id, path, workspace_path),
         None => state.save_node(id),
     }
     .map_err(ToolError::new)?;

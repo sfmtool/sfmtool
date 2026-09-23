@@ -804,7 +804,8 @@ fn build_catalog() -> Vec<ToolSpec> {
                           there, the file sfm xform --minimal writes: no thumbnails, no patch \
                           bitmaps, no lineage and no absolute workspace path. The node keeps its \
                           path, label and history, and is no cleaner than before; a minimal copy \
-                          over the node's own file is refused.",
+                          over the node's own file is refused. workspace_path states the \
+                          workspace.relative_path the file records instead of the measured one.",
             kind: Save,
             schema: object(
                 &[
@@ -825,6 +826,20 @@ fn build_catalog() -> Vec<ToolSpec> {
                             "description":
                                 "Write a minimal copy to path instead of saving the node. \
                                  Default false.",
+                        }),
+                    ),
+                    (
+                        "workspace_path",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The workspace.relative_path to record in the file, as the \
+                                 reader will walk it from the file's own directory, instead \
+                                 of the path measured from where the file is written. \
+                                 \".\" for a file written inside its workspace. Requires \
+                                 path: a save of the node's own file leaves it where it is, \
+                                 so the measured path is already right, and an override \
+                                 only means something for a copy written elsewhere.",
                         }),
                     ),
                 ],
@@ -2507,6 +2522,7 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             path: args.optional_string("path")?.map(std::path::PathBuf::from),
             minimal: args.optional_bool("minimal")?.unwrap_or(false),
+            workspace_path: args.optional_string("workspace_path")?,
         },
         "delete_point" => Command::DeletePoint {
             reconstruction_label: args.required_string("reconstruction_label")?,

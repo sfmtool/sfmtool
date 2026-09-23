@@ -246,7 +246,7 @@ fn the_busy_node_refuses_and_another_node_does_not() {
     );
     // A save, and a close.
     assert_eq!(
-        state.save_node_as(busy, std::path::Path::new("/runs/never.sfmr")),
+        state.save_node_as(busy, std::path::Path::new("/runs/never.sfmr"), None),
         Err(expected.to_string())
     );
     assert_eq!(state.close_node(busy), Err(expected.to_string()));

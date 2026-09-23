@@ -250,13 +250,45 @@ fn save_as_writes_elsewhere_and_re_points_the_node() {
     let id = state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
     let path = dir.join("chosen.sfmr");
 
-    state.save_node_as(id, &path).expect("a writable path");
+    state
+        .save_node_as(id, &path, None)
+        .expect("a writable path");
 
     let node = &state.scene[0];
     assert_eq!(node.path.as_deref(), Some(path.as_path()));
     assert_eq!(node.label, "chosen");
     assert!(!node.is_dirty());
     assert!(path.exists());
+}
+
+/// A Save As that states a workspace path records it, and the value the session
+/// holds is the value that reached the disk: the metadata is inside the content
+/// hash, so the stated path is folded into a version of its own even though
+/// there was no overlay to fold.
+#[test]
+fn save_as_states_the_workspace_path_and_keeps_the_hash_honest() {
+    let dir = temp_dir("save_as_workspace_path");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+    let path = dir.join("stated.sfmr");
+    let versions_before = state.scene[0].history.versions().len();
+
+    state
+        .save_node_as(id, &path, Some(r"..\shared\ws"))
+        .expect("a writable path");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    assert_eq!(written.metadata.workspace.relative_path, "../shared/ws");
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), versions_before + 1);
+    assert_eq!(
+        node.edited()
+            .base_content_hash()
+            .expect("hashable")
+            .content_xxh128,
+        written.content_hash.content_xxh128
+    );
+    assert!(!node.is_dirty());
 }
 
 #[test]
@@ -348,7 +380,9 @@ fn a_write_that_fails_is_refused_with_a_reason_and_changes_nothing() {
     let blocked = dir.join("a-directory.sfmr");
     std::fs::create_dir_all(&blocked).expect("a writable temp dir");
 
-    let error = state.save_node_as(id, &blocked).expect_err("a directory");
+    let error = state
+        .save_node_as(id, &blocked, None)
+        .expect_err("a directory");
 
     assert!(error.contains("Cannot write"), "{error}");
     assert_eq!(

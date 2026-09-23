@@ -64,14 +64,28 @@ class MinimalTransform:
     part (an empty ``workspace.absolute_path``, no ``lineage``, ``tool_options``
     holding only this invocation's ``transforms``) is a property of the save,
     which the command applies when any step in the chain is this one.
+
+    ``workspace_path``, from ``wspath=<path>``, is carried to that save as well:
+    it is the ``workspace.relative_path`` the output records, stated rather than
+    measured from where the output is written. ``None`` measures it.
     """
+
+    def __init__(self, workspace_path: str | None = None) -> None:
+        self.workspace_path = workspace_path
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         recon = DropPatchBitmapsTransform().apply(recon)
         return DropThumbnailsTransform().apply(recon)
 
     def description(self) -> str:
-        return "Minimal (drop patch bitmaps and thumbnails; minimal metadata)"
+        # The description is what lands in the output's tool_options, so a
+        # stated workspace path is named there rather than left implicit.
+        stated = (
+            f"; workspace path '{self.workspace_path}'"
+            if self.workspace_path is not None
+            else ""
+        )
+        return f"Minimal (drop patch bitmaps and thumbnails; minimal metadata{stated})"
 
 
 def _restore_note(step: str, column: str) -> None:

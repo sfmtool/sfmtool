@@ -5785,6 +5785,43 @@ fn save_reconstruction_minimal_writes_a_copy_and_leaves_the_node() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `workspace_path` is recorded as it stands, wherever the file is written, and
+/// it needs a path of its own: a save over the node's own file leaves the file
+/// where it already is, so the path it records is already the right one.
+#[test]
+fn save_reconstruction_states_the_workspace_path_and_needs_a_path() {
+    let dir = temp_dir("save_workspace_path");
+    let own = dir.join("recon.sfmr");
+    let copy = dir.join("published").join("recon.sfmr");
+    std::fs::create_dir_all(copy.parent().expect("a parent")).expect("a writable temp dir");
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(&own, SfmrReconstruction::demo(32)));
+    let mut viewer = Viewer3D::new();
+
+    call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({
+            "reconstruction_label": "recon",
+            "path": copy.display().to_string(),
+            "minimal": true,
+            "workspace_path": "../shared/ws",
+        }),
+    );
+    let written = sfmtool_sfmr_format::read_sfmr(&copy).expect("a readable copy");
+    assert_eq!(written.metadata.workspace.relative_path, "../shared/ws");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({ "reconstruction_label": "recon", "workspace_path": "." }),
+    );
+    assert!(error.0.contains("pass path with workspace_path"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The editing tools name their reconstruction rather than defaulting to the
 /// selection, and an unknown label is refused naming what is loaded.
 #[test]
@@ -5944,6 +5981,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             path: None,
             minimal: false,
+            workspace_path: None,
         }
     );
 }

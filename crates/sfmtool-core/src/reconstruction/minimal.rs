@@ -4,7 +4,8 @@
 //! The metadata a save stamps, and the minimal file.
 //!
 //! A save by a tool records who wrote the file and where the workspace is from
-//! the file's own location ([`SfmrReconstruction::stamp_save`]). A **minimal**
+//! the file's own location ([`SfmrReconstruction::stamp_save`]), or from the
+//! path the caller states ([`SaveStamp::workspace_path`]). A **minimal**
 //! file is the smallest file that still holds the whole reconstruction: no
 //! thumbnails, no patch bitmaps, no `lineage`, no recorded
 //! `workspace.absolute_path`, and `tool_options` holding only the options of the
@@ -24,7 +25,8 @@ use std::path::{Path, PathBuf};
 
 use super::SfmrReconstruction;
 
-/// Who a save records as having written the file.
+/// Who a save records as having written the file, and where it records the
+/// workspace as being.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveStamp<'a> {
     /// The operation that produced the file's content, such as `"xform"`.
@@ -33,6 +35,16 @@ pub struct SaveStamp<'a> {
     pub tool: &'a str,
     /// That tool's version.
     pub tool_version: &'a str,
+    /// The `workspace.relative_path` to record, stated rather than measured.
+    ///
+    /// `None` measures it from the output's directory to the workspace, which
+    /// is what an ordinary save wants. `Some(p)` records `p` as it stands, for
+    /// a caller that knows where the file will sit relative to its workspace
+    /// better than the directory it is being written from says: a ground-truth
+    /// file written for a repository inside its own workspace states `"."`
+    /// however it was produced. `Some("")` records an empty value, which the
+    /// format reads as no path recorded.
+    pub workspace_path: Option<&'a str>,
 }
 
 impl SfmrReconstruction {
@@ -40,13 +52,15 @@ impl SfmrReconstruction {
     ///
     /// Sets `operation`, `tool` and `tool_version`, refreshes the four counts
     /// from the arrays, and recomputes both workspace paths: `relative_path`
-    /// from `path`'s directory to [`Self::workspace_dir`], in POSIX form, and
-    /// `absolute_path` as the workspace directory itself. A relative `path` is
-    /// taken against the current directory. Both directories are resolved to
-    /// their real locations first, where they exist, so a symlinked or aliased
-    /// output turns into a step or two rather than a walk from the filesystem
-    /// root. `relative_path` is left as it was when no relative path exists
-    /// between the two (different drives, say).
+    /// as [`Self::measured_workspace_path`] measures it from `path`, and
+    /// `absolute_path` as the workspace directory itself. `relative_path` is
+    /// left as it was when there is no path to measure between the two.
+    ///
+    /// A `stamp` carrying a [`SaveStamp::workspace_path`] states
+    /// `relative_path` instead: the stated value is recorded through
+    /// [`Self::set_workspace_relative_path`] and no measurement happens, so
+    /// neither directory is resolved and `path` is not consulted for it.
+    /// `absolute_path` is stamped either way.
     ///
     /// # Example
     ///
@@ -59,7 +73,12 @@ impl SfmrReconstruction {
     /// let out = std::path::Path::new("out/moved.sfmr");
     /// recon.stamp_save(
     ///     out,
-    ///     &SaveStamp { operation: "xform", tool: "sfmtool", tool_version: "0.2.0" },
+    ///     &SaveStamp {
+    ///         operation: "xform",
+    ///         tool: "sfmtool",
+    ///         tool_version: "0.2.0",
+    ///         workspace_path: None,
+    ///     },
     /// );
     /// recon.save(out)?;
     /// # Ok(())
@@ -75,14 +94,47 @@ impl SfmrReconstruction {
         meta.observation_count = self.point_set.tracks.len() as u32;
         meta.camera_count = self.image_table.cameras.len() as u32;
 
-        let output = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        if let Some(parent) = output.parent() {
-            let (workspace, parent) = comparable(&self.workspace_dir, parent);
-            if let Some(relative) = pathdiff::diff_paths(workspace, parent) {
-                meta.workspace.relative_path = relative.to_string_lossy().replace('\\', "/");
+        match stamp.workspace_path {
+            Some(stated) => self.set_workspace_relative_path(stated),
+            None => {
+                if let Some(measured) = self.measured_workspace_path(path) {
+                    self.metadata.workspace.relative_path = measured;
+                }
             }
         }
-        meta.workspace.absolute_path = self.workspace_dir.to_string_lossy().to_string();
+        self.metadata.workspace.absolute_path = self.workspace_dir.to_string_lossy().to_string();
+    }
+
+    /// The `workspace.relative_path` a save of this value to `output` measures:
+    /// the path from `output`'s directory to [`Self::workspace_dir`], in POSIX
+    /// form.
+    ///
+    /// The measurement [`Self::stamp_save`] performs when the caller states no
+    /// path, offered on its own so that a caller about to state one can show what
+    /// it would have been. `None` where there is no such path to measure, which
+    /// is a root `output` with no directory to stand in, or two paths with
+    /// nothing in common to walk between (different drives on Windows, say); the
+    /// stamp then leaves the recorded path as it was. A relative `output` is
+    /// taken against the current directory, and both directories are resolved to
+    /// their real locations first where they exist (`comparable`), so a
+    /// symlinked or aliased output gives the step or two between the two rather
+    /// than a walk from the filesystem root.
+    pub fn measured_workspace_path(&self, output: &Path) -> Option<String> {
+        let output = std::path::absolute(output).unwrap_or_else(|_| output.to_path_buf());
+        let parent = output.parent()?;
+        let (workspace, parent) = comparable(&self.workspace_dir, parent);
+        let relative = pathdiff::diff_paths(workspace, parent)?;
+        Some(relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    /// Record `stated` as `workspace.relative_path`, as it stands.
+    ///
+    /// The one place a stated path is put into the metadata, so every caller
+    /// records it in the same form the measured path is in: POSIX, with any
+    /// `\` turned into `/`. Nothing else about it is interpreted, so `"."` is a
+    /// file beside its workspace marker and `""` is no path recorded.
+    pub fn set_workspace_relative_path(&mut self, stated: &str) {
+        self.metadata.workspace.relative_path = stated.replace('\\', "/");
     }
 
     /// Clear the metadata a minimal file does not carry.
@@ -122,7 +174,12 @@ impl SfmrReconstruction {
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let recon = SfmrReconstruction::load("in.sfmr".as_ref(), &Progress::none())?;
     /// let out = std::path::Path::new("published/in.sfmr");
-    /// let stamp = SaveStamp { operation: "minimal", tool: "sfm-explorer", tool_version: "0.2.0" };
+    /// let stamp = SaveStamp {
+    ///     operation: "minimal",
+    ///     tool: "sfm-explorer",
+    ///     tool_version: "0.2.0",
+    ///     workspace_path: None,
+    /// };
     /// recon.to_minimal(out, &stamp, BTreeMap::new()).save(out)?;
     /// # Ok(())
     /// # }

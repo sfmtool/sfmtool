@@ -727,3 +727,34 @@ class TestSaveTimestamp:
         assert recon.metadata()["timestamp"] == restored["timestamp"]
         assert restored["timestamp"] != stored["timestamp"]
         assert read_sfmr_content_hash(first) == read_sfmr_content_hash(second)
+
+
+class TestStatedWorkspacePath:
+    """``save(workspace_path=...)`` records that path instead of measuring one."""
+
+    def test_the_stated_path_is_what_the_file_records(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        out = tmp_path / "stated.sfmr"
+        recon.save(out, operation="xform", workspace_path=".")
+        assert read_sfmr_metadata(out)["workspace"]["relative_path"] == "."
+
+        # An empty statement is the format's "none recorded", not a fallback to
+        # measuring; a backslash statement lands as the POSIX field it is.
+        none = tmp_path / "none.sfmr"
+        recon.save(none, operation="xform", workspace_path="")
+        assert read_sfmr_metadata(none)["workspace"]["relative_path"] == ""
+        windows = tmp_path / "windows.sfmr"
+        recon.save(windows, operation="xform", workspace_path=r"..\shared\ws")
+        assert (
+            read_sfmr_metadata(windows)["workspace"]["relative_path"] == "../shared/ws"
+        )
+
+    def test_a_stated_path_without_an_operation_is_refused(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        out = tmp_path / "unstamped.sfmr"
+        with pytest.raises(ValueError, match="stamped save"):
+            recon.save(out, workspace_path=".")

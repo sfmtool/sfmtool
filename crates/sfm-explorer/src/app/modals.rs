@@ -3,7 +3,11 @@
 
 //! Dialog rendering and deferred close requests.
 
-use super::{menu::forget_selected, save::save_dirty_before_closing, UiParts, UiRequests};
+use super::{
+    menu::forget_selected,
+    save::{save_dirty_before_closing, save_outcome},
+    UiParts, UiRequests,
+};
 use crate::dock::Tab;
 
 pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &mut UiRequests) {
@@ -32,6 +36,16 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         // The refusal is already an Action Log row: the start writes it
         // itself, in the words the menu's own gate uses.
         let _ = app_state.start_bundle_adjust(answer.recon, &options);
+    }
+
+    // The workspace path a minimal copy records. The file was chosen in the
+    // native dialog `File > Save As Minimal...` opened, and nothing has been
+    // written yet, so this frame's answer is the save itself; a cancelled prompt
+    // writes nothing and logs nothing, as a dismissed file dialog does.
+    if let Some(answer) = app_state.save_minimal_prompt.show(root_ui.ctx()) {
+        let outcome =
+            app_state.save_minimal_copy(answer.recon, &answer.path, Some(&answer.workspace_path));
+        save_outcome(app_state, Some(outcome));
     }
 
     // The close prompt, and the answer to whichever question it asked.

@@ -16,6 +16,7 @@ const STAMP: SaveStamp<'static> = SaveStamp {
     operation: "minimal",
     tool: "sfm-explorer",
     tool_version: "9.9.9",
+    workspace_path: None,
 };
 
 /// A demo value with everything `to_minimal` drops or clears: both heavy
@@ -63,8 +64,15 @@ fn stamp_save_records_the_tool_and_the_workspace_from_the_output() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("ws");
     let mut recon = heavy(&workspace);
-    recon.stamp_save(&dir.path().join("out").join("a.sfmr"), &STAMP);
+    let out = dir.path().join("out").join("a.sfmr");
+    recon.stamp_save(&out, &STAMP);
 
+    // The measurement is offered on its own, for a caller about to state a path
+    // instead, and it is the one the stamp used.
+    assert_eq!(
+        recon.measured_workspace_path(&out),
+        Some("../ws".to_string())
+    );
     assert_eq!(recon.metadata.operation, "minimal");
     assert_eq!(recon.metadata.tool, "sfm-explorer");
     assert_eq!(recon.metadata.tool_version, "9.9.9");
@@ -112,6 +120,86 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     assert!(read.point_set.patch_u_halfvec_xyz.is_some());
     assert!(read.metadata.workspace.absolute_path.is_empty());
     assert!(read.metadata.lineage.is_empty());
+}
+
+/// A stated workspace path is what the file records, and no measurement runs:
+/// the output here sits one directory away from the workspace, which is where a
+/// measurement would read `../ws`, and the value says what the caller said.
+#[test]
+fn a_stated_workspace_path_is_recorded_instead_of_measured() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("ws");
+    let mut recon = heavy(&workspace);
+    let out = dir.path().join("out").join("a.sfmr");
+    recon.stamp_save(
+        &out,
+        &SaveStamp {
+            workspace_path: Some("."),
+            ..STAMP
+        },
+    );
+
+    assert_eq!(recon.metadata.workspace.relative_path, ".");
+    // Everything else the stamp writes is unchanged by stating it, the absolute
+    // path included, which is the one a minimal save then clears.
+    assert_eq!(
+        recon.metadata.workspace.absolute_path,
+        workspace.to_string_lossy()
+    );
+    assert_eq!(recon.metadata.operation, "minimal");
+    assert_eq!(recon.metadata.point_count as usize, recon.point_count());
+
+    // A Windows-shaped statement still lands as the POSIX field it is.
+    recon.stamp_save(
+        &out,
+        &SaveStamp {
+            workspace_path: Some(r"..\shared\ws"),
+            ..STAMP
+        },
+    );
+    assert_eq!(recon.metadata.workspace.relative_path, "../shared/ws");
+
+    // An empty statement is a request for the format's "none recorded", not an
+    // absent statement that falls back to measuring.
+    recon.stamp_save(
+        &out,
+        &SaveStamp {
+            workspace_path: Some(""),
+            ..STAMP
+        },
+    );
+    assert!(recon.metadata.workspace.relative_path.is_empty());
+}
+
+/// The minimal copy carries the stated path too, since the stamp is the stamp it
+/// is given, and the written file reads back with it.
+#[test]
+fn a_minimal_copy_carries_the_stated_workspace_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("ws");
+    let recon = heavy(&workspace);
+    // Inside the workspace, where a ground truth checked into a repository sits.
+    let out = workspace.join("ground_truth.sfmr");
+    let minimal = recon.to_minimal(
+        &out,
+        &SaveStamp {
+            workspace_path: Some("."),
+            ..STAMP
+        },
+        BTreeMap::new(),
+    );
+    assert_eq!(minimal.metadata.workspace.relative_path, ".");
+    assert!(minimal.metadata.workspace.absolute_path.is_empty());
+
+    minimal.save(&out).unwrap();
+    let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
+    assert_eq!(read.metadata.workspace.relative_path, ".");
+    // The stated path is what the reader walks, so it finds the workspace with
+    // nothing else recorded.
+    assert_eq!(
+        std::fs::canonicalize(&read.workspace_dir).unwrap(),
+        std::fs::canonicalize(&workspace).unwrap()
+    );
 }
 
 /// A workspace reached by a path that is not its real one: the relative path is

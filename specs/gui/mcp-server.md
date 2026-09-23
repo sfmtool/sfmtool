@@ -177,7 +177,7 @@ write, and one writes a file.
 | `open_sift_index` | write | Adopt a `.kdf` as one reconstruction's SIFT index |
 | `build_sift_index` | write | Index every `.sift` file of one reconstruction into a `.kdf` beside its `.sfmr`, and open it, on a worker thread |
 | `close_sift_index` | write | Let go of the SIFT index open beside one reconstruction |
-| `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it |
+| `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it, with `workspace_path` stating the workspace path it records |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
@@ -1858,6 +1858,10 @@ where any version it would pass through has been released.
   "path": "D:/published/seoul_bull.sfmr",      // the copy
   "serial": "v7",                                // the version at the cursor
   "minimal": true }
+
+// save_reconstruction { "reconstruction_label": "seoul_bull",
+//                       "path": "D:/ws/ground_truth.sfmr", "minimal": true,
+//                       "workspace_path": "." }        // recorded, not measured
 ```
 
 With no path it is `AppState::save_node`, which writes over the file the node
@@ -1888,6 +1892,19 @@ minimal copy is written to a path of its own; pass path with minimal: true."*,
 and refuses the node's own file. `minimal` is an argument rather than a tool of
 its own because it is the same write with a different definition of what is
 written, as `save(minimal=True)` is in the binding.
+
+`workspace_path` records that string as the file's `workspace.relative_path`, in
+place of the path measured from the directory the file is written to. It is the
+path a reader will walk from the file's own directory, so `"."` is a file that
+sits inside its workspace, and it is taken as written, with `\` turned into `/`
+because the field is POSIX. It works with `minimal` and without it, and **it
+needs a `path`**, the same rule `minimal` has, refusing without one with *"A
+workspace path only means something for a file written elsewhere; pass path with
+workspace_path."* The reason is that a save of the node's own file leaves the
+file where it already is, so the measured path is the right one by construction;
+an override only says something about a copy written somewhere else. Stating one
+on a plain save writes a version carrying the stated metadata, since the metadata
+is inside the content hash ([saving.md](saving.md) § "Materialise on save").
 
 ### `delete_point` / `delete_camera_image`
 
@@ -3201,6 +3218,9 @@ where a test hands no host over.
   the copy has no thumbnails, lineage or absolute path and the viewer's
   provenance, the node keeps its path and its dirty mark, and a minimal save
   without a path is refused.
+- **`save_reconstruction` with `workspace_path` states the path**: the file
+  written carries the stated `workspace.relative_path` rather than one measured
+  from where it landed, and a stated path with no path of its own is refused.
 - **`open_reconstruction` defers and answers with the reconstruction**: the
   pending reply names `Open`, the landed answer is the node's entry with
   `already_open: false`, and a second open of the same path is `scene (2)` with

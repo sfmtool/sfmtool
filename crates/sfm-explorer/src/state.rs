@@ -636,6 +636,10 @@ pub struct AppState {
     /// [`crate::bundle_adjust_prompt`].
     pub bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
 
+    /// The workspace path `Save As Minimal...` asks about once its file dialog
+    /// has named a file. See [`crate::save_minimal_prompt`].
+    pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
+
     /// The `.matches` file each node's matches-backed resection reads, chosen
     /// once per source node and remembered for the session. See
     /// [`crate::resect`].
@@ -814,6 +818,7 @@ impl AppState {
             goto_point: GotoPointDialog::default(),
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
+            save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt::default(),
             resect_matches: HashMap::new(),
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]

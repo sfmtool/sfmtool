@@ -291,6 +291,44 @@ def parse_add_patch_bitmaps_params(param: str) -> AddPatchBitmapsTransform:
     return AddPatchBitmapsTransform(**kwargs)
 
 
+# The one --minimal key. ``wspath`` is the command-line spelling of the stated
+# workspace path; Rust, Python and the wire all call it ``workspace_path``, and
+# the CLI abbreviates it because it sits inside a comma-separated value.
+_MINIMAL_KEYS: dict[str, Callable[[str], object]] = {
+    "wspath": str,
+}
+
+
+def parse_minimal_params(param: str) -> MinimalTransform:
+    """Parse a ``--minimal`` comma-separated ``key=value`` string.
+
+    An empty string leaves the save measuring the workspace path, as every other
+    save does. Unknown keys, malformed tokens and empty keys raise
+    ``click.UsageError``.
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --minimal token '{token}': expected key=value"
+            )
+        key, value = (part.strip() for part in token.split("=", 1))
+        if not key:
+            raise click.UsageError(f"Invalid --minimal token '{token}': empty key")
+        if key not in _MINIMAL_KEYS:
+            raise click.UsageError(
+                f"Unknown --minimal key '{key}' "
+                f"(expected one of: {', '.join(sorted(_MINIMAL_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --minimal key '{key}'")
+        kwargs[key] = value
+    return MinimalTransform(workspace_path=kwargs.get("wspath"))
+
+
 # Each --localize-keypoints key maps to a caster for its value; the
 # LocalizeKeypointsTransform constructor owns range/enum validation. Keys mirror
 # the PatchCloud.localize_keypoints binding parameters, plus the compaction cull
@@ -540,8 +578,20 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
         elif arg == "--add-thumbnails":
             transforms.append(AddThumbnailsTransform())
 
-        elif arg == "--minimal":
-            transforms.append(MinimalTransform())
+        elif arg == "--minimal" or arg.startswith("--minimal="):
+            # Optional value, same tokenization as --add-patch-bitmaps.
+            if arg.startswith("--minimal="):
+                param = arg[len("--minimal=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_minimal_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --minimal parameter: {e}")
 
         elif arg == "--add-patch-bitmaps" or arg.startswith("--add-patch-bitmaps="):
             # Optional value, same tokenization as --refine-normals.
