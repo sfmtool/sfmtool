@@ -194,6 +194,7 @@ machine-checked**
 
 **The reply vocabulary forks three ways on one handle, because the rule is tested on
 requests only**
+> _Status (2026-09-22): Done — `camera_intrinsics_index` is the sole intrinsics handle in image rows, image details, intrinsics details, and selection blocks; bare and nested `index` spellings were removed, with a reply-to-tool round-trip test and updated MCP spec examples._
 - Location: `crates/sfm-explorer/src/mcp/render.rs:208` vs `mcp/read.rs:364–369` vs
   `read.rs:435`; the rule is `tools.rs:6–13`, the enforcement gap is `tests.rs:3492–3527`
 - Problem: `tools.rs`'s module doc states the surface's one rule as absolute — "one

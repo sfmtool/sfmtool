@@ -157,7 +157,7 @@ pub(super) fn selection(state: &AppState) -> Value {
         })),
         "camera_intrinsics": state.selected_camera.map(|camera| json!({
             "reconstruction_label": label_of(state, camera.recon),
-            "index": camera.index(),
+            "camera_intrinsics_index": camera.index(),
         })),
         "point": state.selected_point.map(|point| json!({
             "reconstruction_label": label_of(state, point.recon),

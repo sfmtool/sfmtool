@@ -287,8 +287,8 @@ attribute that identifies* an entity is named for both:
 
 | Field | Holds |
 |-------|-------|
-| `camera_intrinsics` | the expanded record — model, size, params |
-| `camera_intrinsics_index` | just the index, whether as a cross-reference from a camera image or as the argument naming which record to act on |
+| `camera_intrinsics` | intrinsics details, such as the model and sensor size in an image reply |
+| `camera_intrinsics_index` | the intrinsics handle in image rows, image and intrinsics replies, selection blocks, and tool arguments |
 | `reconstruction_label` | just the label, identifying which reconstruction |
 | `revision` | the Action Log's clock, on the log and on each entry |
 | `since_revision` | just the revision, identifying where a read of the log starts — "the revision I have seen since" |
@@ -301,6 +301,11 @@ other an object. It is also why a camera image's cross-reference to its lens is
 `camera_intrinsics_index` rather than `camera_index` — which would reintroduce
 the bare `camera` the previous rule just removed, and read as plausibly "the
 index of this camera image".
+
+The intrinsics handle is always `camera_intrinsics_index`, even inside a
+`selection.camera_intrinsics` block. `get_camera_image` puts the handle beside
+its `camera_intrinsics` detail block, so it can be passed unchanged to
+`get_camera_intrinsics` or `select_camera_intrinsics`.
 
 **A reply always qualifies; an argument qualifies only when it has one
 spelling.** A reply knows exactly which form it is emitting, so it always says
@@ -413,7 +418,8 @@ addressable. No arguments.
     "reconstruction_label": "seoul_bull",
     "camera_image": { "reconstruction_label": "seoul_bull", "index": 3,
                       "name": "images/IMG_0042.jpg" },
-    "camera_intrinsics": { "reconstruction_label": "seoul_bull", "index": 0 },
+    "camera_intrinsics": { "reconstruction_label": "seoul_bull",
+                           "camera_intrinsics_index": 0 },
     "point": null
   },
   "solo": null,                           // a reconstruction label, or null
@@ -512,7 +518,8 @@ first and not the second.
 //                    "camera_image": "images/IMG_0042.jpg" }
 { "reconstruction_label": "seoul_bull", "index": 3,
   "name": "images/IMG_0042.jpg",
-  "camera_intrinsics": { "index": 0, "model": "OPENCV",
+  "camera_intrinsics_index": 0,
+  "camera_intrinsics": { "model": "OPENCV",
                          "width": 270, "height": 480 },
   "quaternion_wxyz": [0.98, 0.01, -0.17, 0.04],
   "translation_xyz": [0.10, -1.88, 0.51],
@@ -522,7 +529,7 @@ first and not the second.
 
 // get_camera_intrinsics { "reconstruction_label": "seoul_bull",
 //                         "camera_intrinsics_index": 0 }
-{ "reconstruction_label": "seoul_bull", "index": 0,
+{ "reconstruction_label": "seoul_bull", "camera_intrinsics_index": 0,
   "model": "OPENCV", "width": 270, "height": 480,
   "params": { "focal_length_x": 402.1, "focal_length_y": 402.1,
               "principal_point_x": 135.0, "principal_point_y": 240.0,

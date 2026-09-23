@@ -363,8 +363,8 @@ pub(super) fn get_camera_image(
         "reconstruction_label": node.label,
         "index": index,
         "name": image.name,
+        "camera_intrinsics_index": image.camera_index as usize,
         "camera_intrinsics": {
-            "index": image.camera_index as usize,
             "model": camera.model.model_name(),
             "width": camera.width,
             "height": camera.height,
@@ -432,7 +432,7 @@ pub(super) fn get_camera_intrinsics(
     let mut out = render::camera_intrinsics(camera);
     let object = out.as_object_mut().expect("camera_intrinsics is an object");
     object.insert("reconstruction_label".into(), json!(node.label));
-    object.insert("index".into(), json!(index));
+    object.insert("camera_intrinsics_index".into(), json!(index));
     object.insert("camera_image_indices".into(), json!(users));
     Ok(out)
 }

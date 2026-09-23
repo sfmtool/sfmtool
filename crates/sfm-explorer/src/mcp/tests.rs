@@ -378,7 +378,7 @@ fn a_camera_image_is_addressable_by_index_or_by_name() {
     assert_eq!(by_index, by_name);
     assert_eq!(by_index["index"], 5);
     // Second half of the reconstruction, so the other lens.
-    assert_eq!(by_index["camera_intrinsics"]["index"], 1);
+    assert_eq!(by_index["camera_intrinsics_index"], 1);
 }
 
 #[test]
@@ -390,7 +390,7 @@ fn get_camera_intrinsics_names_its_parameters_and_its_users() {
         "get_camera_intrinsics",
         json!({ "reconstruction_label": "alpha", "camera_intrinsics_index": 1 }),
     );
-    assert_eq!(lens["index"], 1);
+    assert_eq!(lens["camera_intrinsics_index"], 1);
     assert_eq!(lens["camera_image_indices"], json!([4, 5, 6, 7]));
     let params = lens["params"].as_object().expect("a parameter map");
     assert!(
@@ -401,6 +401,59 @@ fn get_camera_intrinsics_names_its_parameters_and_its_users() {
         params.values().all(|v| v.is_number()),
         "parameters are numbers keyed by name: {params:?}"
     );
+}
+
+/// An intrinsics handle copied from any reply is the argument for the next
+/// tool, without digging into a nested record or translating a bare `index`.
+#[test]
+fn camera_intrinsics_has_one_handle_across_replies() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let page = call(
+        &mut state,
+        &mut viewer,
+        "list_camera_images",
+        json!({ "reconstruction_label": "alpha", "offset": 5, "limit": 1 }),
+    );
+    let row = &page["camera_images"][0];
+    assert_eq!(row["index"], 5, "the row's index names the image");
+    let lens_index = row["camera_intrinsics_index"].clone();
+
+    let image = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_image",
+        json!({ "reconstruction_label": "alpha", "camera_image": row["name"] }),
+    );
+    assert_eq!(image["camera_intrinsics_index"], lens_index);
+    assert!(image["camera_intrinsics"].get("index").is_none());
+
+    let lens = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "reconstruction_label": "alpha", "camera_intrinsics_index": lens_index }),
+    );
+    assert_eq!(
+        lens["camera_intrinsics_index"],
+        image["camera_intrinsics_index"]
+    );
+    assert!(lens.get("index").is_none());
+
+    let selected = call(
+        &mut state,
+        &mut viewer,
+        "select_camera_intrinsics",
+        json!({ "reconstruction_label": "alpha", "camera_intrinsics_index": lens["camera_intrinsics_index"] }),
+    );
+    let selection = &selected["selection"]["camera_intrinsics"];
+    assert_eq!(
+        selection["camera_intrinsics_index"],
+        lens["camera_intrinsics_index"]
+    );
+    assert!(selection.get("index").is_none());
+
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(scene["selection"]["camera_intrinsics"], *selection);
 }
 
 /// A bare index resolves against the selected reconstruction; a qualified id
@@ -431,7 +484,7 @@ fn selecting_a_camera_image_selects_the_intrinsics_it_was_shot_through() {
     )["selection"]
         .clone();
     assert_eq!(selection["camera_image"]["index"], 6);
-    assert_eq!(selection["camera_intrinsics"]["index"], 1);
+    assert_eq!(selection["camera_intrinsics"]["camera_intrinsics_index"], 1);
     assert_eq!(selection["reconstruction_label"], "alpha");
 }
 
@@ -451,7 +504,7 @@ fn selecting_a_different_lens_clears_the_camera_image() {
         json!({ "camera_intrinsics_index": 0 }),
     )["selection"]
         .clone();
-    assert_eq!(selection["camera_intrinsics"]["index"], 0);
+    assert_eq!(selection["camera_intrinsics"]["camera_intrinsics_index"], 0);
     assert_eq!(
         selection["camera_image"],
         Value::Null,
@@ -561,7 +614,7 @@ fn clearing_the_camera_image_keeps_its_intrinsics() {
     )["selection"]
         .clone();
     assert_eq!(selection["camera_image"], Value::Null);
-    assert_eq!(selection["camera_intrinsics"]["index"], 1);
+    assert_eq!(selection["camera_intrinsics"]["camera_intrinsics_index"], 1);
 }
 
 #[test]
