@@ -201,16 +201,16 @@ measurement.
 widening only when nothing matched would be the cheaper query if a small prefix
 ever found an image the full fifty missed, and over 1,200 patch-stage
 comparisons on five captures it never did -- two single candidates, against a
-recall loss on everything else
-([2026-09-17](../../../reports/exp/2026-09-17-constellation-progressive-eval.md)).
+recall loss on everything else. The prefix sweep's harness is
+[`kdf_constellation_progressive_eval.py`](../../../scripts/kdf_constellation_progressive_eval.py).
 A feature's forest hits do not depend on which other features are in the
 constellation, so stage `n` of any schedule is exactly a fresh query on the
 nearest `n`, which is what lets one table of prefix queries answer for every
 schedule at once. What a small prefix *did* give was a more accurate warp near
 the centre, and a second round measured freezing each image's warp at the first
-stage that accepted it
-([2026-09-18](../../../reports/exp/2026-09-18-constellation-two-stage-eval.md)):
-over 13,416 (patch, image) cases on eight corpora that lock is beaten by
+stage that accepted it with the same evaluation script's `measure2` and
+`analyze2` modes (with `--refit none` for the original three-point baseline).
+Across 13,416 (patch, image) cases on eight corpora, that lock is beaten by
 refitting the fifty-feature consensus on all eight, by 0.065 to 0.148 of the
 share of images placing the patch centre within 3 px, and the gap *widens* with
 the baseline, so there is no capture shape where staging wins. It also costs

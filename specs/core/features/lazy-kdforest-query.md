@@ -320,6 +320,20 @@ buffers and decoder workspace; include these in reported peak memory rather
 than claiming the decoded cache limit is a process RSS limit. A loader never
 waits for admission while holding a different chunk pin, avoiding cache deadlock.
 
+Size `cache_bytes` for the query's working set, not just for the largest item
+the file declares. The 256 MiB default admits DinoLedge's blocks but causes
+repeated patch searches to evict blocks they immediately need again. In a
+2026-09-23 check of a 1,455 MB DinoLedge index built by
+[`kdf_constellation_progressive_eval.py`](../../../scripts/kdf_constellation_progressive_eval.py)
+(`build-kdf` with its default layout), eight evenly spaced source images each
+supplied 50 descriptors. With `k=32` and 512 leaf checks, the
+median time for an identical second search was 374 ms at 256 MiB, 10 ms at
+512 MiB, and 10 ms at 1 GiB. This check reads `.sift` descriptors and the
+`.kdf` index only; it loads no reconstruction or lineage. The result locates
+the working-set knee for this file and query shape, not a universal cache
+default. Callers with a large index should compare repeated-query latency at
+several budgets before attributing that latency to forest search itself.
+
 Per-query dedup uses reusable bitsets for feature IDs and logical node IDs, with
 lists of touched words to clear between queries. Scratch includes bits proportional
 to corpus and tree size per Rayon job. Queue memory grows with explored branches. Batch output is O(M*k);
