@@ -19,6 +19,7 @@ import pytest
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.geometry import Se3Transform
 from sfmtool._workspace import find_sfmr_by_content_hash
+from sfmtool.xform import ToEmbeddedPatchesTransform
 from sfmtool.xform._scale_by_measurements import (
     ScaleByMeasurementsTransform,
     _resolve_point_cross_recon,
@@ -177,3 +178,56 @@ class TestWorkspaceSearchFallback:
         transform = ScaleByMeasurementsTransform(yaml_path)
         with pytest.raises(ValueError, match="no .sfmr under"):
             transform.apply(SfmrReconstruction.load(input_path))
+
+
+class TestEmbeddedPatches:
+    """A reconstruction whose features are embedded patches has no feature indexes."""
+
+    def _embedded(self, sfmr_path, tmp_path):
+        embedded = ToEmbeddedPatchesTransform().apply(
+            SfmrReconstruction.load(sfmr_path)
+        )
+        path = tmp_path / "embedded.sfmr"
+        embedded.save(path, operation="test")
+        embedded = SfmrReconstruction.load(path)
+        assert embedded.track_feature_indexes is None
+        return embedded
+
+    def test_point_ids_from_the_same_file_need_no_feature_indexes(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        recon = self._embedded(seoul_bull_workspace, tmp_path)
+        prefix = recon.content_xxh128[:8].lower()
+        i, j = _pick_separated_pair(recon.positions)
+        dist = float(np.linalg.norm(recon.positions[i] - recon.positions[j]))
+        yaml_path = tmp_path / "measurements.yaml"
+        yaml_path.write_text(
+            "unit: m\n"
+            "measurements:\n"
+            f"  - point_a: pt3d_{prefix}_{i}\n"
+            f"    point_b: pt3d_{prefix}_{j}\n"
+            "    distance: 2.0\n"
+        )
+
+        transform = ScaleByMeasurementsTransform(yaml_path)
+        out = transform.apply(recon)
+
+        assert transform._scale_factor == pytest.approx(2.0 / dist, rel=1e-6)
+        assert out.world_space_unit == "m"
+
+    def test_point_ids_from_another_file_say_why_they_cannot_resolve(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        recon = self._embedded(seoul_bull_workspace, tmp_path)
+        yaml_path = tmp_path / "measurements.yaml"
+        yaml_path.write_text(
+            "unit: m\n"
+            "measurements:\n"
+            "  - point_a: pt3d_ffffffff_0\n"
+            "    point_b: pt3d_ffffffff_1\n"
+            "    distance: 2.0\n"
+        )
+
+        transform = ScaleByMeasurementsTransform(yaml_path)
+        with pytest.raises(ValueError, match="no feature indexes"):
+            transform.apply(recon)

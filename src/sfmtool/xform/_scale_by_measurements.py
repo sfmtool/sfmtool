@@ -80,6 +80,15 @@ def _parse_distance(value, target_unit: str) -> float:
 def _build_observation_index(
     recon: SfmrReconstruction,
 ) -> tuple[dict[str, int], dict[tuple[int, int], int]]:
+    # Matching goes through SIFT feature indexes, which a reconstruction whose
+    # features are embedded patches does not carry.
+    if recon.track_feature_indexes is None:
+        raise ValueError(
+            "Point IDs from another reconstruction are matched through shared "
+            "feature observations, and this reconstruction has no feature "
+            "indexes (its features are embedded patches). Use Point IDs copied "
+            "from this reconstruction instead."
+        )
     name_to_idx = {name: i for i, name in enumerate(recon.image_names)}
 
     obs_index: dict[tuple[int, int], int] = {}
@@ -230,7 +239,9 @@ class ScaleByMeasurementsTransform:
             )
 
         input_hash_prefix = (recon.content_xxh128 or "")[:8]
-        input_name_to_idx, input_obs_index = _build_observation_index(recon)
+        # Built on the first Point ID that names another reconstruction, since
+        # only those resolve through it.
+        input_index = None
 
         by_prefix: dict[str, list[dict]] = {}
         for pm in parsed_measurements:
@@ -258,6 +269,9 @@ class ScaleByMeasurementsTransform:
                             )
                         resolved[pt_id] = idx
             else:
+                if input_index is None:
+                    input_index = _build_observation_index(recon)
+                input_name_to_idx, input_obs_index = input_index
                 source = self._load_source(prefix, source_sfmr_path)
 
                 click.echo(
