@@ -13,13 +13,43 @@ from click.testing import CliRunner
 
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.sift.file import SiftReader, get_sift_path_for_image
-from sfmtool._undistort_images import undistort_reconstruction_images
+from sfmtool._undistort_images import (
+    _features_in_frame,
+    undistort_reconstruction_images,
+)
 from sfmtool.cli import main
 
 
 # =============================================================================
 # CLI tests
 # =============================================================================
+
+
+class TestFeaturesInFrame:
+    def test_edge_is_tested_at_stored_precision(self):
+        """A position that rounds onto the edge in float32 is dropped."""
+        width, height = 270, 480
+        just_inside_x = 269.999995
+        just_inside_y = 479.99999
+        # The premise: inside in float64, on the edge once stored as float32.
+        assert just_inside_x < width and np.float32(just_inside_x) == width
+        assert just_inside_y < height and np.float32(just_inside_y) == height
+        positions = np.array(
+            [
+                [just_inside_x, 10.0],
+                [10.0, just_inside_y],
+                [269.9, 479.9],
+                [0.0, 0.0],
+                [-1e-9, 10.0],
+            ]
+        )
+
+        keep, kept = _features_in_frame(positions, width, height)
+
+        np.testing.assert_array_equal(keep, [False, False, True, True, False])
+        assert kept.dtype == np.float32
+        np.testing.assert_array_equal(kept, positions[[2, 3]].astype(np.float32))
+        assert np.all(kept[:, 0] < width) and np.all(kept[:, 1] < height)
 
 
 class TestUndistortCLI:

@@ -49,6 +49,26 @@ def _print_camera_params(label: str, cam) -> None:
                 print(f"    {key:<{name_width}}  {val:>14.6f}")
 
 
+def _features_in_frame(
+    positions: np.ndarray, width: int, height: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep the feature positions that lie inside a ``width`` x ``height`` frame.
+
+    ``positions`` is Nx2 float64. Returns the boolean keep mask and the kept
+    positions as float32, the precision a ``.sift`` file stores. The bounds are
+    tested on the float32 values: a position just inside the right or bottom
+    edge in float64 can round onto the edge itself.
+    """
+    positions_f32 = positions.astype(np.float32)
+    keep = (
+        (positions_f32[:, 0] >= 0)
+        & (positions_f32[:, 0] < width)
+        & (positions_f32[:, 1] >= 0)
+        & (positions_f32[:, 1] < height)
+    )
+    return keep, positions_f32[keep]
+
+
 def _compute_jacobians(
     distorted_cam,
     pinhole,
@@ -375,19 +395,13 @@ def undistort_reconstruction_images(
             new_positions_f64 = pinhole.project_batch(normalized)
 
             # Filter: keep only features within pinhole bounds
-            ph_w = float(pinhole.width)
-            ph_h = float(pinhole.height)
-            keep = (
-                (new_positions_f64[:, 0] >= 0)
-                & (new_positions_f64[:, 0] < ph_w)
-                & (new_positions_f64[:, 1] >= 0)
-                & (new_positions_f64[:, 1] < ph_h)
+            keep, new_positions = _features_in_frame(
+                new_positions_f64, pinhole.width, pinhole.height
             )
 
             keep_indices = np.where(keep)[0]
             remap = {int(old): new for new, old in enumerate(keep_indices)}
 
-            new_positions = new_positions_f64[keep].astype(np.float32)
             new_descriptors = src_descriptors[keep]
 
             # Transform affine shapes via Jacobian
