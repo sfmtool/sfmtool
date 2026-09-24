@@ -56,12 +56,22 @@ DEFAULTS = {
     # other: the vote, not each member, is what refuses a wrong track.
     "shared": {"ray_consensus": True, "min_zncc_median": 0.7, "min_in_views": 2},
     "bearing_tolerance_deg": 0.2,
+    # When set, the winning group's tracks whose queried view peaks within this
+    # many pixels of the pixel are preferred over the rest (see query_shift).
+    "prefer_centred_px": None,
 }
 
 
 def _half(track) -> float:
     p = track.placement
     return float(np.linalg.norm(p["u_halfvec"])) if p is not None else 0.0
+
+
+def query_shift(result) -> float:
+    """How far the queried view's correlation peak sits from its keypoint."""
+    o = result.track.observations[result.query_observation]
+    v = o.get("track", {}).get("seed_shift_px")
+    return float(v) if v is not None else float("inf")
 
 
 def agree(a, b, opts) -> bool:
@@ -118,7 +128,13 @@ def build_track(ctx, image: int, pixel, options: dict | None = None):
         if best_key is None or key > best_key:
             best, best_key = group, key
     names = [m for m, _ in opts["members"]]
-    chosen = min(best, key=lambda o: (o["size"], names.index(o["member"])))
+    centred = opts["prefer_centred_px"]
+
+    def rank(o):
+        off = centred is not None and query_shift(o["result"]) > centred
+        return (off, o["size"], names.index(o["member"]))
+
+    chosen = min(best, key=rank)
     result = chosen["result"]
     result.diagnostics = {
         "member": chosen["member"],

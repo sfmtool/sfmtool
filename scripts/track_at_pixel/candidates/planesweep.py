@@ -124,8 +124,11 @@ def depth_range(ctx, image: int, margin: float) -> tuple[float, float]:
     return float(np.percentile(d, 1)) / margin, float(np.percentile(d, 99)) * margin
 
 
-def sweep(ctx, image: int, pixel, radius_px: float, opts: dict):
-    """Per depth (inverse-depth grid plus infinity): per-view ZNCC and centre pixels."""
+def sweep(ctx, image: int, pixel, radius_px: float, opts: dict, depths=None):
+    """Per depth: per-view ZNCC and centre pixels.
+
+    ``depths`` defaults to the inverse-depth grid over the scene plus infinity.
+    """
     ds = ctx.dataset
     grey = grey_images(ds, opts["blur_sigma"])
     cam = ctx.camera(image)
@@ -139,9 +142,10 @@ def sweep(ctx, image: int, pixel, radius_px: float, opts: dict):
     rays = np.asarray(cam.intrinsics.pixel_to_ray_batch(grid_px), float) @ cam.R
     rays /= np.linalg.norm(rays, axis=1, keepdims=True)
     axis = rays[(n * n) // 2]
-    near, far = depth_range(ctx, image, opts["depth_margin"])
-    inv = np.linspace(1.0 / near, 1.0 / far, opts["depth_samples"])
-    depths = list(1.0 / inv) + [np.inf]
+    if depths is None:
+        near, far = depth_range(ctx, image, opts["depth_margin"])
+        inv = np.linspace(1.0 / near, 1.0 / far, opts["depth_samples"])
+        depths = list(1.0 / inv) + [np.inf]
     others = [i for i in range(len(ds.cameras)) if i != image]
     zncc = np.full((len(depths), len(others)), -1.0)
     centre = np.full((len(depths), len(others), 2), np.nan)

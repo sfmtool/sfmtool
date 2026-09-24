@@ -73,6 +73,7 @@ ZNCC.
 | `cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.62 |
 | `planesweep` | 699 | 614 | 14 | 85 | 48.1% | 0.024 | 13.5 | 0.25 | 1.43 |
 | `ensemble` | 1239 | 1087 | 35 | 152 | 85.1% | 0.032 | 13.4 | 0.26 | 14.05 |
+| `centred` | 1239 | 1107 | 35 | 132 | 86.7% | 0.031 | 13.3 | 0.25 | 7.11 |
 
 The medians are over the built tracks. The second candidate row is the control:
 the baseline's own way of finding sightings, with the shared finish. It shows
@@ -88,7 +89,7 @@ From the cascade on, each candidate is measured by how much of the gap to the
 ground truth's 1230 good queries it closes. The cascade leaves 305. The
 ensemble leaves 143, 53% of the cascade's gap; its tracks came from `clusters`
 (878), `transfer` (197), `sweep` (123), `planesweep` (40) and the descriptor
-route (1).
+route (1). `centred` leaves 123, 14% of the ensemble's gap.
 
 ## Files
 
@@ -107,6 +108,7 @@ route (1).
 | `candidates/clusters.py` | Reads the cluster-patches `.matches`: the nearest clusters' kept members, with the pixel's offset from the member carried into each image through the members' affine shapes |
 | `candidates/cascade.py` | Runs `clusters`, `transfer`, `sweep` and the descriptor route in that order and returns the first track that passes its own gates |
 | `candidates/planesweep.py` | Needs only the poses and the photographs. Sweeps a patch facing the queried camera along the pixel's ray (uniform in inverse depth, down to infinity), scores each depth by the other views' ZNCC against the query, and fits the best-agreed depths |
+| `candidates/centred.py` | The ensemble, preferring within the winning group the tracks whose queried view's correlation peak is within 0.5 px of the pixel |
 | `candidates/ensemble.py` | Runs every member above at 1, 1.5 and 2 times its own patch size, with the ray consensus in the finish and gates at the good-track bar's ZNCC. The members' tracks all lie on the pixel's ray, so they vote on the depth; the group most distinct members agree on wins, and its track is chosen in the cascade's order |
 
 The baseline's `size_policy` option (`prior`, `largest_view`, `median_view`,
