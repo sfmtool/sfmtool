@@ -136,7 +136,9 @@ one bar (`metrics.GOOD_BAR`) and the summary counts the tracks that pass it
 (`good`) and the ones that do not (`built but not good`). A track is good when
 all of these hold:
 
-- the queried sighting is `in` and within 2 px of the pixel;
+- the queried sighting is `in` (its keypoint may settle away from the pixel:
+  the track's job is to find the correspondences, and bundle adjustment
+  reconciles a point with its keypoints);
 - the point is within one ground-truth half-extent of the ground-truth point
   (0.5 degrees for a bearing);
 - `view_precision` is at least 0.75;

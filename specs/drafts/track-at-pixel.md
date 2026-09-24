@@ -11,8 +11,8 @@ surface and ask for the point there: which other photographs see that same
 spot, where it sits in each of them, where it is in 3D, which way the surface
 faces and how large a patch of it can be matched reliably. This operation
 answers that question from a single image and pixel. It either returns a
-high-quality track centred on the pixel, ready to be judged and committed on
-the bench, or it refuses and says which step failed and what it measured on
+high-quality track of the spot at the pixel, ready to be judged and committed
+on the bench, or it refuses and says which step failed and what it measured on
 the way. In SfM Explorer it is the gesture that turns "this spot" into a track
 in one step, instead of a person assembling one sighting at a time.
 
@@ -43,11 +43,15 @@ script's own bars, decides what happens to it next, and
 [`commit`](../core/bench/editable-track.md) is still the only step that writes
 the reconstruction.
 
-**"Centred at the pixel"** is part of the contract. The track has an
-observation in the queried image, that observation is `in`, and its keypoint
-lies within a small pixel distance of the pixel asked about. A track that has
-wandered onto a more distinctive feature nearby has answered a different
-question. The operation refuses in that case rather than returning it.
+**"The spot at the pixel"** is part of the contract. The track has an
+observation in the queried image, and that observation is `in`. Its keypoint is
+not held on the pixel. The pixel says which piece of surface is meant, and the
+fit then puts every sighting, the queried one included, where the photographs
+agree. On a reconstruction less accurate than a ground truth, a point's
+projection and its keypoints disagree by a few pixels, and bundle adjustment is
+what reconciles them. The operation's job is to find the correspondences.
+What makes the answer a different question is a different piece of surface:
+a point further from the spot than the patch reaches.
 
 **Refusal.** An error that names the stage that failed (building a local prior,
 the constellation search, cluster refinement, the stage upgrade, the geometry
@@ -90,7 +94,8 @@ These are the properties a returned track must have. The gates that enforce
 them read the same measurements `evaluate` writes, so a bar here and a
 threshold slider in Track View judge the same numbers.
 
-- **Centred.** The queried observation is `in` and on the pixel, as above.
+- **Of the spot.** The queried observation is `in`, and the point is the
+  piece of surface seen at the pixel, as above.
 - **Supported.** Enough `in` observations that the leave-one-out consensus
   means something: two is a correspondence, and three or more is a track.
 - **Photometrically consistent.** Each `in` observation's leave-one-out ZNCC
@@ -183,9 +188,8 @@ another piece of surface.
 of tracks each returns does not compare them. The harness judges each returned
 track against a single bar of its own and counts the tracks that pass it
 (good) and the ones that do not (built but not good). A track is good when its
-queried observation is `in` and within 2 px of the pixel, its point is within
-one ground-truth half-extent of the ground-truth point (0.5 degrees for a
-bearing), at least three quarters of its `in` views pass the geometric
+queried observation is `in`, its point is within one ground-truth half-extent
+of the ground-truth point (0.5 degrees for a bearing), at least three quarters of its `in` views pass the geometric
 membership test above, and its median leave-one-out ZNCC is at least 0.7.
 Candidates are ranked on the good count, with the not-good count beside it.
 
@@ -268,12 +272,10 @@ Once a track stands, the last four share one finish:
 - **Which algorithm.** The harness decides this. The cascade is the strongest
   candidate so far, and it is also the slowest, since a pixel no source can
   serve runs all four.
-- **Holding the pixel.** The candidates anchor after every fit, as described
-  above. Holding the queried sighting's keypoint through the fit, so that it
-  still casts its ray from the pixel, is the other way to keep the track on the
-  pixel. In the harness it did no better than anchoring, so the fit has no
-  such option. Whether the operation in `sfmtool-core` anchors inside its own
-  loop, or leaves that to its caller, is open.
+- **How far the queried sighting may move.** The queried keypoint is not held
+  on the pixel, and the position bar is what keeps the track on the spot. Whether
+  the operation should also bound the keypoint's move in pixels, and at what
+  multiple of the patch's size, is open.
 - **Near a depth edge.** When the neighbourhood holds two depth populations,
   the patch has to choose one surface and be sized not to span the edge. Which
   surface to pick, and whether to return both as two tracks, is open.

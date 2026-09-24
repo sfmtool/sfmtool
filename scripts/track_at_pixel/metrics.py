@@ -242,7 +242,6 @@ VIEW_TOLERANCE_PX = 3.0
 # candidates with different gates are compared on one scale. A candidate's gates
 # decide what it returns; this decides whether what it returned was right.
 GOOD_BAR = {
-    "max_query_offset_px": 2.0,  # the track sits on the pixel asked about
     "max_err_in_gt_halves": 1.0,  # the point lies within the true patch
     "max_bearing_err_deg": 0.5,  # the same, for a bearing
     "min_view_precision": 0.75,  # its views mostly see the true point
@@ -254,13 +253,10 @@ def good_failures(m: dict) -> list[str]:
     """Which parts of :data:`GOOD_BAR` a scored row misses (empty = good)."""
     bar = GOOD_BAR
     out = []
-    offset = m.get("query_keypoint_offset_px")
-    if (
-        not m.get("query_image_in")
-        or offset is None
-        or offset > bar["max_query_offset_px"]
-    ):
-        out.append("query offset")
+    # The queried sighting has to stay in the track, but its keypoint may settle
+    # away from the pixel: the position bar is what keeps the track on the spot.
+    if not m.get("query_image_in"):
+        out.append("query out")
     halves = m.get("position_err_in_gt_halves")
     if halves is not None:
         if halves > bar["max_err_in_gt_halves"]:
