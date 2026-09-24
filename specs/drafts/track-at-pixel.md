@@ -213,8 +213,8 @@ the ground truth's.
 
 ## Candidates
 
-The harness holds five candidates. Four differ in where the other photographs'
-sightings of the pixel come from, and the fifth combines them.
+The harness holds eight candidates. Five differ in where the other
+photographs' sightings of the pixel come from, and three combine them.
 
 - **Descriptor constellation** (`baseline`): the bench steps in the order a
   person would press them. A cluster at the pixel, the constellation search and
@@ -233,10 +233,29 @@ sightings of the pixel come from, and the fifth combines them.
 - **Cluster file** (`clusters`): the clusters of the `.matches` file with a
   member near the pixel. The pixel's offset from that member is carried into
   each kept member's image through the two members' affine shapes.
+- **Plane sweep** (`planesweep`): reads no reconstructed point, only the poses
+  and the photographs. A patch facing the queried camera is moved along the
+  pixel's ray, at depths uniform in inverse depth down to infinity. At each
+  depth its sample grid is projected into every other photograph and compared
+  with the queried photograph's by ZNCC. The depths the most views agree on
+  are fitted.
 - **Cascade** (`cascade`): runs the cluster file, the neighbour transfer, the
   sweep and the descriptor route in that order and returns the first track that
   passes its own gates. The order is from the source that is least often wrong
   when it returns a track to the one that is most often wrong.
+- **Ensemble** (`ensemble`): runs every member above at 1, 1.5 and 2 times the
+  patch size it picks for itself, with the ray consensus in the finish and the
+  gates lowered to two views and a median ZNCC of 0.7. Every member's track is
+  anchored on the pixel, so the tracks can differ only in depth. Two tracks
+  agree when their points are within the larger patch's half-extent of each
+  other. The group of agreeing tracks from the most distinct members wins, and
+  its track is taken in the cascade's order, smallest patch first.
+- **Centred** (`centred`): the ensemble, but within the winning group it
+  prefers the tracks whose queried view's own correlation peak is within
+  0.5 px of the pixel. A fit that slid the patch toward a stronger feature
+  beside the pixel leaves that peak off the pixel after the anchor has moved
+  the patch back, and its other views hold the slid correspondences, which
+  put the point at the wrong depth along the ray.
 
 Once a track stands, the last four share one finish:
 
@@ -250,12 +269,17 @@ Once a track stands, the last four share one finish:
    the track's depth, kept unless the median ZNCC drops.
 3. **Growth.** The geometry search from the queried sighting, then an anchored
    refit. A view the search adds has no keypoint until a fit places it.
-4. **Cleaning.** An `in` view whose correlation peak sits more than 1.5 px from
+4. **Ray consensus** (when enabled). The queried pixel's ray is the one line
+   the point is known to lie on. Each `in` view whose correlation peak is at
+   its keypoint names a distance along it, where its own ray passes nearest.
+   The distance the most views agree on (within 2 px of their keypoints) is
+   kept, and the views that disagree are turned out before the cleaning.
+5. **Cleaning.** An `in` view whose correlation peak sits more than 1.5 px from
    its keypoint, or whose keypoint sits more than 1.5 px from the point's
    projection, is turned out, and the track is refit.
-5. **Gates.** The queried sighting `in` and on the pixel, at least three `in`
-   views, a median ZNCC of at least 0.8, and no `in` view more than 1.5 px from
-   the point's projection.
+6. **Gates.** The queried sighting `in` and on the pixel, at least three `in`
+   views (two in the ensemble), a median ZNCC of at least 0.8 (0.7 in the
+   ensemble), and no `in` view more than 1.5 px from the point's projection.
 
 ## Consumers
 
@@ -272,6 +296,13 @@ Once a track stands, the last four share one finish:
 - **Which algorithm.** The harness decides this. The cascade is the strongest
   candidate so far, and it is also the slowest, since a pixel no source can
   serve runs all four.
+- **Framing a track.** The sightings a track keeps, and where its keypoints
+  settle, depend on the patch's normal and size as much as on where the
+  sightings were first found. The neighbours' mean normal is the one the
+  members use. A fit through the directions to the image-space neighbours, the
+  photometric normal refinement and a plane through the congealed depths of
+  subpatches tiling the patch were each tried and did not frame tracks better.
+  How to choose a normal and a size that hold the sightings is open.
 - **How far the queried sighting may move.** The queried keypoint is not held
   on the pixel, and the position bar is what keeps the track on the spot. Whether
   the operation should also bound the keypoint's move in pixels, and at what

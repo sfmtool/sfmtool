@@ -91,6 +91,54 @@ ensemble leaves 143, 53% of the cascade's gap; its tracks came from `clusters`
 (878), `transfer` (197), `sweep` (123), `planesweep` (40) and the descriptor
 route (1). `centred` leaves 123, 14% of the ensemble's gap.
 
+## Where the remaining gap is
+
+`centred` leaves 123 of the ground truth's 1230 good queries. These
+measurements say where they are.
+
+**The sightings are not the limit; the framing is.** A diagnostic built
+tracks from the held-out point's own keypoints, the true sightings, with the
+members' construction (size from the neighbours, the neighbours' normal, the
+upgrade, the fit and the shared finish). A diagnostic reads the held-out
+point, so it is not a candidate and is not in `candidates/`.
+
+| Built from the true sightings with | Good |
+|---|---|
+| the members' size and normal | 1090 |
+| the ground truth's size | 1110 |
+| the ground truth's normal | 1134 |
+| the ground truth's size and normal | 1156 |
+| the ground-truth track itself, pinned, through the finish | 1175 |
+
+`centred` gets 1107, more than the construction gets from the true sightings.
+The normal decides where the keypoints settle. The neighbours' mean normal is
+11 degrees from the ground truth's at the median. A fit through the directions
+to the image-space neighbours is 27 degrees off. The photometric normal
+refinement is 17 degrees off, and it moves even the ground truth's own normal
+by 16 degrees.
+
+**The misses are coherent.** The tracks that miss the bar are mostly 2 or 3
+views, and all their views are off by a similar amount: 3.6 px from the
+ground-truth projection at the median, against the bar's 3 px. Their median
+ZNCC is within 0.012 of the ground truth's. At 40 of the 123, the ground
+truth's own point projects 1.5 px or more from its keypoint at the queried
+pixel. A track that holds that pixel then disagrees with the ground truth in
+every other view.
+
+**What was tried and not kept** (good queries, against `centred`'s 1107 unless
+noted):
+
+| Idea | Result |
+|---|---|
+| A cross-validated logistic selector over 13 or 21 member runs | 1115 to 1122 |
+| Adding the photometric normal search to every member | 1107 |
+| A plane through the congealed depths of a 3x3 grid of subpatches tiling the patch, as the normal | 1092 (+8 to +13 from the true sightings) |
+| One unanchored refit of the chosen track, kept if the queried keypoint moves under 2 px | 1098 |
+| No anchoring in any fit | 944 |
+| Growing the chosen track into every view that should see it | +3 net, on the ensemble's not-good points |
+| A fine photometric depth search around the chosen depth | moved 113 correct tracks off the truth |
+| The neighbours' plane as a depth prior in the vote | 1063 to 1103 |
+
 ## Files
 
 | File | Role |
