@@ -11,7 +11,7 @@
 //! is known to the pixel. Nothing here decodes a photograph: every step in this
 //! slice is decided by what the reconstruction and the person already say.
 
-mod scene;
+pub(super) mod scene;
 
 use std::sync::Arc;
 

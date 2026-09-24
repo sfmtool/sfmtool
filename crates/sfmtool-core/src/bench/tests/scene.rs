@@ -23,10 +23,10 @@ use crate::reconstruction::data::{
 };
 use crate::reconstruction::edited::EditedReconstruction;
 
-pub(super) const IMG_W: u32 = 128;
-pub(super) const IMG_H: u32 = 128;
+pub(in crate::bench) const IMG_W: u32 = 128;
+pub(in crate::bench) const IMG_H: u32 = 128;
 const FOCAL: f64 = 160.0;
-const PLANE_Z: f64 = 4.0;
+pub(in crate::bench) const PLANE_Z: f64 = 4.0;
 const HALF_EXTENT: f64 = 0.12;
 /// The camera centres, in world space. The first two observe the point; the
 /// third is the one an observation is added in.
@@ -86,7 +86,7 @@ fn pose(center: [f64; 3]) -> RigidTransform {
 
 /// The decoded views, held so the borrows in [`views`] have something to point
 /// at.
-pub(super) struct Scene {
+pub(in crate::bench) struct Scene {
     centers: Vec<[f64; 3]>,
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
@@ -94,7 +94,7 @@ pub(super) struct Scene {
 }
 
 impl Scene {
-    pub(super) fn new() -> Self {
+    pub(in crate::bench) fn new() -> Self {
         Self::from_centers(&CENTERS, PLANE_Z)
     }
 
@@ -106,7 +106,7 @@ impl Scene {
     /// knobs a test turns: the near scene [`Scene::new`] builds resolves a
     /// depth, and one whose cameras step by centimetres at a plane hundreds of
     /// units out resolves only a bearing.
-    pub(super) fn from_centers(centers: &[[f64; 3]], depth: f64) -> Self {
+    pub(in crate::bench) fn from_centers(centers: &[[f64; 3]], depth: f64) -> Self {
         Self {
             centers: centers.to_vec(),
             cameras: centers.iter().map(|_| pinhole()).collect(),
@@ -118,7 +118,7 @@ impl Scene {
         }
     }
 
-    pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
+    pub(in crate::bench) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras
             .iter()
             .zip(&self.poses)
@@ -132,13 +132,18 @@ impl Scene {
     }
 
     /// Where `world` lands in image `i`, in source-image px.
-    pub(super) fn project(&self, i: usize, world: Point3<f64>) -> [f64; 2] {
+    pub(in crate::bench) fn project(&self, i: usize, world: Point3<f64>) -> [f64; 2] {
         self.project_homogeneous(i, world, 1.0)
     }
 
     /// Where the homogeneous world point `(coords, w)` lands in image `i`, in
     /// source-image px: a place at `w == 1`, a direction at `w == 0`.
-    pub(super) fn project_homogeneous(&self, i: usize, coords: Point3<f64>, w: f64) -> [f64; 2] {
+    pub(in crate::bench) fn project_homogeneous(
+        &self,
+        i: usize,
+        coords: Point3<f64>,
+        w: f64,
+    ) -> [f64; 2] {
         let cam = self.poses[i].transform_point_homogeneous(coords.coords, w);
         let (u, v) = self.cameras[i]
             .ray_to_pixel([cam.x, cam.y, cam.z])
@@ -147,7 +152,7 @@ impl Scene {
     }
 
     /// How many images the scene holds.
-    pub(super) fn len(&self) -> usize {
+    pub(in crate::bench) fn len(&self) -> usize {
         self.centers.len()
     }
 }
@@ -178,7 +183,7 @@ fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
 /// such a row. Everything else is the same fixture either way, which is the
 /// point: a test of the finite/infinity boundary needs the two sides built the
 /// same way apart from that one number.
-pub(super) fn fixture_of(
+pub(in crate::bench) fn fixture_of(
     scene: &Scene,
     coordinate: Point3<f64>,
     w: f64,
@@ -264,7 +269,10 @@ pub(super) fn fixture_of(
 /// A reconstruction carrying the optional per-observation and per-point columns
 /// a created point has to fill in: an `(P, r, r, 4)` bitmap column, an
 /// observation confidence and a normal confidence.
-pub(super) fn with_columns(mut recon: SfmrReconstruction, r: usize) -> SfmrReconstruction {
+pub(in crate::bench) fn with_columns(
+    mut recon: SfmrReconstruction,
+    r: usize,
+) -> SfmrReconstruction {
     let set = &mut recon.point_set;
     set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::zeros((set.points.len(), r, r, 4))));
     set.observation_confidence = Some(vec![200; set.tracks.len()]);
@@ -276,7 +284,7 @@ pub(super) fn with_columns(mut recon: SfmrReconstruction, r: usize) -> SfmrRecon
 /// [`fixture`] carrying the optional per-observation and per-point columns a
 /// created point has to fill in: an `(P, r, r, 4)` bitmap column, an
 /// observation confidence and a normal confidence.
-pub(super) fn fixture_with_columns(
+pub(in crate::bench) fn fixture_with_columns(
     scene: &Scene,
     world: Point3<f64>,
     r: usize,
@@ -285,8 +293,67 @@ pub(super) fn fixture_with_columns(
 }
 
 /// The fixture wrapped as a version with no edits.
-pub(super) fn edited(scene: &Scene, world: Point3<f64>) -> EditedReconstruction {
+pub(in crate::bench) fn edited(scene: &Scene, world: Point3<f64>) -> EditedReconstruction {
     EditedReconstruction::new(Arc::new(fixture(scene, world)))
 }
 
-pub(super) const WORLD: Point3<f64> = Point3::new(0.0, 0.0, PLANE_Z);
+pub(in crate::bench) const WORLD: Point3<f64> = Point3::new(0.0, 0.0, PLANE_Z);
+
+/// An `embedded_patches` reconstruction over `scene` holding one point on the
+/// plane at each of `points`, every one observed by every image at its exact
+/// projection and standing on a patch that faces the cameras.
+///
+/// What the track-at-pixel tests hold one point out of: the points around it
+/// are its neighbourhood, and each one's keypoints are the pairs a local map
+/// between two photographs is fitted to.
+pub(in crate::bench) fn fixture_points(
+    scene: &Scene,
+    points: &[Point3<f64>],
+) -> SfmrReconstruction {
+    let n = scene.len();
+    let mut recon = fixture_of(scene, points[0], 1.0, &[0], &plane_patch(points[0]));
+    let set = &mut recon.point_set;
+    set.points = points
+        .iter()
+        .map(|&position| Point3D {
+            position,
+            w: 1.0,
+            color: [120, 130, 140],
+            error: 0.5,
+            normal: Vector3::new(0.0, 0.0, -1.0),
+        })
+        .collect();
+    set.tracks = (0..points.len() as u32)
+        .flat_map(|point_index| {
+            (0..n as u32).map(move |image_index| TrackObservation {
+                image_index,
+                point_index,
+            })
+        })
+        .collect();
+    set.observation_counts = vec![n as u32; points.len()];
+    let mut keypoints = Array2::<f32>::zeros((points.len() * n, 2));
+    for (p, &world) in points.iter().enumerate() {
+        for image in 0..n {
+            let px = scene.project(image, world);
+            keypoints[[p * n + image, 0]] = px[0] as f32;
+            keypoints[[p * n + image, 1]] = px[1] as f32;
+        }
+    }
+    set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: keypoints,
+        image_file_hashes: vec![[0u8; 16]; n],
+    };
+    let patch = plane_patch(points[0]);
+    let halfvec = |axis: Vector3<f64>| {
+        let v = axis * HALF_EXTENT;
+        [v.x as f32, v.y as f32, v.z as f32]
+    };
+    let rows = |v: [f32; 3]| {
+        Array2::from_shape_vec((points.len(), 3), v.repeat(points.len())).expect("(P, 3)")
+    };
+    set.patch_u_halfvec_xyz = Some(rows(halfvec(patch.u_axis)));
+    set.patch_v_halfvec_xyz = Some(rows(halfvec(patch.v_axis)));
+    recon.rebuild_derived_fields();
+    recon
+}

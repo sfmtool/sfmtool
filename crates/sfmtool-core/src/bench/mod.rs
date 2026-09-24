@@ -48,6 +48,7 @@ pub mod search;
 pub mod stage;
 pub mod steps;
 pub mod track;
+pub mod track_at_pixel;
 
 #[cfg(test)]
 mod tests;
@@ -87,6 +88,14 @@ pub use steps::{
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,
     Provenance, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Unmeasured, Verdict,
+};
+pub use track_at_pixel::{
+    build_track_at_pixel, CandidateKind, CandidateRecord, CascadeMember, ClusterMember,
+    ClustersOptions, ConstellationOptions, FinishOptions, HypothesisRecord, LateralRecord,
+    LocalPriorRecord, MatchesClusters, MatchesClustersError, MemberRefusal, NearbyCluster,
+    NearbyObservation, RefusalStage, SiftIndexSource, StageRecord, SweepOptions, TiltRecord,
+    TrackAtPixelError, TrackAtPixelOptions, TrackAtPixelReport, TrackAtPixelSources,
+    TransferOptions,
 };
 
 /// One thing on the bench.
