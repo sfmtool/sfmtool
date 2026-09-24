@@ -49,6 +49,8 @@ use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
 use crate::spatial::constellation_query::DEFAULTS as QUERY_DEFAULTS;
 use crate::spatial::kdf::PyLazyKdForest;
 
+mod track_at_pixel;
+
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
 fn refused<E: std::fmt::Display>(e: E) -> PyErr {
     PyValueError::new_err(e.to_string())
@@ -1940,5 +1942,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(search_descriptors, m)?)?;
     m.add_function(wrap_pyfunction!(search_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
+    track_at_pixel::register(m)?;
     Ok(())
 }
