@@ -3,8 +3,12 @@
 **Status:** Draft. Decided: the operation's inputs, its output and refusal
 contract, the evidence it may draw on, and the leave-one-track-out harness in
 [`scripts/track_at_pixel/`](../../scripts/track_at_pixel/README.md) that judges
-candidate algorithms for it. Not decided: the algorithm, its Rust signature,
-and the bars a track has to clear. Those follow from what wins in the harness.
+candidate algorithms for it. Built: the cascade, as
+`sfmtool_core::bench::build_track_at_pixel`, whose Rust signature, report and
+refusal are specified in
+[core/bench/track-at-pixel.md](../core/bench/track-at-pixel.md). Not decided:
+whether the cascade is the algorithm the operation keeps, and the bars a track
+has to clear. Those follow from what wins in the harness.
 
 A person looking at a photograph in a reconstruction can point at a spot on a
 surface and ask for the point there: which other photographs see that same
@@ -60,33 +64,16 @@ act on, and carries what was measured up to that point. "The constellation of
 38 keypoints within 30 px matched no other image with 6 or more inliers" tells
 the person to try a more textured spot. "Refused" does not.
 
-The sketch below shows the proposed shape in `sfmtool_core::bench`, beside the
-steps it composes. It is a sketch, and the names will settle when it is filed.
-
-```rust
-pub struct TrackAtPixelOptions { /* the kernels' options, the quality bars */ }
-
-pub struct TrackAtPixelReport {
-    pub stages: Vec<StageRecord>,   // what each step did and measured, in order
-}
-
-pub enum TrackAtPixelError {
-    // One variant per stage, each carrying its measurements and a Display
-    // sentence, the way `SearchError` and `GeometrySearchError` do.
-}
-
-pub fn build_track_at_pixel(
-    edited: &EditedReconstruction,
-    views: &[ProjectedImage<'_>],
-    index: &dyn ConstellationIndex,      // in-memory or file-backed forest
-    keypoints: &dyn Fn(u32) -> ImageKeypoints,
-    clusters: &MatchesClusters,          // the cluster-patches section, by image
-    image: u32,
-    pixel: [f64; 2],
-    options: &TrackAtPixelOptions,
-    progress: &Progress<'_>,
-) -> Result<(EditableTrack, TrackAtPixelReport), TrackAtPixelError>;
-```
+The shape in `sfmtool_core::bench` is the one the cascade was filed with:
+`build_track_at_pixel(edited, views, sources, image, pixel, options, progress)`,
+where `sources` holds the SIFT index with every image's keypoints and the
+`.matches` clusters indexed onto the reconstruction's images. It returns the
+track with a report of which member built it and a record per step, or an
+error carrying each member's refusal with its stage, its sentence and what it
+measured. [core/bench/track-at-pixel.md](../core/bench/track-at-pixel.md) §
+"Rust API" is the reference, and says why it is shaped that way. A different
+algorithm that wins in the harness would keep that signature and change what
+runs behind it.
 
 ## What makes a track high quality
 
@@ -148,7 +135,9 @@ The operation is developed against ground truth, in the harness at
 candidate algorithm is a Python function with the contract above,
 `build_track(ctx, image, pixel, options)`, composed from the bindings. It
 returns a track or raises an error that names the stage and the reason. When
-one candidate wins, it moves into `sfmtool-core` under the interface above.
+one candidate wins, it moves into `sfmtool-core` under the interface above, as
+the cascade has; its harness candidate `core_cascade` calls the Rust operation,
+so the port is judged on the same bar as the Python composition it came from.
 
 **Leave one track out.** For each point of a ground-truth reconstruction, the
 harness removes the point, then calls the candidate at every pixel where the
@@ -213,8 +202,9 @@ the ground truth's.
 
 ## Candidates
 
-The harness holds eight candidates. Five differ in where the other
-photographs' sightings of the pixel come from, and three combine them.
+The harness holds nine candidates. Five differ in where the other
+photographs' sightings of the pixel come from, three combine them, and one
+(`core_cascade`) runs the cascade in `sfmtool-core`.
 
 - **Descriptor constellation** (`baseline`): the bench steps in the order a
   person would press them. A cluster at the pixel, the constellation search and
@@ -242,7 +232,9 @@ photographs' sightings of the pixel come from, and three combine them.
 - **Cascade** (`cascade`): runs the cluster file, the neighbour transfer, the
   sweep and the descriptor route in that order and returns the first track that
   passes its own gates. The order is from the source that is least often wrong
-  when it returns a track to the one that is most often wrong.
+  when it returns a track to the one that is most often wrong. `core_cascade`
+  is the same cascade run by `sfmtool_core::bench::build_track_at_pixel`
+  ([core/bench/track-at-pixel.md](../core/bench/track-at-pixel.md)).
 - **Ensemble** (`ensemble`): runs every member above at 1, 1.5 and 2 times the
   patch size it picks for itself, with the ray consensus in the finish and the
   gates lowered to two views and a median ZNCC of 0.7. Every member's track is
@@ -293,9 +285,10 @@ Once a track stands, the last four share one finish:
 
 ## Open questions
 
-- **Which algorithm.** The harness decides this. The cascade is the strongest
-  candidate so far, and it is also the slowest, since a pixel no source can
-  serve runs all four.
+- **Which algorithm.** The harness decides this. The cascade is the one in
+  `sfmtool-core` today. It is also the slowest where it fails, since a pixel no
+  source can serve runs all four, and porting it to Rust did not change its
+  cost, which is the bench kernels' rather than the composition's.
 - **Framing a track.** The sightings a track keeps, and where its keypoints
   settle, depend on the patch's normal and size as much as on where the
   sightings were first found. The neighbours' mean normal is the one the
