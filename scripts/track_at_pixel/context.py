@@ -13,6 +13,16 @@ cluster-patches ``.matches`` file with a 2D index over their members.
 candidate is handed. The point is deleted from ``edited`` (index-stable, so
 every other point keeps its index) and filtered out of every neighbourhood
 query, so a candidate cannot find the answer by looking it up.
+
+A holdout can also be **empty**: every point is gone, not just the one under
+test. ``edited`` then holds the cameras and no points, and the neighbourhood
+queries over reconstructed points (:meth:`HoldoutContext.observations_near`,
+:meth:`HoldoutContext.points_near`, :meth:`HoldoutContext.scene_depths`) return
+nothing. The photographs, the descriptor index, the ``.sift`` keypoints and the
+cluster-patches clusters are unchanged, since none of them comes from the
+reconstruction's points. This is the state early in building a
+reconstruction, when a track has to be built with no reconstructed
+neighbours to take its normal, depth or size from.
 """
 
 from __future__ import annotations
@@ -256,21 +266,35 @@ class DatasetContext:
                 KdTree2d(self.member_positions[rows]) if len(rows) else None
             )
 
-    def holdout(self, point: int) -> "HoldoutContext":
-        return HoldoutContext(self, point)
+    def holdout(self, point: int, *, empty: bool = False) -> "HoldoutContext":
+        return HoldoutContext(self, point, empty=empty)
+
+    @property
+    def empty_recon(self):
+        """The reconstruction's cameras with none of its points, built once."""
+        if getattr(self, "_empty_recon", None) is None:
+            self._empty_recon = self.recon.filter_points_by_mask(
+                np.zeros(self.recon.point_count, dtype=bool)
+            )
+        return self._empty_recon
 
 
 class HoldoutContext:
-    """The dataset with one point removed: what a candidate is handed."""
+    """The dataset with one point removed, or with every point removed when
+    ``empty``: what a candidate is handed."""
 
-    def __init__(self, dataset: DatasetContext, point: int | None):
+    def __init__(self, dataset: DatasetContext, point: int | None, *, empty=False):
         from sfmtool._sfmtool.reconstruction import EditedReconstruction
 
         self.dataset = dataset
         self._excluded = point
-        self.edited = EditedReconstruction(dataset.recon)
-        if point is not None:
-            self.edited.delete_point(int(point))
+        self.empty = empty
+        if empty:
+            self.edited = EditedReconstruction(dataset.empty_recon)
+        else:
+            self.edited = EditedReconstruction(dataset.recon)
+            if point is not None:
+                self.edited.delete_point(int(point))
 
     # -- pass-throughs a candidate needs -----------------------------------
     @property
@@ -336,7 +360,7 @@ class HoldoutContext:
         """
         ds = self.dataset
         tree = ds._obs_tree[image]
-        if tree is None:
+        if tree is None or self.empty:
             return []
         q = np.asarray([pixel], dtype=np.float64)
         offsets, idx = tree.within_radius(q, float(radius_px))
@@ -420,6 +444,8 @@ class HoldoutContext:
         self, xyz, *, k: int = 12, radius: float | None = None
     ) -> list[dict]:
         """Finite points nearest ``xyz`` in 3D, with their frames."""
+        if self.empty:
+            return []
         ds = self.dataset
         q = np.asarray([xyz], dtype=np.float64)
         if radius is None:
@@ -444,6 +470,26 @@ class HoldoutContext:
                 }
             )
         return out[:k]
+
+    def scene_depths(self, image: int) -> np.ndarray:
+        """Depths of the finite points in front of ``image``'s camera and inside its frame.
+
+        The held-out point is left out, and an empty holdout has none.
+        """
+        if self.empty:
+            return np.zeros(0)
+        ds = self.dataset
+        cam = self.camera(image)
+        w, h = self.image_size(image)
+        out = []
+        for p in ds._finite:
+            if p == self._excluded:
+                continue
+            px = cam.project(ds.point_xyz[p])
+            if px is not None and 0 <= px[0] < w and 0 <= px[1] < h:
+                out.append(cam.depth(ds.point_xyz[p]))
+        d = np.asarray(out)
+        return d[d > 0]
 
 
 MEMBER_STATUS = (

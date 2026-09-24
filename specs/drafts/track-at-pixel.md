@@ -151,6 +151,15 @@ queries over the remaining points and over the clusters' members. The
 `.matches` file needs no filtering, because it is built from the detected
 keypoints and the index alone and holds nothing of the reconstruction.
 
+**Two passes.** Every query runs twice. In the full pass only the point under
+test is removed, which is a reconstruction with many tracks being filled in:
+the neighbours' depths, normals and sizes are there to lean on. In the empty
+pass every point is removed, which is a reconstruction early on: the candidate
+has the cameras, the photographs, the descriptor index, the keypoints and the
+cluster-patches clusters, and has to build the track with no reconstructed
+neighbour. The operation has to do both: make a usable track from nothing
+early on, and use the existing tracks to make a better one later.
+
 **Metrics.** Each query is scored against the removed track, using the two
 tracks and the cameras alone:
 

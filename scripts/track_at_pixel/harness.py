@@ -8,11 +8,18 @@ for every image it was observed in, ask the candidate to build a track at that
 observation's pixel. Each query yields one row -- either the failure's stage and
 reason, or the built track scored against the removed one (see ``metrics.py``).
 
+Every query runs in two passes (``--passes``). The ``full`` pass removes only
+the point under test, so a candidate can lean on the reconstructed points
+around the pixel: the state of a reconstruction being filled in. The ``empty``
+pass removes every point, so a candidate has the cameras, the photographs, the
+descriptors and the cluster-patches clusters and no reconstructed point: the
+state early in building one. Both are scored against the same ground truth.
+
     pixi run -e test python scripts/track_at_pixel/harness.py \\
         --dataset seoul_bull --candidate baseline --points 20
 
-Rows go to ``<out>/rows.jsonl`` and a summary is printed and written beside
-them. ``--opt key=value`` overrides a candidate default (values parsed as
+Rows go to ``<out>/rows.jsonl``, each naming its ``pass``, and a summary of
+each pass is printed and written beside them. ``--opt key=value`` overrides a candidate default (values parsed as
 JSON, else kept as strings), so a variant needs no new file.
 """
 
@@ -159,13 +166,15 @@ def summarize(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def save_tracks(built, out: Path, prepared, candidate: str, options: dict) -> Path:
-    """Write the returned tracks as ``tracks.sfmr`` in the run directory.
+def save_tracks(
+    built, out: Path, prepared, candidate: str, options: dict, pass_name: str
+) -> Path:
+    """Write one pass's returned tracks as ``tracks-<pass>.sfmr`` in the run directory.
 
-    A row's ``output_point`` is its track's point index in this file.
+    A row's ``output_point`` is its track's point index in its pass's file.
     """
     recon, _, _ = built.materialize()
-    path = out / "tracks.sfmr"
+    path = out / f"tracks-{pass_name}.sfmr"
     recon.save(
         path,
         operation="track_at_pixel",
@@ -174,6 +183,7 @@ def save_tracks(built, out: Path, prepared, candidate: str, options: dict) -> Pa
             "ground_truth": str(prepared.ground_truth),
             "candidate": candidate,
             "options": json.dumps(options),
+            "pass": pass_name,
         },
     )
     return path
@@ -199,6 +209,12 @@ def main(argv=None) -> int:
         "--point-ids", default="", help="comma-separated point indexes to test"
     )
     ap.add_argument("--min-track-length", type=int, default=2)
+    ap.add_argument(
+        "--passes",
+        default="full,empty",
+        help="comma-separated passes to run: full (only the point under test is "
+        "removed) and empty (every point is removed)",
+    )
     ap.add_argument(
         "--finite-only",
         action="store_true",
@@ -266,74 +282,98 @@ def main(argv=None) -> int:
     )
 
     points = choose_points(ds, args)
+    passes = [p.strip() for p in args.passes.split(",") if p.strip()]
+    unknown = set(passes) - {"full", "empty"}
+    if unknown:
+        raise SystemExit(f"unknown pass(es): {', '.join(sorted(unknown))}")
     rows = []
     # Every returned track, committed into the ground truth's cameras with none
-    # of its points, so the file loads beside the ground truth in the viewer.
-    built = EditedReconstruction(
-        ds.recon.filter_points_by_mask(np.zeros(ds.recon.point_count, dtype=bool))
-    )
+    # of its points, so each pass's file loads beside the ground truth in the
+    # viewer.
+    built = {p: EditedReconstruction(ds.empty_recon) for p in passes}
     with open(out / "rows.jsonl", "w") as sink:
-        for pi, point in enumerate(points):
-            gt_read = ground_truth_reading(ds, point)
-            ctx = ds.holdout(point)
-            images = ds.point_images[point]
-            order = range(len(images))
-            if args.max_queries_per_point:
-                order = list(order)[: args.max_queries_per_point]
-            for j in order:
-                image = int(images[j])
-                pixel = ds.point_keypoints[point][j]
-                row = {"point": point, "image": image, "pixel": pixel.tolist()}
-                start = time.perf_counter()
-                try:
-                    result = candidate.build_track(ctx, image, pixel, options)
-                    row["status"] = "ok"
-                    row.update(score(ds, point, image, pixel, result, gt_read))
-                    row["diagnostics"] = result.diagnostics
+        for pass_name in passes:
+            for pi, point in enumerate(points):
+                gt_read = ground_truth_reading(ds, point)
+                ctx = ds.holdout(point, empty=pass_name == "empty")
+                images = ds.point_images[point]
+                order = range(len(images))
+                if args.max_queries_per_point:
+                    order = list(order)[: args.max_queries_per_point]
+                for j in order:
+                    image = int(images[j])
+                    pixel = ds.point_keypoints[point][j]
+                    row = {
+                        "pass": pass_name,
+                        "point": point,
+                        "image": image,
+                        "pixel": pixel.tolist(),
+                    }
+                    start = time.perf_counter()
                     try:
-                        built, committed = bench.commit(
-                            built, result.track, node="tracks.sfmr"
+                        result = candidate.build_track(ctx, image, pixel, options)
+                        row["status"] = "ok"
+                        row.update(score(ds, point, image, pixel, result, gt_read))
+                        row["diagnostics"] = result.diagnostics
+                        try:
+                            built[pass_name], committed = bench.commit(
+                                built[pass_name],
+                                result.track,
+                                node=f"tracks-{pass_name}.sfmr",
+                            )
+                            row["output_point"] = committed["point"]
+                        except ValueError as e:
+                            row["output_error"] = str(e)
+                    except TrackAtPixelError as e:
+                        row.update(
+                            status="refused",
+                            stage=e.stage,
+                            reason=e.reason,
+                            diagnostics=e.diagnostics,
                         )
-                        row["output_point"] = committed["point"]
-                    except ValueError as e:
-                        row["output_error"] = str(e)
-                except TrackAtPixelError as e:
-                    row.update(
-                        status="refused",
-                        stage=e.stage,
-                        reason=e.reason,
-                        diagnostics=e.diagnostics,
-                    )
-                except Exception as e:  # a candidate bug, not a refusal
-                    if args.reraise:
-                        raise
-                    row.update(
-                        status="crashed",
-                        stage="exception",
-                        reason=f"{type(e).__name__}: {e}",
-                        traceback=traceback.format_exc(),
-                    )
-                row["seconds"] = time.perf_counter() - start
-                rows.append(row)
-                sink.write(json.dumps(_jsonable(row)) + "\n")
-                sink.flush()
-            n_built = sum(r["status"] == "ok" for r in rows if r["point"] == point)
-            print(
-                f"[{pi + 1}/{len(points)}] point {point}: {n_built}/{len(order)} built"
-            )
+                    except Exception as e:  # a candidate bug, not a refusal
+                        if args.reraise:
+                            raise
+                        row.update(
+                            status="crashed",
+                            stage="exception",
+                            reason=f"{type(e).__name__}: {e}",
+                            traceback=traceback.format_exc(),
+                        )
+                    row["seconds"] = time.perf_counter() - start
+                    rows.append(row)
+                    sink.write(json.dumps(_jsonable(row)) + "\n")
+                    sink.flush()
+                n_built = sum(
+                    r["status"] == "ok"
+                    for r in rows
+                    if r["point"] == point and r["pass"] == pass_name
+                )
+                print(
+                    f"[{pass_name} {pi + 1}/{len(points)}] point {point}: "
+                    f"{n_built}/{len(order)} built"
+                )
 
-    summary = summarize(rows)
+    summaries = []
+    for pass_name in passes:
+        pass_rows = [r for r in rows if r["pass"] == pass_name]
+        summaries.append(f"== {pass_name} pass ==\n{summarize(pass_rows)}")
+    summary = "\n\n".join(summaries)
     (out / "summary.txt").write_text(summary + "\n")
     print()
     print(summary)
     print(f"\nrows: {out / 'rows.jsonl'}")
-    if built.point_count == 0:
-        # A .sfmr with no points cannot be written; there is nothing to compare.
-        print("tracks: none built, so no tracks.sfmr was written")
-        return 0
-    sfmr = save_tracks(built, out, prepared, args.candidate, options)
-    print(f"tracks: {sfmr} ({built.point_count} points)")
-    print(f"compare: pixi run gui -- {prepared.ground_truth} {sfmr}")
+    for pass_name in passes:
+        if built[pass_name].point_count == 0:
+            # A .sfmr with no points cannot be written; there is nothing to compare.
+            print(f"tracks ({pass_name}): none built, so no file was written")
+            continue
+        sfmr = save_tracks(
+            built[pass_name], out, prepared, args.candidate, options, pass_name
+        )
+        n = built[pass_name].point_count
+        print(f"tracks ({pass_name}): {sfmr} ({n} points)")
+    print(f"compare: pixi run gui -- {prepared.ground_truth} {out}/tracks-*.sfmr")
     return 0
 
 

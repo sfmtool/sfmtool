@@ -20,6 +20,22 @@ contract and its open questions are in
 4. Score the returned track against the removed one (`metrics.py`), or record
    the refusal's stage and reason.
 
+Every query runs in two passes, which stand for two stages of building a
+reconstruction:
+
+- **`full`**: only the point under test is removed. The candidate can lean on
+  the reconstructed points around the pixel for depth, normal and size. This
+  is a reconstruction that already has many tracks and is being filled in.
+- **`empty`**: every point is removed. The candidate has the cameras, the
+  photographs, the descriptor index, the `.sift` keypoints and the
+  cluster-patches clusters, and no reconstructed point:
+  `observations_near`, `points_near` and `scene_depths` return nothing, and
+  `edited` holds no points. This is a reconstruction early on, when a track has
+  to be built from scratch.
+
+Both passes are scored against the same ground truth. `--passes full` or
+`--passes empty` runs one of them.
+
 ```bash
 pixi run -e test python scripts/track_at_pixel/harness.py                       # every point
 pixi run -e test python scripts/track_at_pixel/harness.py --points 20 --seed 1   # a sample
@@ -39,77 +55,109 @@ instead; its images are matched to the reconstruction's by name. Nothing is
 written beside `test-data`. Each run
 writes these files to `<cache>/runs/<candidate>-<time>/`, or to `--out`:
 
-- `rows.jsonl`: one row per query, with the candidate's diagnostics.
-- `summary.txt` and `config.json`.
-- `tracks.sfmr`: every returned track, committed into the ground truth's
-  cameras with none of its points.
+- `rows.jsonl`: one row per query and pass, with the candidate's diagnostics.
+  A row's `pass` names its pass.
+- `summary.txt`, with a section per pass, and `config.json`.
+- `tracks-full.sfmr` and `tracks-empty.sfmr`: every track returned in that
+  pass, committed into the ground truth's cameras with none of its points.
 
-A row's `output_point` is its track's index in `tracks.sfmr`. There is one
+A row's `output_point` is its track's index in its pass's file. There is one
 point per successful query, so a ground-truth point queried from five images
 can appear up to five times. To compare the run with the ground truth, load
-both into one Explorer window and toggle between them:
+them into one Explorer window and toggle between them:
 
 ```bash
-pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr <run>/tracks.sfmr
+pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr <run>/tracks-full.sfmr <run>/tracks-empty.sfmr
 ```
 
 ## Results on seoul_bull
 
 Every point of the ground truth seen in two or more images, queried from each
 image it is seen in (1277 queries, 44 of them on the 14 points at infinity),
-judged against the good-track bar. The first row scores the ground-truth tracks
-themselves against the same bar. It is the number a candidate is measured
-against: 47 of the ground truth's own tracks miss the bar, mostly on the median
-ZNCC.
+judged against the good-track bar. The ground-truth tracks themselves pass
+that bar on 1230 queries: 47 of them miss it, mostly on the median ZNCC. That
+is the number a candidate is measured against.
+
+**Full pass** (only the point under test is removed):
 
 | Candidate | Built | Good | Good at infinity | Not good | Good % | Median angle err (deg) | Median normal err (deg) | Median projection offset at the pixel (px) | s/query |
 |---|---|---|---|---|---|---|---|---|---|
 | ground truth | 1277 | 1230 | 44 | 47 | 96.3% | | | | |
-| `baseline` | 289 | 254 | 11 | 35 | 19.9% | 0.102 | 13.3 | 0.67 | 0.30 |
-| `baseline --opt finish=common` | 337 | 308 | 7 | 29 | 24.1% | 0.019 | 12.6 | 0.19 | 0.59 |
-| `sweep` | 833 | 739 | 0 | 94 | 57.9% | 0.026 | 10.2 | 0.26 | 0.43 |
-| `transfer` | 667 | 592 | 0 | 75 | 46.4% | 0.025 | 11.9 | 0.24 | 0.43 |
-| `clusters` | 721 | 674 | 19 | 47 | 52.8% | 0.028 | 13.5 | 0.24 | 0.38 |
-| `cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.62 |
-| `core_cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.49 |
-| `planesweep` | 699 | 614 | 14 | 85 | 48.1% | 0.024 | 13.5 | 0.25 | 1.43 |
-| `ensemble` | 1239 | 1087 | 35 | 152 | 85.1% | 0.032 | 13.4 | 0.26 | 14.05 |
-| `centred` | 1239 | 1107 | 35 | 132 | 86.7% | 0.031 | 13.3 | 0.25 | 7.11 |
+| `baseline` | 289 | 254 | 11 | 35 | 19.9% | 0.102 | 13.3 | 0.67 | 0.23 |
+| `baseline --opt finish=common` | 337 | 308 | 7 | 29 | 24.1% | 0.019 | 12.6 | 0.19 | 0.53 |
+| `transfer` | 667 | 592 | 0 | 75 | 46.4% | 0.025 | 11.9 | 0.24 | 0.31 |
+| `clusters` | 721 | 674 | 19 | 47 | 52.8% | 0.028 | 13.5 | 0.24 | 0.30 |
+| `sweep` | 833 | 739 | 0 | 94 | 57.9% | 0.026 | 10.2 | 0.26 | 0.30 |
+| `planesweep` | 786 | 697 | 11 | 89 | 54.6% | 0.021 | 13.4 | 0.24 | 1.11 |
+| `cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.51 |
+| `core_cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.37 |
+| `ensemble` | 1240 | 1089 | 34 | 151 | 85.3% | 0.032 | 13.4 | 0.26 | 7.66 |
+| `centred` | 1240 | 1100 | 34 | 140 | 86.1% | 0.031 | 13.4 | 0.25 | 8.02 |
 
-The medians are over the built tracks. The second candidate row is the control:
-the baseline's own way of finding sightings, with the shared finish. It shows
-how much of the gain is the finish and how much is where the sightings come
-from. The cascade's tracks came from `clusters` (721), `transfer` (183),
-`sweep` (110) and the descriptor route (11). `sweep` and `transfer` build from
-finite neighbours only, so they return nothing at infinity. Anchoring puts the
-queried keypoint on the pixel by construction, so the centring number to read
-for the new candidates is the point's projection offset, not
-`query_keypoint_offset_px`. Times are with 32 processes sharing the machine
-(22 for `core_cascade`).
+**Empty pass** (every point is removed):
+
+| Candidate | Built | Good | Good at infinity | Not good | Good % | Median angle err (deg) | Median normal err (deg) | Median projection offset at the pixel (px) | s/query |
+|---|---|---|---|---|---|---|---|---|---|
+| `baseline` | 240 | 213 | 11 | 27 | 16.7% | 0.084 | 29.4 | 0.53 | 0.14 |
+| `baseline --opt finish=common` | 264 | 243 | 7 | 21 | 19.0% | 0.020 | 29.9 | 0.20 | 0.29 |
+| `transfer` | 0 | 0 | 0 | 0 | 0.0% | | | | |
+| `clusters` | 694 | 647 | 19 | 47 | 50.7% | 0.029 | 30.2 | 0.24 | 0.20 |
+| `sweep` | 0 | 0 | 0 | 0 | 0.0% | | | | |
+| `planesweep` | 623 | 529 | 13 | 94 | 41.4% | 0.030 | 33.1 | 0.23 | 0.92 |
+| `cascade` | 741 | 688 | 20 | 53 | 53.9% | 0.029 | 30.3 | 0.24 | 0.42 |
+| `core_cascade` | 741 | 688 | 20 | 53 | 53.9% | 0.029 | 30.3 | 0.24 | 0.26 |
+| `ensemble` | 1177 | 1003 | 36 | 174 | 78.5% | 0.035 | 34.3 | 0.24 | 3.96 |
+| `centred` | 1177 | 1009 | 36 | 168 | 79.0% | 0.034 | 34.2 | 0.24 | 4.55 |
+
+The medians are over the built tracks. Times are the median over the pass's
+queries with 16 processes sharing the machine; for times measured with each
+candidate alone, time it on its own with `--points`. The second candidate row
+is the control: the baseline's own way of finding sightings, with the shared
+finish. It shows how much of the gain is the finish and how much is where the
+sightings come from. Anchoring puts the queried keypoint on the pixel by
+construction, so the centring number to read is the point's projection offset,
+not `query_keypoint_offset_px`.
+
+In the full pass the cascade's tracks came from `clusters` (721), `transfer`
+(183), `sweep` (110) and the descriptor route (11). `sweep` and `transfer`
+build from finite neighbours only, so they return nothing at infinity. From the
+cascade on, each candidate is measured by how much of the gap to the ground
+truth's 1230 good queries it closes. The cascade leaves 305. The ensemble
+leaves 141, 54% of the cascade's gap; its tracks came from `clusters` (876),
+`transfer` (191), `sweep` (124), `planesweep` (48) and the descriptor route
+(1). `centred` leaves 130, 8% of the ensemble's gap.
 
 `core_cascade` is the cascade as `sfmtool_core::bench::build_track_at_pixel`
 runs it ([`specs/core/bench/track-at-pixel.md`](../../specs/core/bench/track-at-pixel.md)).
-Against `cascade` it has the same outcome on all 1277 queries, from the same
-member, with the same refusal stages. The tracks agree to about `1e-15` except
+Against `cascade` it has the same outcome on every query of both passes, from
+the same member, with the same refusal stages. The tracks agree to about `1e-15` except
 one, point 83 from image 8, whose median ZNCC differs by `1.3e-4`: a last-bit
 change in the sweep's surface hypothesis decides which side of a discrete step
 in the fit the track lands on, and perturbing the Python sweep's hypothesis by
-one part in `1e15` moves it between the same two results. On the
-`--points 15 --seed 3` sample, run one after the other on a loaded machine, the
-Rust cascade's median was 0.31 to 0.37 s a query against the Python cascade's
-0.34 to 0.39 s: the time is in the bench kernels both call, not in the
+one part in `1e15` moves it between the same two results. Each run alone on an
+idle machine, over the `--points 15 --seed 3` sample, twice each, the Rust
+cascade's median was 0.101 and 0.117 s a query against the Python cascade's
+0.123 and 0.117 s: the time is in the bench kernels both call, not in the
 composition around them.
 
-From the cascade on, each candidate is measured by how much of the gap to the
-ground truth's 1230 good queries it closes. The cascade leaves 305. The
-ensemble leaves 143, 53% of the cascade's gap; its tracks came from `clusters`
-(878), `transfer` (197), `sweep` (123), `planesweep` (40) and the descriptor
-route (1). `centred` leaves 123, 14% of the ensemble's gap.
+The empty pass separates what finds sightings from the photographs and the
+descriptors from what needs reconstructed neighbours. `sweep` and `transfer`
+have nothing to start from and refuse every query. `clusters` loses little
+(674 to 647): its sightings come from the cluster file, which holds nothing of
+the reconstruction, and it only loses the neighbours' normal. The cascade falls
+from 925 to 688, because two of its members are gone. The ensemble falls
+least, to 1003, because `planesweep` needs only the poses and the photographs;
+it supplies 279 of the ensemble's tracks in the empty pass against 48 in the
+full one. Positions stay as accurate as in the full pass. Normals do not:
+without the neighbours' normal to tilt toward, the median normal error rises
+from about 13 degrees to about 30.
 
 ## Where the remaining gap is
 
-`centred` leaves 123 of the ground truth's 1230 good queries. These
-measurements say where they are.
+These measurements were made on the full pass before the plane sweep took
+its depth range from the points inside the queried photograph only, when
+`centred` got 1107 good queries and left 123. They say where the remaining gap
+is.
 
 **The sightings are not the limit; the framing is.** A diagnostic built
 tracks from the held-out point's own keypoints, the true sightings, with the

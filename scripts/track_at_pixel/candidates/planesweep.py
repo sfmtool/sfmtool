@@ -108,20 +108,25 @@ def sample(img: np.ndarray, px: np.ndarray) -> np.ndarray:
 
 
 def depth_range(ctx, image: int, margin: float) -> tuple[float, float]:
-    ds = ctx.dataset
+    """The depths to sweep: the reconstructed points' depths, or the camera spacing.
+
+    With reconstructed points, the 1st to the 99th percentile of their depths
+    in this camera, widened by ``margin``. With none, the range is set from how
+    far this camera is from the others: a scene the cameras were placed to
+    photograph is usually between a fraction and a few tens of that spacing
+    away, and the grid runs on to infinity in either case.
+    """
+    d = ctx.scene_depths(image)
+    if d.size:
+        return float(np.percentile(d, 1)) / margin, float(np.percentile(d, 99)) * margin
     cam = ctx.camera(image)
-    finite = ds.point_w != 0
-    d = np.asarray(
-        [
-            cam.depth(x)
-            for x, f in zip(ds.point_xyz, finite)
-            if f and cam.project(x) is not None
-        ]
-    )
-    d = d[d > 0]
-    if d.size == 0:
-        return 0.1, 100.0
-    return float(np.percentile(d, 1)) / margin, float(np.percentile(d, 99)) * margin
+    others = [
+        np.linalg.norm(ctx.camera(i).center - cam.center)
+        for i in range(len(ctx.dataset.cameras))
+        if i != image
+    ]
+    spacing = float(np.median(others)) if others else 1.0
+    return 0.2 * spacing, 20.0 * spacing
 
 
 def sweep(ctx, image: int, pixel, radius_px: float, opts: dict, depths=None):
