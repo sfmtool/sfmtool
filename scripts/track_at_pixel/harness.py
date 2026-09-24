@@ -57,7 +57,7 @@ def choose_points(ds: DatasetContext, args) -> list[int]:
         return [int(p) for p in args.point_ids.split(",")]
     lengths = np.asarray([len(i) for i in ds.point_images])
     ok = lengths >= args.min_track_length
-    if not args.include_infinity:
+    if args.finite_only:
         ok &= ds.point_w != 0
     candidates = np.flatnonzero(ok)
     rng = np.random.default_rng(args.seed)
@@ -200,7 +200,9 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--min-track-length", type=int, default=2)
     ap.add_argument(
-        "--include-infinity", action="store_true", help="also test points at infinity"
+        "--finite-only",
+        action="store_true",
+        help="leave out the points at infinity (they are tested by default)",
     )
     ap.add_argument(
         "--max-queries-per-point", type=int, default=0, help="0 = every observation"

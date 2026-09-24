@@ -21,7 +21,7 @@ contract and its open questions are in
    the refusal's stage and reason.
 
 ```bash
-pixi run -e test python scripts/track_at_pixel/harness.py                       # every finite point
+pixi run -e test python scripts/track_at_pixel/harness.py                       # every point
 pixi run -e test python scripts/track_at_pixel/harness.py --points 20 --seed 1   # a sample
 pixi run -e test python scripts/track_at_pixel/harness.py --point-ids 144,177 --raise
 pixi run -e test python scripts/track_at_pixel/harness.py --opt max_query_offset_px=3 --opt normal_prior=false
@@ -55,26 +55,32 @@ pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_groun
 
 ## Results on seoul_bull
 
-Every finite point of the ground truth, queried from each image it is seen in
-(1233 queries), judged against the good-track bar:
+Every point of the ground truth seen in two or more images, queried from each
+image it is seen in (1277 queries, 44 of them on the 14 points at infinity),
+judged against the good-track bar. The first row scores the ground-truth tracks
+themselves against the same bar. It is the number a candidate is measured
+against: 47 of the ground truth's own tracks miss the bar, mostly on the median
+ZNCC.
 
-| Candidate | Built | Good | Not good | Good % | Median angle err (deg) | Median normal err (deg) | Median projection offset at the pixel (px) | s/query |
-|---|---|---|---|---|---|---|---|---|
-| `baseline` | 278 | 243 | 35 | 19.7% | 0.096 | 12.1 | 0.67 | 0.16 |
-| `baseline --opt finish=common` | 330 | 301 | 29 | 24.4% | 0.016 | 12.1 | 0.19 | 0.24 |
-| `sweep` | 832 | 739 | 93 | 59.9% | 0.022 | 9.5 | 0.26 | 0.24 |
-| `transfer` | 666 | 592 | 74 | 48.0% | 0.021 | 10.4 | 0.24 | 0.21 |
-| `clusters` | 702 | 655 | 47 | 53.1% | 0.027 | 13.4 | 0.24 | 0.19 |
-| `cascade` | 1004 | 905 | 99 | 73.4% | 0.028 | 12.3 | 0.26 | 0.23 |
+| Candidate | Built | Good | Good at infinity | Not good | Good % | Median angle err (deg) | Median normal err (deg) | Median projection offset at the pixel (px) | s/query |
+|---|---|---|---|---|---|---|---|---|---|
+| ground truth | 1277 | 1230 | 44 | 47 | 96.3% | | | | |
+| `baseline` | 289 | 254 | 11 | 35 | 19.9% | 0.102 | 13.3 | 0.67 | 0.30 |
+| `baseline --opt finish=common` | 337 | 308 | 7 | 29 | 24.1% | 0.019 | 12.6 | 0.19 | 0.59 |
+| `sweep` | 833 | 739 | 0 | 94 | 57.9% | 0.026 | 10.2 | 0.26 | 0.43 |
+| `transfer` | 667 | 592 | 0 | 75 | 46.4% | 0.025 | 11.9 | 0.24 | 0.43 |
+| `clusters` | 721 | 674 | 19 | 47 | 52.8% | 0.028 | 13.5 | 0.24 | 0.38 |
+| `cascade` | 1025 | 925 | 20 | 100 | 72.4% | 0.030 | 12.7 | 0.26 | 0.62 |
 
-The second row is the control: the baseline's own way of finding sightings,
-with the shared finish. It shows how much of the gain is the finish and how
-much is where the sightings come from. The cascade's tracks came from
-`clusters` (702), `transfer` (182), `sweep` (110) and the descriptor route
-(10). Anchoring puts the queried keypoint on the pixel by construction, so
-the centring number to read for the new candidates is the point's projection
-offset, not `query_keypoint_offset_px`. Times are with six runs sharing the
-machine.
+The medians are over the built tracks. The second candidate row is the control:
+the baseline's own way of finding sightings, with the shared finish. It shows
+how much of the gain is the finish and how much is where the sightings come
+from. The cascade's tracks came from `clusters` (721), `transfer` (183),
+`sweep` (110) and the descriptor route (11). `sweep` and `transfer` build from
+finite neighbours only, so they return nothing at infinity. Anchoring puts the
+queried keypoint on the pixel by construction, so the centring number to read
+for the new candidates is the point's projection offset, not
+`query_keypoint_offset_px`. Times are with 32 processes sharing the machine.
 
 ## Files
 
