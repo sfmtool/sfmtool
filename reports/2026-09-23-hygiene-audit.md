@@ -30,6 +30,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: low, with existing compatibility tests.
 
 **Extract the still-monolithic format readers and writers**
+> _Status (2026-09-23): Partially done — `read_sfmr` now delegates to section helpers; the SFMR and matches writers remain open._
 - Location: `crates/sfmtool-sfmr-format/src/read.rs` (750 lines, `read_sfmr` 66–687), `crates/sfmtool-sfmr-format/src/write.rs` (1,371 lines, `write_sfmr_into` 282–881), and `crates/sfmtool-matches-format/src/write.rs` (1,072 lines, `write_matches_into` 54–478).
 - Problem: Each driver still owns several wire sections, unlike the per-section `verify_sfmr` helpers and the 87-line KDF writer driver completed after the last audit. The earlier recommendation's verify and KDF portions are resolved; these three remain.
 - Proposed fix: Use per-section helpers while keeping `SectionDigests` folding in explicit wire order in the driver. Keep round-trip and hash-stability fixtures as the guard.
