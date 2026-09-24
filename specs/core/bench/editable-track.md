@@ -1873,6 +1873,13 @@ carries `at_infinity`, `position` or `direction`, `reason` (the lowercase words
 `max_pair_angle_deg`, `finite_rms_px`, `bearing_rms_px`, `residual_margin` and
 `text`, the sentence the Action Log shows.
 
+`translate_patch` takes the displacement `by` as three numbers on the patch's
+own `[u, v, n]` axes, and `tilt_patch` the outward normal as three numbers of
+any non-zero length; both take the reconstruction. `translate_patch`'s report
+carries `by`, `center`, `moved`, `placed` and `changed`; `tilt_patch`'s carries
+`degrees`, `asked`, `normal`, `stopped` (`None`, or a dict of the
+`observation` and `image` whose cap ended the turn), `placed` and `changed`.
+
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and
 `resize_patch_to_pixel` take the reconstruction too, because they read an
@@ -1894,6 +1901,15 @@ keywords beside the constellation query's own; its report is a dict carrying
 `image`, `inliers`, `correspondences`, `affine`, `pixel` and `found` --
 `"added"` or `"already_in_track"` with the observation index that goes with it,
 or `"own_image"`.
+
+`search_geometry` takes the track, the observation to search from, the
+reconstruction and `images` the way `evaluate` does, plus the view selector's
+`resolution`, `min_valid_fraction`, `min_track_views`, `robust_iters` and
+`min_self_agreement` as keywords, each defaulting to the selector's own; the
+admission bar stays the track's `min_relative_zncc`. Its report is a dict
+carrying `observation`, `observation_count`, `image`, `reference_views`,
+`self_agreement`, `added`, `already_in_track`, `sentence` and `matches`, one
+dict per admitted image with its `image`, `zncc`, `pixel` and `found`.
 
 ```python
 from sfmtool._sfmtool import bench as bench_module

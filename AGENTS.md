@@ -52,6 +52,14 @@ template existed. Keep the checklist items and the License block verbatim,
 ticking what applies and marking the rest `n/a` with the reason, rather than
 deleting the lines.
 
+### Writing style
+
+Specs, doc comments, commit messages and PR descriptions are written in plain
+language. Do not use mannered prose: no metaphors or idioms where a
+straightforward literal phrase says the same thing clearly. Write "the
+constellation query matched no other image", not "the constellation came up
+empty-handed". Name the thing and say what it does.
+
 ## Structure at a glance
 
 - `src/sfmtool/` — the Python package. Entry point is `cli.py`

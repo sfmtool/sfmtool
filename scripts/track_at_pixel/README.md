@@ -1,0 +1,137 @@
+# Track at a pixel: evaluation harness
+
+A development harness for the core operation behind bench track editing in SfM
+Explorer: **given a reconstruction, an image and a pixel, build a high-quality
+track centred at (or very near) that pixel, or explain why none could be
+built.** Candidates are Python compositions of the bench steps and the patch
+kernels. Once one wins here, it moves into `sfmtool-core`. The operation's
+contract and its open questions are in
+[`specs/drafts/track-at-pixel.md`](../../specs/drafts/track-at-pixel.md).
+
+## How the evaluation works
+
+1. Take a ground-truth reconstruction (today `seoul_bull`, meaning
+   `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`).
+2. Remove one point from it. It is deleted from the `EditedReconstruction` the
+   candidate is given (index-stable) and filtered out of every neighbourhood
+   query.
+3. For each image that point was observed in, call the candidate at that
+   observation's pixel.
+4. Score the returned track against the removed one (`metrics.py`), or record
+   the refusal's stage and reason.
+
+```bash
+pixi run -e test python scripts/track_at_pixel/harness.py                       # every finite point
+pixi run -e test python scripts/track_at_pixel/harness.py --points 20 --seed 1   # a sample
+pixi run -e test python scripts/track_at_pixel/harness.py --point-ids 144,177 --raise
+pixi run -e test python scripts/track_at_pixel/harness.py --opt max_query_offset_px=3 --opt normal_prior=false
+```
+
+The first run copies the dataset into a cache workspace
+(`%TEMP%/sfmtool-track-at-pixel/<dataset>`, or `--cache-dir`), extracts SIFT
+there with the marker's settings, and builds a `.kdf` over it in the
+reconstruction's image order. It then clusters the features from that same
+`.kdf` (`background_floor_clusters_kdf`, `sfm match --cluster`'s clustering)
+and refines the clusters with `sfm cluster-patches`' defaults. The result is
+`track_at_pixel_clusters-patches.matches`, which every candidate is handed.
+Pass `--matches <file>` to hand candidates a different cluster-patches file
+instead; its images are matched to the reconstruction's by name. Nothing is
+written beside `test-data`. Each run
+writes these files to `<cache>/runs/<candidate>-<time>/`, or to `--out`:
+
+- `rows.jsonl`: one row per query, with the candidate's diagnostics.
+- `summary.txt` and `config.json`.
+- `tracks.sfmr`: every returned track, committed into the ground truth's
+  cameras with none of its points.
+
+A row's `output_point` is its track's index in `tracks.sfmr`. There is one
+point per successful query, so a ground-truth point queried from five images
+can appear up to five times. To compare the run with the ground truth, load
+both into one Explorer window and toggle between them:
+
+```bash
+pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr <run>/tracks.sfmr
+```
+
+## Files
+
+| File | Role |
+|---|---|
+| `api.py` | The contract: `build_track(ctx, image, pixel, options) -> TrackAtPixelResult`, or raise `TrackAtPixelError(stage, reason, diagnostics)` |
+| `dataset.py` | Ground-truth registry, the cache workspace, SIFT, the `.kdf`, the cluster-patches `.matches` |
+| `context.py` | `DatasetContext`, loaded once: photographs as an `ImagePyramidSet`, `LazyKdForest`, keypoints, cameras (−Z forward, depth = −z), per-point frames with 2D/3D indexes. `HoldoutContext` is what a candidate sees: `edited`, `observations_near(image, pixel, r)`, `clusters_near(image, pixel, r)`, `points_near(xyz)`, `texel_scales(track)`, `keypoints(image)`, `camera(image)` |
+| `metrics.py` | The per-query score |
+| `harness.py` | The loop, the JSONL rows, the summary |
+| `candidates/baseline.py` | The first candidate. A local prior sets size and normal, then: cluster, constellation search plus lateral search, cluster evaluate, upgrade, tilt to the prior normal, geometry search, refit, gates |
+
+The baseline's `size_policy` option (`prior`, `largest_view`, `median_view`,
+`smallest_view`, with `texel_scale_target`, default 1.0) resizes the patch so
+the chosen view samples at the target ratio, and refits:
+
+```bash
+pixi run -e test python scripts/track_at_pixel/harness.py --opt size_policy=largest_view
+```
+
+A new candidate is a new module in `candidates/` with a `DEFAULTS` dict and
+`build_track`; run it with `--candidate <name>`.
+
+## Metrics
+
+All are computed over the built track's `in` observations.
+
+- **Contract**
+  - `query_keypoint_offset_px`: the queried sighting's fitted keypoint versus
+    the pixel asked about.
+  - `query_projection_offset_px`: where the point projects in that image,
+    versus the pixel.
+  - `query_image_in`: whether the queried sighting is still `in`.
+- **Geometry**
+  - `position_err_angle_deg`: the angle the built point and the GT point
+    subtend from the query camera.
+  - `position_err` / `_rel_depth` / `_in_gt_halves` / `_along_ray` /
+    `_lateral`: the 3D position error, raw and in other units.
+  - `normal_err_deg`.
+  - `half_extent_ratio`: world patch half-size, built ÷ GT.
+  - `texel_scale_min` / `_median` / `_max`: image pixels per patch-bitmap
+    texel over the `in` views, from the Jacobian of the render at the bench's
+    24-texel resolution (`context.texel_scale`), with `gt_texel_scale_*` for the
+    ground truth's frame over its own images. `texel_scale_aniso_max` is the
+    largest ratio of the Jacobian's singular values.
+  - finite versus infinity agreement.
+- **Membership**
+  - `image_precision` and `image_recall` against the GT track's images.
+  - `kp_err_median_px` / `kp_err_max_px`: keypoint error in the shared images.
+- **Photometry**
+  - `zncc_median` / `_min`: leave-one-out ZNCC, set against the same
+    `evaluate` reading of the GT point (`gt_zncc_*`, `zncc_median_delta`).
+  - `localizability_*` and `reproj_median`.
+- **Cost**
+  - `seconds` per query.
+
+GT normals and sizes are what the ground truth's embedding pass produced. They
+are good references, not exact truth: a built track can beat the GT ZNCC.
+
+## Tools the candidates draw on
+
+| Need | Call |
+|---|---|
+| Constellation search from a pixel | `bench.search_descriptors(track, obs, xy, affine, forest, radius_px=, min_inliers=)` (radius from `spatial.radius_for_feature_count`) |
+| Geometry search | `bench.search_geometry(track, obs, edited, pyramids)` |
+| Nearby observations in an image, and their depth, normal and size | `ctx.observations_near` |
+| Clusters with a member near a pixel, with every member's image, refined position, shape, status and ZNCC | `ctx.clusters_near` (the raw arrays are on `ctx.dataset`: `cluster_starts`, `member_*`, `reference_members`, `cluster_radius`) |
+| Nearby 3D patches, including ones with no image overlap | `ctx.points_near` |
+| Evaluating a track without moving it | `bench.evaluate` |
+| Fitting it (localize, refine, re-triangulate, re-fuse) | `bench.fit` |
+| Moving between cluster and track stage | `bench.set_stage` |
+| Hand moves | `bench.tilt_patch`, `translate_patch`, `translate_patch_to_pixel`, `resize_patch`, `spin_patch`, `sight_observation` |
+| Congealing a subset of views | `PatchCloud.localize_keypoints(view_sets=…, basis_max_views=…)` |
+| Sub-pixel refinement against the consensus | `PatchCloud.refine_keypoints` |
+| Normal refinement | `PatchCloud.refine_normals` |
+| Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
+| Localizability | `PatchCloud.score_localizability` |
+| Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |
+| Cluster refinement | `matching.refine_cluster_patches` |
+
+Two kernels are not bound yet: registering one bitmap directly against another,
+and congealing a bare stack of bitmaps. The `PatchCloud` kernels reach both
+indirectly, through a one-patch cloud built with `from_halfvec_arrays`.

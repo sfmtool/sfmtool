@@ -103,7 +103,7 @@ specs predate the template and use their own vocabulary throughout.
 **So do not audit for conformance.** A spec that departs and works is not a
 finding, and reporting it as one trains everybody to reach for the form instead of
 thinking about the reader. Ask what a reader needs and whether they can get it,
-not whether the headings match. The five failures below are the ones that hold
+not whether the headings match. The failures below are the ones that hold
 whatever arrangement a spec chose — each is something a reader is *missing*, not
 something out of order. Only failure 1 is absolute; for the others, a spec that
 supplies the thing under a different name, in a different place, or by a means the
@@ -203,6 +203,18 @@ subject, say so in the report — that is a proposed amendment to
    or where the definition should be restated. When a format spec's only
    account of a field is a link, the fix is to write the definition into the
    format spec, not to shorten the link.
+
+7. **Mannered prose.** This applies to every spec. A spec is written in plain
+   language: no metaphors or idioms where a straightforward literal phrase says
+   the same thing clearly. The test: can the sentence be rewritten in literal
+   terms without losing anything? If so, the figure of speech was decoration,
+   and a reader has to translate it back before they can check it against the
+   code. "The kernel walks the sighting onto a neighbouring feature" has a
+   literal version ("the localizer moves the keypoint to a neighbouring
+   feature"), and the literal one is the finding's proposed replacement. Quote
+   the sentence and give the replacement. An established technical term that
+   happens to be figurative (a *seed*, a *forest*, a *track*) is vocabulary,
+   not a finding; `specs/GLOSSARY.md` is where the settled terms are listed.
 
 Weigh these by how much a reader is misled, not by how far the spec is from the
 template. A spec whose interface section is missing but whose theory is exact is

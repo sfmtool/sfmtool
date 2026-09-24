@@ -28,17 +28,20 @@ use sfmtool_core::bench::{
     create_track as core_create_track, duplicate as core_duplicate, evaluate as core_evaluate,
     fit as core_fit, resize_patch as core_resize_patch,
     resize_patch_to_pixel as core_resize_patch_to_pixel,
-    search_descriptors as core_search_descriptors, set_stage as core_set_stage,
-    set_verdict as core_set_verdict, shape_observation as core_shape_observation,
-    sight_observation as core_sight_observation, spin_patch as core_spin_patch,
-    split as core_split, translate_patch_to_pixel as core_translate_patch_to_pixel, Bench,
-    BenchItem, ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack,
-    EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation,
-    ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport, StageKind,
-    TrackClassification, Verdict, Viewpoint, DEFAULT_RADIUS_PX,
+    search_descriptors as core_search_descriptors, search_geometry as core_search_geometry,
+    set_stage as core_set_stage, set_verdict as core_set_verdict,
+    shape_observation as core_shape_observation, sight_observation as core_sight_observation,
+    spin_patch as core_spin_patch, split as core_split, tilt_patch as core_tilt_patch,
+    translate_patch as core_translate_patch,
+    translate_patch_to_pixel as core_translate_patch_to_pixel, Bench, BenchItem,
+    ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack, EvaluateOptions,
+    EvaluateReport, FitOptions, FitReport, Found, GeometrySearchOptions, GeometrySearchReport,
+    ItemKind, Observation, ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport,
+    StageKind, TrackClassification, Verdict, Viewpoint, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::view_selection::ViewSelectParams;
 use sfmtool_core::progress::Progress;
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
@@ -728,6 +731,108 @@ fn translate_patch_to_pixel(
     d.set_item("changed", report.changed)?;
     d.set_item("clamped", report.clamped_from.is_some())?;
     d.set_item("clamped_from", report.clamped_from)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Move the patch of a track-stage `track` by ``by``, read on the patch's
+/// **own orthonormal axes** ``[u, v, n]`` in world units.
+///
+/// ``u`` and ``v`` slide it across its own plane and ``n`` moves it along its
+/// outward normal, the one direction no photograph can name; a mixed ``by``
+/// does both. Every sighting is carried by the displacement and keeps its own
+/// in-plane offset from the centre; one the moved centre no longer projects
+/// into is left with no keypoint. The axes, the normal and the size are
+/// untouched and nothing is pinned.
+///
+/// Returns ``(EditableTrack, report)`` carrying ``by``, ``center``, ``moved``,
+/// ``placed`` and ``changed``. Raises ``ValueError`` with the reason when the
+/// move is refused -- a cluster, a track with no patch, a ``by`` that is not
+/// finite, or a normal part on a bearing.
+#[pyfunction]
+fn translate_patch(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    by: [f64; 3],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) = core_translate_patch(
+        &track.inner,
+        &edited.inner,
+        nalgebra::Vector3::new(by[0], by[1], by[2]),
+    )
+    .map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item(
+        "by",
+        PyArray1::from_vec(py, vec![report.by.x, report.by.y, report.by.z]),
+    )?;
+    d.set_item(
+        "center",
+        PyArray1::from_vec(py, vec![report.center.x, report.center.y, report.center.z]),
+    )?;
+    d.set_item("moved", report.moved)?;
+    d.set_item("placed", report.placed)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Turn the patch of a track-stage `track` about its centre, by the least
+/// rotation, toward the outward ``normal`` named (any non-zero length),
+/// stopping ``MAX_TILT_DEG`` from any observation's camera.
+///
+/// The centre and the half-lengths do not move; every sighting keeps the
+/// in-plane offset it was measured at and is re-projected from the turned
+/// plane. The bitmap and the measurements are dropped, and nothing is pinned.
+///
+/// Returns ``(EditableTrack, report)`` carrying ``degrees``, ``asked``,
+/// ``normal`` (the one the patch now shows), ``stopped`` (``None``, or a dict
+/// with the ``observation`` and ``image`` whose cap ended the turn),
+/// ``placed`` and ``changed``. Raises ``ValueError`` with the reason when the
+/// turn is refused.
+#[pyfunction]
+fn tilt_patch(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    normal: [f64; 3],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) = core_tilt_patch(
+        &track.inner,
+        &edited.inner,
+        nalgebra::Vector3::new(normal[0], normal[1], normal[2]),
+    )
+    .map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("degrees", report.degrees)?;
+    d.set_item(
+        "asked",
+        PyArray1::from_vec(py, vec![report.asked.x, report.asked.y, report.asked.z]),
+    )?;
+    d.set_item(
+        "normal",
+        PyArray1::from_vec(py, vec![report.normal.x, report.normal.y, report.normal.z]),
+    )?;
+    match report.stopped {
+        Some(stop) => {
+            let s = PyDict::new(py);
+            s.set_item("observation", stop.observation)?;
+            s.set_item("image", stop.image)?;
+            d.set_item("stopped", s)?;
+        }
+        None => d.set_item("stopped", py.None())?,
+    }
+    d.set_item("placed", report.placed)?;
+    d.set_item("changed", report.changed)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),
@@ -1696,6 +1801,120 @@ fn search_report_dict<'py>(py: Python<'py>, report: &SearchReport) -> PyResult<B
     Ok(d)
 }
 
+/// Grow a track-stage `track` from its geometry: project its patch into every
+/// image of `edited`, vet each projected appearance against a reference fused
+/// from observation `observation` and the track's ``in`` observations, and
+/// append every admitted image the track does not name yet as a ``candidate``.
+///
+/// This is the single-point form of the view expansion ``sfm embed-patches``
+/// runs. An admitted image arrives at the patch centre's projection, seeded
+/// with the projected frame as its shape, and with no verdict: the next
+/// :func:`evaluate` or :func:`fit` judges it. The admission bar is the track's
+/// own ``min_relative_zncc`` threshold, as it is in the viewer. The keywords are
+/// the view selector's rendering and trust tunables, each defaulting to the
+/// selector's own.
+///
+/// Returns ``(EditableTrack, report)``. The report carries ``observation``,
+/// ``observation_count``, ``image``, ``reference_views``, ``self_agreement``
+/// (``NaN`` when no reference could be built), ``added``,
+/// ``already_in_track``, ``sentence`` and ``matches``: one dict per admitted
+/// image with its ``image``, ``zncc``, ``pixel`` and ``found`` -- ``"added"``
+/// or ``"already_in_track"`` with the observation that goes with it. Raises
+/// ``ValueError`` with the reason when the search is refused.
+#[pyfunction]
+#[pyo3(signature = (
+    track,
+    observation,
+    edited,
+    images,
+    *,
+    resolution = None,
+    min_valid_fraction = None,
+    min_track_views = None,
+    robust_iters = None,
+    min_self_agreement = None,
+))]
+#[allow(clippy::too_many_arguments)]
+fn search_geometry(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observation: usize,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    resolution: Option<u32>,
+    min_valid_fraction: Option<f64>,
+    min_track_views: Option<u32>,
+    robust_iters: Option<u32>,
+    min_self_agreement: Option<f64>,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let defaults = ViewSelectParams::default();
+    let options = GeometrySearchOptions {
+        selection: ViewSelectParams {
+            resolution: resolution.unwrap_or(defaults.resolution),
+            min_valid_fraction: min_valid_fraction.unwrap_or(defaults.min_valid_fraction),
+            min_track_views: min_track_views.unwrap_or(defaults.min_track_views),
+            robust_iters: robust_iters.unwrap_or(defaults.robust_iters),
+            min_self_agreement: min_self_agreement.unwrap_or(defaults.min_self_agreement),
+            ..defaults
+        },
+    };
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    let views = views_of(&posed, &pyramids);
+    let (next, report) = core_search_geometry(
+        &track.inner,
+        observation,
+        &views,
+        &options,
+        &Progress::none(),
+    )
+    .map_err(refused)?;
+    let d = geometry_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// The dict form of a geometry search report, with one entry per admitted image.
+fn geometry_report_dict<'py>(
+    py: Python<'py>,
+    report: &GeometrySearchReport,
+) -> PyResult<Bound<'py, PyDict>> {
+    let matches = PyList::empty(py);
+    for found in &report.matches {
+        let entry = PyDict::new(py);
+        entry.set_item("image", found.image)?;
+        entry.set_item("zncc", found.zncc)?;
+        entry.set_item("pixel", found.pixel)?;
+        match found.found {
+            Found::Added { observation } => {
+                entry.set_item("found", "added")?;
+                entry.set_item("observation", observation)?;
+            }
+            Found::AlreadyInTrack { observation } => {
+                entry.set_item("found", "already_in_track")?;
+                entry.set_item("observation", observation)?;
+            }
+            Found::OwnImage => entry.set_item("found", "own_image")?,
+        }
+        matches.append(entry)?;
+    }
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("observation_count", report.observation_count)?;
+    d.set_item("image", report.image)?;
+    d.set_item("reference_views", report.reference_views)?;
+    d.set_item("self_agreement", report.self_agreement)?;
+    d.set_item("added", report.added())?;
+    d.set_item("already_in_track", report.already_in_track())?;
+    d.set_item("sentence", report.to_string())?;
+    d.set_item("matches", matches)?;
+    Ok(d)
+}
+
 /// Register the bench bindings on the `sfmtool.bench` submodule.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBench>()?;
@@ -1705,6 +1924,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(translate_patch_to_pixel, m)?)?;
+    m.add_function(wrap_pyfunction!(translate_patch, m)?)?;
+    m.add_function(wrap_pyfunction!(tilt_patch, m)?)?;
     m.add_function(wrap_pyfunction!(sight_observation, m)?)?;
     m.add_function(wrap_pyfunction!(resize_patch, m)?)?;
     m.add_function(wrap_pyfunction!(resize_patch_to_pixel, m)?)?;
@@ -1717,6 +1938,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(duplicate, m)?)?;
     m.add_function(wrap_pyfunction!(search_descriptors, m)?)?;
+    m.add_function(wrap_pyfunction!(search_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     Ok(())
 }

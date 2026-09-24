@@ -31,6 +31,8 @@ from sfmtool._sfmtool.bench import (
     sight_observation,
     spin_patch,
     split,
+    tilt_patch,
+    translate_patch,
     translate_patch_to_pixel,
 )
 from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
@@ -1094,6 +1096,114 @@ class TestDuplicating:
 
         with pytest.raises(ValueError, match="nothing on the bench"):
             duplicate(bench, "nothing at all")
+
+
+class TestTheNormalHandSteps:
+    """``translate_patch`` and ``tilt_patch``: the two moves no pixel can name.
+
+    The arithmetic -- the least rotation, the offsets kept, the cap -- is proved
+    in Rust; what is checked here is that the bindings carry each step's numbers
+    and hand back a new value.
+    """
+
+    @staticmethod
+    def _normal(frame):
+        cross = np.cross(frame["u_halfvec"], frame["v_halfvec"])
+        return cross / np.linalg.norm(cross)
+
+    def test_an_offset_along_the_normal_moves_the_centre_that_far(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        before = track.placement
+        moved, report = translate_patch(track, edited, (0.0, 0.0, 0.05))
+
+        assert report["changed"]
+        assert report["moved"] == pytest.approx(0.05, rel=1e-9)
+        np.testing.assert_allclose(report["by"], [0.0, 0.0, 0.05])
+        after = moved.placement
+        np.testing.assert_allclose(
+            np.asarray(after["center"]) - np.asarray(before["center"]),
+            0.05 * self._normal(before),
+            atol=1e-12,
+        )
+        for axis in ("u_halfvec", "v_halfvec"):
+            np.testing.assert_allclose(after[axis], before[axis])
+        # The value it was called on is untouched.
+        np.testing.assert_allclose(track.placement["center"], before["center"])
+
+    def test_a_tilt_turns_the_normal_and_keeps_the_centre_and_size(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        before = track.placement
+        n = self._normal(before)
+        u = np.asarray(before["u_halfvec"]) / np.linalg.norm(before["u_halfvec"])
+        asked = np.cos(np.radians(10.0)) * n + np.sin(np.radians(10.0)) * u
+
+        turned, report = tilt_patch(track, edited, tuple(asked))
+        assert report["changed"]
+        assert report["stopped"] is None
+        assert report["degrees"] == pytest.approx(10.0, abs=1e-6)
+        np.testing.assert_allclose(report["normal"], asked, atol=1e-9)
+        after = turned.placement
+        np.testing.assert_allclose(self._normal(after), asked, atol=1e-9)
+        np.testing.assert_allclose(after["center"], before["center"])
+        assert np.linalg.norm(after["u_halfvec"]) == pytest.approx(
+            np.linalg.norm(before["u_halfvec"]), rel=1e-12
+        )
+
+    def test_a_cluster_refuses_both(self, edited):
+        _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
+        with pytest.raises(ValueError, match="cluster"):
+            translate_patch(track, edited, (0.0, 0.0, 1.0))
+        with pytest.raises(ValueError, match="cluster"):
+            tilt_patch(track, edited, (0.0, 0.0, 1.0))
+
+
+class TestTheGeometrySearch:
+    """``search_geometry`` over the fixture's own photographs."""
+
+    def test_a_search_appends_only_unruled_sweep_candidates(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        grown, report = bench_module.search_geometry(track, 0, edited, images)
+
+        assert set(report) == {
+            "observation",
+            "observation_count",
+            "image",
+            "reference_views",
+            "self_agreement",
+            "added",
+            "already_in_track",
+            "sentence",
+            "matches",
+        }
+        assert report["observation"] == 0
+        assert report["image"] == track.observations[0]["image"]
+        assert report["sentence"].startswith("Geometry search from observation 0")
+        assert grown.observation_count == track.observation_count + report["added"]
+        held = {o["image"] for o in track.observations}
+        for match in report["matches"]:
+            assert set(match) >= {"image", "zncc", "pixel", "found"}
+            if match["found"] == "added":
+                assert match["image"] not in held
+                row = grown.observations[match["observation"]]
+                assert row["verdict"] == "candidate"
+                assert row["provenance"] == {"kind": "sweep"}
+                np.testing.assert_allclose(
+                    row["cluster"]["seed_position"], match["pixel"], atol=1e-9
+                )
+        # The existing observations are left exactly as they were.
+        for before, after in zip(track.observations, grown.observations):
+            assert after["verdict"] == before["verdict"]
+
+    def test_a_cluster_stage_track_is_refused_by_name(self, edited, images):
+        _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
+        with pytest.raises(ValueError, match="track stage"):
+            bench_module.search_geometry(track, 0, edited, images)
 
 
 def test_the_module_reports_its_public_location():
