@@ -25,24 +25,10 @@ use crate::bench::steps::{
 };
 use crate::bench::track::{EditableTrack, Provenance, StageKind, TrackMeasurement, Verdict};
 use crate::bench::Bench;
+use crate::numeric::median_in_place;
 use crate::progress::Progress;
 
 use super::{Ctx, FinishOptions, Refusal, RefusalStage, StageRecord, TiltRecord};
-
-/// The median of `values`, as numpy takes it: the mean of the two middle values
-/// for an even count. `NaN` for none.
-pub(super) fn median(values: &mut [f64]) -> f64 {
-    if values.is_empty() {
-        return f64::NAN;
-    }
-    values.sort_by(f64::total_cmp);
-    let n = values.len();
-    if n % 2 == 1 {
-        values[n / 2]
-    } else {
-        0.5 * (values[n / 2 - 1] + values[n / 2])
-    }
-}
 
 /// The median leave-one-out ZNCC over the `in` observations that carry one, or
 /// negative infinity when none does.
@@ -56,7 +42,7 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
     if z.is_empty() {
         f64::NEG_INFINITY
     } else {
-        median(&mut z)
+        median_in_place(&mut z)
     }
 }
 

@@ -21,7 +21,6 @@ use crate::bench::track::Verdict;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::finish::median;
 use super::members::{depth_modes, fit_affine};
 use super::neighbourhood::{ObservationIndex, ViewCamera};
 use super::*;
@@ -63,13 +62,6 @@ fn observation(depth: Option<f64>, distance_px: f64) -> NearbyObservation {
 }
 
 // ---- Arithmetic --------------------------------------------------------------
-
-#[test]
-fn the_median_of_an_even_count_is_the_mean_of_the_middle_two() {
-    assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
-    assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), 2.5);
-    assert!(median(&mut []).is_nan());
-}
 
 #[test]
 fn the_weighted_affine_recovers_an_exact_map() {

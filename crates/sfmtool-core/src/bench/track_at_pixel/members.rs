@@ -15,10 +15,11 @@ use crate::bench::stage::set_stage;
 use crate::bench::steps::tilt_patch;
 use crate::bench::track::{EditableTrack, StageKind};
 use crate::features::kdforest::{radius_for_feature_count, ConstellationParams};
+use crate::numeric::median_in_place;
 use crate::progress::Progress;
 
 use super::finish::{
-    anchored_fit, at_infinity, finish, fit_track, in_count, median, median_zncc, position, read,
+    anchored_fit, at_infinity, finish, fit_track, in_count, median_zncc, position, read,
     score_track, seed_cluster, shape_track, thresholds, track_from_sightings,
 };
 use super::neighbourhood::{MatchesClusters, NearbyCluster, NearbyObservation};
@@ -283,7 +284,7 @@ fn half_px_of<'a>(
         if half.is_empty() {
             default
         } else {
-            median(&mut half)
+            median_in_place(&mut half)
         },
         lo,
         hi,
@@ -697,7 +698,7 @@ fn visible_views(
             .iter()
             .filter_map(NearbyObservation::stated_depth)
             .collect();
-        if !near.is_empty() && median(&mut near) < OCCLUSION_RATIO * depth {
+        if !near.is_empty() && median_in_place(&mut near) < OCCLUSION_RATIO * depth {
             continue;
         }
         out.push((other, px, angle));
@@ -746,7 +747,7 @@ fn local_prior(
     modes.push(depths[start..].to_vec());
     prior.depth_modes = modes
         .iter()
-        .map(|m| (median(&mut m.clone()), m.len()))
+        .map(|m| (median_in_place(&mut m.clone()), m.len()))
         .collect();
     prior.edge = modes.iter().filter(|m| m.len() >= 2).count() >= 2;
 
@@ -765,14 +766,16 @@ fn local_prior(
         .filter(|&(_, d)| lo <= d && d <= hi)
         .take(opts.prior_k)
         .collect();
-    prior.depth = Some(median(&mut same.iter().map(|s| s.1).collect::<Vec<_>>()));
+    prior.depth = Some(median_in_place(
+        &mut same.iter().map(|s| s.1).collect::<Vec<_>>(),
+    ));
     let mut half: Vec<f64> = same
         .iter()
         .map(|s| s.0.half_px)
         .filter(|h| h.is_finite())
         .collect();
     if !half.is_empty() {
-        prior.half_px = Some(median(&mut half));
+        prior.half_px = Some(median_in_place(&mut half));
     }
     let mean: Vector3<f64> = same
         .iter()
