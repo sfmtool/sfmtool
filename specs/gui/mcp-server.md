@@ -3423,10 +3423,11 @@ where a test hands no host over.
   advertises `panel_name`, `hud` and `max_dimension`.
 - **Schema and parser cannot drift**: the cached catalog schema supplies the
   accepted top-level argument names to the parser, so a tool has one declaration
-  of that vocabulary. Nested objects keep their own local closed-object checks.
-  A catalog-wide regression adds an unknown key to every representative call;
-  the vocabulary rule is asserted
-  the same way, including that a panel argument is `panel_name` and never
+  of that vocabulary. The parser also derives accepted names for its three
+  nested objects from their catalog schemas. A catalog-wide regression adds an
+  unknown key to every representative call and probes both directions of those
+  three nested schemas; the vocabulary rule is asserted the same way, including
+  that a panel argument is `panel_name` and never
   `panel`, and that `hud` — the one allowed initialism — is on `screenshot` and
   nowhere else, so a second one cannot arrive quietly.
 - **Catalog and command metadata agree**: one valid representative call for

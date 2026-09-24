@@ -209,7 +209,7 @@ pub(crate) fn parse(
                 tool: "set_reconstruction_transform.transform",
                 map: transform,
             };
-            inner.reject_unknown(&["rotation_wxyz", "translation", "scale"])?;
+            inner.reject_unknown_nested()?;
             let rotation_wxyz = inner.required_vec4("rotation_wxyz")?;
             let translation = inner.required_vec3("translation")?;
             let scale = inner.required_f64("scale")?;
@@ -334,7 +334,7 @@ pub(crate) fn parse(
                 tool: "move_camera_image.world_from_camera",
                 map: pose,
             };
-            inner.reject_unknown(&["quaternion_wxyz", "translation"])?;
+            inner.reject_unknown_nested()?;
             Command::MoveCameraImage {
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 camera_image: args.camera_image("camera_image")?,
@@ -654,7 +654,7 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
             tool: "set_view.look_through",
             map,
         };
-        inner.reject_unknown(&["reconstruction_label", "camera_image"])?;
+        inner.reject_unknown_nested()?;
         return Ok(Command::SetView {
             view: ViewCommand::LookThrough {
                 reconstruction_label: inner.optional_string("reconstruction_label")?,
@@ -839,6 +839,44 @@ impl Args<'_> {
             format!("it takes {}", allowed.join(", "))
         };
         Err(self.error(format!("has no argument {} — {known}.", unknown.join(", "))))
+    }
+
+    /// Use the advertised closed object for a nested argument. Optional fields
+    /// precede the schema's required order, preserving the existing error text.
+    fn reject_unknown_nested(&self) -> Result<(), ToolError> {
+        let (tool, field) = self
+            .tool
+            .split_once('.')
+            .expect("nested argument has a tool and field path");
+        let spec = catalog()
+            .iter()
+            .find(|spec| spec.name == tool)
+            .expect("nested argument belongs to an advertised tool");
+        let schema = &spec.schema["properties"][field];
+        let properties = schema["properties"]
+            .as_object()
+            .expect("nested argument schema has object properties");
+        let required = schema["required"]
+            .as_array()
+            .expect("nested argument schema lists required properties");
+        let mut allowed = properties
+            .keys()
+            .filter(|name| {
+                !required
+                    .iter()
+                    .any(|key| key.as_str() == Some(name.as_str()))
+            })
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        allowed.extend(required.iter().map(|key| {
+            let name = key.as_str().expect("required property is a string");
+            assert!(
+                properties.contains_key(name),
+                "required property is advertised"
+            );
+            name
+        }));
+        self.reject_unknown(&allowed)
     }
 
     pub(super) fn optional_string(&self, key: &str) -> Result<Option<String>, ToolError> {

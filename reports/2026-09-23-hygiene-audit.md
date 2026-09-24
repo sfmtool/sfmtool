@@ -23,6 +23,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium, because advertised wire names and schemas must remain identical.
 
 **Derive nested MCP argument validation from its schema**
+> _Status (2026-09-23): Done — the three nested parsers take accepted names from their catalog schemas, with catalog regression coverage and unchanged error wording._
 - Location: `crates/sfm-explorer/src/mcp/tools.rs:2561,2686,3006` and neighboring nested `Args` parsing.
 - Problem: Catalog-wide command names, classifications, and top-level unknown arguments are now checked against schemas, resolving much of the old six-edit finding. Nested object parsers still hand-list accepted keys in `reject_unknown`, beside their schema declarations. Adding one nested field can therefore fork the advertised and accepted sets.
 - Proposed fix: Pass the nested schema's accepted-key set to the local parser, and extend the catalog fixture to exercise nested objects in both directions.

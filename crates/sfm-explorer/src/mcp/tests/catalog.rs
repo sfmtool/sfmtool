@@ -384,6 +384,58 @@ fn every_advertised_tool_refuses_an_unknown_top_level_argument() {
     }
 }
 
+/// Exercise the three nested objects parsed by `Args` using the valid catalog
+/// calls. The schema supplies the probe names; the parser must recognize each
+/// advertised name and reject a name absent from the schema.
+#[test]
+fn nested_argument_names_agree_with_the_catalog() {
+    let calls = representative_tool_calls();
+    for (tool, field) in [
+        ("set_reconstruction_transform", "transform"),
+        ("move_camera_image", "world_from_camera"),
+        ("set_view", "look_through"),
+    ] {
+        let spec = tools::catalog()
+            .iter()
+            .find(|spec| spec.name == tool)
+            .expect("advertised tool");
+        let schema = &spec.schema["properties"][field];
+        assert_eq!(schema["additionalProperties"], false, "{tool}.{field}");
+        let properties = schema["properties"].as_object().expect("nested object");
+        let base = if tool == "set_view" {
+            json!({ "look_through": { "camera_image": 0 } })
+        } else {
+            calls
+                .iter()
+                .find(|(name, _)| *name == tool)
+                .expect("representative call")
+                .1
+                .clone()
+        };
+
+        for name in properties.keys() {
+            let mut arguments = base.clone();
+            arguments[field][name] = json!("<probe>");
+            if let Err(error) = tools::parse(tool, arguments.as_object()) {
+                assert!(
+                    !error.0.contains("has no argument"),
+                    "{tool}.{field} advertises {name:?} but rejects it: {error}"
+                );
+            }
+        }
+
+        let mut arguments = base;
+        arguments[field]["unknown_argument"] = json!(true);
+        let error = tools::parse(tool, arguments.as_object()).expect_err("unknown nested key");
+        assert!(
+            error.0.starts_with(&format!(
+                "{tool}.{field} has no argument \"unknown_argument\" — "
+            )),
+            "{tool}.{field}: {error}"
+        );
+    }
+}
+
 #[test]
 fn schema_driven_unknown_argument_errors_remain_compatible() {
     let arguments = json!({ "reconstruction_labelz": "alpha" })
@@ -409,6 +461,32 @@ fn schema_driven_unknown_argument_errors_remain_compatible() {
         "set_view.look_through has no argument \"unknown_argument\" — it takes \
          reconstruction_label, camera_image."
     );
+
+    for (tool, arguments, expected) in [
+        (
+            "set_reconstruction_transform",
+            json!({
+                "transform": { "unknown_argument": true },
+            }),
+            "set_reconstruction_transform.transform has no argument \"unknown_argument\" — \
+             it takes rotation_wxyz, translation, scale.",
+        ),
+        (
+            "move_camera_image",
+            json!({
+                "world_from_camera": { "unknown_argument": true },
+            }),
+            "move_camera_image.world_from_camera has no argument \"unknown_argument\" — \
+             it takes quaternion_wxyz, translation.",
+        ),
+    ] {
+        assert_eq!(
+            tools::parse(tool, arguments.as_object())
+                .expect_err("rejected")
+                .0,
+            expected
+        );
+    }
 
     let arguments = json!({ "unknown_argument": true })
         .as_object()
