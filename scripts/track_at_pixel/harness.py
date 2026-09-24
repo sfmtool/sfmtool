@@ -96,6 +96,7 @@ SUMMARY_METRICS = [
     "texel_scale_aniso_max",
     "image_recall",
     "image_precision",
+    "view_precision",
     "kp_err_median_px",
     "zncc_median",
     "gt_zncc_median",
@@ -111,6 +112,17 @@ def summarize(rows: list[dict]) -> str:
     n = len(rows)
     ok = [r for r in rows if r["status"] == "ok"]
     lines.append(f"queries: {n}   built: {len(ok)} ({100 * len(ok) / max(n, 1):.0f}%)")
+    good = [r for r in ok if r.get("good")]
+    lines.append(
+        f"good: {len(good)} ({100 * len(good) / max(n, 1):.0f}% of queries)   "
+        f"built but not good: {len(ok) - len(good)}"
+    )
+    misses = Counter(f for r in ok for f in r.get("good_failures", []))
+    if misses:
+        lines.append(
+            "  not good because: "
+            + ", ".join(f"{k} {v}" for k, v in misses.most_common())
+        )
     # Group refusals by their sentence with the numbers masked, so "sits 2.6 px"
     # and "sits 5.0 px" count as one kind of refusal.
     failures = Counter(

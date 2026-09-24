@@ -128,6 +128,19 @@ def score(
     m["kp_err_median_px"] = float(np.median(kp_err)) if kp_err else None
     m["kp_err_max_px"] = float(np.max(kp_err)) if kp_err else None
 
+    # Geometric precision: an `in` view is right when its keypoint lies within
+    # VIEW_TOLERANCE_PX of the ground-truth point's projection in that image.
+    # Unlike image precision this credits a correct sighting in a photograph
+    # the ground-truth track happens not to list (ground-truth tracks are not
+    # complete), and still charges one on another piece of surface.
+    right = 0
+    for o in rows:
+        kp = o.get("track", {}).get("keypoint")
+        proj = dataset.cameras[int(o["image"])].project(gt_xyz, 1.0 if gt_w else 0.0)
+        if kp is not None and proj is not None:
+            right += float(np.linalg.norm(np.asarray(kp) - proj)) <= VIEW_TOLERANCE_PX
+    m["view_precision"] = right / len(rows) if rows else None
+
     # Where the track sits in the queried photograph, which is the contract:
     # centred at, or very near, the pixel asked about.
     qo = result.query_observation
@@ -216,4 +229,50 @@ def score(
         m[key] = gt_read.get(key)
     if m["zncc_median"] is not None and gt_read.get("gt_zncc_median") is not None:
         m["zncc_median_delta"] = m["zncc_median"] - gt_read["gt_zncc_median"]
+    m["good_failures"] = good_failures(m)
+    m["good"] = not m["good_failures"]
     return m
+
+
+# How far an `in` keypoint may sit from the ground-truth point's projection in
+# its image and still count as a sighting of that point.
+VIEW_TOLERANCE_PX = 3.0
+
+# The harness's own bar for a good track, the same for every candidate, so
+# candidates with different gates are compared on one scale. A candidate's gates
+# decide what it returns; this decides whether what it returned was right.
+GOOD_BAR = {
+    "max_query_offset_px": 2.0,  # the track sits on the pixel asked about
+    "max_err_in_gt_halves": 1.0,  # the point lies within the true patch
+    "max_bearing_err_deg": 0.5,  # the same, for a bearing
+    "min_view_precision": 0.75,  # its views mostly see the true point
+    "min_zncc_median": 0.7,  # and they agree photometrically
+}
+
+
+def good_failures(m: dict) -> list[str]:
+    """Which parts of :data:`GOOD_BAR` a scored row misses (empty = good)."""
+    bar = GOOD_BAR
+    out = []
+    offset = m.get("query_keypoint_offset_px")
+    if (
+        not m.get("query_image_in")
+        or offset is None
+        or offset > bar["max_query_offset_px"]
+    ):
+        out.append("query offset")
+    halves = m.get("position_err_in_gt_halves")
+    if halves is not None:
+        if halves > bar["max_err_in_gt_halves"]:
+            out.append("position")
+    else:
+        angle = m.get("position_err_angle_deg")
+        if angle is None or angle > bar["max_bearing_err_deg"]:
+            out.append("position")
+    precision = m.get("view_precision")
+    if precision is None or precision < bar["min_view_precision"]:
+        out.append("precision")
+    zncc = m.get("zncc_median")
+    if zncc is None or zncc < bar["min_zncc_median"]:
+        out.append("zncc")
+    return out

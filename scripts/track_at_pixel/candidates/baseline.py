@@ -49,6 +49,9 @@ DEFAULTS = {
     "min_in_views": 3,
     "min_zncc_median": 0.8,
     "max_query_offset_px": 2.0,
+    # "baseline" runs steps 8-9 below; "common" hands the track to
+    # candidates.common.finish (anchoring, geometry search, the same gates).
+    "finish": "baseline",
 }
 
 
@@ -287,6 +290,11 @@ def build_track(
     # 7. Sampling ratio: resize so the chosen view samples at the target.
     if opts["size_policy"] != "prior":
         track = _size_by_sampling_ratio(ctx, track, opts, diag)
+
+    if opts["finish"] == "common":
+        from candidates.common import FINISH_DEFAULTS, finish
+
+        return finish(ctx, track, 0, pixel, {**FINISH_DEFAULTS, **opts}, diag)
 
     # 8. Geometry search from the queried sighting, then refit.
     if opts["geometry_search"]:

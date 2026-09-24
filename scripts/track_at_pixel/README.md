@@ -53,6 +53,29 @@ both into one Explorer window and toggle between them:
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr <run>/tracks.sfmr
 ```
 
+## Results on seoul_bull
+
+Every finite point of the ground truth, queried from each image it is seen in
+(1233 queries), judged against the good-track bar:
+
+| Candidate | Built | Good | Not good | Good % | Median angle err (deg) | Median normal err (deg) | Median projection offset at the pixel (px) | s/query |
+|---|---|---|---|---|---|---|---|---|
+| `baseline` | 278 | 243 | 35 | 19.7% | 0.096 | 12.1 | 0.67 | 0.16 |
+| `baseline --opt finish=common` | 330 | 301 | 29 | 24.4% | 0.016 | 12.1 | 0.19 | 0.24 |
+| `sweep` | 832 | 739 | 93 | 59.9% | 0.022 | 9.5 | 0.26 | 0.24 |
+| `transfer` | 666 | 592 | 74 | 48.0% | 0.021 | 10.4 | 0.24 | 0.21 |
+| `clusters` | 702 | 655 | 47 | 53.1% | 0.027 | 13.4 | 0.24 | 0.19 |
+| `cascade` | 1004 | 905 | 99 | 73.4% | 0.028 | 12.3 | 0.26 | 0.23 |
+
+The second row is the control: the baseline's own way of finding sightings,
+with the shared finish. It shows how much of the gain is the finish and how
+much is where the sightings come from. The cascade's tracks came from
+`clusters` (702), `transfer` (182), `sweep` (110) and the descriptor route
+(10). Anchoring puts the queried keypoint on the pixel by construction, so
+the centring number to read for the new candidates is the point's projection
+offset, not `query_keypoint_offset_px`. Times are with six runs sharing the
+machine.
+
 ## Files
 
 | File | Role |
@@ -62,7 +85,13 @@ pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_groun
 | `context.py` | `DatasetContext`, loaded once: photographs as an `ImagePyramidSet`, `LazyKdForest`, keypoints, cameras (−Z forward, depth = −z), per-point frames with 2D/3D indexes. `HoldoutContext` is what a candidate sees: `edited`, `observations_near(image, pixel, r)`, `clusters_near(image, pixel, r)`, `points_near(xyz)`, `texel_scales(track)`, `keypoints(image)`, `camera(image)` |
 | `metrics.py` | The per-query score |
 | `harness.py` | The loop, the JSONL rows, the summary |
-| `candidates/baseline.py` | The first candidate. A local prior sets size and normal, then: cluster, constellation search plus lateral search, cluster evaluate, upgrade, tilt to the prior normal, geometry search, refit, gates |
+| `compare.py` | Several runs side by side, each re-judged against the current good-track bar |
+| `candidates/baseline.py` | The first candidate. A local prior sets size and normal, then: cluster, constellation search plus lateral search, cluster evaluate, upgrade, tilt to the prior normal, geometry search, refit, gates. `--opt finish=common` swaps its last two steps for `common.finish` |
+| `candidates/common.py` | What the other candidates share once a track stands: `finish` (anchored fit, neighbours' normal, geometry search, cleaning, gates), and `track_from_sightings`, which upgrades a pixel plus a list of `(image, pixel)` sightings straight to a track |
+| `candidates/sweep.py` | No descriptors. The neighbours' depth modes each give a plane; the pixel's ray meets it; the guess is projected into the views that face it and are not occluded, and the fit corrects it |
+| `candidates/transfer.py` | No descriptors, no depth guess. For each other image, a weighted affine map is fitted to the neighbours' own matched keypoints and carries the pixel across |
+| `candidates/clusters.py` | Reads the cluster-patches `.matches`: the nearest clusters' kept members, with the pixel's offset from the member carried into each image through the members' affine shapes |
+| `candidates/cascade.py` | Runs `clusters`, `transfer`, `sweep` and the descriptor route in that order and returns the first track that passes its own gates |
 
 The baseline's `size_policy` option (`prior`, `largest_view`, `median_view`,
 `smallest_view`, with `texel_scale_target`, default 1.0) resizes the patch so
@@ -73,11 +102,33 @@ pixi run -e test python scripts/track_at_pixel/harness.py --opt size_policy=larg
 ```
 
 A new candidate is a new module in `candidates/` with a `DEFAULTS` dict and
-`build_track`; run it with `--candidate <name>`.
+`build_track`; run it with `--candidate <name>`. To compare runs:
+
+```bash
+pixi run -e test python scripts/track_at_pixel/compare.py <run> <run> ...
+```
 
 ## Metrics
 
 All are computed over the built track's `in` observations.
+
+**A good track.** Candidates have their own gates, so the number of tracks they
+return does not compare them. The harness judges every returned track against
+one bar (`metrics.GOOD_BAR`) and the summary counts the tracks that pass it
+(`good`) and the ones that do not (`built but not good`). A track is good when
+all of these hold:
+
+- the queried sighting is `in` and within 2 px of the pixel;
+- the point is within one ground-truth half-extent of the ground-truth point
+  (0.5 degrees for a bearing);
+- `view_precision` is at least 0.75;
+- the median leave-one-out ZNCC is at least 0.7.
+
+`view_precision` is the fraction of `in` views whose keypoint lies within 3 px
+of where the ground-truth point projects in that image. Unlike
+`image_precision` it credits a correct sighting in a photograph the
+ground-truth track does not list (ground-truth tracks are not complete), and it
+still charges one on another piece of surface, or an `in` view with no keypoint.
 
 - **Contract**
   - `query_keypoint_offset_px`: the queried sighting's fitted keypoint versus
@@ -100,6 +151,7 @@ All are computed over the built track's `in` observations.
   - finite versus infinity agreement.
 - **Membership**
   - `image_precision` and `image_recall` against the GT track's images.
+  - `view_precision`, described above.
   - `kp_err_median_px` / `kp_err_max_px`: keypoint error in the shared images.
 - **Photometry**
   - `zncc_median` / `_min`: leave-one-out ZNCC, set against the same

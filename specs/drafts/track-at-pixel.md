@@ -173,6 +173,22 @@ tracks and the cameras alone:
   reprojection residuals.
 - **Cost:** time per query.
 
+Membership is also scored geometrically: the fraction of `in` views whose
+keypoint lies within 3 px of the ground-truth point's projection in that image.
+This credits a correct sighting in a photograph the ground-truth track does not
+list, since ground-truth tracks are not complete, and still charges one on
+another piece of surface.
+
+**One bar for every candidate.** Candidates set their own gates, so the number
+of tracks each returns does not compare them. The harness judges each returned
+track against a single bar of its own and counts the tracks that pass it
+(good) and the ones that do not (built but not good). A track is good when its
+queried observation is `in` and within 2 px of the pixel, its point is within
+one ground-truth half-extent of the ground-truth point (0.5 degrees for a
+bearing), at least three quarters of its `in` views pass the geometric
+membership test above, and its median leave-one-out ZNCC is at least 0.7.
+Candidates are ranked on the good count, with the not-good count beside it.
+
 A refusal is scored by its stage, and the summary groups refusals by reason,
 so a candidate's failure modes can be compared as well as its successes.
 
@@ -191,6 +207,52 @@ sizes in the ground truth are what its embedding pass produced. They are good
 references rather than exact truth, and a returned track can read better than
 the ground truth's.
 
+## Candidates
+
+The harness holds five candidates. Four differ in where the other photographs'
+sightings of the pixel come from, and the fifth combines them.
+
+- **Descriptor constellation** (`baseline`): the bench steps in the order a
+  person would press them. A cluster at the pixel, the constellation search and
+  a lateral search from the best image it finds, cluster refinement, the
+  upgrade, a tilt toward the neighbours' normal, the geometry search, and the
+  gates.
+- **Surface sweep** (`sweep`): no descriptor is read. The reconstruction's
+  points near the pixel are split into depth modes, and each mode gives a plane
+  through its points with their mean normal. The pixel's ray meets the plane at
+  a guess of the patch, which is projected into the photographs that face it
+  and do not see the reconstruction's surface in front of it. The fit then
+  corrects the guess in each view.
+- **Neighbour transfer** (`transfer`): no descriptor and no depth guess. For
+  each other photograph, the neighbouring points seen in both give pairs of
+  keypoints, and a weighted affine map fitted to them carries the pixel across.
+- **Cluster file** (`clusters`): the clusters of the `.matches` file with a
+  member near the pixel. The pixel's offset from that member is carried into
+  each kept member's image through the two members' affine shapes.
+- **Cascade** (`cascade`): runs the cluster file, the neighbour transfer, the
+  sweep and the descriptor route in that order and returns the first track that
+  passes its own gates. The order is from the source that is least often wrong
+  when it returns a track to the one that is most often wrong.
+
+Once a track stands, the last four share one finish:
+
+1. **Anchoring.** A track-stage fit localizes every sighting, the queried one
+   included, and a patch beside a more distinctive feature slides toward it in
+   every view at once. After each fit the patch is slid back across its own
+   plane until its centre in the queried photograph is the pixel
+   (`translate_patch_to_pixel`), which carries every other sighting by the same
+   in-plane displacement, and the track is read again.
+2. **Normal.** A tilt toward the distance-weighted normal of the neighbours at
+   the track's depth, kept unless the median ZNCC drops.
+3. **Growth.** The geometry search from the queried sighting, then an anchored
+   refit. A view the search adds has no keypoint until a fit places it.
+4. **Cleaning.** An `in` view whose correlation peak sits more than 1.5 px from
+   its keypoint, or whose keypoint sits more than 1.5 px from the point's
+   projection, is turned out, and the track is refit.
+5. **Gates.** The queried sighting `in` and on the pixel, at least three `in`
+   views, a median ZNCC of at least 0.8, and no `in` view more than 1.5 px from
+   the point's projection.
+
 ## Consumers
 
 - SfM Explorer's bench: an Image Detail gesture that builds a track at the
@@ -203,13 +265,15 @@ the ground truth's.
 
 ## Open questions
 
-- **Which algorithm.** The harness decides this.
-- **Holding the pixel.** The fit re-centres a track on whatever its consensus
-  locks onto, which is often a more distinctive feature a few pixels away. The
-  options are to re-anchor the patch on the pixel after fitting and refit with
-  the queried sighting held, to bound that sighting's walk more tightly than
-  the others', or to accept the move and report it. It is also open whether a
-  small move is a refusal or a warning.
+- **Which algorithm.** The harness decides this. The cascade is the strongest
+  candidate so far, and it is also the slowest, since a pixel no source can
+  serve runs all four.
+- **Holding the pixel.** The candidates anchor after every fit, as described
+  above. Holding the queried sighting's keypoint through the fit, so that it
+  still casts its ray from the pixel, is the other way to keep the track on the
+  pixel. In the harness it did no better than anchoring, so the fit has no
+  such option. Whether the operation in `sfmtool-core` anchors inside its own
+  loop, or leaves that to its caller, is open.
 - **Near a depth edge.** When the neighbourhood holds two depth populations,
   the patch has to choose one surface and be sized not to span the edge. Which
   surface to pick, and whether to return both as two tracks, is open.
