@@ -104,6 +104,7 @@ def surface_hypotheses(ctx, image: int, pixel, opts: dict) -> list[dict]:
             or [opts["default_radius_px"]]
         )
         half_px = float(np.clip(half_px, opts["min_radius_px"], opts["max_radius_px"]))
+        half_px *= opts["size_scale"]
         out.append(
             {
                 "xyz": xyz,

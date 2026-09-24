@@ -165,6 +165,7 @@ def build_track(ctx, image: int, pixel, options: dict | None = None):
                 opts["max_radius_px"],
             )
         )
+        radius_px *= opts["size_scale"]
         try:
             track = track_from_sightings(ctx, image, pixel, radius_px, sightings)
             track = anchored_fit(ctx, track, 0, pixel, opts["anchor_refits"])

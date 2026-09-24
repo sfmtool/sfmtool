@@ -58,6 +58,12 @@ FINISH_DEFAULTS = {
     "geometry_search": True,
     "min_in_views": 3,
     "min_zncc_median": 0.8,
+    # Ray consensus before the cleaning (see ray_consensus).
+    "ray_consensus": False,
+    "ray_tolerance_px": 2.0,
+    "ray_min_zncc": 0.5,
+    # A multiplier on the patch size each candidate chooses for itself.
+    "size_scale": 1.0,
     "max_query_offset_px": 2.0,
 }
 
@@ -323,6 +329,92 @@ def clean(ctx, track, q: int, pixel, opts: dict, diag: dict):
     return track
 
 
+def ray_depth(ctx, image: int, pixel, other: int, kp) -> float | None:
+    """Distance along ``pixel``'s ray in ``image`` where the ray through ``kp`` in ``other`` passes nearest."""
+    a = ctx.camera(image)
+    b = ctx.camera(other)
+    d1, d2 = a.ray(pixel), b.ray(kp)
+    w0 = a.center - b.center
+    bb = float(d1 @ d2)
+    den = 1.0 - bb * bb
+    if den < 1e-9:
+        return None
+    t = (bb * float(d2 @ w0) - float(d1 @ w0)) / den
+    return t if t > 0 else None
+
+
+def ray_consensus(ctx, track, q: int, pixel, opts: dict, diag: dict):
+    """Keep the views that agree on one depth along the queried pixel's ray.
+
+    The queried pixel is the one sighting known to be right, so the point lies
+    on its ray; only the distance along it is unknown. Each other view with a
+    keypoint names a distance: where its own ray passes nearest. A view counts
+    only when its ZNCC is at least ``ray_min_zncc`` and its correlation peak
+    is within ``clean_max_shift_px`` of its keypoint. A distance is supported
+    by every counted view whose keypoint lies within ``ray_tolerance_px`` of
+    the ray point's projection, and the distance with the most support (then
+    the highest summed ZNCC) wins. Every other ``in`` view is turned out, and
+    the track is refit. Unlike :func:`clean`, which
+    reads offsets from a point the wrong views may have pulled off the ray,
+    this never lets the views that disagree decide where the point is.
+    """
+    from sfmtool._sfmtool import bench as B
+
+    if track.at_infinity:
+        return track
+    image = int(track.observations[q]["image"])
+    cam_q = ctx.camera(image)
+    ray = cam_q.ray(pixel)
+    views = []
+    for i, o in enumerate(track.observations):
+        if i == q or o["verdict"] != "in":
+            continue
+        tr = o.get("track", {})
+        kp, z = tr.get("keypoint"), tr.get("zncc")
+        if kp is None or z is None or z < opts["ray_min_zncc"]:
+            continue
+        # A keypoint the correlation peak has left is not a sighting yet.
+        if _reading(o, "seed_shift_px") > opts["clean_max_shift_px"]:
+            continue
+        views.append((i, int(o["image"]), np.asarray(kp, float), float(z)))
+    if not views:
+        return track
+    depths = [ray_depth(ctx, image, pixel, img, kp) for _, img, kp, _ in views]
+    depths.append(float(ray @ (np.asarray(track.position) - cam_q.center)))
+    best, best_key = None, None
+    for t in depths:
+        if t is None or t <= 0:
+            continue
+        x = cam_q.center + t * ray
+        support = []
+        for i, img, kp, z in views:
+            p = ctx.camera(img).project(x)
+            if p is not None and np.linalg.norm(p - kp) <= opts["ray_tolerance_px"]:
+                support.append((i, z))
+        key = (len(support), sum(z for _, z in support))
+        if best_key is None or key > best_key:
+            best, best_key = (t, [i for i, _ in support]), key
+    if best is None:
+        return track
+    keep = set(best[1])
+    changed = []
+    for i, o in enumerate(track.observations):
+        if i != q and o["verdict"] == "in" and i not in keep:
+            track, _ = B.set_verdict(track, i, "out")
+            changed.append(int(o["image"]))
+    diag["ray_consensus"] = {
+        "depth": best[0],
+        "support": len(keep),
+        "turned_out": changed,
+    }
+    if changed and track.verdict_counts[0] >= 2:
+        try:
+            track = anchored_fit(ctx, track, q, pixel, opts["anchor_refits"])
+        except ValueError:
+            pass
+    return track
+
+
 def neighbour_normal(ctx, image: int, pixel, depth: float, opts: dict):
     """Distance-weighted mean normal of the nearby points on the track's own surface.
 
@@ -403,6 +495,8 @@ def finish(ctx, track, q: int, pixel, opts: dict, diag: dict) -> TrackAtPixelRes
             diag["geometry_search"] = {"error": str(e)}
 
     track, _ = B.apply_thresholds(track)
+    if opts["ray_consensus"]:
+        track = ray_consensus(ctx, track, q, pixel, opts, diag)
     if opts["clean"]:
         track = clean(ctx, track, q, pixel, opts, diag)
     row = track.observations[q]
