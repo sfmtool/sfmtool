@@ -411,87 +411,142 @@ fn write_sfmr_into<S: EntrySink>(
     let cameras_hash = xxhash_rust::xxh3::xxh3_128(&cameras_bytes);
     section_digests.push(cameras_hash);
 
-    // === Rigs (optional, hashed in lexicographic path order) ===
-    let rigs_hash: Option<u128>;
-    let frames_hash: Option<u128>;
-    if let Some(rf) = &data.rig_frame_data {
-        let sensor_count = rf.rigs_metadata.sensor_count as usize;
-        let frame_count = rf.frames_metadata.frame_count as usize;
-
-        let mut rigs_hasher = Xxh3::new();
-
-        // rigs/metadata.json
-        let bytes = sink.write_json(entries::rigs_metadata(), &rf.rigs_metadata)?;
-        rigs_hasher.update(&bytes);
-
-        // rigs/sensor_camera_indexes
-        binary_hashed(
-            &mut sink,
-            &entries::rigs_sensor_camera_indexes(sensor_count),
-            bytemuck::cast_slice(rf.sensor_camera_indexes.as_slice().unwrap()),
-            &mut rigs_hasher,
-        )?;
-
-        // rigs/sensor_quaternions_wxyz
-        binary_hashed(
-            &mut sink,
-            &entries::rigs_sensor_quaternions_wxyz(sensor_count),
-            bytemuck::cast_slice(rf.sensor_quaternions_wxyz.as_slice().unwrap()),
-            &mut rigs_hasher,
-        )?;
-
-        // rigs/sensor_translations_xyz
-        binary_hashed(
-            &mut sink,
-            &entries::rigs_sensor_translations_xyz(sensor_count),
-            bytemuck::cast_slice(rf.sensor_translations_xyz.as_slice().unwrap()),
-            &mut rigs_hasher,
-        )?;
-
-        let rigs_digest = rigs_hasher.digest128();
-        section_digests.push(rigs_digest);
-        rigs_hash = Some(rigs_digest);
-
-        // === Frames (hashed in lexicographic path order) ===
-        let mut frames_hasher = Xxh3::new();
-
-        // frames/image_frame_indexes
-        binary_hashed(
-            &mut sink,
-            &entries::frames_image_frame_indexes(image_count),
-            bytemuck::cast_slice(rf.image_frame_indexes.as_slice().unwrap()),
-            &mut frames_hasher,
-        )?;
-
-        // frames/image_sensor_indexes
-        binary_hashed(
-            &mut sink,
-            &entries::frames_image_sensor_indexes(image_count),
-            bytemuck::cast_slice(rf.image_sensor_indexes.as_slice().unwrap()),
-            &mut frames_hasher,
-        )?;
-
-        // frames/metadata.json
-        let bytes = sink.write_json(entries::frames_metadata(), &rf.frames_metadata)?;
-        frames_hasher.update(&bytes);
-
-        // frames/rig_indexes
-        binary_hashed(
-            &mut sink,
-            &entries::frames_rig_indexes(frame_count),
-            bytemuck::cast_slice(rf.rig_indexes.as_slice().unwrap()),
-            &mut frames_hasher,
-        )?;
-
-        let frames_digest = frames_hasher.digest128();
-        section_digests.push(frames_digest);
-        frames_hash = Some(frames_digest);
+    // Fold section digests in wire order. Derived data is verified separately
+    // and does not identify the reconstruction.
+    let (rigs_hash, frames_hash) = if let Some(rf) = &data.rig_frame_data {
+        let rigs_hash = write_rigs(&mut sink, rf)?;
+        section_digests.push(rigs_hash);
+        let frames_hash = write_frames(&mut sink, rf, image_count)?;
+        section_digests.push(frames_hash);
+        (Some(rigs_hash), Some(frames_hash))
     } else {
-        rigs_hash = None;
-        frames_hash = None;
-    }
+        (None, None)
+    };
+    let derived_hash = write_derived(
+        &mut sink,
+        depth_statistics,
+        &observed_depth_histogram_counts,
+        image_count,
+        num_buckets,
+    )?;
+    let images_hash = write_images(&mut sink, data, image_count, is_embedded)?;
+    section_digests.push(images_hash);
+    let points3d_hash = write_points3d(
+        &mut sink,
+        data,
+        normals_xyz.as_deref(),
+        point_count,
+        image_count,
+    )?;
+    section_digests.push(points3d_hash);
+    let tracks_hash = write_tracks(&mut sink, data, observation_count, point_count, is_embedded)?;
+    section_digests.push(tracks_hash);
 
-    // === Images (hashed in lexicographic path order) ===
+    // === Content hash ===
+    let content_hash_value = section_digests.finish();
+
+    let content_hash = ContentHash {
+        metadata_xxh128: format_hash(metadata_hash),
+        cameras_xxh128: format_hash(cameras_hash),
+        rigs_xxh128: rigs_hash.map(format_hash),
+        frames_xxh128: frames_hash.map(format_hash),
+        images_xxh128: format_hash(images_hash),
+        points3d_xxh128: format_hash(points3d_hash),
+        tracks_xxh128: format_hash(tracks_hash),
+        derived_xxh128: Some(format_hash(derived_hash)),
+        content_xxh128: format_hash(content_hash_value),
+    };
+    sink.write_json(entries::content_hash(), &content_hash)?;
+
+    sink.finish()?;
+    Ok(content_hash)
+}
+
+fn write_rigs<S: EntrySink>(sink: &mut S, rf: &RigFrameData) -> Result<u128, SfmrError> {
+    // === Rigs (optional, hashed in lexicographic path order) ===
+    let sensor_count = rf.rigs_metadata.sensor_count as usize;
+
+    let mut rigs_hasher = Xxh3::new();
+
+    // rigs/metadata.json
+    let bytes = sink.write_json(entries::rigs_metadata(), &rf.rigs_metadata)?;
+    rigs_hasher.update(&bytes);
+
+    // rigs/sensor_camera_indexes
+    binary_hashed(
+        sink,
+        &entries::rigs_sensor_camera_indexes(sensor_count),
+        bytemuck::cast_slice(rf.sensor_camera_indexes.as_slice().unwrap()),
+        &mut rigs_hasher,
+    )?;
+
+    // rigs/sensor_quaternions_wxyz
+    binary_hashed(
+        sink,
+        &entries::rigs_sensor_quaternions_wxyz(sensor_count),
+        bytemuck::cast_slice(rf.sensor_quaternions_wxyz.as_slice().unwrap()),
+        &mut rigs_hasher,
+    )?;
+
+    // rigs/sensor_translations_xyz
+    binary_hashed(
+        sink,
+        &entries::rigs_sensor_translations_xyz(sensor_count),
+        bytemuck::cast_slice(rf.sensor_translations_xyz.as_slice().unwrap()),
+        &mut rigs_hasher,
+    )?;
+
+    Ok(rigs_hasher.digest128())
+}
+
+fn write_frames<S: EntrySink>(
+    sink: &mut S,
+    rf: &RigFrameData,
+    image_count: usize,
+) -> Result<u128, SfmrError> {
+    let frame_count = rf.frames_metadata.frame_count as usize;
+
+    // === Frames (hashed in lexicographic path order) ===
+    let mut frames_hasher = Xxh3::new();
+
+    // frames/image_frame_indexes
+    binary_hashed(
+        sink,
+        &entries::frames_image_frame_indexes(image_count),
+        bytemuck::cast_slice(rf.image_frame_indexes.as_slice().unwrap()),
+        &mut frames_hasher,
+    )?;
+
+    // frames/image_sensor_indexes
+    binary_hashed(
+        sink,
+        &entries::frames_image_sensor_indexes(image_count),
+        bytemuck::cast_slice(rf.image_sensor_indexes.as_slice().unwrap()),
+        &mut frames_hasher,
+    )?;
+
+    // frames/metadata.json
+    let bytes = sink.write_json(entries::frames_metadata(), &rf.frames_metadata)?;
+    frames_hasher.update(&bytes);
+
+    // frames/rig_indexes
+    binary_hashed(
+        sink,
+        &entries::frames_rig_indexes(frame_count),
+        bytemuck::cast_slice(rf.rig_indexes.as_slice().unwrap()),
+        &mut frames_hasher,
+    )?;
+
+    Ok(frames_hasher.digest128())
+}
+
+fn write_derived<S: EntrySink>(
+    sink: &mut S,
+    depth_statistics: &DepthStatistics,
+    observed_depth_histogram_counts: &ndarray::Array2<u32>,
+    image_count: usize,
+    num_buckets: usize,
+) -> Result<u128, SfmrError> {
     // === Derived (hashed, but outside `content_xxh128`) ===
     //
     // Computed from the poses, the positions and the tracks, every one of which
@@ -511,20 +566,27 @@ fn write_sfmr_into<S: EntrySink>(
 
     // derived/observed_depth_histogram_counts
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::observed_depth_histogram_counts(false, image_count, num_buckets),
         bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
         &mut derived_hasher,
     )?;
 
-    let derived_hash = derived_hasher.digest128();
+    Ok(derived_hasher.digest128())
+}
 
+fn write_images<S: EntrySink>(
+    sink: &mut S,
+    data: &SfmrData,
+    image_count: usize,
+    is_embedded: bool,
+) -> Result<u128, SfmrError> {
     // === Images ===
     let mut images_hasher = Xxh3::new();
 
     // images/camera_indexes
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::images_camera_indexes(image_count),
         bytemuck::cast_slice(data.camera_indexes.as_slice().unwrap()),
         &mut images_hasher,
@@ -542,7 +604,7 @@ fn write_sfmr_into<S: EntrySink>(
             .flat_map(|h| h.iter().copied())
             .collect();
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::images_image_file_hashes(image_count),
             &hash_bytes,
             &mut images_hasher,
@@ -556,7 +618,7 @@ fn write_sfmr_into<S: EntrySink>(
             .flat_map(|h| h.iter().copied())
             .collect();
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::images_feature_tool_hashes(image_count),
             &hash_bytes,
             &mut images_hasher,
@@ -579,7 +641,7 @@ fn write_sfmr_into<S: EntrySink>(
 
     // images/quaternions_wxyz
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::images_quaternions_wxyz(image_count),
         bytemuck::cast_slice(data.quaternions_wxyz.as_slice().unwrap()),
         &mut images_hasher,
@@ -595,7 +657,7 @@ fn write_sfmr_into<S: EntrySink>(
             .flat_map(|h| h.iter().copied())
             .collect();
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::images_sift_content_hashes(image_count),
             &hash_bytes,
             &mut images_hasher,
@@ -605,7 +667,7 @@ fn write_sfmr_into<S: EntrySink>(
     // images/thumbnails_y_x_rgb (optional; absent from the digest when absent)
     if let Some(thumbnails) = &data.thumbnails_y_x_rgb {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::images_thumbnails_y_x_rgb(image_count),
             thumbnails.as_slice().unwrap(),
             &mut images_hasher,
@@ -614,15 +676,22 @@ fn write_sfmr_into<S: EntrySink>(
 
     // images/translations_xyz
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::images_translations_xyz(image_count),
         bytemuck::cast_slice(data.translations_xyz.as_slice().unwrap()),
         &mut images_hasher,
     )?;
 
-    let images_hash = images_hasher.digest128();
-    section_digests.push(images_hash);
+    Ok(images_hasher.digest128())
+}
 
+fn write_points3d<S: EntrySink>(
+    sink: &mut S,
+    data: &SfmrData,
+    normals_xyz: Option<&ndarray::Array2<f32>>,
+    point_count: usize,
+    image_count: usize,
+) -> Result<u128, SfmrError> {
     // === Points3D (hashed in lexicographic path order) ===
     // The optional per-point patch frame (`patch_u_halfvec_xyz`,
     // `patch_v_halfvec_xyz`, and an optional `patch_bitmaps_y_x_rgba`) lives in
@@ -637,7 +706,7 @@ fn write_sfmr_into<S: EntrySink>(
 
     // points3d/colors_rgb
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::points3d_colors_rgb(point_count),
         data.colors_rgb.as_slice().unwrap(),
         &mut points3d_hasher,
@@ -648,13 +717,13 @@ fn write_sfmr_into<S: EntrySink>(
     // metadata.json). Two of the constraint triple; the third sorts much later.
     if let Some((_, constraint_distances, constraint_reference_images)) = constraints {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_constraint_distances(point_count),
             bytemuck::cast_slice(constraint_distances),
             &mut points3d_hasher,
         )?;
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_constraint_reference_images(point_count),
             bytemuck::cast_slice(constraint_reference_images),
             &mut points3d_hasher,
@@ -690,7 +759,7 @@ fn write_sfmr_into<S: EntrySink>(
     // caller that supplies both is responsible for keeping them coherent.
     if let Some(normal_confidence) = &data.normal_confidence {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_normal_confidence(point_count),
             normal_confidence.as_slice().unwrap(),
             &mut points3d_hasher,
@@ -700,7 +769,7 @@ fn write_sfmr_into<S: EntrySink>(
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if let Some(normals_xyz) = &normals_xyz {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_normals(false, point_count),
             bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
             &mut points3d_hasher,
@@ -711,7 +780,7 @@ fn write_sfmr_into<S: EntrySink>(
     if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
         let r = bitmaps.shape()[1];
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_patch_bitmaps_y_x_rgba(point_count, r),
             bitmaps.as_slice().unwrap(),
             &mut points3d_hasher,
@@ -719,7 +788,7 @@ fn write_sfmr_into<S: EntrySink>(
     }
     if let Some(u) = &data.patch_u_halfvec_xyz {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_patch_u_halfvec_xyz(point_count),
             bytemuck::cast_slice(u.as_slice().unwrap()),
             &mut points3d_hasher,
@@ -727,7 +796,7 @@ fn write_sfmr_into<S: EntrySink>(
     }
     if let Some(v) = &data.patch_v_halfvec_xyz {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_patch_v_halfvec_xyz(point_count),
             bytemuck::cast_slice(v.as_slice().unwrap()),
             &mut points3d_hasher,
@@ -739,7 +808,7 @@ fn write_sfmr_into<S: EntrySink>(
     // triple.
     if let Some((point_constraints, _, _)) = constraints {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::points3d_point_constraints(point_count),
             point_constraints,
             &mut points3d_hasher,
@@ -748,7 +817,7 @@ fn write_sfmr_into<S: EntrySink>(
 
     // points3d/positions_xyzw
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::points3d_positions(false, point_count),
         bytemuck::cast_slice(data.positions_xyzw.as_slice().unwrap()),
         &mut points3d_hasher,
@@ -756,22 +825,29 @@ fn write_sfmr_into<S: EntrySink>(
 
     // points3d/reprojection_errors
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::points3d_reprojection_errors(point_count),
         bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
         &mut points3d_hasher,
     )?;
 
-    let points3d_hash = points3d_hasher.digest128();
-    section_digests.push(points3d_hash);
+    Ok(points3d_hasher.digest128())
+}
 
+fn write_tracks<S: EntrySink>(
+    sink: &mut S,
+    data: &SfmrData,
+    observation_count: usize,
+    point_count: usize,
+    is_embedded: bool,
+) -> Result<u128, SfmrError> {
     // === Tracks (hashed in lexicographic path order) ===
     let mut tracks_hasher = Xxh3::new();
 
     // tracks/feature_indexes (sift_files only; lexicographically before image_indexes)
     if !is_embedded {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::tracks_feature_indexes(observation_count),
             bytemuck::cast_slice(data.feature_indexes.as_ref().unwrap().as_slice().unwrap()),
             &mut tracks_hasher,
@@ -780,7 +856,7 @@ fn write_sfmr_into<S: EntrySink>(
 
     // tracks/image_indexes
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::tracks_image_indexes(observation_count),
         bytemuck::cast_slice(data.image_indexes.as_slice().unwrap()),
         &mut tracks_hasher,
@@ -791,7 +867,7 @@ fn write_sfmr_into<S: EntrySink>(
     // before metadata.json)
     if let Some(keypoints_xy) = &data.keypoints_xy {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::tracks_keypoints_xy(observation_count),
             bytemuck::cast_slice(keypoints_xy.as_slice().unwrap()),
             &mut tracks_hasher,
@@ -816,7 +892,7 @@ fn write_sfmr_into<S: EntrySink>(
     // per-observation arrays when the tracks need sorting.
     if let Some(observation_confidence) = &data.observation_confidence {
         binary_hashed(
-            &mut sink,
+            sink,
             &entries::tracks_observation_confidence(observation_count),
             observation_confidence.as_slice().unwrap(),
             &mut tracks_hasher,
@@ -825,7 +901,7 @@ fn write_sfmr_into<S: EntrySink>(
 
     // tracks/observation_counts
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::tracks_observation_counts(point_count),
         bytemuck::cast_slice(data.observation_counts.as_slice().unwrap()),
         &mut tracks_hasher,
@@ -833,33 +909,13 @@ fn write_sfmr_into<S: EntrySink>(
 
     // tracks/point_indexes
     binary_hashed(
-        &mut sink,
+        sink,
         &entries::tracks_point_indexes(false, observation_count),
         bytemuck::cast_slice(data.point_indexes.as_slice().unwrap()),
         &mut tracks_hasher,
     )?;
 
-    let tracks_hash = tracks_hasher.digest128();
-    section_digests.push(tracks_hash);
-
-    // === Content hash ===
-    let content_hash_value = section_digests.finish();
-
-    let content_hash = ContentHash {
-        metadata_xxh128: format_hash(metadata_hash),
-        cameras_xxh128: format_hash(cameras_hash),
-        rigs_xxh128: rigs_hash.map(format_hash),
-        frames_xxh128: frames_hash.map(format_hash),
-        images_xxh128: format_hash(images_hash),
-        points3d_xxh128: format_hash(points3d_hash),
-        tracks_xxh128: format_hash(tracks_hash),
-        derived_xxh128: Some(format_hash(derived_hash)),
-        content_xxh128: format_hash(content_hash_value),
-    };
-    sink.write_json(entries::content_hash(), &content_hash)?;
-
-    sink.finish()?;
-    Ok(content_hash)
+    Ok(tracks_hasher.digest128())
 }
 
 /// The three constraint columns as borrowed slices: the constraint per point,
