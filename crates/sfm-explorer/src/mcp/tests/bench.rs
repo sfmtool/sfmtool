@@ -1993,3 +1993,120 @@ fn a_slow_evaluate_answers_with_a_handle_naming_it() {
         Ok(_) => panic!("the fixture's photographs are not on disk"),
     }
 }
+
+// ── Create Track Here ───────────────────────────────────────────────────
+
+/// `create_track_at_pixel` over the plane capture Create Track Here's own tests
+/// use, as `run_a`: a grid of points on a textured plane, every photograph
+/// cached.
+fn plane_benchable() -> (AppState, Viewer3D) {
+    let (mut state, viewer) = benchable_with(crate::bench::track_at_pixel::tests::plane_recon());
+    let id = state.scene[0].id;
+    crate::bench::track_at_pixel::tests::cache_photographs(&mut state, id);
+    (state, viewer)
+}
+
+/// The tool is the panel's step: at a pixel on the textured plane it answers
+/// with the version the commit pushed, the item the track stays on the bench
+/// as, the member that built it and the point it wrote, which `get_point`
+/// takes back.
+#[test]
+fn create_track_at_pixel_commits_a_point_and_names_it() {
+    let (mut state, mut viewer) = plane_benchable();
+    let pixel = crate::bench::track_at_pixel::tests::textured_pixel();
+    let before = state.scene[0].edited().point_count();
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "create_track_at_pixel",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": pixel }),
+    );
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    assert_eq!(reply["member"], json!("transfer"), "{reply}");
+    let item = reply["item"].as_str().expect("an item");
+    assert!(item.starts_with("image_0@"), "{reply}");
+    assert!(
+        reply["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Created {item} at (")),
+        "{reply}"
+    );
+    assert!(
+        reply["label"]
+            .as_str()
+            .expect("the version's label")
+            .starts_with("Committed"),
+        "the cursor is on the commit's version: {reply}"
+    );
+    let index = reply["point"]["index"].as_u64().expect("an index");
+    assert_eq!(reply["point"]["replaced"], Value::Null, "{reply}");
+    assert_eq!(state.scene[0].edited().point_count(), before + 1);
+
+    let id = reply["point"]["id"].as_str().expect("an id");
+    let point = call(&mut state, &mut viewer, "get_point", json!({ "point": id }));
+    assert_eq!(point["index"].as_u64(), Some(index), "{point}");
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["active"]["track"], json!(item), "{bench}");
+}
+
+/// Every member refusing is a tool error carrying the row's sentence and then
+/// each member's stage and reason, in the order tried, with nothing pushed; a
+/// pixel off the photograph is refused in the call, before any worker.
+#[test]
+fn create_track_at_pixel_refuses_with_every_members_stage() {
+    let (mut state, mut viewer) = plane_benchable();
+    let versions = state.scene[0].history.versions().len();
+    let pixel = crate::bench::track_at_pixel::tests::lonely_pixel();
+    let map = json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": pixel })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("create_track_at_pixel", Some(&map)).expect("parses");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        _ => panic!("create_track_at_pixel must defer to a worker"),
+    };
+    state.finish_background_task();
+    let error = match super::super::edit::background_reply(&state, &pending)
+        .expect("the operation finished")
+    {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("expected every member to refuse"),
+    };
+    assert!(
+        error.starts_with("Cannot create a track at (2.0, 125.0) in image_0.jpg: every member refused; the last, constellation, at constellation: "),
+        "{error}"
+    );
+    assert!(error.contains("Build Index Files"), "{error}");
+    let lines: Vec<&str> = error.lines().filter(|l| l.starts_with("- ")).collect();
+    assert_eq!(lines.len(), 4, "{error}");
+    for (line, member) in lines
+        .iter()
+        .zip(["clusters", "transfer", "sweep", "constellation"])
+    {
+        assert!(
+            line.starts_with(&format!("- {member} refused at ")),
+            "{error}"
+        );
+    }
+    assert_eq!(state.scene[0].history.versions().len(), versions);
+
+    let off = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_track_at_pixel",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [-4.0, 10.0] }),
+    );
+    assert!(
+        off.to_string().contains("not on the 128x128 photograph"),
+        "{off}"
+    );
+    assert!(state.background_task().is_none());
+}

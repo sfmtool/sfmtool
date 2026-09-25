@@ -442,28 +442,36 @@ pub(super) fn background_reply(
                 pending.operation_name, pending.label
             ))));
         };
-        return Some(match &outcome.outcome {
+        return Some(match (pending.answer, &outcome.outcome) {
+            // A Create Track Here answers with the point it committed or the
+            // cascade's refusal, which the record carries beside the row's
+            // sentence, whichever way the row went.
+            (super::Answer::CreatedTrack(node), result) => super::bench::created_track_reply(
+                state,
+                node,
+                result,
+                outcome.created_track.as_ref(),
+            ),
             // An operation that finished with a report pushed a version: the
             // three photometric bench steps end in `Finished::BenchTrack` and
             // the two solves in an edit, and a run that was cancelled or refused
             // is the `Err` arm. So the field is here for the reason it is on
             // every other edit reply -- one question, one answer, whichever
             // family the caller is in.
-            Ok(report) => match pending.answer {
-                super::Answer::Version(node) => version_reply(state, node, Some(report.clone()))
-                    .map(|mut reply| {
-                        reply
-                            .as_object_mut()
-                            .expect("a version reply is an object")
-                            .insert("changed".into(), json!(true));
-                        super::ToolOutput::Json(reply)
-                    }),
-                super::Answer::Opened { already_open } => {
-                    super::write::opened_reply(state, outcome.opened, already_open)
-                        .map(super::ToolOutput::Json)
-                }
-            },
-            Err(message) => Err(ToolError::new(message.clone())),
+            (super::Answer::Version(node), Ok(report)) => {
+                version_reply(state, node, Some(report.clone())).map(|mut reply| {
+                    reply
+                        .as_object_mut()
+                        .expect("a version reply is an object")
+                        .insert("changed".into(), json!(true));
+                    super::ToolOutput::Json(reply)
+                })
+            }
+            (super::Answer::Opened { already_open }, Ok(_)) => {
+                super::write::opened_reply(state, outcome.opened, already_open)
+                    .map(super::ToolOutput::Json)
+            }
+            (_, Err(message)) => Err(ToolError::new(message.clone())),
         });
     }
     if pending.started.elapsed() < REPLY_DIRECTLY_WITHIN {

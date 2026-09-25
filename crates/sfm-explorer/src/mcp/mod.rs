@@ -306,6 +306,14 @@ pub(crate) enum Command {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
     },
+    /// Build a track at a pixel of one camera image, put it on the bench and
+    /// commit it, on a worker: Image Detail's *Create Track Here*.
+    CreateTrackAtPixel {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        /// Where, in that image's own pixels.
+        pixel: [f64; 2],
+    },
     ActivateBenchItem {
         reconstruction_label: String,
         item: String,
@@ -922,6 +930,10 @@ pub(crate) struct BackgroundReply {
 pub(crate) enum Answer {
     /// The version the operation left on this node, as every edit answers.
     Version(ReconId),
+    /// The point a *Create Track Here* committed on this node, with the
+    /// version the commit left, or the cascade's refusal with every member's
+    /// stage.
+    CreatedTrack(ReconId),
     /// The reconstruction the open made, as `open_reconstruction` answers, with
     /// whether the path was already open when the call was made.
     Opened { already_open: bool },
@@ -1228,6 +1240,11 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &point,
         )),
+        Command::CreateTrackAtPixel {
+            reconstruction_label,
+            camera_image,
+            pixel,
+        } => bench::create_track_at_pixel(state, &reconstruction_label, &camera_image, pixel),
         Command::ActivateBenchItem {
             reconstruction_label,
             item,

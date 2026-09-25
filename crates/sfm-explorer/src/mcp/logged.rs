@@ -75,6 +75,7 @@ impl Command {
             Command::GetBenchTrack { .. } => "get_bench_track",
             Command::CreateBenchCluster { .. } => "create_bench_cluster",
             Command::CreateBenchTrack { .. } => "create_bench_track",
+            Command::CreateTrackAtPixel { .. } => "create_track_at_pixel",
             Command::ActivateBenchItem { .. } => "activate_bench_item",
             Command::DeactivateBenchItem { .. } => "deactivate_bench_item",
             Command::RenameBenchItem { .. } => "rename_bench_item",
@@ -292,6 +293,9 @@ impl Command {
             // reconstruction, which is the kind the panel's own refusals carry.
             Command::CreateBenchCluster { .. }
             | Command::CreateBenchTrack { .. }
+            // Its row puts the track on the bench; the commit that follows
+            // writes its own `Edit` row.
+            | Command::CreateTrackAtPixel { .. }
             | Command::ActivateBenchItem { .. }
             | Command::DeactivateBenchItem { .. }
             | Command::RenameBenchItem { .. }

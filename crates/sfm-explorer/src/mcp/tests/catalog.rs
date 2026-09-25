@@ -171,6 +171,14 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "point": 0 }),
         ),
         (
+            "create_track_at_pixel",
+            json!({
+                "reconstruction_label": "alpha",
+                "camera_image": 0,
+                "pixel": [142.0, 197.5],
+            }),
+        ),
+        (
             "activate_bench_item",
             json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
         ),
@@ -654,15 +662,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, sixty writes, the one that writes a file, and the one
+    // Fifteen reads, sixty-one writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 76, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 77, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        60
+        61
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -725,9 +733,15 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
     // The bench family says its own size three times -- once in the heading
     // sentence and twice in the back-references that split it -- and the three
     // have to be one number. They were "twenty-three" and "the twenty-two".
+    // `create_track_at_pixel` is one of the family without the word: what it
+    // produces is a point, and the bench is where the track waits on it.
     let bench = catalog
         .iter()
-        .filter(|spec| spec.name.contains("bench") || spec.name.contains("index_files"))
+        .filter(|spec| {
+            spec.name.contains("bench")
+                || spec.name.contains("index_files")
+                || spec.name == "create_track_at_pixel"
+        })
         .count();
     let family = format!("{} tools that read and work the", spelled(bench));
     assert!(

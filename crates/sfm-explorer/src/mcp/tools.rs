@@ -393,6 +393,13 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             point: args.point("point")?,
         },
+        "create_track_at_pixel" => Command::CreateTrackAtPixel {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+            pixel: args
+                .optional_numbers::<2>("pixel")?
+                .ok_or_else(|| args.error("needs pixel."))?,
+        },
         "activate_bench_item" => Command::ActivateBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.required_string("item")?,

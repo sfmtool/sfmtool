@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-six tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty
+Seventy-seven tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-one
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -154,6 +154,7 @@ write, and one writes a file.
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
 | `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
+| `create_track_at_pixel` | write | Build a track at a pixel of one camera image, put it on the bench and commit it as a new point, on a worker thread: Image Detail's *Create Track Here* |
 | `activate_bench_item` | write | Make one item the active one, the item Track View edits |
 | `deactivate_bench_item` | write | Leave every item on the bench with none active: Track View's Edit box cleared |
 | `rename_bench_item` | write | Give one item a label of your own |
@@ -184,7 +185,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-one writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2269,7 +2270,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty tools that read and work the **bench** beside a node
+Thirty-one tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -2342,6 +2343,27 @@ stage needs two or more"* -- rather than starting a task that would decode a
 dozen images before saying so ([bench.md](bench.md) § "The three steps that read
 photographs").
 
+**`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
+`camera_image` and a `pixel` and runs `AppState::start_create_track_at_pixel`,
+the call the panel's menu entry and its Control+Shift click make: the
+track-at-pixel cascade on a worker, reading the node's index files only where
+`get_bench` reports them `current`, then the track put on the bench as the
+active item and committed, two versions. It answers as `commit_bench_track`
+does, with the commit's version, the `item` the track stays on the bench as and
+the `point` it wrote, plus the `member` of the cascade that built it and a
+`report` that is the sentence of the row that put it on the bench. It is not
+named for the bench because what it produces is a point of the reconstruction:
+the bench is where the track waits, seated on that point, in case it needs
+work. Its refusals come at two times. In the call: a node that is busy, an image
+with no pose, a pixel off the photograph (not clamped: a track is built at the
+pixel named or nowhere) and a node whose observations are `.sift` features,
+which no commit can write. After the worker: every member refusing, which is a
+tool error whose first line is the Action Log row's sentence, the last member's
+stage and reason followed by what the index files lacked, and whose next lines
+are each member's stage and reason in the order tried. Nothing is pushed then.
+It answers in two levels like the other steps that run on a worker, and a
+handle's `get_background_task` reports `Create track at pixel`.
+
 **Reading and fitting are two tools.** `evaluate_bench_track` measures every
 observation where it sits and moves nothing -- no keypoint, no position, no
 frame -- and drops nothing: a row it could not read carries a `reason` sentence
@@ -2372,7 +2394,7 @@ a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Eight of the thirty are the patch a track is**, and they are the
+**Eight of the thirty-one are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -2472,7 +2494,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the thirty are about the index files**, the node's SIFT index and
+**Four of the thirty-one are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -3431,7 +3453,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-six tools**, fifteen of them reads and one of them
+- **The catalog is seventy-seven tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

@@ -222,6 +222,94 @@ pub(super) fn create_bench_track(
     Ok(with_item(reply, &made))
 }
 
+/// `create_track_at_pixel`: a track built at a pixel of one camera image by
+/// the track-at-pixel cascade, put on the bench and committed, on a worker.
+///
+/// Image Detail's *Create Track Here* over the wire, through the same
+/// `AppState` call, so the two versions it leaves and their rows are the
+/// panel's. A refusal in front of the worker (the node busy, the image not
+/// posed, a `sift_files` node, a pixel off the photograph) is a tool error in
+/// the call; the cascade's own refusal arrives with the task.
+pub(super) fn create_track_at_pixel(
+    state: &mut AppState,
+    label: &str,
+    selector: &CameraImageSel,
+    pixel: [f64; 2],
+) -> Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    let image = match resolve_camera_image(state, id, selector) {
+        Ok(image) => image,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_create_track_at_pixel(image, pixel) {
+        return Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state
+        .background_task()
+        .expect("the step started a background task");
+    Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::CreatedTrack(id),
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
+/// What `create_track_at_pixel` answers once its run has landed.
+///
+/// A committed point answers as `commit_bench_track` does, with the version the
+/// commit pushed, the item and the `point` it wrote, and adds the `member` that
+/// built the track. Its `report` is the sentence of the row that put the track
+/// on the bench. A cascade refusal is a tool error carrying the row's sentence and
+/// then each member's stage and reason, one line each, in the order they were
+/// tried; a commit refusal is one naming the item the track stays on the bench
+/// as.
+pub(super) fn created_track_reply(
+    state: &AppState,
+    id: ReconId,
+    outcome: &Result<String, String>,
+    created: Option<&crate::bench::track_at_pixel::CreatedTrack>,
+) -> Result<super::ToolOutput, ToolError> {
+    use crate::bench::track_at_pixel::CreatedTrack;
+    match (created, outcome) {
+        (
+            Some(CreatedTrack::Committed {
+                item,
+                member,
+                point,
+            }),
+            Ok(report),
+        ) => {
+            let mut reply = edit::version_reply(state, id, Some(report.clone()))?;
+            insert(&mut reply, "changed", json!(true));
+            let mut reply = with_item(reply, item);
+            insert(&mut reply, "member", json!(member));
+            insert(&mut reply, "point", point_written(state, id, *point));
+            Ok(super::ToolOutput::Json(reply))
+        }
+        (Some(CreatedTrack::NotCommitted { why, .. }), _) => Err(ToolError::new(why.clone())),
+        (Some(CreatedTrack::Refused { refusals }), Err(sentence)) => {
+            let mut text = sentence.clone();
+            text.push_str("\nEach member's refusal, in the order tried:");
+            for line in refusals {
+                text.push_str("\n- ");
+                text.push_str(line);
+            }
+            Err(ToolError::new(text))
+        }
+        // A cancellation, or a run that never reached the cascade: the row's
+        // own sentence.
+        (_, Err(message)) => Err(ToolError::new(message.clone())),
+        (_, Ok(report)) => Err(ToolError::new(format!(
+            "The run ended without a track to report: {report}"
+        ))),
+    }
+}
+
 pub(super) fn activate_bench_item(state: &mut AppState, label: &str, item: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let reply = edit::edited(state, id, |state| state.activate_bench_item(id, item))?;

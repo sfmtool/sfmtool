@@ -45,6 +45,39 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "create_track_at_pixel",
+            description: "Build a track at one pixel of a posed camera image and commit it as a \
+                          new point: what Create Track Here does at the window, from Image \
+                          Detail's context menu or a Ctrl+Shift click. The track-at-pixel \
+                          cascade tries its four members in order, clusters (the node's \
+                          cluster patches file), transfer (the neighbouring points' own \
+                          keypoints), sweep (a plane through the neighbours) and constellation \
+                          (the node's SIFT index), and keeps the first track that passes its \
+                          gates. Only index files that get_bench reports as current are read; a \
+                          member whose file is missing or stale refuses and names it, and \
+                          build_index_files makes both. A track that is built is put on the \
+                          bench as the active item (one version) and committed (a second), so \
+                          one undo takes the point back and leaves the track on the bench. The \
+                          reply is commit_bench_track's (the version, the item and the point \
+                          by index and id) with the member that built it. When every member \
+                          refuses nothing is committed and the tool error carries the last \
+                          member's stage and reason, then each member's in order. Refused in \
+                          the call for an image that is not posed, a pixel off the photograph, \
+                          and a reconstruction whose observations are .sift feature indexes. \
+                          It runs on a worker thread and decodes every photograph, so a run \
+                          still going after 200 ms replies with running: true and an \
+                          operation_id to poll with get_background_task.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "activate_bench_item",
             description: "Make one item on the bench the active one, which is the item Track \
                           View is editing and the item a bench tool acts on when it names none. \
