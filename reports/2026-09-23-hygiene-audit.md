@@ -39,6 +39,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: medium. Risk: medium, because section ordering and hash bytes are format contracts.
 
 **Make xform argument dispatch a table over the shared parsers**
+> _Status (2026-09-24): Done — option spelling, value rules, and constructors now live in one dispatch table; ordered parsing and option-specific diagnostics have regression coverage._
 - Location: `src/sfmtool/xform/_arg_parser.py` (772 lines), `parse_transform_args` at 347–772.
 - Problem: Six `key=value` cases now use `_parse_kv_params` and 20 value-taking branches now use `_take_arg`, completing the two September subfindings. A 426-line conditional dispatch still repeats option selection and construction, so adding a transform continues to touch a long branch ladder.
 - Proposed fix: Use a table of option spelling, value-taking rule, and constructor. Preserve option-specific errors and ordering tests.

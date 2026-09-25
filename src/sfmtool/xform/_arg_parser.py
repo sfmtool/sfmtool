@@ -344,6 +344,264 @@ def auto_output_path(input_path: Path, suffix: str = "transformed") -> Path:
         counter += 1
 
 
+def _parse_scalar(
+    param: str,
+    option: str,
+    caster: Callable,
+    constructor: Callable,
+    *,
+    catch_constructor: bool = False,
+):
+    """Parse a single required value, retaining the option's diagnostic."""
+    try:
+        value = caster(param)
+    except ValueError as e:
+        raise click.UsageError(f"Invalid {option} parameter '{param}': {e}")
+    if catch_constructor:
+        try:
+            return constructor(value)
+        except ValueError as e:
+            raise click.UsageError(f"Invalid {option} parameter '{param}': {e}")
+    return constructor(value)
+
+
+def _parse_optional(param: str, option: str, parser: Callable):
+    try:
+        return parser(param)
+    except ValueError as e:
+        raise click.UsageError(f"Invalid {option} parameter: {e}")
+
+
+def _parse_rotate(param: str, _max_features: int | None):
+    parts = param.split(",")
+    if len(parts) != 4:
+        raise click.UsageError(
+            f"--rotate expects 4 comma-separated values (axisX,axisY,axisZ,angle), got: {param}"
+        )
+    try:
+        axis_x = float(parts[0])
+        axis_y = float(parts[1])
+        axis_z = float(parts[2])
+        angle_rad = parse_angle(parts[3])
+    except ValueError as e:
+        raise click.UsageError(f"Invalid --rotate parameter '{param}': {e}")
+    return RotateTransform(np.array([axis_x, axis_y, axis_z]), angle_rad)
+
+
+def _parse_translate(param: str, _max_features: int | None):
+    parts = param.split(",")
+    if len(parts) != 3:
+        raise click.UsageError(
+            f"--translate expects 3 comma-separated values (X,Y,Z), got: {param}"
+        )
+    try:
+        x, y, z = (float(part) for part in parts)
+    except ValueError as e:
+        raise click.UsageError(f"Invalid --translate parameter '{param}': {e}")
+    return TranslateTransform(np.array([x, y, z]))
+
+
+def _parse_remove_isolated(param: str, _max_features: int | None):
+    parts = param.split(",")
+    if len(parts) != 2:
+        raise click.UsageError(
+            f"--remove-isolated expects 2 comma-separated values (factor,value_spec), got: {param}"
+        )
+    try:
+        factor = float(parts[0])
+    except ValueError as e:
+        raise click.UsageError(f"Invalid factor in --remove-isolated '{param}': {e}")
+    return RemoveIsolatedPointsFilter(factor, parts[1])
+
+
+def _parse_scale_by_measurements(param: str, _max_features: int | None):
+    measurements_path = Path(param)
+    if not measurements_path.exists():
+        raise click.UsageError(f"Measurements file not found: {measurements_path}")
+    return ScaleByMeasurementsTransform(measurements_path)
+
+
+def _parse_include_by_distribution(param: str, _max_features: int | None):
+    parts = param.split(",")
+    try:
+        count = int(parts[0])
+    except ValueError as e:
+        raise click.UsageError(
+            f"Invalid --include-by-distribution parameter '{param}': {e}"
+        )
+    if count < 2:
+        raise click.UsageError(
+            f"--include-by-distribution COUNT must be >= 2, got {count}"
+        )
+    verbose = False
+    for modifier in parts[1:]:
+        if modifier.strip() == "verbose":
+            verbose = True
+        else:
+            raise click.UsageError(
+                f"Unknown --include-by-distribution modifier '{modifier}' "
+                "(expected 'verbose')"
+            )
+    return SelectByDistributionFilter(count, verbose=verbose)
+
+
+def _parse_find_points_at_infinity(param: str, max_features: int | None):
+    parts = param.split(",")
+    if not 1 <= len(parts) <= 4:
+        raise click.UsageError(
+            "--find-points-at-infinity expects "
+            "eps_deg[,desc_thresh[,min_views[,noise_floor_px]]], "
+            f"got: {param}"
+        )
+    try:
+        eps_deg = float(parts[0])
+        desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
+        min_views = int(parts[2]) if len(parts) > 2 else 2
+        noise_floor_px = float(parts[3]) if len(parts) > 3 else 1.0
+    except ValueError as e:
+        raise click.UsageError(
+            f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+        )
+    try:
+        return FindPointsAtInfinityTransform(
+            eps_deg,
+            desc_thresh,
+            min_views,
+            max_features=max_features,
+            noise_floor_px=noise_floor_px,
+        )
+    except ValueError as e:
+        raise click.UsageError(
+            f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+        )
+
+
+# The rule says whether a value is absent, required in the next token, or
+# optional (either joined with "=" or supplied by the next non-option token).
+# Builders keep each option's validation and error text near its registration.
+_TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] = {
+    "--rotate": ("required", _parse_rotate),
+    "--translate": ("required", _parse_translate),
+    "--scale": (
+        "required",
+        lambda p, _: _parse_scalar(p, "--scale", float, ScaleTransform),
+    ),
+    "--remove-short-tracks": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p, "--remove-short-tracks", int, RemoveShortTracksFilter
+        ),
+    ),
+    "--bundle-adjust": ("none", lambda _p, _: BundleAdjustTransform()),
+    "--drop-thumbnails": ("none", lambda _p, _: DropThumbnailsTransform()),
+    "--drop-patch-bitmaps": ("none", lambda _p, _: DropPatchBitmapsTransform()),
+    "--add-thumbnails": ("none", lambda _p, _: AddThumbnailsTransform()),
+    "--minimal": (
+        "optional",
+        lambda p, _: _parse_optional(p, "--minimal", parse_minimal_params),
+    ),
+    "--add-patch-bitmaps": (
+        "optional",
+        lambda p, _: _parse_optional(
+            p, "--add-patch-bitmaps", parse_add_patch_bitmaps_params
+        ),
+    ),
+    "--refine-normals": (
+        "optional",
+        lambda p, _: _parse_optional(
+            p, "--refine-normals", parse_refine_normals_params
+        ),
+    ),
+    "--refine-keypoints": (
+        "optional",
+        lambda p, _: _parse_optional(
+            p, "--refine-keypoints", parse_refine_keypoints_params
+        ),
+    ),
+    "--localize-keypoints": (
+        "optional",
+        lambda p, _: _parse_optional(
+            p, "--localize-keypoints", parse_localize_keypoints_params
+        ),
+    ),
+    "--to-embedded-patches": (
+        "optional",
+        lambda p, _: _parse_optional(
+            p, "--to-embedded-patches", parse_to_embedded_patches_params
+        ),
+    ),
+    "--remove-narrow-tracks": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p, "--remove-narrow-tracks", parse_angle, RemoveNarrowTracksFilter
+        ),
+    ),
+    "--remove-isolated": ("required", _parse_remove_isolated),
+    "--align-to": ("required", lambda p, _: AlignToTransform(Path(p))),
+    "--align-to-input": ("none", lambda _p, _: AlignToInputTransform()),
+    "--remove-large-features": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p, "--remove-large-features", float, RemoveLargeFeaturesFilter
+        ),
+    ),
+    "--filter-by-reprojection-error": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p,
+            "--filter-by-reprojection-error",
+            float,
+            FilterByReprojectionErrorTransform,
+        ),
+    ),
+    "--filter-by-keypoint-uncertainty": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p,
+            "--filter-by-keypoint-uncertainty",
+            float,
+            FilterByLocalizabilityTransform,
+            catch_constructor=True,
+        ),
+    ),
+    "--filter-by-patch-size": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p,
+            "--filter-by-patch-size",
+            float,
+            FilterByPatchSizeTransform,
+            catch_constructor=True,
+        ),
+    ),
+    "--include-range": (
+        "required",
+        lambda p, _: _parse_scalar(p, "--include-range", RangeExpr, IncludeRangeFilter),
+    ),
+    "--exclude-range": (
+        "required",
+        lambda p, _: _parse_scalar(p, "--exclude-range", RangeExpr, ExcludeRangeFilter),
+    ),
+    "--scale-by-measurements": ("required", _parse_scale_by_measurements),
+    "--include-glob": ("required", lambda p, _: IncludeGlobFilter(p)),
+    "--exclude-glob": ("required", lambda p, _: ExcludeGlobFilter(p)),
+    "--include-by-distribution": ("required", _parse_include_by_distribution),
+    "--camera-model": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p, "--camera-model", str, SwitchCameraModelTransform, catch_constructor=True
+        ),
+    ),
+    "--find-points-at-infinity": ("required", _parse_find_points_at_infinity),
+    "--classify-points-at-infinity": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p, "--classify-points-at-infinity", float, ClassifyPointsAtInfinityTransform
+        ),
+    ),
+}
+
+
 def parse_transform_args(args: list[str], max_features: int | None = None) -> list:
     """Parse command-line arguments to extract transforms in order.
 
@@ -353,409 +611,31 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
     """
     transforms = []
     i = 0
-
     while i < len(args):
         arg = args[i]
-
-        if arg == "--rotate":
-            param, i = _take_arg(args, i, arg)
-
-            parts = param.split(",")
-            if len(parts) != 4:
-                raise click.UsageError(
-                    f"--rotate expects 4 comma-separated values (axisX,axisY,axisZ,angle), got: {param}"
-                )
-
-            try:
-                axis_x = float(parts[0])
-                axis_y = float(parts[1])
-                axis_z = float(parts[2])
-                angle_rad = parse_angle(parts[3])
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --rotate parameter '{param}': {e}")
-
-            axis = np.array([axis_x, axis_y, axis_z])
-            transforms.append(RotateTransform(axis, angle_rad))
-
-        elif arg == "--translate":
-            param, i = _take_arg(args, i, arg)
-
-            parts = param.split(",")
-            if len(parts) != 3:
-                raise click.UsageError(
-                    f"--translate expects 3 comma-separated values (X,Y,Z), got: {param}"
-                )
-
-            try:
-                x = float(parts[0])
-                y = float(parts[1])
-                z = float(parts[2])
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --translate parameter '{param}': {e}")
-
-            translation = np.array([x, y, z])
-            transforms.append(TranslateTransform(translation))
-
-        elif arg == "--scale":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                scale_factor = float(param)
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --scale parameter '{param}': {e}")
-
-            transforms.append(ScaleTransform(scale_factor))
-
-        elif arg == "--remove-short-tracks":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                max_size = int(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --remove-short-tracks parameter '{param}': {e}"
-                )
-
-            transforms.append(RemoveShortTracksFilter(max_size))
-
-        elif arg == "--bundle-adjust":
-            transforms.append(BundleAdjustTransform())
-
-        elif arg == "--drop-thumbnails":
-            transforms.append(DropThumbnailsTransform())
-
-        elif arg == "--drop-patch-bitmaps":
-            transforms.append(DropPatchBitmapsTransform())
-
-        elif arg == "--add-thumbnails":
-            transforms.append(AddThumbnailsTransform())
-
-        elif arg == "--minimal" or arg.startswith("--minimal="):
-            # Optional value, same tokenization as --add-patch-bitmaps.
-            if arg.startswith("--minimal="):
-                param = arg[len("--minimal=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_minimal_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --minimal parameter: {e}")
-
-        elif arg == "--add-patch-bitmaps" or arg.startswith("--add-patch-bitmaps="):
-            # Optional value, same tokenization as --refine-normals.
-            if arg.startswith("--add-patch-bitmaps="):
-                param = arg[len("--add-patch-bitmaps=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_add_patch_bitmaps_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --add-patch-bitmaps parameter: {e}")
-
-        elif arg == "--refine-normals" or arg.startswith("--refine-normals="):
-            # Optional value. Mirror Click's optional-value tokenization (the
-            # command declares it is_flag=False, flag_value=""): a value joined
-            # with ``=`` is taken verbatim; otherwise the next token is the value
-            # iff it isn't another option (so ``--refine-normals --bundle-adjust``
-            # and a trailing ``--refine-normals`` both run the defaults).
-            if arg.startswith("--refine-normals="):
-                param = arg[len("--refine-normals=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_refine_normals_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --refine-normals parameter: {e}")
-
-        elif arg == "--refine-keypoints" or arg.startswith("--refine-keypoints="):
-            # Optional value, same tokenization as --refine-normals.
-            if arg.startswith("--refine-keypoints="):
-                param = arg[len("--refine-keypoints=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_refine_keypoints_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --refine-keypoints parameter: {e}")
-
-        elif arg == "--localize-keypoints" or arg.startswith("--localize-keypoints="):
-            # Optional value, same tokenization as --refine-normals.
-            if arg.startswith("--localize-keypoints="):
-                param = arg[len("--localize-keypoints=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_localize_keypoints_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --localize-keypoints parameter: {e}")
-
-        elif arg == "--to-embedded-patches" or arg.startswith("--to-embedded-patches="):
-            # Optional value, same tokenization as --refine-normals.
-            if arg.startswith("--to-embedded-patches="):
-                param = arg[len("--to-embedded-patches=") :]
-            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
-                i += 1
-                param = args[i]
-            else:
-                param = ""
-
-            try:
-                transforms.append(parse_to_embedded_patches_params(param))
-            except ValueError as e:
-                raise click.UsageError(f"Invalid --to-embedded-patches parameter: {e}")
-
-        elif arg == "--remove-narrow-tracks":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                min_angle_rad = parse_angle(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --remove-narrow-tracks parameter '{param}': {e}"
-                )
-
-            transforms.append(RemoveNarrowTracksFilter(min_angle_rad))
-
-        elif arg == "--remove-isolated":
-            param, i = _take_arg(args, i, arg)
-
-            parts = param.split(",")
-            if len(parts) != 2:
-                raise click.UsageError(
-                    f"--remove-isolated expects 2 comma-separated values (factor,value_spec), got: {param}"
-                )
-
-            try:
-                factor = float(parts[0])
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid factor in --remove-isolated '{param}': {e}"
-                )
-
-            value_spec = parts[1]
-            transforms.append(RemoveIsolatedPointsFilter(factor, value_spec))
-
-        elif arg == "--align-to":
-            param, i = _take_arg(args, i, arg)
-
-            reference_path = Path(param)
-            transforms.append(AlignToTransform(reference_path))
-
-        elif arg == "--align-to-input":
-            transforms.append(AlignToInputTransform())
-
-        elif arg == "--remove-large-features":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                max_size = float(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --remove-large-features parameter '{param}': {e}"
-                )
-
-            transforms.append(RemoveLargeFeaturesFilter(max_size))
-
-        elif arg == "--filter-by-reprojection-error":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                threshold = float(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --filter-by-reprojection-error parameter '{param}': {e}"
-                )
-
-            transforms.append(FilterByReprojectionErrorTransform(threshold))
-
-        elif arg == "--filter-by-keypoint-uncertainty":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                threshold = float(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
-                )
-
-            try:
-                transforms.append(FilterByLocalizabilityTransform(threshold))
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
-                )
-
-        elif arg == "--filter-by-patch-size":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                multiplier = float(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
-                )
-
-            try:
-                transforms.append(FilterByPatchSizeTransform(multiplier))
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
-                )
-
-        elif arg == "--include-range":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                range_expr = RangeExpr(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --include-range parameter '{param}': {e}"
-                )
-
-            transforms.append(IncludeRangeFilter(range_expr))
-
-        elif arg == "--exclude-range":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                range_expr = RangeExpr(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --exclude-range parameter '{param}': {e}"
-                )
-
-            transforms.append(ExcludeRangeFilter(range_expr))
-
-        elif arg == "--scale-by-measurements":
-            param, i = _take_arg(args, i, arg)
-
-            measurements_path = Path(param)
-            if not measurements_path.exists():
-                raise click.UsageError(
-                    f"Measurements file not found: {measurements_path}"
-                )
-
-            transforms.append(ScaleByMeasurementsTransform(measurements_path))
-
-        elif arg == "--include-glob":
-            param, i = _take_arg(args, i, arg)
-            transforms.append(IncludeGlobFilter(param))
-
-        elif arg == "--exclude-glob":
-            param, i = _take_arg(args, i, arg)
-            transforms.append(ExcludeGlobFilter(param))
-
-        elif arg == "--include-by-distribution":
-            param, i = _take_arg(args, i, arg)
-
-            parts = param.split(",")
-            try:
-                count = int(parts[0])
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --include-by-distribution parameter '{param}': {e}"
-                )
-            if count < 2:
-                raise click.UsageError(
-                    f"--include-by-distribution COUNT must be >= 2, got {count}"
-                )
-            verbose = False
-            for modifier in parts[1:]:
-                if modifier.strip() == "verbose":
-                    verbose = True
+        option, separator, joined_value = arg.partition("=")
+        spec = _TRANSFORM_OPTIONS.get(option)
+        if spec is not None:
+            value_rule, build = spec
+            # Required and value-free options did not accept joined values.
+            if not separator or value_rule == "optional":
+                if value_rule == "required":
+                    param, i = _take_arg(args, i, option)
+                elif value_rule == "optional":
+                    if separator:
+                        param = joined_value
+                    elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                        i += 1
+                        param = args[i]
+                    else:
+                        param = ""
                 else:
-                    raise click.UsageError(
-                        f"Unknown --include-by-distribution modifier '{modifier}' "
-                        "(expected 'verbose')"
-                    )
-
-            transforms.append(SelectByDistributionFilter(count, verbose=verbose))
-
-        elif arg == "--camera-model":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                transforms.append(SwitchCameraModelTransform(param))
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --camera-model parameter '{param}': {e}"
-                )
-
-        elif arg == "--find-points-at-infinity":
-            param, i = _take_arg(args, i, arg)
-
-            parts = param.split(",")
-            if not 1 <= len(parts) <= 4:
-                raise click.UsageError(
-                    "--find-points-at-infinity expects "
-                    "eps_deg[,desc_thresh[,min_views[,noise_floor_px]]], "
-                    f"got: {param}"
-                )
-
-            try:
-                eps_deg = float(parts[0])
-                desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
-                min_views = int(parts[2]) if len(parts) > 2 else 2
-                noise_floor_px = float(parts[3]) if len(parts) > 3 else 1.0
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
-                )
-
-            try:
-                transforms.append(
-                    FindPointsAtInfinityTransform(
-                        eps_deg,
-                        desc_thresh,
-                        min_views,
-                        max_features=max_features,
-                        noise_floor_px=noise_floor_px,
-                    )
-                )
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
-                )
-
-        elif arg == "--classify-points-at-infinity":
-            param, i = _take_arg(args, i, arg)
-
-            try:
-                noise_floor_px = float(param)
-            except ValueError as e:
-                raise click.UsageError(
-                    f"Invalid --classify-points-at-infinity parameter '{param}': {e}"
-                )
-
-            transforms.append(ClassifyPointsAtInfinityTransform(noise_floor_px))
-
+                    param = ""
+                transforms.append(build(param, max_features))
         elif arg == "--max-features":
-            # A global value option, not an ordered transform: its value is
-            # obtained reliably via Click kwargs, so just step over its token
-            # here to keep it out of the ordered transform list.
+            # Click supplies this global value; it is not an ordered transform.
             if i + 1 < len(args):
                 i += 1
-
         i += 1
 
     # An --add-* step after --minimal restores part of what the shorthand

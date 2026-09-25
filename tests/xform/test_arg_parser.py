@@ -38,3 +38,39 @@ def test_required_value_option_reports_missing_argument(option):
     with pytest.raises(click.UsageError) as exc_info:
         parse_transform_args([option])
     assert str(exc_info.value) == f"{option} requires an argument"
+
+
+def test_interleaved_options_keep_order_and_repeated_values():
+    transforms = parse_transform_args(
+        ["--scale", "2", "--bundle-adjust", "--scale", "3", "--drop-thumbnails"]
+    )
+    assert [type(transform).__name__ for transform in transforms] == [
+        "ScaleTransform",
+        "BundleAdjustTransform",
+        "ScaleTransform",
+        "DropThumbnailsTransform",
+    ]
+    assert [transforms[0].scale, transforms[2].scale] == [2.0, 3.0]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (
+            ["--rotate", "0,1,90deg"],
+            "--rotate expects 4 comma-separated values (axisX,axisY,axisZ,angle), got: 0,1,90deg",
+        ),
+        (
+            ["--include-by-distribution", "2,other"],
+            "Unknown --include-by-distribution modifier 'other' (expected 'verbose')",
+        ),
+        (
+            ["--minimal=unknown"],
+            "Invalid --minimal token 'unknown': expected key=value",
+        ),
+    ],
+)
+def test_option_specific_errors(args, message):
+    with pytest.raises(click.UsageError) as exc_info:
+        parse_transform_args(args)
+    assert str(exc_info.value) == message
