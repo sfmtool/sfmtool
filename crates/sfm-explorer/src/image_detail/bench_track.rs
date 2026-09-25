@@ -1113,8 +1113,9 @@ pub(super) fn draw(
 
     // The layer is on top, so a click one of its marks catches does not also
     // reach the features under it: two selections from one click would be two
-    // answers to one gesture.
-    if interact_response.clicked() {
+    // answers to one gesture. A Control+Shift click is Create Track Here, and
+    // selects no row either.
+    if interact_response.clicked() && response.create_track_here.is_none() {
         if let Some(pos) = interact_response.interact_pointer_pos() {
             let marks = layer.marks();
             let hit = marks

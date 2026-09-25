@@ -212,6 +212,22 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// A track built at one pixel of a posed photograph by the track-at-pixel
+    /// cascade, then put on the node's bench and committed
+    /// ([`crate::bench::track_at_pixel`]).
+    ///
+    /// Cancellable on either side of the decode and of the reads of the
+    /// keypoints and the cluster patches, and inside the cascade, which polls
+    /// the flag in front of each member and hands back
+    /// `TrackAtPixelError::Cancelled`. A member once entered runs to its end,
+    /// so a cancel lands between two of them. A cancelled run puts nothing on
+    /// the bench.
+    pub(crate) const CREATE_TRACK_AT_PIXEL: Operation = Operation {
+        name: "Create track at pixel",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
     /// One or more `.sfmr` files read and made nodes, with the columns a file
     /// does not carry filled in for display (`specs/gui/background-tasks.md`
     /// section "Opening a file").
@@ -235,7 +251,7 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 11] = [
+    pub(crate) const ALL: [Operation; 12] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -247,6 +263,7 @@ impl Operation {
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
         Operation::BUILD_INDEX_FILES,
+        Operation::CREATE_TRACK_AT_PIXEL,
     ];
 }
 
@@ -382,6 +399,14 @@ pub(crate) enum Finished {
         /// How the build ended.
         end: IndexFilesEnd,
     },
+    /// A track-at-pixel run: the track the cascade built, or every member's
+    /// refusal.
+    ///
+    /// Two versions when it built one, and neither is pushed on the worker:
+    /// the GUI thread puts the track on the bench, writes that row, and then
+    /// commits it through the bench's own commit, which writes its own
+    /// ([`crate::bench::track_at_pixel`]). A refusal is the failed row alone.
+    TrackAtPixel(Box<crate::bench::track_at_pixel::TrackAtPixelRun>),
     /// The files an open read, each with what it filled in for display, and
     /// the ones it could not read.
     ///
@@ -435,6 +460,10 @@ pub(crate) struct FinishedTask {
     /// The first node an open made, which is what `open_reconstruction`
     /// answers with once it lands. `None` for every other operation.
     pub(crate) opened: Option<ReconId>,
+    /// What a *Create Track Here* left behind: the point it committed, the
+    /// commit's refusal, or every member's refusal. What `create_track_at_pixel`
+    /// answers with once it lands. `None` for every other operation.
+    pub(crate) created_track: Option<crate::bench::track_at_pixel::CreatedTrack>,
     /// What the whole operation cost, measured from the instant it started.
     ///
     /// Not the entry's `took`, which the frame stamps on settling and which
@@ -751,6 +780,10 @@ impl AppState {
         } = task;
         let mut opened = None;
         let mut installed = None;
+        let mut created_track = None;
+        // A track-at-pixel run that landed a track, to commit once its own row
+        // is written: the node, the item and the member that built it.
+        let mut to_commit: Option<(ReconId, String, &'static str)> = None;
         let outcome = match finished {
             Finished::Produced {
                 value,
@@ -853,6 +886,33 @@ impl AppState {
                     }
                 }
             },
+            // The track goes on the bench here, as one bench version; the
+            // commit that follows is written after this row, below.
+            Finished::TrackAtPixel(run) => {
+                match self.scene.iter().position(|n| Some(n.id) == locked) {
+                    None => Err(format!(
+                        "{} of {label} finished, but it is no longer loaded.",
+                        operation.name
+                    )),
+                    Some(index) => {
+                        let member = match &run.result {
+                            Ok((_, report)) => report.member.name(),
+                            Err(_) => "",
+                        };
+                        let (outcome, created, item) = {
+                            let _phase = collector.phase("push version");
+                            self.land_track_at_pixel(index, *run)
+                        };
+                        let node = self.scene[index].id;
+                        if let Some(item) = item {
+                            installed = Some(node);
+                            to_commit = Some((node, item, member));
+                        }
+                        created_track = Some(created);
+                        outcome
+                    }
+                }
+            }
             // Each file becomes a node in the order it was asked for, and the
             // row names every one; a file the worker could not read is a failed
             // row of its own under the same actor. Nothing is installed into
@@ -903,11 +963,18 @@ impl AppState {
                 detail,
             ),
         }
+        // The commit a landed track ends in, as its own version and its own
+        // row, after the row that put the track on the bench because that is
+        // the order the two happened in, and as whoever asked for the run.
+        if let Some((node, item, member)) = to_commit {
+            created_track = Some(self.commit_created_track(actor, node, item, member));
+        }
         self.last_background_task = Some(FinishedTask {
             id,
             operation,
             label,
             opened,
+            created_track,
             took,
             detail: kept,
             outcome,

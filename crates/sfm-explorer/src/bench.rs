@@ -50,6 +50,7 @@ use crate::state::edits::version_before;
 use crate::state::AppState;
 
 pub(crate) mod geometry;
+pub(crate) mod track_at_pixel;
 
 #[cfg(test)]
 pub(crate) mod tests;

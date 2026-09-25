@@ -68,17 +68,37 @@ pub struct BenchMenu<'a> {
     /// and corners take no drag. Read at the cluster stage not at all, where
     /// every handle is already one sighting's.
     pub lock: bool,
+    /// Why *Create Track Here* cannot run on the image shown, or `None` when
+    /// it can: the node busy, the image not posed, or a reconstruction a
+    /// commit cannot write ([`crate::state::AppState::create_track_here_refusal`]).
+    pub create_track: Option<&'a str>,
 }
 
 impl Default for BenchMenu<'_> {
-    /// Nothing busy, nothing on the bench, and the lock on, which is what the
-    /// box starts ticked at.
+    /// Nothing busy, nothing on the bench, the lock on, which is what the box
+    /// starts ticked at, and *Create Track Here* offered.
     fn default() -> Self {
         Self {
             busy: None,
             active_track: None,
             lock: true,
+            create_track: None,
         }
+    }
+}
+
+/// Whether the menu's *Create Track Here* entry can run, and why not when it
+/// is greyed.
+///
+/// A pixel is the whole of what it needs from the gesture, and the menu is only
+/// drawn over the photograph, so what can stop it is the node and the image:
+/// the dock asks [`crate::state::AppState::create_track_here_refusal`] and
+/// hands the answer in. A feature under the pointer is not asked about: the
+/// track is built at the pixel right-clicked, not at a feature near it.
+pub(crate) fn create_track_here_entry(bench: BenchMenu<'_>) -> Result<(), String> {
+    match bench.create_track {
+        Some(why) => Err(why.to_string()),
+        None => Ok(()),
     }
 }
 
@@ -393,7 +413,28 @@ impl ImageDetail {
             }
         }
         crate::context_menu::on_secondary_click(interact_response).show(|ui| {
-            // ── Edit on Bench, first ──
+            let pixel = response.context_menu_pixel.or(self.menu_pixel);
+
+            // ── Create Track Here, first ──
+            //
+            // At the pixel the menu was opened at, not snapped to a feature:
+            // the track is built there, and committed. Its Control+Shift click
+            // is shown beside it, as the menu bar shows a key's shortcut.
+            let button = egui::Button::new(crate::bench::track_at_pixel::CREATE_TRACK_HERE_LABEL)
+                .shortcut_text(crate::bench::track_at_pixel::CREATE_TRACK_HERE_SHORTCUT);
+            let clicked = match create_track_here_entry(bench) {
+                Ok(()) => ui.add(button).clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.create_track_here = pixel;
+                ui.close();
+            }
+
+            // ── Edit on Bench ──
             //
             // The point is the one the feature at the place the menu was opened
             // at observes, hit-tested through the same rule a left click
@@ -401,7 +442,6 @@ impl ImageDetail {
             // which point is under the pointer. Refused rather than hidden
             // where there is none, so a reader can see the gesture exists and
             // read why it cannot run here.
-            let pixel = response.context_menu_pixel.or(self.menu_pixel);
             let hit = pixel.and_then(|pixel| {
                 feature_at(features, feature_tree, &pixel, 8.0 / effective_scale)
             });
@@ -456,8 +496,10 @@ impl ImageDetail {
             }
         });
 
-        // Hit testing for feature clicks (only tracked features)
-        if interact_response.clicked() {
+        // Hit testing for feature clicks (only tracked features). A Control+
+        // Shift click is Create Track Here and selects nothing: one click, one
+        // answer.
+        if interact_response.clicked() && response.create_track_here.is_none() {
             if let Some(pointer_pos) = ui.input(|i| i.pointer.interact_pos()) {
                 let hit_radius_px = 8.0 / effective_scale;
                 response.select_point = find_nearest_tracked_feature(

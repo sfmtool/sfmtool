@@ -179,6 +179,14 @@ pub struct ImageDetailResponse {
     /// The pixel the context menu's `Add observation to bench track here` was
     /// clicked for: a candidate joins the bench's active track there.
     pub add_bench_observation: Option<[f32; 2]>,
+    /// The pixel *Create Track Here* was asked for at, in source-image
+    /// coordinates: the context menu's entry, at the pixel the menu was opened
+    /// at, or a Control+Shift click, at the pixel clicked. A track is built
+    /// there, put on the node's bench and committed.
+    ///
+    /// Applied by the dock, since the step raises no panel: the point it
+    /// commits becomes the selection, which Track View already follows.
+    pub create_track_here: Option<[f32; 2]>,
     /// `Edit on Bench` was chosen on a feature, or one was double-clicked:
     /// put the point it observes on the bench and raise Track View.
     ///
@@ -365,6 +373,9 @@ impl ImageDetail {
         interact_response: &egui::Response,
         track: Option<&sfmtool_core::bench::EditableTrack>,
         lock: bool,
+        // Control and Shift held: the press is Create Track Here's, and takes
+        // no handle.
+        chord: bool,
         image_table: &sfmtool_core::ImageTable,
         img_idx: usize,
         image_rect: egui::Rect,
@@ -409,7 +420,11 @@ impl ImageDetail {
         // geometry this frame starts from -- which is the geometry the person
         // pressed on, since nothing has panned yet -- and from that moment the
         // pan is suppressed.
-        if self.bench_drag.is_none() && pressed && !crate::platform::other_mouse_button_down() {
+        if self.bench_drag.is_none()
+            && pressed
+            && !chord
+            && !crate::platform::other_mouse_button_down()
+        {
             if let Some((press, handle)) = pointer
                 .filter(|_| interact_response.contains_pointer())
                 .and_then(|press| layer.hit(press).map(|handle| (press, handle)))
@@ -506,6 +521,7 @@ impl ImageDetail {
             context_menu_pixel: None,
             start_bench_cluster: None,
             add_bench_observation: None,
+            create_track_here: None,
             edit_on_bench: None,
             select_bench_row: None,
             bench_edit: None,
@@ -627,6 +643,24 @@ impl ImageDetail {
             egui::Color32::WHITE,
         );
 
+        // --- Create Track Here's Control+Shift click, before anything else ---
+        //
+        // Read against the geometry the click was made on, before the view
+        // input moves it, and at the pixel clicked rather than a feature near
+        // it. It is the whole of what the click means: no handle is taken at
+        // its press, and no point or bench row is selected by it. The second
+        // click of a double-click is not a second request, and a refusal is
+        // the step's own row rather than silence.
+        let chord = ui.input(|i| crate::bench::track_at_pixel::is_create_track_chord(i.modifiers));
+        if chord && interact_response.clicked() && !interact_response.double_clicked() {
+            response.create_track_here = ui.input(|i| i.pointer.interact_pos()).map(|pos| {
+                [
+                    (pos.x - image_rect.min.x) / effective_scale,
+                    (pos.y - image_rect.min.y) / effective_scale,
+                ]
+            });
+        }
+
         // --- The bench layer's handles, before the view's own input ---
         //
         // A drag that began on a handle is an edit of the track and must not
@@ -637,6 +671,7 @@ impl ImageDetail {
             &interact_response,
             bench.active_track,
             bench.lock,
+            chord,
             &edited.base.image_table,
             img_idx,
             image_rect,
@@ -648,8 +683,7 @@ impl ImageDetail {
         // against the geometry the gesture was made on: on a feature that
         // observes a point it is Edit on Bench, and anywhere else it is the
         // zoom `handle_input` applies.
-        let double_click_point = interact_response
-            .double_clicked()
+        let double_click_point = (interact_response.double_clicked() && !chord)
             .then(|| self.point_under_pointer(ui, image_rect, effective_scale))
             .flatten();
         response.edit_on_bench = double_click_point;
@@ -665,7 +699,9 @@ impl ImageDetail {
             scroll_input,
             gesture_events,
             self.bench_drag.is_some(),
-            double_click_point.is_some(),
+            // A Control+Shift double-click is two requests for a track, the
+            // second refused while the first runs; it is not also a zoom.
+            double_click_point.is_some() || chord,
         );
 
         // Recompute image rect after pan/zoom changes from input

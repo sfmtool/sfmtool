@@ -603,6 +603,9 @@ impl TabContext<'_> {
             // `String`, the track its own `Arc`), because the panel is handed
             // `&mut` into the state further down the same call.
             let bench_busy = self.state.busy_refusal(id);
+            // Why *Create Track Here* is greyed on the image shown, if it is.
+            let create_track_refusal = selected_image
+                .and_then(|idx| self.state.create_track_here_refusal(ImageRef::new(id, idx)));
             let (bench_label, bench_track) = match self.state.bench(id) {
                 Some(bench) => match crate::bench::active_track_label(bench) {
                     Some(label) => (Some(label.to_string()), bench.track(label).cloned()),
@@ -693,6 +696,7 @@ impl TabContext<'_> {
                     busy: bench_busy.as_deref(),
                     active_track: bench_track.as_deref(),
                     lock: self.track_view.lock(),
+                    create_track: create_track_refusal.as_deref(),
                 },
                 self.gesture_events,
                 self.scroll_input,
@@ -740,6 +744,14 @@ impl TabContext<'_> {
                             .fail(crate::action_log::Kind::Bench, why);
                     }
                 }
+            }
+            // Create Track Here, from the menu entry or a Control+Shift click:
+            // the run starts on a worker, and its refusal, in front of the
+            // worker or from the cascade, is one failed row.
+            if let (Some(pixel), Some(image)) = (detail_response.create_track_here, selected_image)
+            {
+                self.state
+                    .create_track_here(ImageRef::new(id, image), pixel);
             }
             // A drag of one of the bench layer's handles: the sighting placed,
             // the patch resized or turned. One version per gesture, through the

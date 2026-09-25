@@ -567,6 +567,24 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: Some(workspace),
             }
         }
+        // Create Track Here, over the plane capture its own tests use: a grid
+        // of points on a textured plane and a pixel between them, which the
+        // cascade builds a track at when it is let run.
+        "Create track at pixel" => {
+            let (mut state, id) = crate::bench::track_at_pixel::tests::plane_state();
+            let job = state
+                .create_track_at_pixel_job(
+                    crate::scene::ImageRef::new(id, 0),
+                    crate::bench::track_at_pixel::tests::textured_pixel(),
+                )
+                .expect("the fixture is a posed embedded_patches node");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         other => panic!("{other} has no starter here; add one"),
     }
 }

@@ -562,6 +562,7 @@ fn starting_a_cluster_needs_only_a_pixel_and_a_node_that_is_not_busy() {
             busy: Some(BUSY),
             active_track: None,
             lock: true,
+            create_track: None,
         }),
         Err(BUSY.to_string()),
     );
@@ -586,6 +587,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
             busy: None,
             active_track: Some(&track),
             lock: true,
+            create_track: None,
         }),
         Ok(()),
     );
@@ -594,6 +596,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
             busy: Some(BUSY),
             active_track: Some(&track),
             lock: true,
+            create_track: None,
         }),
         Err(BUSY.to_string()),
     );
@@ -609,6 +612,7 @@ fn the_context_menu_offers_the_two_bench_entries() {
         busy: None,
         active_track: Some(&track),
         lock: true,
+        create_track: None,
     });
     for label in [START_CLUSTER_LABEL, ADD_BENCH_OBSERVATION_LABEL] {
         assert!(
@@ -692,36 +696,220 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
 
 // ── Edit on Bench, and what a double-click means ────────────────────────
 
-use super::overlay::{edit_on_bench_entry, feature_at, FeatureHit};
+use super::overlay::{create_track_here_entry, edit_on_bench_entry, feature_at, FeatureHit};
+use crate::bench::track_at_pixel::{CREATE_TRACK_HERE_LABEL, CREATE_TRACK_HERE_SHORTCUT};
 use crate::state::edits::PointGesture;
 use crate::viewer_3d::EDIT_ON_BENCH_LABEL;
 
-/// `Edit on Bench` stands at the top of the menu, above the two bench entries,
-/// and it is **drawn** where it cannot run rather than hidden: the menu here is
-/// opened over empty image, so nothing is under it to stage.
-#[test]
-fn the_feature_menu_puts_edit_on_bench_at_the_top() {
-    let texts = context_menu_texts(BenchMenu::default());
-    let entries: Vec<&str> = texts
+/// The menu's entries in the order they are drawn, of the four this panel
+/// adds.
+fn menu_entries(texts: &[String]) -> Vec<&str> {
+    texts
         .iter()
         .map(String::as_str)
         .filter(|text| {
             [
+                CREATE_TRACK_HERE_LABEL,
                 EDIT_ON_BENCH_LABEL,
                 START_CLUSTER_LABEL,
                 ADD_BENCH_OBSERVATION_LABEL,
             ]
             .contains(text)
         })
-        .collect();
+        .collect()
+}
+
+/// `Create Track Here` stands at the top of the menu, directly above `Edit on
+/// Bench`, which is above the two bench entries; and `Edit on Bench` is
+/// **drawn** where it cannot run rather than hidden: the menu here is opened
+/// over empty image, so nothing is under it to stage, while a track can be
+/// created at any pixel.
+#[test]
+fn the_feature_menu_puts_create_track_here_directly_above_edit_on_bench() {
+    let texts = context_menu_texts(BenchMenu::default());
     assert_eq!(
-        entries,
+        menu_entries(&texts),
         [
+            CREATE_TRACK_HERE_LABEL,
             EDIT_ON_BENCH_LABEL,
             START_CLUSTER_LABEL,
             ADD_BENCH_OBSERVATION_LABEL
         ],
     );
+    // Its shortcut is painted beside it, as the menu bar paints a key's.
+    assert!(
+        texts.iter().any(|t| t == CREATE_TRACK_HERE_SHORTCUT),
+        "the shortcut is not in the menu: {texts:?}"
+    );
+}
+
+/// Greyed rather than hidden where it cannot run: the entry is still drawn,
+/// in its place, and the entry's rule is the reason the state hands in, word
+/// for word.
+#[test]
+fn create_track_here_is_greyed_with_the_reason_it_cannot_run() {
+    assert_eq!(create_track_here_entry(BenchMenu::default()), Ok(()));
+    for why in [
+        crate::bench::track_at_pixel::NOT_POSED,
+        crate::bench::track_at_pixel::NOT_EMBEDDED_PATCHES,
+        BUSY,
+    ] {
+        let menu = BenchMenu {
+            create_track: Some(why),
+            ..BenchMenu::default()
+        };
+        assert_eq!(create_track_here_entry(menu), Err(why.to_string()));
+        assert_eq!(
+            menu_entries(&context_menu_texts(menu)).first(),
+            Some(&CREATE_TRACK_HERE_LABEL),
+            "the greyed entry left the menu or its place"
+        );
+    }
+}
+
+/// What one frame of clicks with `modifiers` held asked of the app: the pixel
+/// Create Track Here was asked for at, and the point a click selected.
+fn chord_click(
+    detail: &mut ImageDetail,
+    at: egui::Pos2,
+    clicks: usize,
+    modifiers: egui::Modifiers,
+) -> (Option<[f32; 2]>, Option<usize>) {
+    let (node, sift) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    let ctx = egui::Context::default();
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let mut asked = (None, None);
+    crate::platform::set_test_pointer_pos(Some(at));
+    for frame in 0..2 {
+        let mut events = vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(at),
+        ];
+        if frame == 1 {
+            for _ in 0..clicks {
+                for pressed in [true, false] {
+                    events.push(egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers,
+                    });
+                }
+            }
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            events,
+            ..Default::default()
+        };
+        crate::test_support::run_frame_headless(&ctx, input, |ui| {
+            let response = detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(0),
+                None,
+                None,
+                None,
+                BenchMenu::default(),
+                &[],
+                &crate::platform::ScrollInput::default(),
+                Some(&sift),
+                Some(&image),
+                &display,
+                &mut intrinsics_display,
+            );
+            if frame == 1 {
+                asked = (response.create_track_here, response.select_point);
+            }
+        });
+    }
+    crate::platform::set_test_pointer_pos(None);
+    asked
+}
+
+/// Control and Shift held.
+fn ctrl_shift() -> egui::Modifiers {
+    egui::Modifiers {
+        ctrl: true,
+        shift: true,
+        command: true,
+        ..Default::default()
+    }
+}
+
+/// A Control+Shift click on a feature asks for a track at the pixel clicked,
+/// not at the feature, and is the whole of what the click means: no point is
+/// selected, no bench item staged, nothing zoomed. The same click with no
+/// modifier selects the feature's point and asks for no track.
+#[test]
+fn a_control_shift_click_asks_for_a_track_at_the_pixel_clicked() {
+    let (node, _) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    let (&feature, &point) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's first image tracks features");
+    let [fx, fy] = feature_pixel(feature as usize);
+    // A few source pixels off the feature, inside the click's hit radius, so
+    // the answer tells the clicked pixel from the feature's.
+    let clicked = [f64::from(fx) + 3.0, f64::from(fy) - 2.0];
+    let at = to_panel(&image, clicked);
+
+    let mut detail = ImageDetail::new();
+    let (track_at, selected) = chord_click(&mut detail, at, 1, ctrl_shift());
+    let track_at = track_at.expect("the chord asked for a track");
+    let under = pixel_under(&detail, &image, at);
+    assert!(
+        (track_at[0] - under.x).abs() < 1e-3 && (track_at[1] - under.y).abs() < 1e-3,
+        "asked at {track_at:?}, the pointer is over {under:?}"
+    );
+    assert!(
+        (f64::from(track_at[0]) - clicked[0]).abs() < 0.5
+            && (f64::from(track_at[1]) - clicked[1]).abs() < 0.5,
+        "asked at {track_at:?} for a click at {clicked:?}: snapped to the feature?"
+    );
+    assert_eq!(selected, None, "the chord also selected a point");
+    assert_eq!(detail.take_point_gesture(), None);
+    assert_eq!(detail.zoom, 1.0);
+
+    let mut detail = ImageDetail::new();
+    let (track_at, selected) = chord_click(&mut detail, at, 1, egui::Modifiers::default());
+    assert_eq!(track_at, None, "a plain click asked for a track");
+    assert_eq!(selected, Some(point as usize));
+
+    // Control alone, or Shift alone, is not the chord.
+    for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::SHIFT] {
+        let mut detail = ImageDetail::new();
+        assert_eq!(chord_click(&mut detail, at, 1, modifiers).0, None);
+    }
+}
+
+/// A Control+Shift double-click on a feature is not Edit on Bench and not a
+/// zoom: its second click is a second request the busy node will refuse, and
+/// the panel asks for nothing else.
+#[test]
+fn a_control_shift_double_click_is_neither_edit_on_bench_nor_a_zoom() {
+    let (node, _) = gesture_fixture();
+    let image = pixels(1920, 1080);
+    let (&feature, _) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's first image tracks features");
+    let [fx, fy] = feature_pixel(feature as usize);
+    let at = to_panel(&image, [f64::from(fx), f64::from(fy)]);
+
+    let mut detail = ImageDetail::new();
+    let _ = chord_click(&mut detail, at, 2, ctrl_shift());
+    assert_eq!(
+        detail.take_point_gesture(),
+        None,
+        "Edit on Bench was staged"
+    );
+    assert_eq!(detail.zoom, 1.0, "the chord zoomed");
 }
 
 /// What the entry needs, and the two ways of having nothing to stage told
@@ -750,6 +938,7 @@ fn edit_on_bench_needs_a_feature_with_a_point_behind_it() {
                 busy: Some(BUSY),
                 active_track: None,
                 lock: true,
+                create_track: None,
             },
             Some(FeatureHit::Point(7)),
         ),
@@ -1139,6 +1328,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
             busy: None,
             active_track: Some(&track),
             lock: true,
+            create_track: None,
         },
     );
     assert!(!paths.is_empty(), "the layer drew nothing");
@@ -1259,6 +1449,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
                 busy: None,
                 active_track: Some(&judged),
                 lock: true,
+                create_track: None,
             },
         );
         assert_eq!(
@@ -1306,6 +1497,7 @@ fn the_bench_layer_draws_nothing_without_a_track_and_no_mark_outside_it() {
                 busy: None,
                 active_track: Some(&track),
                 lock: true,
+                create_track: None,
             },
         )
         .is_empty(),
@@ -1398,6 +1590,7 @@ fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
         busy: None,
         active_track: Some(&track),
         lock: true,
+        create_track: None,
     };
     let ghosts = ghost_shapes(&node, unseen, bench);
     assert_eq!(ghosts.len(), 1, "one ghost outline, got {}", ghosts.len());
@@ -1458,6 +1651,7 @@ fn a_member_image_draws_its_outline_and_no_ghost_whatever_the_verdict() {
             busy: None,
             active_track: Some(&judged),
             lock: true,
+            create_track: None,
         };
         for image in judged.observations.iter().map(|o| o.image as usize) {
             assert!(
@@ -1489,6 +1683,7 @@ fn the_cluster_stage_draws_no_ghost() {
         busy: None,
         active_track: Some(&track),
         lock: true,
+        create_track: None,
     };
     for image in 1..node.edited().image_count() {
         assert!(
@@ -1512,6 +1707,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
         busy: None,
         active_track: Some(track),
         lock: true,
+        create_track: None,
     };
     assert!(
         !ghost_shapes(&node, unseen, menu(&track)).is_empty(),
@@ -1527,6 +1723,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
                 busy: None,
                 active_track: Some(&unplaced),
                 lock: true,
+                create_track: None,
             },
         )
         .is_empty(),
@@ -1547,6 +1744,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
                 busy: None,
                 active_track: Some(&turned),
                 lock: true,
+                create_track: None,
             },
         )
         .is_empty(),
@@ -1635,6 +1833,7 @@ fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
             busy: None,
             active_track: Some(&track),
             lock: true,
+            create_track: None,
         },
     );
     let outline = paths
@@ -1952,6 +2151,7 @@ fn gesture(
                     busy: None,
                     active_track: Some(track),
                     lock,
+                    create_track: None,
                 },
                 &[],
                 &crate::platform::ScrollInput::default(),
@@ -2988,6 +3188,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
                 busy: None,
                 active_track: Some(&track),
                 lock,
+                create_track: None,
             },
         )
         .iter()
@@ -3003,6 +3204,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
             busy: None,
             active_track: Some(&track),
             lock,
+            create_track: None,
         };
         assert!(
             ghost_shapes(node, unseen, menu)
@@ -3161,6 +3363,7 @@ fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
         busy: None,
         active_track: Some(&track),
         lock,
+        create_track: None,
     };
     // The segment is the one two-point path the layer draws.
     let segments = |image, lock, color: egui::Color32| -> Vec<Vec<egui::Pos2>> {
@@ -3251,6 +3454,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
                 busy: None,
                 active_track: Some(track),
                 lock: true,
+                create_track: None,
             },
         );
         paths.into_iter().filter(|path| path.len() == 2).count()
