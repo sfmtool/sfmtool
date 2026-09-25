@@ -9,9 +9,9 @@ use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArr
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::camera::CameraModel;
+use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::geometry::{
-    bundle_adjust as core_bundle_adjust, BaSchedule, DistanceReference, FreePointPolicy,
+    bundle_adjust as core_bundle_adjust, BaCameras, BaSchedule, DistanceReference, FreePointPolicy,
     PointConstraints,
 };
 use sfmtool_core::progress::Progress;
@@ -85,16 +85,97 @@ fn build_constraints(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
-/// Staged bundle adjustment for images sharing one camera model.
+/// The release gates the binding holds every camera to: each requested
+/// release must be one the camera's model admits, or the call raises rather
+/// than letting the kernel hold that camera's parameter fixed behind the
+/// caller's back.
+fn check_releases(
+    cameras: &[CameraIntrinsics],
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+) -> PyResult<()> {
+    // The two distortion rungs live on different models, so no camera could
+    // ever satisfy both releases — reject the combination up front with the
+    // real reason rather than whichever model gate happens to fire first.
+    if opt_k1 && opt_bspline {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "opt_k1 and opt_bspline are mutually exclusive (no camera model \
+             carries both a radial coefficient and a spline)",
+        ));
+    }
+    for (j, camera) in cameras.iter().enumerate() {
+        let model = camera.model_name();
+        // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the
+        // focal multiplies an `f`-independent distorted coordinate: the two
+        // single-focal distortion-free models, the one-coefficient fisheye
+        // whose `k1` rides on the ray's own `θ`, and the two spline models whose
+        // dimensionless radial spline rides on the ray's own radial coordinate
+        // the same way.
+        let releasable = matches!(
+            camera.model,
+            CameraModel::SimplePinhole { .. }
+                | CameraModel::EquidistantFisheye { .. }
+                | CameraModel::SimpleRadialFisheye { .. }
+                | CameraModel::SfmtoolFisheye { .. }
+                | CameraModel::SfmtoolPinhole { .. }
+        );
+        if opt_f && !releasable {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "opt_f requires every camera to be SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
+                 SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or SFMTOOL_PINHOLE; camera {j} \
+                 is {model}"
+            )));
+        }
+        // The curvature rung exists on exactly one model — no other camera has
+        // a single radial coefficient acting on `θ` for `f·θ³·û` to be its
+        // exact derivative.
+        if opt_k1 && !matches!(camera.model, CameraModel::SimpleRadialFisheye { .. }) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "opt_k1 requires every camera to be SIMPLE_RADIAL_FISHEYE; camera {j} \
+                 is {model}"
+            )));
+        }
+        // The spline rung exists on the two models that carry a spline, whose
+        // dimensionless coefficients act on the ray's own radial coordinate —
+        // and the spline must be defined for there to be anything to release.
+        if opt_bspline {
+            match camera.model.radial_spline() {
+                Some((bspline, d_max, _)) => {
+                    if bspline.len() < 2 || !(d_max.is_finite() && d_max > 0.0) {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "opt_bspline requires a defined spline (at least two \
+                             coefficients on a positive bspline_theta_max / \
+                             bspline_rho_max); camera {j}'s is not"
+                        )));
+                    }
+                }
+                None => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "opt_bspline requires every camera to be SFMTOOL_FISHEYE or \
+                         SFMTOOL_PINHOLE; camera {j} is {model}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Staged bundle adjustment for images taken through one or more cameras.
 ///
-/// Jointly refines world-to-camera poses, world points, and optionally the
-/// shared focal length by minimizing soft-L1 pixel reprojection error over a
-/// trim schedule with inter-round retriangulation (canonical frame; the
-/// camera looks along −Z). See ``specs/core/geometry/bundle-adjustment.md``.
+/// Jointly refines world-to-camera poses, world points, and optionally each
+/// camera's focal length and distortion by minimizing soft-L1 pixel
+/// reprojection error over a trim schedule with inter-round retriangulation
+/// (canonical frame; the camera looks along −Z). Every observation is read
+/// through the camera of its own image, and each camera keeps its own lens
+/// parameters. See ``specs/core/geometry/bundle-adjustment.md``.
 ///
 /// Args:
-///     camera: ``CameraIntrinsics`` shared by all images (carries the
-///         initial focal).
+///     cameras: Sequence of ``CameraIntrinsics``, one per camera (each
+///         carries its own initial focal).
+///     image_camera: (n_img,) uint32 index into ``cameras`` of the camera that
+///         took each image.
 ///     quaternions_wxyz: (n_img, 4) world-to-camera rotations (WXYZ).
 ///     translations: (n_img, 3) world-to-camera translations.
 ///     points: (n_pt, 3) world points; NaN rows are re-admitted by the
@@ -137,7 +218,8 @@ fn build_constraints(
 ///         reproduces the standing kernel bit for bit.
 ///     noise_floor_scale: The constant ``c`` in the noise-floor angle
 ///         ``theta_floor = c * s / f``, with ``s`` the round's loss scale in
-///         pixels and ``f`` the camera's current focal (default 2.0; must be
+///         pixels and ``f`` the mean current focal of the cameras the track
+///         was seen through, one term per observation (default 2.0; must be
 ///         positive and finite). Read only under ``free_points_cross``.
 ///     protected: Optional (n_obs,) bool mask marking protected
 ///         observations. A protected observation is never removed by the
@@ -150,16 +232,18 @@ fn build_constraints(
 ///     protected_loss_scale: Multiplier on each stage's loss scale for
 ///         protected observations (default 3.0; must be positive and
 ///         finite).
-///     opt_f: Release the shared focal (SIMPLE_PINHOLE,
+///     opt_f: Release each camera's focal (SIMPLE_PINHOLE,
 ///         EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or
 ///         SFMTOOL_PINHOLE — the models whose projection multiplies the focal
 ///         onto a distorted coordinate that does not itself read it, where the
-///         kernel's analytic focal column is exact; any other model raises).
-///     opt_k1: Release the shared radial coefficient (SIMPLE_RADIAL_FISHEYE
-///         only — the one model carrying it; any other model raises). The
-///         staged use is fixed -> opt_f -> opt_f + opt_k1, so the curvature
-///         rung opens on a focal that has already settled.
-///     opt_bspline: Release the shared radial spline coefficients
+///         kernel's analytic focal column is exact; a camera of any other
+///         model raises).
+///     opt_k1: Release each camera's radial coefficient
+///         (SIMPLE_RADIAL_FISHEYE only — the one model carrying it; a camera
+///         of any other model raises). The staged use is fixed -> opt_f ->
+///         opt_f + opt_k1, so the curvature rung opens on a focal that has
+///         already settled.
+///     opt_bspline: Release each camera's radial spline coefficients
 ///         (SFMTOOL_FISHEYE or SFMTOOL_PINHOLE — the two models carrying
 ///         them, and the spline must be defined: at least two coefficients on
 ///         a positive ``bspline_theta_max`` / ``bspline_rho_max``; anything
@@ -175,26 +259,25 @@ fn build_constraints(
 ///         state passes through, all residual norms +inf (default 12).
 ///
 /// Returns:
-///     A dict ``{"focal", "k1", "bspline_coefficients" (n_coeffs,),
-///     "quaternions_wxyz" (n_img, 4), "translations" (n_img, 3), "points"
-///     (n_pt, 3), "residual_norms" (n_obs,), "point_at_infinity" (n_pt,)}``.
+///     A dict ``{"cameras", "quaternions_wxyz" (n_img, 4), "translations"
+///     (n_img, 3), "points" (n_pt, 3), "residual_norms" (n_obs,),
+///     "point_at_infinity" (n_pt,)}``. ``cameras`` holds one
+///     ``CameraIntrinsics`` per input camera, in order: the input camera with
+///     its released parameters replaced by the solved ones, and equal to the
+///     input camera otherwise.
 ///     ``point_at_infinity`` is the representation each point ended with:
 ///     ``True`` where its returned row is a world-frame direction and
 ///     ``False`` where it is a position. A free point's entry is the input
 ///     mask unless ``free_points_cross`` let the re-estimation re-decide it, a
 ///     held point's is its input value, and a ranged point's is whether its
 ///     distance is infinite.
-///     ``k1`` is the shared radial coefficient after the solve — the input
-///     one unless ``opt_k1``, and 0.0 for models that have none.
-///     ``bspline_coefficients`` mirrors it for the radial spline: the
-///     coefficients after the solve — the camera's input ones unless
-///     ``opt_bspline``, and an empty array for models that carry no spline.
 ///     ``residual_norms`` are unweighted reprojection norms at the final
 ///     state, ``+inf`` where the point is non-finite / behind the camera /
 ///     outside the model domain.
 #[pyfunction]
 #[pyo3(signature = (
-    camera,
+    cameras,
+    image_camera,
     quaternions_wxyz,
     translations,
     points,
@@ -220,7 +303,8 @@ fn build_constraints(
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust<'py>(
     py: Python<'py>,
-    camera: PyRef<'_, PyCameraIntrinsics>,
+    cameras: Vec<PyRef<'_, PyCameraIntrinsics>>,
+    image_camera: PyReadonlyArray1<'py, u32>,
     quaternions_wxyz: PyReadonlyArray2<'py, f64>,
     translations: PyReadonlyArray2<'py, f64>,
     points: PyReadonlyArray2<'py, f64>,
@@ -273,67 +357,30 @@ pub fn bundle_adjust<'py>(
             "schedule must have at least one (trim_px, loss_scale) round",
         ));
     }
-    // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the focal
-    // multiplies an `f`-independent distorted coordinate: the two single-focal
-    // distortion-free models, the one-coefficient fisheye whose `k1` rides on
-    // the ray's own `θ`, and the two spline models whose dimensionless radial
-    // spline rides on the ray's own radial coordinate the same way. Everything
-    // else is rejected loudly rather than degraded to a fixed-parameter solve
-    // behind the caller's back.
-    let releasable = matches!(
-        camera.inner.model,
-        CameraModel::SimplePinhole { .. }
-            | CameraModel::EquidistantFisheye { .. }
-            | CameraModel::SimpleRadialFisheye { .. }
-            | CameraModel::SfmtoolFisheye { .. }
-            | CameraModel::SfmtoolPinhole { .. }
-    );
-    if opt_f && !releasable {
+    let cams: Vec<CameraIntrinsics> = cameras.iter().map(|c| c.inner.clone()).collect();
+    if cams.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "opt_f requires a SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
-             SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera",
+            "cameras must hold at least one CameraIntrinsics",
         ));
     }
-    // The two distortion rungs live on different models, so no camera could
-    // ever satisfy both releases — reject the combination up front with the
-    // real reason rather than whichever model gate happens to fire first.
-    if opt_k1 && opt_bspline {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "opt_k1 and opt_bspline are mutually exclusive (no camera model \
-             carries both a radial coefficient and a spline)",
-        ));
-    }
-    // The curvature rung exists on exactly one model — no other camera has a
-    // single radial coefficient acting on `θ` for `f·θ³·û` to be its exact
-    // derivative.
-    if opt_k1 && !matches!(camera.inner.model, CameraModel::SimpleRadialFisheye { .. }) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "opt_k1 requires a SIMPLE_RADIAL_FISHEYE camera",
-        ));
-    }
-    // The spline rung exists on the two models that carry a spline, whose
-    // dimensionless coefficients act on the ray's own radial coordinate — and
-    // the spline must be defined for there to be anything to release.
-    if opt_bspline {
-        match camera.inner.model.radial_spline() {
-            Some((bspline, d_max, _)) => {
-                if bspline.len() < 2 || !(d_max.is_finite() && d_max > 0.0) {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "opt_bspline requires a defined spline (at least two \
-                         coefficients on a positive bspline_theta_max / \
-                         bspline_rho_max)",
-                    ));
-                }
-            }
-            None => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "opt_bspline requires a SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera",
-                ));
-            }
-        }
-    }
+    // Every requested release must be one each camera's model admits; the
+    // binding raises rather than letting the kernel degrade it.
+    check_releases(&cams, opt_f, opt_k1, opt_bspline)?;
 
     let n_img = quaternions_wxyz.shape()[0];
+    let image_camera: Vec<u32> = to_contiguous!(image_camera).into_owned();
+    if image_camera.len() != n_img {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "image_camera must have shape (n_img,): {} given for {n_img} images",
+            image_camera.len()
+        )));
+    }
+    if let Some(&bad) = image_camera.iter().find(|&&j| j as usize >= cams.len()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "image_camera index {bad} out of range ({} cameras)",
+            cams.len()
+        )));
+    }
     let n_pt = points.shape()[0];
     if let Some(ref mask) = point_at_infinity {
         if mask.shape()[0] != n_pt {
@@ -441,10 +488,12 @@ pub fn bundle_adjust<'py>(
         point_at_infinity.map(|mask| to_contiguous!(mask).into_owned());
     let prot_mask: Option<Vec<bool>> = protected.map(|mask| to_contiguous!(mask).into_owned());
 
-    let cam = camera.inner.clone();
     let (out, quats, trans, pts) = py.detach(move || {
         let out = core_bundle_adjust(
-            &cam,
+            &BaCameras {
+                cameras: &cams,
+                image_camera: image_camera.as_slice().into(),
+            },
             &mut quats,
             &mut trans,
             &mut pts,
@@ -479,9 +528,12 @@ pub fn bundle_adjust<'py>(
     let p_rows: Vec<Vec<f64>> = pts.iter().map(|p| p.to_vec()).collect();
 
     let d = PyDict::new(py);
-    d.set_item("focal", out.focal)?;
-    d.set_item("k1", out.k1)?;
-    d.set_item("bspline_coefficients", PyArray1::from_vec(py, out.bspline))?;
+    let solved: Vec<PyCameraIntrinsics> = out
+        .cameras
+        .into_iter()
+        .map(|inner| PyCameraIntrinsics { inner })
+        .collect();
+    d.set_item("cameras", solved)?;
     d.set_item(
         "quaternions_wxyz",
         PyArray2::from_vec2(py, &q_rows)

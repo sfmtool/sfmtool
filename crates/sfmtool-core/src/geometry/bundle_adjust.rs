@@ -1,21 +1,24 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Staged bundle adjustment for images sharing one camera model.
+//! Staged bundle adjustment for images taken through one or more cameras.
 //!
-//! Jointly refines world-to-camera poses, world points, and optionally the
-//! shared focal length and radial coefficient by minimizing soft-L1 pixel
-//! reprojection error over a trim schedule with inter-round retriangulation —
-//! the multi-view generalization of [`crate::geometry::pose_refine`], and the
-//! native replacement for the cluster-bootstrap experiments' scipy BA
+//! Jointly refines world-to-camera poses, world points, and optionally each
+//! camera's focal length and radial coefficient or spline by minimizing
+//! soft-L1 pixel reprojection error over a trim schedule with inter-round
+//! retriangulation. It is the multi-view generalization of
+//! [`crate::geometry::pose_refine`], and the native replacement for the
+//! cluster-bootstrap experiments' scipy BA
 //! (`specs/core/geometry/bundle-adjustment.md`).
 //!
 //! Canonical camera frame throughout (the camera looks along `−Z`; a point in
 //! front has `z < 0`). Each Levenberg–Marquardt step is taken over a local
 //! `SO(3) × ℝ³` perturbation per image, `ℝ³` per point, and the optional
-//! shared camera parameters (the two scalars, or the radial spline
+//! per-camera lens parameters (the two scalars, or the radial spline
 //! coefficients), with analytic Jacobians; points are eliminated by a Schur
 //! complement and the dense reduced camera system is solved by LU.
+
+use std::borrow::Cow;
 
 use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, UnitQuaternion, Vector2, Vector3};
 
@@ -27,7 +30,7 @@ use crate::camera::{CameraModel, PixelJacobian};
 use crate::progress::Progress;
 use crate::progress_info;
 use crate::reconstruction::triangulation::points::{
-    tangent_basis, triangulate_points_from_observations, FewObservations, ObservationSet,
+    tangent_basis, triangulate_points_through_cameras, FewObservations, ObservationSet,
     PointDistance, PointRules,
 };
 use crate::CameraIntrinsics;
@@ -341,19 +344,68 @@ impl Default for FreePointPolicy {
     }
 }
 
+/// The cameras of a solve, and which of them took each image.
+///
+/// The camera list and the image-to-camera column only mean something
+/// together, so they travel as one argument and are checked in one place: an
+/// empty camera list, an `image_camera` whose length is not the image count,
+/// or an index past the list is a caller error, and [`bundle_adjust`] panics
+/// on it like on its other shape checks.
+///
+/// `image_camera` is a [`Cow`] so that [`BaCameras::shared`] can own the
+/// all-zero column it builds, while a caller with a column of its own lends it
+/// (`image_camera: column.as_slice().into()`).
+#[derive(Clone, Debug)]
+pub struct BaCameras<'a> {
+    /// One entry per camera; each carries its own model, parameters and
+    /// initial focal.
+    pub cameras: &'a [CameraIntrinsics],
+    /// One entry per image: the index into `cameras` of the camera that took
+    /// it.
+    pub image_camera: Cow<'a, [u32]>,
+}
+
+impl<'a> BaCameras<'a> {
+    /// Every one of `n_img` images taken by one camera: the single-camera
+    /// case.
+    pub fn shared(camera: &'a CameraIntrinsics, n_img: usize) -> BaCameras<'a> {
+        BaCameras {
+            cameras: std::slice::from_ref(camera),
+            image_camera: Cow::Owned(vec![0; n_img]),
+        }
+    }
+
+    /// Panic on a camera list or column that does not describe `n_img` images.
+    fn check(&self, n_img: usize) {
+        assert!(!self.cameras.is_empty(), "BaCameras holds no camera");
+        assert_eq!(
+            self.image_camera.len(),
+            n_img,
+            "image_camera and quats length mismatch"
+        );
+        if let Some(&bad) = self
+            .image_camera
+            .iter()
+            .find(|&&j| j as usize >= self.cameras.len())
+        {
+            panic!(
+                "image_camera names camera {bad}, past the {} cameras",
+                self.cameras.len()
+            );
+        }
+    }
+}
+
 /// Result of [`bundle_adjust`]. Poses and points are refined in place; this
 /// carries what has no in-place home.
 #[derive(Clone, Debug)]
 pub struct BundleAdjustment {
-    /// The shared focal length after the solve (the input focal unless
-    /// `opt_f`).
-    pub focal: f64,
-    /// The shared radial coefficient after the solve — the input `k1` unless
-    /// `opt_k1`, and `0.0` for models that have no such parameter.
-    pub k1: f64,
-    /// The shared radial spline coefficients after the solve — the input
-    /// ones unless `opt_bspline`, and empty for models that carry no spline.
-    pub bspline: Vec<f64>,
+    /// The cameras after the solve, one per input camera and in its order: each
+    /// the input camera with its released parameters replaced by the solved
+    /// ones (the focal under `opt_f`, `k1` under `opt_k1`, the spline under
+    /// `opt_bspline`, where its model admits the release), and equal to the
+    /// input camera otherwise.
+    pub cameras: Vec<CameraIntrinsics>,
     /// Unweighted reprojection residual norm of every supplied observation at
     /// the final state; `+∞` where the point is non-finite, behind the
     /// camera, or outside the model domain. All-`∞` signals the degenerate
@@ -430,11 +482,13 @@ struct ObsBlocks<const CAM_COLS: usize> {
     cam_j: SMatrix<f64, 2, CAM_COLS>,
     pt_j: SMatrix<f64, 2, 3>,
     /// Reduced-system column of each `cam_j` column, per observation:
-    /// `[f, k1, (active spline coefficients,) δθ×3, δt×3]`. A spline slot
-    /// whose active basis function is one of the gauge-anchored pair (full
-    /// index < 2 — no coefficient, no column) points at [`K1_SLOT`], which is
-    /// always pinned under the spline release, so its exactly-zero column
-    /// accumulates exact zeros there.
+    /// `[f, k1, (active spline coefficients,) δθ×3, δt×3]`, the lens columns
+    /// in the block of the camera that took the observation's image. A spline
+    /// slot that carries no coefficient (an active basis function of the
+    /// gauge-anchored pair, full index < 2, or any spline slot of a camera
+    /// whose spline is not released) points at that camera's [`K1_SLOT`]. Its
+    /// column is exactly zero, so it adds exact zeros there whether or not that
+    /// slot is released.
     idx: [usize; CAM_COLS],
     /// The reference-camera columns of a ranged point's observation: the
     /// reduced-system column and its `∂(u, v)/∂parameter`, one entry per DOF of
@@ -447,24 +501,25 @@ struct ObsBlocks<const CAM_COLS: usize> {
 }
 
 /// Width of one observation's camera-side Jacobian block in the base
-/// instantiation: the two shared camera scalars (`f`, `k1`) plus the image's
+/// instantiation: its camera's two lens scalars (`f`, `k1`) plus the image's
 /// six pose DOFs. Both scalar slots are always present — pinned in the
 /// reduced system when unreleased — so the indexing is uniform.
 const BASE_CAM_COLS: usize = 2 + 6;
 
-/// Width under the spline release: the two scalar slots, the
+/// Width when any camera's spline is released: the two scalar slots, the
 /// [`BSPLINE_SUPPORT`] basis functions active at the observation's incidence
 /// angle (cubic local support — the only nonzero columns of `∂(u, v)/∂c` for
 /// that observation), and the six pose DOFs.
 const BSPLINE_CAM_COLS: usize = 2 + BSPLINE_SUPPORT + 6;
 
-/// The reduced camera system's slot of the shared focal.
+/// A camera's focal slot, relative to the start of its lens block.
 const F_SLOT: usize = 0;
-/// The reduced camera system's slot of the shared radial coefficient.
+/// A camera's radial-coefficient slot, relative to the start of its lens block.
 const K1_SLOT: usize = 1;
-/// The reduced camera system's slot of the first shared spline coefficient
-/// (coefficient `i` lives at `BSPLINE_SLOT0 + i`; the pose blocks follow the
-/// whole coefficient vector).
+/// A camera's first spline-coefficient slot, relative to the start of its lens
+/// block (coefficient `i` lives at `BSPLINE_SLOT0 + i`; the next camera's block,
+/// or the pose blocks after the last camera, follow the whole coefficient
+/// vector).
 const BSPLINE_SLOT0: usize = 2;
 
 /// `∂(u, v)/∂k1` at a camera-frame point, for the one model `opt_k1` admits.
@@ -606,17 +661,24 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
     bspline.iter().all(|c| c.is_finite()) && bspline_is_monotone(bspline, d_max, d_max)
 }
 
-/// Staged bundle adjustment over images sharing one camera model.
+/// Staged bundle adjustment over images taken through one or more cameras.
+///
+/// `cameras` holds the camera list and, per image, the index of the camera
+/// that took it; [`BaCameras::shared`] is the single-camera case. Every
+/// observation is projected, differentiated, trimmed and re-estimated through
+/// the camera of its own image, and each camera keeps its own lens block in the
+/// reduced system, so two cameras' lens parameters couple only through the
+/// poses and points they both observe.
 ///
 /// Per schedule round: retriangulate every point from all supplied
 /// observations at the current poses (rounds after the first), trim to
 /// observations under `trim_px` with in-front depth and a finite point whose
 /// track keeps at least `min_track` survivors, then run one robust sparse LM
 /// solve at the round's `loss_scale`. Poses and points are refined in place;
-/// the returned [`BundleAdjustment`] carries the focal and the per-observation
-/// residual norms at the final state (`+∞` where invalid — and everywhere,
-/// with the state passed through, when fewer than `min_obs` observations —
-/// finite and direction alike — survive a trim).
+/// the returned [`BundleAdjustment`] carries the cameras and the
+/// per-observation residual norms at the final state (`+∞` where invalid — and
+/// everywhere, with the state passed through, when fewer than `min_obs`
+/// observations — finite and direction alike — survive a trim).
 ///
 /// `point_at_infinity` optionally marks per-point directions: a marked row of
 /// `points` is a world-frame direction (normalized on input and output) whose
@@ -642,14 +704,16 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// `specs/core/geometry/bundle-adjustment.md`. An absent or all-`false` mask
 /// reproduces the unprotected behavior bit for bit.
 ///
-/// `opt_f` releases the shared focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
+/// `opt_f` releases each camera's focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
 /// SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and SFMTOOL_PINHOLE — the models
 /// this kernel's analytic focal column `(u − cx)/f` is exact for), `opt_k1`
-/// the shared radial coefficient (SIMPLE_RADIAL_FISHEYE only, the one model
-/// carrying it), and `opt_bspline` the shared radial spline coefficients
-/// (SFMTOOL_FISHEYE and SFMTOOL_PINHOLE, the two carrying a spline). The
-/// binding rejects other models loudly; the core silently degrades them to a
-/// fixed-parameter solve, never a half-modeled DOF. `opt_k1` and `opt_bspline` are naturally exclusive
+/// each camera's radial coefficient (SIMPLE_RADIAL_FISHEYE only, the one model
+/// carrying it), and `opt_bspline` each camera's radial spline coefficients
+/// (SFMTOOL_FISHEYE and SFMTOOL_PINHOLE, the two carrying a spline). Each is a
+/// request to every camera, decided per camera: a camera whose model the
+/// release is not exact for keeps that parameter fixed, never a half-modeled
+/// DOF, while the others release theirs. The binding rejects such a model
+/// loudly instead. `opt_k1` and `opt_bspline` are exclusive on any one camera
 /// (no model carries both parameters). Callers stage the releases — fixed →
 /// `opt_f` → `opt_f` plus the model's distortion release — so the distortion
 /// rung opens on a focal that has already settled.
@@ -666,7 +730,7 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// parameter existed.
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
-    cam: &CameraIntrinsics,
+    cameras: &BaCameras<'_>,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -687,6 +751,7 @@ pub fn bundle_adjust(
     min_obs: usize,
     progress: &Progress<'_>,
 ) -> BundleAdjustment {
+    cameras.check(quats.len());
     if let Some(mask) = protected {
         assert_eq!(
             mask.len(),
@@ -725,7 +790,8 @@ pub fn bundle_adjust(
         }
     }
     bundle_adjust_staged(
-        cam,
+        cameras.cameras,
+        &cameras.image_camera,
         quats,
         trans,
         points,
@@ -897,11 +963,9 @@ fn normalized_dir(p: [f64; 3]) -> [f64; 3] {
     }
 }
 
-/// Mixed-path residual norms and in-front measures. Finite observations
-/// report the canonical depth `−z_cam` (checked against the `1e-3·f` floor by
-/// the caller); direction observations report `−(R·d)_z` (cheirality: any
-/// positive value is in front). Invalid observations report
-/// `INVALID_RESIDUAL` and a non-positive in-front measure.
+/// Mixed-path residual norms and in-front measures, each observation through
+/// the camera of its own image (`cams[image_camera[i]]`). Invalid observations
+/// report `INVALID_RESIDUAL` and a non-positive in-front measure.
 ///
 /// **Model-aware in-front measure.** `−z_cam` is the perspective family's
 /// notion of "in front": its projection is only defined for `z_cam < 0`, so
@@ -912,9 +976,17 @@ fn normalized_dir(p: [f64; 3]) -> [f64; 3] {
 /// the range `‖p_cam‖` instead, which keeps the floor doing the only job it
 /// can still do there (reject a point sitting on the camera centre, where the
 /// direction is undefined) and leaves the domain test to `ray_to_pixel`.
+///
+/// Finite observations are checked against the `1e-3·f` floor by the caller.
+/// A direction observation reports the same measure at `R·d` and is checked
+/// against zero: for the perspective family that is `(R·d)_z < 0`, and for a
+/// ray-path model, whose range of a unit direction is one, it passes and the
+/// direction is in front exactly when `ray_to_pixel(R·d)` is defined, which the
+/// residual already reports.
 #[allow(clippy::too_many_arguments)]
 fn residual_norms_depths(
-    cam: &CameraIntrinsics,
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &[[f64; 3]],
@@ -926,7 +998,7 @@ fn residual_norms_depths(
     let n_obs = obs_img.len();
     let mut norms = vec![INVALID_RESIDUAL; n_obs];
     let mut depths = vec![f64::NEG_INFINITY; n_obs];
-    let ray_path = cam.model.needs_ray_path();
+    let ray_path: Vec<bool> = cams.iter().map(|c| c.model.needs_ray_path()).collect();
     for k in 0..n_obs {
         let pi = obs_pt[k] as usize;
         let p = points[pi];
@@ -934,10 +1006,11 @@ fn residual_norms_depths(
             continue;
         }
         let i = obs_img[k] as usize;
+        let j = image_camera[i] as usize;
         let rot = quats[i] * Vector3::new(p[0], p[1], p[2]);
         let c = if is_dir[pi] { rot } else { rot + trans[i] };
-        depths[k] = if ray_path { c.norm() } else { -c.z };
-        if let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) {
+        depths[k] = if ray_path[j] { c.norm() } else { -c.z };
+        if let Some((u, v)) = cams[j].ray_to_pixel([c.x, c.y, c.z]) {
             norms[k] = (u - uv[k][0]).hypot(v - uv[k][1]);
         }
     }
@@ -961,16 +1034,22 @@ fn residual_norms_depths(
 /// observations accumulate in the order the caller listed them and the result
 /// is defined by the input order rather than by a sort's tie-breaking.
 ///
+/// Each observation's ray is `pixel_to_ray` through the camera of its own
+/// image, so a track seen by two cameras back-projects each observation
+/// through its own lens.
+///
 /// `cross_floor` is the crossing policy for free points: `None` keeps every
 /// free point's representation as it came in (the mask is honoured for the
-/// whole solve), and `Some(θ_floor)` re-decides it from the rays at this
-/// geometry -- marks off, the floor at `θ_floor`, cheirality on -- and writes
-/// the verdict back into `is_dir` for the next linearization. A ranged point is
-/// carried by the distance rule at whatever origin its reference resolves to
-/// now, and a held point is not re-estimated at all.
+/// whole solve), and `Some(θ_floor)`, one angle per point, re-decides it from
+/// the rays at this geometry -- marks off, the floor at the point's own
+/// `θ_floor`, cheirality on -- and writes the verdict back into `is_dir` for
+/// the next linearization. A ranged point is carried by the distance rule at
+/// whatever origin its reference resolves to now, and a held point is not
+/// re-estimated at all.
 #[allow(clippy::too_many_arguments)]
 fn retriangulate_round(
-    cam: &CameraIntrinsics,
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -979,7 +1058,7 @@ fn retriangulate_round(
     obs_img: &[u32],
     obs_pt: &[u32],
     cons: &Constraints,
-    cross_floor: Option<f64>,
+    cross_floor: Option<&[f64]>,
 ) {
     let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
     for q in quats {
@@ -1020,8 +1099,9 @@ fn retriangulate_round(
             })
             .collect()
     });
-    let est = triangulate_points_from_observations(
-        cam,
+    let est = triangulate_points_through_cameras(
+        cams,
+        image_camera,
         ObservationSet {
             uv: uv.as_flattened(),
             obs_image: obs_img,
@@ -1033,11 +1113,11 @@ fn retriangulate_round(
         Some(&marks),
         PointRules {
             distance: distances.as_deref(),
-            floor_rad: cross_floor,
             cheirality: cross_floor.is_some(),
             few: FewObservations::Absent,
             ..Default::default()
         },
+        cross_floor,
     );
     for (p, (row, e)) in points.iter_mut().zip(&est.xyzw).enumerate() {
         // A held point owns its coordinate; the estimate for it is discarded.
@@ -1059,10 +1139,12 @@ fn retriangulate_round(
 /// world positions by compact index -- a ranged point's already resolved
 /// through its reference and distance; `cp_dir` flags direction points; `s2s`
 /// is the per-kept-observation squared loss scale (uniform except where a
-/// protected observation widens it).
+/// protected observation widens it). `cams` are the cameras at the candidate
+/// state and `obs_cam` the camera of each kept observation.
 #[allow(clippy::too_many_arguments)]
 fn robust_cost(
-    cam: &CameraIntrinsics,
+    cams: &[CameraIntrinsics],
+    obs_cam: &[usize],
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &[Vector3<f64>],
@@ -1090,7 +1172,7 @@ fn robust_cost(
             } else {
                 rot + trans[obs_ci[kk]]
             };
-            match cam.ray_to_pixel([c.x, c.y, c.z]) {
+            match cams[obs_cam[kk]].ray_to_pixel([c.x, c.y, c.z]) {
                 Some((u, v)) => {
                     let dx = u - uv[k][0];
                     let dy = v - uv[k][1];
@@ -1103,7 +1185,7 @@ fn robust_cost(
 }
 
 /// Everything one linearization of the solve reads that does not vary from
-/// observation to observation: the camera at the current shared state, the
+/// observation to observation: every camera at the current lens state, the
 /// current poses and points, and the per-point flags that say what each point's
 /// block looks like.
 ///
@@ -1111,18 +1193,11 @@ fn robust_cost(
 /// call, which is how the reference-camera columns of a ranged point are
 /// checked against a difference of the residual they claim to differentiate.
 struct LinState<'a> {
-    cam: &'a CameraIntrinsics,
-    /// Whether the model carries an analytic pixel Jacobian.
-    analytic: bool,
-    cx: f64,
-    cy: f64,
-    f: f64,
-    opt_f: bool,
-    opt_k1: bool,
-    opt_bspline: bool,
-    n_coeffs: usize,
-    d_max: f64,
-    radial: SplineRadial,
+    /// One entry per camera: that camera at the current state and its lens
+    /// block.
+    lenses: &'a [LinLens<'a>],
+    /// The camera of each compact image, an index into `lenses`.
+    ci_cam: &'a [usize],
     /// Compact poses.
     q: &'a [UnitQuaternion<f64>],
     t: &'a [Vector3<f64>],
@@ -1136,8 +1211,29 @@ struct LinState<'a> {
     cp_origin: &'a [Option<DistanceOrigin>],
     /// Every supplied observation's pixel, indexed by the caller's own index.
     uv: &'a [[f64; 2]],
-    /// Width of the reduced system's shared-parameter head.
+    /// Width of the reduced system's lens head: every camera's block.
     n_shared: usize,
+}
+
+/// One camera as a linearization reads it: the camera at the current state,
+/// which of its parameters are released, and where its lens block starts in
+/// the reduced system.
+struct LinLens<'a> {
+    cam: &'a CameraIntrinsics,
+    /// Whether the model carries an analytic pixel Jacobian.
+    analytic: bool,
+    cx: f64,
+    cy: f64,
+    f: f64,
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+    n_coeffs: usize,
+    d_max: f64,
+    radial: SplineRadial,
+    /// The reduced-system slot of this camera's focal; its `k1` and spline
+    /// slots follow.
+    slot0: usize,
 }
 
 impl LinState<'_> {
@@ -1162,8 +1258,9 @@ fn observation_blocks<const CAM_COLS: usize>(
 ) -> ObsBlocks<CAM_COLS> {
     // First pose column within an observation's camera block.
     let pose_c = CAM_COLS - 6;
-    let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, st.cam);
-    let f = st.f;
+    let lens = &st.lenses[st.ci_cam[ci]];
+    let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, lens.cam);
+    let f = lens.f;
     let dir = st.cp_dir[cp];
     let rot_pt = q[ci] * xp[cp];
     let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
@@ -1171,12 +1268,12 @@ fn observation_blocks<const CAM_COLS: usize>(
     let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
     let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
     let mut ref_cols: Vec<(usize, Vector2<f64>)> = Vec::new();
-    // Column indices: `[f, k1, (spline), δθ×3, δt×3]`. Spline
-    // slots start at the pinned K1_SLOT dummy and are pointed at
-    // their coefficient's shared slot below, where the
-    // observation actually carries one.
-    let mut idx = [K1_SLOT; CAM_COLS];
-    idx[F_SLOT] = F_SLOT;
+    // Column indices: `[f, k1, (spline), δθ×3, δt×3]`, the lens columns in
+    // the block of this observation's camera. Spline slots start at that
+    // camera's K1_SLOT dummy and are pointed at their coefficient's slot
+    // below, where the observation actually carries one.
+    let mut idx = [lens.slot0 + K1_SLOT; CAM_COLS];
+    idx[F_SLOT] = lens.slot0 + F_SLOT;
     let o = st.img_slot(ci);
     for (j, slot) in idx[pose_c..].iter_mut().enumerate() {
         *slot = o + j;
@@ -1185,7 +1282,7 @@ fn observation_blocks<const CAM_COLS: usize>(
     // never excludes them) keeps the penalized residual and zero
     // Jacobian rows: penalized, never steering.
     let proj = if xp[cp].x.is_finite() && xp[cp].y.is_finite() && xp[cp].z.is_finite() {
-        project_with_jac(cam, p_cam, st.analytic)
+        project_with_jac(cam, p_cam, lens.analytic)
     } else {
         None
     };
@@ -1195,35 +1292,35 @@ fn observation_blocks<const CAM_COLS: usize>(
             SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
             SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
         ]);
-        if st.opt_f {
+        if lens.opt_f {
             // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
             // admits: the focal is a pure multiplier of an
             // `f`-independent distorted coordinate, so the
             // derivative is that coordinate.
-            cam_j[(0, F_SLOT)] = (u - st.cx) / f;
-            cam_j[(1, F_SLOT)] = (v - st.cy) / f;
+            cam_j[(0, F_SLOT)] = (u - lens.cx) / f;
+            cam_j[(1, F_SLOT)] = (v - lens.cy) / f;
         }
-        if st.opt_k1 {
+        if lens.opt_k1 {
             // ∂(u, v)/∂k1 = f·θ³·û — direction rows included,
             // they project through the same map.
             let (du, dv) = k1_column(f, p_cam);
             cam_j[(0, K1_SLOT)] = du;
             cam_j[(1, K1_SLOT)] = dv;
         }
-        if st.opt_bspline {
+        if lens.opt_bspline {
             // ∂(u, v)/∂cᵢ = f·Bᵢ(θ)·û for the ≤ 4 active basis
             // functions — direction rows included, they project
             // through the same map. Gauge-anchored functions
             // (full index < 2) carry no coefficient: their slot
             // keeps the pinned K1_SLOT dummy and their column
             // stays exactly zero.
-            let (first, cols) = bspline_columns(f, st.n_coeffs, st.d_max, st.radial, p_cam);
+            let (first, cols) = bspline_columns(f, lens.n_coeffs, lens.d_max, lens.radial, p_cam);
             for (j, col) in cols.iter().enumerate() {
                 let full = first + j;
                 if full < 2 {
                     continue;
                 }
-                idx[2 + j] = BSPLINE_SLOT0 + (full - 2);
+                idx[2 + j] = lens.slot0 + BSPLINE_SLOT0 + (full - 2);
                 cam_j[(0, 2 + j)] = col[0];
                 cam_j[(1, 2 + j)] = col[1];
             }
@@ -1317,6 +1414,170 @@ fn observation_blocks<const CAM_COLS: usize>(
     }
 }
 
+/// One camera's state across the staged loop: the camera the caller handed in,
+/// the releases its model admits, and the current values of the parameters
+/// those releases move.
+#[derive(Clone, Debug)]
+struct Lens<'a> {
+    /// The input camera. A fixed spline, and every parameter no release
+    /// touches, ride along inside it.
+    base: &'a CameraIntrinsics,
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+    /// The focal, the model's first where it carries two.
+    f: f64,
+    /// The radial coefficient; `0.0` for a model without one.
+    k1: f64,
+    /// The spline coefficients; empty for a model without a spline.
+    bspline: Vec<f64>,
+}
+
+impl<'a> Lens<'a> {
+    /// `base` with the releases its own model admits. Each request is decided
+    /// on this camera alone, and a model a release is not exact for keeps that
+    /// parameter fixed, whatever the other cameras of the solve do.
+    fn new(base: &'a CameraIntrinsics, opt_f: bool, opt_k1: bool, opt_bspline: bool) -> Self {
+        // Which models release the focal is a property of this
+        // implementation's focal column, not of the camera: the analytic
+        // `∂(u, v)/∂f = (u − cx)/f` is exact exactly when the focal is a pure
+        // multiplier of a distorted coordinate that does not itself read `f` —
+        // `u = f·x_d + cx` with `x_d = rx/(−rz)` (SIMPLE_PINHOLE),
+        // `x_d = θ·ûx`, `θ = atan2(ρ, rz)` (EQUIDISTANT_FISHEYE), or
+        // `x_d = θ·(1 + k1·θ²)·ûx` with the same ray-derived `θ`
+        // (SIMPLE_RADIAL_FISHEYE — the distortion rides on `θ`, not on
+        // `r/f`). Every other model fails that test, via a second focal `fy`
+        // this kernel has no slot for or via coefficients applied to a
+        // normalized coordinate whose relation to the pixel is `f`-dependent
+        // (the multi-coefficient fisheye family: `x_d = θ·g(θ²)·û` with `θ`
+        // recovered from `r/f`), and degrades to a fixed focal (the binding
+        // rejects it loudly first). The two sfmtool spline models pass the
+        // test the same way SIMPLE_RADIAL_FISHEYE does: their radial spline is
+        // dimensionless and rides on the ray-derived radial coordinate
+        // (`x_d = (θ + δ(θ))·ûx` for SFMTOOL_FISHEYE, `x_d = (ρ + δ(ρ))·ûx`
+        // with `ρ = ρ_xy/rz` for SFMTOOL_PINHOLE), so `f` never appears inside
+        // the distorted coordinate and `(u − cx)/f` stays exact.
+        // `CameraIntrinsics::with_focal` mirrors this gate.
+        let opt_f = opt_f
+            && matches!(
+                base.model,
+                CameraModel::SimplePinhole { .. }
+                    | CameraModel::EquidistantFisheye { .. }
+                    | CameraModel::SimpleRadialFisheye { .. }
+                    | CameraModel::SfmtoolFisheye { .. }
+                    | CameraModel::SfmtoolPinhole { .. }
+            );
+        // The curvature rung exists on exactly one model:
+        // `SIMPLE_RADIAL_FISHEYE` is the only one whose single radial
+        // coefficient acts on the ray's own `θ`, which is what makes
+        // `∂(u, v)/∂k1 = f·θ³·û` exact. Same degrade.
+        let opt_k1 = opt_k1 && matches!(base.model, CameraModel::SimpleRadialFisheye { .. });
+        // The spline rung exists on the two models that carry a spline,
+        // `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose dimensionless
+        // coefficients act on the ray's own radial coordinate `d`, making
+        // `∂(u, v)/∂cᵢ = f·Bᵢ(d)·û` exact — and only when the spline is
+        // actually defined (at least `MIN_BSPLINE_COEFFS` coefficients on a
+        // positive finite domain end; anything shorter evaluates as the
+        // identity and carries nothing to release). Same degrade; `opt_k1` and
+        // `opt_bspline` are therefore exclusive on any one camera, which the
+        // spline instantiation's pinned-K1 dummy slot relies on.
+        let opt_bspline = opt_bspline
+            && base
+                .model
+                .radial_spline()
+                .is_some_and(|(bspline, d_max, _)| {
+                    bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
+                });
+        let k1 = match base.model {
+            CameraModel::SimpleRadialFisheye {
+                radial_distortion_k1,
+                ..
+            } => radial_distortion_k1,
+            _ => 0.0,
+        };
+        let bspline = base
+            .model
+            .radial_spline()
+            .map(|(bspline, _, _)| bspline.to_vec())
+            .unwrap_or_default();
+        Self {
+            base,
+            opt_f,
+            opt_k1,
+            opt_bspline,
+            f: base.focal_lengths().0,
+            k1,
+            bspline,
+        }
+    }
+
+    /// The camera at the current state.
+    fn camera(&self) -> CameraIntrinsics {
+        self.at(self.f, self.k1, &self.bspline)
+    }
+
+    /// The camera at a candidate state. Off the spline release this is
+    /// exactly the scalar builder, and a fixed spline rides along inside
+    /// `base` untouched.
+    fn at(&self, f: f64, k1: f64, bspline: &[f64]) -> CameraIntrinsics {
+        if self.opt_bspline {
+            self.base.with_focal_bspline(f, bspline)
+        } else {
+            self.base.with_focal_k1(f, k1)
+        }
+    }
+}
+
+/// The noise-floor angle `scale / f` of every point, with `f` the mean focal of
+/// the cameras its observations were taken through, one term per observation
+/// (the mean of a camera's two focals where its model carries two).
+///
+/// A track seen through one camera takes that camera's focal as it is rather
+/// than as a mean of copies of it, which could round differently, so a solve
+/// with one camera reads the floor it always has. A point with no observation
+/// takes the first camera's, which nothing reads: the re-estimation calls such
+/// a track absent before it asks for a floor.
+fn track_noise_floors(
+    cams: &[CameraIntrinsics],
+    obs_cam: &[usize],
+    obs_pt: &[u32],
+    n_pt: usize,
+    scale: f64,
+) -> Vec<f64> {
+    let focal: Vec<f64> = cams
+        .iter()
+        .map(|c| {
+            let (fx, fy) = c.focal_lengths();
+            0.5 * (fx + fy)
+        })
+        .collect();
+    let mut first: Vec<Option<usize>> = vec![None; n_pt];
+    let mut mixed = vec![false; n_pt];
+    let mut sum = vec![0.0f64; n_pt];
+    let mut count = vec![0usize; n_pt];
+    for (k, &p) in obs_pt.iter().enumerate() {
+        let p = p as usize;
+        let j = obs_cam[k];
+        match first[p] {
+            None => first[p] = Some(j),
+            Some(j0) if j0 != j => mixed[p] = true,
+            Some(_) => {}
+        }
+        sum[p] += focal[j];
+        count[p] += 1;
+    }
+    (0..n_pt)
+        .map(|p| {
+            let f = if mixed[p] {
+                sum[p] / count[p] as f64
+            } else {
+                focal[first[p].unwrap_or(0)]
+            };
+            scale / f
+        })
+        .collect()
+}
+
 /// One robust sparse LM solve over the kept observations with mixed finite
 /// and direction points. Direction points use 2-DOF tangent-plane parameters
 /// stored in the first two slots of the uniform 3-wide point block (the third
@@ -1332,15 +1593,18 @@ fn observation_blocks<const CAM_COLS: usize>(
 /// point takes no point block, no Schur block and no update, so it comes back
 /// exactly as it went in.
 ///
+/// The reduced system opens with one lens block per camera,
+/// `[f_j, k1_j, (c_j,0..c_j,N_j−1) | …]`, then the poses. `lenses` carries each
+/// camera's state in and its solved state out. A camera none of whose images
+/// has a kept observation in this round has its whole block pinned and comes
+/// back exactly as it went in.
+///
 /// `CAM_COLS` selects the per-observation camera-block width:
-/// [`BASE_CAM_COLS`] for every solve without the spline release (the
-/// original layout, byte for byte), [`BSPLINE_CAM_COLS`] when the staged
-/// loop releases a radial spline — the reduced system then carries one
-/// shared slot per coefficient (`n_shared = 2 + n_coeffs`, still
-/// dynamic) while each observation's block stays compile-time sized at the
-/// spline's local support. `bspline0` is the current coefficient vector
-/// (read-only outside the spline instantiation, where the camera's own
-/// fixed spline rides along inside `cam0`).
+/// [`BASE_CAM_COLS`] for every solve in which no camera releases a spline (the
+/// original layout, byte for byte), [`BSPLINE_CAM_COLS`] when one does — a
+/// camera whose spline is released then carries one slot per coefficient in its
+/// block (`2 + N_j`, still dynamic) while each observation's block stays
+/// compile-time sized at the spline's local support.
 ///
 /// `progress` counts the iterations, names the stages inside one of them at the
 /// detail level, and is polled at the top of each: an iteration boundary is
@@ -1350,10 +1614,8 @@ fn observation_blocks<const CAM_COLS: usize>(
 /// the budget run out there.
 #[allow(clippy::too_many_arguments)]
 fn solve_lm<const CAM_COLS: usize>(
-    cam0: &CameraIntrinsics,
-    f0: f64,
-    k1_0: f64,
-    bspline0: &[f64],
+    lenses: &mut [Lens<'_>],
+    image_camera: &[u32],
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -1363,25 +1625,38 @@ fn solve_lm<const CAM_COLS: usize>(
     obs_pt: &[u32],
     kept: &[usize],
     cons: &Constraints,
-    opt_f: bool,
-    opt_k1: bool,
     loss_scale: f64,
     max_iters: usize,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     progress: &Progress<'_>,
-) -> (f64, f64, Vec<f64>) {
-    // The spline instantiation is selected by width; the staged loop only
-    // requests it for a released, well-formed spline.
-    let opt_bspline = CAM_COLS == BSPLINE_CAM_COLS;
+) {
+    // The spline instantiation is selected by width; the staged loop requests
+    // it exactly when some camera releases a well-formed spline.
     debug_assert!(
-        !(opt_bspline && opt_k1),
+        CAM_COLS == BSPLINE_CAM_COLS || lenses.iter().all(|l| !l.opt_bspline),
+        "a released spline needs the spline instantiation"
+    );
+    debug_assert!(
+        lenses.iter().all(|l| !(l.opt_bspline && l.opt_k1)),
         "opt_k1 and opt_bspline live on different models"
     );
-    let (n_coeffs, d_max, radial) = match cam0.model.radial_spline() {
-        Some((_, d_max, radial)) if opt_bspline => (bspline0.len(), d_max, radial),
-        _ => (0, 0.0, SplineRadial::IncidenceAngle),
-    };
+    let n_cam = lenses.len();
+    // Each camera's spline shape where its spline is released, and where its
+    // lens block starts in the reduced system.
+    let shapes: Vec<(usize, f64, SplineRadial)> = lenses
+        .iter()
+        .map(|l| match l.base.model.radial_spline() {
+            Some((_, d_max, radial)) if l.opt_bspline => (l.bspline.len(), d_max, radial),
+            _ => (0, 0.0, SplineRadial::IncidenceAngle),
+        })
+        .collect();
+    let mut slot0 = Vec::with_capacity(n_cam);
+    let mut n_shared = 0usize;
+    for &(n_coeffs, _, _) in &shapes {
+        slot0.push(n_shared);
+        n_shared += 2 + n_coeffs;
+    }
     // Compact the images and points the kept observations touch.
     let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
     img_ids.sort_unstable();
@@ -1400,6 +1675,14 @@ fn solve_lm<const CAM_COLS: usize>(
         .map(|&k| ci_of[&(obs_img[k] as usize)])
         .collect();
     let obs_cp: Vec<usize> = kept.iter().map(|&k| cp_of[&(obs_pt[k] as usize)]).collect();
+    // The camera of each compact image and of each kept observation, and which
+    // cameras this round's observations reach at all.
+    let ci_cam: Vec<usize> = img_ids.iter().map(|&i| image_camera[i] as usize).collect();
+    let obs_cam: Vec<usize> = obs_ci.iter().map(|&ci| ci_cam[ci]).collect();
+    let mut live = vec![false; n_cam];
+    for &j in &obs_cam {
+        live[j] = true;
+    }
     let cp_dir: Vec<bool> = pt_ids.iter().map(|&p| is_dir[p]).collect();
     // A held point owns no parameters: no point block, no Schur block, no
     // update.
@@ -1434,9 +1717,9 @@ fn solve_lm<const CAM_COLS: usize>(
     // Working state (compact copies). Direction rows arrive unit-normalized
     // (input normalization / re-estimation) and every accepted step
     // re-normalizes them.
-    let mut f = f0;
-    let mut k1 = k1_0;
-    let mut bspline: Vec<f64> = bspline0.to_vec();
+    let mut fs: Vec<f64> = lenses.iter().map(|l| l.f).collect();
+    let mut k1s: Vec<f64> = lenses.iter().map(|l| l.k1).collect();
+    let mut bsplines: Vec<Vec<f64>> = lenses.iter().map(|l| l.bspline.clone()).collect();
     let mut q: Vec<UnitQuaternion<f64>> = img_ids.iter().map(|&i| quats[i]).collect();
     let mut t: Vec<Vector3<f64>> = img_ids.iter().map(|&i| trans[i]).collect();
     let mut x: Vec<Vector3<f64>> = pt_ids
@@ -1496,33 +1779,22 @@ fn solve_lm<const CAM_COLS: usize>(
             x[c] = (x[c] - origin_of(o, &q, &t)).normalize();
         }
     }
-    // Reduced camera system: [f | k1 | (spline coefficients) | 6 per image];
-    // the scalar shared slots are always present (pinned when unreleased) to
-    // keep the indexing uniform, the coefficient slots only under the
+    // Reduced camera system: every camera's lens block, then 6 per image. A
+    // block's two scalar slots are always present (pinned when unreleased) to
+    // keep the indexing uniform, its coefficient slots only under its own
     // spline release.
-    let n_shared = 2 + n_coeffs;
     let d = n_shared + 6 * n_im;
     // First pose slot of compact image `ci` in the reduced camera system.
     let img_slot = |ci: usize| n_shared + 6 * ci;
-    // The camera at a candidate shared state. Off the spline instantiation
-    // this is exactly the scalar builder (a fixed spline
-    // rides along inside `cam0` untouched).
-    let build_cam = |fv: f64, k1v: f64, bsv: &[f64]| {
-        if opt_bspline {
-            cam0.with_focal_bspline(fv, bsv)
-        } else {
-            cam0.with_focal_k1(fv, k1v)
-        }
-    };
-    // The imaged field, as the kept observations report it: the largest pixel
-    // radius from the principal point. The `k1` step guard asks whether the
-    // distorted map stays monotone out to here.
-    let field_r = {
-        let (cx, cy) = cam0.principal_point();
-        kept.iter()
-            .map(|&k| (uv[k][0] - cx).hypot(uv[k][1] - cy))
-            .fold(0.0f64, f64::max)
-    };
+    // Each camera's imaged field, as its kept observations report it: the
+    // largest pixel radius from its principal point. The `k1` step guard asks
+    // whether that camera's distorted map stays monotone out to here.
+    let mut field_r = vec![0.0f64; n_cam];
+    for (kk, &k) in kept.iter().enumerate() {
+        let j = obs_cam[kk];
+        let (cx, cy) = lenses[j].base.principal_point();
+        field_r[j] = f64::max(field_r[j], (uv[k][0] - cx).hypot(uv[k][1] - cy));
+    }
     // Per-kept-observation squared loss scale: the round's scale everywhere,
     // widened by `protected_loss_scale` for protected observations.
     let s2 = loss_scale * loss_scale;
@@ -1537,7 +1809,7 @@ fn solve_lm<const CAM_COLS: usize>(
         })
         .collect();
     // The robust cost at a candidate state, read through the positions above.
-    let cost_at = |cam: &CameraIntrinsics,
+    let cost_at = |cams: &[CameraIntrinsics],
                    q: &[UnitQuaternion<f64>],
                    t: &[Vector3<f64>],
                    x: &[Vector3<f64>]| {
@@ -1548,14 +1820,19 @@ fn solve_lm<const CAM_COLS: usize>(
         } else {
             x
         };
-        robust_cost(cam, q, t, xp, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s)
+        robust_cost(
+            cams, &obs_cam, q, t, xp, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
+        )
     };
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
-    let mut cam = build_cam(f, k1, &bspline);
-    let mut prev_cost = cost_at(&cam, &q, &t, &x);
+    let mut cams: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
+    let mut prev_cost = cost_at(&cams, &q, &t, &x);
 
-    let analytic = cam.model.supports_pixel_jacobian();
+    let analytic: Vec<bool> = cams
+        .iter()
+        .map(|c| c.model.supports_pixel_jacobian())
+        .collect();
     for iter in 0..max_iters {
         // An iteration boundary is this solve's stopping point: every state
         // below is either the last accepted step's or a candidate nothing has
@@ -1588,20 +1865,29 @@ fn solve_lm<const CAM_COLS: usize>(
         } else {
             &x
         };
-        let (cx, cy) = cam.principal_point();
         let blocks: Vec<ObsBlocks<CAM_COLS>> = {
+            let lin: Vec<LinLens<'_>> = (0..n_cam)
+                .map(|j| {
+                    let (cx, cy) = cams[j].principal_point();
+                    LinLens {
+                        cam: &cams[j],
+                        analytic: analytic[j],
+                        cx,
+                        cy,
+                        f: fs[j],
+                        opt_f: lenses[j].opt_f,
+                        opt_k1: lenses[j].opt_k1,
+                        opt_bspline: lenses[j].opt_bspline,
+                        n_coeffs: shapes[j].0,
+                        d_max: shapes[j].1,
+                        radial: shapes[j].2,
+                        slot0: slot0[j],
+                    }
+                })
+                .collect();
             let st = LinState {
-                cam: &cam,
-                analytic,
-                cx,
-                cy,
-                f,
-                opt_f,
-                opt_k1,
-                opt_bspline,
-                n_coeffs,
-                d_max,
-                radial,
+                lenses: &lin,
+                ci_cam: &ci_cam,
                 q: &q,
                 t: &t,
                 xp,
@@ -1772,30 +2058,35 @@ fn solve_lm<const CAM_COLS: usize>(
                     }
                 }
             }
-            // Pin the unreleased shared-camera slots (their columns are
-            // already exactly zero; this keeps the reduced system regular).
-            // Under the spline release the same treatment covers each
-            // coefficient slot with no observation support in this
-            // linearization: no kept observation touches its basis span, so
-            // its column carries zero curvature (`h_cc` diagonal exactly
-            // zero — every contribution is a square) and the LU would be
-            // singular. A pinned coefficient holds its value exactly, like a
-            // frozen translation.
-            for slot in 0..n_shared {
-                let released = match slot {
-                    F_SLOT => opt_f,
-                    K1_SLOT => opt_k1,
-                    _ => h_cc[(slot, slot)] > 0.0,
-                };
-                if released {
-                    continue;
+            // Pin every lens slot that is not released (its column is already
+            // exactly zero; this keeps the reduced system regular), and every
+            // slot of a camera no kept observation reaches, whose columns are
+            // zero whatever it releases. Under a spline release the same
+            // treatment covers each coefficient slot with no observation
+            // support in this linearization: no kept observation touches its
+            // basis span, so its column carries zero curvature (`h_cc`
+            // diagonal exactly zero — every contribution is a square) and the
+            // LU would be singular. A pinned slot holds its value exactly, like
+            // a frozen translation.
+            for (j, lens) in lenses.iter().enumerate() {
+                for local in 0..2 + shapes[j].0 {
+                    let slot = slot0[j] + local;
+                    let released = live[j]
+                        && match local {
+                            F_SLOT => lens.opt_f,
+                            K1_SLOT => lens.opt_k1,
+                            _ => h_cc[(slot, slot)] > 0.0,
+                        };
+                    if released {
+                        continue;
+                    }
+                    for dd in 0..d {
+                        s[(slot, dd)] = 0.0;
+                        s[(dd, slot)] = 0.0;
+                    }
+                    s[(slot, slot)] = 1.0;
+                    g_red[slot] = 0.0;
                 }
-                for dd in 0..d {
-                    s[(slot, dd)] = 0.0;
-                    s[(dd, slot)] = 0.0;
-                }
-                s[(slot, slot)] = 1.0;
-                g_red[slot] = 0.0;
             }
             if any_frozen {
                 // Pin the translation slots of all-direction images (frozen
@@ -1821,41 +2112,59 @@ fn solve_lm<const CAM_COLS: usize>(
                 continue;
             };
 
-            // Candidate state.
-            let f_cand = if opt_f { f + delta[F_SLOT] } else { f };
-            if opt_f && !(f_cand.is_finite() && f_cand > 1e-6) {
-                lambda *= 4.0;
-                continue;
-            }
-            let k1_cand = if opt_k1 { k1 + delta[K1_SLOT] } else { k1 };
-            // The curvature rung's plausibility guard: a step that folds the
-            // distorted map inside the imaged field is rejected the way a
-            // non-positive focal is.
-            if opt_k1 && !k1_step_admissible(f_cand, k1_cand, field_r) {
-                lambda *= 4.0;
-                continue;
-            }
-            // The spline rung's plausibility guard: a step that folds the
-            // spline map anywhere on its domain is rejected the same way.
-            let bspline_cand: Option<Vec<f64>> = if opt_bspline {
-                let mut pc = bspline.clone();
-                for (i, c) in pc.iter_mut().enumerate() {
-                    let dv = delta[BSPLINE_SLOT0 + i];
-                    // Pinned (unsupported) slots solve to exactly zero; skip
-                    // the add so a `−0.0` coefficient keeps its sign (the
-                    // frozen-translation precedent).
-                    if dv != 0.0 {
-                        *c += dv;
-                    }
-                }
-                if !bspline_step_admissible(&pc, d_max) {
-                    lambda *= 4.0;
+            // Candidate lens state, camera by camera, each step checked against
+            // that camera's own model and field. A camera no kept observation
+            // reaches is not stepped at all.
+            let mut f_cand = fs.clone();
+            let mut k1_cand = k1s.clone();
+            let mut bspline_cand: Vec<Option<Vec<f64>>> = vec![None; n_cam];
+            let mut admissible = true;
+            for (j, lens) in lenses.iter().enumerate() {
+                if !live[j] {
                     continue;
                 }
-                Some(pc)
-            } else {
-                None
-            };
+                let o = slot0[j];
+                if lens.opt_f {
+                    f_cand[j] = fs[j] + delta[o + F_SLOT];
+                    if !(f_cand[j].is_finite() && f_cand[j] > 1e-6) {
+                        admissible = false;
+                        break;
+                    }
+                }
+                // The curvature rung's plausibility guard: a step that folds
+                // the distorted map inside the imaged field is rejected the way
+                // a non-positive focal is.
+                if lens.opt_k1 {
+                    k1_cand[j] = k1s[j] + delta[o + K1_SLOT];
+                    if !k1_step_admissible(f_cand[j], k1_cand[j], field_r[j]) {
+                        admissible = false;
+                        break;
+                    }
+                }
+                // The spline rung's plausibility guard: a step that folds the
+                // spline map anywhere on its domain is rejected the same way.
+                if lens.opt_bspline {
+                    let mut pc = bsplines[j].clone();
+                    for (i, c) in pc.iter_mut().enumerate() {
+                        let dv = delta[o + BSPLINE_SLOT0 + i];
+                        // Pinned (unsupported) slots solve to exactly zero;
+                        // skip the add so a `−0.0` coefficient keeps its sign
+                        // (the frozen-translation precedent).
+                        if dv != 0.0 {
+                            *c += dv;
+                        }
+                    }
+                    if !bspline_step_admissible(&pc, shapes[j].1) {
+                        admissible = false;
+                        break;
+                    }
+                    bspline_cand[j] = Some(pc);
+                }
+            }
+            if !admissible {
+                lambda *= 4.0;
+                continue;
+            }
             let mut q_cand = q.clone();
             let mut t_cand = t.clone();
             for c in 0..n_im {
@@ -1900,22 +2209,29 @@ fn solve_lm<const CAM_COLS: usize>(
                 }
             }
 
-            let cam_cand = match &bspline_cand {
-                Some(pc) => build_cam(f_cand, k1_cand, pc),
-                None => build_cam(f_cand, k1_cand, &bspline),
-            };
-            let new_cost = cost_at(&cam_cand, &q_cand, &t_cand, &x_cand);
+            let cams_cand: Vec<CameraIntrinsics> = (0..n_cam)
+                .map(|j| {
+                    if !live[j] {
+                        return cams[j].clone();
+                    }
+                    let bs = bspline_cand[j].as_deref().unwrap_or(&bsplines[j]);
+                    lenses[j].at(f_cand[j], k1_cand[j], bs)
+                })
+                .collect();
+            let new_cost = cost_at(&cams_cand, &q_cand, &t_cand, &x_cand);
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
-                f = f_cand;
-                k1 = k1_cand;
-                if let Some(pc) = bspline_cand {
-                    bspline = pc;
+                fs = f_cand;
+                k1s = k1_cand;
+                for (j, pc) in bspline_cand.into_iter().enumerate() {
+                    if let Some(pc) = pc {
+                        bsplines[j] = pc;
+                    }
                 }
                 q = q_cand;
                 t = t_cand;
                 x = x_cand;
-                cam = cam_cand;
+                cams = cams_cand;
                 prev_cost = new_cost;
                 lambda = (lambda * 0.5).max(1e-12);
                 improved = true;
@@ -1964,7 +2280,11 @@ fn solve_lm<const CAM_COLS: usize>(
         }
         points[p] = [xf[c].x, xf[c].y, xf[c].z];
     }
-    (f, k1, bspline)
+    for (j, lens) in lenses.iter_mut().enumerate() {
+        lens.f = fs[j];
+        lens.k1 = k1s[j];
+        lens.bspline = std::mem::take(&mut bsplines[j]);
+    }
 }
 
 /// The staged loop: direction-aware residuals, trims, re-estimation, and the
@@ -1972,7 +2292,8 @@ fn solve_lm<const CAM_COLS: usize>(
 /// every direction branch is skipped and this is the finite-only solve.
 #[allow(clippy::too_many_arguments)]
 fn bundle_adjust_staged(
-    cam: &CameraIntrinsics,
+    cameras: &[CameraIntrinsics],
+    image_camera: &[u32],
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -2006,68 +2327,17 @@ fn bundle_adjust_staged(
         }
     }
 
-    // Which models release the focal is a property of this implementation's
-    // focal column, not of the camera: the analytic `∂(u, v)/∂f = (u − cx)/f`
-    // is exact exactly when the focal is a pure multiplier of a distorted
-    // coordinate that does not itself read `f` — `u = f·x_d + cx` with
-    // `x_d = rx/(−rz)` (SIMPLE_PINHOLE), `x_d = θ·ûx`, `θ = atan2(ρ, rz)`
-    // (EQUIDISTANT_FISHEYE), or `x_d = θ·(1 + k1·θ²)·ûx` with the same
-    // ray-derived `θ` (SIMPLE_RADIAL_FISHEYE — the distortion rides on `θ`,
-    // not on `r/f`). Every other model fails that test, via a second focal
-    // `fy` this kernel has no slot for or via coefficients applied to a
-    // normalized coordinate whose relation to the pixel is `f`-dependent
-    // (the multi-coefficient fisheye family: `x_d = θ·g(θ²)·û` with `θ`
-    // recovered from `r/f`), and degrades to a fixed-focal solve (the binding
-    // rejects it loudly first). The two sfmtool spline models pass the test
-    // the same way SIMPLE_RADIAL_FISHEYE does: their radial spline is
-    // dimensionless and rides on the ray-derived radial coordinate
-    // (`x_d = (θ + δ(θ))·ûx` for SFMTOOL_FISHEYE, `x_d = (ρ + δ(ρ))·ûx` with
-    // `ρ = ρ_xy/rz` for SFMTOOL_PINHOLE), so `f` never appears inside the
-    // distorted coordinate and `(u − cx)/f` stays exact. `CameraIntrinsics::with_focal`
-    // mirrors this gate.
-    let opt_f = opt_f
-        && matches!(
-            cam.model,
-            CameraModel::SimplePinhole { .. }
-                | CameraModel::EquidistantFisheye { .. }
-                | CameraModel::SimpleRadialFisheye { .. }
-                | CameraModel::SfmtoolFisheye { .. }
-                | CameraModel::SfmtoolPinhole { .. }
-        );
-    // The curvature rung exists on exactly one model: `SIMPLE_RADIAL_FISHEYE`
-    // is the only one whose single radial coefficient acts on the ray's own
-    // `θ`, which is what makes `∂(u, v)/∂k1 = f·θ³·û` exact. Same degrade.
-    let opt_k1 = opt_k1 && matches!(cam.model, CameraModel::SimpleRadialFisheye { .. });
-    // The spline rung exists on the two models that carry a spline,
-    // `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose dimensionless
-    // coefficients act on the ray's own radial coordinate `d`, making
-    // `∂(u, v)/∂cᵢ = f·Bᵢ(d)·û` exact — and only when the spline is actually
-    // defined (at least `MIN_BSPLINE_COEFFS` coefficients on a positive finite
-    // domain end; anything shorter evaluates as the identity and carries
-    // nothing to release). Same degrade; `opt_k1` and `opt_bspline` are
-    // therefore naturally exclusive, which the spline instantiation's
-    // pinned-K1 dummy slot relies on.
-    let opt_bspline = opt_bspline
-        && cam
-            .model
-            .radial_spline()
-            .is_some_and(|(bspline, d_max, _)| {
-                bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
-            });
-
-    let mut f = cam.focal_lengths().0;
-    let mut k1 = match cam.model {
-        CameraModel::SimpleRadialFisheye {
-            radial_distortion_k1,
-            ..
-        } => radial_distortion_k1,
-        _ => 0.0,
-    };
-    let mut bspline: Vec<f64> = cam
-        .model
-        .radial_spline()
-        .map(|(bspline, _, _)| bspline.to_vec())
-        .unwrap_or_default();
+    // Each camera's releases, decided on its own model.
+    let mut lenses: Vec<Lens<'_>> = cameras
+        .iter()
+        .map(|c| Lens::new(c, opt_f, opt_k1, opt_bspline))
+        .collect();
+    let spline_cols = lenses.iter().any(|l| l.opt_bspline);
+    // The camera of each observation.
+    let obs_cam: Vec<usize> = obs_img
+        .iter()
+        .map(|&i| image_camera[i as usize] as usize)
+        .collect();
 
     // A share of the range per round. Even shares, because the rounds run the
     // same solve over a tightening trim and none of them is predictably the
@@ -2099,23 +2369,26 @@ fn bundle_adjust_staged(
             break;
         }
         let round = p_round.phase("round");
-        let cam_now = if opt_bspline {
-            cam.with_focal_bspline(f, &bspline)
-        } else {
-            cam.with_focal_k1(f, k1)
-        };
+        let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
         // The noise floor a crossing free point is classified at: the parallax
         // this stage's own residual scale cannot tell from noise, `c·s/f` in
-        // radians, so a wide-baseline stage keeps more tracks finite than a
+        // radians with `f` the mean focal of the cameras its track was seen
+        // through, so a wide-baseline stage keeps more tracks finite than a
         // tight one and the boundary moves with the focal as the release walks
         // it.
         let cross_floor = free_points.cross.then(|| {
-            let (fx, fy) = cam_now.focal_lengths();
-            free_points.noise_floor_scale * stage.loss_scale / (0.5 * (fx + fy))
+            track_noise_floors(
+                &cams_now,
+                &obs_cam,
+                obs_pt,
+                points.len(),
+                free_points.noise_floor_scale * stage.loss_scale,
+            )
         });
         if rnd > 0 {
             retriangulate_round(
-                &cam_now,
+                &cams_now,
+                image_camera,
                 quats,
                 trans,
                 points,
@@ -2124,22 +2397,31 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 cons,
-                cross_floor,
+                cross_floor.as_deref(),
             );
         }
-        let (norms, depths) =
-            residual_norms_depths(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
+        let (norms, depths) = residual_norms_depths(
+            &cams_now,
+            image_camera,
+            quats,
+            trans,
+            points,
+            is_dir,
+            uv,
+            obs_img,
+            obs_pt,
+        );
         // In-front: the model-aware measure from `residual_norms_depths`
         // (canonical depth for the perspective family, range for a ray-path
-        // model) over the 1e-3·f floor for finite observations; cheirality
-        // (R·d)_z < 0 for directions. Protected observations bypass the trim
-        // gates entirely.
+        // model) over the `1e-3·f` floor of the observation's own camera for
+        // finite observations, and over zero for directions. Protected
+        // observations bypass the trim gates entirely.
         let mut keep: Vec<bool> = (0..n_obs)
             .map(|k| {
                 let floor = if is_dir[obs_pt[k] as usize] {
                     0.0
                 } else {
-                    1e-3 * f
+                    1e-3 * lenses[obs_cam[k]].f
                 };
                 is_prot(k) || (norms[k] < stage.trim_px && depths[k] > floor)
             })
@@ -2165,19 +2447,15 @@ fn bundle_adjust_staged(
         if kept.len() < min_obs {
             // Degenerate (e.g. a wildly wrong focal): state passes through.
             return BundleAdjustment {
-                focal: f,
-                k1,
-                bspline,
+                cameras: lenses.iter().map(Lens::camera).collect(),
                 residual_norms: vec![f64::INFINITY; n_obs],
                 point_at_infinity: is_dir.to_vec(),
             };
         }
-        (f, k1, bspline) = if opt_bspline {
+        if spline_cols {
             solve_lm::<BSPLINE_CAM_COLS>(
-                cam,
-                f,
-                k1,
-                &bspline,
+                &mut lenses,
+                image_camera,
                 quats,
                 trans,
                 points,
@@ -2187,20 +2465,16 @@ fn bundle_adjust_staged(
                 obs_pt,
                 &kept,
                 cons,
-                opt_f,
-                opt_k1,
                 stage.loss_scale,
                 max_iters,
                 protected,
                 protected_loss_scale,
                 &round,
-            )
+            );
         } else {
             solve_lm::<BASE_CAM_COLS>(
-                cam,
-                f,
-                k1,
-                &bspline,
+                &mut lenses,
+                image_camera,
                 quats,
                 trans,
                 points,
@@ -2210,26 +2484,28 @@ fn bundle_adjust_staged(
                 obs_pt,
                 &kept,
                 cons,
-                opt_f,
-                opt_k1,
                 stage.loss_scale,
                 max_iters,
                 protected,
                 protected_loss_scale,
                 &round,
-            )
-        };
+            );
+        }
         drop(round);
         progress.count(rnd as u64 + 1, Some(schedule.len() as u64), "round");
     }
 
-    let cam_final = if opt_bspline {
-        cam.with_focal_bspline(f, &bspline)
-    } else {
-        cam.with_focal_k1(f, k1)
-    };
+    let cams_final: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
     let (norms, _depths) = residual_norms_depths(
-        &cam_final, quats, trans, points, is_dir, uv, obs_img, obs_pt,
+        &cams_final,
+        image_camera,
+        quats,
+        trans,
+        points,
+        is_dir,
+        uv,
+        obs_img,
+        obs_pt,
     );
     let residual_norms = norms
         .iter()
@@ -2242,9 +2518,7 @@ fn bundle_adjust_staged(
         })
         .collect();
     BundleAdjustment {
-        focal: f,
-        k1,
-        bspline,
+        cameras: cams_final,
         residual_norms,
         point_at_infinity: is_dir.to_vec(),
     }

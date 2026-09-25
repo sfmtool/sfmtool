@@ -4,6 +4,33 @@
 use super::*;
 use crate::camera::CameraModel;
 
+/// The focal of the one camera a single-camera solve returns.
+fn ba_focal(out: &BundleAdjustment) -> f64 {
+    out.cameras[0].focal_lengths().0
+}
+
+/// The radial coefficient of the one camera a single-camera solve returns;
+/// `0.0` for a model without one.
+fn ba_k1(out: &BundleAdjustment) -> f64 {
+    match out.cameras[0].model {
+        CameraModel::SimpleRadialFisheye {
+            radial_distortion_k1,
+            ..
+        } => radial_distortion_k1,
+        _ => 0.0,
+    }
+}
+
+/// The spline coefficients of the one camera a single-camera solve returns;
+/// empty for a model without a spline.
+fn ba_bspline(out: &BundleAdjustment) -> Vec<f64> {
+    out.cameras[0]
+        .model
+        .radial_spline()
+        .map(|(b, _, _)| b.to_vec())
+        .unwrap_or_default()
+}
+
 fn simple_pinhole(f: f64) -> CameraIntrinsics {
     CameraIntrinsics {
         model: CameraModel::SimplePinhole {
@@ -97,7 +124,7 @@ fn make_scene_cam(cam: CameraIntrinsics, n_img: usize, n_pt: usize) -> Scene {
 
 fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -129,7 +156,7 @@ fn run_masked(
     min_obs: usize,
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -160,7 +187,7 @@ fn run_protected(
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -195,7 +222,7 @@ fn perfect_data_stays_put() {
     }
     let max_res = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
     assert!(max_res < 1e-5, "max residual {max_res}");
-    assert_eq!(out.focal, 500.0);
+    assert_eq!(ba_focal(&out), 500.0);
 }
 
 #[test]
@@ -247,9 +274,9 @@ fn recovers_focal_started_20_percent_off() {
     s.cam = simple_pinhole(600.0);
     let out = run(&mut s, true, &DEFAULT_SCHEDULE);
     assert!(
-        (out.focal - 500.0).abs() < 5.0,
+        (ba_focal(&out) - 500.0).abs() < 5.0,
         "focal {} (want ~500)",
-        out.focal
+        ba_focal(&out)
     );
 }
 
@@ -593,7 +620,10 @@ fn all_false_and_absent_masks_match_bit_for_bit() {
     let mut masked = build();
     let mask = vec![false; masked.points.len()];
     let out_masked = run_masked(&mut masked, &mask, false, &DEFAULT_SCHEDULE, 12);
-    assert_eq!(out_absent.focal.to_bits(), out_masked.focal.to_bits());
+    assert_eq!(
+        ba_focal(&out_absent).to_bits(),
+        ba_focal(&out_masked).to_bits()
+    );
     for (a, b) in absent.quats.iter().zip(&masked.quats) {
         for c in 0..4 {
             assert_eq!(a.coords[c].to_bits(), b.coords[c].to_bits());
@@ -646,7 +676,10 @@ fn unobserved_direction_row_does_not_perturb_finite_results() {
 
     // Compare only the rows the plain scene has; the appended direction is
     // unobserved, so re-estimation legitimately leaves it NaN.
-    assert_eq!(out_plain.focal.to_bits(), out_extra.focal.to_bits());
+    assert_eq!(
+        ba_focal(&out_plain).to_bits(),
+        ba_focal(&out_extra).to_bits()
+    );
     for (a, b) in plain.quats.iter().zip(&extra.quats) {
         for c in 0..4 {
             assert_eq!(a.coords[c].to_bits(), b.coords[c].to_bits());
@@ -963,7 +996,7 @@ fn directions_lock_rotations_for_focal_release() {
     let mut plain = make_lowpar_scene(6, 80, 0.3);
     plain.cam = simple_pinhole(650.0);
     let out_plain = bundle_adjust(
-        &plain.cam,
+        &BaCameras::shared(&plain.cam, plain.quats.len()),
         &mut plain.quats,
         &mut plain.trans,
         &mut plain.points,
@@ -985,9 +1018,9 @@ fn directions_lock_rotations_for_focal_release() {
         &Progress::none(),
     );
     assert!(
-        (out_plain.focal - 500.0).abs() > 25.0,
+        (ba_focal(&out_plain) - 500.0).abs() > 25.0,
         "precondition failed: finite-only opt_f recovered f = {} (true 500)",
-        out_plain.focal
+        ba_focal(&out_plain)
     );
     // With far-field direction tracks (same pixel noise) the same solve
     // recovers the focal to within the noise floor.
@@ -996,7 +1029,7 @@ fn directions_lock_rotations_for_focal_release() {
     let mask = dir_mask(&s, &ids);
     s.cam = simple_pinhole(650.0);
     let out = bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -1018,10 +1051,10 @@ fn directions_lock_rotations_for_focal_release() {
         &Progress::none(),
     );
     assert!(
-        (out.focal - 500.0).abs() < 5.0,
+        (ba_focal(&out) - 500.0).abs() < 5.0,
         "focal {} with directions (want ~500; finite-only gave {})",
-        out.focal,
-        out_plain.focal
+        ba_focal(&out),
+        ba_focal(&out_plain)
     );
 }
 
@@ -1053,7 +1086,7 @@ fn make_perturbed_scene() -> Scene {
 }
 
 fn assert_bitwise_equal(a: &Scene, oa: &BundleAdjustment, b: &Scene, ob: &BundleAdjustment) {
-    assert_eq!(oa.focal.to_bits(), ob.focal.to_bits());
+    assert_eq!(ba_focal(oa).to_bits(), ba_focal(ob).to_bits());
     for (qa, qb) in a.quats.iter().zip(&b.quats) {
         for c in 0..4 {
             assert_eq!(qa.coords[c].to_bits(), qb.coords[c].to_bits());
@@ -1098,7 +1131,7 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
     let out_plain = run_masked(&mut plain, &mask_a, false, &DEFAULT_SCHEDULE, 12);
     let (mut prot, mask_b) = build();
     let out_prot = bundle_adjust(
-        &prot.cam,
+        &BaCameras::shared(&prot.cam, prot.quats.len()),
         &mut prot.quats,
         &mut prot.trans,
         &mut prot.points,
@@ -1351,7 +1384,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
     let mut prot = vec![false; s.uv.len()];
     prot[k] = true;
     let out = bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -1550,7 +1583,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
     // toward the true gauge.
     let run_ba = |s: &mut Scene, prot: Option<&[bool]>| -> BundleAdjustment {
         bundle_adjust(
-            &s.cam,
+            &BaCameras::shared(&s.cam, s.quats.len()),
             &mut s.quats,
             &mut s.trans,
             &mut s.points,
@@ -1581,7 +1614,8 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
     let rms_init = aligned_center_rms(&init.s, &init.true_centers);
     assert!(rms_init > 0.2, "drift too tame: initial rms {rms_init}");
     let (init_norms, _) = residual_norms_depths(
-        &init.s.cam,
+        std::slice::from_ref(&init.s.cam),
+        &vec![0; init.s.quats.len()],
         &init.s.quats,
         &init.s.trans,
         &init.s.points,
@@ -1830,7 +1864,8 @@ fn fixed_fisheye_intrinsics_keep_observations_past_ninety_degrees() {
     );
     // The gate the staged loop applies, evaluated at the ground-truth state.
     let (norms, depths) = residual_norms_depths(
-        &s.cam,
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
         &s.quats,
         &s.trans,
         &s.points,
@@ -1887,7 +1922,7 @@ fn fixed_fisheye_intrinsics_converge_from_a_perturbed_state() {
         }
     }
     let out = run(&mut s, false, &DEFAULT_SCHEDULE);
-    assert_eq!(out.focal, 130.0, "fixed intrinsics must not move");
+    assert_eq!(ba_focal(&out), 130.0, "fixed intrinsics must not move");
     let finite = out.residual_norms.iter().filter(|r| r.is_finite()).count();
     assert_eq!(
         finite,
@@ -1964,8 +1999,8 @@ fn fisheye_analytic_and_central_difference_bundles_agree() {
     let out_l = run(&mut legacy, false, &DEFAULT_SCHEDULE);
     let out_n = run(&mut native, false, &DEFAULT_SCHEDULE);
 
-    assert_eq!(out_l.focal, 130.0);
-    assert_eq!(out_n.focal, 130.0);
+    assert_eq!(ba_focal(&out_l), 130.0);
+    assert_eq!(ba_focal(&out_n), 130.0);
     for (i, (a, b)) in legacy.quats.iter().zip(native.quats.iter()).enumerate() {
         assert!(
             a.angle_to(b) < 1e-9,
@@ -2075,11 +2110,11 @@ fn equidistant_opt_f_recovers_a_perturbed_focal() {
         *t *= f_start / f_true;
     }
     let out = run(&mut s, true, &DEFAULT_SCHEDULE);
-    let err = (out.focal - f_true).abs() / f_true;
+    let err = (ba_focal(&out) - f_true).abs() / f_true;
     assert!(
         err < 0.01,
         "released focal {} from a {:.1}% start (want {f_true})",
-        out.focal,
+        ba_focal(&out),
         100.0 * (f_start / f_true - 1.0)
     );
     // …and it converged, not just drifted: the fit is sub-pixel.
@@ -2112,16 +2147,16 @@ fn equidistant_fixed_focal_holds_exactly() {
     }
     let out_fixed = run(&mut fixed, false, &DEFAULT_SCHEDULE);
     assert_eq!(
-        out_fixed.focal.to_bits(),
+        ba_focal(&out_fixed).to_bits(),
         off.to_bits(),
         "a fixed-focal equidistant solve moved the focal to {}",
-        out_fixed.focal
+        ba_focal(&out_fixed)
     );
     let out_freed = run(&mut freed, true, &DEFAULT_SCHEDULE);
     assert!(
-        (out_freed.focal - f0).abs() < (off - f0).abs() / 2.0,
+        (ba_focal(&out_freed) - f0).abs() < (off - f0).abs() / 2.0,
         "the release did not close on the planted focal: {} (start {off}, true {f0})",
-        out_freed.focal
+        ba_focal(&out_freed)
     );
 }
 
@@ -2146,10 +2181,10 @@ fn polynomial_fisheye_still_holds_its_focal_under_opt_f() {
     }
     let out = run(&mut s, true, &DEFAULT_SCHEDULE);
     assert_eq!(
-        out.focal.to_bits(),
+        ba_focal(&out).to_bits(),
         off.to_bits(),
         "RadialFisheye took a focal step under opt_f: {}",
-        out.focal
+        ba_focal(&out)
     );
 }
 
@@ -2182,7 +2217,7 @@ fn radial_fisheye(f: f64, k1: f64) -> CameraIntrinsics {
 /// [`run`] with both shared-camera releases.
 fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -2214,7 +2249,7 @@ fn run_k1_masked(
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -2312,12 +2347,16 @@ fn opt_k1_recovers_a_planted_curvature() {
         // Hand the solver the same focal but no curvature at all.
         s.cam = radial_fisheye(f, 0.0);
         let out = run_k1(&mut s, false, true, &DEFAULT_SCHEDULE);
-        assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
-        let err = (out.k1 - k1_true).abs() / k1_true.abs();
+        assert_eq!(
+            ba_focal(&out).to_bits(),
+            f.to_bits(),
+            "the focal was not fixed"
+        );
+        let err = (ba_k1(&out) - k1_true).abs() / k1_true.abs();
         assert!(
             err < 0.1,
             "released k1 {} from a 0.0 start (want {k1_true})",
-            out.k1
+            ba_k1(&out)
         );
         let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
         assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
@@ -2343,13 +2382,13 @@ fn opt_f_and_opt_k1_recover_together() {
         *t *= f_start / f_true;
     }
     let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
-    let f_err = (out.focal - f_true).abs() / f_true;
-    let k_err = (out.k1 - k1_true).abs() / k1_true;
+    let f_err = (ba_focal(&out) - f_true).abs() / f_true;
+    let k_err = (ba_k1(&out) - k1_true).abs() / k1_true;
     assert!(
         f_err < 0.01 && k_err < 0.15,
         "co-released (f, k1) = ({}, {}) from ({f_start}, 0.0), want ({f_true}, {k1_true})",
-        out.focal,
-        out.k1
+        ba_focal(&out),
+        ba_k1(&out)
     );
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
     assert!(worst < 0.5, "worst reprojection {worst} px");
@@ -2383,11 +2422,15 @@ fn opt_k1_holds_at_zero_on_an_equidistant_scene() {
     perturb(&mut fixed);
     let out_r = run_k1(&mut released, false, true, &DEFAULT_SCHEDULE);
     let out_f = run_k1(&mut fixed, false, false, &DEFAULT_SCHEDULE);
-    assert_eq!(out_f.k1.to_bits(), 0.0f64.to_bits(), "unreleased k1 moved");
+    assert_eq!(
+        ba_k1(&out_f).to_bits(),
+        0.0f64.to_bits(),
+        "unreleased k1 moved"
+    );
     assert!(
-        out_r.k1.abs() < 1e-4,
+        ba_k1(&out_r).abs() < 1e-4,
         "the released k1 walked off zero on an equidistant scene: {}",
-        out_r.k1
+        ba_k1(&out_r)
     );
     // …and the reconstruction is the same one, not a curvature-for-geometry
     // trade that happens to end near zero.
@@ -2412,7 +2455,7 @@ fn opt_k1_is_gated_on_the_radial_fisheye_model() {
     let mut plain = released.clone();
     let out_r = run_k1(&mut released, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_k1(&mut plain, true, false, &DEFAULT_SCHEDULE);
-    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_eq!(ba_k1(&out_r).to_bits(), 0.0f64.to_bits());
     assert_bitwise_equal(&released, &out_r, &plain, &out_p);
     // The multi-coefficient family holds BOTH parameters: its k1 is not
     // reachable through this column, and its focal is not `(u − cx)/f`.
@@ -2420,12 +2463,12 @@ fn opt_k1_is_gated_on_the_radial_fisheye_model() {
     let off = 0.94 * f;
     s.cam = equidistant_legacy(off);
     let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
-    assert_eq!(out.focal.to_bits(), off.to_bits());
-    assert_eq!(out.k1.to_bits(), 0.0f64.to_bits());
+    assert_eq!(ba_focal(&out).to_bits(), off.to_bits());
+    assert_eq!(ba_k1(&out).to_bits(), 0.0f64.to_bits());
     // A pinhole scene the same way (the rung is a fisheye one).
     let mut ph = make_scene(6, 60);
     let out_ph = run_k1(&mut ph, true, true, &DEFAULT_SCHEDULE);
-    assert_eq!(out_ph.k1.to_bits(), 0.0f64.to_bits());
+    assert_eq!(ba_k1(&out_ph).to_bits(), 0.0f64.to_bits());
 }
 
 /// The step guard: `θ_d = θ·(1 + k1·θ²)` must stay strictly increasing over
@@ -2471,10 +2514,10 @@ fn released_k1_stays_admissible() {
             .map(|p| (p[0] - cx).hypot(p[1] - cy))
             .fold(0.0f64, f64::max);
     assert!(
-        k1_step_admissible(out.focal, out.k1, field_r),
+        k1_step_admissible(ba_focal(&out), ba_k1(&out), field_r),
         "the solve returned a folded map: k1 = {} at f = {}",
-        out.k1,
-        out.focal
+        ba_k1(&out),
+        ba_focal(&out)
     );
 }
 
@@ -2556,11 +2599,11 @@ fn directions_participate_in_the_curvature_rung() {
     // With the directions in the solve, the rung recovers the curvature.
     let mut with_dirs = scene.clone();
     let out = run_k1_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
-    let err = (out.k1 - k1_true).abs() / k1_true;
+    let err = (ba_k1(&out) - k1_true).abs() / k1_true;
     assert!(
         err < 0.15,
         "k1 {} from the direction rows (want {k1_true})",
-        out.k1
+        ba_k1(&out)
     );
 
     // The control: drop every direction observation and the near-axis finite
@@ -2573,13 +2616,13 @@ fn directions_participate_in_the_curvature_rung() {
     finite_only.obs_img = keep.iter().map(|&k| finite_only.obs_img[k]).collect();
     finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
     let out_finite = run_k1(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
-    let err_finite = (out_finite.k1 - k1_true).abs() / k1_true;
+    let err_finite = (ba_k1(&out_finite) - k1_true).abs() / k1_true;
     assert!(
         err_finite > 3.0 * err,
         "the near-axis control recovered k1 too well ({} vs {}) - the test no \
          longer isolates the direction rows",
-        out_finite.k1,
-        out.k1
+        ba_k1(&out_finite),
+        ba_k1(&out)
     );
 }
 
@@ -2619,7 +2662,7 @@ fn run_bspline(
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -2651,7 +2694,7 @@ fn run_bspline_masked(
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -2776,18 +2819,22 @@ fn opt_bspline_recovers_a_planted_spline() {
     assert!(n_behind >= 50, "scene is not wide enough: {n_behind}");
     s.cam = sfmtool_fisheye(f, &[0.0; 8]);
     let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
-    assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
-    let map_err = worst_map_err_px(f, &out.bspline, &PLANTED_BSPLINE, 0.05, 1.85);
+    assert_eq!(
+        ba_focal(&out).to_bits(),
+        f.to_bits(),
+        "the focal was not fixed"
+    );
+    let map_err = worst_map_err_px(f, &ba_bspline(&out), &PLANTED_BSPLINE, 0.05, 1.85);
     assert!(
         map_err < 0.3,
         "recovered composite map off by {map_err} px (spline {:?})",
-        out.bspline
+        ba_bspline(&out)
     );
-    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_BSPLINE).enumerate() {
+    for (i, (c, t)) in ba_bspline(&out).iter().zip(&PLANTED_BSPLINE).enumerate() {
         assert!(
             (c - t).abs() < 0.01,
             "coefficient {i}: {c} (want {t}; full spline {:?})",
-            out.bspline
+            ba_bspline(&out)
         );
     }
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
@@ -2812,13 +2859,13 @@ fn opt_f_and_opt_bspline_recover_together() {
         *t *= f_start / f_true;
     }
     let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
-    let f_err = (out.focal - f_true).abs() / f_true;
-    let map_err = worst_map_err_px(f_true, &out.bspline, &PLANTED_BSPLINE, 0.05, 1.85);
+    let f_err = (ba_focal(&out) - f_true).abs() / f_true;
+    let map_err = worst_map_err_px(f_true, &ba_bspline(&out), &PLANTED_BSPLINE, 0.05, 1.85);
     assert!(
         f_err < 0.01 && map_err < 0.5,
         "co-released f = {} (want {f_true}), composite map off by {map_err} px ({:?})",
-        out.focal,
-        out.bspline
+        ba_focal(&out),
+        ba_bspline(&out)
     );
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
     assert!(worst < 0.5, "worst reprojection {worst} px");
@@ -2852,15 +2899,15 @@ fn opt_bspline_holds_at_zero_on_an_equidistant_scene() {
     perturb(&mut fixed);
     let out_r = run_bspline(&mut released, false, true, &DEFAULT_SCHEDULE);
     let out_f = run_bspline(&mut fixed, false, false, &DEFAULT_SCHEDULE);
-    for (i, c) in out_f.bspline.iter().enumerate() {
+    for (i, c) in ba_bspline(&out_f).iter().enumerate() {
         assert_eq!(c.to_bits(), 0.0f64.to_bits(), "unreleased c{i} moved");
     }
-    let held = worst_map_err_px(f, &out_r.bspline, &[0.0; 8], 0.05, 1.85);
+    let held = worst_map_err_px(f, &ba_bspline(&out_r), &[0.0; 8], 0.05, 1.85);
     assert!(
         held < 0.1,
         "the released spline walked off zero on an equidistant scene by \
          {held} px ({:?})",
-        out_r.bspline
+        ba_bspline(&out_r)
     );
     // …and the reconstruction is the same one, not a spline-for-geometry
     // trade that happens to end near zero.
@@ -2886,14 +2933,14 @@ fn opt_bspline_is_gated_on_the_sfmtool_fisheye_model() {
     let mut plain = released.clone();
     let out_r = run_bspline(&mut released, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_bspline(&mut plain, true, false, &DEFAULT_SCHEDULE);
-    assert!(out_r.bspline.is_empty());
+    assert!(ba_bspline(&out_r).is_empty());
     assert_bitwise_equal(&released, &out_r, &plain, &out_p);
     // SIMPLE_RADIAL_FISHEYE carries a k1, not a spline: same degrade.
     let (mut srf_r, _) = make_fisheye_scene_for(radial_fisheye(f, 0.02), 6, 90);
     let mut srf_p = srf_r.clone();
     let out_r = run_bspline(&mut srf_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_bspline(&mut srf_p, true, false, &DEFAULT_SCHEDULE);
-    assert!(out_r.bspline.is_empty());
+    assert!(ba_bspline(&out_r).is_empty());
     assert_bitwise_equal(&srf_r, &out_r, &srf_p, &out_p);
     // The converse: SFMTOOL_FISHEYE carries no k1, so `opt_k1` degrades on
     // it the same way (the two releases are naturally exclusive).
@@ -2901,7 +2948,7 @@ fn opt_bspline_is_gated_on_the_sfmtool_fisheye_model() {
     let mut k1_p = k1_r.clone();
     let out_r = run_k1(&mut k1_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_k1(&mut k1_p, true, false, &DEFAULT_SCHEDULE);
-    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_eq!(ba_k1(&out_r).to_bits(), 0.0f64.to_bits());
     assert_bitwise_equal(&k1_r, &out_r, &k1_p, &out_p);
     // A coefficient vector too short to define the spline (the identity map)
     // carries nothing to release: same silent degrade, and the input comes back.
@@ -2909,7 +2956,7 @@ fn opt_bspline_is_gated_on_the_sfmtool_fisheye_model() {
     let mut empty_p = empty_r.clone();
     let out_r = run_bspline(&mut empty_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_bspline(&mut empty_p, true, false, &DEFAULT_SCHEDULE);
-    assert!(out_r.bspline.is_empty());
+    assert!(ba_bspline(&out_r).is_empty());
     assert_bitwise_equal(&empty_r, &out_r, &empty_p, &out_p);
 }
 
@@ -2953,10 +3000,10 @@ fn released_bspline_stays_admissible() {
     s.cam = sfmtool_fisheye(f, &[0.0; 8]);
     let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
     assert!(
-        bspline_is_monotone(&out.bspline, THETA_MAX, THETA_MAX),
+        bspline_is_monotone(&ba_bspline(&out), THETA_MAX, THETA_MAX),
         "the solve returned a folded spline: {:?} at f = {}",
-        out.bspline,
-        out.focal
+        ba_bspline(&out),
+        ba_focal(&out)
     );
 }
 
@@ -2999,12 +3046,12 @@ fn unsupported_bspline_slots_hold_their_input_exactly() {
         "solve degenerated: {finite} finite residuals"
     );
     // …the unsupported outer coefficients held their inputs exactly…
-    assert_eq!(out.bspline[6].to_bits(), sentinels[6].to_bits());
-    assert_eq!(out.bspline[7].to_bits(), sentinels[7].to_bits());
+    assert_eq!(ba_bspline(&out)[6].to_bits(), sentinels[6].to_bits());
+    assert_eq!(ba_bspline(&out)[7].to_bits(), sentinels[7].to_bits());
     // …and the supported inner ones stayed near the (true) zero.
     let inner_err = worst_map_err_px(
         f,
-        &out.bspline[..6]
+        &ba_bspline(&out)[..6]
             .iter()
             .chain(&[0.0, 0.0])
             .copied()
@@ -3016,7 +3063,7 @@ fn unsupported_bspline_slots_hold_their_input_exactly() {
     assert!(
         inner_err < 0.2,
         "supported coefficients drifted by {inner_err} px: {:?}",
-        out.bspline
+        ba_bspline(&out)
     );
 }
 
@@ -3097,11 +3144,11 @@ fn directions_participate_in_the_bspline_rung() {
     // With the directions in the solve, the rung recovers the composite map.
     let mut with_dirs = scene.clone();
     let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
-    let err = worst_map_err_px(f, &out.bspline, &PLANTED_BSPLINE, 0.5, 1.7);
+    let err = worst_map_err_px(f, &ba_bspline(&out), &PLANTED_BSPLINE, 0.5, 1.7);
     assert!(
         err < 1.0,
         "composite map off by {err} px from the direction rows ({:?})",
-        out.bspline
+        ba_bspline(&out)
     );
 
     // The control: drop every direction observation and the near-axis finite
@@ -3114,7 +3161,7 @@ fn directions_participate_in_the_bspline_rung() {
     finite_only.obs_img = keep.iter().map(|&k| finite_only.obs_img[k]).collect();
     finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
     let out_finite = run_bspline(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
-    let err_finite = worst_map_err_px(f, &out_finite.bspline, &PLANTED_BSPLINE, 0.5, 1.7);
+    let err_finite = worst_map_err_px(f, &ba_bspline(&out_finite), &PLANTED_BSPLINE, 0.5, 1.7);
     assert!(
         err_finite > 3.0 * err,
         "the near-axis control recovered the spline too well ({err_finite} \
@@ -3327,18 +3374,26 @@ fn opt_bspline_recovers_a_planted_pinhole_spline() {
     assert!(n_wide >= 100, "scene is not wide enough: {n_wide}");
     s.cam = sfmtool_pinhole(f, &[0.0; 6]);
     let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
-    assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
-    let map_err = pinhole_map_err_px(f, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.05, 0.8);
+    assert_eq!(
+        ba_focal(&out).to_bits(),
+        f.to_bits(),
+        "the focal was not fixed"
+    );
+    let map_err = pinhole_map_err_px(f, &ba_bspline(&out), &PLANTED_PINHOLE_BSPLINE, 0.05, 0.8);
     assert!(
         map_err < 0.3,
         "recovered composite map off by {map_err} px (spline {:?})",
-        out.bspline
+        ba_bspline(&out)
     );
-    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_PINHOLE_BSPLINE).enumerate() {
+    for (i, (c, t)) in ba_bspline(&out)
+        .iter()
+        .zip(&PLANTED_PINHOLE_BSPLINE)
+        .enumerate()
+    {
         assert!(
             (c - t).abs() < 0.01,
             "coefficient {i}: {c} (want {t}; full spline {:?})",
-            out.bspline
+            ba_bspline(&out)
         );
     }
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
@@ -3364,13 +3419,19 @@ fn opt_f_and_opt_bspline_recover_together_on_a_pinhole() {
         *t *= f_start / f_true;
     }
     let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
-    let f_err = (out.focal - f_true).abs() / f_true;
-    let map_err = pinhole_map_err_px(f_true, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.05, 0.8);
+    let f_err = (ba_focal(&out) - f_true).abs() / f_true;
+    let map_err = pinhole_map_err_px(
+        f_true,
+        &ba_bspline(&out),
+        &PLANTED_PINHOLE_BSPLINE,
+        0.05,
+        0.8,
+    );
     assert!(
         f_err < 0.01 && map_err < 0.5,
         "co-released f = {} (want {f_true}), composite map off by {map_err} px ({:?})",
-        out.focal,
-        out.bspline
+        ba_focal(&out),
+        ba_bspline(&out)
     );
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
     assert!(worst < 0.5, "worst reprojection {worst} px");
@@ -3404,14 +3465,14 @@ fn opt_bspline_holds_at_zero_on_a_pinhole_scene() {
     perturb(&mut fixed);
     let out_r = run_bspline(&mut released, false, true, &DEFAULT_SCHEDULE);
     let out_f = run_bspline(&mut fixed, false, false, &DEFAULT_SCHEDULE);
-    for (i, c) in out_f.bspline.iter().enumerate() {
+    for (i, c) in ba_bspline(&out_f).iter().enumerate() {
         assert_eq!(c.to_bits(), 0.0f64.to_bits(), "unreleased c{i} moved");
     }
-    let held = pinhole_map_err_px(f, &out_r.bspline, &[0.0; 6], 0.05, 0.8);
+    let held = pinhole_map_err_px(f, &ba_bspline(&out_r), &[0.0; 6], 0.05, 0.8);
     assert!(
         held < 0.1,
         "the released spline walked off zero on a pinhole scene by {held} px ({:?})",
-        out_r.bspline
+        ba_bspline(&out_r)
     );
     // …and the reconstruction is the same one, not a spline-for-geometry
     // trade that happens to end near zero.
@@ -3443,10 +3504,18 @@ fn opt_f_is_admitted_on_the_spline_pinhole() {
         *t *= f_start / f_true;
     }
     let out = run_bspline(&mut s, true, false, &DEFAULT_SCHEDULE);
-    let err = (out.focal - f_true).abs() / f_true;
-    assert!(err < 0.005, "released focal {} (want {f_true})", out.focal);
+    let err = (ba_focal(&out) - f_true).abs() / f_true;
+    assert!(
+        err < 0.005,
+        "released focal {} (want {f_true})",
+        ba_focal(&out)
+    );
     // The spline came back untouched: `opt_bspline` was not requested.
-    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_PINHOLE_BSPLINE).enumerate() {
+    for (i, (c, t)) in ba_bspline(&out)
+        .iter()
+        .zip(&PLANTED_PINHOLE_BSPLINE)
+        .enumerate()
+    {
         assert_eq!(c.to_bits(), t.to_bits(), "unreleased c{i} moved");
     }
 }
@@ -3463,21 +3532,21 @@ fn the_rungs_are_gated_on_the_spline_pinhole_too() {
     let mut k1_p = k1_r.clone();
     let out_r = run_k1(&mut k1_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_k1(&mut k1_p, true, false, &DEFAULT_SCHEDULE);
-    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_eq!(ba_k1(&out_r).to_bits(), 0.0f64.to_bits());
     assert_bitwise_equal(&k1_r, &out_r, &k1_p, &out_p);
 
     let (mut empty_r, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &[]), 6, 250);
     let mut empty_p = empty_r.clone();
     let out_r = run_bspline(&mut empty_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_bspline(&mut empty_p, true, false, &DEFAULT_SCHEDULE);
-    assert!(out_r.bspline.is_empty());
+    assert!(ba_bspline(&out_r).is_empty());
     assert_bitwise_equal(&empty_r, &out_r, &empty_p, &out_p);
 
     let (mut plain_r, _) = make_pinhole_scene_for(simple_pinhole_at(f), 6, 250);
     let mut plain_p = plain_r.clone();
     let out_r = run_bspline(&mut plain_r, true, true, &DEFAULT_SCHEDULE);
     let out_p = run_bspline(&mut plain_p, true, false, &DEFAULT_SCHEDULE);
-    assert!(out_r.bspline.is_empty());
+    assert!(ba_bspline(&out_r).is_empty());
     assert_bitwise_equal(&plain_r, &out_r, &plain_p, &out_p);
 }
 
@@ -3504,10 +3573,10 @@ fn pinhole_bspline_step_guard_rejects_a_folded_spline() {
     s.cam = sfmtool_pinhole(f, &[0.0; 6]);
     let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
     assert!(
-        bspline_is_monotone(&out.bspline, RHO_MAX, RHO_MAX),
+        bspline_is_monotone(&ba_bspline(&out), RHO_MAX, RHO_MAX),
         "the solve returned a folded spline: {:?} at f = {}",
-        out.bspline,
-        out.focal
+        ba_bspline(&out),
+        ba_focal(&out)
     );
 }
 
@@ -3552,12 +3621,12 @@ fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
         "solve degenerated: {finite} finite residuals"
     );
     // …the unsupported outer coefficients held their inputs exactly…
-    assert_eq!(out.bspline[4].to_bits(), sentinels[4].to_bits());
-    assert_eq!(out.bspline[5].to_bits(), sentinels[5].to_bits());
+    assert_eq!(ba_bspline(&out)[4].to_bits(), sentinels[4].to_bits());
+    assert_eq!(ba_bspline(&out)[5].to_bits(), sentinels[5].to_bits());
     // …and the supported inner ones stayed near the (true) zero.
     let inner_err = pinhole_map_err_px(
         f,
-        &out.bspline[..4]
+        &ba_bspline(&out)[..4]
             .iter()
             .chain(&[0.0, 0.0])
             .copied()
@@ -3569,7 +3638,7 @@ fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
     assert!(
         inner_err < 0.2,
         "supported coefficients drifted by {inner_err} px: {:?}",
-        out.bspline
+        ba_bspline(&out)
     );
 }
 
@@ -3652,12 +3721,18 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
     // With the directions in the solve, the rung recovers the composite map.
     let mut with_dirs = scene.clone();
     let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
-    let err = pinhole_map_err_px(f, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.15, RHO_LIMIT);
+    let err = pinhole_map_err_px(
+        f,
+        &ba_bspline(&out),
+        &PLANTED_PINHOLE_BSPLINE,
+        0.15,
+        RHO_LIMIT,
+    );
     eprintln!("[pinhole-dir-rung] direction rows recovered to {err:.3e} px");
     assert!(
         err < 1.0,
         "composite map off by {err} px from the direction rows ({:?})",
-        out.bspline
+        ba_bspline(&out)
     );
 
     // The control: drop every direction observation and the near-axis finite
@@ -3672,7 +3747,7 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
     let out_finite = run_bspline(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
     let err_finite = pinhole_map_err_px(
         f,
-        &out_finite.bspline,
+        &ba_bspline(&out_finite),
         &PLANTED_PINHOLE_BSPLINE,
         0.15,
         RHO_LIMIT,
@@ -3731,7 +3806,7 @@ fn run_constrained(
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
     bundle_adjust(
-        &s.cam,
+        &BaCameras::shared(&s.cam, s.quats.len()),
         &mut s.quats,
         &mut s.trans,
         &mut s.points,
@@ -3838,9 +3913,9 @@ fn constraints_off_reproduce_the_unconstrained_kernel() {
     );
     assert_eq!(pose_bits(&a.quats, &a.trans), pose_bits(&b.quats, &b.trans));
     assert_eq!(point_bits(&a.points), point_bits(&b.points));
-    assert_eq!(out_a.focal.to_bits(), out_b.focal.to_bits());
-    assert_eq!(out_a.k1.to_bits(), out_b.k1.to_bits());
-    assert_eq!(out_a.bspline, out_b.bspline);
+    assert_eq!(ba_focal(&out_a).to_bits(), ba_focal(&out_b).to_bits());
+    assert_eq!(ba_k1(&out_a).to_bits(), ba_k1(&out_b).to_bits());
+    assert_eq!(ba_bspline(&out_a), ba_bspline(&out_b));
     assert_eq!(
         res_bits(&out_a.residual_norms),
         res_bits(&out_b.residual_norms)
@@ -3934,7 +4009,7 @@ fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
     let xp = [origin0 + distance * d0];
     let (cx, cy) = cam.principal_point();
     let analytic = cam.model.supports_pixel_jacobian();
-    let st = LinState {
+    let lens = LinLens {
         cam: &cam,
         analytic,
         cx,
@@ -3946,6 +4021,11 @@ fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
         n_coeffs: 0,
         d_max: 0.0,
         radial: SplineRadial::IncidenceAngle,
+        slot0: 0,
+    };
+    let st = LinState {
+        lenses: std::slice::from_ref(&lens),
+        ci_cam: &vec![0; n_im],
         q: &quats,
         t: &trans,
         xp: &xp,
@@ -4461,4 +4541,621 @@ fn a_true_distance_recovers_a_direction_a_free_point_cannot() {
         "the free landmark recovered its depth ({free_distance} vs {distance}), \
          so the contrast the distance is for is not in this fixture"
     );
+}
+
+// ── Several cameras ─────────────────────────────────────────────────────────
+
+/// A two-focal perspective camera: the `PINHOLE` of the two-model scene, whose
+/// focal no release reaches.
+fn pinhole_xy(fx: f64, fy: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: fx,
+            focal_length_y: fy,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
+/// A `SIMPLE_PINHOLE` with its own principal point.
+fn simple_pinhole_pp(f: f64, cx: f64, cy: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: f,
+            principal_point_x: cx,
+            principal_point_y: cy,
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
+/// An `OPENCV_FISHEYE`, a model no release reaches, with enough distortion that
+/// reading its pixels through a pinhole lands them many pixels off.
+fn opencv_fisheye(f: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: f,
+            focal_length_y: f * 1.002,
+            principal_point_x: 330.0,
+            principal_point_y: 236.0,
+            radial_distortion_k1: 0.05,
+            radial_distortion_k2: -0.01,
+            radial_distortion_k3: 0.002,
+            radial_distortion_k4: 0.0,
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
+/// [`make_scene_cam`]'s arc and cloud with image `i` taken through
+/// `cams[image_camera[i]]`, every observation the exact projection through its
+/// own image's camera. The scene's `cam` is the first camera; a run over
+/// several cameras reads `cams` instead.
+fn make_scene_cams(cams: &[CameraIntrinsics], image_camera: &[u32], n_pt: usize) -> Scene {
+    let n_img = image_camera.len();
+    let mut s = make_scene_cam(cams[0].clone(), n_img, n_pt);
+    s.uv.clear();
+    s.obs_img.clear();
+    s.obs_pt.clear();
+    for (p, x) in s.points.iter().enumerate() {
+        for i in 0..n_img {
+            let cam = &cams[image_camera[i] as usize];
+            let c = s.quats[i] * Vector3::new(x[0], x[1], x[2]) + s.trans[i];
+            if c.z >= -0.5 {
+                continue;
+            }
+            let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            if !(0.0..cam.width as f64).contains(&u) || !(0.0..cam.height as f64).contains(&v) {
+                continue;
+            }
+            s.uv.push([u, v]);
+            s.obs_img.push(i as u32);
+            s.obs_pt.push(p as u32);
+        }
+    }
+    s
+}
+
+/// Every pose but the first and every point nudged off the truth, as in
+/// [`make_perturbed_scene`].
+fn perturb_scene(s: &mut Scene) {
+    for i in 1..s.quats.len() {
+        let d = Vector3::new(
+            0.03 * jitter(i, 21),
+            0.03 * jitter(i, 22),
+            0.03 * jitter(i, 23),
+        );
+        s.quats[i] = UnitQuaternion::from_scaled_axis(d) * s.quats[i];
+        s.trans[i] += Vector3::new(
+            0.05 * jitter(i, 24),
+            0.05 * jitter(i, 25),
+            0.05 * jitter(i, 26),
+        );
+    }
+    for (p, x) in s.points.iter_mut().enumerate() {
+        for (c, xc) in x.iter_mut().enumerate() {
+            *xc += 0.05 * jitter(p, 30 + c as u64);
+        }
+    }
+}
+
+/// [`run`] over a camera list and a per-image camera column, with every
+/// release the caller asks for.
+#[allow(clippy::too_many_arguments)]
+fn run_cameras(
+    s: &mut Scene,
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    mask: Option<&[bool]>,
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+    schedule: &[BaSchedule],
+) -> BundleAdjustment {
+    bundle_adjust(
+        &BaCameras {
+            cameras: cams,
+            image_camera: image_camera.into(),
+        },
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        mask,
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        opt_k1,
+        opt_bspline,
+        schedule,
+        60,
+        2,
+        12,
+        &Progress::none(),
+    )
+}
+
+/// The share of observations whose final residual is under `px`.
+fn share_under(out: &BundleAdjustment, px: f64) -> f64 {
+    let n = out.residual_norms.iter().filter(|&&r| r < px).count();
+    n as f64 / out.residual_norms.len() as f64
+}
+
+/// Two cameras compared parameter for parameter, as bit patterns: `Debug`
+/// prints the shortest decimal that reads back to the same `f64`, so two
+/// equal strings are two equal sets of bits.
+fn same_camera_bits(a: &CameraIntrinsics, b: &CameraIntrinsics) -> bool {
+    format!("{a:?}") == format!("{b:?}")
+}
+
+/// A scene run through `BaCameras::shared` and through an explicit one-entry
+/// camera list is the same solve to the bit, under the focal release.
+#[test]
+fn an_explicit_one_camera_list_is_the_shared_camera() {
+    let mut a = make_perturbed_scene();
+    let mut b = a.clone();
+    let oa = run(&mut a, true, &DEFAULT_SCHEDULE);
+    let n_img = b.quats.len();
+    let cams = [b.cam.clone()];
+    let ob = run_cameras(
+        &mut b,
+        &cams,
+        &vec![0; n_img],
+        None,
+        true,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert_bitwise_equal(&a, &oa, &b, &ob);
+    assert!(same_camera_bits(&oa.cameras[0], &ob.cameras[0]));
+}
+
+/// A `PINHOLE` and an `OPENCV_FISHEYE` in one solve, images from each, from
+/// perturbed poses and points: every observation read through its own lens
+/// converges to sub-pixel. The same scene with every image read through the
+/// pinhole does not, which is what shows each observation is read through its
+/// own camera rather than through the first.
+#[test]
+fn two_cameras_of_different_models_each_read_through_their_own_lens() {
+    let cams = [pinhole_xy(500.0, 503.0), opencv_fisheye(420.0)];
+    let image_camera: Vec<u32> = (0..8).map(|i| (i % 2) as u32).collect();
+    let mut s = make_scene_cams(&cams, &image_camera, 80);
+    let q_true = s.quats.clone();
+    perturb_scene(&mut s);
+    let mut wrong = s.clone();
+
+    let out = run_cameras(
+        &mut s,
+        &cams,
+        &image_camera,
+        None,
+        false,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert!(
+        share_under(&out, 0.1) > 0.99,
+        "{} of the observations under 0.1 px",
+        share_under(&out, 0.1)
+    );
+    // Rotations relative to image 0, which the free gauge does not move.
+    for i in 1..s.quats.len() {
+        let got = s.quats[i] * s.quats[0].inverse();
+        let want = q_true[i] * q_true[0].inverse();
+        let ang = got.angle_to(&want);
+        assert!(ang < 1e-3, "image {i} relative rotation err {ang} rad");
+    }
+    // Neither model admits a release, and nothing was asked for: both cameras
+    // come back as they went in.
+    for (solved, input) in out.cameras.iter().zip(&cams) {
+        assert!(same_camera_bits(solved, input));
+    }
+
+    let out_wrong = run_cameras(
+        &mut wrong,
+        &cams,
+        &vec![0; image_camera.len()],
+        None,
+        false,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert!(
+        share_under(&out_wrong, 0.5) < 0.9,
+        "the fisheye's pixels fit through the pinhole: {} under 0.5 px",
+        share_under(&out_wrong, 0.5)
+    );
+}
+
+/// Two releasable cameras with different planted focals, both started several
+/// percent off, each recover their own under `opt_f`. With one releasable and
+/// one not, the releasable one moves and the other comes back bit for bit.
+#[test]
+fn opt_f_releases_each_camera_its_own_focal() {
+    let truth = [
+        simple_pinhole_pp(500.0, 320.0, 240.0),
+        simple_pinhole_pp(620.0, 327.0, 235.0),
+    ];
+    let image_camera: Vec<u32> = (0..10).map(|i| (i % 2) as u32).collect();
+    let base = make_scene_cams(&truth, &image_camera, 100);
+
+    let mut s = base.clone();
+    let started = [
+        simple_pinhole_pp(500.0 * 1.05, 320.0, 240.0),
+        simple_pinhole_pp(620.0 * 0.96, 327.0, 235.0),
+    ];
+    let out = run_cameras(
+        &mut s,
+        &started,
+        &image_camera,
+        None,
+        true,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    for (j, want) in [500.0, 620.0].into_iter().enumerate() {
+        let got = out.cameras[j].focal_lengths().0;
+        assert!(
+            (got - want).abs() / want < 0.01,
+            "camera {j}: focal {got} (want {want})"
+        );
+    }
+
+    let mut s = base.clone();
+    let mixed = [
+        simple_pinhole_pp(500.0 * 1.05, 320.0, 240.0),
+        pinhole_xy(620.0 * 0.96, 620.0 * 0.96),
+    ];
+    let out = run_cameras(
+        &mut s,
+        &mixed,
+        &image_camera,
+        None,
+        true,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let moved = out.cameras[0].focal_lengths().0;
+    assert!(
+        (moved - 500.0 * 1.05).abs() > 5.0,
+        "the releasable camera's focal did not move ({moved})"
+    );
+    assert!(
+        same_camera_bits(&out.cameras[1], &mixed[1]),
+        "the PINHOLE camera moved: {:?}",
+        out.cameras[1]
+    );
+}
+
+/// An observation's lens columns land only in its own camera's block: cameras
+/// no image uses come back bit for bit under every release, whatever their
+/// models admit, while the camera the images do use is solved.
+#[test]
+fn a_camera_with_no_observations_comes_back_bit_for_bit() {
+    let mut s = make_perturbed_scene();
+    let cams = [
+        simple_pinhole(500.0 * 1.03),
+        radial_fisheye(130.0, 0.02),
+        sfmtool_fisheye(130.0, &PLANTED_BSPLINE),
+    ];
+    let image_camera = vec![0; s.quats.len()];
+    let out = run_cameras(
+        &mut s,
+        &cams,
+        &image_camera,
+        None,
+        true,
+        true,
+        true,
+        &DEFAULT_SCHEDULE,
+    );
+    assert!(same_camera_bits(&out.cameras[1], &cams[1]));
+    assert!(same_camera_bits(&out.cameras[2], &cams[2]));
+    let f = out.cameras[0].focal_lengths().0;
+    assert!((f - 500.0).abs() < 5.0, "the used camera's focal {f}");
+    assert!(
+        share_under(&out, 0.1) > 0.99,
+        "{} of the observations under 0.1 px",
+        share_under(&out, 0.1)
+    );
+}
+
+/// [`make_fisheye_scene_for`]'s rig and shell with image `i` taken through
+/// `cams[image_camera[i]]`, keeping each camera's image circle out to 105°.
+fn make_fisheye_scene_cams(cams: &[CameraIntrinsics], image_camera: &[u32], n_pt: usize) -> Scene {
+    let n_img = image_camera.len();
+    let (base, _) = make_fisheye_scene_for(cams[0].clone(), n_img, 2);
+    let mut points = Vec::new();
+    for p in 0..n_pt {
+        let theta = std::f64::consts::PI * (0.15 + 0.7 * (p as f64) / (n_pt as f64 - 1.0));
+        let phi = 2.399_963 * p as f64;
+        let rad = 6.0 + 1.5 * jitter(p, 3);
+        points.push([
+            rad * theta.sin() * phi.cos(),
+            rad * theta.cos(),
+            rad * theta.sin() * phi.sin(),
+        ]);
+    }
+    let mut s = Scene {
+        points: Vec::new(),
+        uv: Vec::new(),
+        obs_img: Vec::new(),
+        obs_pt: Vec::new(),
+        ..base
+    };
+    for x in &points {
+        let mut obs = Vec::new();
+        for i in 0..n_img {
+            let cam = &cams[image_camera[i] as usize];
+            let c = s.quats[i] * Vector3::new(x[0], x[1], x[2]) + s.trans[i];
+            let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            let (cx, cy) = cam.principal_point();
+            if (u - cx).hypot(v - cy) > cam.focal_lengths().0 * 105.0_f64.to_radians() {
+                continue;
+            }
+            obs.push((i as u32, [u, v]));
+        }
+        if obs.len() < 2 {
+            continue;
+        }
+        let p = s.points.len() as u32;
+        s.points.push(*x);
+        for (i, px) in obs {
+            s.uv.push(px);
+            s.obs_img.push(i);
+            s.obs_pt.push(p);
+        }
+    }
+    s
+}
+
+/// One solve that releases a `k1` on one camera and a spline on another: each
+/// observation's distortion columns go to its own camera, including the spline
+/// instantiation's coefficient-less slots, which point at the observing
+/// camera's own `k1` slot, released here on the first camera, and must add
+/// nothing to it.
+#[test]
+fn a_k1_and_a_spline_are_released_on_two_cameras_in_one_solve() {
+    let f = 130.0;
+    let k1_true = 0.02;
+    let truth = [
+        radial_fisheye(f, k1_true),
+        sfmtool_fisheye(f, &PLANTED_BSPLINE),
+    ];
+    let image_camera: Vec<u32> = (0..12).map(|i| (i % 2) as u32).collect();
+    let mut s = make_fisheye_scene_cams(&truth, &image_camera, 200);
+    let started = [radial_fisheye(f, 0.0), sfmtool_fisheye(f, &[0.0; 8])];
+    let out = run_cameras(
+        &mut s,
+        &started,
+        &image_camera,
+        None,
+        false,
+        true,
+        true,
+        &DEFAULT_SCHEDULE,
+    );
+    let k1 = match out.cameras[0].model {
+        CameraModel::SimpleRadialFisheye {
+            radial_distortion_k1,
+            ..
+        } => radial_distortion_k1,
+        _ => unreachable!(),
+    };
+    assert!(
+        (k1 - k1_true).abs() / k1_true < 0.1,
+        "released k1 {k1} (want {k1_true})"
+    );
+    let spline = out.cameras[1]
+        .model
+        .radial_spline()
+        .map(|(b, _, _)| b.to_vec())
+        .unwrap();
+    let map_err = worst_map_err_px(f, &spline, &PLANTED_BSPLINE, 0.05, 1.8);
+    assert!(
+        map_err < 0.5,
+        "recovered spline map off by {map_err} px ({spline:?})"
+    );
+    assert!(
+        share_under(&out, 0.5) > 0.99,
+        "{} of the observations under 0.5 px",
+        share_under(&out, 0.5)
+    );
+}
+
+/// A direction a wide fisheye sees at `θ = 100°` is in front: it survives the
+/// trim and pins the rotation of an image whose only observations are such
+/// directions. On a perspective camera a direction behind the image plane is
+/// still trimmed.
+#[test]
+fn directions_past_ninety_degrees_survive_the_trim_on_a_wide_fisheye() {
+    let f = 130.0;
+    let (mut s, _) = make_fisheye_scene_for(equidistant_native(f), 6, 90);
+    let k = 2usize;
+    // Image k keeps no finite observation, so its rotation rests on the
+    // directions alone.
+    let keep: Vec<bool> = s.obs_img.iter().map(|&i| i as usize != k).collect();
+    let rows: Vec<usize> = (0..keep.len()).filter(|&r| keep[r]).collect();
+    s.uv = rows.iter().map(|&r| s.uv[r]).collect();
+    s.obs_img = rows.iter().map(|&r| s.obs_img[r]).collect();
+    s.obs_pt = rows.iter().map(|&r| s.obs_pt[r]).collect();
+    let n_finite = s.points.len();
+    let rk_inv = s.quats[k].inverse();
+    let mut past_ninety = Vec::new();
+    for a in 0..12 {
+        let phi = std::f64::consts::TAU * a as f64 / 12.0;
+        let theta = 100.0_f64.to_radians();
+        // Optical frame (+Z forward) to canonical (−Z forward): S = diag(1, −1, −1).
+        let ray = Vector3::new(
+            theta.sin() * phi.cos(),
+            -(theta.sin() * phi.sin()),
+            -theta.cos(),
+        );
+        let d = rk_inv * ray;
+        let p = s.points.len() as u32;
+        let mut seen = 0;
+        for i in 0..s.quats.len() {
+            let c = s.quats[i] * d;
+            let Some((u, v)) = s.cam.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            if (u - 240.0).hypot(v - 240.0) > f * 105.0_f64.to_radians() {
+                continue;
+            }
+            if i == k {
+                past_ninety.push(s.uv.len());
+            }
+            s.uv.push([u, v]);
+            s.obs_img.push(i as u32);
+            s.obs_pt.push(p);
+            seen += 1;
+        }
+        assert!(seen >= 2, "direction {a} is seen {seen} times");
+        s.points.push([d.x, d.y, d.z]);
+    }
+    assert_eq!(
+        past_ninety.len(),
+        12,
+        "image {k} does not see every direction"
+    );
+    let mut mask = vec![false; n_finite];
+    mask.resize(s.points.len(), true);
+
+    // At the truth the trim keeps every one of image k's observations.
+    let (norms, depths) = residual_norms_depths(
+        std::slice::from_ref(&s.cam),
+        &vec![0; s.quats.len()],
+        &s.quats,
+        &s.trans,
+        &s.points,
+        &mask,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+    );
+    for &row in &past_ninety {
+        assert!(depths[row] > 0.0 && norms[row] < 1e-6, "row {row} trimmed");
+    }
+
+    // Image k's rotation, knocked off, comes back on the directions.
+    // Were they trimmed, image k would have no observation and its pose would
+    // pass through untouched.
+    let q_true = s.quats[k];
+    s.quats[k] = UnitQuaternion::from_scaled_axis(Vector3::new(0.01, -0.02, 0.015)) * q_true;
+    let start = s.quats[k].angle_to(&q_true);
+    let out = run_masked(&mut s, &mask, false, &DEFAULT_SCHEDULE, 12);
+    let err = s.quats[k].angle_to(&q_true);
+    assert!(
+        err < 0.05 * start,
+        "image {k} rotation off by {err} rad from a {start} rad start"
+    );
+    for &row in &past_ninety {
+        assert!(
+            out.residual_norms[row] < 0.2,
+            "row {row} ends at {} px",
+            out.residual_norms[row]
+        );
+    }
+
+    // A perspective camera: a direction straight behind image 0 projects
+    // nowhere and has a non-positive in-front measure, so the trim drops it.
+    let p = make_scene(6, 20);
+    let behind = p.quats[0].inverse() * Vector3::new(0.0, 0.0, 1.0);
+    let (norms, depths) = residual_norms_depths(
+        std::slice::from_ref(&p.cam),
+        &[0; 6],
+        &p.quats,
+        &p.trans,
+        &[[behind.x, behind.y, behind.z]],
+        &[true],
+        &[[320.0, 240.0]],
+        &[0],
+        &[0],
+    );
+    assert!(depths[0] <= 0.0, "in-front measure {}", depths[0]);
+    assert_eq!(norms[0], INVALID_RESIDUAL);
+}
+
+/// The shape checks on a camera list: an index past the list, a column of the
+/// wrong length, and an empty list are caller errors.
+#[test]
+#[should_panic(expected = "image_camera names camera 1, past the 1 cameras")]
+fn an_image_camera_index_past_the_list_panics() {
+    let mut s = make_scene(4, 20);
+    let cams = [s.cam.clone()];
+    run_cameras(
+        &mut s,
+        &cams,
+        &[0, 1, 0, 0],
+        None,
+        false,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+}
+
+#[test]
+#[should_panic(expected = "image_camera and quats length mismatch")]
+fn an_image_camera_column_of_the_wrong_length_panics() {
+    let mut s = make_scene(4, 20);
+    let cams = [s.cam.clone()];
+    run_cameras(
+        &mut s,
+        &cams,
+        &[0, 0, 0],
+        None,
+        false,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+}
+
+#[test]
+#[should_panic(expected = "BaCameras holds no camera")]
+fn an_empty_camera_list_panics() {
+    let mut s = make_scene(4, 20);
+    run_cameras(
+        &mut s,
+        &[],
+        &[0, 0, 0, 0],
+        None,
+        false,
+        false,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+}
+
+/// A track seen through two cameras takes the mean of their focals, one term
+/// per observation, in its noise floor; a track seen through one takes that
+/// camera's focal as it is.
+#[test]
+fn the_noise_floor_of_a_track_reads_the_focals_it_was_seen_through() {
+    let cams = [simple_pinhole(400.0), pinhole_xy(600.0, 620.0)];
+    // Point 0 through camera 0 twice and camera 1 once; point 1 through camera
+    // 1 alone; point 2 unobserved.
+    let floors = track_noise_floors(&cams, &[0, 0, 1, 1], &[0, 0, 0, 1], 3, 2.0);
+    assert_eq!(floors[0], 2.0 / ((400.0 + 400.0 + 610.0) / 3.0));
+    assert_eq!(floors[1], 2.0 / 610.0);
+    assert_eq!(floors[2], 2.0 / 400.0);
 }

@@ -28,7 +28,7 @@ use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
 
 use crate::camera::CameraModel;
 use crate::geometry::bundle_adjust::{
-    bundle_adjust, FreePointPolicy, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    bundle_adjust, BaCameras, FreePointPolicy, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 use crate::geometry::focal_vote::ortho_cost;
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
@@ -772,7 +772,7 @@ pub fn rotation_init(
         }
     }
     let ba = bundle_adjust(
-        &cam,
+        &BaCameras::shared(&cam, quats.len()),
         &mut quats,
         &mut trans,
         &mut points,

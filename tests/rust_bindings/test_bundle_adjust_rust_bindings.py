@@ -105,9 +105,27 @@ def _scene(n_img=6, n_pt=50, f=500.0, seed=7):
     }
 
 
+def _focal(out, j=0):
+    """The solved focal of camera ``j``, the model's first where it has two."""
+    return out["cameras"][j].focal_lengths[0]
+
+
+def _k1(out, j=0):
+    """The solved radial coefficient of camera ``j``; 0.0 for a model without one."""
+    return out["cameras"][j].parameters.get("radial_distortion_k1", 0.0)
+
+
+def _bspline(out, j=0):
+    """The solved spline coefficients of camera ``j``; empty for a model without one."""
+    p = out["cameras"][j].parameters
+    n = int(p.get("bspline_coeff_count", 0))
+    return np.array([p[f"bspline_c{i}"] for i in range(n)], dtype=np.float64)
+
+
 def _run(s, **kw):
     return bundle_adjust(
-        s["cam"],
+        [s["cam"]],
+        np.zeros(len(s["quats"]), dtype=np.uint32),
         s["quats"],
         s["trans"],
         s["points"],
@@ -123,7 +141,7 @@ def test_perfect_data_stays_put():
     out = _run(s)
     npt.assert_allclose(out["quaternions_wxyz"], s["quats"], atol=1e-6)
     npt.assert_allclose(out["translations"], s["trans"], atol=1e-5)
-    assert out["focal"] == 500.0
+    assert _focal(out) == 500.0
     assert np.max(out["residual_norms"]) < 1e-5
 
 
@@ -169,7 +187,7 @@ def test_opt_f_recovers_focal():
     s = _scene(n_img=8, n_pt=60)
     s["cam"] = _cam(600.0)  # observations generated at f=500
     out = _run(s, opt_f=True)
-    assert abs(out["focal"] - 500.0) < 5.0, out["focal"]
+    assert abs(_focal(out) - 500.0) < 5.0, _focal(out)
 
 
 def test_nan_points_readmitted_by_retriangulation():
@@ -308,7 +326,7 @@ def test_opt_f_recovers_equidistant_focal_past_ninety_degrees():
     s["points"] = s["points"] * (f_start / 130.0)
     s["trans"] = s["trans"] * (f_start / 130.0)
     out = _run(s, opt_f=True)
-    assert abs(out["focal"] - 130.0) / 130.0 < 0.01, out["focal"]
+    assert abs(_focal(out) - 130.0) / 130.0 < 0.01, _focal(out)
     assert np.max(out["residual_norms"]) < 0.5
 
 
@@ -316,7 +334,7 @@ def test_equidistant_fixed_focal_is_bit_identical():
     s = _wide_scene(f=130.0)
     s["cam"] = _equidistant_cam(122.0)
     out = _run(s, opt_f=False)
-    assert out["focal"] == 122.0
+    assert _focal(out) == 122.0
 
 
 def test_fortran_order_inputs_match_c_order():
@@ -331,7 +349,7 @@ def test_fortran_order_inputs_match_c_order():
     for key in ("quats", "trans", "points", "uv"):
         f[key] = np.asfortranarray(f[key])
     out = _run(f, opt_f=True)
-    npt.assert_allclose(out["focal"], ref["focal"], rtol=0, atol=1e-9)
+    npt.assert_allclose(_focal(out), _focal(ref), rtol=0, atol=1e-9)
     npt.assert_allclose(out["translations"], ref["translations"], atol=1e-9)
     npt.assert_allclose(out["residual_norms"], ref["residual_norms"], atol=1e-9)
 
@@ -436,7 +454,7 @@ def test_point_at_infinity_absent_none_and_all_false_match_bitwise():
         runs.append(_run(s, opt_f=True, **kw))
     ref = runs[0]
     for out in runs[1:]:
-        assert out["focal"] == ref["focal"]
+        assert _focal(out) == _focal(ref)
         npt.assert_array_equal(out["quaternions_wxyz"], ref["quaternions_wxyz"])
         npt.assert_array_equal(out["translations"], ref["translations"])
         npt.assert_array_equal(out["points"], ref["points"])
@@ -461,7 +479,7 @@ def test_directions_recover_focal_on_low_parallax_scene():
     plain = _lowpar_scene()
     plain["cam"] = _cam(650.0)
     out_plain = _run(plain, opt_f=True, schedule=[(300.0, 2.0)], max_iters=150)
-    assert abs(out_plain["focal"] - 500.0) > 25.0, out_plain["focal"]
+    assert abs(_focal(out_plain) - 500.0) > 25.0, _focal(out_plain)
 
     s = _lowpar_scene()
     mask = _add_direction_tracks(s, 20, np.random.default_rng(17), noise=0.3)
@@ -473,7 +491,7 @@ def test_directions_recover_focal_on_low_parallax_scene():
         schedule=[(300.0, 2.0)],
         max_iters=150,
     )
-    assert abs(out["focal"] - 500.0) < 5.0, (out["focal"], out_plain["focal"])
+    assert abs(_focal(out) - 500.0) < 5.0, (_focal(out), _focal(out_plain))
 
 
 def test_translation_frozen_for_direction_only_image():
@@ -565,7 +583,7 @@ def test_protected_absent_none_and_all_false_match_bitwise():
         runs.append(_run(s, opt_f=True, **kw_of_n_obs(len(s["uv"]))))
     ref = runs[0]
     for out in runs[1:]:
-        assert out["focal"] == ref["focal"]
+        assert _focal(out) == _focal(ref)
         npt.assert_array_equal(out["quaternions_wxyz"], ref["quaternions_wxyz"])
         npt.assert_array_equal(out["translations"], ref["translations"])
         npt.assert_array_equal(out["points"], ref["points"])
@@ -660,7 +678,8 @@ def test_shape_validation():
     s = _scene()
     with pytest.raises(ValueError, match="uv"):
         bundle_adjust(
-            s["cam"],
+            [s["cam"]],
+            np.zeros(len(s["quats"]), dtype=np.uint32),
             s["quats"],
             s["trans"],
             s["points"],
@@ -670,7 +689,8 @@ def test_shape_validation():
         )
     with pytest.raises(ValueError, match="out of range"):
         bundle_adjust(
-            s["cam"],
+            [s["cam"]],
+            np.zeros(len(s["quats"]), dtype=np.uint32),
             s["quats"],
             s["trans"],
             s["points"],
@@ -708,8 +728,8 @@ def test_opt_k1_recovers_a_planted_curvature():
     s = _wide_scene(f=f, cam=_radial_fisheye_cam(f, k1_true))
     s["cam"] = _radial_fisheye_cam(f, 0.0)
     out = _run(s, opt_k1=True)
-    assert out["focal"] == f, "the focal moved with opt_f off"
-    assert abs(out["k1"] - k1_true) / k1_true < 0.1, out["k1"]
+    assert _focal(out) == f, "the focal moved with opt_f off"
+    assert abs(_k1(out) - k1_true) / k1_true < 0.1, _k1(out)
     assert np.max(out["residual_norms"]) < 0.5
 
 
@@ -721,8 +741,8 @@ def test_opt_f_and_opt_k1_release_together():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True, opt_k1=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
-    assert abs(out["k1"] - k1_true) / k1_true < 0.15, out["k1"]
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
+    assert abs(_k1(out) - k1_true) / k1_true < 0.15, _k1(out)
 
 
 def test_opt_k1_holds_at_zero_on_an_equidistant_scene():
@@ -732,7 +752,7 @@ def test_opt_k1_holds_at_zero_on_an_equidistant_scene():
     f = 130.0
     s = _wide_scene(f=f, cam=_radial_fisheye_cam(f, 0.0))
     out = _run(s, opt_k1=True)
-    assert abs(out["k1"]) < 1e-4, out["k1"]
+    assert abs(_k1(out)) < 1e-4, _k1(out)
 
 
 def test_opt_f_accepts_the_radial_fisheye_model():
@@ -743,8 +763,8 @@ def test_opt_f_accepts_the_radial_fisheye_model():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
-    assert out["k1"] == 0.02, "an unreleased k1 moved"
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
+    assert _k1(out) == 0.02, "an unreleased k1 moved"
 
 
 @pytest.mark.parametrize("model", ["SIMPLE_PINHOLE", "EQUIDISTANT_FISHEYE"])
@@ -755,7 +775,9 @@ def test_opt_k1_rejected_for_models_without_the_coefficient(model):
     else:
         cam = _equidistant_cam(500.0, w=640, h=480)
     s["cam"] = cam
-    with pytest.raises(ValueError, match="opt_k1 requires a SIMPLE_RADIAL_FISHEYE"):
+    with pytest.raises(
+        ValueError, match="opt_k1 requires every camera to be SIMPLE_RADIAL_FISHEYE"
+    ):
         _run(s, opt_k1=True)
 
 
@@ -763,7 +785,7 @@ def test_k1_returned_for_every_model():
     # The key is always present; it is 0.0 where the model has no such
     # parameter.
     s = _scene()
-    assert _run(s)["k1"] == 0.0
+    assert _k1(_run(s)) == 0.0
 
 
 # ── The spline rung: opt_bspline under SFMTOOL_FISHEYE ────────────────────
@@ -800,8 +822,8 @@ def test_opt_bspline_recovers_a_planted_spline():
     s = _wide_scene(f=f, cam=_sfmtool_fisheye_cam(f, _PLANTED_BSPLINE))
     s["cam"] = _sfmtool_fisheye_cam(f, [0.0] * 8)
     out = _run(s, opt_bspline=True)
-    assert out["focal"] == f, "the focal moved with opt_f off"
-    npt.assert_allclose(out["bspline_coefficients"], _PLANTED_BSPLINE, atol=0.02)
+    assert _focal(out) == f, "the focal moved with opt_f off"
+    npt.assert_allclose(_bspline(out), _PLANTED_BSPLINE, atol=0.02)
     assert np.max(out["residual_norms"]) < 0.5
 
 
@@ -813,8 +835,8 @@ def test_opt_f_and_opt_bspline_release_together():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True, opt_bspline=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
-    npt.assert_allclose(out["bspline_coefficients"], _PLANTED_BSPLINE, atol=0.02)
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
+    npt.assert_allclose(_bspline(out), _PLANTED_BSPLINE, atol=0.02)
 
 
 def test_opt_f_accepts_the_sfmtool_fisheye_model():
@@ -825,9 +847,9 @@ def test_opt_f_accepts_the_sfmtool_fisheye_model():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
     npt.assert_array_equal(
-        out["bspline_coefficients"],
+        _bspline(out),
         _PLANTED_BSPLINE,
         err_msg="an unreleased spline moved",
     )
@@ -840,7 +862,9 @@ def test_opt_bspline_rejected_for_models_without_a_spline(model):
         s["cam"] = _cam()
     else:
         s["cam"] = _radial_fisheye_cam(500.0, 0.0, w=640, h=480)
-    with pytest.raises(ValueError, match="opt_bspline requires a SFMTOOL_FISHEYE"):
+    with pytest.raises(
+        ValueError, match="opt_bspline requires every camera to be SFMTOOL_FISHEYE"
+    ):
         _run(s, opt_bspline=True)
 
 
@@ -868,18 +892,18 @@ def test_bspline_coefficients_returned_for_every_model():
     # released.
     s = _scene()
     out = _run(s)
-    assert out["bspline_coefficients"].shape == (0,)
+    assert _bspline(out).shape == (0,)
     f = 130.0
     s = _wide_scene(f=f, cam=_sfmtool_fisheye_cam(f, _PLANTED_BSPLINE))
     out = _run(s)
-    npt.assert_array_equal(out["bspline_coefficients"], _PLANTED_BSPLINE)
+    npt.assert_array_equal(_bspline(out), _PLANTED_BSPLINE)
     # Both spline models, hence the name: the pinhole reports its own
     # coefficients through the same key. (Its scene helpers are defined
     # below, with the rest of the pinhole rung.)
     f = 250.0
     s = _wide_pinhole_scene(_sfmtool_pinhole_cam(f, _PLANTED_PINHOLE_BSPLINE), f=f)
     out = _run(s)
-    npt.assert_array_equal(out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE)
+    npt.assert_array_equal(_bspline(out), _PLANTED_PINHOLE_BSPLINE)
 
 
 # ── The spline rung: opt_bspline under SFMTOOL_PINHOLE ────────────────────
@@ -981,10 +1005,8 @@ def test_opt_bspline_recovers_a_planted_pinhole_spline():
     s = _wide_pinhole_scene(cam_true, f=f)
     s["cam"] = _sfmtool_pinhole_cam(f, [0.0] * 6)
     out = _run(s, opt_bspline=True)
-    assert out["focal"] == f, "the focal moved with opt_f off"
-    npt.assert_allclose(
-        out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE, atol=0.01
-    )
+    assert _focal(out) == f, "the focal moved with opt_f off"
+    npt.assert_allclose(_bspline(out), _PLANTED_PINHOLE_BSPLINE, atol=0.01)
     assert np.max(out["residual_norms"]) < 0.5
 
 
@@ -998,10 +1020,8 @@ def test_opt_f_and_opt_bspline_release_together_on_a_pinhole():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True, opt_bspline=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
-    npt.assert_allclose(
-        out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE, atol=0.01
-    )
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
+    npt.assert_allclose(_bspline(out), _PLANTED_PINHOLE_BSPLINE, atol=0.01)
 
 
 def test_opt_f_accepts_the_sfmtool_pinhole_model():
@@ -1014,9 +1034,9 @@ def test_opt_f_accepts_the_sfmtool_pinhole_model():
     s["points"] = s["points"] * (f_start / f_true)
     s["trans"] = s["trans"] * (f_start / f_true)
     out = _run(s, opt_f=True)
-    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    assert abs(_focal(out) - f_true) / f_true < 0.01, _focal(out)
     npt.assert_array_equal(
-        out["bspline_coefficients"],
+        _bspline(out),
         _PLANTED_PINHOLE_BSPLINE,
         err_msg="an unreleased spline moved",
     )
@@ -1054,7 +1074,7 @@ def test_opt_f_rejection_names_the_spline_pinhole():
             },
         }
     )
-    with pytest.raises(ValueError, match="SFMTOOL_PINHOLE camera"):
+    with pytest.raises(ValueError, match="SFMTOOL_PINHOLE; camera 0 is PINHOLE"):
         _run(s, opt_f=True)
 
 
@@ -1102,7 +1122,7 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
         runs.append(_run(s, opt_f=True, **kw))
     ref = runs[0]
     for out in runs[1:]:
-        assert out["focal"] == ref["focal"]
+        assert _focal(out) == _focal(ref)
         npt.assert_array_equal(out["quaternions_wxyz"], ref["quaternions_wxyz"])
         npt.assert_array_equal(out["translations"], ref["translations"])
         npt.assert_array_equal(out["points"], ref["points"])
@@ -1267,3 +1287,111 @@ def test_noise_floor_scale_validation(bad_scale):
     s = _perturbed_scene()
     with pytest.raises(ValueError, match="noise_floor_scale"):
         _run(s, noise_floor_scale=bad_scale)
+
+
+# ── Several cameras ──────────────────────────────────────────────────────────
+
+
+def _cam_pp(f, cx, cy):
+    return CameraIntrinsics.from_dict(
+        {
+            "model": "SIMPLE_PINHOLE",
+            "width": 640,
+            "height": 480,
+            "parameters": {
+                "focal_length": f,
+                "principal_point_x": cx,
+                "principal_point_y": cy,
+            },
+        }
+    )
+
+
+_TWO_CAMERAS = (_cam_pp(500.0, 320.0, 240.0), _cam_pp(620.0, 327.0, 235.0))
+
+
+def _two_camera_scene(n_img=10, n_pt=80):
+    """``_scene``'s arc and cloud, odd images through the second camera."""
+    s = _scene(n_img=n_img, n_pt=n_pt)
+    image_camera = (np.arange(n_img) % 2).astype(np.uint32)
+    rots = [_quat_to_matrix(q) for q in s["quats"]]
+    uv, oi, op = [], [], []
+    for p in range(n_pt):
+        for i in range(n_img):
+            c = rots[i] @ s["points"][p] + s["trans"][i]
+            if c[2] >= -0.5:
+                continue
+            px = _TWO_CAMERAS[image_camera[i]].ray_to_pixel(c.tolist())
+            if px is None or not (0 <= px[0] < 640 and 0 <= px[1] < 480):
+                continue
+            uv.append(px)
+            oi.append(i)
+            op.append(p)
+    s["uv"] = np.asarray(uv, dtype=np.float64)
+    s["obs_image"] = np.array(oi, dtype=np.uint32)
+    s["obs_point"] = np.array(op, dtype=np.uint32)
+    s["image_camera"] = image_camera
+    return s
+
+
+def _run_cameras(s, cameras, **kw):
+    return bundle_adjust(
+        list(cameras),
+        s["image_camera"],
+        s["quats"],
+        s["trans"],
+        s["points"],
+        s["uv"],
+        s["obs_image"],
+        s["obs_point"],
+        **kw,
+    )
+
+
+def test_two_cameras_each_come_back_as_they_went_in_without_a_release():
+    s = _two_camera_scene()
+    out = _run_cameras(s, _TWO_CAMERAS)
+    assert len(out["cameras"]) == 2
+    for solved, given in zip(out["cameras"], _TWO_CAMERAS):
+        assert isinstance(solved, CameraIntrinsics)
+        assert solved == given
+    assert np.max(out["residual_norms"]) < 1e-5
+
+
+def test_opt_f_recovers_each_camera_its_own_focal():
+    s = _two_camera_scene()
+    started = (_cam_pp(500.0 * 1.05, 320.0, 240.0), _cam_pp(620.0 * 0.96, 327.0, 235.0))
+    out = _run_cameras(s, started, opt_f=True)
+    assert abs(_focal(out, 0) - 500.0) / 500.0 < 0.01, _focal(out, 0)
+    assert abs(_focal(out, 1) - 620.0) / 620.0 < 0.01, _focal(out, 1)
+
+
+def test_camera_list_validation():
+    s = _two_camera_scene()
+    with pytest.raises(ValueError, match="at least one CameraIntrinsics"):
+        _run_cameras(s, [])
+    short = dict(s, image_camera=s["image_camera"][:-1])
+    with pytest.raises(ValueError, match=r"image_camera must have shape \(n_img,\)"):
+        _run_cameras(short, _TWO_CAMERAS)
+    past = dict(s, image_camera=np.full_like(s["image_camera"], 2))
+    with pytest.raises(ValueError, match="image_camera index 2 out of range"):
+        _run_cameras(past, _TWO_CAMERAS)
+
+
+def test_opt_f_names_the_camera_that_cannot_release_its_focal():
+    s = _two_camera_scene()
+    pinhole = CameraIntrinsics.from_dict(
+        {
+            "model": "PINHOLE",
+            "width": 640,
+            "height": 480,
+            "parameters": {
+                "focal_length_x": 620.0,
+                "focal_length_y": 620.0,
+                "principal_point_x": 327.0,
+                "principal_point_y": 235.0,
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="camera 1 is PINHOLE"):
+        _run_cameras(s, [_TWO_CAMERAS[0], pinhole], opt_f=True)

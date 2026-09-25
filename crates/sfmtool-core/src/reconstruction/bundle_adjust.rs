@@ -16,8 +16,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use super::data::SfmrReconstruction;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::bundle_adjust::{
-    BaSchedule, DistanceReference, FreePointPolicy, PointConstraints, PointConstraintsError,
-    DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    BaCameras, BaSchedule, DistanceReference, FreePointPolicy, PointConstraints,
+    PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 use crate::numeric::median_in_place;
 use crate::progress::Progress;
@@ -398,7 +398,7 @@ pub fn bundle_adjust(
     // a second spelling of it here.
     let residuals = p_before.phase("residuals before");
     let before = crate::geometry::bundle_adjust::bundle_adjust(
-        camera,
+        &BaCameras::shared(camera, posed.len()),
         &mut quats.clone(),
         &mut trans.clone(),
         &mut points.clone(),
@@ -428,7 +428,7 @@ pub fn bundle_adjust(
 
     let solve = p_solve.phase("solve");
     let solved = crate::geometry::bundle_adjust::bundle_adjust(
-        camera,
+        &BaCameras::shared(camera, posed.len()),
         &mut quats,
         &mut trans,
         &mut points,
@@ -481,7 +481,7 @@ pub fn bundle_adjust(
     }
     let focal_before = camera.focal_lengths().0;
     if options.opt_f {
-        out.image_table.cameras[camera_index as usize] = camera.with_focal(solved.focal);
+        out.image_table.cameras[camera_index as usize] = solved.cameras[0].clone();
     }
 
     // Each point's own residuals, for the stored error column and for the
@@ -540,7 +540,7 @@ pub fn bundle_adjust(
         median_residual_after: median_residual(&solved.residual_norms, &obs_pt, &keep),
         focal_before,
         focal_after: if options.opt_f {
-            solved.focal
+            solved.cameras[0].focal_lengths().0
         } else {
             focal_before
         },

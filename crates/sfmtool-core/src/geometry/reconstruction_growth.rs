@@ -45,7 +45,8 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use crate::features::cluster_match::covisibility::ClusterCovisibility;
 use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions};
 use crate::geometry::bundle_adjust::{
-    bundle_adjust, BaSchedule, FreePointPolicy, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    bundle_adjust, BaCameras, BaSchedule, FreePointPolicy, DEFAULT_PROTECTED_LOSS_SCALE,
+    DEFAULT_SCHEDULE,
 };
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::numeric::{median, splitmix64};
@@ -648,7 +649,7 @@ pub fn grow_reconstruction(
             uv.push(positions_xy[k]);
         }
         bundle_adjust(
-            camera,
+            &BaCameras::shared(camera, quats.len()),
             quats,
             trans,
             points,
@@ -1049,7 +1050,7 @@ pub fn grow_reconstruction(
         }
     }
     let ba = bundle_adjust(
-        camera,
+        &BaCameras::shared(camera, quats.len()),
         &mut quats,
         &mut trans,
         &mut points,
@@ -1070,8 +1071,8 @@ pub fn grow_reconstruction(
         BA_MIN_OBS,
         &Progress::none(),
     );
-    let focal = ba.focal;
-    let cam_final = camera.with_focal(focal);
+    let cam_final = ba.cameras[0].clone();
+    let focal = cam_final.focal_lengths().0;
     // Re-triangulation at the released focal (the finishing adjustment wiped
     // every cluster outside its observation set).
     fill_new_points(

@@ -326,11 +326,12 @@ pub fn triangulate_points_from_rays(
             }
         })
         .collect();
-    decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules)
+    decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules, None)
 }
 
 /// Triangulate every track of an observation set, building the world rays
-/// through `cam` and the observing image's pose.
+/// through `cam` and the observing image's pose. A set whose images were taken
+/// through several cameras goes through `triangulate_points_through_cameras`.
 ///
 /// The world ray of an observation is `R⁻¹ · pixel_to_ray(u, v)` and its camera
 /// centre `-R⁻¹ t`, with `R` the image's world-to-camera rotation. An
@@ -341,6 +342,78 @@ pub fn triangulate_points_from_observations(
     obs: ObservationSet<'_>,
     marks: Option<&[bool]>,
     rules: PointRules<'_>,
+) -> TriangulatedPoints {
+    let lenses = Lenses {
+        cameras: std::slice::from_ref(cam),
+        image_camera: None,
+    };
+    from_observations(lenses, obs, marks, rules, None)
+}
+
+/// [`triangulate_points_from_observations`] over images taken through several
+/// cameras, with the floor read per track.
+///
+/// `image_camera` holds, per image, the index into `cameras` of the camera that
+/// took it, so each observation's ray is `pixel_to_ray` through its own lens.
+/// `track_floor_rad`, where given, is the angular floor of each track in the
+/// caller's track order and replaces [`PointRules::floor_rad`]: the bundle
+/// adjustment's noise floor is an angle per track, because a track can be seen
+/// through cameras of different focal lengths.
+pub(crate) fn triangulate_points_through_cameras(
+    cameras: &[CameraIntrinsics],
+    image_camera: &[u32],
+    obs: ObservationSet<'_>,
+    marks: Option<&[bool]>,
+    rules: PointRules<'_>,
+    track_floor_rad: Option<&[f64]>,
+) -> TriangulatedPoints {
+    assert_eq!(
+        image_camera.len(),
+        obs.quats_wxyz.len() / 4,
+        "image_camera must have one entry per image"
+    );
+    if let Some(floors) = track_floor_rad {
+        assert_eq!(
+            floors.len(),
+            obs.n_tracks,
+            "track_floor_rad must have one entry per track"
+        );
+    }
+    let lenses = Lenses {
+        cameras,
+        image_camera: Some(image_camera),
+    };
+    from_observations(lenses, obs, marks, rules, track_floor_rad)
+}
+
+/// The camera each image of an observation set was taken through.
+#[derive(Clone, Copy)]
+struct Lenses<'a> {
+    cameras: &'a [CameraIntrinsics],
+    /// Per image, the index into `cameras`; `None` is every image through the
+    /// first.
+    image_camera: Option<&'a [u32]>,
+}
+
+impl<'a> Lenses<'a> {
+    /// The camera that took image `image`.
+    #[inline]
+    fn of(&self, image: usize) -> &'a CameraIntrinsics {
+        match self.image_camera {
+            Some(ic) => &self.cameras[ic[image] as usize],
+            None => &self.cameras[0],
+        }
+    }
+}
+
+/// The observation form's body, shared by the one-camera and the per-image
+/// entry points.
+fn from_observations(
+    lenses: Lenses<'_>,
+    obs: ObservationSet<'_>,
+    marks: Option<&[bool]>,
+    rules: PointRules<'_>,
+    track_floor_rad: Option<&[f64]>,
 ) -> TriangulatedPoints {
     let n_obs = obs.obs_image.len();
     assert_eq!(obs.obs_point.len(), n_obs, "obs_image/obs_point mismatch");
@@ -395,7 +468,7 @@ pub fn triangulate_points_from_observations(
             prev = Some(p);
         }
         let i = obs.obs_image[k] as usize;
-        let d = cam.pixel_to_ray(obs.uv[2 * k], obs.uv[2 * k + 1]);
+        let d = lenses.of(i).pixel_to_ray(obs.uv[2 * k], obs.uv[2 * k + 1]);
         let world = inv[i] * Vector3::new(d[0], d[1], d[2]);
         if !world.x.is_finite() || !world.y.is_finite() || !world.z.is_finite() {
             continue;
@@ -418,7 +491,14 @@ pub fn triangulate_points_from_observations(
             });
         }
     }
-    decide(&tracks, obs.n_tracks, n_obs, Some((cam, obs)), rules)
+    decide(
+        &tracks,
+        obs.n_tracks,
+        n_obs,
+        Some((lenses, obs)),
+        rules,
+        track_floor_rad,
+    )
 }
 
 /// The distance entry of one track, or `None` where the rule says nothing about
@@ -475,13 +555,15 @@ struct Solved {
 /// The shared decision pass over prepared tracks.
 ///
 /// `n_obs` is how many observations the caller handed in, which is the length
-/// of the per-observation prune mask.
+/// of the per-observation prune mask. `track_floor_rad`, where given, is the
+/// floor of each track by its slot and replaces `rules.floor_rad`.
 fn decide(
     tracks: &[Track],
     n_tracks: usize,
     n_obs: usize,
-    reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
+    reproject: Option<(Lenses<'_>, ObservationSet<'_>)>,
     rules: PointRules<'_>,
+    track_floor_rad: Option<&[f64]>,
 ) -> TriangulatedPoints {
     let mut xyzw = vec![[f64::NAN; 4]; n_tracks];
     let mut verdicts = vec![PointVerdict::Few; n_tracks];
@@ -491,7 +573,10 @@ fn decide(
     // The widest pair is read once, here, and only where the floor asks for it:
     // it costs O(K²) in the track's observation count, and a caller with the
     // floor off has not asked for that pass.
-    let cos_floor = rules.floor_rad.map(f64::cos);
+    let floor_of = |slot: usize| match track_floor_rad {
+        Some(floors) => Some(floors[slot]),
+        None => rules.floor_rad,
+    };
     let early: Vec<(Option<Early>, Option<f64>)> = tracks
         .par_iter()
         .map(|t| {
@@ -508,7 +593,7 @@ fn decide(
             if t.marked {
                 return (Some(Early::Marked), None);
             }
-            match cos_floor {
+            match floor_of(t.slot).map(f64::cos) {
                 None => (None, None),
                 Some(c) => {
                     let m = smallest_pairwise_cosine(&t.dirs);
@@ -544,15 +629,15 @@ fn decide(
             }
             if rules.cheirality && !front {
                 if rules.prune_behind {
-                    if let Some(s) = prune_behind(t, p, reproject, rules) {
+                    if let Some(s) = prune_behind(t, p, reproject, rules, floor_of(t.slot)) {
                         return s;
                     }
                 }
                 return refused(PointVerdict::Behind, &t.dirs, false);
             }
             if let Some(bar) = rules.bar_px {
-                if let Some((cam, obs)) = reproject {
-                    if !clears_bar(cam, obs, &t.rows, &t.centres, p, bar) {
+                if let Some((lenses, obs)) = reproject {
+                    if !clears_bar(lenses, obs, &t.rows, &t.centres, p, bar) {
                         return refused(PointVerdict::OverBar, &t.dirs, front);
                     }
                 }
@@ -673,7 +758,7 @@ fn ranged(
     at: PointDistance,
     free: Vector3<f64>,
     free_in_front: bool,
-    reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
+    reproject: Option<(Lenses<'_>, ObservationSet<'_>)>,
 ) -> Solved {
     if !at.distance.is_finite() {
         return Solved {
@@ -696,8 +781,8 @@ fn ranged(
         }
     };
     let d = match reproject {
-        Some((cam, obs)) => {
-            refine_ranged_direction(cam, obs, &track.rows, origin, at.distance, start)
+        Some((lenses, obs)) => {
+            refine_ranged_direction(lenses, obs, &track.rows, origin, at.distance, start)
         }
         // `check_distances` refuses the ray form, so this is unreachable for a
         // ranged track; the start direction is the honest answer if it ever is.
@@ -724,7 +809,7 @@ fn ranged(
 /// taken, so the rule cannot walk a track away from its pixels however badly
 /// the distance and the rays disagree.
 fn refine_ranged_direction(
-    cam: &CameraIntrinsics,
+    lenses: Lenses<'_>,
     obs: ObservationSet<'_>,
     rows: &[usize],
     origin: Vector3<f64>,
@@ -752,6 +837,7 @@ fn refine_ranged_direction(
         for &k in rows {
             let (r, t) = pose(k);
             let p = r * x + t;
+            let cam = lenses.of(obs.obs_image[k] as usize);
             match cam.ray_to_pixel([p.x, p.y, p.z]) {
                 Some((u, v)) => {
                     let du = u - obs.uv[2 * k];
@@ -774,6 +860,7 @@ fn refine_ranged_direction(
         for &k in rows {
             let (r, t) = pose(k);
             let p = r * x + t;
+            let cam = lenses.of(obs.obs_image[k] as usize);
             let Some((u, v)) = cam.ray_to_pixel([p.x, p.y, p.z]) else {
                 continue;
             };
@@ -863,12 +950,13 @@ fn refused(verdict: PointVerdict, dirs: &[Vector3<f64>], front: bool) -> Solved 
 /// the floor over the surviving pair angles, cheirality again over the new
 /// solve, and the bar over the surviving observations. `None` where any of them
 /// refuses, which leaves the track the bearing it would have been anyway, with
-/// nothing pruned.
+/// nothing pruned. `floor_rad` is the track's own floor.
 fn prune_behind(
     track: &Track,
     p: Vector3<f64>,
-    reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
+    reproject: Option<(Lenses<'_>, ObservationSet<'_>)>,
     rules: PointRules<'_>,
+    floor_rad: Option<f64>,
 ) -> Option<Solved> {
     let n = track.dirs.len();
     let behind: Vec<usize> = (0..n)
@@ -887,7 +975,7 @@ fn prune_behind(
     let rows: Vec<usize> = keep.iter().map(|&i| track.rows[i]).collect();
 
     let mut cos_widest = None;
-    if let Some(c) = rules.floor_rad.map(f64::cos) {
+    if let Some(c) = floor_rad.map(f64::cos) {
         let m = smallest_pairwise_cosine(&dirs);
         if m > c {
             return None;
@@ -900,8 +988,8 @@ fn prune_behind(
         return None;
     }
     if let Some(bar) = rules.bar_px {
-        if let Some((cam, obs)) = reproject {
-            if !clears_bar(cam, obs, &rows, &centres, q, bar) {
+        if let Some((lenses, obs)) = reproject {
+            if !clears_bar(lenses, obs, &rows, &centres, q, bar) {
                 return None;
             }
         }
@@ -984,7 +1072,7 @@ pub(crate) fn smallest_pairwise_cosine(dirs: &[Vector3<f64>]) -> f64 {
 /// project carry no residual and do not vote; a set where none of them projects
 /// fails the bar.
 fn clears_bar(
-    cam: &CameraIntrinsics,
+    lenses: Lenses<'_>,
     obs: ObservationSet<'_>,
     rows: &[usize],
     centres: &[Point3<f64>],
@@ -996,7 +1084,7 @@ fn clears_bar(
         let i = obs.obs_image[k] as usize;
         let d = p - centres[n].coords;
         let xc = pose_rotation(obs, i) * d;
-        if let Some((u, v)) = cam.ray_to_pixel([xc.x, xc.y, xc.z]) {
+        if let Some((u, v)) = lenses.of(i).ray_to_pixel([xc.x, xc.y, xc.z]) {
             let du = obs.uv[2 * k] - u;
             let dv = obs.uv[2 * k + 1] - v;
             let r = (du * du + dv * dv).sqrt();
