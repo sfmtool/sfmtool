@@ -26,7 +26,8 @@ import cv2
 import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool.sift.file import SiftExtractionError, xxh128_of_file
+from sfmtool.sift.extract import SiftExtractionError
+from sfmtool.sift.file import xxh128_of_file
 
 __all__ = [
     "get_default_sfmtool_feature_options",

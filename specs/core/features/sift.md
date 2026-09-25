@@ -448,8 +448,9 @@ low-risk overlaps:
 - **Stream `.sift` writes per image** instead of buffering a whole chunk
   (`chunk_size = 500` images) in memory — `extract_sift_with_sfmtool` is a
   generator that yields one result at a time, and `image_files_to_sift_files`
-  writes each as it arrives. A peak-memory win (hundreds of MB for dense,
-  high-resolution inputs). (Up front, before any extraction, images whose `.sift`
+  in [`sift/extract.py`](../../../src/sfmtool/sift/extract.py) writes each as it
+  arrives. A peak-memory win (hundreds of MB for dense, high-resolution inputs).
+  (Up front, before any extraction, images whose `.sift`
   is already newer than the source are skipped via an mtime check, so the
   pipeline only runs on stale/missing outputs.)
 - **The `write_sift` binding releases the GIL** (`py.detach`) around its

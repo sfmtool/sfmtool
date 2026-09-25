@@ -898,8 +898,8 @@ image-to-panel transform (accounting for the fitted image size and offset within
 
 - **Features mode**: For each SIFT feature:
   - Draw an oriented ellipse (green stroke) from the 2×2 affine shape matrix. Decompose
-    via SVD to get semi-axis lengths and rotation angle — same math as
-    `sift_file.py:draw_sift_features()` (lines 830-860).
+    via SVD to get semi-axis lengths and rotation angle — equivalent to the
+    transformed circle drawn by [`draw_sift_features`](../../src/sfmtool/sift/draw.py).
   - Draw a small filled circle (red) at the center position.
   - Only draw features within the visible panel region for performance.
   - The "Tracked only" checkbox controls whether untracked features are shown.

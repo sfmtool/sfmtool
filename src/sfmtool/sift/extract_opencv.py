@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool.sift.file import SiftExtractionError, feature_size, xxh128_of_file
+from sfmtool.sift.extract import SiftExtractionError
+from sfmtool.sift.file import feature_size, xxh128_of_file
 
 __all__ = [
     "get_default_opencv_feature_options",

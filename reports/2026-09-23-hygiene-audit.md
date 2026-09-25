@@ -174,6 +174,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low. Risk: low.
 
 **Split SIFT file I/O from extraction and drawing**
+> _Status (2026-09-24): Done — extraction and drawing live in `sift/extract.py` and `sift/draw.py`, with `sift/file.py` retaining compatibility exports._
 - Location: `src/sfmtool/sift/file.py` (873 lines).
 - Problem: Its hash helpers (61–110), file I/O (229–597), extraction (598–791), and drawing (799–873) remain four concerns behind a file-oriented name.
 - Proposed fix: Retain file I/O here and move extraction/drawing to named siblings, preserving imports temporarily.
