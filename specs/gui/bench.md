@@ -42,7 +42,7 @@ The bench half of the history is in
 `AppState` method in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the
 SIFT index a search queries is in
 [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), one of the node's
-two search files ([search_files.rs](../../crates/sfm-explorer/src/search_files.rs)).
+two index files ([index_files.rs](../../crates/sfm-explorer/src/index_files.rs)).
 
 ```rust
 /// One hand edit of a track's geometry, in the form the core steps take.
@@ -209,22 +209,22 @@ impl AppState {
 
 // The index the search queries, in
 // [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), and the
-// search files it is one of, in
-// [search_files.rs](../../crates/sfm-explorer/src/search_files.rs); specified
-// in [sift-index.md](sift-index.md) and [search-files.md](search-files.md).
+// index files it is one of, in
+// [index_files.rs](../../crates/sfm-explorer/src/index_files.rs); specified
+// in [sift-index.md](sift-index.md) and [index-files.md](index-files.md).
 impl AppState {
     pub(crate) fn sift_index(&self, id: ReconId) -> Option<&SiftIndex>;
-    pub(crate) fn sift_index_state(&self, id: ReconId) -> SearchFileState;
+    pub(crate) fn sift_index_state(&self, id: ReconId) -> IndexFileState;
     pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
-    /// Open the node's search files if they are there and nothing has looked
+    /// Open the node's index files if they are there and nothing has looked
     /// yet, re-derive their states when a version has moved the image table,
     /// and remember the look either way.
-    pub(crate) fn refresh_search_files(&mut self, id: ReconId);
-    pub(crate) fn open_search_files(&mut self, id: ReconId, sift_index: Option<PathBuf>,
+    pub(crate) fn refresh_index_files(&mut self, id: ReconId);
+    pub(crate) fn open_index_files(&mut self, id: ReconId, sift_index: Option<PathBuf>,
                                     cluster_patches: Option<PathBuf>) -> Result<(), String>;
-    pub(crate) fn close_search_files(&mut self, id: ReconId) -> Result<(), String>;
-    pub(crate) fn build_search_files_refusal(&self, id: ReconId) -> Option<String>;
-    pub(crate) fn start_build_search_files(&mut self, id: ReconId) -> Result<(), String>;
+    pub(crate) fn close_index_files(&mut self, id: ReconId) -> Result<(), String>;
+    pub(crate) fn build_index_files_refusal(&self, id: ReconId) -> Option<String>;
+    pub(crate) fn start_build_index_files(&mut self, id: ReconId) -> Result<(), String>;
 }
 ```
 
@@ -438,9 +438,9 @@ A reading, a fit and a stage change run as **background tasks**
 ([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
 track` and `Set track stage`, beside `Geometry search`, which reads
 photographs too, `Search descriptors`, which reads a `.kdf` and a capture's
-`.sift` files rather than photographs, and `Build search files`, which reads
-the `.sift` files and then the photographs ([`search-files.md`](search-files.md)).
-All but the search-files build are
+`.sift` files rather than photographs, and `Build index files`, which reads
+the `.sift` files and then the photographs ([`index-files.md`](index-files.md)).
+All but the index-files build are
 **cancellable**: the kernels they run take the `Progress` for their phases and
 poll its flag as well -- between the reading's rounds, between the views the
 localizer or the geometry selector renders, in front of the forest query and
@@ -616,11 +616,11 @@ create_bench_cluster."*
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // commit_bench_track           { "reconstruction_label": "bull" }
 //
-// The search files, which are the node's rather than any track's, and the
+// The index files, which are the node's rather than any track's, and the
 // search through its SIFT index, which is one observation's.
-// open_search_files               { "reconstruction_label": "bull" }
-// build_search_files              { "reconstruction_label": "bull" }
-// close_search_files              { "reconstruction_label": "bull" }
+// open_index_files               { "reconstruction_label": "bull" }
+// build_index_files              { "reconstruction_label": "bull" }
+// close_index_files              { "reconstruction_label": "bull" }
 // search_bench_track_descriptors  { "reconstruction_label": "bull", "observation": 0 }
 //
 // The other search, which asks the reconstruction's geometry rather than an
@@ -747,17 +747,17 @@ through the counts for whichever row is new. So `undo`, `redo` and
 `jump_to_version` need no bench variant: the history they walk already holds the
 bench steps.
 
-**The three search-files tools push no version.** The search files sit beside
-the node's `.sfmr`, so `open_search_files`, `build_search_files` and
-`close_search_files` change neither the reconstruction nor the bench, and their
-reply is the `search_files` object -- per file its path, which of the three
+**The three index-files tools push no version.** The index files sit beside
+the node's `.sfmr`, so `open_index_files`, `build_index_files` and
+`close_index_files` change neither the reconstruction nor the bench, and their
+reply is the `index_files` object -- per file its path, which of the three
 states it is in, its counts, and the sentence saying why it is stale -- rather
-than a version. `get_bench` reports the same object under `search_files`,
+than a version. `get_bench` reports the same object under `index_files`,
 carrying the node's own paths even when nothing is open, so an agent can see
 where a build would put them; those paths are spelled in one convention, the
 platform's own. A search against an index that is not `current` is refused
 with that index's own sentence ([`sift-index.md`](sift-index.md),
-[`search-files.md`](search-files.md)). The search itself is an ordinary bench step
+[`index-files.md`](index-files.md)). The search itself is an ordinary bench step
 and answers as one.
 
 **The steps that read a file answer in two levels**, as the bundle

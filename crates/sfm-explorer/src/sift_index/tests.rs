@@ -22,8 +22,8 @@ use sfmtool_core::progress::{Event, Progress};
 use super::{index_path, BuildPlan, INDEX_FILE_SUFFIX};
 use crate::action_log::Kind;
 use crate::background::Finished;
+use crate::index_files::IndexFileState;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
-use crate::search_files::SearchFileState;
 use crate::state::edits::tests::projected_embedded_demo;
 use crate::state::AppState;
 
@@ -118,7 +118,7 @@ pub(crate) fn index_of(dir: &Path) -> PathBuf {
 /// workspace puts them, the size of its camera.
 ///
 /// The cluster-patches half of a build decodes every photograph, so a fixture
-/// that builds search files needs them there. The texture is a smooth pattern
+/// that builds index files needs them there. The texture is a smooth pattern
 /// that differs per image, which is enough for the refinement to have
 /// something to score; nothing here asserts what it scores.
 pub(crate) fn with_photographs(state: &AppState, id: ReconId) {
@@ -245,7 +245,7 @@ pub(crate) fn write_sift(
     sfmtool_sift_format::write_sift(path, &data, 3).unwrap();
 }
 
-/// A state whose node has `.sift` files and built, open search files, with
+/// A state whose node has `.sift` files and built, open index files, with
 /// [`POINT`] on the bench under the label it took.
 ///
 /// The centre the patch is planted around is observation 0's own keypoint, read
@@ -268,7 +268,7 @@ pub(crate) fn searchable(dir: &Path) -> (AppState, ReconId, String) {
     };
     with_sift_files(&state, id, center);
     state
-        .start_build_search_files(id)
+        .start_build_index_files(id)
         .expect("a node with .sift files can be indexed");
     state.finish_background_task();
     (state, id, label)
@@ -340,14 +340,14 @@ fn the_index_path_is_spelled_with_one_kind_of_separator() {
 fn a_node_with_no_path_on_disk_cannot_have_an_index_built() {
     let (mut state, id) = unsaved_state();
     let why = state
-        .build_search_files_refusal(id)
+        .build_index_files_refusal(id)
         .expect("nowhere to write it");
     assert_eq!(
         why,
-        "Save demo first: the search files are written beside the .sfmr file."
+        "Save demo first: the index files are written beside the .sfmr file."
     );
     let refused = state
-        .start_build_search_files(id)
+        .start_build_index_files(id)
         .expect_err("the step asks the same question the menu does");
     assert_eq!(refused, why);
     assert!(state.sift_index_path(id).is_none());
@@ -358,11 +358,11 @@ fn a_node_with_no_sift_files_cannot_have_an_index_built() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = state_in(dir.path());
     let why = state
-        .build_search_files_refusal(id)
+        .build_index_files_refusal(id)
         .expect("nothing to index");
     assert!(why.contains("No .sift file"), "{why}");
     let refused = state
-        .start_build_search_files(id)
+        .start_build_index_files(id)
         .expect_err("the step asks the same question the menu does");
     assert_eq!(refused, why);
     assert!(
@@ -411,7 +411,7 @@ fn a_build_indexes_every_sift_file_and_opens_what_it_wrote() {
         state
             .action_log
             .entries()
-            .any(|entry| entry.text.starts_with("Built the search files of")
+            .any(|entry| entry.text.starts_with("Built the index files of")
                 && entry.text.contains("the SIFT index")),
         "the build writes one row saying what it made"
     );
@@ -423,7 +423,7 @@ fn a_build_indexes_every_sift_file_and_opens_what_it_wrote() {
 fn a_built_index_is_current_over_an_embedded_patches_node() {
     let dir = tempfile::tempdir().unwrap();
     let (state, id, _) = searchable(dir.path());
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
     assert_eq!(
         state.sift_index(id).expect("open").stale_reason(),
         None,
@@ -439,10 +439,10 @@ fn a_built_index_is_current_over_a_sift_files_node() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
     state
-        .start_build_search_files(id)
+        .start_build_index_files(id)
         .expect("the fixture has a .sift file per image");
     state.finish_background_task();
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
     assert_eq!(
         state.sift_index(id).expect("open").path,
         dir.path().join(format!("run_a{INDEX_FILE_SUFFIX}"))
@@ -469,7 +469,7 @@ fn an_index_over_other_images_is_stale_naming_the_first_one_it_disagrees_on() {
     renamed
         .open_sift_index(other_id, path.clone())
         .expect("a file that opens is adopted whether or not it fits");
-    assert_eq!(renamed.sift_index_state(other_id), SearchFileState::Stale);
+    assert_eq!(renamed.sift_index_state(other_id), IndexFileState::Stale);
     let why = renamed
         .sift_index(other_id)
         .expect("still open")
@@ -509,7 +509,7 @@ fn an_index_over_more_images_than_the_node_has_is_stale() {
         .delete_image(ImageRef::new(id, 5))
         .expect("an image the node can lose");
     state.open_sift_index(id, path).expect("it still opens");
-    assert_eq!(state.sift_index_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
     let why = state
         .sift_index(id)
         .expect("open")
@@ -544,7 +544,7 @@ fn re_extracted_features_make_the_index_stale() {
         recon.image_table.images[2].name.clone()
     };
     state.open_sift_index(id, path).expect("it opens");
-    assert_eq!(state.sift_index_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
     assert_eq!(
         state.sift_index(id).expect("open").stale_reason(),
         Some(
@@ -610,7 +610,7 @@ fn a_sift_file_that_appeared_or_vanished_makes_the_index_stale() {
 fn a_version_re_derives_the_state_only_when_it_moves_the_image_table() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, label) = searchable(dir.path());
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
 
     // A `.sift` file rewritten underneath: a re-derivation would find it and
     // call the index stale, so the verdict after a version that leaves the
@@ -631,7 +631,7 @@ fn a_version_re_derives_the_state_only_when_it_moves_the_image_table() {
     state.refresh_sift_index(id);
     assert_eq!(
         state.sift_index_state(id),
-        SearchFileState::Current,
+        IndexFileState::Current,
         "a version that moves no image re-reads nothing"
     );
 
@@ -641,7 +641,7 @@ fn a_version_re_derives_the_state_only_when_it_moves_the_image_table() {
         .delete_image(ImageRef::new(id, 5))
         .expect("an image the node can lose");
     state.refresh_sift_index(id);
-    assert_eq!(state.sift_index_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
 }
 
 // ── Opening on sight, and letting go ────────────────────────────────────
@@ -652,7 +652,7 @@ fn looking_for_an_index_that_is_not_there_is_silent_and_remembered() {
     let (mut state, id) = state_in(dir.path());
     state.refresh_sift_index(id);
     assert!(state.sift_index(id).is_none());
-    assert_eq!(state.sift_index_state(id), SearchFileState::None);
+    assert_eq!(state.sift_index_state(id), IndexFileState::None);
     assert!(
         !state
             .action_log
@@ -671,14 +671,14 @@ fn closing_lets_go_of_the_index_and_leaves_the_file() {
     let (mut state, id, _) = searchable(dir.path());
     let path = state.sift_index(id).expect("built above").path.clone();
 
-    state.close_search_files(id).expect("one is open");
-    assert_eq!(state.sift_index_state(id), SearchFileState::None);
+    state.close_index_files(id).expect("one is open");
+    assert_eq!(state.sift_index_state(id), IndexFileState::None);
     assert!(path.is_file(), "the file stays where it is");
     assert!(
         state
             .action_log
             .entries()
-            .any(|entry| entry.text.starts_with("Closed the search files")),
+            .any(|entry| entry.text.starts_with("Closed the index files")),
         "closing is a row of its own"
     );
     let why = state
@@ -688,10 +688,10 @@ fn closing_lets_go_of_the_index_and_leaves_the_file() {
 
     // A second close has nothing to do and says so, and the look is remembered
     // rather than re-opening the file the next frame.
-    let refused = state.close_search_files(id).expect_err("none is open");
-    assert!(refused.contains("No search file is open"), "{refused}");
-    state.refresh_search_files(id);
-    assert_eq!(state.sift_index_state(id), SearchFileState::None);
+    let refused = state.close_index_files(id).expect_err("none is open");
+    assert!(refused.contains("No index file is open"), "{refused}");
+    state.refresh_index_files(id);
+    assert_eq!(state.sift_index_state(id), IndexFileState::None);
 }
 
 // ── What the read makes of the files ────────────────────────────────────
@@ -782,7 +782,7 @@ fn a_cancel_during_the_read_stops_it_and_writes_nothing() {
     let (state, id) = state_in(dir.path());
     with_sift_files(&state, id, [900.0, 500.0]);
     let job = state
-        .build_search_files_job(id)
+        .build_index_files_job(id)
         .expect("a node with .sift files can be indexed");
 
     let flag = AtomicBool::new(false);
@@ -839,7 +839,7 @@ fn an_unreadable_file_is_named_and_it_is_the_first_of_them() {
 
     for _ in 0..8 {
         let job = state
-            .build_search_files_job(id)
+            .build_index_files_job(id)
             .expect("a node with .sift files can be indexed");
         let Finished::Failed(why) = job(&Progress::none()) else {
             panic!("a build over an unreadable file did not fail");
@@ -889,7 +889,7 @@ pub(crate) fn fractions_of(
 ///
 /// Driven through the index build alone, over a `Progress` of its own, so the
 /// fractions are the index's shares rather than their place in the whole
-/// search-files build ([`crate::search_files::tests`] asserts that one).
+/// index-files build ([`crate::index_files::tests`] asserts that one).
 #[test]
 fn a_build_reports_through_the_forest_and_the_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -939,7 +939,7 @@ fn a_cancelled_rebuild_leaves_the_index_that_is_there() {
     let before = std::fs::read(&path).expect("the first build wrote it");
 
     let job = state
-        .build_search_files_job(id)
+        .build_index_files_job(id)
         .expect("a node with .sift files can be indexed");
     let flag = AtomicBool::new(true);
     let (_, finished) = fractions_of(job, Some(&flag));
@@ -967,6 +967,6 @@ fn a_cancelled_rebuild_leaves_the_index_that_is_there() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 
     // The node still has its index open, and it is still the good one.
-    state.refresh_search_files(id);
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
+    state.refresh_index_files(id);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
 }

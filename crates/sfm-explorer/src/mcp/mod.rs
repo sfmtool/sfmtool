@@ -481,8 +481,8 @@ pub(crate) enum Command {
         /// position in `get_bench_track`'s list.
         observation: usize,
     },
-    /// Open the node's search files, or files of the caller's naming.
-    OpenSearchFiles {
+    /// Open the node's index files, or files of the caller's naming.
+    OpenIndexFiles {
         reconstruction_label: String,
         /// The `.kdf`, or `None` for the node's own index path beside its
         /// `.sfmr`.
@@ -491,11 +491,11 @@ pub(crate) enum Command {
         cluster_patches_path: Option<String>,
     },
     /// Build the node's SIFT index and cluster patches, on a worker.
-    BuildSearchFiles {
+    BuildIndexFiles {
         reconstruction_label: String,
     },
-    /// Let go of the node's open search files.
-    CloseSearchFiles {
+    /// Let go of the node's open index files.
+    CloseIndexFiles {
         reconstruction_label: String,
     },
     /// What the background operation is doing, or what the last one did.
@@ -1446,22 +1446,22 @@ pub(crate) fn apply_with_window(
             track.as_deref(),
             observation,
         ),
-        Command::OpenSearchFiles {
+        Command::OpenIndexFiles {
             reconstruction_label,
             sift_index_path,
             cluster_patches_path,
-        } => done(bench::open_search_files(
+        } => done(bench::open_index_files(
             state,
             &reconstruction_label,
             sift_index_path.as_deref(),
             cluster_patches_path.as_deref(),
         )),
-        Command::BuildSearchFiles {
+        Command::BuildIndexFiles {
             reconstruction_label,
-        } => bench::build_search_files(state, &reconstruction_label),
-        Command::CloseSearchFiles {
+        } => bench::build_index_files(state, &reconstruction_label),
+        Command::CloseIndexFiles {
             reconstruction_label,
-        } => done(bench::close_search_files(state, &reconstruction_label)),
+        } => done(bench::close_index_files(state, &reconstruction_label)),
         Command::GetBackgroundTask => done(read::get_background_task(state)),
         Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {

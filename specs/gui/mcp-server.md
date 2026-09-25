@@ -177,9 +177,9 @@ write, and one writes a file.
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it as a candidate, on a worker thread |
-| `open_search_files` | write | Open one reconstruction's search files, its SIFT index and its cluster patches, from its own paths or from files the caller names |
-| `build_search_files` | write | Build one reconstruction's SIFT index and, from it, its cluster patches, beside its `.sfmr`, and open both, on a worker thread |
-| `close_search_files` | write | Let go of the search files open beside one reconstruction |
+| `open_index_files` | write | Open one reconstruction's index files, its SIFT index and its cluster patches, from its own paths or from files the caller names |
+| `build_index_files` | write | Build one reconstruction's SIFT index and, from it, its cluster patches, beside its `.sfmr`, and open both, on a worker thread |
+| `close_index_files` | write | Let go of the index files open beside one reconstruction |
 | `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it, with `workspace_path` stating the workspace path it records |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
@@ -414,7 +414,7 @@ addressable. No arguments.
       },
       "feature_source": "sift_files",     // or "embedded_patches"
       "has_patch_data": false,            // narrower: the frames *and* the bitmaps
-      "search_files": {                   // the files beside this node's .sfmr
+      "index_files": {                   // the files beside this node's .sfmr
         "sift_index": {                   //   that a bench search reads
           "state": "current",             // or "stale", or "none"
           "path": "C:/work/seoul_bull-sift-index.kdf",
@@ -2472,18 +2472,18 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the thirty are about the search files**, the node's SIFT index and
+**Four of the thirty are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
-`open_search_files` opens both, from the node's own paths or from a
+`open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
-`build_search_files` builds the index out of the node's `.sift` files and the
+`build_index_files` builds the index out of the node's `.sift` files and the
 cluster patches out of that index, always at the node's own paths, keeping a
 current index when the cluster patches are the file that is missing or out of
-date; `close_search_files` lets go of both; and `get_bench` reports them under
-`search_files`, with the paths a build would write to even when nothing is
+date; `close_index_files` lets go of both; and `get_bench` reports them under
+`index_files`, with the paths a build would write to even when nothing is
 open. None of the three pushes a version -- the files sit beside the node's
 `.sfmr`, and nothing about the reconstruction or the bench moves -- so `undo`
-has nothing to take back and the reply is the `search_files` object rather
+has nothing to take back and the reply is the `index_files` object rather
 than a version. These are the only names the operation has on the wire: the
 names it had when it built the index alone are refused as unknown tools, with
 no alias, as `point_track` is (§ "`panel`").
@@ -2495,7 +2495,7 @@ files on disk now, and the cluster patches are `current` when they are over
 this node's images in its order and were made from the index that is open and
 current; either is `stale` with a `stale_reason` naming the first discrepancy
 when it is not, and `none` when nothing is open. Only a `current` index answers
-a search ([sift-index.md](sift-index.md), [search-files.md](search-files.md)).
+a search ([sift-index.md](sift-index.md), [index-files.md](index-files.md)).
 The counts are `null` when nothing is open.
 
 **`search_bench_track_descriptors` is the third way an observation reaches a

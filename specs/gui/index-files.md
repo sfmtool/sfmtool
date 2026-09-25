@@ -1,25 +1,25 @@
-# Search Files
+# Index Files
 
-A reconstruction's **search files** are the two files beside its `.sfmr` that a
+A reconstruction's **index files** are the two files beside its `.sfmr` that a
 bench search reads: its **SIFT index**, `<stem>-sift-index.kdf`, which holds
 every SIFT descriptor of the capture arranged for nearest-neighbour queries, and
 its **cluster patches**, `<stem>-cluster-patches.matches`, which holds those
 descriptors clustered into candidate tracks and each cluster refined into a
 patch. The second is made from the first, so the viewer builds both with one
-operation, *Build Search Files*, keeps each one's none / current / stale state
+operation, *Build Index Files*, keeps each one's none / current / stale state
 beside the node, and shows both in one group of the Scene tree. The index has
 a spec of its own, [sift-index.md](sift-index.md); this one covers the pair,
 the operation that builds them, and the cluster-patches file.
 
 ## Where the files live
 
-The search files of `<dir>/<stem>.sfmr` are `<dir>/<stem>-sift-index.kdf` and
+The index files of `<dir>/<stem>.sfmr` are `<dir>/<stem>-sift-index.kdf` and
 `<dir>/<stem>-cluster-patches.matches`: siblings of the reconstruction file,
 named after its stem, so two reconstructions saved in one directory have two
 pairs. Both paths are spelled in the platform's own separator, for the reason
 the index's is ([sift-index.md](sift-index.md) § "Building one"). A node with no
 path on disk has nowhere to put them, and every entry that would build them is
-greyed with *"Save ‹label› first: the search files are written beside the .sfmr
+greyed with *"Save ‹label› first: the index files are written beside the .sfmr
 file."*
 
 The cluster-patches file is a `.matches` file with a clusters section and a
@@ -94,7 +94,7 @@ under a running viewer is found by opening it again or rebuilding.
 
 ## Opening on sight
 
-`AppState::refresh_search_files` looks for the index and then the cluster
+`AppState::refresh_index_files` looks for the index and then the cluster
 patches at the node's own paths, when the Scene tree draws, when Track View
 draws, and when the first item goes onto the node's bench. The index opens
 without decoding a tree or a descriptor block; the cluster patches are read for
@@ -110,12 +110,12 @@ said about it.
 
 ## Building them
 
-*Build Search Files* is one background task, `Build search files`
+*Build Index Files* is one background task, `Build index files`
 ([background-tasks.md](background-tasks.md)), that writes the index and then
 the cluster patches from it, each at the node's own path, replacing what is
 there, and opens both. It is live on a node that has been saved, whose images
 have at least one `.sift` file, and that nothing is running on
-(`AppState::build_search_files_refusal`).
+(`AppState::build_index_files_refusal`).
 
 **A current index is kept when the cluster patches are the file that is
 missing or out of date.** When the index open beside the node is at the node's
@@ -124,9 +124,9 @@ skips the index and makes the cluster patches from the index that is open, and
 its Action Log row says the index was already current. Every other build
 writes both, so a node whose two files are current rebuilds both, and a node
 whose index is stale gets cluster patches made from the index the same build
-has just written. The entry reads *Build Search Files* when the node has
-neither file open and *Rebuild Search Files* when it has either
-(`AppState::search_files_build_label`).
+has just written. The entry reads *Build Index Files* when the node has
+neither file open and *Rebuild Index Files* when it has either
+(`AppState::index_files_build_label`).
 
 ### The phases
 
@@ -185,11 +185,11 @@ renames over the target only once the file is whole.
 
 ## The Scene tree rows
 
-The node's last group row is **Search Files**, open by default, with the two
+The node's last group row is **Index Files**, open by default, with the two
 files under it ([scene-graph.md](scene-graph.md) § "Tree rows"):
 
 ```
-▾   Search Files     2 of 2 current
+▾   Index Files     2 of 2 current
       SIFT Index       37,167 descriptors
       Cluster Patches  5,117 clusters
 ```
@@ -199,7 +199,7 @@ when either is stale and dimmed when neither is there. Each child reads its
 size when current, `stale` in the warning colour, `none` dimmed, and
 `building...` while the build runs; its hover carries its file, its counts, and
 the sentence naming the first discrepancy, or where a build would write it. The
-group row's menu carries *Build Search Files* and *Close Search Files*; each
+group row's menu carries *Build Index Files* and *Close Index Files*; each
 child's carries those two with an *Open...* for its own kind of file between
 them, a `.kdf` for the index and a `.matches` for the cluster patches. A file
 opened by hand is adopted whatever its state, and its row says why a stale one
@@ -207,7 +207,7 @@ will not do.
 
 ## The interface
 
-The pair is in [search_files.rs](../../crates/sfm-explorer/src/search_files.rs),
+The pair is in [index_files.rs](../../crates/sfm-explorer/src/index_files.rs),
 the cluster patches in
 [cluster_patches.rs](../../crates/sfm-explorer/src/cluster_patches.rs), and the
 index in [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), each file
@@ -215,34 +215,34 @@ held per node on `AppState`.
 
 ```rust
 /// The state word both files use, on the rows and on the wire.
-pub(crate) enum SearchFileState { None, Current, Stale }
+pub(crate) enum IndexFileState { None, Current, Stale }
 
-pub(crate) const BUILD_SEARCH_FILES: &str = "Build Search Files";
-pub(crate) const REBUILD_SEARCH_FILES: &str = "Rebuild Search Files";
+pub(crate) const BUILD_INDEX_FILES: &str = "Build Index Files";
+pub(crate) const REBUILD_INDEX_FILES: &str = "Rebuild Index Files";
 
 /// Where `node`'s cluster patches go: `<stem>-cluster-patches.matches`.
 pub(crate) fn cluster_patches_path(node: &SceneNode) -> Option<PathBuf>;
 
 impl AppState {
     /// The look and the re-derivation for both files, in that order.
-    pub(crate) fn refresh_search_files(&mut self, id: ReconId);
-    pub(crate) fn build_search_files_refusal(&self, id: ReconId) -> Option<String>;
-    pub(crate) fn search_files_build_label(&self, id: ReconId) -> &'static str;
-    pub(crate) fn start_build_search_files(&mut self, id: ReconId) -> Result<(), String>;
+    pub(crate) fn refresh_index_files(&mut self, id: ReconId);
+    pub(crate) fn build_index_files_refusal(&self, id: ReconId) -> Option<String>;
+    pub(crate) fn index_files_build_label(&self, id: ReconId) -> &'static str;
+    pub(crate) fn start_build_index_files(&mut self, id: ReconId) -> Result<(), String>;
     /// The build's work, owning what it reads, for the starter and the tests.
-    pub(crate) fn build_search_files_job(&self, id: ReconId) -> Result<Job, String>;
+    pub(crate) fn build_index_files_job(&self, id: ReconId) -> Result<Job, String>;
     /// Opens the named files, or the node's own where none is named.
-    pub(crate) fn open_search_files(&mut self, id: ReconId, sift_index: Option<PathBuf>,
+    pub(crate) fn open_index_files(&mut self, id: ReconId, sift_index: Option<PathBuf>,
                                     cluster_patches: Option<PathBuf>) -> Result<(), String>;
-    pub(crate) fn close_search_files(&mut self, id: ReconId) -> Result<(), String>;
+    pub(crate) fn close_index_files(&mut self, id: ReconId) -> Result<(), String>;
 
     pub(crate) fn cluster_patches(&self, id: ReconId) -> Option<&ClusterPatches>;
-    pub(crate) fn cluster_patches_state(&self, id: ReconId) -> SearchFileState;
+    pub(crate) fn cluster_patches_state(&self, id: ReconId) -> IndexFileState;
     pub(crate) fn cluster_patches_path(&self, id: ReconId) -> Option<PathBuf>;
 }
 ```
 
-`open_search_files` requires a named file to open and refuses the step when it
+`open_index_files` requires a named file to open and refuses the step when it
 does not; a file that is not named is opened when it is at the node's own path
 and reads `none` otherwise, and the step is refused when neither file opened.
 Opening again is how a person asks about files changed on disk. Closing lets go
@@ -254,13 +254,13 @@ None of the three, and not the build, is a version.
 The operation and its files have one set of names on the wire
 ([mcp-server.md](mcp-server.md)):
 
-- `build_search_files` `{ reconstruction_label }` starts the build on a worker
+- `build_index_files` `{ reconstruction_label }` starts the build on a worker
   and answers as `evaluate_bench_track` does.
-- `open_search_files` `{ reconstruction_label, sift_index_path?,
+- `open_index_files` `{ reconstruction_label, sift_index_path?,
   cluster_patches_path? }` opens the files by the rule above.
-- `close_search_files` `{ reconstruction_label }` lets go of both.
+- `close_index_files` `{ reconstruction_label }` lets go of both.
 
-`get_bench` and each node of `get_scene` carry the `search_files` object, one
+`get_bench` and each node of `get_scene` carry the `index_files` object, one
 entry per file:
 
 ```json
@@ -282,7 +282,7 @@ the counts are `null` when nothing is open.
 ## Testing
 
 [cluster_patches/tests.rs](../../crates/sfm-explorer/src/cluster_patches/tests.rs)
-and [search_files/tests.rs](../../crates/sfm-explorer/src/search_files/tests.rs),
+and [index_files/tests.rs](../../crates/sfm-explorer/src/index_files/tests.rs),
 headless over the index's workspace fixture, which writes a `.sift` file and a
 photograph per image. Covered: the cluster-patches path being the `.sfmr`'s
 stem beside it in one convention, and absent on an unsaved node; a build
@@ -305,7 +305,7 @@ cluster half naming the file; and the open and the close refusing when there is
 nothing to do. The rows are tested in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs), the
 wire in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs)
-(the `search_files` object on `get_bench` and `get_scene`, the three tools, and
+(the `index_files` object on `get_bench` and `get_scene`, the three tools, and
 a build over a node whose cluster patches are missing keeping its index).
 
 ## Non-goals
@@ -315,4 +315,4 @@ beyond what its state needs. It does not decode photographs through OpenCV, so
 a JPEG capture's refinement can differ from the command line's by what the two
 decoders differ by (§ "Building them"). A build writes the files at the node's
 own paths only; a pair under other names is made outside the viewer and opened
-with *Open...* or `open_search_files`.
+with *Open...* or `open_index_files`.

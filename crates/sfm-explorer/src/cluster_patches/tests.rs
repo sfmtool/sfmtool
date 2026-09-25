@@ -26,8 +26,8 @@ use sfmtool_core::patch::cluster_refine::{
 use sfmtool_core::patch::normal_refine::PatchWindow;
 
 use super::{cluster_patches_path, CLUSTER_PATCHES_FILE_SUFFIX, INDEX_HASH_OPTION};
+use crate::index_files::IndexFileState;
 use crate::scene::ImageRef;
-use crate::search_files::SearchFileState;
 use crate::sift_index::tests::{searchable, state_in};
 use crate::state::AppState;
 
@@ -90,8 +90,8 @@ fn an_unsaved_node_has_no_cluster_patches_path() {
     ));
     let id = state.scene[0].id;
     assert_eq!(state.cluster_patches_path(id), None);
-    state.refresh_search_files(id);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::None);
+    state.refresh_index_files(id);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
 }
 
 // ── What a build makes ──────────────────────────────────────────────────
@@ -103,7 +103,7 @@ fn an_unsaved_node_has_no_cluster_patches_path() {
 fn a_build_writes_cluster_patches_that_read_current() {
     let dir = tempfile::tempdir().unwrap();
     let (state, id, _) = searchable(dir.path());
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
     let file = state.cluster_patches(id).expect("the build opened it");
     assert_eq!(file.path, patches_of(dir.path()));
     assert!(file.clusters > 0, "the planted patch clusters");
@@ -368,8 +368,8 @@ fn cluster_patches_from_a_stale_index_are_stale() {
     }
     let path = state.sift_index(id).expect("built").path.clone();
     state.open_sift_index(id, path).expect("it opens");
-    assert_eq!(state.sift_index_state(id), SearchFileState::Stale);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
     let why = stale_reason(&state, id);
     assert!(why.contains("which is out of date"), "{why}");
 }
@@ -399,10 +399,10 @@ fn cluster_patches_from_another_index_are_stale() {
     let built = crate::sift_index::build_index(plan, &sfmtool_core::progress::Progress::none());
     let index = built.ok().expect("the index is built again").path;
     state
-        .open_search_files(id, Some(index.clone()), None)
+        .open_index_files(id, Some(index.clone()), None)
         .expect("the new index opens");
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
     let why = stale_reason(&state, id);
     assert!(why.contains("other than"), "{why}");
     assert!(why.contains(&index.display().to_string()), "{why}");
@@ -415,12 +415,12 @@ fn cluster_patches_with_no_index_open_are_stale() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, _) = searchable(dir.path());
     std::fs::remove_file(crate::sift_index::tests::index_of(dir.path())).unwrap();
-    state.close_search_files(id).expect("both are open");
+    state.close_index_files(id).expect("both are open");
     state
-        .open_search_files(id, None, None)
+        .open_index_files(id, None, None)
         .expect("the cluster patches are still there");
-    assert_eq!(state.sift_index_state(id), SearchFileState::None);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::None);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
     let why = stale_reason(&state, id);
     assert!(why.contains("No SIFT index is open"), "{why}");
 }
@@ -434,14 +434,14 @@ fn a_version_that_moves_the_image_table_makes_the_file_stale() {
     state
         .set_bench_verdict(id, &label, 0, sfmtool_core::bench::Verdict::Out)
         .expect("a verdict is a version");
-    state.refresh_search_files(id);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    state.refresh_index_files(id);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
 
     state
         .delete_image(ImageRef::new(id, 5))
         .expect("an image the node can lose");
-    state.refresh_search_files(id);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    state.refresh_index_files(id);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
     let why = stale_reason(&state, id);
     assert!(why.contains("covers 8 images"), "{why}");
 }
@@ -462,11 +462,11 @@ fn cluster_patches_over_other_images_are_stale_naming_the_first() {
         recon.image_table.images[0].name = "somewhere_else.jpg".into();
     }
     renamed
-        .open_search_files(other_id, None, Some(path.clone()))
+        .open_index_files(other_id, None, Some(path.clone()))
         .expect("a file that opens is adopted whether or not it fits");
     assert_eq!(
         renamed.cluster_patches_state(other_id),
-        SearchFileState::Stale
+        IndexFileState::Stale
     );
     let why = stale_reason(&renamed, other_id);
     assert!(why.contains("somewhere_else.jpg"), "{why}");
@@ -491,9 +491,9 @@ fn a_clusters_file_with_no_patches_section_is_stale() {
     sfmtool_matches_format::write_matches(&clusters_only, &data, 3).unwrap();
 
     state
-        .open_search_files(id, None, Some(clusters_only))
+        .open_index_files(id, None, Some(clusters_only))
         .expect("it opens");
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
     let why = stale_reason(&state, id);
     assert!(why.contains("no cluster patches section"), "{why}");
 }
@@ -506,8 +506,8 @@ fn a_clusters_file_with_no_patches_section_is_stale() {
 fn looking_for_a_file_that_is_not_there_is_silent_and_remembered() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = state_in(dir.path());
-    state.refresh_search_files(id);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::None);
+    state.refresh_index_files(id);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
     assert!(
         !state
             .action_log
@@ -525,9 +525,9 @@ fn a_later_session_opens_both_files_on_sight() {
     let dir = tempfile::tempdir().unwrap();
     let (_built, _, _) = searchable(dir.path());
     let (mut state, id) = state_in(dir.path());
-    state.refresh_search_files(id);
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    state.refresh_index_files(id);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
     let opened = state
         .action_log
         .entries()

@@ -6,9 +6,9 @@
 //! cluster refined into a patch, where it lives, how one is opened, how one is
 //! built, and what says it is still good.
 //!
-//! See `specs/gui/search-files.md`. The file is made from the node's SIFT index
-//! ([`crate::sift_index`]) by the second half of the search-files build
-//! ([`crate::search_files`]), with the defaults of the two CLI steps that make
+//! See `specs/gui/index-files.md`. The file is made from the node's SIFT index
+//! ([`crate::sift_index`]) by the second half of the index-files build
+//! ([`crate::index_files`]), with the defaults of the two CLI steps that make
 //! one from the command line: `sfm match --cluster`'s background-floor
 //! clustering, run over the index, and `sfm cluster-patches`' refinement. Like
 //! the index it is a node's, opened on sight when it is there and judged
@@ -37,8 +37,8 @@ use sfmtool_matches_format::{
 };
 
 use crate::action_log::{Actor, Kind};
+use crate::index_files::{unsaved_refusal, IndexFileState, Stopped};
 use crate::scene::{ReconId, SceneNode};
-use crate::search_files::{unsaved_refusal, SearchFileState, Stopped};
 use crate::sift_index::{decode_xxh128, image_fingerprint, SiftIndex};
 use crate::state::AppState;
 
@@ -248,11 +248,11 @@ impl AppState {
     }
 
     /// Which of the three states `id`'s cluster-patches file is in.
-    pub(crate) fn cluster_patches_state(&self, id: ReconId) -> SearchFileState {
+    pub(crate) fn cluster_patches_state(&self, id: ReconId) -> IndexFileState {
         match self.cluster_patches(id) {
-            None => SearchFileState::None,
-            Some(file) if file.stale.is_some() => SearchFileState::Stale,
-            Some(_) => SearchFileState::Current,
+            None => IndexFileState::None,
+            Some(file) if file.stale.is_some() => IndexFileState::Stale,
+            Some(_) => IndexFileState::Current,
         }
     }
 
@@ -264,7 +264,7 @@ impl AppState {
     /// Look for `id`'s cluster-patches file if nothing has yet, and re-derive
     /// its state when what it was judged against has moved.
     ///
-    /// Called through [`Self::refresh_search_files`], after the index's own
+    /// Called through [`Self::refresh_index_files`], after the index's own
     /// refresh, so the verdict is taken against the index as it now stands.
     /// Like the index's, it builds nothing and a miss is remembered.
     pub(crate) fn refresh_cluster_patches(&mut self, id: ReconId) {
@@ -619,7 +619,7 @@ fn image_starts(
     if at != forest.len() as u64 {
         return Err(Stopped::Failed(format!(
             "{} holds {} descriptors and the .sift files hold {at}, so it is not an index of \
-             these features. Rebuild the search files.",
+             these features. Rebuild the index files.",
             index_path.display(),
             forest.len()
         )));
@@ -674,7 +674,7 @@ fn member_detections(
         .ok_or_else(|| {
             Stopped::Failed(format!(
                 "{} holds no keypoint geometry, so the clusters have no detections to refine \
-                 from. Rebuild the search files.",
+                 from. Rebuild the index files.",
                 index_path.display()
             ))
         })?;

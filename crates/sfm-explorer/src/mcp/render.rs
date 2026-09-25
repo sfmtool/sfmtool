@@ -29,7 +29,7 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
             .scene
             .iter()
             .map(|node| {
-                reconstruction(node, state.solo, super::bench::search_files(state, node.id))
+                reconstruction(node, state.solo, super::bench::index_files(state, node.id))
             })
             .collect::<Vec<_>>(),
         "selection": selection(state),
@@ -64,15 +64,11 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
 ///
 /// `path` is `null` for a node that came from no file, which is demo data.
 ///
-/// `search_files` is handed in rather than read here, because the files live
+/// `index_files` is handed in rather than read here, because the files live
 /// on `AppState` and one caller holds the node mutably while it builds this
-/// entry. It is [`super::bench::search_files`]'s object either way, so the
+/// entry. It is [`super::bench::index_files`]'s object either way, so the
 /// scene reply and `get_bench` say the same thing about the same files.
-pub(super) fn reconstruction(
-    node: &SceneNode,
-    solo: Option<ReconId>,
-    search_files: Value,
-) -> Value {
+pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, index_files: Value) -> Value {
     let recon = node.recon();
     json!({
         "label": node.label,
@@ -132,7 +128,7 @@ pub(super) fn reconstruction(
         // in the shape `get_bench` reports them: the files a bench search
         // reads are a fact about the reconstruction, so the scene entry is
         // where an agent finds out whether they are there and still good.
-        "search_files": search_files,
+        "index_files": index_files,
     })
 }
 

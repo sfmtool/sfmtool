@@ -33,6 +33,7 @@ mod elide;
 mod goto_point;
 mod image_browser;
 mod image_detail;
+mod index_files;
 mod intrinsics_detail;
 mod layout;
 #[cfg(feature = "mcp")]
@@ -46,7 +47,6 @@ mod save_minimal_prompt;
 mod scene;
 mod scene_graph;
 mod scene_renderer;
-mod search_files;
 mod sift_index;
 mod state;
 #[cfg(test)]

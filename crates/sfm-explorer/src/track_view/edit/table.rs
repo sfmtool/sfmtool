@@ -274,7 +274,7 @@ impl TrackEdit {
         let sources = self.build_refusal.as_ref().and_then(|(_, why)| why.clone());
         crate::context_menu::on_secondary_click(&row_response).show(|ui| {
             match state.sift_index_state(id) {
-                crate::search_files::SearchFileState::Current => {
+                crate::index_files::IndexFileState::Current => {
                     let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
                     let clicked = match state.bench_search_refusal(id, &label, observation) {
                         None => ui
@@ -295,7 +295,7 @@ impl TrackEdit {
                     }
                 }
                 _ => {
-                    let text = state.search_files_build_label(id);
+                    let text = state.index_files_build_label(id);
                     // The staleness sentence where there is one, so the entry
                     // says what is wrong as well as what to do about it.
                     let hint = state
@@ -303,14 +303,14 @@ impl TrackEdit {
                         .and_then(|index| index.stale_reason())
                         .map(str::to_string)
                         .unwrap_or_else(|| {
-                            "No SIFT index is open. Build this reconstruction's search files, \
+                            "No SIFT index is open. Build this reconstruction's index files, \
                              its SIFT index and its cluster patches, beside its .sfmr. Runs on \
                              a worker thread, and does not then run the search."
                                 .to_string()
                         });
                     let refusal = state
                         .busy_refusal(id)
-                        .or_else(|| state.search_files_home_refusal(id))
+                        .or_else(|| state.index_files_home_refusal(id))
                         .or(sources.clone());
                     let button = egui::Button::new(text);
                     let clicked = match refusal {
@@ -321,7 +321,7 @@ impl TrackEdit {
                         }
                     };
                     if clicked {
-                        response.build_search_files = true;
+                        response.build_index_files = true;
                         ui.close();
                     }
                 }

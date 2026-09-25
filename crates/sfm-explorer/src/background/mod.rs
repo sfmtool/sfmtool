@@ -193,9 +193,9 @@ impl Operation {
         kind: Kind::Bench,
     };
 
-    /// A node's search files built and written beside its `.sfmr`: the SIFT
+    /// A node's index files built and written beside its `.sfmr`: the SIFT
     /// index over its `.sift` files, then the cluster-patches file made from
-    /// that index ([`crate::search_files`]).
+    /// that index ([`crate::index_files`]).
     ///
     /// Cancellable in every phase. In the index: the read polls the flag
     /// between images, `KdForestU8::build` polls it as each leaf is placed, and
@@ -206,8 +206,8 @@ impl Operation {
     /// and runs to its end. A file that was there is left standing, because
     /// both writes stream into a temporary sibling and rename over the target
     /// only once they have a whole file.
-    pub(crate) const BUILD_SEARCH_FILES: Operation = Operation {
-        name: "Build search files",
+    pub(crate) const BUILD_INDEX_FILES: Operation = Operation {
+        name: "Build index files",
         cancellable: true,
         kind: Kind::Bench,
     };
@@ -246,7 +246,7 @@ impl Operation {
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
-        Operation::BUILD_SEARCH_FILES,
+        Operation::BUILD_INDEX_FILES,
     ];
 }
 
@@ -362,7 +362,7 @@ pub(crate) enum Finished {
         /// The Action Log sentence, up to the serials.
         text: String,
     },
-    /// A node's search files built, for the node the task ran on: the index
+    /// A node's index files built, for the node the task ran on: the index
     /// it wrote and reopened, if it wrote one, and the cluster-patches file, if
     /// it got that far.
     ///
@@ -371,7 +371,7 @@ pub(crate) enum Finished {
     /// what was written and writes the row, and Undo has nothing to take back.
     /// A build that wrote its index and then stopped still hands the index
     /// back, so the node opens the file that is now on disk.
-    SearchFiles {
+    IndexFiles {
         /// The `.kdf` that was written, and it opened.
         index: Option<(
             std::path::PathBuf,
@@ -380,7 +380,7 @@ pub(crate) enum Finished {
         /// The `.matches` that was written.
         cluster_patches: Option<std::path::PathBuf>,
         /// How the build ended.
-        end: SearchFilesEnd,
+        end: IndexFilesEnd,
     },
     /// The files an open read, each with what it filled in for display, and
     /// the ones it could not read.
@@ -403,11 +403,11 @@ pub(crate) enum Finished {
     Failed(String),
 }
 
-/// How a search-files build ended, beside whatever it wrote.
+/// How a index-files build ended, beside whatever it wrote.
 ///
 /// The three endings of [`Finished`] itself, for a build that may have written
 /// one of its two files before it stopped.
-pub(crate) enum SearchFilesEnd {
+pub(crate) enum IndexFilesEnd {
     /// Both files were written; the Action Log sentence.
     Built(String),
     /// Asked to stop, and did.
@@ -828,7 +828,7 @@ impl AppState {
             // pushed: what was written is opened and the row says what was
             // built. A node that has left the scene in the meantime leaves the
             // files on disk, which the next session opens.
-            Finished::SearchFiles {
+            Finished::IndexFiles {
                 index,
                 cluster_patches,
                 end,
@@ -839,11 +839,11 @@ impl AppState {
                 )),
                 Some(node) => {
                     let wrote_index = index.as_ref().map(|(path, _)| path.display().to_string());
-                    self.install_search_files(node, index, cluster_patches);
+                    self.install_index_files(node, index, cluster_patches);
                     match end {
-                        SearchFilesEnd::Built(text) => Ok(text),
-                        SearchFilesEnd::Failed(message) => Err(message),
-                        SearchFilesEnd::Cancelled => Err(match wrote_index {
+                        IndexFilesEnd::Built(text) => Ok(text),
+                        IndexFilesEnd::Failed(message) => Err(message),
+                        IndexFilesEnd::Cancelled => Err(match wrote_index {
                             None => format!("{} of {label} cancelled", operation.name),
                             Some(path) => format!(
                                 "{} of {label} cancelled after it wrote the SIFT index {path}",

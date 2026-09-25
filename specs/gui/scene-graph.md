@@ -69,7 +69,7 @@ Scene (root, implicit)
 │   │   └── IMG_0004@120,90  3 in
 │   ├── Patches                   ← toggle-only row, present when the recon
 │   │                                carries patch data; not expandable
-│   └── Search Files  1 of 2 current  ← the files beside the .sfmr that a
+│   └── Index Files  1 of 2 current  ← the files beside the .sfmr that a
 │       │                               bench search reads
 │       ├── SIFT Index  1.2M descriptors  ← each current, stale or absent
 │       └── Cluster Patches  3,412 clusters
@@ -307,7 +307,7 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
-  `Build Search Files`, `Convert to Embedded Patches`, `Close`.
+  `Build Index Files`, `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Bundle Adjust...`** refines every pose and point of the node against its
@@ -350,19 +350,19 @@ fixed-height for virtualization.
   `prune_covered_observations` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer. A prune that finds nothing
   covered pushes no version and says so in the Action Log.
-- **`Build Search Files`** builds the node's two search files beside its
+- **`Build Index Files`** builds the node's two index files beside its
   `.sfmr` and opens them, on a worker thread: the SIFT index over every `.sift`
   file of the node, then the cluster patches made from that index
   ([background-tasks.md](background-tasks.md),
-  [search-files.md](search-files.md)). It reads *`Rebuild Search Files`* when
+  [index-files.md](index-files.md)). It reads *`Rebuild Index Files`* when
   either file is open. It sits above `Convert to Embedded Patches` because it
   is where a person looks first when they find a bench search greyed; the
-  Search Files rows below offer the same entry, with the *Open...* and *Close
-  Search Files* that go with it. It is **live only on a node that has been
+  Index Files rows below offer the same entry, with the *Open...* and *Close
+  Index Files* that go with it. It is **live only on a node that has been
   saved, whose images have at least one `.sift` companion, and that nothing is
   running on**, and greyed with the reason otherwise. The gate is
-  `AppState::build_search_files_refusal`, which the wire's
-  `build_search_files` and the operation itself also ask, so the greyed entry
+  `AppState::build_index_files_refusal`, which the wire's
+  `build_index_files` and the operation itself also ask, so the greyed entry
   and a call that asks anyway give one answer.
 - **`Convert to Embedded Patches`** runs the `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
@@ -497,12 +497,12 @@ poses. The panel that edits a track on it is [track-view.md](track-view.md).
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
 
-**Search Files group** — `▾ Search Files  1 of 2 current` — last among the
+**Index Files group** — `▾ Index Files  1 of 2 current` — last among the
 group rows, after Points and after Patches where that row is present, open by
 default, with one child row per file:
 
 ```
-▾   Search Files     1 of 2 current
+▾   Index Files     1 of 2 current
       SIFT Index       1.2M descriptors
       Cluster Patches  stale
 ```
@@ -520,14 +520,14 @@ reconstruction row is, so the menu and the hover come up over the name and not
 only over the status text. A child's hover carries the file, its counts, and
 the sentence naming the first discrepancy when it is stale; with no file open
 it says so and names where a build would write one. The menus: the group row
-carries `Build Search Files` (reading `Rebuild Search Files` when either file
-is open) and `Close Search Files`; each child carries the same two with an
+carries `Build Index Files` (reading `Rebuild Index Files` when either file
+is open) and `Close Index Files`; each child carries the same two with an
 `Open...` for its own kind of file between them. Each entry is greyed with its
 own sentence while the node is busy. `Open...` reports the gesture and nothing
 else, and `dock.rs` puts up the file chooser, as it does for the resection's
 `.matches` file: that is what keeps the panel a pure egui function a headless
 frame can run. The rows and everything behind them are
-[search-files.md](search-files.md) and [sift-index.md](sift-index.md).
+[index-files.md](index-files.md) and [sift-index.md](sift-index.md).
 
 ### Panel plumbing
 
@@ -557,11 +557,11 @@ pub struct SceneGraphResponse {
     /// stays `Copy`; the panel also keeps it for `take_bench_edit`.
     pub edit_bench_item: Option<(ReconId, usize)>,
     pub discard_bench_item: Option<(ReconId, usize)>,
-    /// The Search Files rows' menus, and the build entry on the node's own.
-    pub build_search_files: Option<ReconId>,
+    /// The Index Files rows' menus, and the build entry on the node's own.
+    pub build_index_files: Option<ReconId>,
     pub open_sift_index: Option<ReconId>,
     pub open_cluster_patches: Option<ReconId>,
-    pub close_search_files: Option<ReconId>,
+    pub close_index_files: Option<ReconId>,
 }
 ```
 
@@ -1255,7 +1255,7 @@ bundle from `retain_nodes` on the next frame.
   that is active it pushes no version and writes no `Bench` row; and a
   double-click made while the dock is swapped out for the placeholder still
   raises the panel once the request is drained against the real dock.
-- **The Search Files rows**, through the same whole frames: the group row and
+- **The Index Files rows**, through the same whole frames: the group row and
   both children are drawn, saying `0 of 2 current` and `none` twice on a node
   with neither file, `2 of 2 current` with the descriptor and cluster counts
   once both are built, and `stale` twice once the index is out of date; the
@@ -1269,7 +1269,7 @@ bundle from `retain_nodes` on the next frame.
   `Convert to Embedded Patches`, asserted on where the two entries were drawn;
   and an unsaved node's build entry is dead under the *Save ‹label› first*
   sentence. What the states themselves mean is tested in the modules of
-  [search-files.md](search-files.md) and [sift-index.md](sift-index.md).
+  [index-files.md](index-files.md) and [sift-index.md](sift-index.md).
 - **The reconstruction row's `Bundle Adjust...`**, through the same whole
   frames: live on an adjustable node, drawn **above**
   `Retriangulate All Points`, and reporting the node the menu was opened on

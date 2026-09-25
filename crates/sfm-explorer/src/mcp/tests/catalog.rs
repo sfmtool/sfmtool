@@ -302,15 +302,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "observation": 0 }),
         ),
         (
-            "open_search_files",
+            "open_index_files",
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
-            "build_search_files",
+            "build_index_files",
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
-            "close_search_files",
+            "close_index_files",
             json!({ "reconstruction_label": "alpha" }),
         ),
         ("get_background_task", json!({})),
@@ -727,7 +727,7 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
     // have to be one number. They were "twenty-three" and "the twenty-two".
     let bench = catalog
         .iter()
-        .filter(|spec| spec.name.contains("bench") || spec.name.contains("search_files"))
+        .filter(|spec| spec.name.contains("bench") || spec.name.contains("index_files"))
         .count();
     let family = format!("{} tools that read and work the", spelled(bench));
     assert!(

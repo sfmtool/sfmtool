@@ -375,7 +375,7 @@ impl AppState {
             .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
         let text = format!("Put point {} on the bench as {}", point.point, report.label);
         self.push_bench_step(index, next, text);
-        self.refresh_search_files(point.recon);
+        self.refresh_index_files(point.recon);
         Ok(report.label)
     }
 
@@ -431,7 +431,7 @@ impl AppState {
         // Putting something on the bench is the moment a search becomes
         // possible, so it is the moment to look for the index that would serve
         // one. The look is remembered, so the second item costs nothing.
-        self.refresh_search_files(image.recon);
+        self.refresh_index_files(image.recon);
         Ok(Seeded {
             label: report.label,
             pixel: seeded.pixel,

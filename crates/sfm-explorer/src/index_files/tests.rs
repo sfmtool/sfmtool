@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The search-files build as one operation: what it builds when, what it
+//! The index-files build as one operation: what it builds when, what it
 //! reports, and what a stop or a failure in its second half leaves.
 //!
 //! Over the SIFT index's workspace fixture ([`crate::sift_index::tests`]).
@@ -11,11 +11,11 @@ use std::sync::Mutex;
 
 use sfmtool_core::progress::{Event, Progress};
 
-use super::{SearchFileState, BUILD_SEARCH_FILES, REBUILD_SEARCH_FILES};
-use crate::background::{Finished, SearchFilesEnd};
+use super::{IndexFileState, BUILD_INDEX_FILES, REBUILD_INDEX_FILES};
+use crate::background::{Finished, IndexFilesEnd};
 use crate::sift_index::tests::{index_of, searchable, state_in, with_sift_files};
 
-/// A node with `.sift` files and photographs and neither search file yet.
+/// A node with `.sift` files and photographs and neither index file yet.
 fn unbuilt(dir: &std::path::Path) -> (crate::state::AppState, crate::scene::ReconId) {
     let (state, id) = state_in(dir);
     with_sift_files(&state, id, [900.0, 500.0]);
@@ -28,11 +28,11 @@ fn unbuilt(dir: &std::path::Path) -> (crate::state::AppState, crate::scene::Reco
 fn the_build_entry_reads_build_then_rebuild() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = unbuilt(dir.path());
-    state.refresh_search_files(id);
-    assert_eq!(state.search_files_build_label(id), BUILD_SEARCH_FILES);
-    state.start_build_search_files(id).expect("it starts");
+    state.refresh_index_files(id);
+    assert_eq!(state.index_files_build_label(id), BUILD_INDEX_FILES);
+    state.start_build_index_files(id).expect("it starts");
     state.finish_background_task();
-    assert_eq!(state.search_files_build_label(id), REBUILD_SEARCH_FILES);
+    assert_eq!(state.index_files_build_label(id), REBUILD_INDEX_FILES);
 }
 
 /// One build makes both files, opens both, and both read current.
@@ -40,15 +40,15 @@ fn the_build_entry_reads_build_then_rebuild() {
 fn one_build_makes_both_files_and_both_read_current() {
     let dir = tempfile::tempdir().unwrap();
     let (state, id, _) = searchable(dir.path());
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
     assert!(index_of(dir.path()).is_file());
     assert!(dir.path().join("demo-cluster-patches.matches").is_file());
     assert!(
         state
             .action_log
             .entries()
-            .any(|entry| entry.text.starts_with("Built the search files of demo")),
+            .any(|entry| entry.text.starts_with("Built the index files of demo")),
         "the build writes one row naming both files"
     );
 }
@@ -62,18 +62,18 @@ fn a_build_with_a_current_index_keeps_it_and_makes_the_cluster_patches() {
     let patches = state.cluster_patches(id).expect("built").path.clone();
     let before = std::fs::read(index_of(dir.path())).unwrap();
     std::fs::remove_file(&patches).unwrap();
-    state.close_search_files(id).expect("both are open");
+    state.close_index_files(id).expect("both are open");
     state
-        .open_search_files(id, None, None)
+        .open_index_files(id, None, None)
         .expect("the index is there");
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::None);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
 
-    let job = state.build_search_files_job(id).expect("it can build");
+    let job = state.build_index_files_job(id).expect("it can build");
     let finished = job(&Progress::none());
-    let Finished::SearchFiles {
+    let Finished::IndexFiles {
         index,
         cluster_patches,
-        end: SearchFilesEnd::Built(text),
+        end: IndexFilesEnd::Built(text),
     } = finished
     else {
         panic!("the build did not finish");
@@ -82,8 +82,8 @@ fn a_build_with_a_current_index_keeps_it_and_makes_the_cluster_patches() {
     assert_eq!(cluster_patches.as_deref(), Some(patches.as_path()));
     assert!(text.contains("already current"), "{text}");
     assert_eq!(std::fs::read(index_of(dir.path())).unwrap(), before);
-    state.install_search_files(id, index, cluster_patches);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    state.install_index_files(id, index, cluster_patches);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
 }
 
 /// With a stale index the build writes both files again, so the cluster
@@ -104,15 +104,15 @@ fn a_build_with_a_stale_index_rebuilds_both() {
         );
     }
     state
-        .open_search_files(id, None, None)
+        .open_index_files(id, None, None)
         .expect("both files open again");
-    assert_eq!(state.sift_index_state(id), SearchFileState::Stale);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Stale);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
 
-    state.start_build_search_files(id).expect("it starts");
+    state.start_build_index_files(id).expect("it starts");
     state.finish_background_task();
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::Current);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
 }
 
 /// The bar moves through both halves: fractions inside the index's eighth and
@@ -122,7 +122,7 @@ fn a_build_with_a_stale_index_rebuilds_both() {
 fn the_build_reports_through_both_halves() {
     let dir = tempfile::tempdir().unwrap();
     let (state, id) = unbuilt(dir.path());
-    let job = state.build_search_files_job(id).expect("it can build");
+    let job = state.build_index_files_job(id).expect("it can build");
     let fractions = Mutex::new(Vec::new());
     let phases = Mutex::new(Vec::new());
     let sink = |event: Event<'_>| match event {
@@ -134,8 +134,8 @@ fn the_build_reports_through_both_halves() {
     assert!(
         matches!(
             finished,
-            Finished::SearchFiles {
-                end: SearchFilesEnd::Built(_),
+            Finished::IndexFiles {
+                end: IndexFilesEnd::Built(_),
                 ..
             }
         ),
@@ -176,7 +176,7 @@ fn the_build_reports_through_both_halves() {
 fn a_cancel_in_the_cluster_half_keeps_the_index_it_wrote() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = unbuilt(dir.path());
-    let job = state.build_search_files_job(id).expect("it can build");
+    let job = state.build_index_files_job(id).expect("it can build");
     let flag = AtomicBool::new(false);
     let sink = |event: Event<'_>| {
         if let Event::Enter {
@@ -188,10 +188,10 @@ fn a_cancel_in_the_cluster_half_keeps_the_index_it_wrote() {
         }
     };
     let finished = job(&Progress::to(&sink).cancelled_by(&flag));
-    let Finished::SearchFiles {
+    let Finished::IndexFiles {
         index,
         cluster_patches,
-        end: SearchFilesEnd::Cancelled,
+        end: IndexFilesEnd::Cancelled,
     } = finished
     else {
         panic!("the build did not stop in its cluster half");
@@ -200,9 +200,9 @@ fn a_cancel_in_the_cluster_half_keeps_the_index_it_wrote() {
     assert!(cluster_patches.is_none());
     assert!(index_of(dir.path()).is_file());
     assert!(!dir.path().join("demo-cluster-patches.matches").exists());
-    state.install_search_files(id, index, cluster_patches);
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::None);
+    state.install_index_files(id, index, cluster_patches);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
 }
 
 /// A photograph that cannot be read fails the cluster half naming it, and the
@@ -216,10 +216,10 @@ fn a_missing_photograph_fails_the_cluster_half_naming_it() {
         recon.workspace_dir.join(&recon.image_table.images[4].name)
     };
     std::fs::remove_file(&missing).unwrap();
-    state.start_build_search_files(id).expect("it starts");
+    state.start_build_index_files(id).expect("it starts");
     state.finish_background_task();
-    assert_eq!(state.sift_index_state(id), SearchFileState::Current);
-    assert_eq!(state.cluster_patches_state(id), SearchFileState::None);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+    assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
     let failed = state
         .action_log
         .entries()
@@ -239,13 +239,13 @@ fn open_and_close_refuse_when_there_is_nothing_to_do() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = state_in(dir.path());
     let why = state
-        .open_search_files(id, None, None)
+        .open_index_files(id, None, None)
         .expect_err("neither file is there");
-    assert!(why.contains("No search file of demo"), "{why}");
+    assert!(why.contains("No index file of demo"), "{why}");
     let why = state
-        .open_search_files(id, Some(dir.path().join("missing.kdf")), None)
+        .open_index_files(id, Some(dir.path().join("missing.kdf")), None)
         .expect_err("a named file has to open");
     assert!(why.starts_with("Cannot open"), "{why}");
-    let why = state.close_search_files(id).expect_err("nothing is open");
-    assert!(why.contains("No search file is open"), "{why}");
+    let why = state.close_index_files(id).expect_err("nothing is open");
+    assert!(why.contains("No index file is open"), "{why}");
 }

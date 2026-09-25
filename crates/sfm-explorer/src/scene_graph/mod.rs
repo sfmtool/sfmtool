@@ -20,7 +20,7 @@
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
 //!     👁 Patches                   ← only when the node carries patch data
-//!   ▾   Search Files  1 of 2 current
+//!   ▾   Index Files  1 of 2 current
 //!         SIFT Index       1.2M descriptors   ← current / stale / none
 //!         Cluster Patches  none
 //! ```
@@ -60,9 +60,9 @@ use sfmtool_core::bench::{BenchEntry, StageKind};
 
 use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Layer};
 use crate::align::AlignOptions;
+use crate::index_files::IndexFileState;
 use crate::resect::ResectFrom;
 use crate::scene::{point_id, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
-use crate::search_files::SearchFileState;
 use crate::state::AppState;
 
 mod cameras;
@@ -70,7 +70,7 @@ mod menus;
 mod widgets;
 
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
-use menus::{cluster_patches_menu, node_context_menu, search_files_menu, sift_index_menu};
+use menus::{cluster_patches_menu, index_files_menu, node_context_menu, sift_index_menu};
 use widgets::{counts_text, eye_toggle, glyph_toggle, with_thousands};
 
 /// Height of one tree row. Fixed so the image list can be virtualized, and so
@@ -189,11 +189,11 @@ pub struct SceneGraphResponse {
     /// `AppState::start_prune_covered_observations` sends it to a worker after
     /// the frame.
     pub prune_covered_observations: Option<ReconId>,
-    /// `Build Search Files` / `Rebuild Search Files` chosen, from a Search
+    /// `Build Index Files` / `Rebuild Index Files` chosen, from a Search
     /// Files row's menu or from the reconstruction row's. Reads every `.sift`
-    /// file and photograph of the node, so `AppState::start_build_search_files`
+    /// file and photograph of the node, so `AppState::start_build_index_files`
     /// sends it to a worker after the frame.
-    pub build_search_files: Option<ReconId>,
+    pub build_index_files: Option<ReconId>,
     /// `Open...` chosen on the SIFT Index row, which asks the dock for a `.kdf`
     /// chooser. The panel names no path: a chooser is not an egui widget, so it
     /// lives where the other file questions do.
@@ -201,8 +201,8 @@ pub struct SceneGraphResponse {
     /// `Open...` chosen on the Cluster Patches row, which asks the dock for a
     /// `.matches` chooser.
     pub open_cluster_patches: Option<ReconId>,
-    /// `Close Search Files` chosen on a Search Files row.
-    pub close_search_files: Option<ReconId>,
+    /// `Close Index Files` chosen on a Index Files row.
+    pub close_index_files: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// A Bench row was double-clicked: make that item the active one, select
@@ -291,20 +291,20 @@ impl SceneGraphPanel {
             .background_task()
             .and_then(|task| task.node)
             .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
-        // The Search Files rows are truthful on a node whose bench is empty, so
+        // The Index Files rows are truthful on a node whose bench is empty, so
         // the look that Track View and the bench do happens here too -- once
         // per node per frame, and remembered, so a reconstruction with no files
-        // beside it is not stat-ed again (`specs/gui/search-files.md`).
+        // beside it is not stat-ed again (`specs/gui/index-files.md`).
         let ids: Vec<ReconId> = state.scene.iter().map(|node| node.id).collect();
         for id in ids {
-            state.refresh_search_files(id);
+            state.refresh_index_files(id);
         }
-        // What each node's rows and menus say about its search files, read out
+        // What each node's rows and menus say about its index files, read out
         // before the mutable walk below for the reason `targets` is.
-        let search_files: std::collections::HashMap<ReconId, SearchFilesRows> = state
+        let index_files: std::collections::HashMap<ReconId, IndexFilesRows> = state
             .scene
             .iter()
-            .map(|node| (node.id, SearchFilesRows::of(state, node.id)))
+            .map(|node| (node.id, IndexFilesRows::of(state, node.id)))
             .collect();
         let targets: Vec<AlignTarget> = state
             .scene
@@ -361,7 +361,7 @@ impl SceneGraphPanel {
             align_options: &mut self.align_options,
             targets: &targets,
             busy,
-            search_files: &search_files,
+            index_files: &index_files,
             log,
         };
 
@@ -444,9 +444,9 @@ struct TreeOutput<'a> {
     /// before the walk, because the walk holds the scene and `AppState` is one
     /// borrow.
     busy: Option<(ReconId, String)>,
-    /// What each node's Search Files rows say, read out before the walk for
+    /// What each node's Index Files rows say, read out before the walk for
     /// the same reason.
-    search_files: &'a std::collections::HashMap<ReconId, SearchFilesRows>,
+    index_files: &'a std::collections::HashMap<ReconId, IndexFilesRows>,
     /// Where the toggles that write straight into a node record what they did.
     log: &'a mut ActionLog,
 }
@@ -548,21 +548,21 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
                 ui.label("Patches");
             });
         }
-        show_search_files_group(ui, node, out);
+        show_index_files_group(ui, node, out);
     });
 }
 
-/// What one node's Search Files rows say, taken off `AppState` before the tree
+/// What one node's Index Files rows say, taken off `AppState` before the tree
 /// walk borrows the scene.
 ///
 /// Rows rather than a question asked while drawing, because each file's state
 /// is derived when it is opened or built and when a version moves the image
-/// table, never per frame (`specs/gui/search-files.md`).
-pub(super) struct SearchFilesRows {
+/// table, never per frame (`specs/gui/index-files.md`).
+pub(super) struct IndexFilesRows {
     /// The SIFT index's row.
-    pub(super) index: SearchFileRow,
+    pub(super) index: IndexFileRow,
     /// The cluster-patches file's row.
-    pub(super) patches: SearchFileRow,
+    pub(super) patches: IndexFileRow,
     /// What the build entry is called: a first build or a rebuild.
     pub(super) build_label: &'static str,
     /// Why a build cannot start, or `None` when it can.
@@ -574,13 +574,13 @@ pub(super) struct SearchFilesRows {
 }
 
 /// What one of the two file rows says.
-pub(super) struct SearchFileRow {
+pub(super) struct IndexFileRow {
     /// What the row is called.
     name: &'static str,
     /// What the hover calls the file when there is none.
     noun: &'static str,
     /// Which of the three states the file is in.
-    state: SearchFileState,
+    state: IndexFileState,
     /// The file that is open, or where a build would put one. `None` on a node
     /// with no path on disk.
     path: Option<String>,
@@ -596,11 +596,11 @@ pub(super) struct SearchFileRow {
     save_first: Option<String>,
 }
 
-impl SearchFilesRows {
+impl IndexFilesRows {
     fn of(state: &AppState, id: ReconId) -> Self {
-        let save_first = state.search_files_home_refusal(id);
+        let save_first = state.index_files_home_refusal(id);
         let index = state.sift_index(id);
-        let index_row = SearchFileRow {
+        let index_row = IndexFileRow {
             name: "SIFT Index",
             noun: "SIFT index",
             state: state.sift_index_state(id),
@@ -621,7 +621,7 @@ impl SearchFilesRows {
             save_first: save_first.clone(),
         };
         let patches = state.cluster_patches(id);
-        let patches_row = SearchFileRow {
+        let patches_row = IndexFileRow {
             name: "Cluster Patches",
             noun: "cluster-patches",
             state: state.cluster_patches_state(id),
@@ -645,11 +645,11 @@ impl SearchFilesRows {
         Self {
             index: index_row,
             patches: patches_row,
-            build_label: state.search_files_build_label(id),
-            build_refusal: state.build_search_files_refusal(id),
+            build_label: state.index_files_build_label(id),
+            build_refusal: state.build_index_files_refusal(id),
             close_refusal: (!open)
-                .then(|| "No search file is open beside this reconstruction.".to_string()),
-            building: state.building_search_files(id),
+                .then(|| "No index file is open beside this reconstruction.".to_string()),
+            building: state.building_index_files(id),
         }
     }
 
@@ -665,20 +665,20 @@ impl SearchFilesRows {
     fn current_count(&self) -> usize {
         [self.index.state, self.patches.state]
             .iter()
-            .filter(|state| **state == SearchFileState::Current)
+            .filter(|state| **state == IndexFileState::Current)
             .count()
     }
 
     /// The group row's status is in the warning colour when either file is
     /// stale, dimmed when neither is there, and plain otherwise.
-    fn state(&self) -> SearchFileState {
+    fn state(&self) -> IndexFileState {
         let states = [self.index.state, self.patches.state];
-        if states.contains(&SearchFileState::Stale) {
-            SearchFileState::Stale
-        } else if states.iter().all(|state| *state == SearchFileState::None) {
-            SearchFileState::None
+        if states.contains(&IndexFileState::Stale) {
+            IndexFileState::Stale
+        } else if states.iter().all(|state| *state == IndexFileState::None) {
+            IndexFileState::None
         } else {
-            SearchFileState::Current
+            IndexFileState::Current
         }
     }
 
@@ -694,14 +694,14 @@ impl SearchFilesRows {
     }
 }
 
-impl SearchFileRow {
+impl IndexFileRow {
     /// What the row reads to the right of its name.
     fn status(&self, building: bool) -> String {
         if building {
             return "building...".to_string();
         }
         match (self.state, &self.current) {
-            (SearchFileState::Current, Some(current)) => current.clone(),
+            (IndexFileState::Current, Some(current)) => current.clone(),
             (state, _) => state.name().to_string(),
         }
     }
@@ -715,7 +715,7 @@ impl SearchFileRow {
     /// all, so it gets the sentence its menu entries are greyed with.
     fn hover(&self) -> String {
         let mut text = match (&self.path, self.state) {
-            (Some(path), SearchFileState::None) => {
+            (Some(path), IndexFileState::None) => {
                 format!("No {} file is there.\nA build writes {path}", self.noun)
             }
             (Some(path), _) => path.clone(),
@@ -738,16 +738,16 @@ impl SearchFileRow {
 
 /// The status text in the colour its state is told apart by: the warning
 /// colour when stale, dimmed when there is nothing, plain when current.
-fn status_text(ui: &egui::Ui, text: String, state: SearchFileState) -> egui::RichText {
+fn status_text(ui: &egui::Ui, text: String, state: IndexFileState) -> egui::RichText {
     let status = egui::RichText::new(text).small();
     match state {
-        SearchFileState::Stale => status.color(ui.visuals().warn_fg_color),
-        SearchFileState::None => status.weak(),
-        SearchFileState::Current => status,
+        IndexFileState::Stale => status.color(ui.visuals().warn_fg_color),
+        IndexFileState::None => status.weak(),
+        IndexFileState::Current => status,
     }
 }
 
-/// One row of the Search Files group: its whole width one click target with
+/// One row of the Index Files group: its whole width one click target with
 /// the menu `menu` opens, then its name and its status drawn on top.
 ///
 /// The target is claimed before its contents for the reason the
@@ -758,7 +758,7 @@ fn status_text(ui: &egui::Ui, text: String, state: SearchFileState) -> egui::Ric
 /// `Sense::click_and_drag()` so its text can be dragged out, and being drawn
 /// after the row it wins every pointer hit that lands on it, which would leave
 /// the name the one part of the row with no menu and no hover.
-fn search_files_row(
+fn index_files_row(
     ui: &mut egui::Ui,
     id: egui::Id,
     name: &str,
@@ -776,7 +776,7 @@ fn search_files_row(
     ui.add(egui::Label::new(status).selectable(false));
 }
 
-/// `Search Files   1 of 2 current`, and under it one row per file: the SIFT
+/// `Index Files   1 of 2 current`, and under it one row per file: the SIFT
 /// index and the cluster patches a bench search reads, as rows of the node
 /// they belong to.
 ///
@@ -785,14 +785,14 @@ fn search_files_row(
 /// holds. No eye, because nothing here is drawn in the viewport, and clicking
 /// a row selects nothing. Open by default, so the two states read without a
 /// click; the group row's own count says as much when it is folded.
-fn show_search_files_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let Some(rows) = out.search_files.get(&node.id) else {
+fn show_index_files_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let Some(rows) = out.index_files.get(&node.id) else {
         return;
     };
     let id = node.id;
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
-        row_id(id, "search_files"),
+        row_id(id, "index_files"),
         true,
     );
     let header = state.show_header(ui, |ui| {
@@ -801,14 +801,14 @@ fn show_search_files_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOu
         // so this label sits on the same x as the group rows that have an eye.
         ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, ROW_HEIGHT), egui::Sense::hover());
         let status = status_text(ui, rows.status(), rows.state());
-        search_files_row(
+        index_files_row(
             ui,
-            row_id(id, "search_files_row"),
-            "Search Files",
+            row_id(id, "index_files_row"),
+            "Index Files",
             status,
             rows.hover(),
             out,
-            |ui, out| search_files_menu(ui, id, rows, out),
+            |ui, out| index_files_menu(ui, id, rows, out),
         );
     });
     header.body(|ui| {
@@ -819,7 +819,7 @@ fn show_search_files_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOu
             ui.horizontal(|ui| {
                 ui.set_height(ROW_HEIGHT);
                 let status = status_text(ui, row.status(rows.building), row.state);
-                search_files_row(
+                index_files_row(
                     ui,
                     row_id(id, key),
                     row.name,

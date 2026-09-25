@@ -84,17 +84,17 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
         // The files a search reads, reported here rather than on the track
         // because they are the node's: every track's search goes through the
         // same files.
-        "search_files": search_files(state, id),
+        "index_files": index_files(state, id),
     }))
 }
 
-/// The search files beside a node, as every reply that names them states
+/// The index files beside a node, as every reply that names them states
 /// them: one object per file.
 ///
 /// `state` is the fact a caller acts on -- `current` is the one a search runs
 /// against -- and `path` is the file, which is the node's own path for it even
 /// when nothing is open, so an agent can see where a build would put one.
-pub(super) fn search_files(state: &AppState, id: ReconId) -> Value {
+pub(super) fn index_files(state: &AppState, id: ReconId) -> Value {
     let index = state.sift_index(id);
     let patches = state.cluster_patches(id);
     let shown = |path: Option<std::path::PathBuf>| path.map(|path| path.display().to_string());
@@ -882,7 +882,7 @@ pub(super) fn search_bench_track_geometry(
     }
 }
 
-/// `open_search_files`: the node's search files, or files of the caller's
+/// `open_index_files`: the node's index files, or files of the caller's
 /// naming, adopted for one node.
 ///
 /// Not an edit and not a version: the files sit beside the node's `.sfmr`,
@@ -890,7 +890,7 @@ pub(super) fn search_bench_track_geometry(
 /// the files rather than a version, and there is nothing for `undo` to take
 /// back. A file that is not this node's opens all the same and reports
 /// `state: "stale"` with the sentence saying why.
-pub(super) fn open_search_files(
+pub(super) fn open_index_files(
     state: &mut AppState,
     label: &str,
     sift_index: Option<&str>,
@@ -898,7 +898,7 @@ pub(super) fn open_search_files(
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     state
-        .open_search_files(
+        .open_index_files(
             id,
             sift_index.map(std::path::PathBuf::from),
             cluster_patches.map(std::path::PathBuf::from),
@@ -906,33 +906,33 @@ pub(super) fn open_search_files(
         .map_err(ToolError::new)?;
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        "search_files": search_files(state, id),
+        "index_files": index_files(state, id),
     }))
 }
 
-/// `close_search_files`: both files let go of, left where they are.
-pub(super) fn close_search_files(state: &mut AppState, label: &str) -> JsonReply {
+/// `close_index_files`: both files let go of, left where they are.
+pub(super) fn close_index_files(state: &mut AppState, label: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
-    state.close_search_files(id).map_err(ToolError::new)?;
+    state.close_index_files(id).map_err(ToolError::new)?;
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        "search_files": search_files(state, id),
+        "index_files": index_files(state, id),
     }))
 }
 
-/// `build_search_files`: the node's SIFT index and its cluster patches,
+/// `build_index_files`: the node's SIFT index and its cluster patches,
 /// written beside its `.sfmr` and opened, on a worker thread.
-pub(super) fn build_search_files(state: &mut AppState, label: &str) -> Outcome {
+pub(super) fn build_index_files(state: &mut AppState, label: &str) -> Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    match state.start_build_search_files(id) {
+    match state.start_build_index_files(id) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started_or(state, id, |state| {
             Ok(json!({
                 "reconstruction_label": node_label(state, id),
-                "search_files": search_files(state, id),
+                "index_files": index_files(state, id),
             }))
         }),
     }

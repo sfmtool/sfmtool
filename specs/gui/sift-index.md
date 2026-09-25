@@ -10,7 +10,7 @@ a `.kdf` file -- a randomized k-d tree forest
 ([`../core/features/randomized-kdtree-forest.md`](../core/features/randomized-kdtree-forest.md))
 -- written next to the `.sfmr` it indexes. It is one of the node's two **search
 files**, built together with the other, the cluster patches made from it, by
-one operation ([search-files.md](search-files.md)); this spec is the index's
+one operation ([index-files.md](index-files.md)); this spec is the index's
 half of that pair.
 
 The index is a fact about a **reconstruction**, not about a panel or a
@@ -30,8 +30,8 @@ reconstructions saved in one directory have two indexes, and a reconstruction
 whose images span several image directories has one index in one obvious place.
 
 A node with no path on disk -- the demo scene, a value never saved -- has
-nowhere to put one. Every entry that would build its search files is greyed
-with *"Save ‹label› first: the search files are written beside the .sfmr
+nowhere to put one. Every entry that would build its index files is greyed
+with *"Save ‹label› first: the index files are written beside the .sfmr
 file."*
 
 A reconstruction saved under a new name leaves its index behind under the old
@@ -93,21 +93,21 @@ exactly as true as it was, and only one that adds, removes, renames or reorders
 an image can change the answer.
 
 It is **not** re-derived when a `.sift` file changes on disk under a running
-viewer. *Rebuild Search Files* and re-opening the file are the two ways to ask
+viewer. *Rebuild Index Files* and re-opening the file are the two ways to ask
 again.
 
 Whenever the index's state or identity changes -- it is opened, built, closed,
 or re-derived -- the cluster patches are judged again against it, because they
 are only as current as the index they were made from
-([search-files.md](search-files.md) § "When the cluster patches are stale").
+([index-files.md](index-files.md) § "When the cluster patches are stale").
 
 ## The Scene tree row
 
-Each reconstruction node carries a **Search Files** group last among its group
+Each reconstruction node carries a **Index Files** group last among its group
 rows, after Points and after Patches where that row is present, and the **SIFT
 Index** row is its first child, above the Cluster Patches row
 ([`scene-graph.md`](scene-graph.md) § "Tree rows",
-[search-files.md](search-files.md) § "The Scene tree rows"). They are the one
+[index-files.md](index-files.md) § "The Scene tree rows"). They are the one
 part of a node that is files beside it rather than something the node holds.
 
 ```
@@ -132,16 +132,16 @@ part of a node that is files beside it rather than something the node holds.
   selected, and a label drawn after the row wins every pointer hit that lands on
   it, which leaves the name the one part of the row with no menu and no hover
   ([`scene-graph.md`](scene-graph.md) § "Tree rows").
-- Its context menu carries *Build Search Files* (reading *Rebuild Search
-  Files* when either search file is open), *Open...*, which opens a `.kdf`, and
-  *Close Search Files* (live only when a search file is open). Each is greyed
+- Its context menu carries *Build Index Files* (reading *Rebuild Search
+  Files* when either index file is open), *Open...*, which opens a `.kdf`, and
+  *Close Index Files* (live only when a index file is open). Each is greyed
   with its own sentence while the node is busy.
 - While the build runs the row reads `building...`; progress and cancellation
   are the background task's own
   ([`background-tasks.md`](background-tasks.md)).
 
-The reconstruction row's context menu carries *Build Search Files* (*Rebuild
-Search Files* when either file is open) too, above *Convert to Embedded
+The reconstruction row's context menu carries *Build Index Files* (*Rebuild
+Index Files* when either file is open) too, above *Convert to Embedded
 Patches*, under the same gate. It is where a person looks first.
 
 ## The search entry
@@ -150,12 +150,12 @@ In Track View a row's context menu offers *Find matches by SIFT
 query* when the node's index is current ([`track-view.md`](track-view.md)
 § "Edit mode"). When it is not, the entry itself is the remedy:
 
-- `none`: the entry reads *Build Search Files* (or *Rebuild Search Files* when
+- `none`: the entry reads *Build Index Files* (or *Rebuild Index Files* when
   the cluster patches are open without an index) and starts the build.
-- `stale`: the entry reads *Rebuild Search Files*, starts the build, and
+- `stale`: the entry reads *Rebuild Index Files*, starts the build, and
   carries the staleness sentence as its hover text.
 
-The label is the one every menu uses, `AppState::search_files_build_label`, so
+The label is the one every menu uses, `AppState::index_files_build_label`, so
 the three places a build is offered never disagree on what it is called.
 - When the build cannot start -- a busy node, no `.sift` files, no path on disk
   -- the entry is greyed with that refusal.
@@ -168,7 +168,7 @@ candidates on a track unasked is a surprise.
 
 The node's index path is looked at when the Scene tree draws a row, when the
 Track View draws, and when the first item goes onto the node's bench, through
-`AppState::refresh_search_files`, which looks for the cluster patches next.
+`AppState::refresh_index_files`, which looks for the cluster patches next.
 Opening a `.kdf` decodes no tree and no descriptor block
 ([`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)),
 so looking costs a stat and a header read, and a session finds what the last one
@@ -186,8 +186,8 @@ sentence would report this one instead
 
 ## Building one
 
-The index is the first half of the search-files build
-([search-files.md](search-files.md) § "Building them"), a background task over
+The index is the first half of the index-files build
+([index-files.md](index-files.md) § "Building them"), a background task over
 every `.sift` file the node's images resolve to, reporting the phases `read
 descriptors`, `build forest` and `write index`, with `count features` and `read
 features` under the first of them. It writes the node's index path, replacing
@@ -278,7 +278,7 @@ The index lives in
 [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), one open forest
 per loaded node on `AppState`; what it shares with the cluster patches -- the
 state word, the build, the open and the close of the pair -- is in
-[search_files.rs](../../crates/sfm-explorer/src/search_files.rs). The Scene
+[index_files.rs](../../crates/sfm-explorer/src/index_files.rs). The Scene
 tree's rows and their menus are in
 [scene_graph/](../../crates/sfm-explorer/src/scene_graph/), the search entry in
 [track_view/edit/table.rs](../../crates/sfm-explorer/src/track_view/edit/table.rs), and
@@ -298,13 +298,13 @@ impl SiftIndex {
     pub(crate) fn stale_reason(&self) -> Option<&str>;
 }
 
-/// In search_files.rs, shared with the cluster patches.
-pub(crate) enum SearchFileState { None, Current, Stale }
+/// In index_files.rs, shared with the cluster patches.
+pub(crate) enum IndexFileState { None, Current, Stale }
 
 /// Where `node`'s index goes: `<stem>-sift-index.kdf` beside its `.sfmr`.
 pub(crate) fn index_path(node: &SceneNode) -> Option<PathBuf>;
 
-/// The index half of the search-files build, and what it hands back.
+/// The index half of the index-files build, and what it hands back.
 pub(crate) struct BuildPlan { /* the path, the sources, the image names */ }
 impl BuildPlan {
     pub(crate) fn of(node: &SceneNode) -> Result<Self, String>;
@@ -314,12 +314,12 @@ pub(crate) fn build_index(plan: BuildPlan, progress: &Progress<'_>)
 
 impl AppState {
     pub(crate) fn sift_index(&self, id: ReconId) -> Option<&SiftIndex>;
-    pub(crate) fn sift_index_state(&self, id: ReconId) -> SearchFileState;
+    pub(crate) fn sift_index_state(&self, id: ReconId) -> IndexFileState;
     pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
 
     /// Open the node's index if nothing has looked yet, and re-derive the
     /// state when a version has moved the image table. Called through
-    /// `refresh_search_files`.
+    /// `refresh_index_files`.
     pub(crate) fn refresh_sift_index(&mut self, id: ReconId);
     pub(crate) fn open_sift_index(&mut self, id: ReconId, path: PathBuf)
         -> Result<PathBuf, String>;
@@ -332,9 +332,9 @@ impl AppState {
 ```
 
 The build, its refusal, the open and the close of both files are the pair's
-and are in [search-files.md](search-files.md) § "The interface".
+and are in [index-files.md](index-files.md) § "The interface".
 
-`refresh_search_files` is the one entry point a panel calls: the look and the
+`refresh_index_files` is the one entry point a panel calls: the look and the
 re-derivation are the same question asked at the same moments, and a caller that
 had to remember both would eventually forget one. The staleness verdict is a
 `String` held on the index rather than an error returned at open, because a
@@ -346,9 +346,9 @@ anyway is told what the menu already said.
 
 ## The wire
 
-`get_bench` reports the index under `search_files.sift_index`, and each node of
-the `get_scene` reply carries the same `search_files` object
-([`mcp-server.md`](mcp-server.md), [search-files.md](search-files.md) § "The
+`get_bench` reports the index under `index_files.sift_index`, and each node of
+the `get_scene` reply carries the same `index_files` object
+([`mcp-server.md`](mcp-server.md), [index-files.md](index-files.md) § "The
 wire"):
 
 ```json
@@ -365,10 +365,10 @@ wire"):
 an agent can see where a build would put one; it is `null` on a node with no
 path on disk. `descriptors` and `images` are `null` when nothing is open.
 
-The index is opened, built and let go of by the search-files tools:
-`open_search_files` with a `sift_index_path` adopts a `.kdf`,
-`build_search_files` makes the index and the cluster patches on a worker
-thread, and `close_search_files` lets go of both. None of them pushes a
+The index is opened, built and let go of by the index-files tools:
+`open_index_files` with a `sift_index_path` adopts a `.kdf`,
+`build_index_files` makes the index and the cluster patches on a worker
+thread, and `close_index_files` lets go of both. None of them pushes a
 version. `search_bench_track_descriptors` needs `state: "current"` and is
 refused with the staleness sentence otherwise.
 
@@ -377,7 +377,7 @@ refused with the staleness sentence otherwise.
 [sift_index/tests.rs](../../crates/sfm-explorer/src/sift_index/tests.rs),
 headless over a temporary directory holding a `.sfmr` path, a `.sift` file per
 image, a photograph per image for the cluster-patches half of the build, and
-real built search files. Covered: the index path being the `.sfmr`'s stem
+real built index files. Covered: the index path being the `.sfmr`'s stem
 beside it and spelled with one kind of separator; the refusal on a node with no
 path on disk, and on one whose images have no `.sift` companion; a built index
 reading as current over both an `embedded_patches` and a `sift_files` node; each
@@ -409,7 +409,7 @@ the assertion that choosing a build label asks for the build and asks for no
 search, and that the panel draws no index row of its own.
 
 The wire is in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs):
-the `search_files.sift_index` object under `get_bench`, the three search-files
+the `index_files.sift_index` object under `get_bench`, the three index-files
 tools parsing and reaching the viewer, and the search refused with the state's
 own sentence.
 

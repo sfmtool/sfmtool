@@ -613,8 +613,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the patch is — evaluate_bench_track is what then scores it. An image the \
                           track already has an observation in is left alone whatever its verdict, \
                           and so is the searched image itself. Needs a CURRENT SIFT index: \
-                          build_search_files or open_search_files first, and get_bench reports \
-                          its state under search_files.sift_index. Runs on a worker thread and \
+                          build_index_files or open_index_files first, and get_bench reports \
+                          its state under index_files.sift_index. Runs on a worker thread and \
                           answers as evaluate_bench_track does.",
             kind: Write,
             schema: object(
@@ -681,8 +681,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "open_search_files",
-            description: "Open one reconstruction's search files: its SIFT index (.kdf), \
+            name: "open_index_files",
+            description: "Open one reconstruction's index files: its SIFT index (.kdf), \
                           which search_bench_track_descriptors queries, and its cluster patches \
                           (.matches), the SIFT index's features clustered into tracks and \
                           refined into patches. Each path omitted is the node's own, \
@@ -690,7 +690,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           .sfmr, opened when it is there and reported as state none when it is \
                           not; a path named has to open or the call is refused. A file that \
                           opens is adopted whether or not it fits: get_bench reports each \
-                          file's state under search_files, current when it answers for this \
+                          file's state under index_files, current when it answers for this \
                           reconstruction as it stands and stale with a stale_reason otherwise. \
                           The cluster patches are current only when they are over this \
                           reconstruction's images, in its order, and were made from the SIFT \
@@ -709,7 +709,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "string",
                             "description":
                                 "The .kdf to open. Omit for the node's own index path, which \
-                                 get_bench reports under search_files.sift_index.",
+                                 get_bench reports under index_files.sift_index.",
                         }),
                     ),
                     (
@@ -718,7 +718,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "string",
                             "description":
                                 "The cluster-patches .matches to open. Omit for the node's own, \
-                                 which get_bench reports under search_files.cluster_patches.",
+                                 which get_bench reports under index_files.cluster_patches.",
                         }),
                     ),
                 ],
@@ -726,8 +726,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "build_search_files",
-            description: "Build one reconstruction's search files beside its .sfmr and open \
+            name: "build_index_files",
+            description: "Build one reconstruction's index files beside its .sfmr and open \
                           them: a SIFT index over every .sift file of the node \
                           (<stem>-sift-index.kdf), then from that index a cluster-patches file \
                           (<stem>-cluster-patches.matches) holding its features clustered and \
@@ -746,8 +746,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
-            name: "close_search_files",
-            description: "Let go of the search files open beside one reconstruction, leaving \
+            name: "close_index_files",
+            description: "Let go of the index files open beside one reconstruction, leaving \
                           the files where they are. get_bench then reports both as state none, \
                           and a search is refused until they are built or opened again. \
                           Refused when neither is open.",

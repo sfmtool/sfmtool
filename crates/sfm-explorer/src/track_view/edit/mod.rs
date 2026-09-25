@@ -68,10 +68,10 @@ pub struct TrackEditResponse {
     pub duplicate: bool,
     /// *Commit*.
     pub commit: bool,
-    /// A row's *Build Search Files* / *Rebuild Search Files*: the entry a row
+    /// A row's *Build Index Files* / *Rebuild Index Files*: the entry a row
     /// offers where the search would be when the node's index is absent or out
     /// of date.
-    pub build_search_files: bool,
+    pub build_index_files: bool,
     /// A row's *Find matches by SIFT query*, carrying the observation it was
     /// opened on.
     pub search_descriptors: Option<usize>,

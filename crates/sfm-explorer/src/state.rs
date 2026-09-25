@@ -954,7 +954,7 @@ impl AppState {
     /// leaves them where they are).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
-        self.forget_search_files(id);
+        self.forget_index_files(id);
         self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);

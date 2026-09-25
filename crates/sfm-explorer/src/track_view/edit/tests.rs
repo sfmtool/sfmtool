@@ -861,7 +861,7 @@ fn a_row_s_menu_offers_the_build_when_the_node_has_no_index() {
     assert!(
         texts
             .iter()
-            .any(|t| t == crate::search_files::BUILD_SEARCH_FILES),
+            .any(|t| t == crate::index_files::BUILD_INDEX_FILES),
         "the build entry is not in the row's menu: {texts:?}"
     );
     assert!(
@@ -890,7 +890,7 @@ fn a_row_s_menu_offers_the_search_against_a_current_index() {
     assert!(
         !texts
             .iter()
-            .any(|t| t == crate::search_files::REBUILD_SEARCH_FILES),
+            .any(|t| t == crate::index_files::REBUILD_INDEX_FILES),
         "a current index is offered a rebuild: {texts:?}"
     );
     assert!(
@@ -929,7 +929,7 @@ fn geometry_search_is_track_stage_only_and_routes_its_own_response() {
     assert!(
         texts
             .iter()
-            .any(|t| t == crate::search_files::BUILD_SEARCH_FILES),
+            .any(|t| t == crate::index_files::BUILD_INDEX_FILES),
         "stage gating accidentally removed the SIFT/build action: {texts:?}"
     );
 }
@@ -955,7 +955,7 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
     state.open_sift_index(id, path).expect("it opens");
     assert_eq!(
         state.sift_index_state(id),
-        crate::search_files::SearchFileState::Stale
+        crate::index_files::IndexFileState::Stale
     );
 
     let (mut panel, ctx) = settled(&state);
@@ -971,7 +971,7 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
     assert!(
         texts
             .iter()
-            .any(|t| t == crate::search_files::REBUILD_SEARCH_FILES),
+            .any(|t| t == crate::index_files::REBUILD_INDEX_FILES),
         "the rebuild entry is not in the row's menu: {texts:?}"
     );
 
@@ -980,10 +980,10 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
         &mut panel,
         &ctx,
         &state,
-        crate::search_files::REBUILD_SEARCH_FILES,
+        crate::index_files::REBUILD_INDEX_FILES,
     );
     let response = at_pointer(&mut panel, &ctx, &state, entry, true);
-    assert!(response.build_search_files, "the entry started no build");
+    assert!(response.build_index_files, "the entry started no build");
     assert_eq!(
         response.search_descriptors, None,
         "the build does not run the search when it finishes, and does not run it now"

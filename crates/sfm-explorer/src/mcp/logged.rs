@@ -98,9 +98,9 @@ impl Command {
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
             Command::SearchBenchTrackGeometry { .. } => "search_bench_track_geometry",
-            Command::OpenSearchFiles { .. } => "open_search_files",
-            Command::BuildSearchFiles { .. } => "build_search_files",
-            Command::CloseSearchFiles { .. } => "close_search_files",
+            Command::OpenIndexFiles { .. } => "open_index_files",
+            Command::BuildIndexFiles { .. } => "build_index_files",
+            Command::CloseIndexFiles { .. } => "close_index_files",
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
@@ -317,9 +317,9 @@ impl Command {
             // The three that are about the index rather than about a track:
             // nothing on the bench moves, and the row belongs beside the search
             // that will use them.
-            | Command::OpenSearchFiles { .. }
-            | Command::BuildSearchFiles { .. }
-            | Command::CloseSearchFiles { .. } => Kind::Bench,
+            | Command::OpenIndexFiles { .. }
+            | Command::BuildIndexFiles { .. }
+            | Command::CloseIndexFiles { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }

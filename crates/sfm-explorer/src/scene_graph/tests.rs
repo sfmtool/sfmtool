@@ -3398,7 +3398,7 @@ fn the_prune_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_task();
 }
 
-// ── The Search Files rows ───────────────────────────────────────────────
+// ── The Index Files rows ───────────────────────────────────────────────
 
 /// Wide enough that the status text beside a row's name is not clipped away.
 const INDEX_ROW_WIDTH: f32 = 600.0;
@@ -3413,18 +3413,18 @@ fn index_row_texts(
     painted_at_width(panel, ctx, state, INDEX_ROW_WIDTH)
 }
 
-/// A node with `.sift` files and built search files, and the state holding it.
+/// A node with `.sift` files and built index files, and the state holding it.
 fn indexed(dir: &std::path::Path) -> (AppState, crate::scene::ReconId) {
     let (state, id, _) = crate::sift_index::tests::searchable(dir);
     (state, id)
 }
 
 #[test]
-fn the_search_files_rows_say_none_on_a_node_with_neither_file() {
+fn the_index_files_rows_say_none_on_a_node_with_neither_file() {
     let mut state = shared_shoot(1);
     let (mut panel, ctx) = settled(&mut state);
     let texts = index_row_texts(&mut panel, &ctx, &mut state);
-    for row in ["Search Files", "SIFT Index", "Cluster Patches"] {
+    for row in ["Index Files", "SIFT Index", "Cluster Patches"] {
         assert!(
             texts.iter().any(|t| t == row),
             "the {row} row is not drawn: {texts:?}"
@@ -3442,7 +3442,7 @@ fn the_search_files_rows_say_none_on_a_node_with_neither_file() {
 }
 
 #[test]
-fn the_search_files_rows_count_what_current_files_hold() {
+fn the_index_files_rows_count_what_current_files_hold() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = indexed(dir.path());
     let descriptors = state.sift_index(id).expect("built").feature_count();
@@ -3464,7 +3464,7 @@ fn the_search_files_rows_count_what_current_files_hold() {
 /// An index made stale makes the cluster patches made from it stale too, and
 /// both rows say so.
 #[test]
-fn the_search_files_rows_say_stale_when_the_files_are() {
+fn the_index_files_rows_say_stale_when_the_files_are() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = indexed(dir.path());
     // One image's features extracted again after the build.
@@ -3500,9 +3500,9 @@ fn the_sift_index_row_s_menu_offers_the_build_the_open_and_the_close() {
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "sift_index"));
     let texts = painted_at_width(&mut panel, &ctx, &mut state, INDEX_ROW_WIDTH);
     for entry in [
-        super::menus::CLOSE_SEARCH_FILES,
+        super::menus::CLOSE_INDEX_FILES,
         "Open...",
-        crate::search_files::REBUILD_SEARCH_FILES,
+        crate::index_files::REBUILD_INDEX_FILES,
     ] {
         assert!(
             texts.iter().any(|t| t == entry),
@@ -3514,9 +3514,9 @@ fn the_sift_index_row_s_menu_offers_the_build_the_open_and_the_close() {
         &mut panel,
         &ctx,
         &mut state,
-        row_id(id, "close_search_files"),
+        row_id(id, "close_index_files"),
     );
-    assert_eq!(response.close_search_files, Some(id));
+    assert_eq!(response.close_index_files, Some(id));
 }
 
 /// The Cluster Patches row's menu offers its own open, and the group row's
@@ -3536,11 +3536,11 @@ fn the_cluster_patches_and_group_rows_offer_their_entries() {
     );
     assert_eq!(response.open_cluster_patches, Some(id));
 
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "search_files_row"));
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "index_files_row"));
     let texts = painted_at_width(&mut panel, &ctx, &mut state, INDEX_ROW_WIDTH);
     for entry in [
-        super::menus::CLOSE_SEARCH_FILES,
-        crate::search_files::REBUILD_SEARCH_FILES,
+        super::menus::CLOSE_INDEX_FILES,
+        crate::index_files::REBUILD_INDEX_FILES,
     ] {
         assert!(
             texts.iter().any(|t| t == entry),
@@ -3563,16 +3563,16 @@ fn the_sift_index_row_s_menu_builds_the_first_files() {
     assert!(
         texts
             .iter()
-            .any(|t| t == crate::search_files::BUILD_SEARCH_FILES),
+            .any(|t| t == crate::index_files::BUILD_INDEX_FILES),
         "the build entry is not in the row's menu: {texts:?}"
     );
     let response = click(
         &mut panel,
         &ctx,
         &mut state,
-        row_id(id, "build_search_files"),
+        row_id(id, "build_index_files"),
     );
-    assert_eq!(response.build_search_files, Some(id));
+    assert_eq!(response.build_index_files, Some(id));
 }
 
 /// The reconstruction row's own menu carries the build too, above *Convert to
@@ -3586,7 +3586,7 @@ fn the_reconstruction_row_s_menu_offers_the_build_above_the_conversion() {
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
     let build = panel
-        .hit_rect(row_id(id, "build_search_files"))
+        .hit_rect(row_id(id, "build_index_files"))
         .expect("the build entry was not drawn on the reconstruction row's menu");
     let convert = panel
         .hit_rect(row_id(id, "to_embedded_patches"))
@@ -3600,9 +3600,9 @@ fn the_reconstruction_row_s_menu_offers_the_build_above_the_conversion() {
         &mut panel,
         &ctx,
         &mut state,
-        row_id(id, "build_search_files"),
+        row_id(id, "build_index_files"),
     );
-    assert_eq!(response.build_search_files, Some(id));
+    assert_eq!(response.build_index_files, Some(id));
 }
 
 /// A point over the row's `SIFT Index` label rather than over its status text.
@@ -3626,7 +3626,7 @@ fn the_sift_index_row_s_menu_opens_on_its_name() {
     let on_the_name = on_the_index_label(&panel, id);
     right_click_at(&mut panel, &ctx, &mut state, on_the_name);
     assert!(
-        panel.hit_rect(row_id(id, "build_search_files")).is_some(),
+        panel.hit_rect(row_id(id, "build_index_files")).is_some(),
         "right-clicking the row's name opened no menu"
     );
 }
@@ -3692,7 +3692,7 @@ fn hovering_an_unsaved_node_s_sift_index_row_says_to_save_first() {
     assert!(
         hovered
             .iter()
-            .any(|t| t.starts_with("Save demo first: the search files are written beside")),
+            .any(|t| t.starts_with("Save demo first: the index files are written beside")),
         "the hover did not say to save the node first: {hovered:?}"
     );
 }
@@ -3714,14 +3714,14 @@ fn an_unsaved_node_s_build_entry_is_greyed_with_the_save_first_sentence() {
         &mut panel,
         &ctx,
         &mut state,
-        row_id(id, "build_search_files"),
+        row_id(id, "build_index_files"),
     );
     assert_eq!(
-        response.build_search_files, None,
+        response.build_index_files, None,
         "the entry was live on a node with nowhere to write"
     );
     let why = state
-        .build_search_files_refusal(id)
+        .build_index_files_refusal(id)
         .expect("nowhere to write it");
     assert!(why.starts_with("Save demo first"), "{why}");
 }

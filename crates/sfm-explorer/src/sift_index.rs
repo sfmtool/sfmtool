@@ -15,7 +15,7 @@
 //! (`specs/core/features/lazy-kdforest-query.md`) -- so the node's index path is
 //! opened on sight when the file is there; building one reads every `.sift` of
 //! the capture and is the first half of the background task that builds the
-//! node's search files ([`crate::search_files`]).
+//! node's index files ([`crate::index_files`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,8 +32,8 @@ use sfmtool_core::{progress_note, SfmrReconstruction};
 use sfmtool_sift_format::DESCRIPTOR_DIM;
 
 use crate::action_log::{Actor, Kind};
+use crate::index_files::{unsaved_refusal, IndexFileState, Stopped};
 use crate::scene::{ReconId, SceneNode};
-use crate::search_files::{unsaved_refusal, SearchFileState, Stopped};
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -126,11 +126,11 @@ impl AppState {
     }
 
     /// Which of the three states `id`'s index is in.
-    pub(crate) fn sift_index_state(&self, id: ReconId) -> SearchFileState {
+    pub(crate) fn sift_index_state(&self, id: ReconId) -> IndexFileState {
         match self.sift_index(id) {
-            None => SearchFileState::None,
-            Some(index) if index.stale.is_some() => SearchFileState::Stale,
-            Some(_) => SearchFileState::Current,
+            None => IndexFileState::None,
+            Some(index) if index.stale.is_some() => IndexFileState::Stale,
+            Some(_) => IndexFileState::Current,
         }
     }
 
@@ -142,7 +142,7 @@ impl AppState {
     /// Look for `id`'s index if nothing has yet, and re-derive its state when
     /// the node's image table has moved since the state was derived.
     ///
-    /// Called through [`Self::refresh_search_files`], which is what Track View,
+    /// Called through [`Self::refresh_index_files`], which is what Track View,
     /// the Scene tree and the first item put on a node's bench call, and which
     /// asks the same of the cluster-patches file after it. A `.kdf` opens
     /// without decoding a tree or a descriptor block, so looking costs a stat
@@ -306,7 +306,7 @@ impl AppState {
     pub(crate) fn sift_index_search_refusal(&self, id: ReconId) -> Option<String> {
         match self.sift_index(id) {
             None => Some(
-                "No SIFT index is open. Build the search files from the Search Files row in \
+                "No SIFT index is open. Build the index files from the Index Files row in \
                  the Scene tree, or from this menu."
                     .to_string(),
             ),
@@ -358,7 +358,7 @@ impl AppState {
     }
 }
 
-/// What the index half of the search-files build writes, and from what.
+/// What the index half of the index-files build writes, and from what.
 ///
 /// The corpus carries **one image-table row per image of the node**, in the
 /// node's own order, including the images that have no `.sift` file: an image
