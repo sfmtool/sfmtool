@@ -202,6 +202,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low to medium. Risk: low.
 
 **Enforce source-to-spec link integrity**
+> _Status (2026-09-24): Done — the Python test task checks source citations and local Markdown links in specs, while excluding fenced and inline code examples._
 - Location: `crates/`, `src/`, `scripts/`, and `specs/` references to `specs/*.md`.
 - Problem: The three broken paths from the last audit were corrected, and all 484 current code references resolve. The promised repeatable check was never added, so a future rename can recreate silent link rot. Draft prose may mention a proposed path in a code span; those mentions are not live links.
 - Proposed fix: Add a small repository test that resolves cited source paths and actual Markdown links, while excluding plain code-span examples of planned files. Run it in the existing test task.

@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Synthetic-patch validation of the structure-tensor scorer (the spec's
-//! [Validation](../../../../specs/core/patch/patch-localizability.md) table) plus a
+//! Synthetic-patch validation of the structure-tensor scorer (see the
+//! Validation table in `specs/core/patch/patch-localizability.md`) plus a
 //! numeric cross-check against the throwaway Python prototype (not in-tree; see
 //! the spec's Evidence section) whose math this scorer ports.
 
