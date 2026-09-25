@@ -31,7 +31,7 @@ use std::borrow::Cow;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 
-use crate::features::kdforest::{KdForestParams, KdForestU8};
+use crate::features::kdforest::{KdForestParams, KdForestU8, KdfError, LazyKdForestU8};
 use crate::progress::Progress;
 
 /// Env-gated stage timing for the matcher. Enabled by setting
@@ -221,6 +221,71 @@ pub fn background_floor_clusters(
             width: k,
         },
     )
+}
+
+/// Why [`background_floor_clusters_lazy`] produced no clusters.
+#[derive(Debug)]
+pub enum LazyClusterError {
+    /// The inputs disagree with each other or with the corpus.
+    Cluster(ClusterMatchError),
+    /// Reading the `.kdf` failed, or the join was cancelled
+    /// ([`KdfError::Cancelled`]).
+    Kdf(KdfError),
+}
+
+impl std::fmt::Display for LazyClusterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cluster(e) => e.fmt(f),
+            Self::Kdf(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for LazyClusterError {}
+
+/// [`background_floor_clusters`] over a forest that stays on disk.
+///
+/// The k-NN table comes from [`LazyKdForestU8::self_join_with_distances_progress`]
+/// rather than from a forest built here, so neither the corpus nor the index is
+/// held in memory: what is resident is the file's bounded cache and the
+/// `N x (d + 1)` neighbour table. Results are identical to the in-memory
+/// matcher over the forest the file was written from, because the file stores
+/// that forest's exact topology and leaf order.
+///
+/// `image_starts` are the CSR offsets of the corpus's images in the feature-ID
+/// order the file was written in. The per-query budget is
+/// `params.forest.max_leaf_checks`: a `.kdf` stores no build-time default, so
+/// it is always the caller's. The inputs are checked before the join, so a
+/// `d` the corpus cannot hold is refused without a search.
+///
+/// `progress` receives the join's count of answered queries, and a cancel
+/// stops the join and returns [`KdfError::Cancelled`] inside
+/// [`LazyClusterError::Kdf`]. The clustering after the join is a fraction of
+/// its time and is not interrupted.
+pub fn background_floor_clusters_lazy(
+    forest: &LazyKdForestU8,
+    image_starts: &[u32],
+    params: &BackgroundFloorParams,
+    progress: &Progress<'_>,
+) -> Result<Clusters, LazyClusterError> {
+    let n = forest.len();
+    validate_floor_corpus(n, image_starts, params).map_err(LazyClusterError::Cluster)?;
+    let k = params.d + 1;
+    let (indexes, distances_sq) = forest
+        .self_join_with_distances_progress(k, params.forest.max_leaf_checks, None, progress)
+        .map_err(LazyClusterError::Kdf)?;
+    background_floor_clusters_from_neighbors(
+        n,
+        image_starts,
+        params,
+        &NeighborTable {
+            indexes,
+            distances_sq,
+            width: k,
+        },
+    )
+    .map_err(LazyClusterError::Cluster)
 }
 
 fn validate_floor_corpus(

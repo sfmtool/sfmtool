@@ -21,12 +21,12 @@ use sfmtool_core::CameraIntrinsics;
 use crate::flow::warp::extract_image_u8;
 use crate::PySfmrReconstruction;
 
-/// Full pyramid depth for a source image: down to ~1 px on the short side.
-/// The formula is shared by the list path and [`PyImagePyramidSet`] so a
-/// prebuilt set is level-for-level identical to a per-call build.
+/// Full pyramid depth for a source image: down to ~1 px on the short side
+/// ([`ImageU8Pyramid::full_levels`]). Shared by the list path and
+/// [`PyImagePyramidSet`] so a prebuilt set is level-for-level identical to a
+/// per-call build.
 pub(super) fn pyramid_levels(src: &ImageU8) -> usize {
-    let min_dim = src.width().min(src.height()).max(1);
-    ((min_dim as f32).log2().floor() as usize).max(1) + 1
+    ImageU8Pyramid::full_levels(src.width(), src.height())
 }
 
 /// Validate that image `i` (dimensions `w × h`) matches its camera's resolution.

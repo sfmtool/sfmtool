@@ -175,6 +175,18 @@ pub struct ImageU8Pyramid {
 }
 
 impl ImageU8Pyramid {
+    /// The full pyramid depth for an image of `width x height`: levels down to
+    /// about one pixel on the short side, and never fewer than two.
+    ///
+    /// What a kernel that picks its own level per sample is given, so a
+    /// footprint of any size finds a level to read. Every caller that builds a
+    /// pyramid for the patch kernels from a list of photographs uses this, so
+    /// two of them handed the same image build the same levels.
+    pub fn full_levels(width: u32, height: u32) -> usize {
+        let min_dim = width.min(height).max(1);
+        ((min_dim as f32).log2().floor() as usize).max(1) + 1
+    }
+
     /// Build a Gaussian pyramid from a full-resolution image.
     ///
     /// Level 0 is a copy of the input. Each subsequent level is 2x downsampled

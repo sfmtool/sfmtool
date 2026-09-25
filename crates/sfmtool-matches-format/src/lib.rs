@@ -25,7 +25,7 @@ mod types;
 mod verify;
 mod write;
 
-pub use read::{read_matches, read_matches_metadata};
+pub use read::{read_matches, read_matches_image_names, read_matches_metadata};
 pub use select::ClusterSelect;
 pub use types::*;
 pub use verify::verify_matches;

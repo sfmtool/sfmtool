@@ -6,6 +6,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use rayon::prelude::*;
 use sfmtool_kdf_format::{
@@ -322,6 +323,14 @@ fn validate_loaded_tree<S: ForestScalar>(
     Ok(())
 }
 
+/// How many self-join queries pass between two counts
+/// [`LazyKdForest::self_join_with_distances_progress`] reports.
+///
+/// Large enough that the reporting costs nothing against the searches, and
+/// small enough that the bar moves many times over a corpus of a few thousand
+/// descriptors.
+const SELF_JOIN_REPORT_EVERY: usize = 1024;
+
 /// A file-backed randomized kd-forest with a shared bounded decoded cache.
 pub struct LazyKdForest<S: ForestScalar + KdfScalar> {
     file: KdfFile<S>,
@@ -380,6 +389,11 @@ where
     }
     pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError> {
         self.file.image_table()
+    }
+    /// The file's whole-content hash, as its writer recorded it
+    /// ([`KdfFile::content_xxh128`]).
+    pub fn content_xxh128(&self) -> &str {
+        self.file.content_xxh128()
     }
     pub fn resolve_origins(
         &self,
@@ -617,6 +631,26 @@ where
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
+        self.self_join_with_distances_progress(k, max_leaf_checks, max_dist, &Progress::none())
+    }
+
+    /// [`self_join_with_distances`](Self::self_join_with_distances), reporting
+    /// a count of the queries answered through `progress` and stopping when it
+    /// is cancelled.
+    ///
+    /// The flag is read in front of every query, which is one relaxed load
+    /// against a forest search, and a cancelled join returns
+    /// [`KdfError::Cancelled`] rather than a partly filled table. The count is
+    /// reported once per `SELF_JOIN_REPORT_EVERY` queries, so a join over
+    /// forty million descriptors sends tens of thousands of reports rather
+    /// than forty million. The answers are the same either way.
+    pub fn self_join_with_distances_progress(
+        &self,
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+        progress: &Progress<'_>,
+    ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
         let mut order = self.file.storage_order();
         let n = self.len();
         let width = n
@@ -635,6 +669,10 @@ where
         if k == 0 {
             return Ok((indices, distances));
         }
+        // Queries answered, in steps of `SELF_JOIN_REPORT_EVERY`: the workers
+        // finish rows in whatever order they take them, so what moves the bar
+        // is how many are done rather than which row a worker is on.
+        let answered = AtomicU64::new(0);
         self.workers.install(|| {
             indices
                 .par_chunks_mut(k)
@@ -643,13 +681,20 @@ where
                 .try_for_each_init(
                     || (self.new_scratch(), Vec::with_capacity(self.dim())),
                     |(scratch, query), (at, (out_idx, out_dist))| {
+                        progress.check_cancel()?;
                         self.file.vector_into(order[at], query)?;
                         self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
                         scratch.result.write_results(out_idx, out_dist);
+                        if (at + 1) % SELF_JOIN_REPORT_EVERY == 0 {
+                            let step = SELF_JOIN_REPORT_EVERY as u64;
+                            let done = answered.fetch_add(step, AtomicOrdering::Relaxed) + step;
+                            progress.count(done, Some(n as u64), "descriptor");
+                        }
                         Ok::<_, KdfError>(())
                     },
                 )
         })?;
+        progress.count(n as u64, Some(n as u64), "descriptor");
         scatter_result_rows(&mut indices, &mut distances, k, &mut order);
         Ok((indices, distances))
     }

@@ -465,6 +465,17 @@ impl<S: KdfScalar> KdfFile<S> {
         order
     }
 
+    /// The whole-file content hash the writer recorded, as 32 lowercase hex
+    /// characters.
+    ///
+    /// Read from `content_hash.json.zst` at open and not recomputed, so it is
+    /// free to ask. It covers every section of the file, so two files with the
+    /// same hash hold the same corpus, trees and image table, which is what
+    /// lets a file derived from an index record which index that was.
+    pub fn content_xxh128(&self) -> &str {
+        &self.hashes.content_xxh128
+    }
+
     /// The writer's recorded build settings, if it left any.
     ///
     /// Provenance is free-form, so this returns the raw value rather than a typed

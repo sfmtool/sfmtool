@@ -503,6 +503,18 @@ fn test_read_metadata_only() {
 }
 
 #[test]
+fn test_read_image_names_only() {
+    let data = make_test_data();
+    let (dir, path) = write_to_temp("matches_test_image_names", &data);
+
+    let (metadata, names) = read_matches_image_names(&path).unwrap();
+    assert_eq!(metadata.image_count, 3);
+    assert_eq!(names, data.image_names);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_content_hash_populated() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_hash", &data);

@@ -22,6 +22,34 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
     Ok(read_json_entry(&mut archive, entries::metadata())?)
 }
 
+/// Read the top-level metadata and the image names of a `.matches` file, and
+/// no binary section.
+///
+/// For a caller that needs to know which images a file covers, in which order,
+/// without decompressing its correspondences: two JSON entries rather than the
+/// whole archive. The names are checked against the metadata's `image_count`,
+/// as [`read_matches`] checks them.
+pub fn read_matches_image_names(
+    path: &Path,
+) -> Result<(MatchesMetadata, Vec<String>), MatchesError> {
+    let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
+        operation: "Failed to open file",
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let metadata: MatchesMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    let image_names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
+    if image_names.len() != metadata.image_count as usize {
+        return Err(MatchesError::ShapeMismatch(format!(
+            "image names count {} != image_count {}",
+            image_names.len(),
+            metadata.image_count
+        )));
+    }
+    Ok((metadata, image_names))
+}
+
 /// Read a complete `.matches` file into columnar data.
 ///
 /// The file stores exactly one correspondence backbone: `image_pairs/`
