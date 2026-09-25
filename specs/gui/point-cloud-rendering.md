@@ -434,7 +434,7 @@ holding a unit direction when `w = 0`.
 4. **Data-pipeline exclusions** — sites that iterate `p.position` as a 3-D
    location must skip or branch on `w = 0` points, or they silently corrupt
    (unit directions cluster at the origin):
-   `auto_point_size.rs::compute_scene_bounds` and `compute_auto_point_size`
+   `sfmtool_core::analysis::scene_scale::compute_scene_bounds` and `compute_auto_point_size`
    skip them (protecting scene center/radius, clip planes, and auto splat
    size); `upload/track_rays.rs::upload_track_rays` draws infinity observations as
    fixed-length bearing rays from each camera center (no finite endpoint to

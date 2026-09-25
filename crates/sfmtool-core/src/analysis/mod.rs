@@ -20,4 +20,5 @@ pub mod infinity;
 pub mod observation_adjacency;
 pub mod observation_coverage;
 pub mod point_inspect;
+pub mod scene_scale;
 pub mod source_clusters;

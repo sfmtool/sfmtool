@@ -169,6 +169,64 @@ pub fn verified_sift_thumbnail(recon: &SfmrReconstruction, index: usize) -> Opti
     belongs.then_some(thumbnail)
 }
 
+/// The grey a display thumbnail row is filled with when neither the image's
+/// `.sift` nor its photograph can supply one.
+///
+/// A neutral mid-grey rather than black: black reads as a dark photograph,
+/// while a flat grey reads as "no picture here".
+pub const PLACEHOLDER_GREY: u8 = 128;
+
+/// Where a display thumbnail row came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailSource {
+    /// Read from the image's verified `.sift` ([`verified_sift_thumbnail`]).
+    Sift,
+    /// Decoded from the photograph and resized by area averaging.
+    Photograph,
+    /// Neither could supply one; the row is flat [`PLACEHOLDER_GREY`].
+    Placeholder,
+}
+
+/// Image `index`'s display thumbnail row for a reconstruction that carries no
+/// thumbnail column: `THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3` RGB bytes, row major.
+///
+/// The image's `.sift` thumbnail when a `.sift` verifiably belongs to it,
+/// otherwise its photograph (`workspace_dir` joined with the image name)
+/// decoded and resized by [`thumbnail_from_rgb`], otherwise flat
+/// [`PLACEHOLDER_GREY`]. SfM Explorer's open and `sfm web-export` both fill a
+/// missing column with this, so the two show the same picture.
+///
+/// # Panics
+///
+/// Panics if `index` is past the image table.
+pub fn display_thumbnail_row(
+    recon: &SfmrReconstruction,
+    index: usize,
+) -> (Vec<u8>, ThumbnailSource) {
+    if let Some(thumbnail) = verified_sift_thumbnail(recon, index) {
+        let pixels = thumbnail.as_standard_layout().iter().copied().collect();
+        return (pixels, ThumbnailSource::Sift);
+    }
+    let path = recon
+        .workspace_dir
+        .join(&recon.image_table.images[index].name);
+    if path.is_file() {
+        if let Ok(image) = crate::camera::remap::ImageU8::read_rgb(&path) {
+            let (width, height) = (image.width() as usize, image.height() as usize);
+            if width > 0 && height > 0 {
+                return (
+                    thumbnail_from_rgb(image.data(), width, height),
+                    ThumbnailSource::Photograph,
+                );
+            }
+        }
+    }
+    (
+        vec![PLACEHOLDER_GREY; THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3],
+        ThumbnailSource::Placeholder,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

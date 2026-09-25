@@ -110,7 +110,6 @@ sfmtool/
 │   │       │   ├── sizing.rs     # Texture creation and resize
 │   │       │   ├── uniforms.rs   # Uniform buffer updates
 │   │       │   ├── gpu_types.rs  # GPU data struct definitions, pick tags, constants
-│   │       │   ├── auto_point_size.rs  # Median NN distance computation
 │   │       │   ├── compass.rs          # Orientation-compass mesh generation
 │   │       │   ├── distorted_mesh.rs   # Tessellated mesh for distorted cameras
 │   │       │   ├── upload/       # Per-resource GPU data upload

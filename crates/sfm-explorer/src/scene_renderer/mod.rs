@@ -18,7 +18,6 @@
 //! [`ReconUniforms`] slice: model matrix, point size, pick bases) before the
 //! existing instanced draw. See `specs/gui/scene-graph.md`.
 
-mod auto_point_size;
 mod bench_track;
 #[cfg(feature = "mcp")]
 mod capture;

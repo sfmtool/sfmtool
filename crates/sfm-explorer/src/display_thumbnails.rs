@@ -30,18 +30,13 @@ use std::sync::Arc;
 use ndarray::{Array4, ArrayView3, Axis};
 use rayon::prelude::*;
 use sfmtool_core::progress::{Cancelled, Progress};
-use sfmtool_core::reconstruction::thumbnail::{thumbnail_from_rgb, verified_sift_thumbnail};
+use sfmtool_core::reconstruction::thumbnail::{display_thumbnail_row, ThumbnailSource};
 use sfmtool_core::{SfmrReconstruction, THUMBNAIL_SIZE};
 
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// The grey a row is filled with when neither the image's `.sift` nor its
-/// photograph can supply one.
-///
-/// A neutral mid-grey rather than black: black reads as a dark photograph,
-/// while a flat grey reads as "no picture here".
-pub(crate) const PLACEHOLDER_GREY: u8 = 128;
+pub(crate) use sfmtool_core::reconstruction::thumbnail::PLACEHOLDER_GREY;
 
 /// Bytes in one RGB thumbnail row.
 const ROW_BYTES: usize = THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3;
@@ -65,13 +60,6 @@ pub(crate) struct BuiltFrom {
     pub(crate) placeholders: usize,
 }
 
-/// Where one row came from.
-enum Row {
-    Sift,
-    Photograph,
-    Placeholder,
-}
-
 impl DisplayThumbnails {
     /// The display column of a reconstruction that carries thumbnails: its
     /// own column, shared. `None` when it carries none.
@@ -86,7 +74,9 @@ impl DisplayThumbnails {
     /// Build a row for every image of `recon`, which carries no thumbnails.
     ///
     /// Each row is the image's `.sift` thumbnail when a `.sift` verifiably
-    /// belongs to it ([`verified_sift_thumbnail`]), otherwise its photograph
+    /// belongs to it
+    /// ([`verified_sift_thumbnail`](sfmtool_core::reconstruction::thumbnail::verified_sift_thumbnail)),
+    /// otherwise its photograph
     /// decoded and resized by area averaging, otherwise the flat
     /// [`PLACEHOLDER_GREY`]. The rows are built in parallel; `progress` gets an
     /// `images` count as each lands, and is polled for cancellation before
@@ -103,11 +93,11 @@ impl DisplayThumbnails {
         let images = &recon.image_table.images;
         let total = images.len();
         let landed = AtomicUsize::new(0);
-        let rows: Vec<(Box<[u8]>, Row)> = (0..total)
+        let rows: Vec<(Vec<u8>, ThumbnailSource)> = (0..total)
             .into_par_iter()
             .map(|index| {
                 if progress.is_cancelled() {
-                    return (Box::default(), Row::Placeholder);
+                    return (Vec::new(), ThumbnailSource::Placeholder);
                 }
                 let row = build_row(recon, index);
                 let n = landed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -121,9 +111,9 @@ impl DisplayThumbnails {
         let mut flat = Vec::with_capacity(total * ROW_BYTES);
         for (pixels, source) in rows {
             match source {
-                Row::Sift => from.sift += 1,
-                Row::Photograph => from.photographs += 1,
-                Row::Placeholder => from.placeholders += 1,
+                ThumbnailSource::Sift => from.sift += 1,
+                ThumbnailSource::Photograph => from.photographs += 1,
+                ThumbnailSource::Placeholder => from.placeholders += 1,
             }
             flat.extend_from_slice(&pixels);
         }
@@ -164,43 +154,21 @@ fn names_to_rows(recon: &SfmrReconstruction) -> HashMap<String, usize> {
         .collect()
 }
 
-/// Image `index`'s row: the verified `.sift` copy, the photograph, or the grey.
-fn build_row(recon: &SfmrReconstruction, index: usize) -> (Box<[u8]>, Row) {
-    if let Some(thumbnail) = verified_sift_thumbnail(recon, index) {
-        let pixels = thumbnail.as_standard_layout().iter().copied().collect();
-        return (pixels, Row::Sift);
+/// Image `index`'s row: the verified `.sift` copy, the photograph, or the grey
+/// ([`display_thumbnail_row`], which `sfm web-export` fills a column with too).
+fn build_row(recon: &SfmrReconstruction, index: usize) -> (Vec<u8>, ThumbnailSource) {
+    let (pixels, source) = display_thumbnail_row(recon, index);
+    if source == ThumbnailSource::Placeholder {
+        log::warn!(
+            "Display thumbnail: neither a .sift nor the photograph {} could be read; \
+             showing a placeholder",
+            recon
+                .workspace_dir
+                .join(&recon.image_table.images[index].name)
+                .display()
+        );
     }
-    let path = recon
-        .workspace_dir
-        .join(&recon.image_table.images[index].name);
-    if let Some(pixels) = photograph_row(&path) {
-        return (pixels, Row::Photograph);
-    }
-    log::warn!(
-        "Display thumbnail: neither a .sift nor the photograph {} could be read; \
-         showing a placeholder",
-        path.display()
-    );
-    (
-        vec![PLACEHOLDER_GREY; ROW_BYTES].into_boxed_slice(),
-        Row::Placeholder,
-    )
-}
-
-/// The display row of one photograph: decoded as the viewer decodes every
-/// photograph ([`crate::state::decode_full_res`], which ignores the EXIF
-/// orientation as the extractors do), then resized to 128 x 128 by area
-/// averaging.
-fn photograph_row(path: &std::path::Path) -> Option<Box<[u8]>> {
-    if !path.is_file() {
-        return None;
-    }
-    let image = crate::state::decode_full_res(path)?;
-    let (width, height) = (image.width() as usize, image.height() as usize);
-    if width == 0 || height == 0 {
-        return None;
-    }
-    Some(thumbnail_from_rgb(image.data(), width, height).into_boxed_slice())
+    (pixels, source)
 }
 
 /// The row a panel draws for image `index` of `recon`, the value a node shows.

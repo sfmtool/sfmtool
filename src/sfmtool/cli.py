@@ -37,6 +37,7 @@ from ._commands import (
     to_colmap_db,
     to_nerfstudio,
     undistort,
+    web_export,
     ws,
     xform,
 )
@@ -78,6 +79,7 @@ main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")
 main.add_command_with_category(render_patches_command, category="Visualization")
 main.add_command_with_category(panorama, category="Visualization")
+main.add_command_with_category(web_export, category="Visualization")
 main.add_command_with_category(undistort, category="Image Processing")
 main.add_command_with_category(pano2rig, category="Workspace")
 main.add_command_with_category(insv2rig, category="Workspace")

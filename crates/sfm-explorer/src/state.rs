@@ -1439,7 +1439,8 @@ pub fn ensure_sift_cached<'a>(
 /// One constant, because the cluster sampler mip-selects by the grid's
 /// footprint and Track View draws the tile the kernel measured: two
 /// depths would be two pictures of one surface.
-pub(crate) const PYRAMID_LEVELS: usize = 6;
+pub(crate) const PYRAMID_LEVELS: usize =
+    sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS;
 
 /// Get the cached full-resolution image for an image index, decoding from disk
 /// if needed.
@@ -1491,13 +1492,11 @@ pub fn ensure_full_res_pyramid<'a>(
 ///
 /// The one decode in the viewer, so that a worker reading a photograph the
 /// cache has not got ([`crate::state::edits::ViewSources`]) reads it exactly as
-/// the GUI thread would have.
+/// the GUI thread would have. It is [`ImageU8::read_rgb`], the decode the
+/// display thumbnails and display patch bitmaps built in `sfmtool-core` use.
 pub fn decode_full_res(path: &std::path::Path) -> Option<ImageU8> {
-    match image::open(path) {
-        Ok(dyn_image) => {
-            let rgb = dyn_image.to_rgb8();
-            Some(ImageU8::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
-        }
+    match ImageU8::read_rgb(path) {
+        Ok(image) => Some(image),
         Err(e) => {
             log::warn!("Failed to load full-res image {}: {}", path.display(), e);
             None

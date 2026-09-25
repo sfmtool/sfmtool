@@ -23,6 +23,8 @@
 //!   the per-image keypoint reach enumeration in the pixel domain
 //! - [`progress`] — the parameter a long-running call reports its phases,
 //!   messages and counts through, and is told to stop by
+//! - [`web_export`]: a reconstruction as static web files, the `scene.json`
+//!   and JPEG atlas pages `sfm web-export` writes for a browser viewer
 //!
 //! File-format I/O is provided by the sibling crates `sfmtool-sift-format`,
 //! `sfmtool-sfmr-format`, `sfmtool-matches-format`, and `sfmtool-camrig-format`.
@@ -37,6 +39,7 @@ pub mod patch;
 pub mod reconstruction;
 pub mod spatial;
 pub mod spherical;
+pub mod web_export;
 
 // Headline types reachable as `sfmtool_core::Foo`, leaning on each group's
 // own facade re-exports (`camera::{Camera, CameraIntrinsics, CameraModel}`,

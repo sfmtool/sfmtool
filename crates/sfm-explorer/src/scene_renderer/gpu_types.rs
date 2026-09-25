@@ -287,13 +287,12 @@ pub(super) struct BgImageUniforms {
 // ── Related constants ────────────────────────────────────────────────────
 
 /// Fallback point size when fewer than 2 points are loaded.
-pub(super) const FALLBACK_POINT_SIZE: f32 = 0.03;
+pub(super) use sfmtool_core::analysis::scene_scale::FALLBACK_POINT_SIZE;
 
-/// Number of points to subsample for nearest-neighbor distance queries.
-pub(super) const NN_SUBSAMPLE_COUNT: usize = 10_000;
-
-/// Default length scale multiplier (length_scale = multiplier * point_size).
-pub const DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 = 10.0;
+/// Default length scale multiplier (length_scale = multiplier * point_size),
+/// the one `sfmtool-core` measures a node's length scale with.
+pub const DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 =
+    sfmtool_core::analysis::scene_scale::LENGTH_SCALE_MULTIPLIER;
 
 /// Default target indicator size multiplier (radius = multiplier * length_scale).
 pub const DEFAULT_TARGET_SIZE_MULTIPLIER: f32 = 0.3;

@@ -249,7 +249,7 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
          also takes an already-sorted slice",
     ),
     (
-        "sfm-explorer/src/scene_renderer/auto_point_size.rs",
+        "sfmtool-core/src/analysis/scene_scale.rs",
         "iteratively_trimmed_median",
         "a different operation: repeated trimming of a sorted prefix, which \
          must keep an actual sample each pass so the prefix never empties",

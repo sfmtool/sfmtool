@@ -136,8 +136,8 @@ task. The adaptive scaling is independent of the rendering method.
 
 ### Scene Bounding Sphere
 
-`compute_scene_bounds()` in `auto_point_size.rs` computes the bounding sphere on point
-upload. It uses component-wise median for a robust center and the 80th percentile distance
+`compute_scene_bounds()` in `sfmtool-core`'s `analysis/scene_scale.rs` computes
+the bounding sphere on point upload. It uses component-wise median for a robust center and the 80th percentile distance
 for a robust radius. The result is stored as `scene_center` and `scene_radius` on
 `SceneRenderer` and exposed via accessor methods.
 

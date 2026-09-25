@@ -14,7 +14,11 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [dependencies]
+base64 = "0.23"
 half = "2"
+# Photograph decoding (display thumbnails, display patch bitmaps) and the JPEG
+# atlas pages `web_export` writes.
+image = "0.25"
 nalgebra = "0.35"
 ndarray = "0.17"
 # Build-once / query-many KD-tree for the spatial index (`spatial.rs`). Default
@@ -44,7 +48,6 @@ bytemuck = { version = "1.25", features = ["derive"], optional = true }
 [dev-dependencies]
 approx = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
-image = "0.25"
 # Used by the .sfmr v4→v5 upgrade-on-load tests to author version-4 fixture
 # bytes (rewriting the archive's metadata.json.zst version field).
 zip = { version = "8", default-features = false, features = ["deflate"] }

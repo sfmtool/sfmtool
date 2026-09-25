@@ -364,12 +364,10 @@ impl ReconResources {
     /// `length_scale` actually is. That is what lets a scaled node stop
     /// dominating the global frustum size once it has been aligned.
     pub(super) fn length_scale_seed(&self) -> f32 {
-        let point_scale = super::DEFAULT_LENGTH_SCALE_MULTIPLIER * self.auto_point_size;
-        let seed = match self.camera_nn_scale {
-            Some(camera_scale) => point_scale.min(camera_scale),
-            None => point_scale,
-        };
-        seed * self.transform.scale as f32
+        sfmtool_core::analysis::scene_scale::length_scale(
+            self.auto_point_size,
+            self.camera_nn_scale,
+        ) * self.transform.scale as f32
     }
 
     /// This node's bounding sphere in the **shared world space**: its own

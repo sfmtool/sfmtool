@@ -30,6 +30,7 @@ from .to_colmap_bin import to_colmap_bin
 from .to_colmap_db import to_colmap_db
 from .to_nerfstudio import to_nerfstudio
 from .undistort import undistort
+from .web_export import web_export
 from .ws import ws
 from .xform import xform
 
@@ -61,6 +62,7 @@ __all__ = [
     "to_colmap_db",
     "to_nerfstudio",
     "undistort",
+    "web_export",
     "ws",
     "xform",
 ]

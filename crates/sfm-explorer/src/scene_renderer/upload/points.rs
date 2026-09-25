@@ -3,13 +3,13 @@
 
 //! Point cloud instance buffer upload.
 
-use super::super::auto_point_size::{
-    compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds,
-};
 use super::super::gpu_types::PointInstance;
 use super::super::SceneRenderer;
 use super::Uploaded;
 use crate::scene::ReconId;
+use sfmtool_core::analysis::scene_scale::{
+    compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds,
+};
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{progress_note, SfmrReconstruction};
 use wgpu::util::DeviceExt;

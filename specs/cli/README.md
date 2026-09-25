@@ -60,6 +60,7 @@ specced under [../gui/](../gui/README.md).
 | `sfm heatmap` | [heatmap-command.md](visualization/heatmap-command.md) |
 | `sfm render-patches` | [render-patches-command.md](visualization/render-patches-command.md) |
 | `sfm panorama` | [panorama-command.md](visualization/panorama-command.md) |
+| `sfm web-export` | [web-export-command.md](visualization/web-export-command.md) |
 
 ## Image Processing
 

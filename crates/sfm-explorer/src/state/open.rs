@@ -16,7 +16,8 @@
 //! - **`patch bitmaps`**, for a file with patch frames and inline keypoints but
 //!   no bitmaps: every photograph decoded, then every patch fused at its stored
 //!   frame and keypoints by the fuse `sfm xform --add-patch-bitmaps` runs
-//!   ([`fuse_patch_cloud_bitmaps`]). The column goes into the value marked
+//!   ([`render_display_patch_bitmaps`], which `sfm web-export` also calls).
+//!   The column goes into the value marked
 //!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], so the bench, the
 //!   edits and Track View read it as they would a file's own, while no save
 //!   writes it and no content hash covers it.
@@ -25,15 +26,9 @@
 //! ([`AppState::append_opened`]).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use rayon::prelude::*;
-use sfmtool_core::camera::remap::ImageU8Pyramid;
-use sfmtool_core::geometry::RigidTransform;
-use sfmtool_core::patch::keypoint_subpixel::{fuse_patch_cloud_bitmaps, KeypointSubpixelParams};
-use sfmtool_core::patch::normal_refine::ProjectedImage;
-use sfmtool_core::patch::PatchCloud;
+use sfmtool_core::patch::display_bitmaps::render_display_patch_bitmaps;
 use sfmtool_core::progress::{Cancelled, Progress};
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
@@ -43,7 +38,7 @@ use crate::background::{Finished, Job, Operation};
 use crate::display_thumbnails::DisplayThumbnails;
 use crate::scene::{ReconId, SceneNode};
 
-use super::{AppState, PYRAMID_LEVELS};
+use super::AppState;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -283,93 +278,16 @@ fn load_for_display(path: &Path, progress: &Progress<'_>) -> Result<Loaded, Stop
     })
 }
 
-/// Render `recon`'s patch bitmap column at its stored frames and keypoints,
-/// moving nothing.
-///
-/// Two stages under `progress`: `decode photographs`, each image's photograph
-/// read and pyramided in parallel, and `fuse`, the whole-cloud form of the one
-/// fuse the bench commit and `--add-patch-bitmaps` use. A photograph that
-/// cannot be read, or is not the size its camera says, is left out of every
-/// patch's views rather than failing the operation; a point that two readable
-/// views do not see gets a zero row. `Ok(None)` when not one photograph could
-/// be read, since a column of zero rows would draw nothing. The conversion
-/// worker also calls this fuse, but keeps the result as a stored column rather
-/// than marking it for display only.
+/// Render `recon`'s display patch bitmaps at its stored frames and keypoints,
+/// moving nothing: [`render_display_patch_bitmaps`]. `Ok(None)` when not one photograph could be read, since
+/// a column of zero rows would draw nothing. The conversion worker also calls
+/// this, but keeps the result as a stored column rather than marking it for
+/// display only.
 pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,
     progress: &Progress<'_>,
 ) -> Result<Option<ndarray::Array4<u8>>, Cancelled> {
-    let Some(cloud) = PatchCloud::from_stored_frames(recon) else {
-        return Ok(None);
-    };
-    let [decode, fuse] = progress.split([1.0, 3.0]);
-    let images = &recon.image_table.images;
-    let total = images.len();
-    let pyramids: Vec<Option<ImageU8Pyramid>> = {
-        let mut phase = decode.phase("decode photographs");
-        let landed = AtomicUsize::new(0);
-        let pyramids: Vec<Option<ImageU8Pyramid>> = images
-            .par_iter()
-            .map(|image| {
-                if phase.is_cancelled() {
-                    return None;
-                }
-                let camera = &recon.image_table.cameras[image.camera_index as usize];
-                let decoded = crate::state::decode_full_res(&recon.workspace_dir.join(&image.name))
-                    .filter(|decoded| {
-                        decoded.width() == camera.width && decoded.height() == camera.height
-                    })
-                    .map(|decoded| ImageU8Pyramid::from_image(decoded, PYRAMID_LEVELS));
-                let n = landed.fetch_add(1, Ordering::Relaxed) + 1;
-                phase.count(n as u64, Some(total as u64), "images");
-                decoded
-            })
-            .collect();
-        phase.check_cancel()?;
-        let read = pyramids.iter().filter(|p| p.is_some()).count();
-        progress_note!(phase, "{read} of {total} read");
-        pyramids
-    };
-    if pyramids.iter().all(Option::is_none) {
-        return Ok(None);
-    }
-    let poses: Vec<RigidTransform> = images
-        .iter()
-        .map(|image| {
-            let q = image.quaternion_wxyz;
-            RigidTransform::from_wxyz_translation(
-                [q.w, q.i, q.j, q.k],
-                [
-                    image.translation_xyz.x,
-                    image.translation_xyz.y,
-                    image.translation_xyz.z,
-                ],
-            )
-        })
-        .collect();
-    let views: Vec<Option<ProjectedImage<'_>>> = images
-        .iter()
-        .zip(&poses)
-        .zip(&pyramids)
-        .map(|((image, cam_from_world), pyramid)| {
-            pyramid.as_ref().map(|pyramid| ProjectedImage {
-                camera: &recon.image_table.cameras[image.camera_index as usize],
-                cam_from_world,
-                pyramid,
-            })
-        })
-        .collect();
-    let mut phase = fuse.phase("fuse");
-    let column = fuse_patch_cloud_bitmaps(
-        &cloud,
-        recon,
-        &views,
-        &KeypointSubpixelParams::default(),
-        None,
-        &phase,
-    )?;
-    progress_note!(phase, "{} patches at {} px", cloud.len(), column.shape()[1]);
-    Ok(Some(column))
+    render_display_patch_bitmaps(recon, progress)
 }
 
 #[cfg(test)]

@@ -82,6 +82,16 @@ impl ImageU8 {
         }
     }
 
+    /// Decode the image file at `path` to 3-channel RGB.
+    ///
+    /// The EXIF orientation is ignored, as the feature extractors ignore it, so
+    /// the pixels line up with the keypoints and with the camera's width and
+    /// height.
+    pub fn read_rgb(path: &std::path::Path) -> Result<Self, image::ImageError> {
+        let rgb = image::open(path)?.to_rgb8();
+        Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
+    }
+
     /// Create a zeroed image with the given dimensions and channel count.
     pub fn from_channels(width: u32, height: u32, channels: u32) -> Self {
         let len = (width as usize) * (height as usize) * (channels as usize);

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::{Point3D, SfmrImage};
 use nalgebra::{Point3 as NPoint3, UnitQuaternion, Vector3};
-use sfmtool_core::{Point3D, SfmrImage};
 
 fn make_point(x: f64, y: f64, z: f64) -> Point3D {
     Point3D {
