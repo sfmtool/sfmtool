@@ -267,10 +267,56 @@ the trimmed refinement treat like any other.
   3. those non-target members, as rays through their **refined positions** at
      their images' stored poses, triangulate under step 2's rules: at least two
      usable rays, in front of every camera, and an observable depth. A cluster
-     that fails contributes nothing.
+     that fails contributes nothing;
+  4. the triangulated position **agrees with its own members**: projected into
+     each non-target member's image at its stored pose, it lands within
+     `ResectImageOptions::max_cluster_residual_px` (default 1.5 px) of that
+     member's refined position. A position behind a member's camera (judged
+     along the member's ray, as the triangulation judges "in front"), or one
+     that projects outside the member's frame, does not agree. A cluster that
+     fails is dropped whole and contributes nothing; no member is removed and
+     the rest re-triangulated.
 
   The pair is the target member's refined position against that triangulated
   position. A cluster reaching several targets is triangulated once.
+
+The fourth rule exists because a cluster's members can agree pairwise in
+appearance and still not be one point in space: refinement keeps a member on
+its patch match, not on the geometry. A cluster whose own members do not meet
+at one position gives a position the target's pixel has no reason to agree
+with. On the Kerry Park reconstruction (48 fisheye images, 14532 clusters),
+scored against the stored poses of the 42 images that have tracks, 51.5% of
+the clusters that triangulate put their target member within 3 px of the
+stored pose; of those whose own worst member residual is at most 1.5 px, 88.5%
+do. On the seoul_bull ground truth (17 images) the same numbers are 70.3% and
+92.3%.
+
+The threshold and the form were chosen on those two reconstructions, each image
+resected alone through `resect_images`:
+
+| Threshold (px) | Kerry clusters kept | within 3 px | seoul_bull kept | within 3 px | Kerry accepted |
+|---|---|---|---|---|---|
+| 0.5 | 3125 | 0.898 | 1611 | 0.935 | 45/48 |
+| 1.0 | 3830 | 0.894 | 1737 | 0.926 | 48/48 |
+| 1.5 | 4223 | 0.885 | 1754 | 0.923 | 48/48 |
+| 2.0 | 4444 | 0.878 | 1772 | 0.915 | 48/48 |
+| 3.0 | 4820 | 0.861 | 1792 | 0.908 | 48/48 |
+| no rule | 9061 | 0.515 | 2319 | 0.703 | 42/48 |
+
+"Kept" and "within 3 px" count the targets with tracks; "accepted" counts every
+image, and every image with tracks is accepted at every threshold on both
+reconstructions. Kerry has six images with no tracks, which the clusters alone
+have to place. With no rule all six are refused; at 0.5 px three are refused,
+keeping only 6 to 13 clusters each; from 1 px up all six are accepted. At 1 px
+one of them (`fisheye_left/frame_24`) is accepted on 5 inliers of 14 with a
+5.0° rotation away from its stored pose, against 0.8° at 1.5 px, and the 90th
+percentile of the camera-centre move over the images with tracks drops from
+0.0096 to 0.0057 scene units between 1 and 1.5 px. Above 1.5 px the agreement
+keeps falling while those images gain few clusters. Removing the worst member
+and re-triangulating instead of dropping the cluster keeps about 1.5 times as
+many Kerry clusters, but only 78% of them agree with the stored pose at 1.5 px
+and the images with tracks move further from their stored poses (median
+rotation 0.12° against 0.10°), so the cluster is dropped whole.
 
 Clusters need no feature indexes and no position matching, so they work the same
 on `sift_files` and `embedded_patches` reconstructions. A target keypoint that is
@@ -283,13 +329,15 @@ Each target gets its own report — the path taken, the correspondences the
 estimate saw and how many were inliers, each split into the part from the
 tracks and the part from the clusters, how many clusters had a kept member in
 the image (`clusters_considered`), how many of those the member rules set aside
-(`clusters_skipped`) and how many failed to triangulate (`clusters_failed`),
+(`clusters_skipped`), how many failed to triangulate (`clusters_failed`) and
+how many triangulated to a position their own members disagree with
+(`clusters_inconsistent`),
 whether it was accepted and why not, how far its pose moved, and its share of
 the held-out, re-triangulated and removed points. On the rotation-only path the
 correspondences are the tracks' bearings and the cluster counts of pairs and
 inliers are zero. Over the set there are totals: how many targets were accepted
 and refused, the summed correspondences and inliers with their ratio and with
-their split by source, and the held-out, re-triangulated and removed point
+their split by source, the summed `clusters_inconsistent`, and the held-out, re-triangulated and removed point
 counts with each point counted once however many targets observe it.
 
 The rotation delta is the angle between the stored and resected world-to-camera
@@ -309,7 +357,7 @@ displacement in its own units and no ratio.
   `Resected IMG_0007.jpg (bull): 214 pts (150 tracks, 64 clusters), inliers
   198/214 (0.93; 140 tracks, 58 clusters), rotation 12.40°, translation 0.081
   (scene-scale), 190 re-triangulated; clusters 80 considered, 12 skipped, 4
-  failed to triangulate (v3 → v4)`. A refusal is one **failed** entry:
+  failed to triangulate, 6 inconsistent (v3 → v4)`. A refusal is one **failed** entry:
   `Resect <image> in <node> refused: <reason>`. One entry either way, and it is
   also what the status line (viewport overlay, as `Align to…` reports) shows.
 - **Selection**: unchanged, but followed through the map: the node is the one
@@ -327,8 +375,9 @@ single-target action runs synchronously in tens of milliseconds on the
 reconstructions the viewer targets. It reads the cluster-patches file on every
 run, as *Create Track Here* does, so the file on disk is always the one used;
 the read is its own row (`read cluster patches`) in the entry's timing. The
-cluster pass is one walk over the file's members and one triangulation per
-cluster that passes the member rules. The current value is materialised first
+cluster pass is one walk over the file's members, one triangulation per
+cluster that passes the member rules, and one reprojection per non-target
+member of each cluster that triangulates. The current value is materialised first
 when the overlay is not empty, and the
 answer pushed is a whole base held by the history until the budget releases it
 ([../document-model.md](../document-model.md)).
@@ -360,14 +409,19 @@ Core (`sfmtool-core`, headless):
   aside; a cluster whose only non-target kept member is in one image is set
   aside when a second target holds the other member, and a rejected member does
   not count; clusters with parallel rays or rays that meet behind the cameras
-  fail triangulation; the rotation-only path reads no cluster; a file without
-  the cluster sections is refused.
+  fail triangulation; a cluster whose members agree with its position is kept,
+  one with a member 10 px off is counted in `clusters_inconsistent` and gives
+  no pair (and is kept under a wider threshold); a member behind its camera,
+  outside its frame or at a non-finite pixel does not agree; the rotation-only
+  path reads no cluster; a file without the cluster sections is refused.
 
 Bindings (`tests/rust_bindings/`): the name-to-index lookup and its
 `ValueError`, the report dict and its per-image list, a refusal returning a
 reconstruction rather than raising, a two-target call, that the input
 reconstruction is unchanged, the source split with a written cluster-patches
-file, the totals' split, and a file without the cluster sections
+file, the totals' split, a cluster with a moved member counted in
+`clusters_inconsistent` at the default threshold and kept at
+`max_cluster_residual_px=inf`, and a file without the cluster sections
 (`ValueError`) or that cannot be read (`OSError`). The installing variant is in
 `test_edited_reconstruction_rust_bindings.py`, on the real reconstruction the
 other edit bindings use: an image past the table raising, and an accepted

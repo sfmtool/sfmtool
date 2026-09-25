@@ -22,7 +22,11 @@ or the tracks plus the clusters of a cluster-patches `.matches` file
 (`ResectSource::Tracks` / `ResectSource::TracksAndClusters`). It hands this
 primitive both sets as cluster ids: a track's is its point index, scored against
 the point's held-out position, and a cluster's is an id past the point indexes,
-scored against the position its non-target kept members triangulate to.
+scored against the position its non-target kept members triangulate to. A
+cluster reaches the primitive only when that position reprojects within
+`ResectImageOptions::max_cluster_residual_px` (default 1.5 px) of every one of
+those members in its own image; a cluster whose members disagree with their
+own position is left out rather than handed to RANSAC as an outlier.
 
 ## Inputs
 
