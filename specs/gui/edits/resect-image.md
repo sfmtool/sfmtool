@@ -16,7 +16,8 @@ menus, `Align to…` as the template for a per-node action),
 [../index-files.md](../index-files.md) (the cluster-patches file and its
 none / current / stale state),
 [../../core/geometry/reconstruction-growth.md](../../core/geometry/reconstruction-growth.md)
-(`resect_images_batch`, the registration primitive this reuses),
+(`resect_images_batch`, the registration primitive whose consensus floor,
+refinement schedule and 3 px bound the finite path shares),
 [../document-model.md](../document-model.md) and
 [../edit-history.md](../edit-history.md) (the version it pushes, and the map the
 selection follows), [README.md](README.md) (the other edit families),
@@ -133,7 +134,7 @@ estimated. "Non-target" below means a posed image that is not in the set.
 - A point at infinity is a direction, which one rotation already fixes, so its
   held-out bearing is the mean of the world rays the non-target images see it
   along. A point at infinity no non-target image observes has no held-out
-  bearing. Bearings are excluded from the finite set.
+  bearing.
 
 A point two targets share is therefore re-triangulated from neither of them:
 holding a set out together asks whether the group is corroborated by the rest,
@@ -150,15 +151,48 @@ Each target is estimated against that one shared held-out structure, and
 accepted or refused on the primitive's own gate (`accept_gate`) independently
 of the others.
 
-- **Finite path.** A target's finite correspondences are its track pairs and
-  its cluster pairs together (see "Correspondence sources"). A target with at
-  least the batch-registration observation floor of them
-  (`ResectOptions::min_obs`) is
-  estimated by `resect_images_batch`: RANSAC P3P polished by trimmed pose-only
-  refinement, scored by the all-observation inlier fraction at the 3 px bound,
-  seeded deterministically. The camera model is each image's own, so the
-  targets run as one batch per camera model; each image's seed is a function of
-  its own index, so the grouping changes no answer.
+- **Finite path.** A target's correspondences are its track pairs and its
+  cluster pairs together (see "Correspondence sources"). A track pair is
+  **finite** when its point has a held-out position, and a **bearing** when its
+  point is at infinity and has a held-out bearing. A target with at least
+  `ResectOptions::min_obs` finite pairs (finite tracks and clusters; bearings
+  do not count toward it) is estimated by the finite path in
+  [resect_images/finite.rs](../../../crates/sfmtool-core/src/geometry/resect_images/finite.rs):
+  - **Residuals.** Every pair is scored in pixels through the image's own
+    camera model. A finite pair's residual is its reprojection distance. A
+    bearing's residual is the angle between its held-out direction, rotated
+    into the camera, and the ray the target observed it along, times the
+    camera's focal length (the larger of the two): the currency the
+    rotation-only path uses. A bearing therefore constrains the rotation and
+    not the translation.
+  - **Minimal samples.** RANSAC P3P draws its three-pair samples from the
+    **finite track pairs** when the target has at least three of them, and
+    from every finite pair (tracks and clusters) when it has fewer. Bearings
+    are never sampled: P3P needs three finite points. A pool with at most
+    2000 triples is enumerated whole; a larger one is sampled with a SplitMix64
+    seeded from `(seed, image index)`, for at most 2000 trials, stopping once
+    an all-inlier triple has been drawn with 0.999 probability at the best
+    inlier rate seen among the pool.
+  - **Scoring.** Each hypothesis is scored over **every** pair, tracks,
+    bearings and clusters alike: the count within the 3 px bound, ties broken
+    by the sum of the residuals capped at 3 px. A new best hypothesis is refit
+    once on its own inliers and kept refit when that scores better. Sampling
+    from the tracks means every hypothesis fits three tracks exactly, so a pose
+    under which the tracks are outliers is never proposed, however many
+    clusters agree with it; the clusters and bearings choose between the poses
+    the tracks allow and sharpen them. Below three finite tracks, the tracks
+    are sampled with the clusters rather than set aside. No pair is filtered
+    for being a track.
+  - **Refinement.** A best hypothesis with fewer than 8 inliers (the
+    batch-registration primitive's P3P consensus floor) refuses the estimate.
+    Otherwise its inliers are refit by trimmed Levenberg-Marquardt, five
+    rounds each keeping the best-fitting 60% of them, and the result is refit
+    once more on every pair within 3 px when at least six are. A bearing's
+    residual in the fit is `f · (ray × R·d)`, whose length is `f · sin(angle)`,
+    so it has a derivative at zero angle.
+  - The estimate is accepted when its inliers over all pairs are at least
+    `accept_gate` of them. Each target runs on its own, seeded from its own
+    index, so running targets in parallel changes no answer.
 - **Rotation-only path.** Below that floor, or when the reconstruction is
   rotation-only, the rotation is estimated by closed-form absolute
   orientation between the target's observed ray directions and the held-out
@@ -171,8 +205,9 @@ of the others.
   the camera's own focal, since a spread narrower than that is not a spread.
   The inlier bound is the finite path's 3 px bound in the same currency: the
   angle a pixel subtends on this camera.
-- **Refusals.** A target that misses the gate, whose bearings span no
-  resolvable angle, or that has support on neither path, is refused: it keeps
+- **Refusals.** A target that misses the gate, whose best pose hypothesis has
+  fewer than 8 inliers, whose bearings span no resolvable angle, or that has
+  support on neither path, is refused: it keeps
   its stored pose, its report carries the reason, and the rest of the set
   proceeds. The call still hands back its reconstruction, carrying the refused
   targets' stored poses and the held-out re-triangulation; what the viewer's
@@ -245,13 +280,15 @@ which returns `(EditedReconstruction, report)` and raises on the refusal.
 A target's correspondences are the **union of two sets**, handed to the pose
 estimate side by side. The two are never joined or merged: no cluster is
 matched to a track, nothing is deduplicated, and a cluster that sees the same
-physical point as a track is simply one more correspondence, which RANSAC and
-the trimmed refinement treat like any other.
+physical point as a track is simply one more correspondence, scored and refit
+like any other. The two sets differ in one place: with at least three finite
+track pairs, only the tracks are drawn as RANSAC's minimal samples (step 3).
+The tracks lead and the clusters support them.
 
 - **Tracks** (both sources): the target's own observations, joined to the
-  held-out positions of step 2. A point any target observes is scored only
-  against its held-out position, never the stored one it helped fit, and a
-  point with none contributes nothing.
+  held-out positions and held-out bearings of step 2. A point any target
+  observes is scored only against its held-out position or bearing, never the
+  stored one it helped fit, and a point with neither contributes nothing.
 - **Clusters** (`TracksAndClusters`): each cluster of the cluster-patches file,
   used as a track of its own. Its members are joined to the reconstruction's
   images by image name; a member in an image the reconstruction does not hold
@@ -261,15 +298,19 @@ the trimmed refinement treat like any other.
   1. it has **exactly one** kept member in the target. A cluster with two or
      more does not say which of its pixels the point is at, and contributes
      nothing to that target;
-  2. it has kept members in at least two **non-target** posed images. Members
-     in any target image never count, so the cluster is held out from the
-     whole target set exactly as a track is;
-  3. those non-target members, as rays through their **refined positions** at
+  2. it has kept members in at least two **non-target** posed images **that
+     have tracks**. Members in any target image never count, so the cluster
+     is held out from the whole target set exactly as a track is. A member in
+     an image with no track observation does not count either; see "Images
+     without tracks" below. A cluster with members in two or more non-target
+     posed images but in fewer than two with tracks is counted in
+     `clusters_untracked`;
+  3. those counted members, as rays through their **refined positions** at
      their images' stored poses, triangulate under step 2's rules: at least two
      usable rays, in front of every camera, and an observable depth. A cluster
      that fails contributes nothing;
   4. the triangulated position **agrees with its own members**: projected into
-     each non-target member's image at its stored pose, it lands within
+     each counted member's image at its stored pose, it lands within
      `ResectImageOptions::max_cluster_residual_px` (default 1.5 px) of that
      member's refined position. A position behind a member's camera (judged
      along the member's ray, as the triangulation judges "in front"), or one
@@ -316,7 +357,39 @@ keeps falling while those images gain few clusters. Removing the worst member
 and re-triangulating instead of dropping the cluster keeps about 1.5 times as
 many Kerry clusters, but only 78% of them agree with the stored pose at 1.5 px
 and the images with tracks move further from their stored poses (median
-rotation 0.12° against 0.10°), so the cluster is dropped whole.
+rotation 0.12° against 0.10°), so the cluster is dropped whole. These
+measurements count the members in every non-target posed image and sample the
+tracks and the clusters together; the two rules below were measured on their
+own.
+
+#### Images without tracks
+
+An image **has tracks** when at least one track observation of the
+reconstruction is in it, whatever the point. A member in an image without
+tracks does not count because nothing corroborates that image's pose: no
+point it observes was triangulated together with any other image. Such images
+can hold poses that agree with each other and with nothing else, and the
+clusters they place then agree with each other too, however wrong the poses
+are. One observation is the bar because it is the least that ties an image's
+pose to the rest of the reconstruction; a higher count would be a threshold
+with no measurement to choose it.
+
+On the Kerry Park reconstruction five images, the left and right frames 22 to
+24 other than `fisheye_right/frame_22`, have no tracks, and their stored poses
+agree with each other and are far from the rig's path. With their members
+counted, `fisheye_right/frame_22`, which has four finite tracks and one
+bearing, was resected onto them: 0 of 4 tracks and 33 of 53 clusters were
+inliers, with a 13.0° rotation and an 18.7 scene-unit move. With them not
+counted and the tracks leading, 3 of 4 finite tracks, the bearing and 16 of 23
+clusters are inliers, and the camera centre moves 0.056 scene units. Over the
+42 other images with tracks the median rotation away from the stored pose is
+0.088° (0.095° with those members counted and all pairs sampled together) and
+the largest camera-centre move is the same, at
+0.040 scene units; on the seoul_bull ground truth, where every image has
+tracks, no cluster is affected and all 17 images stay within 0.14° and 0.0033
+scene units. Every accepted image with at least three finite tracks keeps at
+least three quarters of them as inliers on both reconstructions, so the
+estimate carries no further rule requiring a majority of the tracks.
 
 Clusters need no feature indexes and no position matching, so they work the same
 on `sift_files` and `embedded_patches` reconstructions. A target keypoint that is
@@ -325,19 +398,22 @@ estimate and creates no track.
 
 ### Reported quantities
 
-Each target gets its own report — the path taken, the correspondences the
+Each target gets its own report: the path taken; the correspondences the
 estimate saw and how many were inliers, each split into the part from the
-tracks and the part from the clusters, how many clusters had a kept member in
-the image (`clusters_considered`), how many of those the member rules set aside
-(`clusters_skipped`), how many failed to triangulate (`clusters_failed`) and
-how many triangulated to a position their own members disagree with
-(`clusters_inconsistent`),
-whether it was accepted and why not, how far its pose moved, and its share of
-the held-out, re-triangulated and removed points. On the rotation-only path the
+tracks and the part from the clusters, with the track part's bearings
+(`bearing_correspondences`, `bearing_inliers`) counted within it; how many
+clusters had a kept member in the image (`clusters_considered`), how many of
+those the member rules set aside (`clusters_skipped`), how many were left with
+members in fewer than two tracked images (`clusters_untracked`), how many
+failed to triangulate (`clusters_failed`) and how many triangulated to a
+position their own members disagree with (`clusters_inconsistent`); whether it
+was accepted and why not; how far its pose moved; and its share of the
+held-out, re-triangulated and removed points. On the rotation-only path the
 correspondences are the tracks' bearings and the cluster counts of pairs and
 inliers are zero. Over the set there are totals: how many targets were accepted
 and refused, the summed correspondences and inliers with their ratio and with
-their split by source, the summed `clusters_inconsistent`, and the held-out, re-triangulated and removed point
+their split by source and bearings, the summed `clusters_untracked` and
+`clusters_inconsistent`, and the held-out, re-triangulated and removed point
 counts with each point counted once however many targets observe it.
 
 The rotation delta is the angle between the stored and resected world-to-camera
@@ -354,10 +430,11 @@ displacement in its own units and no ratio.
 - **Label**: `Resected <image basename> (<node label>)`.
 - **Action Log**: one entry of kind `Edit`, the label, the estimate's own
   quantities, and the serials:
-  `Resected IMG_0007.jpg (bull): 214 pts (150 tracks, 64 clusters), inliers
-  198/214 (0.93; 140 tracks, 58 clusters), rotation 12.40°, translation 0.081
-  (scene-scale), 190 re-triangulated; clusters 80 considered, 12 skipped, 4
-  failed to triangulate, 6 inconsistent (v3 → v4)`. A refusal is one **failed** entry:
+  `Resected IMG_0007.jpg (bull): 214 pts (147 finite tracks, 3 tracks at
+  infinity, 64 clusters), inliers 198/214 (0.93; 137 finite tracks, 3 tracks at
+  infinity, 58 clusters), rotation 12.40°, translation 0.081 (scene-scale), 190
+  re-triangulated; clusters 80 considered, 12 skipped, 2 untracked, 4 failed to
+  triangulate, 6 inconsistent (v3 → v4)`. A refusal is one **failed** entry:
   `Resect <image> in <node> refused: <reason>`. One entry either way, and it is
   also what the status line (viewport overlay, as `Align to…` reports) shows.
 - **Selection**: unchanged, but followed through the map: the node is the one
@@ -370,7 +447,8 @@ displacement in its own units and no ratio.
 
 Held-out re-triangulation and the estimates touch only the observations of the
 points the target set observes (hundreds to a few thousand rows for one
-target); the finite path is `resect_images_batch` over the targets. The viewer's
+target). The finite path scores each of at most 2000 minimal samples against
+every pair of its target, and the targets run in parallel. The viewer's
 single-target action runs synchronously in tens of milliseconds on the
 reconstructions the viewer targets. It reads the cluster-patches file on every
 run, as *Create Track Here* does, so the file on disk is always the one used;
@@ -414,6 +492,22 @@ Core (`sfmtool-core`, headless):
   no pair (and is kept under a wider threshold); a member behind its camera,
   outside its frame or at a non-finite pixel does not agree; the rotation-only
   path reads no cluster; a file without the cluster sections is refused.
+- Images without tracks: a member in an image with no track observation is not
+  counted (a member 10 px off makes a cluster inconsistent while its image has
+  tracks, and does not once the image has none); a cluster left with one
+  tracked non-target image is counted in `clusters_untracked` and gives no
+  pair; the cluster counts add up to `clusters_considered`, and the totals to
+  the reports.
+- Tracks lead: with ten finite tracks, fifteen clusters that agree with them
+  and thirty clusters that agree with each other on a pose 4° away, the pose
+  recovered is the tracks' and the thirty are outliers; with two tracks, the
+  tracks are sampled with the clusters, and are inliers when the clusters agree
+  with them and outliers when the thirty win.
+- Bearings: a track at infinity is a correspondence of the finite path,
+  counted in `bearing_correspondences` and `bearing_inliers`, and one observed
+  30 px off is an outlier; a bearing's residual is unchanged by moving the
+  camera and grows by the focal length times the angle the camera turns
+  across its ray.
 
 Bindings (`tests/rust_bindings/`): the name-to-index lookup and its
 `ValueError`, the report dict and its per-image list, a refusal returning a
@@ -421,7 +515,8 @@ reconstruction rather than raising, a two-target call, that the input
 reconstruction is unchanged, the source split with a written cluster-patches
 file, the totals' split, a cluster with a moved member counted in
 `clusters_inconsistent` at the default threshold and kept at
-`max_cluster_residual_px=inf`, and a file without the cluster sections
+`max_cluster_residual_px=inf`, members in images that observe nothing counted
+in `clusters_untracked` and giving no pair, and a file without the cluster sections
 (`ValueError`) or that cannot be read (`OSError`). The installing variant is in
 `test_edited_reconstruction_rust_bindings.py`, on the real reconstruction the
 other edit bindings use: an image past the table raising, and an accepted
