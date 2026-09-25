@@ -73,6 +73,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low. Risk: low.
 
 **Set a visibility rule for private viewer modules**
+> _Status (2026-09-24): Done — `AGENTS.md` defines viewer visibility, and `document.rs` / `state/edits.rs` use crate visibility for items shared by private modules._
 - Location: `crates/sfm-explorer/src/document.rs` (38 bare `pub`, zero `pub(crate)`) and `crates/sfm-explorer/src/state/edits.rs` (19 bare `pub`, 17 `pub(crate)`).
 - Problem: Both modules are private in `lib.rs`, while nearby newer subsystems consistently use `pub(crate)` for crate-visible items. The mixed spelling obscures the intended reach.
 - Proposed fix: Write the convention in `AGENTS.md`, then converge these two modules, retaining private items where possible.

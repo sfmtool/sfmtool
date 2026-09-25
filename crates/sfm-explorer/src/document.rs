@@ -48,7 +48,7 @@ use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
 /// What one step did to point indexes, which is the core edits' own vocabulary:
 /// every edit that can be a step of a history answers in it, so a version keeps
 /// the map its edit handed back rather than one translated here.
-pub use sfmtool_core::reconstruction::edited::PointMap;
+pub(crate) use sfmtool_core::reconstruction::edited::PointMap;
 
 #[cfg(test)]
 mod tests;
@@ -62,7 +62,7 @@ mod tests;
 /// 1 189 MB are the shared thumbnail and patch-bitmap columns) a bulk edit's
 /// unshared cost is the light columns, some 165 MB, so this holds twenty-odd
 /// bulk edits or any number of point edits.
-pub const HISTORY_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub(crate) const HISTORY_BUDGET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Source of [`VersionSerial`] values. Process-wide and never reset, so a
 /// serial names one version for the life of the session however many nodes are
@@ -72,7 +72,7 @@ static NEXT_VERSION_SERIAL: AtomicU64 = AtomicU64::new(0);
 /// Identity of one version. Minted once, never reused -- including by a version
 /// a discarded redo tail took with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct VersionSerial(u64);
+pub(crate) struct VersionSerial(u64);
 
 impl VersionSerial {
     /// Mint the next unused serial. The only way to make one.
@@ -86,7 +86,7 @@ impl VersionSerial {
     /// `sfmtool_core::bench::Origin` numbers the version a track was put on the
     /// bench from with an opaque `u64`, which core neither mints nor
     /// interprets; this is what the viewer puts in it.
-    pub fn as_u64(self) -> u64 {
+    pub(crate) fn as_u64(self) -> u64 {
         self.0
     }
 }
@@ -106,50 +106,50 @@ impl std::fmt::Display for VersionSerial {
 /// position among that edit's creations, which is what
 /// [`crate::point_ids::mint`] mints and [`crate::point_ids::resolve`] resolves.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreatedPoints {
+pub(crate) struct CreatedPoints {
     /// The point edit's content hash, 32 lowercase hex digits.
-    pub hash: String,
+    pub(crate) hash: String,
     /// The indexes the created points hold **in this version**, in the order the
     /// edit created them. Position `k` in this list is the `k` of the id.
-    pub indexes: Vec<u32>,
+    pub(crate) indexes: Vec<u32>,
 }
 
 /// One version of a node's reconstruction, the bench beside it and the display
 /// transform it was drawn under.
-pub struct Version {
+pub(crate) struct Version {
     /// Minted once, never reused.
-    pub serial: VersionSerial,
+    pub(crate) serial: VersionSerial,
     /// The sentence the Action Log recorded for the edit that produced it, or
     /// how the node was loaded for the first version.
-    pub label: String,
+    pub(crate) label: String,
     /// When it was made. Wall clock, for the same reason the Action Log's is:
     /// a version is read next to something else that happened.
-    pub at: Timestamp,
+    pub(crate) at: Timestamp,
     /// The value, or `None` once the budget has released it. A released version
     /// keeps its place, its label and its map; it is simply no longer a version
     /// the cursor can reach.
-    pub value: Option<EditedReconstruction>,
+    pub(crate) value: Option<EditedReconstruction>,
     /// The bench as it stood, which is the version's other half. Kept whether
     /// or not the value is: a bench is a few tracks and the budget is about
     /// the reconstruction.
-    pub bench: Arc<Bench>,
+    pub(crate) bench: Arc<Bench>,
     /// The display transform in force when this version was made.
     ///
     /// View state the timeline remembers: never written, never hashed, and no
     /// part of what [`History::is_dirty`] compares. Kept whether or not the
     /// value is, like the bench, for the same reason: it is eight floats.
-    pub transform: Se3Transform,
+    pub(crate) transform: Se3Transform,
     /// The version whose document half this one shares, which is itself for a
     /// version that changed it.
     ///
     /// What "dirty" is asked of ([`History::is_dirty`]): a run of bench steps
     /// over a clean value is clean, because saving any of them would write the
     /// same bytes.
-    pub document_serial: VersionSerial,
+    pub(crate) document_serial: VersionSerial,
     /// What this version holds that its predecessor did not, as the budget
     /// counts it: the unshared half of the value plus the items of the bench
     /// its predecessor's bench does not share.
-    pub unshared_bytes: u64,
+    pub(crate) unshared_bytes: u64,
 }
 
 impl Version {
@@ -170,7 +170,7 @@ struct Step {
 
 /// A node's versions, its cursor, and the maps between every version it has
 /// ever minted.
-pub struct History {
+pub(crate) struct History {
     versions: Vec<Version>,
     /// Which version the node currently shows. Always in range, and always a
     /// version whose value is present.
@@ -187,7 +187,7 @@ pub struct History {
 
 impl History {
     /// A history holding `base` as its only version, labelled `label`.
-    pub fn new(base: SfmrReconstruction, label: impl Into<String>) -> Self {
+    pub(crate) fn new(base: SfmrReconstruction, label: impl Into<String>) -> Self {
         let value = EditedReconstruction::new(Arc::new(base));
         let unshared_bytes = value_bytes(&value, None);
         let serial = VersionSerial::next();
@@ -209,7 +209,7 @@ impl History {
     }
 
     /// The value the node shows.
-    pub fn current(&self) -> &EditedReconstruction {
+    pub(crate) fn current(&self) -> &EditedReconstruction {
         self.versions[self.cursor]
             .value()
             .expect("the cursor never rests on a released version")
@@ -218,7 +218,7 @@ impl History {
     /// The value the node shows, mutably, for a fixture that is still being
     /// built. Test-only: an edit in the app is a `push`, never a write.
     #[cfg(test)]
-    pub fn current_mut(&mut self) -> &mut EditedReconstruction {
+    pub(crate) fn current_mut(&mut self) -> &mut EditedReconstruction {
         let cursor = self.cursor;
         self.versions[cursor]
             .value
@@ -227,13 +227,13 @@ impl History {
     }
 
     /// The version the node shows.
-    pub fn current_version(&self) -> &Version {
+    pub(crate) fn current_version(&self) -> &Version {
         &self.versions[self.cursor]
     }
 
     /// The bench the node shows, which is the other half of the value at the
     /// cursor.
-    pub fn current_bench(&self) -> &Arc<Bench> {
+    pub(crate) fn current_bench(&self) -> &Arc<Bench> {
         &self.versions[self.cursor].bench
     }
 
@@ -243,7 +243,7 @@ impl History {
     /// Read off that version rather than kept beside it, so undo, redo and a
     /// jump restore it by moving the cursor and there is no second copy to
     /// fall out of step.
-    pub fn transform(&self) -> &Se3Transform {
+    pub(crate) fn transform(&self) -> &Se3Transform {
         &self.versions[self.cursor].transform
     }
 
@@ -251,7 +251,7 @@ impl History {
     /// still being built. Test-only: a reframe in the app is a
     /// [`History::push_transform`], never a write.
     #[cfg(test)]
-    pub fn transform_mut(&mut self) -> &mut Se3Transform {
+    pub(crate) fn transform_mut(&mut self) -> &mut Se3Transform {
         let cursor = self.cursor;
         &mut self.versions[cursor].transform
     }
@@ -264,7 +264,7 @@ impl History {
     /// them would write the same bytes and the bench is not written at all. A
     /// disk version a truncation has taken with it leaves the node dirty, since
     /// what the file holds is then no version of this history.
-    pub fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         let current = self.versions[self.cursor].document_serial;
         match self.versions.iter().find(|v| v.serial == self.disk_serial) {
             Some(disk) => disk.document_serial != current,
@@ -273,19 +273,19 @@ impl History {
     }
 
     /// Every version, oldest first.
-    pub fn versions(&self) -> &[Version] {
+    pub(crate) fn versions(&self) -> &[Version] {
         &self.versions
     }
 
     /// Every version, mutably, so a test can charge them against the budget
     /// without building a reconstruction large enough to reach it.
     #[cfg(test)]
-    pub fn versions_mut_for_test(&mut self) -> &mut [Version] {
+    pub(crate) fn versions_mut_for_test(&mut self) -> &mut [Version] {
         &mut self.versions
     }
 
     /// Where the cursor is, as an index into [`History::versions`].
-    pub fn cursor(&self) -> usize {
+    pub(crate) fn cursor(&self) -> usize {
         self.cursor
     }
 
@@ -294,18 +294,18 @@ impl History {
     /// It is the version the node was loaded at until something writes the
     /// node out; a save moves it with [`History::set_disk_serial`], and the
     /// Edit History panel marks whichever version it names.
-    pub fn disk_serial(&self) -> VersionSerial {
+    pub(crate) fn disk_serial(&self) -> VersionSerial {
         self.disk_serial
     }
 
     /// Say that `serial` is now the version on disk. Called by a save.
-    pub fn set_disk_serial(&mut self, serial: VersionSerial) {
+    pub(crate) fn set_disk_serial(&mut self, serial: VersionSerial) {
         self.disk_serial = serial;
     }
 
     /// Where `serial` sits in [`History::versions`], for a caller holding a
     /// serial rather than a position.
-    pub fn position_of(&self, serial: VersionSerial) -> Option<usize> {
+    pub(crate) fn position_of(&self, serial: VersionSerial) -> Option<usize> {
         self.versions.iter().position(|v| v.serial == serial)
     }
 
@@ -313,7 +313,7 @@ impl History {
     ///
     /// `Some((from, to))` when it moved; `None` when it is already there or the
     /// step would land on a released version.
-    pub fn step_towards(&mut self, target: usize) -> Option<(VersionSerial, VersionSerial)> {
+    pub(crate) fn step_towards(&mut self, target: usize) -> Option<(VersionSerial, VersionSerial)> {
         match target.cmp(&self.cursor) {
             std::cmp::Ordering::Less => self.undo(),
             std::cmp::Ordering::Greater => self.redo(),
@@ -323,7 +323,11 @@ impl History {
 
     /// The map from the version with serial `parent` to the version with serial
     /// `serial`, for any version ever minted on this node.
-    pub fn map_between(&self, parent: VersionSerial, serial: VersionSerial) -> Option<&PointMap> {
+    pub(crate) fn map_between(
+        &self,
+        parent: VersionSerial,
+        serial: VersionSerial,
+    ) -> Option<&PointMap> {
         self.steps
             .iter()
             .find(|s| s.serial == serial && s.parent == parent)
@@ -332,13 +336,13 @@ impl History {
 
     /// How many maps are held. The budget never touches these.
     #[allow(dead_code, reason = "read by the version-graph walks and by the tests")]
-    pub fn map_count(&self) -> usize {
+    fn map_count(&self) -> usize {
         self.steps.len()
     }
 
     /// The version `serial` was made from, or `None` for the node's first
     /// version.
-    pub fn parent_of(&self, serial: VersionSerial) -> Option<VersionSerial> {
+    pub(crate) fn parent_of(&self, serial: VersionSerial) -> Option<VersionSerial> {
         self.steps
             .iter()
             .find(|s| s.serial == serial)
@@ -350,7 +354,7 @@ impl History {
     ///
     /// Defined for every version the node has ever minted, including one a
     /// discarded redo tail took with it: the steps outlive the version rows.
-    pub fn ancestry(&self, serial: VersionSerial) -> Vec<VersionSerial> {
+    pub(crate) fn ancestry(&self, serial: VersionSerial) -> Vec<VersionSerial> {
         let mut chain = vec![serial];
         while let Some(parent) = self.parent_of(*chain.last().expect("non-empty")) {
             chain.push(parent);
@@ -359,7 +363,7 @@ impl History {
     }
 
     /// The points the step that produced `serial` created, when it created any.
-    pub fn created_by(&self, serial: VersionSerial) -> Option<&CreatedPoints> {
+    pub(crate) fn created_by(&self, serial: VersionSerial) -> Option<&CreatedPoints> {
         self.steps
             .iter()
             .find(|s| s.serial == serial)
@@ -368,7 +372,7 @@ impl History {
 
     /// Every version the node has ever minted, oldest first, the discarded ones
     /// included.
-    pub fn all_serials(&self) -> Vec<VersionSerial> {
+    pub(crate) fn all_serials(&self) -> Vec<VersionSerial> {
         let mut serials: Vec<VersionSerial> = self
             .versions
             .first()
@@ -393,7 +397,7 @@ impl History {
     /// `Err` carries the version the walk stopped at: the step into or out of it
     /// is where the point ceased to exist, which is the only thing worth saying
     /// to someone whose id did not resolve.
-    pub fn follow(
+    pub(crate) fn follow(
         &self,
         from: VersionSerial,
         to: VersionSerial,
@@ -429,7 +433,7 @@ impl History {
     /// says what the step did to
     /// point indexes and is kept for good; `label` is the sentence the Action
     /// Log recorded. Returns the new version's serial.
-    pub fn push(
+    pub(crate) fn push(
         &mut self,
         value: EditedReconstruction,
         map: PointMap,
@@ -443,7 +447,7 @@ impl History {
     /// `created` is kept on the version for good, so an id minted against the
     /// edit's hash resolves for the rest of the session however far the cursor
     /// travels afterwards.
-    pub fn push_creating(
+    pub(crate) fn push_creating(
         &mut self,
         value: EditedReconstruction,
         map: PointMap,
@@ -461,7 +465,11 @@ impl History {
     /// every activation. Point indexes are untouched, so the map is an empty
     /// `Removed` -- the identity -- and a selection, an id copied before the
     /// step and an undo across it all resolve unchanged.
-    pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>) -> VersionSerial {
+    pub(crate) fn push_bench(
+        &mut self,
+        bench: Arc<Bench>,
+        label: impl Into<String>,
+    ) -> VersionSerial {
         self.push_pair(
             None,
             bench,
@@ -478,7 +486,7 @@ impl History {
     /// predecessor's document serial and a clean node stays clean; the bench at
     /// the cursor is carried along; the map is the empty `Removed`, the
     /// identity.
-    pub fn push_transform(
+    pub(crate) fn push_transform(
         &mut self,
         transform: Se3Transform,
         label: impl Into<String>,
@@ -503,7 +511,7 @@ impl History {
     /// run of bench steps, or of reframes, over a clean value clean.
     /// `transform` is `None` to carry the display transform in force, so no
     /// step that is not about the framing can record a different one.
-    pub fn push_pair(
+    pub(crate) fn push_pair(
         &mut self,
         value: Option<EditedReconstruction>,
         bench: Arc<Bench>,
@@ -554,12 +562,12 @@ impl History {
     }
 
     /// Whether there is a version to step back to that still holds its value.
-    pub fn can_undo(&self) -> bool {
+    pub(crate) fn can_undo(&self) -> bool {
         self.cursor > 0 && self.versions[self.cursor - 1].value.is_some()
     }
 
     /// Whether there is a version to step forward to.
-    pub fn can_redo(&self) -> bool {
+    pub(crate) fn can_redo(&self) -> bool {
         self.cursor + 1 < self.versions.len() && self.versions[self.cursor + 1].value.is_some()
     }
 
@@ -569,7 +577,7 @@ impl History {
     /// All three halves come back with the cursor, the display transform
     /// included, which is what lets an undo of a bake leave the picture where
     /// it was.
-    pub fn undo(&mut self) -> Option<(VersionSerial, VersionSerial)> {
+    pub(crate) fn undo(&mut self) -> Option<(VersionSerial, VersionSerial)> {
         if !self.can_undo() {
             return None;
         }
@@ -580,7 +588,7 @@ impl History {
 
     /// Step the cursor forward one version. `(from, redone)` serials, or `None`
     /// when there is nothing to redo.
-    pub fn redo(&mut self) -> Option<(VersionSerial, VersionSerial)> {
+    pub(crate) fn redo(&mut self) -> Option<(VersionSerial, VersionSerial)> {
         if !self.can_redo() {
             return None;
         }
@@ -591,7 +599,7 @@ impl History {
 
     /// The map of the step that produced the version at the cursor, for a
     /// caller following an index across an edit or an undo.
-    pub fn map_into_cursor(&self) -> Option<&PointMap> {
+    pub(crate) fn map_into_cursor(&self) -> Option<&PointMap> {
         let serial = self.versions[self.cursor].serial;
         let parent = self.versions.get(self.cursor.checked_sub(1)?)?.serial;
         self.map_between(parent, serial)

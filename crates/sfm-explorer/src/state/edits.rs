@@ -350,7 +350,7 @@ pub(crate) mod tests;
 /// and its double-click ([`crate::image_detail::ImageDetail`]) -- so one
 /// gesture is one code path wherever it was made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointGesture {
+pub(crate) enum PointGesture {
     /// A menu opened on this point. Select it, so that what the entries will
     /// act on is also what the rest of the viewer is looking at.
     Opened(PointRef),
@@ -368,7 +368,7 @@ impl AppState {
     /// A point edit: the version's overlay gains one deleted index, the base is
     /// untouched, and every other index still means what it meant. Returns the
     /// message the caller reports, or `Err` when there is nothing to delete.
-    pub fn delete_selected_point(&mut self) -> Result<(), String> {
+    pub(crate) fn delete_selected_point(&mut self) -> Result<(), String> {
         let point = self
             .selected_point
             .ok_or_else(|| "No point is selected.".to_string())?;
@@ -376,7 +376,7 @@ impl AppState {
     }
 
     /// Delete one point, named by ref.
-    pub fn delete_point(&mut self, point: PointRef) -> Result<(), String> {
+    pub(crate) fn delete_point(&mut self, point: PointRef) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(point.recon) {
             return Err(why);
         }
@@ -421,7 +421,7 @@ impl AppState {
     /// The selection moves first in every case, so a menu that merely *opened*
     /// on a point leaves the rest of the viewer looking at that point whether
     /// or not an entry is chosen afterwards.
-    pub fn apply_point_gesture(&mut self, request: PointGesture) {
+    pub(crate) fn apply_point_gesture(&mut self, request: PointGesture) {
         let point = match request {
             PointGesture::Opened(point)
             | PointGesture::EditOnBench(point)
@@ -463,7 +463,7 @@ impl AppState {
     /// the Action Log keeps.
     ///
     /// See `specs/gui/edits/retriangulate-point.md`.
-    pub fn retriangulate_point(&mut self, point: PointRef) -> Result<(), String> {
+    pub(crate) fn retriangulate_point(&mut self, point: PointRef) -> Result<(), String> {
         let started = Instant::now();
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
@@ -549,7 +549,7 @@ impl AppState {
     /// the instant the operation started and in the name of whoever asked for
     /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
     /// edits log theirs.
-    pub fn start_retriangulate_all_points(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn start_retriangulate_all_points(&mut self, id: ReconId) -> Result<(), String> {
         let outcome = match self.retriangulate_all_points_job(id) {
             Ok(job) => self.start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, job),
             Err(message) => Err(message),
@@ -645,7 +645,7 @@ impl AppState {
     /// the instant the operation started and in the name of whoever asked for
     /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
     /// edits log theirs.
-    pub fn start_prune_covered_observations(
+    pub(crate) fn start_prune_covered_observations(
         &mut self,
         id: ReconId,
         options: &PruneCoveredOptions,
@@ -736,7 +736,7 @@ impl AppState {
     /// the patches this image's own observations project to, or the median over
     /// every observation of the node when this image has none, or
     /// [`FALLBACK_PATCH_RADIUS_PX`] when the node has no patch frames at all.
-    pub fn default_patch_radius(&self, image: ImageRef) -> f32 {
+    pub(crate) fn default_patch_radius(&self, image: ImageRef) -> f32 {
         let Some(node) = self.node(image.recon) else {
             return FALLBACK_PATCH_RADIUS_PX;
         };
@@ -759,7 +759,7 @@ impl AppState {
     /// push -- and is recorded with
     /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
     /// the row says what the edit cost rather than what writing the row cost.
-    pub fn delete_image(&mut self, image: ImageRef) -> Result<(), String> {
+    pub(crate) fn delete_image(&mut self, image: ImageRef) -> Result<(), String> {
         let started = Instant::now();
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
@@ -896,7 +896,7 @@ impl AppState {
     /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
     /// the row says what the resection cost rather than what writing the row
     /// cost.
-    pub fn resect_image(&mut self, source: ReconId, image: usize) -> Result<(), String> {
+    pub(crate) fn resect_image(&mut self, source: ReconId, image: usize) -> Result<(), String> {
         let started = Instant::now();
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
@@ -1052,7 +1052,7 @@ impl AppState {
     /// push -- and is recorded with
     /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
     /// the row says what the move cost rather than what writing the row cost.
-    pub fn move_camera(
+    pub(crate) fn move_camera(
         &mut self,
         image: ImageRef,
         world_from_camera: &sfmtool_core::Se3Transform,
@@ -1190,7 +1190,7 @@ impl AppState {
     ///
     /// The image table does not move, so image indexes and the selections keyed
     /// by them still mean what they meant.
-    pub fn start_bundle_adjust(
+    pub(crate) fn start_bundle_adjust(
         &mut self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
@@ -1348,7 +1348,7 @@ impl AppState {
     /// [`AppState::poll_background_task`] on the frame the answer lands. An
     /// `Err` is a refusal to *begin*, logged the way the synchronous edits log
     /// theirs.
-    pub fn start_convert_to_embedded_patches(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn start_convert_to_embedded_patches(&mut self, id: ReconId) -> Result<(), String> {
         let outcome = match self.convert_to_embedded_patches_job(id) {
             Ok(job) => self.start_background_task(Operation::TO_EMBEDDED_PATCHES, id, job),
             Err(message) => Err(message),
@@ -1456,7 +1456,7 @@ impl AppState {
     /// the selection following it, and the image caches the version it left
     /// behind was holding), and is recorded from the instant below, so the row
     /// says what the move cost rather than what writing the row cost.
-    pub fn undo(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn undo(&mut self, id: ReconId) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
         if let Some(why) = self.busy_refusal(id) {
@@ -1501,7 +1501,7 @@ impl AppState {
     /// Step `id`'s cursor forward one version.
     ///
     /// The same three stages [`AppState::undo`] reports, under `redo`.
-    pub fn redo(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn redo(&mut self, id: ReconId) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
         if let Some(why) = self.busy_refusal(id) {
@@ -1553,7 +1553,11 @@ impl AppState {
     ///
     /// It reports the stages [`AppState::undo`] does, and because the walk is a
     /// loop each of them folds into one row carrying the number of steps.
-    pub fn jump_to_version(&mut self, id: ReconId, serial: VersionSerial) -> Result<(), String> {
+    pub(crate) fn jump_to_version(
+        &mut self,
+        id: ReconId,
+        serial: VersionSerial,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
         if let Some(why) = self.busy_refusal(id) {
@@ -1623,12 +1627,12 @@ impl AppState {
     }
 
     /// Whether `id` has a version to step back to.
-    pub fn can_undo(&self, id: ReconId) -> bool {
+    pub(crate) fn can_undo(&self, id: ReconId) -> bool {
         self.node(id).is_some_and(|n| n.history.can_undo())
     }
 
     /// Whether `id` has a version to step forward to.
-    pub fn can_redo(&self, id: ReconId) -> bool {
+    pub(crate) fn can_redo(&self, id: ReconId) -> bool {
         self.node(id).is_some_and(|n| n.history.can_redo())
     }
 
@@ -1794,7 +1798,7 @@ impl AppState {
 /// no patch frames, or none whose projection is readable. Eight pixels is the
 /// order of a SIFT keypoint's own support at the scales these captures are
 /// detected at, which is the size a hand-placed point is usually after.
-pub const FALLBACK_PATCH_RADIUS_PX: f32 = 8.0;
+const FALLBACK_PATCH_RADIUS_PX: f32 = 8.0;
 
 /// How many observations the median is taken over before the walk stops. A
 /// median of a few hundred samples is the same number as a median of a million,

@@ -41,6 +41,13 @@ When finishing a task, run the checks for what you changed:
   `pixi run maturin develop --release` before Python tests (the `.so` does
   **not** rebuild automatically despite the editable Python install).
 
+### Rust visibility in the viewer
+
+In `sfm-explorer`, keep an item private when only its module and descendants use
+it. Use `pub(crate)` when sibling modules need it, including methods and fields
+of types declared in private modules. Reserve bare `pub` for an item exposed
+through the crate's public interface.
+
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before
