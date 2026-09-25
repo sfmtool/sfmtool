@@ -813,6 +813,16 @@ pub fn build_track_at_pixel(
         };
         match result {
             Ok(track) => {
+                // Every member ends by sliding the patch onto the pixel, which
+                // drops the bitmap fused where the patch stood before; fuse it
+                // again where it stands now, moving nothing, so the track can
+                // be committed into a reconstruction that stores one.
+                let track = super::fit::fuse_where_it_stands(
+                    &track,
+                    edited,
+                    views,
+                    &super::fit::FitOptions::default(),
+                );
                 return Ok((
                     track,
                     TrackAtPixelReport {
@@ -821,7 +831,7 @@ pub fn build_track_at_pixel(
                         refusals,
                         stages,
                     },
-                ))
+                ));
             }
             Err(Refusal { stage, reason }) => refusals.push(MemberRefusal {
                 member,

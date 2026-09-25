@@ -487,3 +487,55 @@ fn a_cluster_near_the_pixel_carries_it_into_the_other_photographs() {
     assert!(report.refusals.is_empty());
     assert_rebuilt(&scene, &track, &report);
 }
+
+/// The returned track carries its consensus bitmap, fused where the track
+/// stands after the final slide onto the pixel, on the reconstruction's own
+/// bitmap grid, and the colour at its centre; fusing it again moves nothing.
+#[test]
+fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
+    let scene = Scene::new();
+    let mut edited = EditedReconstruction::new(Arc::new(crate::bench::tests::scene::with_columns(
+        fixture_points(&scene, &grid()),
+        6,
+    )));
+    edited.delete_point(HELD_OUT).expect("the point is live");
+    let views = scene.views();
+    let (track, _) = build_track_at_pixel(
+        &edited,
+        &views,
+        &TrackAtPixelSources::default(),
+        0,
+        held_out_pixel(&scene),
+        &TrackAtPixelOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the transfer builds a track");
+    let payload = track.track().expect("the track stage");
+    let bitmap = payload
+        .bitmap
+        .as_ref()
+        .expect("the returned track has a bitmap");
+    assert_eq!(bitmap.shape(), &[6, 6, 4], "not the reconstruction's grid");
+    assert_eq!(
+        payload.color,
+        [bitmap[[3, 3, 0]], bitmap[[3, 3, 1]], bitmap[[3, 3, 2]]],
+        "the colour is not the tile's centre"
+    );
+
+    let again = crate::bench::fit::fuse_where_it_stands(
+        &track,
+        &edited,
+        &views,
+        &crate::bench::FitOptions::default(),
+    );
+    let after = again.track().expect("the track stage");
+    assert_eq!(after.position, payload.position);
+    assert_eq!(after.placement, payload.placement);
+    for (a, b) in again.observations.iter().zip(&track.observations) {
+        assert_eq!(a.verdict, b.verdict);
+        assert_eq!(
+            a.track.as_ref().and_then(|m| m.keypoint),
+            b.track.as_ref().and_then(|m| m.keypoint)
+        );
+    }
+}

@@ -362,6 +362,47 @@ pub fn fit(
     }
 }
 
+/// Fuse the consensus bitmap of a track-stage track where it stands, and move
+/// nothing.
+///
+/// The fuse a [`fit`] ends its geometry with, for a track whose last step moved
+/// the patch and so left no bitmap: `build_track_at_pixel` ends on a slide of
+/// the patch onto the queried pixel, and fuses with this before it returns. The
+/// placement, the position, the verdicts and every keypoint come back as they
+/// were; what is written is the bitmap the `in` sightings show at their
+/// keypoints, on the reconstruction's own bitmap grid where it stores one, and
+/// the colour at its centre.
+///
+/// A cluster, a track with no placement, and one with fewer than two `in`
+/// sightings that carry a keypoint come back unchanged, since there is no
+/// consensus to fuse.
+pub(crate) fn fuse_where_it_stands(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitOptions,
+) -> EditableTrack {
+    let Stage::Track(payload) = &track.stage else {
+        return track.clone();
+    };
+    let Some(placement) = &payload.placement else {
+        return track.clone();
+    };
+    let ins = track.in_observations();
+    let (bitmap, color) = fuse_bitmap(track, edited, images, placement, &ins, options);
+    let Some(bitmap) = bitmap else {
+        return track.clone();
+    };
+    let mut next = track.clone();
+    if let Stage::Track(payload) = &mut next.stage {
+        payload.bitmap = Some(bitmap);
+        if let Some(color) = color {
+            payload.color = color;
+        }
+    }
+    next
+}
+
 /// Whether `track` can be fitted at the stage it stands in, judged on the track
 /// alone.
 ///

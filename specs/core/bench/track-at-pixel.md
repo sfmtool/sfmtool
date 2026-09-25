@@ -140,7 +140,15 @@ names no place before any member runs.
 observation carries its leave-one-out ZNCC, shift and projection offset.
 Observation 0 is the queried sighting, `in` and pinned, with its keypoint within
 `max_query_offset_px` of the pixel. The track has no origin, so a commit of it
-creates a point.
+creates a point. It **carries its consensus bitmap and colour**, fused where it
+stands: the finish's last step slides the patch onto the pixel, and a patch step
+drops the bitmap fused over the square as it stood, so the operation fuses once
+more before it returns. The fuse is the one a fit ends with, run over the `in`
+sightings at their keypoints on the reconstruction's own bitmap grid where it
+stores one, and the colour is read off the tile's centre; it moves nothing, so
+the position, the placement, the keypoints, the verdicts and every reported
+number are what they were before it. A reconstruction that stores a bitmap per
+point can therefore take the track in a commit as it is returned.
 
 ```rust
 use sfmtool_core::bench::{
@@ -266,6 +274,14 @@ always when an `in` sighting has no keypoint yet, since only a fit places one.
    `min_in_views` views are `in`; their median ZNCC is at least
    `min_zncc_median`; and no `in` view's keypoint sits more than
    `max_projection_offset_px` from the point's projection.
+6. **Bitmap.** The track that passed is given its consensus bitmap and colour
+   where it stands, by the fuse a fit ends with, which moves nothing. The last
+   anchor dropped the bitmap the fits before it had fused, because it slid the
+   patch off the square that bitmap was fused over.
+6. **Bitmap.** The track that passed is given its consensus bitmap and colour
+   where it stands, by the fuse a fit ends with, which moves nothing. The last
+   anchor dropped the bitmap the fits before it had fused, because it slid the
+   patch off the square that bitmap was fused over.
 
 ## Parameters
 
@@ -387,8 +403,10 @@ pixel: the transfer, the sweep and a cluster each rebuild it `in` in all three
 views, on the pixel and within a patch half-extent of where it was; the deleted
 point is absent from the observation index; clusters are matched to images by
 name and found by their nearest member; every member refusing reports each
-refusal in order; and a query that names no place is refused before any member
-runs. The arithmetic (the weighted affine, depth modes, the median) is tested
+refusal in order; a query that names no place is refused before any member
+runs; and the returned track carries a bitmap on the reconstruction's own
+bitmap grid, with the colour at its centre, which fusing again does not move.
+The arithmetic (the weighted affine, depth modes, the median) is tested
 directly.
 [`test_track_at_pixel_rust_bindings.py`](../../../tests/rust_bindings/test_track_at_pixel_rust_bindings.py)
 runs the
