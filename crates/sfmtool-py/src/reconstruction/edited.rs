@@ -50,7 +50,9 @@ fn edit_err(e: sfmtool_core::EditError) -> PyErr {
 /// own base and the copy would buy nothing; owned when it is not. This is the
 /// same rule the viewer applies before a bulk edit, so the two reach the core
 /// function with the same value.
-fn materialised(edited: &EditedReconstruction) -> std::borrow::Cow<'_, SfmrReconstruction> {
+pub(super) fn materialised(
+    edited: &EditedReconstruction,
+) -> std::borrow::Cow<'_, SfmrReconstruction> {
     if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
         std::borrow::Cow::Borrowed(&edited.base)
     } else {

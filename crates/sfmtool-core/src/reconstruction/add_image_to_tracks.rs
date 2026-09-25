@@ -191,18 +191,25 @@ pub struct AddImageToTracksOptions {
     pub refine: KeypointSubpixelParams,
 }
 
+/// The defaults are the rule and gate the leave-one-image-out evaluation chose
+/// (`specs/drafts/add-image-to-tracks.md`, "Evaluation"): one bar for the image
+/// at the median minus three scaled deviations of every candidate's
+/// references' leave-one-out ZNCCs, and a positional bound at the median plus
+/// three scaled deviations of the accepted keypoints' distances from their
+/// projections, never below one pixel. Both bars are read off the call's own
+/// data, so they follow the capture's texture and the pose's error rather
+/// than a constant.
 impl Default for AddImageToTracksOptions {
     fn default() -> Self {
         Self {
-            rule: AcceptRule::TrackBasis {
-                statistic: BasisStatistic::Min,
-                pair: PairRule {
-                    statistic: PairStatistic::Mean,
-                    factor: 1.0,
-                },
+            rule: AcceptRule::PooledBasis {
+                statistic: BasisStatistic::MedianMinusMad { k: 3.0 },
             },
             min_zncc: 0.5,
-            position_gate: PositionGate::Off,
+            position_gate: PositionGate::ImageMad {
+                k: 3.0,
+                floor_px: 1.0,
+            },
             template: TemplateSource::Rendered,
             require_facing: true,
             subpixel: true,

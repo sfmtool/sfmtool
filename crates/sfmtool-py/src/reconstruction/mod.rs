@@ -9,6 +9,7 @@
 
 use pyo3::prelude::*;
 
+pub mod add_image_to_tracks;
 pub mod clone;
 pub mod edited;
 pub mod range_expr;
