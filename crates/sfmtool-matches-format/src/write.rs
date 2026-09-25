@@ -69,392 +69,25 @@ fn write_matches_into<W: std::io::Write + std::io::Seek>(
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
     section_digests.push(metadata_hash);
 
-    // === Images (hashed in lexicographic path order) ===
-    let mut images_hasher = Xxh3::new();
-
-    // images/feature_counts
-    write_binary_entry_hashed(
-        &mut zip,
-        &entries::images_feature_counts(image_count),
-        bytemuck::cast_slice(data.feature_counts.as_slice().unwrap()),
-        zstd_level,
-        &mut images_hasher,
-    )?;
-
-    // images/feature_tool_hashes
-    let hash_bytes: Vec<u8> = data
-        .feature_tool_hashes
-        .iter()
-        .flat_map(|h| h.iter().copied())
-        .collect();
-    write_binary_entry_hashed(
-        &mut zip,
-        &entries::images_feature_tool_hashes(image_count),
-        &hash_bytes,
-        zstd_level,
-        &mut images_hasher,
-    )?;
-
-    // images/image_dims (mandatory since format version 4; validated Some
-    // by validate_dimensions)
-    let image_dims = data.image_dims.as_ref().expect("validated Some");
-    write_binary_entry_hashed(
-        &mut zip,
-        &entries::images_image_dims(image_count),
-        bytemuck::cast_slice(image_dims.as_slice().unwrap()),
-        zstd_level,
-        &mut images_hasher,
-    )?;
-
-    // images/metadata.json
-    let images_meta = serde_json::json!({"image_count": image_count});
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::images_metadata(),
-        &images_meta,
-        zstd_level,
-    )?;
-    images_hasher.update(&bytes);
-
-    // images/names.json
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::images_names(),
-        &data.image_names,
-        zstd_level,
-    )?;
-    images_hasher.update(&bytes);
-
-    // images/sift_content_hashes
-    let hash_bytes: Vec<u8> = data
-        .sift_content_hashes
-        .iter()
-        .flat_map(|h| h.iter().copied())
-        .collect();
-    write_binary_entry_hashed(
-        &mut zip,
-        &entries::images_sift_content_hashes(image_count),
-        &hash_bytes,
-        zstd_level,
-        &mut images_hasher,
-    )?;
-
-    let images_hash = images_hasher.digest128();
+    let images_hash = write_images(&mut zip, data, image_count, zstd_level)?;
     section_digests.push(images_hash);
 
-    // === Image pairs (backbone alternative, hashed in lexicographic path order) ===
-    let pairs_hash: Option<u128> = if let Some(pairs) = &data.image_pairs {
-        let pair_count = pairs.image_index_pairs.nrows();
-        let match_count = pairs.match_feature_indexes.nrows();
-        let mut pairs_hasher = Xxh3::new();
-
-        // image_pairs/image_index_pairs
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::image_pairs_image_index_pairs(pair_count),
-            bytemuck::cast_slice(pairs.image_index_pairs.as_slice().unwrap()),
-            zstd_level,
-            &mut pairs_hasher,
-        )?;
-
-        // image_pairs/match_counts
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::image_pairs_match_counts(pair_count),
-            bytemuck::cast_slice(pairs.match_counts.as_slice().unwrap()),
-            zstd_level,
-            &mut pairs_hasher,
-        )?;
-
-        // image_pairs/match_descriptor_distances
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::image_pairs_match_descriptor_distances(match_count),
-            bytemuck::cast_slice(pairs.match_descriptor_distances.as_slice().unwrap()),
-            zstd_level,
-            &mut pairs_hasher,
-        )?;
-
-        // image_pairs/match_feature_indexes
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::image_pairs_match_feature_indexes(match_count),
-            bytemuck::cast_slice(pairs.match_feature_indexes.as_slice().unwrap()),
-            zstd_level,
-            &mut pairs_hasher,
-        )?;
-
-        // image_pairs/metadata.json
-        let pairs_meta =
-            serde_json::json!({"image_pair_count": pair_count, "match_count": match_count});
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::image_pairs_metadata(),
-            &pairs_meta,
-            zstd_level,
-        )?;
-        pairs_hasher.update(&bytes);
-
-        let digest = pairs_hasher.digest128();
-        section_digests.push(digest);
-        Some(digest)
-    } else {
-        None
-    };
-
-    // === Clusters (backbone alternative, hashed in lexicographic path order) ===
-    let clusters_hash: Option<u128> = if let Some(clusters) = &data.clusters {
-        let cluster_count = clusters.cluster_starts.len() - 1;
-        let member_count = clusters.member_images.len();
-        let mut clusters_hasher = Xxh3::new();
-
-        // clusters/cluster_starts
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::clusters_cluster_starts(cluster_count),
-            bytemuck::cast_slice(clusters.cluster_starts.as_slice().unwrap()),
-            zstd_level,
-            &mut clusters_hasher,
-        )?;
-
-        // clusters/member_affine_shapes (mandatory since format version 6;
-        // validated Some by validate_dimensions)
-        let member_affine_shapes = clusters
-            .member_affine_shapes
-            .as_ref()
-            .expect("validated Some");
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::clusters_member_affine_shapes(member_count),
-            bytemuck::cast_slice(member_affine_shapes.as_slice().unwrap()),
-            zstd_level,
-            &mut clusters_hasher,
-        )?;
-
-        // clusters/member_features
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::clusters_member_features(member_count),
-            bytemuck::cast_slice(clusters.member_features.as_slice().unwrap()),
-            zstd_level,
-            &mut clusters_hasher,
-        )?;
-
-        // clusters/member_images
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::clusters_member_images(member_count),
-            bytemuck::cast_slice(clusters.member_images.as_slice().unwrap()),
-            zstd_level,
-            &mut clusters_hasher,
-        )?;
-
-        // clusters/member_positions (mandatory since format version 6)
-        let member_positions = clusters.member_positions.as_ref().expect("validated Some");
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::clusters_member_positions(member_count),
-            bytemuck::cast_slice(member_positions.as_slice().unwrap()),
-            zstd_level,
-            &mut clusters_hasher,
-        )?;
-
-        // clusters/metadata.json
-        let clusters_meta = serde_json::json!({
-            "cluster_count": cluster_count,
-            "member_count": member_count,
-            "matcher_options": clusters.matcher_options,
-        });
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::clusters_metadata(),
-            &clusters_meta,
-            zstd_level,
-        )?;
-        clusters_hasher.update(&bytes);
-
-        let digest = clusters_hasher.digest128();
-        section_digests.push(digest);
-        Some(digest)
-    } else {
-        None
-    };
-
-    // === Cluster patches (optional, hashed in lexicographic path order) ===
-    let cluster_patches_hash: Option<u128> = if let Some(cp) = &data.cluster_patches {
-        let cluster_count = cp.reference_members.len();
-        let member_count = cp.member_status.len();
-        let mut cp_hasher = Xxh3::new();
-
-        // cluster_patches/member_consistency_residual
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_member_consistency_residual(member_count),
-            bytemuck::cast_slice(cp.member_consistency_residual.as_slice().unwrap()),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
-
-        // cluster_patches/member_shift_px
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_member_shift_px(member_count),
-            bytemuck::cast_slice(cp.member_shift_px.as_slice().unwrap()),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
-
-        // cluster_patches/member_status
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_member_status(member_count),
-            cp.member_status.as_slice().unwrap(),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
-
-        // cluster_patches/member_zncc
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_member_zncc(member_count),
-            bytemuck::cast_slice(cp.member_zncc.as_slice().unwrap()),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
-
-        // cluster_patches/metadata.json
-        let cp_meta = serde_json::json!({
-            "cluster_count": cluster_count,
-            "member_count": member_count,
-            "refine_options": cp.refine_options,
-        });
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::cluster_patches_metadata(),
-            &cp_meta,
-            zstd_level,
-        )?;
-        cp_hasher.update(&bytes);
-
-        // cluster_patches/reference_members
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_reference_members(cluster_count),
-            bytemuck::cast_slice(cp.reference_members.as_slice().unwrap()),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
-
-        let digest = cp_hasher.digest128();
-        section_digests.push(digest);
-        Some(digest)
-    } else {
-        None
-    };
-
-    // === Two-view geometries (optional, hashed in lexicographic path order) ===
-    let tvg_hash: Option<u128> = if let Some(tvg) = &data.two_view_geometries {
-        let pair_count = tvg.config_indexes.len();
-        let inlier_count = tvg.metadata.inlier_count as usize;
-        let mut tvg_hasher = Xxh3::new();
-
-        // two_view_geometries/config_indexes
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_config_indexes(pair_count),
-            tvg.config_indexes.as_slice().unwrap(),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/config_types.json
-        let config_type_strings: Vec<&str> = tvg.config_types.iter().map(|c| c.as_str()).collect();
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::two_view_geometries_config_types(),
-            &config_type_strings,
-            zstd_level,
-        )?;
-        tvg_hasher.update(&bytes);
-
-        // two_view_geometries/e_matrices
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_e_matrices(pair_count),
-            bytemuck::cast_slice(tvg.e_matrices.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/f_matrices
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_f_matrices(pair_count),
-            bytemuck::cast_slice(tvg.f_matrices.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/h_matrices
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_h_matrices(pair_count),
-            bytemuck::cast_slice(tvg.h_matrices.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/inlier_counts
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_inlier_counts(pair_count),
-            bytemuck::cast_slice(tvg.inlier_counts.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/inlier_feature_indexes
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
-            bytemuck::cast_slice(tvg.inlier_feature_indexes.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/metadata.json
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::two_view_geometries_metadata(),
-            &tvg.metadata,
-            zstd_level,
-        )?;
-        tvg_hasher.update(&bytes);
-
-        // two_view_geometries/quaternions_wxyz
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_quaternions_wxyz(pair_count),
-            bytemuck::cast_slice(tvg.quaternions_wxyz.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        // two_view_geometries/translations_xyz
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::two_view_geometries_translations_xyz(pair_count),
-            bytemuck::cast_slice(tvg.translations_xyz.as_slice().unwrap()),
-            zstd_level,
-            &mut tvg_hasher,
-        )?;
-
-        let digest = tvg_hasher.digest128();
-        section_digests.push(digest);
-        Some(digest)
-    } else {
-        None
-    };
+    let pairs_hash = write_image_pairs(&mut zip, data, zstd_level)?;
+    if let Some(hash) = pairs_hash {
+        section_digests.push(hash);
+    }
+    let clusters_hash = write_clusters(&mut zip, data, zstd_level)?;
+    if let Some(hash) = clusters_hash {
+        section_digests.push(hash);
+    }
+    let cluster_patches_hash = write_cluster_patches(&mut zip, data, zstd_level)?;
+    if let Some(hash) = cluster_patches_hash {
+        section_digests.push(hash);
+    }
+    let tvg_hash = write_two_view_geometries(&mut zip, data, zstd_level)?;
+    if let Some(hash) = tvg_hash {
+        section_digests.push(hash);
+    }
 
     // === Content hash ===
     let content_hash_value = section_digests.finish();
@@ -472,6 +105,413 @@ fn write_matches_into<W: std::io::Write + std::io::Seek>(
 
     zip.finish()?;
     Ok(())
+}
+
+fn write_images<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    data: &MatchesData,
+    image_count: usize,
+    zstd_level: i32,
+) -> Result<u128, MatchesError> {
+    // === Images (hashed in lexicographic path order) ===
+    let mut images_hasher = Xxh3::new();
+
+    // images/feature_counts
+    write_binary_entry_hashed(
+        zip,
+        &entries::images_feature_counts(image_count),
+        bytemuck::cast_slice(data.feature_counts.as_slice().unwrap()),
+        zstd_level,
+        &mut images_hasher,
+    )?;
+
+    // images/feature_tool_hashes
+    let hash_bytes: Vec<u8> = data
+        .feature_tool_hashes
+        .iter()
+        .flat_map(|h| h.iter().copied())
+        .collect();
+    write_binary_entry_hashed(
+        zip,
+        &entries::images_feature_tool_hashes(image_count),
+        &hash_bytes,
+        zstd_level,
+        &mut images_hasher,
+    )?;
+
+    // images/image_dims (mandatory since format version 4; validated Some
+    // by validate_dimensions)
+    let image_dims = data.image_dims.as_ref().expect("validated Some");
+    write_binary_entry_hashed(
+        zip,
+        &entries::images_image_dims(image_count),
+        bytemuck::cast_slice(image_dims.as_slice().unwrap()),
+        zstd_level,
+        &mut images_hasher,
+    )?;
+
+    // images/metadata.json
+    let images_meta = serde_json::json!({"image_count": image_count});
+    let bytes = write_json_entry(zip, entries::images_metadata(), &images_meta, zstd_level)?;
+    images_hasher.update(&bytes);
+
+    // images/names.json
+    let bytes = write_json_entry(zip, entries::images_names(), &data.image_names, zstd_level)?;
+    images_hasher.update(&bytes);
+
+    // images/sift_content_hashes
+    let hash_bytes: Vec<u8> = data
+        .sift_content_hashes
+        .iter()
+        .flat_map(|h| h.iter().copied())
+        .collect();
+    write_binary_entry_hashed(
+        zip,
+        &entries::images_sift_content_hashes(image_count),
+        &hash_bytes,
+        zstd_level,
+        &mut images_hasher,
+    )?;
+
+    Ok(images_hasher.digest128())
+}
+
+fn write_image_pairs<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    data: &MatchesData,
+    zstd_level: i32,
+) -> Result<Option<u128>, MatchesError> {
+    // === Image pairs (backbone alternative, hashed in lexicographic path order) ===
+    let pairs_hash = if let Some(pairs) = &data.image_pairs {
+        let pair_count = pairs.image_index_pairs.nrows();
+        let match_count = pairs.match_feature_indexes.nrows();
+        let mut pairs_hasher = Xxh3::new();
+
+        // image_pairs/image_index_pairs
+        write_binary_entry_hashed(
+            zip,
+            &entries::image_pairs_image_index_pairs(pair_count),
+            bytemuck::cast_slice(pairs.image_index_pairs.as_slice().unwrap()),
+            zstd_level,
+            &mut pairs_hasher,
+        )?;
+
+        // image_pairs/match_counts
+        write_binary_entry_hashed(
+            zip,
+            &entries::image_pairs_match_counts(pair_count),
+            bytemuck::cast_slice(pairs.match_counts.as_slice().unwrap()),
+            zstd_level,
+            &mut pairs_hasher,
+        )?;
+
+        // image_pairs/match_descriptor_distances
+        write_binary_entry_hashed(
+            zip,
+            &entries::image_pairs_match_descriptor_distances(match_count),
+            bytemuck::cast_slice(pairs.match_descriptor_distances.as_slice().unwrap()),
+            zstd_level,
+            &mut pairs_hasher,
+        )?;
+
+        // image_pairs/match_feature_indexes
+        write_binary_entry_hashed(
+            zip,
+            &entries::image_pairs_match_feature_indexes(match_count),
+            bytemuck::cast_slice(pairs.match_feature_indexes.as_slice().unwrap()),
+            zstd_level,
+            &mut pairs_hasher,
+        )?;
+
+        // image_pairs/metadata.json
+        let pairs_meta =
+            serde_json::json!({"image_pair_count": pair_count, "match_count": match_count});
+        let bytes = write_json_entry(
+            zip,
+            entries::image_pairs_metadata(),
+            &pairs_meta,
+            zstd_level,
+        )?;
+        pairs_hasher.update(&bytes);
+
+        let digest = pairs_hasher.digest128();
+        Some(digest)
+    } else {
+        None
+    };
+    Ok(pairs_hash)
+}
+
+fn write_clusters<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    data: &MatchesData,
+    zstd_level: i32,
+) -> Result<Option<u128>, MatchesError> {
+    // === Clusters (backbone alternative, hashed in lexicographic path order) ===
+    let clusters_hash = if let Some(clusters) = &data.clusters {
+        let cluster_count = clusters.cluster_starts.len() - 1;
+        let member_count = clusters.member_images.len();
+        let mut clusters_hasher = Xxh3::new();
+
+        // clusters/cluster_starts
+        write_binary_entry_hashed(
+            zip,
+            &entries::clusters_cluster_starts(cluster_count),
+            bytemuck::cast_slice(clusters.cluster_starts.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/member_affine_shapes (mandatory since format version 6;
+        // validated Some by validate_dimensions)
+        let member_affine_shapes = clusters
+            .member_affine_shapes
+            .as_ref()
+            .expect("validated Some");
+        write_binary_entry_hashed(
+            zip,
+            &entries::clusters_member_affine_shapes(member_count),
+            bytemuck::cast_slice(member_affine_shapes.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/member_features
+        write_binary_entry_hashed(
+            zip,
+            &entries::clusters_member_features(member_count),
+            bytemuck::cast_slice(clusters.member_features.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/member_images
+        write_binary_entry_hashed(
+            zip,
+            &entries::clusters_member_images(member_count),
+            bytemuck::cast_slice(clusters.member_images.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/member_positions (mandatory since format version 6)
+        let member_positions = clusters.member_positions.as_ref().expect("validated Some");
+        write_binary_entry_hashed(
+            zip,
+            &entries::clusters_member_positions(member_count),
+            bytemuck::cast_slice(member_positions.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/metadata.json
+        let clusters_meta = serde_json::json!({
+            "cluster_count": cluster_count,
+            "member_count": member_count,
+            "matcher_options": clusters.matcher_options,
+        });
+        let bytes = write_json_entry(
+            zip,
+            entries::clusters_metadata(),
+            &clusters_meta,
+            zstd_level,
+        )?;
+        clusters_hasher.update(&bytes);
+
+        let digest = clusters_hasher.digest128();
+        Some(digest)
+    } else {
+        None
+    };
+    Ok(clusters_hash)
+}
+
+fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    data: &MatchesData,
+    zstd_level: i32,
+) -> Result<Option<u128>, MatchesError> {
+    // === Cluster patches (optional, hashed in lexicographic path order) ===
+    let cluster_patches_hash = if let Some(cp) = &data.cluster_patches {
+        let cluster_count = cp.reference_members.len();
+        let member_count = cp.member_status.len();
+        let mut cp_hasher = Xxh3::new();
+
+        // cluster_patches/member_consistency_residual
+        write_binary_entry_hashed(
+            zip,
+            &entries::cluster_patches_member_consistency_residual(member_count),
+            bytemuck::cast_slice(cp.member_consistency_residual.as_slice().unwrap()),
+            zstd_level,
+            &mut cp_hasher,
+        )?;
+
+        // cluster_patches/member_shift_px
+        write_binary_entry_hashed(
+            zip,
+            &entries::cluster_patches_member_shift_px(member_count),
+            bytemuck::cast_slice(cp.member_shift_px.as_slice().unwrap()),
+            zstd_level,
+            &mut cp_hasher,
+        )?;
+
+        // cluster_patches/member_status
+        write_binary_entry_hashed(
+            zip,
+            &entries::cluster_patches_member_status(member_count),
+            cp.member_status.as_slice().unwrap(),
+            zstd_level,
+            &mut cp_hasher,
+        )?;
+
+        // cluster_patches/member_zncc
+        write_binary_entry_hashed(
+            zip,
+            &entries::cluster_patches_member_zncc(member_count),
+            bytemuck::cast_slice(cp.member_zncc.as_slice().unwrap()),
+            zstd_level,
+            &mut cp_hasher,
+        )?;
+
+        // cluster_patches/metadata.json
+        let cp_meta = serde_json::json!({
+            "cluster_count": cluster_count,
+            "member_count": member_count,
+            "refine_options": cp.refine_options,
+        });
+        let bytes = write_json_entry(
+            zip,
+            entries::cluster_patches_metadata(),
+            &cp_meta,
+            zstd_level,
+        )?;
+        cp_hasher.update(&bytes);
+
+        // cluster_patches/reference_members
+        write_binary_entry_hashed(
+            zip,
+            &entries::cluster_patches_reference_members(cluster_count),
+            bytemuck::cast_slice(cp.reference_members.as_slice().unwrap()),
+            zstd_level,
+            &mut cp_hasher,
+        )?;
+
+        let digest = cp_hasher.digest128();
+        Some(digest)
+    } else {
+        None
+    };
+    Ok(cluster_patches_hash)
+}
+
+fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    data: &MatchesData,
+    zstd_level: i32,
+) -> Result<Option<u128>, MatchesError> {
+    // === Two-view geometries (optional, hashed in lexicographic path order) ===
+    let tvg_hash = if let Some(tvg) = &data.two_view_geometries {
+        let pair_count = tvg.config_indexes.len();
+        let inlier_count = tvg.metadata.inlier_count as usize;
+        let mut tvg_hasher = Xxh3::new();
+
+        // two_view_geometries/config_indexes
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_config_indexes(pair_count),
+            tvg.config_indexes.as_slice().unwrap(),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/config_types.json
+        let config_type_strings: Vec<&str> = tvg.config_types.iter().map(|c| c.as_str()).collect();
+        let bytes = write_json_entry(
+            zip,
+            entries::two_view_geometries_config_types(),
+            &config_type_strings,
+            zstd_level,
+        )?;
+        tvg_hasher.update(&bytes);
+
+        // two_view_geometries/e_matrices
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_e_matrices(pair_count),
+            bytemuck::cast_slice(tvg.e_matrices.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/f_matrices
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_f_matrices(pair_count),
+            bytemuck::cast_slice(tvg.f_matrices.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/h_matrices
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_h_matrices(pair_count),
+            bytemuck::cast_slice(tvg.h_matrices.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/inlier_counts
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_inlier_counts(pair_count),
+            bytemuck::cast_slice(tvg.inlier_counts.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/inlier_feature_indexes
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
+            bytemuck::cast_slice(tvg.inlier_feature_indexes.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/metadata.json
+        let bytes = write_json_entry(
+            zip,
+            entries::two_view_geometries_metadata(),
+            &tvg.metadata,
+            zstd_level,
+        )?;
+        tvg_hasher.update(&bytes);
+
+        // two_view_geometries/quaternions_wxyz
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_quaternions_wxyz(pair_count),
+            bytemuck::cast_slice(tvg.quaternions_wxyz.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        // two_view_geometries/translations_xyz
+        write_binary_entry_hashed(
+            zip,
+            &entries::two_view_geometries_translations_xyz(pair_count),
+            bytemuck::cast_slice(tvg.translations_xyz.as_slice().unwrap()),
+            zstd_level,
+            &mut tvg_hasher,
+        )?;
+
+        let digest = tvg_hasher.digest128();
+        Some(digest)
+    } else {
+        None
+    };
+    Ok(tvg_hash)
 }
 
 /// Validate the backbone rule, section dependencies, and metadata flag /
