@@ -295,15 +295,18 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           carrying the counts and the median residual before and after; one that \
                           is still going after 200 ms replies instead with running: true and an \
                           operation_id, and the outcome is then read out of get_action_log or \
-                          stopped with cancel_background_task. Needs inline keypoints and one shared \
-                          lens.",
+                          stopped with cancel_background_task. Needs inline keypoints. Each \
+                          camera the posed images use is solved through its own lens, and the \
+                          report names each released camera's focal before and after.",
             kind: Write,
             schema: object(
                 &[(
                     "release_focal",
                     flag(
-                        "Solve the shared focal length as well as the poses and points. Defaults \
-                         to false, which holds it where it is.",
+                        "Solve each camera's focal length as well as the poses and points. \
+                         Refused when a camera the posed images use has a model whose focal the \
+                         adjustment cannot solve. Defaults to false, which holds them where \
+                         they are.",
                     ),
                 )],
                 &[("reconstruction_label", edited_label_schema())],

@@ -50,14 +50,39 @@ fn pinhole() -> CameraIntrinsics {
     }
 }
 
+/// A second lens for the two-camera fixture: another `SIMPLE_PINHOLE`, at a
+/// different focal and principal point, so an observation read through the
+/// wrong one lands pixels away.
+fn second_pinhole() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: 620.0,
+            principal_point_x: IMG_W as f64 / 2.0 + 7.0,
+            principal_point_y: IMG_H as f64 / 2.0 - 5.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
 /// The truth: cameras on an arc at radius 8 looking at the origin, points in a
 /// box around it, and every observation at the exact projection.
 ///
 /// Patch frames are a fronto-parallel square per point, in world units at the
 /// depth the point stands at, so a frame's rescale is measurable.
 fn truth() -> SfmrReconstruction {
+    truth_through(vec![pinhole()], |_| 0)
+}
+
+/// [`truth`] with the images taken through `cameras`, image `i` through camera
+/// `camera_of(i)`, and every observation projected through its own image's
+/// camera.
+fn truth_through(
+    cameras: Vec<CameraIntrinsics>,
+    camera_of: impl Fn(usize) -> u32,
+) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = vec![pinhole()];
+    recon.image_table.cameras = cameras;
     recon.image_table.images = (0..IMAGES)
         .map(|i| {
             let angle = 0.25 * (i as f64 - (IMAGES as f64 - 1.0) / 2.0);
@@ -67,7 +92,7 @@ fn truth() -> SfmrReconstruction {
             let rotation = UnitQuaternion::face_towards(&centre, &Vector3::y()).inverse();
             SfmrImage {
                 name: format!("image_{i:03}.jpg"),
-                camera_index: 0,
+                camera_index: camera_of(i),
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
             }
@@ -151,7 +176,11 @@ fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[
 /// The truth with every pose and point nudged off it: what an adjustment has to
 /// find its way back from.
 fn perturbed() -> SfmrReconstruction {
-    let mut recon = truth();
+    perturb(truth())
+}
+
+/// `recon` with every pose but the first and every point nudged off it.
+fn perturb(mut recon: SfmrReconstruction) -> SfmrReconstruction {
     for (i, image) in recon.image_table.images.iter_mut().enumerate().skip(1) {
         let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.01 * jitter(i, 5));
         image.quaternion_wxyz = spin * image.quaternion_wxyz;
@@ -255,8 +284,12 @@ fn the_poses_and_the_points_converge_on_the_truth() {
         "{report:?}"
     );
     assert!(report.median_residual_after < 0.05, "{report:?}");
-    assert!(!report.focal_released);
-    assert_eq!(report.focal_before, report.focal_after);
+    assert_eq!(report.cameras.len(), 1);
+    assert!(!report.cameras[0].focal_released);
+    assert_eq!(
+        report.cameras[0].focal_before,
+        report.cameras[0].focal_after
+    );
 
     for i in 0..IMAGES {
         assert!(
@@ -308,15 +341,16 @@ fn a_released_focal_is_found_and_reported() {
     };
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
-    assert!(report.focal_released);
-    assert_eq!(report.focal_before, FOCAL * 1.06);
+    let camera = &report.cameras[0];
+    assert!(camera.focal_released);
+    assert_eq!(camera.focal_before, FOCAL * 1.06);
     assert!(
-        (report.focal_after - FOCAL).abs() < 0.02 * FOCAL,
+        (camera.focal_after - FOCAL).abs() < 0.02 * FOCAL,
         "{report:?}"
     );
     assert_eq!(
         out.image_table.cameras[0].focal_lengths().0,
-        report.focal_after
+        camera.focal_after
     );
     assert_eq!(
         truth.image_table.cameras[0].width,
@@ -456,17 +490,152 @@ fn a_value_with_no_keypoints_is_refused() {
     );
 }
 
-#[test]
-fn two_cameras_over_the_posed_images_are_refused() {
-    let mut source = perturbed();
-    let second = source.image_table.cameras[0].with_focal(FOCAL * 1.2);
-    source.image_table.cameras.push(second);
-    source.image_table.images[2].camera_index = 1;
+/// The two-camera truth: images 1, 3 and 5 through [`second_pinhole`].
+fn two_camera_truth() -> SfmrReconstruction {
+    truth_through(vec![pinhole(), second_pinhole()], |i| (i % 2) as u32)
+}
 
+#[test]
+fn two_cameras_are_adjusted_each_through_its_own_lens() {
+    let truth = two_camera_truth();
+    let mut source = perturb(truth.clone());
+    // The gauge held as in the one-camera convergence test.
+    let mut columns = PointConstraintColumns::all_free(POINTS);
+    for p in 0..3 {
+        source.point_set.points[p].position = truth.point_set.points[p].position;
+        columns.point_constraints[p] = sfmtool_sfmr_format::POINT_CONSTRAINT_HELD;
+    }
+    source.point_set.point_constraints = Some(columns);
+
+    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("two cameras are adjusted, not refused");
+
+    assert!(report.median_residual_after < 0.05, "{report:?}");
+    for i in 0..IMAGES {
+        assert!(
+            centre_error(&out, &truth, i) < 0.01,
+            "camera {i} is {} from the truth",
+            centre_error(&out, &truth, i)
+        );
+    }
     assert_eq!(
-        bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).err(),
-        Some(BundleAdjustError::MixedCameras { cameras: 2 })
+        report.cameras,
+        vec![
+            CameraAdjustment {
+                camera: 0,
+                images: 3,
+                focal_before: FOCAL,
+                focal_after: FOCAL,
+                focal_released: false,
+            },
+            CameraAdjustment {
+                camera: 1,
+                images: 3,
+                focal_before: 620.0,
+                focal_after: 620.0,
+                focal_released: false,
+            },
+        ]
     );
+    assert_eq!(out.image_table.cameras, truth.image_table.cameras);
+}
+
+#[test]
+fn a_released_focal_is_found_for_each_camera() {
+    let truth = two_camera_truth();
+    let mut source = perturb(truth.clone());
+    source.image_table.cameras[0] = source.image_table.cameras[0].with_focal(FOCAL * 1.05);
+    source.image_table.cameras[1] = source.image_table.cameras[1].with_focal(620.0 * 0.95);
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        ..BundleAdjustOptions::default()
+    };
+
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    for (j, planted) in [(0, FOCAL), (1, 620.0)] {
+        let camera = &report.cameras[j];
+        assert_eq!(camera.camera, j);
+        assert!(camera.focal_released);
+        assert!(
+            (camera.focal_after - planted).abs() < 0.02 * planted,
+            "camera {j}: {report:?}"
+        );
+        assert_eq!(
+            out.image_table.cameras[j].focal_lengths().0,
+            camera.focal_after
+        );
+        // Nothing but the focal moved.
+        assert_eq!(
+            out.image_table.cameras[j],
+            source.image_table.cameras[j].with_focal(camera.focal_after)
+        );
+    }
+}
+
+#[test]
+fn a_focal_release_names_the_camera_that_cannot_take_one() {
+    let mut source = perturb(two_camera_truth());
+    source.image_table.cameras[1] = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 620.0,
+            focal_length_y: 620.0,
+            principal_point_x: IMG_W as f64 / 2.0 + 7.0,
+            principal_point_y: IMG_H as f64 / 2.0 - 5.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    };
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        ..BundleAdjustOptions::default()
+    };
+
+    let err = bundle_adjust(&source, &options, &Progress::none()).err();
+    assert_eq!(
+        err,
+        Some(BundleAdjustError::FocalNotReleasable {
+            camera: 1,
+            model: "PINHOLE",
+        })
+    );
+    assert!(err.unwrap().to_string().contains("camera 1, a PINHOLE"));
+    // Without the release it runs.
+    assert!(bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).is_ok());
+}
+
+#[test]
+fn a_camera_no_posed_image_uses_comes_back_untouched() {
+    let mut source = perturbed();
+    // A camera the table carries but no image uses, and one only an unposed
+    // image uses. Neither is in the solve, and the release is not refused on
+    // their models.
+    let unused = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 700.0,
+            focal_length_y: 710.0,
+            principal_point_x: 300.0,
+            principal_point_y: 200.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    };
+    source.image_table.cameras.push(unused.clone());
+    source.image_table.cameras.push(second_pinhole());
+    source.image_table.images[5].camera_index = 2;
+    source.image_table.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        ..BundleAdjustOptions::default()
+    };
+
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    assert_eq!(report.images, IMAGES - 1);
+    assert_eq!(report.cameras.len(), 1);
+    assert_eq!(report.cameras[0].camera, 0);
+    assert_eq!(out.image_table.cameras[1], unused);
+    assert_eq!(out.image_table.cameras[2], second_pinhole());
 }
 
 #[test]
@@ -489,7 +658,10 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
 
     assert_eq!(
         bundle_adjust(&source, &options, &Progress::none()).err(),
-        Some(BundleAdjustError::FocalNotReleasable("PINHOLE"))
+        Some(BundleAdjustError::FocalNotReleasable {
+            camera: 0,
+            model: "PINHOLE",
+        })
     );
     // Without the release it runs: the model is only a problem for the focal.
     assert!(bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).is_ok());
@@ -720,17 +892,24 @@ fn value_bits(recon: &SfmrReconstruction) -> Vec<u64> {
 
 /// The same for the report.
 fn report_bits(report: &BundleAdjustReport) -> Vec<u64> {
-    vec![
+    let mut bits = vec![
         report.images as u64,
         report.points as u64,
         report.observations as u64,
         report.points_deleted as u64,
         report.median_residual_before.to_bits(),
         report.median_residual_after.to_bits(),
-        report.focal_before.to_bits(),
-        report.focal_after.to_bits(),
-        u64::from(report.focal_released),
-    ]
+    ];
+    for camera in &report.cameras {
+        bits.extend([
+            camera.camera as u64,
+            camera.images as u64,
+            camera.focal_before.to_bits(),
+            camera.focal_after.to_bits(),
+            u64::from(camera.focal_released),
+        ]);
+    }
+    bits
 }
 
 fn same_bits(a: &[u64], b: &[u64], what: &str) {

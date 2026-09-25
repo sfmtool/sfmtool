@@ -5,9 +5,9 @@
 //! context menu opens, and the gate the menu entry itself reads.
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes one decision
-//! from the user -- whether the shared focal is released -- and that is the
-//! whole dialog: a checkbox, `Run` and `Cancel`. Everything else about the
-//! solve is the core function's defaults.
+//! from the user -- whether the cameras' focal lengths are released -- and that
+//! is the whole dialog: a checkbox, `Run` and `Cancel`. Everything else about
+//! the solve is the core function's defaults.
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
@@ -23,9 +23,10 @@ mod tests;
 /// Why the adjustment cannot run on this value, or `None` when it can.
 ///
 /// The two reasons are the ones a caller can see without solving anything: the
-/// observations carry no pixel to reproject against, and the posed images do
-/// not share one lens. Both are the core function's own refusals, checked here
-/// so the menu entry can say them before it is clicked.
+/// observations carry no pixel to reproject against, and no image carries a
+/// pose. Both are the core function's own refusals, checked here so the menu
+/// entry can say them before it is clicked. How many cameras the posed images
+/// use is not a reason: the adjustment solves each of them.
 pub(crate) fn refusal(edited: &EditedReconstruction) -> Option<String> {
     if !edited.has_keypoints() {
         return Some(
@@ -34,26 +35,27 @@ pub(crate) fn refusal(edited: &EditedReconstruction) -> Option<String> {
                 .to_string(),
         );
     }
-    match edited.posed_lens_count() {
-        0 => Some("No image of this reconstruction carries a pose.".to_string()),
-        1 => None,
-        n => Some(format!(
-            "The adjustment solves one shared camera, and these images are taken through {n}."
-        )),
-    }
+    (edited.posed_lens_count() == 0)
+        .then(|| "No image of this reconstruction carries a pose.".to_string())
 }
 
-/// Why the focal cannot be released on this value's camera, or `None` when it
-/// can. The checkbox carries this as its disabled hover text.
+/// Why the focal cannot be released on this value, or `None` when it can. The
+/// checkbox carries this as its disabled hover text.
+///
+/// The release reaches every camera the posed images use, and the core function
+/// refuses it when any of them has a model its focal column is not exact for, so
+/// the checkbox is greyed unless every one of them passes and the reason names
+/// the first that does not.
 pub(crate) fn focal_refusal(edited: &EditedReconstruction) -> Option<String> {
     let table = &edited.base.image_table;
-    let camera = table.cameras.first()?;
-    if focal_is_releasable(camera) {
-        return None;
-    }
+    let (index, camera) = edited
+        .posed_lenses()
+        .into_iter()
+        .map(|c| (c, &table.cameras[c as usize]))
+        .find(|(_, camera)| !focal_is_releasable(camera))?;
     Some(format!(
-        "The adjustment's focal column is not exact for a {} camera, so its focal stays \
-         where it is.",
+        "The adjustment's focal column is not exact for camera {index}, a {} camera, so no \
+         focal length can be released.",
         camera.model_name()
     ))
 }
@@ -63,7 +65,7 @@ pub(crate) fn focal_refusal(edited: &EditedReconstruction) -> Option<String> {
 pub struct BundleAdjustAnswer {
     /// The node to adjust.
     pub recon: ReconId,
-    /// Whether to release the shared focal length.
+    /// Whether to release each camera's focal length.
     pub release_focal: bool,
 }
 
@@ -126,8 +128,8 @@ impl BundleAdjustPrompt {
                     ui.checkbox(&mut pending.release_focal, "Release focal length")
                         .on_disabled_hover_text(pending.focal_refusal.clone().unwrap_or_default())
                         .on_hover_text(
-                            "Solve the shared focal length along with the poses and the \
-                             points, instead of holding it where it is.",
+                            "Solve each camera's focal length along with the poses and the \
+                             points, instead of holding them where they are.",
                         );
                 });
                 ui.add_space(8.0);

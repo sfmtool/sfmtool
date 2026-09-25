@@ -48,7 +48,7 @@ pub use progress::Progress;
 /// from the array kernel [`geometry::bundle_adjust()`] it runs: it takes a
 /// reconstruction value and hands back another one.
 pub use reconstruction::{
-    bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport,
+    bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport, CameraAdjustment,
 };
 pub use reconstruction::{
     move_camera, EditError, EditedReconstruction, ImageTable, MoveCameraError, MoveCameraReport,

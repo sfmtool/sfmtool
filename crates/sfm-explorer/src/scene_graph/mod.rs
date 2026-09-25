@@ -172,7 +172,7 @@ pub struct SceneGraphResponse {
     /// worker after the frame.
     pub convert_to_embedded_patches: Option<ReconId>,
     /// `Bundle Adjust...` chosen from a reconstruction's context menu: ask,
-    /// through `AppState::open_bundle_adjust`, whether the shared focal is
+    /// through `AppState::open_bundle_adjust`, whether the focal lengths are
     /// released, and on `Run` refine every pose and point of this node as its
     /// next version.
     pub bundle_adjust: Option<ReconId>,

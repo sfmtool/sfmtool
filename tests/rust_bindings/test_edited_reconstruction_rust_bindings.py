@@ -286,8 +286,11 @@ class TestBundleAdjust:
         assert report["images"] == before.image_count
         assert report["observations"] == before.observation_count
         assert report["points"] <= before.point_count
-        assert report["focal_released"] is False
-        assert report["focal_before"] == report["focal_after"]
+        assert len(report["cameras"]) == len(before.cameras)
+        for camera in report["cameras"]:
+            assert camera["focal_released"] is False
+            assert camera["focal_before"] == camera["focal_after"]
+        assert sum(c["images"] for c in report["cameras"]) == report["images"]
         assert (
             report["median_residual_after"] <= report["median_residual_before"] + 1e-9
         )

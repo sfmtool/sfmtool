@@ -114,8 +114,8 @@ pub(crate) const CONVERT_TO_EMBEDDED_PATCHES: &str = "Convert to Embedded Patche
 pub(crate) const BUNDLE_ADJUST: &str = "Bundle Adjust...";
 
 /// `Bundle Adjust...`: every pose and point of the node refined against its
-/// observations, behind a dialog that asks whether the shared focal is
-/// released.
+/// observations, behind a dialog that asks whether the cameras' focal lengths
+/// are released.
 ///
 /// First of the whole-value edits because it is the widest of them: it moves
 /// the cameras as well as the points the entries under it re-read. Greyed
@@ -133,7 +133,7 @@ fn show_bundle_adjust_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
         .on_disabled_hover_text(refusal.unwrap_or_default())
         .on_hover_text(
             "Refine every pose and point of this reconstruction against its observations, as \
-             one version. Asks first whether the shared focal length is released. Runs on a \
+             one version. Asks first whether the focal lengths are released. Runs on a \
              worker thread and can be cancelled; Undo (Ctrl+Z) puts the geometry back.",
         );
     if out.hit(row_id(node.id, "bundle_adjust"), entry).clicked() {

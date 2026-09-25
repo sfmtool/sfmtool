@@ -138,6 +138,33 @@ pub(crate) fn retriangulate_refusal(
     }
 }
 
+/// The Action Log's focal clause for one adjustment: each released camera's
+/// focal before and after, and nothing when no focal was released.
+///
+/// A solve over one camera reads `, focal 2803.5 → 2794.1`, and one over
+/// several names each camera by its table index, `, camera 0 focal 2803.5 →
+/// 2794.1, camera 1 focal 1401.2 → 1399.8`, because a bare list of numbers
+/// would not say which lens moved.
+fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    let released: Vec<&sfmtool_core::CameraAdjustment> =
+        cameras.iter().filter(|c| c.focal_released).collect();
+    match released.as_slice() {
+        [] => String::new(),
+        [one] if cameras.len() == 1 => {
+            format!(", focal {:.1} → {:.1}", one.focal_before, one.focal_after)
+        }
+        several => several
+            .iter()
+            .map(|c| {
+                format!(
+                    ", camera {} focal {:.1} → {:.1}",
+                    c.camera, c.focal_before, c.focal_after
+                )
+            })
+            .collect(),
+    }
+}
+
 /// Why `node`'s covered observations cannot be pruned, or `None` when they can.
 ///
 /// The three reasons a caller can see without reading a single footprint, and
@@ -1175,7 +1202,7 @@ impl AppState {
     /// Start a bundle adjustment of `id`'s current value on a worker thread.
     ///
     /// A bulk edit: every posed image's pose, every point's position and, when
-    /// the options release it, the shared focal move together, so the next
+    /// the options release them, the cameras' focals move together, so the next
     /// version is a whole new base under the row map `RowMap::by_scan` reads off
     /// the call's input and output. The map is not decoration here -- a point
     /// the solve leaves unsupported is deleted, and the map is what carries a
@@ -1285,17 +1312,10 @@ impl AppState {
             let map = PointMap::Chain(steps);
 
             let mut version_label = format!("Bundle adjusted {label}");
-            if report.focal_released {
+            if report.cameras.iter().any(|c| c.focal_released) {
                 version_label.push_str(", focal released");
             }
-            let focal = if report.focal_released {
-                format!(
-                    ", focal {:.1} → {:.1}",
-                    report.focal_before, report.focal_after
-                )
-            } else {
-                String::new()
-            };
+            let focal = focal_changes(&report.cameras);
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
             } else {

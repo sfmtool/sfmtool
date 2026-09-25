@@ -990,23 +990,91 @@ fn a_node_with_no_inline_keypoints_is_refused_before_anything_is_solved() {
     assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
 }
 
-#[test]
-fn a_node_whose_images_disagree_about_the_lens_is_refused() {
+/// The adjustable fixture with its camera made a single-focal
+/// `SIMPLE_PINHOLE`, whose focal the adjustment can release, and a copy of it
+/// as camera 1 taking image 2: two cameras, the same lens, so the observations
+/// still describe the geometry.
+fn two_camera_state() -> (AppState, ReconId) {
     let (mut state, id) = adjustable_state();
     {
         let recon = state.scene[0].recon_mut();
+        let camera = &mut recon.image_table.cameras[0];
+        let (fx, _) = camera.focal_lengths();
+        let (cx, cy) = camera.principal_point();
+        camera.model = sfmtool_core::CameraModel::SimplePinhole {
+            focal_length: fx,
+            principal_point_x: cx,
+            principal_point_y: cy,
+        };
         let second = recon.image_table.cameras[0].clone();
         recon.image_table.cameras.push(second);
         recon.image_table.images[2].camera_index = 1;
     }
+    (state, id)
+}
 
-    let why = state
+#[test]
+fn a_node_whose_images_are_taken_through_two_cameras_is_adjusted() {
+    let (mut state, id) = two_camera_state();
+    assert_eq!(
+        crate::bundle_adjust_prompt::refusal(state.scene[0].edited()),
+        None
+    );
+
+    state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
-        .expect_err("two lenses, one solve");
+        .expect("two cameras are adjusted, not refused");
+    state.finish_background_task();
 
-    assert!(why.contains("one shared camera"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
-    assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
+    assert_eq!(state.scene[0].history.versions().len(), 2);
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a"
+    );
+}
+
+#[test]
+fn each_released_camera_is_named_in_the_entry() {
+    let (mut state, id) = two_camera_state();
+    assert_eq!(
+        crate::bundle_adjust_prompt::focal_refusal(state.scene[0].edited()),
+        None
+    );
+    let options = sfmtool_core::BundleAdjustOptions {
+        opt_f: true,
+        ..sfmtool_core::BundleAdjustOptions::default()
+    };
+
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_task();
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, focal released"
+    );
+    let last = texts(&state).last().expect("one entry").clone();
+    assert!(last.contains(", camera 0 focal "), "{last}");
+    assert!(last.contains(", camera 1 focal "), "{last}");
+}
+
+#[test]
+fn the_focal_gate_names_the_first_camera_that_cannot_release_its_focal() {
+    let (mut state, _) = two_camera_state();
+    {
+        let recon = state.scene[0].recon_mut();
+        let (f, _) = recon.image_table.cameras[1].focal_lengths();
+        let (cx, cy) = recon.image_table.cameras[1].principal_point();
+        recon.image_table.cameras[1].model = sfmtool_core::CameraModel::Pinhole {
+            focal_length_x: f,
+            focal_length_y: f,
+            principal_point_x: cx,
+            principal_point_y: cy,
+        };
+    }
+    let edited = state.scene[0].edited();
+    assert_eq!(crate::bundle_adjust_prompt::refusal(edited), None);
+    let why = crate::bundle_adjust_prompt::focal_refusal(edited).expect("camera 1 is a PINHOLE");
+    assert!(why.contains("camera 1, a PINHOLE camera"), "{why}");
 }
 
 #[test]

@@ -38,15 +38,17 @@ const DEFAULT_MIN_OBS: usize = 12;
 /// stated is the one every other caller in this crate runs.
 #[derive(Debug, Clone)]
 pub struct BundleAdjustOptions {
-    /// Release the shared focal length. Off by default, because a focal that
-    /// moves is a different claim about the capture than a pose that does, and
-    /// the caller should be the one making it.
+    /// Release the focal length of every camera the posed images use, each
+    /// camera its own. Off by default, because a focal that moves is a
+    /// different claim about the capture than a pose that does, and the caller
+    /// should be the one making it.
     ///
     /// Only the models the kernel's analytic focal column is exact for accept
     /// it -- `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`,
-    /// `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`. On any other model this is
-    /// refused rather than silently ignored: a caller that asked for a focal
-    /// solve and got a fixed-focal one back would have no way to tell.
+    /// `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`. When any camera in the solve has
+    /// another model this is refused rather than silently ignored: a caller that
+    /// asked for a focal solve and got a fixed-focal one back would have no way
+    /// to tell.
     pub opt_f: bool,
     /// The staged trim schedule, `(trim_px, loss_scale)` per round.
     pub schedule: Vec<BaSchedule>,
@@ -79,14 +81,14 @@ pub enum BundleAdjustError {
     /// The observations carry no pixel: a `sift_files` value without the
     /// format's optional inline keypoint column.
     NoKeypoints,
-    /// The posed images do not share one set of camera intrinsics.
-    MixedCameras {
-        /// How many the posed images between them name.
-        cameras: usize,
+    /// The focal release was asked for, and a camera in the solve has a model
+    /// the kernel's focal column is not exact for.
+    FocalNotReleasable {
+        /// The camera's index in the reconstruction's camera table.
+        camera: usize,
+        /// Its model's name.
+        model: &'static str,
     },
-    /// The focal release was asked for on a model the kernel's focal column is
-    /// not exact for.
-    FocalNotReleasable(&'static str),
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,
     /// No observation of a live point falls in a posed image.
@@ -117,16 +119,12 @@ impl std::fmt::Display for BundleAdjustError {
                 "the adjustment needs a pixel per observation, and this reconstruction's \
                  observations are .sift feature indexes with no inline keypoints"
             ),
-            BundleAdjustError::MixedCameras { cameras } => write!(
+            BundleAdjustError::FocalNotReleasable { camera, model } => write!(
                 f,
-                "the adjustment solves one shared camera, and these images are taken \
-                 through {cameras}"
-            ),
-            BundleAdjustError::FocalNotReleasable(model) => write!(
-                f,
-                "the focal cannot be released on a {model} camera; the adjustment's focal \
-                 column is exact for SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
-                 SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and SFMTOOL_PINHOLE"
+                "the focal cannot be released on camera {camera}, a {model}; the \
+                 adjustment's focal column is exact for SIMPLE_PINHOLE, \
+                 EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and \
+                 SFMTOOL_PINHOLE"
             ),
             BundleAdjustError::NoPosedImages => {
                 write!(f, "no image of this reconstruction carries a pose")
@@ -181,21 +179,35 @@ pub struct BundleAdjustReport {
     /// The same median after it. Taken over the observations of the points that
     /// survived, which is the population the value that comes back describes.
     pub median_residual_after: f64,
-    /// The shared focal before the solve.
+    /// One entry per camera in the solve, in camera-table order.
+    pub cameras: Vec<CameraAdjustment>,
+}
+
+/// What one adjustment did to one camera.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraAdjustment {
+    /// The camera's index in the reconstruction's camera table.
+    pub camera: usize,
+    /// Posed images taken through it that were in the solve.
+    pub images: usize,
+    /// Its focal before the solve, the model's first where it carries two.
     pub focal_before: f64,
-    /// The shared focal after it, which is the one before it unless the focal
+    /// Its focal after the solve, which is the one before it unless the focal
     /// was released.
     pub focal_after: f64,
-    /// Whether the focal was released.
+    /// Whether its focal was released.
     pub focal_released: bool,
 }
 
 /// Bundle-adjust `recon`, returning the adjusted value and a report.
 ///
 /// Every posed image's pose, every live point's position and, under
-/// [`BundleAdjustOptions::opt_f`], the shared focal are refined together against
-/// every observation that carries a pixel, by the staged robust solve in
-/// [`crate::geometry::bundle_adjust()`]. A point at infinity goes in as the
+/// [`BundleAdjustOptions::opt_f`], each camera's focal are refined together
+/// against every observation that carries a pixel, by the staged robust solve in
+/// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
+/// any number of the table's cameras; each keeps its own lens in the solve, and a
+/// camera no posed image uses is not in it and comes back as it went in. A point
+/// at infinity goes in as the
 /// direction it is and comes back as one: the caller's representation is honoured
 /// for the whole solve, so no point crosses between a bearing and a position
 /// here. A point's constraint -- free, ranged or held -- is the one its
@@ -271,25 +283,45 @@ pub fn bundle_adjust(
         return Err(BundleAdjustError::NoPosedImages);
     }
 
-    // One camera for the whole solve: the kernel carries a single shared model,
-    // and a value whose images disagree about the lens has to be told so rather
-    // than silently adjusted through one of them.
-    let camera_index = table.images[posed[0]].camera_index;
-    let mut lenses: Vec<u32> = posed
+    // The cameras of the solve: the table's entries the posed images use, in
+    // table order, and each posed image's index into that list. A camera only
+    // unposed images use sits the solve out with them.
+    let mut used: Vec<u32> = posed
         .iter()
         .map(|&i| table.images[i].camera_index)
         .collect();
-    lenses.sort_unstable();
-    lenses.dedup();
-    if lenses.len() != 1 {
-        return Err(BundleAdjustError::MixedCameras {
-            cameras: lenses.len(),
-        });
+    used.sort_unstable();
+    used.dedup();
+    let cameras: Vec<CameraIntrinsics> = used
+        .iter()
+        .map(|&c| table.cameras[c as usize].clone())
+        .collect();
+    let image_camera: Vec<u32> = posed
+        .iter()
+        .map(|&i| {
+            used.binary_search(&table.images[i].camera_index)
+                .expect("every posed image's camera is in the list") as u32
+        })
+        .collect();
+    // The release refuses rather than degrades, over every camera in the
+    // solve: the kernel would hold a camera it cannot release and move the rest,
+    // and a report saying the focal was released would then be false of it.
+    if options.opt_f {
+        if let Some((&c, camera)) = used
+            .iter()
+            .zip(&cameras)
+            .find(|(_, camera)| !focal_is_releasable(camera))
+        {
+            return Err(BundleAdjustError::FocalNotReleasable {
+                camera: c as usize,
+                model: camera.model_name(),
+            });
+        }
     }
-    let camera = &table.cameras[camera_index as usize];
-    if options.opt_f && !focal_is_releasable(camera) {
-        return Err(BundleAdjustError::FocalNotReleasable(camera.model_name()));
-    }
+    let ba_cameras = BaCameras {
+        cameras: &cameras,
+        image_camera: image_camera.as_slice().into(),
+    };
 
     // The solve is all of the time; the other three walk arrays the size of the
     // reconstruction once. An estimate, as every set of weights is.
@@ -398,7 +430,7 @@ pub fn bundle_adjust(
     // a second spelling of it here.
     let residuals = p_before.phase("residuals before");
     let before = crate::geometry::bundle_adjust::bundle_adjust(
-        &BaCameras::shared(camera, posed.len()),
+        &ba_cameras,
         &mut quats.clone(),
         &mut trans.clone(),
         &mut points.clone(),
@@ -428,7 +460,7 @@ pub fn bundle_adjust(
 
     let solve = p_solve.phase("solve");
     let solved = crate::geometry::bundle_adjust::bundle_adjust(
-        &BaCameras::shared(camera, posed.len()),
+        &ba_cameras,
         &mut quats,
         &mut trans,
         &mut points,
@@ -479,10 +511,23 @@ pub fn bundle_adjust(
         out.image_table.images[i].quaternion_wxyz = quats[slot];
         out.image_table.images[i].translation_xyz = trans[slot];
     }
-    let focal_before = camera.focal_lengths().0;
-    if options.opt_f {
-        out.image_table.cameras[camera_index as usize] = solved.cameras[0].clone();
+    // Each camera in the solve takes the one the kernel returned, which is
+    // itself at its solved focal under `opt_f` and itself unchanged otherwise:
+    // nothing else about any lens moves.
+    for (&c, solved_camera) in used.iter().zip(&solved.cameras) {
+        out.image_table.cameras[c as usize] = solved_camera.clone();
     }
+    let camera_reports: Vec<CameraAdjustment> = used
+        .iter()
+        .enumerate()
+        .map(|(j, &c)| CameraAdjustment {
+            camera: c as usize,
+            images: image_camera.iter().filter(|&&k| k as usize == j).count(),
+            focal_before: cameras[j].focal_lengths().0,
+            focal_after: solved.cameras[j].focal_lengths().0,
+            focal_released: options.opt_f,
+        })
+        .collect();
 
     // Each point's own residuals, for the stored error column and for the
     // verdict on whether anything still sees it.
@@ -538,13 +583,7 @@ pub fn bundle_adjust(
         points_deleted,
         median_residual_before: median_residual(&before.residual_norms, &obs_pt, &keep),
         median_residual_after: median_residual(&solved.residual_norms, &obs_pt, &keep),
-        focal_before,
-        focal_after: if options.opt_f {
-            solved.cameras[0].focal_lengths().0
-        } else {
-            focal_before
-        },
-        focal_released: options.opt_f,
+        cameras: camera_reports,
     };
     Ok((out, report))
 }

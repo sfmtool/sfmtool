@@ -750,17 +750,20 @@ impl PyEditedReconstruction {
     /// Bundle-adjust this version, and give back the answer as its successor.
     ///
     /// Every posed image's pose, every point's position and, under ``opt_f``,
-    /// the shared focal are refined together against every observation that
+    /// each camera's focal are refined together against every observation that
     /// carries a pixel (see
-    /// ``specs/core/reconstruction/bundle-adjust.md``). A point at infinity goes
+    /// ``specs/core/reconstruction/bundle-adjust.md``). The posed images may be
+    /// taken through any number of cameras, each solved through its own lens.
+    /// A point at infinity goes
     /// in as the direction it is and comes back as one, a held point comes back
     /// exactly as it went in, and a point the solve leaves unsupported is
     /// deleted from the value that comes back. A **bulk** edit, so that value is
     /// a whole new base with an empty overlay, and this object is not changed.
     ///
     /// Args:
-    ///     opt_f: Release the shared focal length (default ``False``). Raises
-    ///         on a camera model whose focal the adjustment cannot solve.
+    ///     opt_f: Release the focal length of every camera the posed images
+    ///         use (default ``False``). Raises, naming the camera, when any of
+    ///         them has a model whose focal the adjustment cannot solve.
     ///     schedule: ``[(trim_px, loss_scale), ...]`` staged rounds (default
     ///         ``[(50, 5), (12, 2), (4, 1)]``).
     ///     max_iters: LM iteration budget per round (default 60).
@@ -773,9 +776,12 @@ impl PyEditedReconstruction {
     /// Returns:
     ///     ``(EditedReconstruction, report)``. The report carries ``images``,
     ///     ``points``, ``observations``, ``points_deleted``,
-    ///     ``median_residual_before``, ``median_residual_after``,
-    ///     ``focal_before``, ``focal_after`` and ``focal_released``. Raises
-    ///     ``ValueError`` with the reason when the adjustment is refused.
+    ///     ``median_residual_before``, ``median_residual_after`` and
+    ///     ``cameras``, a list with one dict per camera in the solve, in
+    ///     camera-table order: ``camera`` (its table index), ``images`` (the
+    ///     posed images taken through it), ``focal_before``, ``focal_after``
+    ///     and ``focal_released``. Raises ``ValueError`` with the reason when
+    ///     the adjustment is refused.
     #[pyo3(signature = (*, opt_f=false, schedule=None, max_iters=60, min_track=2, min_obs=12))]
     fn bundle_adjust(
         &self,
@@ -814,9 +820,17 @@ impl PyEditedReconstruction {
         d.set_item("points_deleted", report.points_deleted)?;
         d.set_item("median_residual_before", report.median_residual_before)?;
         d.set_item("median_residual_after", report.median_residual_after)?;
-        d.set_item("focal_before", report.focal_before)?;
-        d.set_item("focal_after", report.focal_after)?;
-        d.set_item("focal_released", report.focal_released)?;
+        let cameras = PyList::empty(py);
+        for camera in &report.cameras {
+            let c = PyDict::new(py);
+            c.set_item("camera", camera.camera)?;
+            c.set_item("images", camera.images)?;
+            c.set_item("focal_before", camera.focal_before)?;
+            c.set_item("focal_after", camera.focal_after)?;
+            c.set_item("focal_released", camera.focal_released)?;
+            cameras.append(c)?;
+        }
+        d.set_item("cameras", cameras)?;
         Ok((
             PyEditedReconstruction {
                 inner: EditedReconstruction::new(Arc::new(next)),

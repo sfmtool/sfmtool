@@ -18,7 +18,7 @@ pub mod thumbnail;
 pub mod triangulation;
 
 pub use bundle_adjust::{
-    bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport,
+    bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport, CameraAdjustment,
 };
 
 pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, ReprojectionSample};

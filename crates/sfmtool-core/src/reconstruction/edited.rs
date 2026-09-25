@@ -704,12 +704,19 @@ impl EditedReconstruction {
     /// through, which is zero when none of them carries a pose.
     ///
     /// The question every operation that reads one shared lens asks before it
-    /// starts -- the adjustment and the retriangulation both -- so the sentence
-    /// a menu entry is greyed with and the refusal the operation itself
-    /// produces are read off one count rather than two scans that could drift
-    /// apart. An unposed image states no ray, so it sits the operation out and
-    /// its lens is not part of the question.
+    /// starts -- the retriangulation, and whether anything is posed at all --
+    /// so the sentence a menu entry is greyed with and the refusal the operation
+    /// itself produces are read off one count rather than two scans that could
+    /// drift apart. An unposed image states no ray, so it sits the operation out
+    /// and its lens is not part of the question.
     pub fn posed_lens_count(&self) -> usize {
+        self.posed_lenses().len()
+    }
+
+    /// The camera-table indexes the **posed** images of this value are taken
+    /// through, ascending and each once: the cameras a bundle adjustment
+    /// solves, and so the ones a caller offering its focal release checks.
+    pub fn posed_lenses(&self) -> Vec<u32> {
         let mut lenses: Vec<u32> = self
             .base
             .image_table
@@ -723,7 +730,7 @@ impl EditedReconstruction {
             .collect();
         lenses.sort_unstable();
         lenses.dedup();
-        lenses.len()
+        lenses
     }
 
     // ── The point edits ──────────────────────────────────────────────
