@@ -127,6 +127,19 @@ pub enum AcceptRule {
         /// The statistic over the pooled leave-one-out ZNCCs.
         statistic: BasisStatistic,
     },
+    /// Accept a candidate that reaches either bar: the pooled one, or the one
+    /// its own track sets. A track whose references agree less well with each
+    /// other than the image's tracks do on the whole sets a lower bar of its
+    /// own, and a sighting as good as its references is not refused for being
+    /// on a harder surface than the rest.
+    PooledOrTrack {
+        /// The statistic over the pooled leave-one-out ZNCCs.
+        pooled: BasisStatistic,
+        /// The statistic over three or more references' leave-one-out ZNCCs.
+        track: BasisStatistic,
+        /// The rule for exactly two references.
+        pair: PairRule,
+    },
 }
 
 /// How far from the point's projection a keypoint may land.
@@ -176,6 +189,10 @@ pub struct AddImageToTracksOptions {
     pub require_facing: bool,
     /// Refine the searched keypoint to sub-pixel against the references.
     pub subpixel: bool,
+    /// Where the search window's highest peak is on its edge, take the local
+    /// maximum an ascent from the projection reaches instead, when that one is
+    /// inside the window. See [`ReferenceConsensus::search`].
+    pub ascend_on_edge: bool,
     /// Two keypoints in the new image closer than this, in source pixels, are
     /// one place: of two accepted candidates the one with the lower ZNCC is
     /// refused, and a candidate this close to an observation the image already
@@ -192,18 +209,23 @@ pub struct AddImageToTracksOptions {
 }
 
 /// The defaults are the rule and gate the leave-one-image-out evaluation chose
-/// (`specs/drafts/add-image-to-tracks.md`, "Evaluation"): one bar for the image
-/// at the median minus three scaled deviations of every candidate's
-/// references' leave-one-out ZNCCs, and a positional bound at the median plus
-/// three scaled deviations of the accepted keypoints' distances from their
-/// projections, never below one pixel. Both bars are read off the call's own
-/// data, so they follow the capture's texture and the pose's error rather
-/// than a constant.
+/// (see the spec, "Why the default is what it is"): a candidate passes when it
+/// reaches either the image's pooled bar (the median minus three scaled
+/// deviations of every candidate's references' leave-one-out ZNCCs) or its own
+/// track's bar (0.9 of its references' median, or the pair rule at 0.9 for two
+/// references); and its keypoint must lie within the median plus three scaled
+/// deviations of the accepted keypoints' distances from their projections,
+/// never less than one pixel. Every bar is read off the call's own data.
 impl Default for AddImageToTracksOptions {
     fn default() -> Self {
         Self {
-            rule: AcceptRule::PooledBasis {
-                statistic: BasisStatistic::MedianMinusMad { k: 3.0 },
+            rule: AcceptRule::PooledOrTrack {
+                pooled: BasisStatistic::MedianMinusMad { k: 3.0 },
+                track: BasisStatistic::FractionOfMedian { fraction: 0.9 },
+                pair: PairRule {
+                    statistic: PairStatistic::Mean,
+                    factor: 0.9,
+                },
             },
             min_zncc: 0.5,
             position_gate: PositionGate::ImageMad {
@@ -213,6 +235,7 @@ impl Default for AddImageToTracksOptions {
             template: TemplateSource::Rendered,
             require_facing: true,
             subpixel: true,
+            ascend_on_edge: false,
             min_keypoint_separation_px: 1.0,
             localize: KeypointLocalizeParams::default(),
             refine: KeypointSubpixelParams::default(),
@@ -624,7 +647,10 @@ pub fn add_image_to_tracks(
 
     // ---- Judge ----
     let pooled_bar = match options.rule {
-        AcceptRule::PooledBasis { statistic } => {
+        AcceptRule::PooledBasis { statistic }
+        | AcceptRule::PooledOrTrack {
+            pooled: statistic, ..
+        } => {
             let pool: Vec<f64> = candidates
                 .iter()
                 .filter(|c| c.refusal.is_none())
@@ -827,7 +853,13 @@ impl Context<'_, '_> {
         }
 
         // The search, from the projection.
-        let search = match consensus.search(&patch, &target, None, self.localize) {
+        let search = match consensus.search(
+            &patch,
+            &target,
+            None,
+            self.options.ascend_on_edge,
+            self.localize,
+        ) {
             Ok(s) => s,
             Err(_) => {
                 out.refusal = Some(Refusal::NoPeak);
@@ -885,22 +917,16 @@ fn judge(c: &mut CandidateReport, options: &AddImageToTracksOptions, pooled_bar:
     let floor = options.min_zncc;
     let (judged, bar) = match options.rule {
         AcceptRule::FixedZncc => (c.zncc, floor),
-        AcceptRule::TrackBasis { statistic, pair } => {
-            let n = c.references.len();
-            if n >= 3 {
-                (c.zncc, statistic.bar(&c.reference_loo_zncc))
+        AcceptRule::TrackBasis { statistic, pair } => track_judgement(c, statistic, pair),
+        AcceptRule::PooledBasis { .. } => (c.zncc, pooled_bar.unwrap_or(f64::NAN)),
+        AcceptRule::PooledOrTrack { track, pair, .. } => {
+            let pooled = pooled_bar.unwrap_or(f64::NAN);
+            if c.zncc >= pooled {
+                (c.zncc, pooled)
             } else {
-                let values = &c.pair_zncc;
-                let judged = match pair.statistic {
-                    PairStatistic::Min => values.iter().copied().fold(f64::INFINITY, f64::min),
-                    PairStatistic::Mean => values.iter().sum::<f64>() / values.len() as f64,
-                    PairStatistic::Max => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-                };
-                let between = c.reference_pair_zncc.get(1).copied().unwrap_or(f64::NAN);
-                (judged, pair.factor * between)
+                track_judgement(c, track, pair)
             }
         }
-        AcceptRule::PooledBasis { .. } => (c.zncc, pooled_bar.unwrap_or(f64::NAN)),
     };
     c.judged = judged;
     c.bar = bar;
@@ -910,6 +936,23 @@ fn judge(c: &mut CandidateReport, options: &AddImageToTracksOptions, pooled_bar:
     } else if judged.is_nan() || bar.is_nan() || judged < bar {
         c.refusal = Some(Refusal::BelowBar);
     }
+}
+
+/// The number a track's own references judge and the bar they set: a
+/// statistic of their leave-one-out ZNCCs with three or more, the pair rule
+/// with two.
+fn track_judgement(c: &CandidateReport, statistic: BasisStatistic, pair: PairRule) -> (f64, f64) {
+    if c.references.len() >= 3 {
+        return (c.zncc, statistic.bar(&c.reference_loo_zncc));
+    }
+    let values = &c.pair_zncc;
+    let judged = match pair.statistic {
+        PairStatistic::Min => values.iter().copied().fold(f64::INFINITY, f64::min),
+        PairStatistic::Mean => values.iter().sum::<f64>() / values.len() as f64,
+        PairStatistic::Max => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    };
+    let between = c.reference_pair_zncc.get(1).copied().unwrap_or(f64::NAN);
+    (judged, pair.factor * between)
 }
 
 /// One observation per place in the image: refuse an accepted candidate that

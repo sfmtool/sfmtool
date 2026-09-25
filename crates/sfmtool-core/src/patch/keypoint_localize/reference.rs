@@ -18,7 +18,7 @@
 //! therefore comparable, because the searched view never contributed to the
 //! consensus it is scored against.
 
-use super::search::{search_shift, SearchScratch};
+use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
     extract_core, extract_core_grid, project, render_context, seed_offset, shifted_center,
     ContextTile, KeypointLocalizeParams, LocalizeError,
@@ -81,6 +81,10 @@ pub struct ViewSearch {
     /// Whether the peak sits on the edge of the searched window, where the true
     /// maximum may lie outside it.
     pub at_edge: bool,
+    /// Whether the window's highest peak was on its edge and the keypoint is
+    /// instead the local maximum an ascent from the start reached (see
+    /// [`ReferenceConsensus::search`]'s `ascend_on_edge`).
+    pub ascended: bool,
     /// The weak-axis positional uncertainty `σ_pos` of the view's own core at
     /// the search's start, in patch-grid px (the member localizability score).
     /// `NaN` when the core is out of frame.
@@ -289,11 +293,19 @@ impl ReferenceConsensus {
     /// [`ViewSearch::sigma_pos`], [`ViewSearch::at_edge`] and the peak and
     /// decides. `Ok` with no keypoint when the point does not project into the
     /// view's frame.
+    ///
+    /// With `ascend_on_edge`, a window whose highest peak sits on its edge is
+    /// searched again by the "+"-descent from the start, which climbs to the
+    /// local maximum nearest the start. Where that maximum is inside the window
+    /// it is the answer (and [`ViewSearch::ascended`] says so): a repeated
+    /// texture can put a stronger correlation a pattern period away, and the
+    /// start (the projection) is the evidence for which period is meant.
     pub fn search(
         &self,
         patch: &OrientedPatch,
         view: &ProjectedImage<'_>,
         seed: Option<[f64; 2]>,
+        ascend_on_edge: bool,
         params: &KeypointLocalizeParams,
     ) -> Result<ViewSearch, LocalizeError> {
         let mut out = ViewSearch {
@@ -301,6 +313,7 @@ impl ReferenceConsensus {
             keypoint: None,
             peak_zncc: f64::NAN,
             at_edge: false,
+            ascended: false,
             sigma_pos: f64::NAN,
         };
         let Some(proj) = project(view, &patch.center, patch.w) else {
@@ -337,7 +350,7 @@ impl ReferenceConsensus {
         scratch
             .tmpl
             .extend_from_slice(&self.template[..kept * self.support.pixels.len()]);
-        let Some(sh) = search_shift(
+        let Some(mut sh) = search_shift(
             &tile,
             &mut scratch,
             &self.support,
@@ -350,8 +363,27 @@ impl ReferenceConsensus {
         ) else {
             return Ok(out);
         };
+        let on_edge = |ix: i64, iy: i64| ix.abs() == margin || iy.abs() == margin;
+        if ascend_on_edge && on_edge(sh.ix, sh.iy) {
+            if let Some(local) = search_shift_plus_descent(
+                &tile,
+                &mut scratch,
+                &self.support,
+                mask,
+                kept,
+                r,
+                margin,
+                c0,
+                c0,
+            ) {
+                if !on_edge(local.ix, local.iy) {
+                    sh = local;
+                    out.ascended = true;
+                }
+            }
+        }
         out.peak_zncc = sh.peak;
-        out.at_edge = sh.ix.abs() == margin || sh.iy.abs() == margin;
+        out.at_edge = on_edge(sh.ix, sh.iy);
         let center = shifted_center(
             patch,
             start[0] + sh.dx,

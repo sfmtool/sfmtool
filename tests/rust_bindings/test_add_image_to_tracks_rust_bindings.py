@@ -109,6 +109,7 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
         dict(rule="track_basis", basis="median_minus_mad", basis_k=3.0),
         dict(rule="track_basis", basis="fraction_of_median", pair_statistic="max"),
         dict(rule="pooled_basis", basis="min"),
+        dict(rule="pooled_or_track", track_basis="min", ascend_on_edge=True),
         dict(position_gate="image_mad", position_k=3.0),
         dict(position_gate="max_px", position_max_px=2.0),
         dict(subpixel=False, max_keypoint_uncertainty=0.0),

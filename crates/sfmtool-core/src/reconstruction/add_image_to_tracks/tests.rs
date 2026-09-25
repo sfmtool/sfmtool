@@ -558,3 +558,30 @@ fn a_stored_bitmap_template_finds_the_same_keypoint() {
         assert!(c.zncc > 0.95, "point {p}: zncc {}", c.zncc);
     }
 }
+
+#[test]
+fn pooled_or_track_accepts_what_either_bar_accepts() {
+    let options = AddImageToTracksOptions::default();
+    let mut c = CandidateReport::new(0);
+    c.references = vec![0, 1, 2];
+    c.reference_loo_zncc = vec![0.6, 0.62, 0.64];
+    // Below the pooled bar, above 0.9 of its own track's median.
+    c.zncc = 0.58;
+    judge(&mut c, &options, Some(0.7));
+    assert_eq!(c.refusal, None);
+    assert!((c.bar - 0.9 * 0.62).abs() < 1e-12);
+    // Below both.
+    let mut c2 = c.clone();
+    c2.refusal = None;
+    c2.zncc = 0.5;
+    c2.reference_loo_zncc = vec![0.8, 0.85, 0.9];
+    judge(&mut c2, &options, Some(0.7));
+    assert_eq!(c2.refusal, Some(Refusal::BelowBar));
+    // Above the pooled bar, whatever the track says.
+    let mut c3 = c2.clone();
+    c3.refusal = None;
+    c3.zncc = 0.72;
+    judge(&mut c3, &options, Some(0.7));
+    assert_eq!(c3.refusal, None);
+    assert_eq!(c3.bar, 0.7);
+}

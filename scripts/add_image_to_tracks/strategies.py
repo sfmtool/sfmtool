@@ -166,4 +166,30 @@ STRATEGIES = {
         "position_k": 3.0,
         "position_floor_px": 1.0,
     },
+    # Answers to the recall breakdown: an ascent from the projection where the
+    # window's highest peak is on its edge, and a track's own bar beside the
+    # pooled one.
+    "default+ascend": {"ascend_on_edge": True},
+    "pooled_or_track": {
+        "rule": "pooled_or_track",
+        "track_basis": "fraction_of_median",
+        "track_basis_fraction": 0.9,
+        "pair_statistic": "mean",
+        "pair_factor": 0.9,
+    },
+    "pooled_or_track+ascend": {
+        "rule": "pooled_or_track",
+        "track_basis": "fraction_of_median",
+        "track_basis_fraction": 0.9,
+        "pair_statistic": "mean",
+        "pair_factor": 0.9,
+        "ascend_on_edge": True,
+    },
+    "pooled_or_track_min+ascend": {
+        "rule": "pooled_or_track",
+        "track_basis": "min",
+        "pair_statistic": "mean",
+        "pair_factor": 0.9,
+        "ascend_on_edge": True,
+    },
 }

@@ -154,12 +154,18 @@ impl PyEditedReconstruction {
     ///         ``ImagePyramidSet``. The references are measured, so the
     ///         photographs of the observing images are read as well as the
     ///         target's.
-    ///     rule: ``"pooled_basis"`` (default: one bar from every candidate's
-    ///         references), ``"track_basis"`` (the point's own references set
-    ///         the bar) or ``"fixed"`` (``min_zncc`` alone).
-    ///     basis: The statistic of the references' leave-one-out ZNCCs:
-    ///         ``"median_minus_mad"`` (default, with ``basis_k``, default 3),
-    ///         ``"min"`` or ``"fraction_of_median"`` (with ``basis_fraction``).
+    ///     rule: ``"pooled_or_track"`` (default: a candidate passes the image's
+    ///         pooled bar or its own track's bar), ``"pooled_basis"`` (one bar
+    ///         from every candidate's references), ``"track_basis"`` (the
+    ///         point's own references set the bar) or ``"fixed"``
+    ///         (``min_zncc`` alone).
+    ///     basis: The statistic of the references' leave-one-out ZNCCs for the
+    ///         pooled bar, and for ``"track_basis"``: ``"median_minus_mad"``
+    ///         (default, with ``basis_k``, default 3), ``"min"`` or
+    ///         ``"fraction_of_median"`` (with ``basis_fraction``).
+    ///     track_basis, track_basis_k, track_basis_fraction: The track's own
+    ///         statistic under ``"pooled_or_track"`` (default
+    ///         ``"fraction_of_median"`` at 0.9).
     ///     pair_statistic, pair_factor: For a two-reference track under
     ///         ``"track_basis"``: ``"min"``, ``"mean"`` or ``"max"`` of the
     ///         image's ZNCC against each reference must reach ``pair_factor``
@@ -171,7 +177,8 @@ impl PyEditedReconstruction {
     ///         ``position_floor_px``), ``"max_px"`` (``position_max_px``) or
     ///         ``"off"``.
     ///     template: ``"rendered"`` or ``"stored_bitmap"``.
-    ///     require_facing, subpixel, min_keypoint_separation_px: see the spec.
+    ///     require_facing, subpixel, ascend_on_edge,
+    ///         min_keypoint_separation_px: see the spec.
     ///     search: The search radius in patch-grid pixels.
     ///     max_keypoint_uncertainty: The member localizability gate's ``τ``
     ///         (``0`` disables it).
@@ -196,10 +203,13 @@ impl PyEditedReconstruction {
         image,
         images,
         *,
-        rule = "pooled_basis",
+        rule = "pooled_or_track",
         basis = "median_minus_mad",
         basis_k = 3.0,
         basis_fraction = 0.9,
+        track_basis = "fraction_of_median",
+        track_basis_k = 3.0,
+        track_basis_fraction = 0.9,
         pair_statistic = "mean",
         pair_factor = 0.9,
         min_zncc = 0.5,
@@ -210,6 +220,7 @@ impl PyEditedReconstruction {
         template = "rendered",
         require_facing = true,
         subpixel = true,
+        ascend_on_edge = false,
         min_keypoint_separation_px = 1.0,
         search = 6.0,
         max_keypoint_uncertainty = 0.35,
@@ -226,6 +237,9 @@ impl PyEditedReconstruction {
         basis: &str,
         basis_k: f64,
         basis_fraction: f64,
+        track_basis: &str,
+        track_basis_k: f64,
+        track_basis_fraction: f64,
         pair_statistic: &str,
         pair_factor: f64,
         min_zncc: f64,
@@ -236,6 +250,7 @@ impl PyEditedReconstruction {
         template: &str,
         require_facing: bool,
         subpixel: bool,
+        ascend_on_edge: bool,
         min_keypoint_separation_px: f64,
         search: f64,
         max_keypoint_uncertainty: f64,
@@ -253,9 +268,17 @@ impl PyEditedReconstruction {
                 },
             },
             "pooled_basis" => AcceptRule::PooledBasis { statistic },
+            "pooled_or_track" => AcceptRule::PooledOrTrack {
+                pooled: statistic,
+                track: basis_statistic(track_basis, track_basis_k, track_basis_fraction)?,
+                pair: PairRule {
+                    statistic: self::pair_statistic(pair_statistic)?,
+                    factor: pair_factor,
+                },
+            },
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "rule must be \"track_basis\", \"pooled_basis\" or \"fixed\", not {other:?}"
+                    "rule must be \"pooled_basis\", \"pooled_or_track\", \"track_basis\" or \"fixed\", not {other:?}"
                 )))
             }
         };
@@ -289,6 +312,7 @@ impl PyEditedReconstruction {
             template,
             require_facing,
             subpixel,
+            ascend_on_edge,
             min_keypoint_separation_px,
             localize: sfmtool_core::patch::keypoint_localize::KeypointLocalizeParams {
                 search,
