@@ -69,6 +69,16 @@ it is `PatchEdit::Tilt`. Only the wire, whose namespace is flat, spells all
 three, as `tilt_bench_patch`. A name like `bench_track_frame` is three words
 where the context has already supplied two.
 
+## Files beside a reconstruction
+
+The files the viewer builds and opens beside a node's `.sfmr`, in
+`crates/sfm-explorer/`, the viewer specs and the wire.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **search files** | the two files beside a reconstruction's `.sfmr` that a bench search reads: its SIFT index, `<stem>-sift-index.kdf`, and its cluster patches, `<stem>-cluster-patches.matches`. Built together by one operation, *Build Search Files* / *Rebuild Search Files* (`Build search files` in the Background panel), shown under one Scene tree group row *Search Files*, and on the wire `build_search_files`, `open_search_files`, `close_search_files` and the `search_files` block | *SIFT index* for the pair, `match files`, `indexes`, `sidecar files` | the operation makes two files, and *SIFT index* names the `.kdf` alone (entry below), so keeping it for the operation would describe half of what it writes. `.matches` files are what `sfm match` writes into `matches/`, so *match files* would point at those. The cluster patches are not an index, so *indexes* is wrong for one of the two. *Sidecar* says where a file sits and not what it is for; what the two have in common is that a search reads them |
+| **cluster patches** (the file) | a node's `<stem>-cluster-patches.matches`: the SIFT index's features clustered as `sfm match --cluster` clusters them and refined as `sfm cluster-patches` refines them, with both the clusters and the cluster-patches sections. Scene tree row *Cluster Patches*, wire key `cluster_patches` | `clusters file`, `patch file` | a `.matches` with a clusters section and no refinement is a clusters file, and such a file reads stale here. *Patch file* would suggest the `.sfmr`'s own patches |
+
 ## The scene's frame
 
 The vocabulary of a node's similarity transform in `crates/sfm-explorer/`, the

@@ -69,8 +69,10 @@ Scene (root, implicit)
 │   │   └── IMG_0004@120,90  3 in
 │   ├── Patches                   ← toggle-only row, present when the recon
 │   │                                carries patch data; not expandable
-│   └── SIFT Index  1.2M descriptors  ← the .kdf beside the .sfmr, and whether
-│                                       it is current, stale or absent
+│   └── Search Files  1 of 2 current  ← the files beside the .sfmr that a
+│       │                               bench search reads
+│       ├── SIFT Index  1.2M descriptors  ← each current, stale or absent
+│       └── Cluster Patches  3,412 clusters
 ├── Reconstruction "run_b"
 │   └── …
 ```
@@ -305,7 +307,7 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
-  `Build SIFT Index`, `Convert to Embedded Patches`, `Close`.
+  `Build Search Files`, `Convert to Embedded Patches`, `Close`.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Bundle Adjust...`** refines every pose and point of the node against its
@@ -348,18 +350,20 @@ fixed-height for virtualization.
   `prune_covered_observations` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer. A prune that finds nothing
   covered pushes no version and says so in the Action Log.
-- **`Build SIFT Index`** indexes every `.sift` file of the node into a `.kdf`
-  beside its `.sfmr` and opens it, on a worker thread
-  ([background-tasks.md](background-tasks.md), [sift-index.md](sift-index.md)).
-  It reads *`Rebuild SIFT Index`* when one is already open. It sits above
-  `Convert to Embedded Patches` because it is where a person looks first when
-  they find a bench search greyed; the `SIFT Index` row below offers the same
-  entry, with the *Open...* and *Close Index* that go with it. It is **live only
-  on a node that has been saved, whose images have at least one `.sift`
-  companion, and that nothing is running on**, and greyed with the reason
-  otherwise. The gate is `AppState::build_sift_index_refusal`, which the wire's
-  `build_sift_index` and the operation itself also ask, so the greyed entry and
-  a call that asks anyway give one answer.
+- **`Build Search Files`** builds the node's two search files beside its
+  `.sfmr` and opens them, on a worker thread: the SIFT index over every `.sift`
+  file of the node, then the cluster patches made from that index
+  ([background-tasks.md](background-tasks.md),
+  [search-files.md](search-files.md)). It reads *`Rebuild Search Files`* when
+  either file is open. It sits above `Convert to Embedded Patches` because it
+  is where a person looks first when they find a bench search greyed; the
+  Search Files rows below offer the same entry, with the *Open...* and *Close
+  Search Files* that go with it. It is **live only on a node that has been
+  saved, whose images have at least one `.sift` companion, and that nothing is
+  running on**, and greyed with the reason otherwise. The gate is
+  `AppState::build_search_files_refusal`, which the wire's
+  `build_search_files` and the operation itself also ask, so the greyed entry
+  and a call that asks anyway give one answer.
 - **`Convert to Embedded Patches`** runs the `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
   ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
@@ -493,25 +497,37 @@ poses. The panel that edits a track on it is [track-view.md](track-view.md).
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
 
-**SIFT Index row** — `SIFT Index  1.2M descriptors` — last among the group rows,
-after Points and after Patches where that row is present. It says whether the
-node has the `.kdf` a bench search queries and whether it is still an index of
-this reconstruction: the descriptor count when it is current, `stale` in the
-warning colour when it is not, `none` dimmed when there is no file, and
-`building...` while the build runs. No eye and no children — nothing here is
-drawn in the viewport and there is nothing under it to list — and clicking it
-selects nothing. It is **one click target spanning the row** with its texts
-drawn non-interactive on top, exactly as the reconstruction row is, so the menu
-and the hover come up over the name and not only over the status text. Its hover
-text carries the file, the counts, and the sentence naming the first discrepancy
-when it is stale; with no index open it says so and names where a build would
-write one. Its context menu carries
-`Build SIFT Index` (reading `Rebuild SIFT Index` when one is open), `Open...`
-and `Close Index`, each greyed with its own sentence while the node is busy.
-`Open...` reports the gesture and nothing else, and `dock.rs` puts up the file
-chooser, as it does for the resection's `.matches` file: that is what keeps the
-panel a pure egui function a headless frame can run. The row and everything
-behind it are [sift-index.md](sift-index.md).
+**Search Files group** — `▾ Search Files  1 of 2 current` — last among the
+group rows, after Points and after Patches where that row is present, open by
+default, with one child row per file:
+
+```
+▾   Search Files     1 of 2 current
+      SIFT Index       1.2M descriptors
+      Cluster Patches  stale
+```
+
+Each child says whether the node has that file and whether it still answers
+for this reconstruction: its size when it is current (descriptors for the
+index, clusters for the cluster patches), `stale` in the warning colour when it
+is not, `none` dimmed when there is no file, and `building...` while the build
+runs. The group row counts how many of the two are current, in the warning
+colour when either is stale and dimmed when neither is there, so the answer
+reads with the group folded. No eye, because nothing here is drawn in the
+viewport, and clicking a row selects nothing. Each row is **one click target
+spanning the row** with its texts drawn non-interactive on top, exactly as the
+reconstruction row is, so the menu and the hover come up over the name and not
+only over the status text. A child's hover carries the file, its counts, and
+the sentence naming the first discrepancy when it is stale; with no file open
+it says so and names where a build would write one. The menus: the group row
+carries `Build Search Files` (reading `Rebuild Search Files` when either file
+is open) and `Close Search Files`; each child carries the same two with an
+`Open...` for its own kind of file between them. Each entry is greyed with its
+own sentence while the node is busy. `Open...` reports the gesture and nothing
+else, and `dock.rs` puts up the file chooser, as it does for the resection's
+`.matches` file: that is what keeps the panel a pure egui function a headless
+frame can run. The rows and everything behind them are
+[search-files.md](search-files.md) and [sift-index.md](sift-index.md).
 
 ### Panel plumbing
 
@@ -541,10 +557,11 @@ pub struct SceneGraphResponse {
     /// stays `Copy`; the panel also keeps it for `take_bench_edit`.
     pub edit_bench_item: Option<(ReconId, usize)>,
     pub discard_bench_item: Option<(ReconId, usize)>,
-    /// The SIFT Index row's menu, and the build entry on the node's own.
-    pub build_sift_index: Option<ReconId>,
+    /// The Search Files rows' menus, and the build entry on the node's own.
+    pub build_search_files: Option<ReconId>,
     pub open_sift_index: Option<ReconId>,
-    pub close_sift_index: Option<ReconId>,
+    pub open_cluster_patches: Option<ReconId>,
+    pub close_search_files: Option<ReconId>,
 }
 ```
 
@@ -1238,17 +1255,21 @@ bundle from `retain_nodes` on the next frame.
   that is active it pushes no version and writes no `Bench` row; and a
   double-click made while the dock is swapped out for the placeholder still
   raises the panel once the request is drained against the real dock.
-- **The SIFT Index row**, through the same whole frames: it says `none`, counts
-  a current index's descriptors and reads `stale`; its menu carries the build,
-  the open and the close, and the close reports the node; a right-click on the
-  row's **name** opens that menu and hovering the name raises each of the three
-  hover texts, both aimed at the left end of the row rather than at its centre,
+- **The Search Files rows**, through the same whole frames: the group row and
+  both children are drawn, saying `0 of 2 current` and `none` twice on a node
+  with neither file, `2 of 2 current` with the descriptor and cluster counts
+  once both are built, and `stale` twice once the index is out of date; the
+  SIFT Index row's menu carries the build, the open and the close, and the
+  close reports the node; the Cluster Patches row's `Open...` and the group
+  row's build and close are there too; a right-click on the SIFT Index row's
+  **name** opens its menu and hovering the name raises each of the three hover
+  texts, both aimed at the left end of the row rather than at its centre,
   which is where a label that sensed its own clicks would swallow them; the
   reconstruction row's menu carries the build **above**
   `Convert to Embedded Patches`, asserted on where the two entries were drawn;
   and an unsaved node's build entry is dead under the *Save ‹label› first*
-  sentence. What the states themselves mean is tested in
-  [sift-index.md](sift-index.md)'s own module.
+  sentence. What the states themselves mean is tested in the modules of
+  [search-files.md](search-files.md) and [sift-index.md](sift-index.md).
 - **The reconstruction row's `Bundle Adjust...`**, through the same whole
   frames: live on an adjustable node, drawn **above**
   `Retriangulate All Points`, and reporting the node the menu was opened on

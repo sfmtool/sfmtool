@@ -108,7 +108,7 @@ pub struct TrackEditResponse {
     pub split: Option<Vec<usize>>,
     pub duplicate: bool,
     pub commit: bool,
-    pub build_sift_index: bool,             // a row's Build/Rebuild SIFT Index to Search
+    pub build_search_files: bool,           // a row's Build/Rebuild Search Files
     pub search_descriptors: Option<usize>,  // Find matches by SIFT query
     pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
     pub set_verdict: Option<(usize, Verdict)>,
@@ -733,8 +733,8 @@ has measured.
   "Searching the descriptor index") and adds what it finds as candidates with
   `search (N)` in *From*; it is a row gesture because what a search searches
   from is one sighting's patch. With no index beside the node, or a stale one,
-  the entry is the remedy instead, *Build SIFT Index to Search* or *Rebuild SIFT
-  Index to Search*, which starts the build and runs no search
+  the entry is the remedy instead, *Build Search Files* or *Rebuild Search
+  Files*, which starts the build of the node's search files and runs no search
   ([`sift-index.md`](sift-index.md) § "The search entry"). At the track stage
   the menu also carries *Find matches by geometry*, which projects the patch into
   every camera and appends each newly admitted image as an untouched `candidate`

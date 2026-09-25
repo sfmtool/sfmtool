@@ -15,7 +15,7 @@ runs at a time. The eleven operations are `Open`, which reads files and makes
 them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
 `Convert to embedded patches`, `Retriangulate all points` and `Prune covered
 observations`; and the six the bench runs, `Evaluate track`, `Fit track`, `Set
-track stage`, `Search descriptors`, `Geometry search` and `Build SIFT index`
+track stage`, `Search descriptors`, `Geometry search` and `Build search files`
 ([bench.md](bench.md)). Every one of them is **cancellable**. The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it fuses, and a
@@ -28,9 +28,11 @@ candidates it found; the geometry search polls around reference construction,
 between scored views, and between appended candidates. The adjustment polls
 between its rounds and its iterations, the
 conversion between its three stages and the images of its `.sift` read, the
-retriangulation between its own three, and the index build between the images it
-reads, as each leaf of the forest is placed, and between batches of the blocks
-it writes ([sift-index.md](sift-index.md)).
+retriangulation between its own three, and the search-files build, in its index
+half, between the images it reads, as each leaf of the forest is placed, and
+between batches of the blocks it writes, and in its cluster-patches half in
+front of every query of the self-join, between the photographs it decodes and
+between batches of the clusters it refines ([search-files.md](search-files.md)).
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.
@@ -516,8 +518,8 @@ pub(crate) enum Report {
 /// knows it was cancelled: the kernel is what met the flag and said so, and
 /// deciding at poll time from the flag alone races a solve that finished on its
 /// own between the last poll and the cancel. What it produced is one variant
-/// per kind of answer: a whole reconstruction, one item of the bench, or a
-/// SIFT index that is no version at all.
+/// per kind of answer: a whole reconstruction, one item of the bench, or
+/// search files that are no version at all.
 pub(crate) enum Finished {
     Produced {
         /// The next value, and the map from the input's rows to its own.
@@ -538,13 +540,16 @@ pub(crate) enum Finished {
         version_label: String,
         text: String,
     },
-    /// A SIFT index built and reopened. Not a version: the index is a
-    /// file beside the node's `.sfmr` and a handle on it, so the handle is
-    /// installed, a row is written, and Undo has nothing to take back.
-    SiftIndex {
-        path: PathBuf,
-        forest: Arc<LazyKdForestU8>,
-        text: String,
+    /// A node's search files built. Not a version: the files sit beside the
+    /// node's `.sfmr`, so what was written is opened, a row is written, and
+    /// Undo has nothing to take back. It carries its own three endings,
+    /// because a build that wrote its index and then stopped or failed in the
+    /// cluster patches still hands the index back to be opened
+    /// ([search-files.md](search-files.md)).
+    SearchFiles {
+        index: Option<(PathBuf, Arc<LazyKdForestU8>)>,
+        cluster_patches: Option<PathBuf>,
+        end: SearchFilesEnd, // Built(text), Cancelled, Failed(message)
     },
     /// The files an open read, each with what it filled in for display or
     /// the sentence saying why it could not be read. Appended in order.
@@ -766,8 +771,9 @@ Panel, through `test_support::run_frame_headless`:
   adjustment over the resection node, the conversion over a `sift_files` node
   with a `.sift` companion per image, the bench steps including geometry search
   over a node with a point on its bench and a photograph per image, the
-  descriptor search over a workspace with `.sift` files and a built `.kdf`. What
-  is held to the claim is the kernel rather than a stand-in for it.
+  descriptor search over a workspace with `.sift` files and a built `.kdf`, and
+  the search-files build over the same workspace with a photograph per image.
+  What is held to the claim is the kernel rather than a stand-in for it.
 
 `crates/sfm-explorer/src/state/open/tests.rs`, the open over real files:
 
