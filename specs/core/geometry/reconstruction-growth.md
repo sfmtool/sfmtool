@@ -15,6 +15,14 @@ posed.
 `resect_images_batch` is the standalone registration primitive: pose-only
 resection of many images against fixed structure, each image independent
 (no adjustment, no cross-image coupling), parallelized across images.
+The held-out resection behind the viewer's *Resect Image*
+(`geometry::resect_images`, [../../gui/edits/resect-image.md](../../gui/edits/resect-image.md))
+is one of its callers. Its correspondence source is the reconstruction's tracks,
+or the tracks plus the clusters of a cluster-patches `.matches` file
+(`ResectSource::Tracks` / `ResectSource::TracksAndClusters`). It hands this
+primitive both sets as cluster ids: a track's is its point index, scored against
+the point's held-out position, and a cluster's is an id past the point indexes,
+scored against the position its non-target kept members triangulate to.
 
 ## Inputs
 

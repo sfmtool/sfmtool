@@ -248,8 +248,9 @@ same thing.
 **The third row is a reservation.** The flow this viewer is built toward is:
 open a reconstruction, load a folder of *further* images that are not in it,
 browse them, and resect the good ones in — and the machinery is half there
-already, since `Resect Image from Matches…` estimates a pose against a match
-graph read from outside the reconstruction. Once loose images are loadable, two
+already, since `Resect Image` estimates a pose against the clusters of a
+cluster-patches file, which reach keypoints the reconstruction never assigned
+to the image. Once loose images are loadable, two
 kinds of picture live in the same panel at the same time, and each needs its own
 word.
 
@@ -2086,8 +2087,6 @@ The two bulk edits.
 ```jsonc
 // resect_camera_image { "reconstruction_label": "seoul_bull",
 //                                "camera_image": "images/IMG_0042.jpg" }
-// resect_camera_image { "reconstruction_label": "seoul_bull",
-//                                "camera_image": 3, "from_matches": true }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "release_focal": true }
 ```
 
@@ -2097,13 +2096,16 @@ not move, so image indexes and the selections keyed by them still mean what they
 meant; the points the image observes are re-triangulated, so point indexes do
 not. A refused *estimate* pushes no version.
 
-**`from_matches` takes the file the viewer already has.** The correspondence
-source is either the reconstruction's own observations (the default) or a
-`.matches` file, and the file is the one chosen for this node in the Scene panel.
-With none chosen the state refuses, *"…refused: no .matches file chosen"*, and
-this surface does not open a file chooser to fix it, for the reason
-`save_reconstruction` does not: a modal dialog stops the GUI thread and every
-queued call times out behind it.
+**It reads the node's cluster-patches file.** The correspondences are the
+reconstruction's tracks and the clusters of the node's current cluster-patches
+index file ([index-files.md](index-files.md)), as they are for the image menu's
+`Resect Image`, and the tool is that entry's step. With the file missing or
+stale the state refuses in the greyed entry's own words -- *"…refused: Resect
+Image reads this reconstruction's cluster patches file, and none is open. Build
+Index Files (the Index Files row in the Scene tree) makes it."* -- and
+`build_index_files` is the call that makes it. The image menu itself is not on
+the wire: its three entries are the tools `resect_camera_image`,
+`move_camera_image` and `delete_camera_image`.
 
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the one decision the
@@ -2849,8 +2851,7 @@ pub(crate) enum Command {
     /// carries: a rotation quaternion and a camera centre.
     MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
-    ResectCameraImage { reconstruction_label: String,
-                               camera_image: CameraImageSel, from_matches: bool },
+    ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
     BundleAdjust { reconstruction_label: String, release_focal: bool },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
@@ -3328,9 +3329,9 @@ where a test hands no host over.
   on the same node commits the lock too, its sentence recorded before the one
   that displaced it.
 - **A refused edit pushes no version and is logged once**: an out-of-range
-  camera image leaves one failed row, and a `from_matches` resection with no
-  file chosen leaves one failed row that is the **state's** sentence rather than
-  the drain's `{tool} failed: …` wrapper.
+  camera image leaves one failed row, and a resection of a node with no
+  cluster-patches file leaves one failed row that is the **state's** sentence
+  rather than the drain's `{tool} failed: …` wrapper.
 - **The cursor moves answer with the version now showing**, undo then redo then
   a jump by serial, with no `report` on any of them; the ends refuse in the
   state's words (*"Nothing to undo in `run_a`."*), and a serial the node never
@@ -3603,8 +3604,7 @@ Other candidates, in rough order of value:
 - **No headless mode.** The window is the point. An MCP server with no window
   behind it would be a worse `sfm inspect`.
 - **No dialogs on an agent's behalf.** `save_reconstruction` takes a path and
-  `resect_camera_image` takes the `.matches` file the viewer already
-  has; neither opens a chooser when it has none. A modal `rfd` dialog stops the
+  opens no chooser when it has none. A modal `rfd` dialog stops the
   GUI thread pumping, so every queued tool call would time out behind a window
   only the human can answer.
 - **No persistence of what an agent *set*.** The endpoint is not remembered
@@ -3641,7 +3641,7 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
-| `resect_camera_image` `from_matches` | `false`, the reconstruction's own observations | The other source is the `.matches` file already chosen for the node in the viewer. |
+
 | `bundle_adjust` `release_focal` | `false`, the shared focal is held | The one decision the Bundle Adjust dialog collects. |
 
 ## Open questions

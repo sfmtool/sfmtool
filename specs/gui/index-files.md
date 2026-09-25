@@ -34,7 +34,7 @@ match its images to a reconstruction's by name
 
 ## What reads them
 
-Two steps read the files, and each reads a file **only while it is
+Three steps read the files, and each reads a file **only while it is
 `current`**; a file in either other state is treated as absent.
 
 - **The descriptor search** (`search_bench_track_descriptors`, Track View's
@@ -51,6 +51,15 @@ Two steps read the files, and each reads a file **only while it is
   *Build Index Files*. The contents are read on the worker, the clusters out of
   the `.matches` and the keypoints out of the `.sift` files; what the node holds
   open is the forest handle and the file's facts, as below.
+- **Resect Image** (the image menu's entry, and `resect_camera_image` on the
+  wire) reads the cluster patches, whose clusters it uses beside the tracks as
+  correspondences, each cluster as a track of its own
+  ([edits/resect-image.md](edits/resect-image.md)). It **needs** the file: when
+  the file is `none` or `stale`, the entry is greyed and the step refused with
+  one sentence that names the state (and a stale file's reason) and ends with
+  *Build Index Files* / *Rebuild Index Files*, or with *save first* on a node
+  with no path. It reads the whole `.matches` on every run, on the GUI thread,
+  as the step itself runs there. The SIFT index is not read.
 
 ## none, current, stale
 

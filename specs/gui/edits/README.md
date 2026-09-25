@@ -21,7 +21,7 @@ invocation, the version's label and the history entry.
 | [bake-transform.md](bake-transform.md) | Write a reconstruction's display transform into its points, poses and bench, from the reconstruction row's context menu, and return it to its own frame as one version, the picture holding still. |
 | [commit-track.md](commit-track.md) | Write the active bench track into the reconstruction: the one step of the bench that touches the file, replacing the point it came from or creating one, with the bench and the value stated in one version. |
 | [prune-covered-observations.md](prune-covered-observations.md) | Retire every observation a finer tracked one covers in the same photograph, and drop the points left with too few, from the reconstruction row's context menu, with nothing re-solved. |
-| [resect-image.md](resect-image.md) | Re-estimate one image's pose against structure held out from it, from the image row's context menu, and keep the answer as the node's next version. |
+| [resect-image.md](resect-image.md) | Re-estimate one image's pose against structure held out from it, from the tracks and the clusters of the node's cluster-patches file, from the image menu, and keep the answer as the node's next version. |
 | [retriangulate-point.md](retriangulate-point.md) | Re-solve structure at the poses and the lens the value already holds: one point from its context menu in the 3D viewport, or every point from the reconstruction row's, as the node's next version. |
 
 The two edits that predate this directory are specced with the document model

@@ -429,21 +429,44 @@ fixed-height for virtualization.
 - Hover: sets `hovered_image` (participates in cross-panel hover exactly like
   a browser thumbnail; the row highlights when the same image is hovered
   elsewhere, e.g. from the 3D viewport pick).
-- Context menu: `Resect Image` and `Resect Image from Matches…`, which
-  re-estimate this one image's pose against the rest of its reconstruction and
-  keep the answer as a version of it -- see
-  [edits/resect-image.md](edits/resect-image.md), which owns both; `Move Camera`, which
-  looks through this image and hands its camera to the reviewer, so that every
-  navigation input moves it -- see
-  [edits/move-camera.md](edits/move-camera.md), which owns that one; and
-  `Delete Image`, which removes this image from the reconstruction as one
-  version of it -- see [edit-history.md](edit-history.md), which owns that one.
-  `Move Camera` sits between the estimators and the deletion because it is the
-  third answer to "this pose is wrong": re-estimate it from correspondences,
-  place it by hand, or take the image out.
+- Context menu: the **image menu** (below), the one menu an image has, which a
+  thumbnail of the Image Browser strip opens too. A right click opens it and
+  selects nothing.
 - Selected row: highlight + auto-scroll into view when the selection changes
   from another panel (scroll-to happens only on selection *change*, so the
   user's manual scrolling isn't fought).
+
+**Image menu** — the context menu of one image, shown in two places: a camera
+image row here and a thumbnail of the Image Browser strip
+([multi-panel-image-browser.md](multi-panel-image-browser.md)). The two are one
+menu: both call `image_menu::show` in
+[image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs), which lays out the
+entries and gives back the one chosen, so the entries, their order, their greyed
+states and their hover reasons cannot differ between the places; and the dock
+carries the chosen entry out through one function
+(`TabContext::apply_image_menu_action` in
+[dock.rs](../../crates/sfm-explorer/src/dock.rs)) whichever place it came from.
+What a place adds is only where it records the entries' rects. The entries, in
+order:
+
+1. `Resect Image` re-estimates this one image's pose against the rest of its
+   reconstruction, from the tracks and the clusters of the node's
+   cluster-patches file, and keeps the answer as a version of it -- see
+   [edits/resect-image.md](edits/resect-image.md), which owns it. Greyed, with
+   the reason as its hover text, for an unposed image, a node with fewer than
+   three other posed images, or a node whose cluster-patches file is missing or
+   stale; that last reason offers `Build Index Files`.
+2. `Move Camera` looks through this image and hands its camera to the
+   reviewer, so that every navigation input moves it -- see
+   [edits/move-camera.md](edits/move-camera.md), which owns it.
+3. `Delete Image` removes this image from the reconstruction as one version of
+   it -- see [edit-history.md](edit-history.md), which owns it.
+
+`Move Camera` sits between the estimator and the deletion because it is the
+third answer to "this pose is wrong": re-estimate it from correspondences, place
+it by hand, or take the image out. The menu's view of a node (which images are
+posed, how many, and why the cluster-patches file will not do) is
+`AppState::image_menu`, read once per node and frame before either place draws.
 
 **Points group row** — `[▸] [👁] Points (1,204,551 · 12 at ∞)`
 - Eye drives `show_points`; an inline `∞` mini-toggle drives
@@ -524,9 +547,8 @@ carries `Build Index Files` (reading `Rebuild Index Files` when either file
 is open) and `Close Index Files`; each child carries the same two with an
 `Open...` for its own kind of file between them. Each entry is greyed with its
 own sentence while the node is busy. `Open...` reports the gesture and nothing
-else, and `dock.rs` puts up the file chooser, as it does for the resection's
-`.matches` file: that is what keeps the panel a pure egui function a headless
-frame can run. The rows and everything behind them are
+else, and `dock.rs` puts up the file chooser: that is what keeps the panel a
+pure egui function a headless frame can run. The rows and everything behind them are
 [index-files.md](index-files.md) and [sift-index.md](sift-index.md).
 
 ### Panel plumbing
@@ -1184,7 +1206,7 @@ when more than one is contributing:
 |-------|--------|
 | **3D Viewer** | Renders all visible nodes (per-recon draws). Camera view mode stores an `ImageRef`; `,` / `.` step within that recon's images, `[` / `]` step across reconstructions with same-named-image carry-over. Hover text gains the recon label. |
 | **Scene Graph** | New (this spec). |
-| **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. |
+| **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. A thumbnail's right click opens the image menu for that image of the selected reconstruction. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
 | **Track View** | Selection-driven via `PointRef` in view mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
@@ -1246,6 +1268,15 @@ bundle from `retain_nodes` on the next frame.
   selection auto-scroll, eye and interaction-cursor toggles,
   selected-reconstruction marking, `Align to` menu gating (point mode
   disabled without feature indexes).
+- **The image menu**, through the same whole frames: `Resect Image` sits on
+  image rows and not on the reconstruction row, reports the image it was chosen
+  on, and is greyed -- with the refusal as its hover text -- for an unposed
+  image, too few posed images, and a missing or stale cluster-patches file,
+  while live on an embedded-patches node with a current file. The same menu
+  opened on an Image Browser thumbnail lays out the same entries in the same
+  order, an entry chosen there reports the action the tree reports, its greyed
+  `Resect Image` hovers the tree's reason, a right click on a thumbnail selects
+  nothing, and one off the thumbnails opens no menu (`image_menu/tests.rs`).
 - **The Bench rows**, through the same whole frames: a click on a row of a
   node that is not selected reports `select_recon` for it, no `edit_bench_item`
   and nothing to `take_bench_edit`, and pushes no version; a double-click on a

@@ -378,6 +378,28 @@ so that the image at the center of the viewport stays anchored in place.
 - When `selected_image` changes externally (e.g., frustum click in 3D viewer), the
   browser auto-scrolls to keep the selected thumbnail visible.
 
+**Context menu**: a right click on a thumbnail opens the **image menu** for that
+image, the same menu a camera image row of the Scene tree opens
+([scene-graph.md](scene-graph.md) § "Image menu", which owns its entries). The
+two are one menu: the strip and the tree both call `image_menu::show` in
+[image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs), which lays out the
+entries (`Resect Image`, `Move Camera`, `Delete Image`) with their greyed states
+and hover reasons and gives back the one chosen, and the dock carries it out
+through the same function whichever place it came from.
+
+- The thumbnail stands for that image of the node the strip is showing, which is
+  the **selected** reconstruction. With several reconstructions loaded, the
+  menu acts on the selected one, the one the strip's header names; choosing
+  another reconstruction switches the strip and with it the node a thumbnail's
+  menu acts on.
+- A right click selects nothing, as on a tree row: it opens the menu on the
+  thumbnail under the pointer and leaves `selected_image` alone. A right click
+  on the minibar or between thumbnails opens no menu.
+- The strip draws its thumbnails with one painter and hit-tests them itself, so
+  the menu hangs off the strip's own response and remembers which thumbnail it
+  was opened on (`context_menu::on_secondary_click_where` opens it only over a
+  thumbnail).
+
 **Thumbnail loading**: every panel that draws a thumbnail reads the node's display
 column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs),
 `SceneNode::display_thumbnails`), which comes from one of two sources:

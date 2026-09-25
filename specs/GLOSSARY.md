@@ -80,6 +80,17 @@ The files the viewer builds and opens beside a node's `.sfmr`, in
 | **index files** | the two files the viewer builds beside a reconstruction's `.sfmr` to index its capture for bench search: its SIFT index, `<stem>-sift-index.kdf`, and its cluster patches, `<stem>-cluster-patches.matches`. Built together by one operation, *Build Index Files* / *Rebuild Index Files* (`Build index files` in the Background panel), shown under one Scene tree group row *Index Files* with *Close Index Files* in its menus, and on the wire `build_index_files`, `open_index_files`, `close_index_files` and the `index_files` block. The two files keep their own names, *SIFT Index* and *Cluster Patches* | `search files`, *SIFT index* for the pair, `match files`, `sidecar files` | the name the user settled on for the pair: both files exist to index the capture so a bench search can find what it looks for, and the name says that. *SIFT index* names the `.kdf` alone (entry below), so keeping it for the operation would describe half of what it writes. `.matches` files are what `sfm match` writes into `matches/`, so *match files* would point at those. *Sidecar* says where a file sits and not what it is for |
 | **cluster patches** (the file) | a node's `<stem>-cluster-patches.matches`: the SIFT index's features clustered as `sfm match --cluster` clusters them and refined as `sfm cluster-patches` refines them, with both the clusters and the cluster-patches sections. Scene tree row *Cluster Patches*, wire key `cluster_patches` | `clusters file`, `patch file` | a `.matches` with a clusters section and no refinement is a clusters file, and such a file reads stale here. *Patch file* would suggest the `.sfmr`'s own patches |
 
+## Images and their resection
+
+The menu an image carries in the viewer, and the correspondence sources of
+*Resect Image*, in `crates/sfm-explorer/`, `sfmtool-core`'s `resect_images`, the
+viewer specs and the bindings.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **image menu** | the context menu of one image of a reconstruction (*Resect Image*, *Move Camera*, *Delete Image*), shown on a Scene tree camera image row and on an Image Browser thumbnail; one function lays it out for both, `image_menu::show`, and its entries are `ImageMenuAction` | `image row menu`, `thumbnail menu`, `image context menu` | a name for the place would make two menus of one. It is named for what it is about, an image, which is the same in both places |
+| **tracks** / **clusters** (as resection sources) | the two sets of correspondences a resection is fit to: the reconstruction's own tracks, joined to their points' held-out positions, and the clusters of a cluster-patches file, each used as a track of its own and placed by triangulating its kept non-target members. `ResectSource::Tracks` and `ResectSource::TracksAndClusters`; report fields `track_*` and `cluster_*`; provenance `tracks` and `tracks_and_clusters` | `observations`, `stored observations`, `matches` | `observations` names only the target's half of a track and read as the whole source once clusters, which have observations too, stood beside it. `matches` named a join through a `.matches` match graph by feature index that no longer exists; the clusters are never joined to the tracks, so a name that suggests matching them would describe the wrong mechanism |
+
 ## The scene's frame
 
 The vocabulary of a node's similarity transform in `crates/sfm-explorer/`, the
