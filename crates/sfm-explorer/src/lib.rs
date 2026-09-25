@@ -21,6 +21,7 @@ mod bundle_adjust_prompt;
 mod camera_lock;
 mod cli;
 mod close_prompt;
+mod cluster_patches;
 mod colormap;
 mod context_menu;
 mod display_thumbnails;
@@ -45,6 +46,7 @@ mod save_minimal_prompt;
 mod scene;
 mod scene_graph;
 mod scene_renderer;
+mod search_files;
 mod sift_index;
 mod state;
 #[cfg(test)]

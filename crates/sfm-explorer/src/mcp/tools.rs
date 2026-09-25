@@ -518,15 +518,15 @@ pub(crate) fn parse(
             track: args.optional_string("track")?,
             observation: args.required_usize("observation")?,
         },
-        "open_sift_index" => Command::OpenSiftIndex {
+        "open_search_files" => Command::OpenSearchFiles {
             reconstruction_label: args.required_string("reconstruction_label")?,
-            path: args.optional_string("path")?,
+            sift_index_path: args.optional_string("sift_index_path")?,
+            cluster_patches_path: args.optional_string("cluster_patches_path")?,
         },
-        "build_sift_index" => Command::BuildSiftIndex {
+        "build_search_files" => Command::BuildSearchFiles {
             reconstruction_label: args.required_string("reconstruction_label")?,
-            path: args.optional_string("path")?,
         },
-        "close_sift_index" => Command::CloseSiftIndex {
+        "close_search_files" => Command::CloseSearchFiles {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
         "get_background_task" => Command::GetBackgroundTask,

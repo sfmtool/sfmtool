@@ -550,14 +550,15 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
-        // The index build, over the same workspace fixture: it reads every
-        // `.sift` file of the node and writes a `.kdf` beside its `.sfmr`.
-        "Build SIFT index" => {
+        // The search-files build, over the same workspace fixture: it reads
+        // every `.sift` file and photograph of the node and writes a `.kdf`
+        // and a `.matches` beside its `.sfmr`.
+        "Build search files" => {
             let workspace = tempfile::tempdir().expect("a temporary directory");
             let (state, id) = crate::sift_index::tests::state_in(workspace.path());
             crate::sift_index::tests::with_sift_files(&state, id, [900.0, 500.0]);
             let job = state
-                .build_sift_index_job(id, None)
+                .build_search_files_job(id)
                 .expect("the fixture is a saved node with .sift files");
             RealTask {
                 state,

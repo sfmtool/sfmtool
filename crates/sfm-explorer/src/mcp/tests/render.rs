@@ -1066,16 +1066,17 @@ fn a_move_across_a_deleted_camera_image_follows_it_by_name() {
     assert_eq!(after, Value::Null, "{after}");
 }
 
-// ── The SIFT index and the search through it ────────────────────────────
+// ── The search files and the search through them ────────────────────────
 
-/// `get_bench` reports the index a search would query, the two index tools give
-/// a node one, and the search itself is a background task an agent polls for.
+/// `get_bench` reports the search files a search would read, the search-files
+/// tools give a node them, and the search itself is a background task an agent
+/// polls for.
 ///
 /// Over the workspace fixture rather than [`benchable`]: a search needs real
 /// `.sift` files and a real `.kdf`, which is what
 /// [`crate::sift_index::tests::searchable`] builds.
 #[test]
-fn the_sift_index_and_the_search_are_on_the_wire() {
+fn the_search_files_and_the_search_are_on_the_wire() {
     use crate::sift_index::tests as fixture;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1090,7 +1091,7 @@ fn the_sift_index_and_the_search_are_on_the_wire() {
         "get_bench",
         json!({ "reconstruction_label": label }),
     );
-    let index = &bench["sift_index"];
+    let index = &bench["search_files"]["sift_index"];
     assert_eq!(index["state"], json!("current"), "{bench}");
     assert!(
         index["path"]
@@ -1102,6 +1103,26 @@ fn the_sift_index_and_the_search_are_on_the_wire() {
     assert!(
         index["descriptors"].as_u64().expect("a count") > 0,
         "{bench}"
+    );
+    let patches = &bench["search_files"]["cluster_patches"];
+    assert_eq!(patches["state"], json!("current"), "{bench}");
+    assert!(
+        patches["path"]
+            .as_str()
+            .expect("a path")
+            .ends_with("demo-cluster-patches.matches"),
+        "{bench}"
+    );
+    assert!(
+        patches["clusters"].as_u64().expect("a count") > 0,
+        "{bench}"
+    );
+    assert_eq!(patches["stale_reason"], Value::Null, "{bench}");
+    // The scene description carries the same object.
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(
+        scene["scene"][0]["search_files"], bench["search_files"],
+        "{scene}"
     );
 
     let searched = worked(
@@ -1139,20 +1160,132 @@ fn the_sift_index_and_the_search_are_on_the_wire() {
     assert!(added["provenance"]["inliers"].is_number(), "{track}");
 
     // Opening the same file again by path is the same index, and pushes no
-    // version: an index is a file beside the workspace, not a value.
+    // version: the search files sit beside the workspace, they are not a value.
     let path = index["path"].as_str().expect("a path").to_string();
     let before = state.node(id).expect("loaded").history.versions().len();
     let opened = call(
         &mut state,
         &mut viewer,
-        "open_sift_index",
-        json!({ "reconstruction_label": label, "path": path }),
+        "open_search_files",
+        json!({ "reconstruction_label": label, "sift_index_path": path }),
     );
-    assert_eq!(opened["sift_index"]["state"], json!("current"), "{opened}");
+    let files = &opened["search_files"];
+    assert_eq!(files["sift_index"]["state"], json!("current"), "{opened}");
+    assert_eq!(
+        files["cluster_patches"]["state"],
+        json!("current"),
+        "{opened}"
+    );
     assert_eq!(
         state.node(id).expect("loaded").history.versions().len(),
         before,
-        "an index is not a version"
+        "the search files are not a version"
+    );
+
+    // Closing lets go of both, and a second close is refused.
+    let closed = call(
+        &mut state,
+        &mut viewer,
+        "close_search_files",
+        json!({ "reconstruction_label": label }),
+    );
+    let files = &closed["search_files"];
+    assert_eq!(files["sift_index"]["state"], json!("none"), "{closed}");
+    assert_eq!(files["cluster_patches"]["state"], json!("none"), "{closed}");
+    let command = tools::parse(
+        "close_search_files",
+        Some(
+            &json!({ "reconstruction_label": label })
+                .as_object()
+                .cloned()
+                .expect("an object"),
+        ),
+    )
+    .expect("a valid call");
+    let error = refused(&mut state, &mut viewer, command);
+    assert!(
+        error.to_string().contains("No search file is open"),
+        "{error}"
+    );
+
+    // Opening with no paths opens the node's own files again.
+    let reopened = call(
+        &mut state,
+        &mut viewer,
+        "open_search_files",
+        json!({ "reconstruction_label": label }),
+    );
+    let files = &reopened["search_files"];
+    assert_eq!(files["sift_index"]["state"], json!("current"), "{reopened}");
+    assert_eq!(
+        files["cluster_patches"]["state"],
+        json!("current"),
+        "{reopened}"
+    );
+}
+
+/// `build_search_files` over the wire: a node with an index and no cluster
+/// patches gets its cluster patches from the index that is open, and the reply
+/// is the handle an agent polls; once it lands both files read current.
+#[test]
+fn build_search_files_makes_the_missing_cluster_patches_on_the_wire() {
+    use crate::sift_index::tests as fixture;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, _) = fixture::searchable(dir.path());
+    let label = state.node(id).expect("loaded").label.clone();
+    let patches = state
+        .cluster_patches(id)
+        .expect("the fixture built them")
+        .path
+        .clone();
+    let index_before = std::fs::read(fixture::index_of(dir.path())).expect("built");
+    std::fs::remove_file(&patches).unwrap();
+    state.close_search_files(id).expect("both are open");
+    state
+        .open_search_files(id, None, None)
+        .expect("the index is still there");
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": label }),
+    );
+    assert_eq!(
+        bench["search_files"]["cluster_patches"]["state"],
+        json!("none"),
+        "{bench}"
+    );
+
+    worked(
+        &mut state,
+        &mut viewer,
+        "build_search_files",
+        json!({ "reconstruction_label": label }),
+    );
+    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(task["operation"], json!("Build search files"), "{task}");
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": label }),
+    );
+    let files = &bench["search_files"];
+    assert_eq!(files["sift_index"]["state"], json!("current"), "{bench}");
+    assert_eq!(
+        files["cluster_patches"]["state"],
+        json!("current"),
+        "{bench}"
+    );
+    assert!(patches.is_file(), "the build wrote the cluster patches");
+    assert_eq!(
+        std::fs::read(fixture::index_of(dir.path())).expect("still there"),
+        index_before,
+        "a current index was rebuilt when only the cluster patches were missing"
     );
 }
 
@@ -1232,7 +1365,11 @@ fn search_bench_track_geometry_needs_no_index_and_reports_as_itself() {
         "get_bench",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert_eq!(bench["sift_index"]["state"], json!("none"), "{bench}");
+    assert_eq!(
+        bench["search_files"]["sift_index"]["state"],
+        json!("none"),
+        "{bench}"
+    );
 
     let versions = version_count(&state);
     let searched = worked(
@@ -1314,15 +1451,25 @@ fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
         "get_bench",
         json!({ "reconstruction_label": label }),
     );
-    assert_eq!(bench["sift_index"]["state"], json!("none"), "{bench}");
+    let files = &bench["search_files"];
+    assert_eq!(files["sift_index"]["state"], json!("none"), "{bench}");
     assert!(
-        bench["sift_index"]["path"]
+        files["sift_index"]["path"]
             .as_str()
             .expect("the default path is named even when nothing is open")
             .ends_with("demo-sift-index.kdf"),
         "{bench}"
     );
-    assert_eq!(bench["sift_index"]["descriptors"], Value::Null);
+    assert_eq!(files["sift_index"]["descriptors"], Value::Null);
+    assert_eq!(files["cluster_patches"]["state"], json!("none"), "{bench}");
+    assert!(
+        files["cluster_patches"]["path"]
+            .as_str()
+            .expect("the default path is named even when nothing is open")
+            .ends_with("demo-cluster-patches.matches"),
+        "{bench}"
+    );
+    assert_eq!(files["cluster_patches"]["clusters"], Value::Null);
 
     let command = tools::parse(
         "search_bench_track_descriptors",
@@ -1343,7 +1490,7 @@ fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
     // And a build over a node whose images have no `.sift` companion is refused
     // the same way, in front of the worker.
     let command = tools::parse(
-        "build_sift_index",
+        "build_search_files",
         Some(
             &json!({ "reconstruction_label": label })
                 .as_object()

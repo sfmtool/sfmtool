@@ -612,10 +612,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           new candidate takes, so it arrives where and at the size the warp says \
                           the patch is — evaluate_bench_track is what then scores it. An image the \
                           track already has an observation in is left alone whatever its verdict, \
-                          and so is the searched image itself. Needs a CURRENT index: \
-                          build_sift_index or open_sift_index first, and get_bench reports the \
-                          state under sift_index. Runs on a worker thread and answers as \
-                          evaluate_bench_track does.",
+                          and so is the searched image itself. Needs a CURRENT SIFT index: \
+                          build_search_files or open_search_files first, and get_bench reports \
+                          its state under search_files.sift_index. Runs on a worker thread and \
+                          answers as evaluate_bench_track does.",
             kind: Write,
             schema: object(
                 &[
@@ -681,66 +681,76 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "open_sift_index",
-            description: "Adopt a .kdf SIFT index for one reconstruction, which is what \
-                          search_bench_track_descriptors queries. Omit path for the node's own, \
-                          which is <stem>-sift-index.kdf beside its .sfmr file. A file that \
-                          opens is adopted whether or not it fits: get_bench reports state \
-                          current when it is over exactly this reconstruction's images, in this \
-                          reconstruction's order, from the .sift files on disk now, and stale \
-                          with a stale_reason otherwise. Only a current index answers a search, \
-                          because a match names a corpus image and the candidate it becomes \
-                          names a reconstruction image. Nothing about the reconstruction or the \
-                          bench moves, so this pushes no version and undo has nothing to take \
-                          back. The viewer opens the node's own index when the file is there; \
-                          this is for one somewhere else.",
+            name: "open_search_files",
+            description: "Open one reconstruction's search files: its SIFT index (.kdf), \
+                          which search_bench_track_descriptors queries, and its cluster patches \
+                          (.matches), the SIFT index's features clustered into tracks and \
+                          refined into patches. Each path omitted is the node's own, \
+                          <stem>-sift-index.kdf or <stem>-cluster-patches.matches beside its \
+                          .sfmr, opened when it is there and reported as state none when it is \
+                          not; a path named has to open or the call is refused. A file that \
+                          opens is adopted whether or not it fits: get_bench reports each \
+                          file's state under search_files, current when it answers for this \
+                          reconstruction as it stands and stale with a stale_reason otherwise. \
+                          The cluster patches are current only when they are over this \
+                          reconstruction's images, in its order, and were made from the SIFT \
+                          index that is open, and that index is current. Only a current index \
+                          answers a search. Nothing about the reconstruction or the bench \
+                          moves, so this pushes no version and undo has nothing to take back. \
+                          The viewer opens the node's own files when they are there; this is \
+                          for files somewhere else, or for asking again about files that \
+                          changed on disk.",
             kind: Write,
             schema: object(
-                &[(
-                    "path",
-                    json!({
-                        "type": "string",
-                        "description":
-                            "The .kdf to open. Omit for the node's own index path, which \
-                             get_bench reports under sift_index.",
-                    }),
-                )],
+                &[
+                    (
+                        "sift_index_path",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The .kdf to open. Omit for the node's own index path, which \
+                                 get_bench reports under search_files.sift_index.",
+                        }),
+                    ),
+                    (
+                        "cluster_patches_path",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The cluster-patches .matches to open. Omit for the node's own, \
+                                 which get_bench reports under search_files.cluster_patches.",
+                        }),
+                    ),
+                ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },
         ToolSpec {
-            name: "build_sift_index",
-            description: "Build a SIFT index over every .sift file of one reconstruction, write \
-                          it beside the node's .sfmr and open it. The corpus carries one \
-                          image-table row per image of the node, in the node's own order, \
-                          including images with no .sift file, which is what lets a search name \
-                          node images directly, and it records each image's .sift content hash \
-                          so a later re-extraction reads as stale. Omit path for \
-                          <stem>-sift-index.kdf beside the .sfmr. Refused when the \
-                          reconstruction has never been saved, and when no .sift file of the \
-                          node can be found. Reading every descriptor of a capture takes a \
-                          while, so it runs on a worker thread and answers as \
-                          evaluate_bench_track does.",
+            name: "build_search_files",
+            description: "Build one reconstruction's search files beside its .sfmr and open \
+                          them: a SIFT index over every .sift file of the node \
+                          (<stem>-sift-index.kdf), then from that index a cluster-patches file \
+                          (<stem>-cluster-patches.matches) holding its features clustered and \
+                          refined into patches, with the defaults of sfm match --cluster and \
+                          sfm cluster-patches. The index carries one image-table row per image \
+                          of the node, in the node's own order, and records each image's .sift \
+                          content hash so a later re-extraction reads as stale; the cluster \
+                          patches record the content hash of the index they were made from. A \
+                          current SIFT index is kept when the cluster patches are the file that \
+                          is missing or out of date; otherwise both are rebuilt, replacing what \
+                          is there. Refused when the reconstruction has never been saved, and \
+                          when no .sift file of the node can be found. It reads every \
+                          descriptor and photograph of the capture, so it runs on a worker \
+                          thread and answers as evaluate_bench_track does.",
             kind: Write,
-            schema: object(
-                &[(
-                    "path",
-                    json!({
-                        "type": "string",
-                        "description":
-                            "Where to write the .kdf, inside the directory holding the .sfmr. \
-                             Omit for the node's own index path, which get_bench reports under \
-                             sift_index. An existing file there is replaced.",
-                    }),
-                )],
-                &[("reconstruction_label", edited_label_schema())],
-            ),
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
-            name: "close_sift_index",
-            description: "Let go of the SIFT index open beside one reconstruction, leaving the \
-                          file where it is. get_bench then reports state none, and a search is \
-                          refused until one is built or opened again. Refused when none is open.",
+            name: "close_search_files",
+            description: "Let go of the search files open beside one reconstruction, leaving \
+                          the files where they are. get_bench then reports both as state none, \
+                          and a search is refused until they are built or opened again. \
+                          Refused when neither is open.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },

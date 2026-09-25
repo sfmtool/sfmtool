@@ -60,7 +60,7 @@ pub(super) fn opened_reply(
         ToolError::new("The open finished, but its reconstruction is no longer loaded.")
     })?;
     let id = node.id;
-    let mut entry = render::reconstruction(node, state.solo, super::bench::sift_index(state, id));
+    let mut entry = render::reconstruction(node, state.solo, super::bench::search_files(state, id));
     entry
         .as_object_mut()
         .expect("a reconstruction entry is an object")
@@ -150,9 +150,9 @@ pub(super) fn set_reconstruction_display(
     };
 
     let solo = state.solo;
-    // Read before the mutable walk below: the entry carries the node's SIFT
-    // index, which lives on `AppState`, and the walk holds the scene.
-    let index = super::bench::sift_index(state, id);
+    // Read before the mutable walk below: the entry carries the node's search
+    // files, which live on `AppState`, and the walk holds the scene.
+    let index = super::bench::search_files(state, id);
     // One entry per field the call *changed*, in the same words the Scene
     // panel's own eyes and tint use: a `set_reconstruction_display` naming four
     // fields is four things to the person watching the window, and the
@@ -249,7 +249,7 @@ pub(super) fn set_solo(state: &mut AppState, label: Option<&str>) -> JsonReply {
             .scene
             .iter()
             .map(|node| {
-                render::reconstruction(node, state.solo, super::bench::sift_index(state, node.id))
+                render::reconstruction(node, state.solo, super::bench::search_files(state, node.id))
             })
             .collect::<Vec<_>>(),
     }))

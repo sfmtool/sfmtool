@@ -20,7 +20,9 @@
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
 //!     👁 Patches                   ← only when the node carries patch data
-//!       SIFT Index  1.2M descriptors   ← current / stale / none
+//!   ▾   Search Files  1 of 2 current
+//!         SIFT Index       1.2M descriptors   ← current / stale / none
+//!         Cluster Patches  none
 //! ```
 //!
 //! Expansion state lives in [`egui::collapsing_header::CollapsingState`] under
@@ -60,6 +62,7 @@ use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Laye
 use crate::align::AlignOptions;
 use crate::resect::ResectFrom;
 use crate::scene::{point_id, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
+use crate::search_files::SearchFileState;
 use crate::state::AppState;
 
 mod cameras;
@@ -67,7 +70,7 @@ mod menus;
 mod widgets;
 
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
-use menus::{node_context_menu, sift_index_menu};
+use menus::{cluster_patches_menu, node_context_menu, search_files_menu, sift_index_menu};
 use widgets::{counts_text, eye_toggle, glyph_toggle, with_thousands};
 
 /// Height of one tree row. Fixed so the image list can be virtualized, and so
@@ -186,17 +189,20 @@ pub struct SceneGraphResponse {
     /// `AppState::start_prune_covered_observations` sends it to a worker after
     /// the frame.
     pub prune_covered_observations: Option<ReconId>,
-    /// `Build SIFT Index` / `Rebuild SIFT Index` chosen, from the SIFT Index
-    /// row's menu or from the reconstruction row's. Reads every `.sift` file of
-    /// the node, so `AppState::start_build_sift_index` sends it to a worker
-    /// after the frame.
-    pub build_sift_index: Option<ReconId>,
-    /// `Open...` chosen on the SIFT Index row, which asks the dock for a file
+    /// `Build Search Files` / `Rebuild Search Files` chosen, from a Search
+    /// Files row's menu or from the reconstruction row's. Reads every `.sift`
+    /// file and photograph of the node, so `AppState::start_build_search_files`
+    /// sends it to a worker after the frame.
+    pub build_search_files: Option<ReconId>,
+    /// `Open...` chosen on the SIFT Index row, which asks the dock for a `.kdf`
     /// chooser. The panel names no path: a chooser is not an egui widget, so it
     /// lives where the other file questions do.
     pub open_sift_index: Option<ReconId>,
-    /// `Close Index` chosen on the SIFT Index row.
-    pub close_sift_index: Option<ReconId>,
+    /// `Open...` chosen on the Cluster Patches row, which asks the dock for a
+    /// `.matches` chooser.
+    pub open_cluster_patches: Option<ReconId>,
+    /// `Close Search Files` chosen on a Search Files row.
+    pub close_search_files: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// A Bench row was double-clicked: make that item the active one, select
@@ -285,20 +291,20 @@ impl SceneGraphPanel {
             .background_task()
             .and_then(|task| task.node)
             .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
-        // The SIFT Index row is truthful on a node whose bench is empty, so the
-        // look that Track View and the bench do happens here too --
-        // once per node per frame, and remembered, so a reconstruction with no
-        // index beside it is not stat-ed again (`specs/gui/sift-index.md`).
+        // The Search Files rows are truthful on a node whose bench is empty, so
+        // the look that Track View and the bench do happens here too -- once
+        // per node per frame, and remembered, so a reconstruction with no files
+        // beside it is not stat-ed again (`specs/gui/search-files.md`).
         let ids: Vec<ReconId> = state.scene.iter().map(|node| node.id).collect();
         for id in ids {
-            state.refresh_sift_index(id);
+            state.refresh_search_files(id);
         }
-        // What each node's row and menu say about its index, read out before
-        // the mutable walk below for the reason `targets` is.
-        let indexes: std::collections::HashMap<ReconId, SiftIndexRow> = state
+        // What each node's rows and menus say about its search files, read out
+        // before the mutable walk below for the reason `targets` is.
+        let search_files: std::collections::HashMap<ReconId, SearchFilesRows> = state
             .scene
             .iter()
-            .map(|node| (node.id, SiftIndexRow::of(state, node.id)))
+            .map(|node| (node.id, SearchFilesRows::of(state, node.id)))
             .collect();
         let targets: Vec<AlignTarget> = state
             .scene
@@ -355,7 +361,7 @@ impl SceneGraphPanel {
             align_options: &mut self.align_options,
             targets: &targets,
             busy,
-            indexes: &indexes,
+            search_files: &search_files,
             log,
         };
 
@@ -438,9 +444,9 @@ struct TreeOutput<'a> {
     /// before the walk, because the walk holds the scene and `AppState` is one
     /// borrow.
     busy: Option<(ReconId, String)>,
-    /// What each node's SIFT Index row says, read out before the walk for the
-    /// same reason.
-    indexes: &'a std::collections::HashMap<ReconId, SiftIndexRow>,
+    /// What each node's Search Files rows say, read out before the walk for
+    /// the same reason.
+    search_files: &'a std::collections::HashMap<ReconId, SearchFilesRows>,
     /// Where the toggles that write straight into a node record what they did.
     log: &'a mut ActionLog,
 }
@@ -542,69 +548,160 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
                 ui.label("Patches");
             });
         }
-        show_sift_index_row(ui, node, out);
+        show_search_files_group(ui, node, out);
     });
 }
 
-/// What one node's SIFT Index row says, taken off `AppState` before the tree
+/// What one node's Search Files rows say, taken off `AppState` before the tree
 /// walk borrows the scene.
 ///
-/// A row rather than a question asked while drawing, because the answer is
-/// derived when a file is opened or built and when a version moves the image
-/// table, never per frame (`specs/gui/sift-index.md`).
-pub(super) struct SiftIndexRow {
-    /// Which of the three states the index is in.
-    state: crate::sift_index::SiftIndexState,
+/// Rows rather than a question asked while drawing, because each file's state
+/// is derived when it is opened or built and when a version moves the image
+/// table, never per frame (`specs/gui/search-files.md`).
+pub(super) struct SearchFilesRows {
+    /// The SIFT index's row.
+    pub(super) index: SearchFileRow,
+    /// The cluster-patches file's row.
+    pub(super) patches: SearchFileRow,
+    /// What the build entry is called: a first build or a rebuild.
+    pub(super) build_label: &'static str,
+    /// Why a build cannot start, or `None` when it can.
+    pub(super) build_refusal: Option<String>,
+    /// Why closing would do nothing, or `None` when there is a file to close.
+    pub(super) close_refusal: Option<String>,
+    /// Whether the build is the operation running right now.
+    pub(super) building: bool,
+}
+
+/// What one of the two file rows says.
+pub(super) struct SearchFileRow {
+    /// What the row is called.
+    name: &'static str,
+    /// What the hover calls the file when there is none.
+    noun: &'static str,
+    /// Which of the three states the file is in.
+    state: SearchFileState,
     /// The file that is open, or where a build would put one. `None` on a node
     /// with no path on disk.
     path: Option<String>,
-    /// How many descriptors and images the open index holds.
-    counts: Option<(usize, usize)>,
+    /// What the status text reads when the file is current: its size in the
+    /// units that say what it holds.
+    current: Option<String>,
+    /// The counts line of the hover, when a file is open.
+    counts: Option<String>,
     /// The sentence naming the first discrepancy, when it is stale.
     stale_reason: Option<String>,
-    /// Why a build cannot start, or `None` when it can.
-    build_refusal: Option<String>,
-    /// Why closing would do nothing, or `None` when there is one to close.
-    close_refusal: Option<String>,
-    /// The sentence a node with nowhere to put an index is told, which is also
-    /// the whole of what its hover can say: there is no path to name.
+    /// The sentence a node with nowhere to put its files is told, which is also
+    /// the whole of what the hover can say: there is no path to name.
     save_first: Option<String>,
-    /// Whether the build is the operation running right now.
-    building: bool,
 }
 
-impl SiftIndexRow {
+impl SearchFilesRows {
     fn of(state: &AppState, id: ReconId) -> Self {
+        let save_first = state.search_files_home_refusal(id);
         let index = state.sift_index(id);
-        Self {
+        let index_row = SearchFileRow {
+            name: "SIFT Index",
+            noun: "SIFT index",
             state: state.sift_index_state(id),
             path: index
-                .map(|index| index.path.display().to_string())
-                .or_else(|| {
-                    state
-                        .sift_index_path(id)
-                        .map(|path| path.display().to_string())
-                }),
-            counts: index.map(|index| (index.feature_count(), index.images)),
+                .map(|index| index.path.clone())
+                .or_else(|| state.sift_index_path(id))
+                .map(|path| path.display().to_string()),
+            current: index
+                .map(|index| format!("{} descriptors", with_thousands(index.feature_count()))),
+            counts: index.map(|index| {
+                format!(
+                    "{} descriptors of {} images",
+                    with_thousands(index.feature_count()),
+                    with_thousands(index.images)
+                )
+            }),
             stale_reason: index.and_then(|index| index.stale_reason().map(str::to_string)),
-            build_refusal: state.build_sift_index_refusal(id),
-            close_refusal: index
-                .is_none()
-                .then(|| "No SIFT index is open beside this reconstruction.".to_string()),
-            save_first: state.sift_index_home_refusal(id),
-            building: state.building_sift_index(id),
+            save_first: save_first.clone(),
+        };
+        let patches = state.cluster_patches(id);
+        let patches_row = SearchFileRow {
+            name: "Cluster Patches",
+            noun: "cluster-patches",
+            state: state.cluster_patches_state(id),
+            path: patches
+                .map(|file| file.path.clone())
+                .or_else(|| state.cluster_patches_path(id))
+                .map(|path| path.display().to_string()),
+            current: patches.map(|file| format!("{} clusters", with_thousands(file.clusters))),
+            counts: patches.map(|file| {
+                format!(
+                    "{} clusters of {} members over {} images",
+                    with_thousands(file.clusters),
+                    with_thousands(file.members),
+                    with_thousands(file.images)
+                )
+            }),
+            stale_reason: patches.and_then(|file| file.stale_reason().map(str::to_string)),
+            save_first,
+        };
+        let open = index.is_some() || patches.is_some();
+        Self {
+            index: index_row,
+            patches: patches_row,
+            build_label: state.search_files_build_label(id),
+            build_refusal: state.build_search_files_refusal(id),
+            close_refusal: (!open)
+                .then(|| "No search file is open beside this reconstruction.".to_string()),
+            building: state.building_search_files(id),
         }
     }
 
-    /// What the row reads to the right of its name.
+    /// What the group row reads to the right of its name: how many of the two
+    /// files are current.
     fn status(&self) -> String {
         if self.building {
             return "building...".to_string();
         }
-        match (self.state, self.counts) {
-            (crate::sift_index::SiftIndexState::Current, Some((descriptors, _))) => {
-                format!("{} descriptors", with_thousands(descriptors))
-            }
+        format!("{} of 2 current", self.current_count())
+    }
+
+    fn current_count(&self) -> usize {
+        [self.index.state, self.patches.state]
+            .iter()
+            .filter(|state| **state == SearchFileState::Current)
+            .count()
+    }
+
+    /// The group row's status is in the warning colour when either file is
+    /// stale, dimmed when neither is there, and plain otherwise.
+    fn state(&self) -> SearchFileState {
+        let states = [self.index.state, self.patches.state];
+        if states.contains(&SearchFileState::Stale) {
+            SearchFileState::Stale
+        } else if states.iter().all(|state| *state == SearchFileState::None) {
+            SearchFileState::None
+        } else {
+            SearchFileState::Current
+        }
+    }
+
+    /// What hovering the group row says: what the two files are for, and each
+    /// one's state.
+    fn hover(&self) -> String {
+        format!(
+            "The files a bench search reads, beside the .sfmr.\nSIFT index: {}\nCluster \
+             patches: {}",
+            self.index.state.name(),
+            self.patches.state.name()
+        )
+    }
+}
+
+impl SearchFileRow {
+    /// What the row reads to the right of its name.
+    fn status(&self, building: bool) -> String {
+        if building {
+            return "building...".to_string();
+        }
+        match (self.state, &self.current) {
+            (SearchFileState::Current, Some(current)) => current.clone(),
             (state, _) => state.name().to_string(),
         }
     }
@@ -612,14 +709,14 @@ impl SiftIndexRow {
     /// The whole of what hovering the row says.
     ///
     /// The path first, because the one question a row of three words cannot
-    /// answer is *which file*. It is the file that is open, or -- when none is
-    /// -- where a build would put one, said in words that do not read as a
-    /// file that is there. A node with nowhere to put one has no path to name
-    /// at all, so it gets the sentence its menu entries are greyed with.
+    /// answer is *which file*. It is the file that is open, or, when none is,
+    /// where a build would put one, said in words that do not read as a file
+    /// that is there. A node with nowhere to put one has no path to name at
+    /// all, so it gets the sentence its menu entries are greyed with.
     fn hover(&self) -> String {
         let mut text = match (&self.path, self.state) {
-            (Some(path), crate::sift_index::SiftIndexState::None) => {
-                format!("No SIFT index file is there.\nA build writes {path}")
+            (Some(path), SearchFileState::None) => {
+                format!("No {} file is there.\nA build writes {path}", self.noun)
             }
             (Some(path), _) => path.clone(),
             (None, _) => self
@@ -627,12 +724,9 @@ impl SiftIndexRow {
                 .clone()
                 .unwrap_or_else(|| "This reconstruction came from no file.".to_string()),
         };
-        if let Some((descriptors, images)) = self.counts {
-            text.push_str(&format!(
-                "\n{} descriptors of {} images",
-                with_thousands(descriptors),
-                with_thousands(images)
-            ));
+        if let Some(counts) = &self.counts {
+            text.push('\n');
+            text.push_str(counts);
         }
         if let Some(why) = &self.stale_reason {
             text.push('\n');
@@ -640,66 +734,105 @@ impl SiftIndexRow {
         }
         text
     }
+}
 
-    /// What the build entry is called: a first one, or one over again.
-    fn build_label(&self) -> &'static str {
-        match self.state {
-            crate::sift_index::SiftIndexState::None => BUILD_SIFT_INDEX,
-            _ => REBUILD_SIFT_INDEX,
-        }
+/// The status text in the colour its state is told apart by: the warning
+/// colour when stale, dimmed when there is nothing, plain when current.
+fn status_text(ui: &egui::Ui, text: String, state: SearchFileState) -> egui::RichText {
+    let status = egui::RichText::new(text).small();
+    match state {
+        SearchFileState::Stale => status.color(ui.visuals().warn_fg_color),
+        SearchFileState::None => status.weak(),
+        SearchFileState::Current => status,
     }
 }
 
-/// What the entry that indexes a node's `.sift` files is called when the node
-/// has no index, in the two menus that offer it and the tests that aim at them.
-pub(crate) const BUILD_SIFT_INDEX: &str = "Build SIFT Index";
-
-/// What the same entry is called when one is already open.
-pub(crate) const REBUILD_SIFT_INDEX: &str = "Rebuild SIFT Index";
-
-/// `SIFT Index   1.2M descriptors` — the forest a bench search queries, as a
-/// row of the node it belongs to.
+/// One row of the Search Files group: its whole width one click target with
+/// the menu `menu` opens, then its name and its status drawn on top.
 ///
-/// Last among the group rows, after Points and after Patches: it is the one
-/// part of a node that is a *file beside it* rather than something the node
-/// holds. No eye and no children — nothing here is drawn in the viewport and
-/// there is nothing under it to list — and clicking it selects nothing. The
-/// three states are told apart by the status text and by its colour, so the row
-/// answers "is there one, and is it still good" without a hover.
-fn show_sift_index_row(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let Some(index) = out.indexes.get(&node.id) else {
+/// The target is claimed before its contents for the reason the
+/// reconstruction row's is: a right-click anywhere along it opens the menu,
+/// and an explicit id keeps the popup's identity off a count of what was
+/// allocated before it. **The texts are drawn non-interactive**
+/// (`selectable(false)`): egui's default gives a bare label
+/// `Sense::click_and_drag()` so its text can be dragged out, and being drawn
+/// after the row it wins every pointer hit that lands on it, which would leave
+/// the name the one part of the row with no menu and no hover.
+fn search_files_row(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    name: &str,
+    status: egui::RichText,
+    hover: String,
+    out: &mut TreeOutput,
+    menu: impl FnOnce(&mut egui::Ui, &mut TreeOutput),
+) {
+    let available = ui.available_rect_before_wrap();
+    let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
+    let row = ui.interact(rect, id, egui::Sense::click());
+    let row = out.hit(id, row).on_hover_text(hover);
+    crate::context_menu::on_secondary_click(&row).show(|ui| menu(ui, out));
+    ui.add(egui::Label::new(name).selectable(false));
+    ui.add(egui::Label::new(status).selectable(false));
+}
+
+/// `Search Files   1 of 2 current`, and under it one row per file: the SIFT
+/// index and the cluster patches a bench search reads, as rows of the node
+/// they belong to.
+///
+/// Last among the group rows, after Points and after Patches: they are the one
+/// part of a node that is *files beside it* rather than something the node
+/// holds. No eye, because nothing here is drawn in the viewport, and clicking
+/// a row selects nothing. Open by default, so the two states read without a
+/// click; the group row's own count says as much when it is folded.
+fn show_search_files_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let Some(rows) = out.search_files.get(&node.id) else {
         return;
     };
     let id = node.id;
-    ui.horizontal(|ui| {
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        row_id(id, "search_files"),
+        true,
+    );
+    let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
-        // The whole row is one target, claimed before its contents for the
-        // reason the reconstruction row's is: a right-click anywhere along it
-        // opens the menu, and an explicit id keeps the popup's identity off a
-        // count of what was allocated before it.
-        let available = ui.available_rect_before_wrap();
-        let rect =
-            egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
-        let row = ui.interact(rect, row_id(id, "sift_index"), egui::Sense::click());
-        let row = out
-            .hit(row_id(id, "sift_index"), row)
-            .on_hover_text(index.hover());
-        crate::context_menu::on_secondary_click(&row)
-            .show(|ui| sift_index_menu(ui, node, index, out));
-        // `selectable(false)` on both texts, for the reason the reconstruction
-        // row's carry it: egui's default `selectable_labels` gives a bare label
-        // `Sense::click_and_drag()` so its text can be dragged out, and being
-        // drawn *after* the row it wins every pointer hit that lands on it --
-        // which left the name the one part of the row with no menu and no
-        // hover.
-        ui.add(egui::Label::new("SIFT Index").selectable(false));
-        let status = egui::RichText::new(index.status()).small();
-        let status = match index.state {
-            crate::sift_index::SiftIndexState::Stale => status.color(ui.visuals().warn_fg_color),
-            crate::sift_index::SiftIndexState::None => status.weak(),
-            crate::sift_index::SiftIndexState::Current => status,
-        };
-        ui.add(egui::Label::new(status).selectable(false));
+        // The blank eye column, allocated as Camera Intrinsics allocates it,
+        // so this label sits on the same x as the group rows that have an eye.
+        ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, ROW_HEIGHT), egui::Sense::hover());
+        let status = status_text(ui, rows.status(), rows.state());
+        search_files_row(
+            ui,
+            row_id(id, "search_files_row"),
+            "Search Files",
+            status,
+            rows.hover(),
+            out,
+            |ui, out| search_files_menu(ui, id, rows, out),
+        );
+    });
+    header.body(|ui| {
+        for (row, key) in [
+            (&rows.index, "sift_index"),
+            (&rows.patches, "cluster_patches"),
+        ] {
+            ui.horizontal(|ui| {
+                ui.set_height(ROW_HEIGHT);
+                let status = status_text(ui, row.status(rows.building), row.state);
+                search_files_row(
+                    ui,
+                    row_id(id, key),
+                    row.name,
+                    status,
+                    row.hover(),
+                    out,
+                    |ui, out| match key {
+                        "sift_index" => sift_index_menu(ui, id, rows, out),
+                        _ => cluster_patches_menu(ui, id, rows, out),
+                    },
+                );
+            });
+        }
     });
 }
 

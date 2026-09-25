@@ -68,10 +68,10 @@ pub struct TrackEditResponse {
     pub duplicate: bool,
     /// *Commit*.
     pub commit: bool,
-    /// A row's *Build SIFT Index to Search* / *Rebuild SIFT Index to Search*:
-    /// the entry a row offers where the search would be when the node's index
-    /// is absent or out of date.
-    pub build_sift_index: bool,
+    /// A row's *Build Search Files* / *Rebuild Search Files*: the entry a row
+    /// offers where the search would be when the node's index is absent or out
+    /// of date.
+    pub build_search_files: bool,
     /// A row's *Find matches by SIFT query*, carrying the observation it was
     /// opened on.
     pub search_descriptors: Option<usize>,
@@ -662,13 +662,6 @@ pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
 /// The track-stage geometry search entry. It is separate from the SIFT label
 /// because it reads poses and photographs, and requires no descriptor index.
 pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
-
-/// What a row's menu calls the entry that builds the node its first SIFT
-/// index, in the menu and in the tests that aim at it.
-pub(crate) const BUILD_INDEX_TO_SEARCH: &str = "Build SIFT Index to Search";
-
-/// What the same entry is called when the node has one and it is out of date.
-pub(crate) const REBUILD_INDEX_TO_SEARCH: &str = "Rebuild SIFT Index to Search";
 
 /// The header: what the active track is, and what the last evaluation of it
 /// made of it.

@@ -4,13 +4,14 @@
 //! The Scene Graph's context menus: everything that opens on a right-click and
 //! closes when it is used.
 //!
-//! Three menus, one per row kind. The reconstruction row's
-//! ([`node_context_menu`]) carries the whole-node actions (select, zoom to fit,
-//! align, reset and bake transform, tint, bundle adjust, retriangulate, prune covered
-//! observations, build the SIFT index, convert to embedded patches, close), the
-//! SIFT Index row's ([`sift_index_menu`]) carries the three ways to give a node
-//! an index or take one away, and the image row's ([`image_context_menu`])
-//! carries the resection, the camera move and the image deletion. They are
+//! One menu per row kind. The reconstruction row's ([`node_context_menu`])
+//! carries the whole-node actions (select, zoom to fit, align, reset and bake
+//! transform, tint, bundle adjust, retriangulate, prune covered observations,
+//! build the search files, convert to embedded patches, close), the three
+//! Search Files rows' ([`search_files_menu`], [`sift_index_menu`],
+//! [`cluster_patches_menu`]) carry the ways to give a node its search files or
+//! let go of them, and the image row's ([`image_context_menu`]) carries the
+//! resection, the camera move and the image deletion. They are
 //! together because a menu is the one place in the panel where an item is
 //! *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
@@ -29,7 +30,7 @@ use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, NodeTint, ReconId, SceneNode, TINT_PALETTE};
 
 use super::cameras::{ResectAvailability, MATCHES_DISABLED_HINT};
-use super::{row_id, AlignTarget, SiftIndexRow, TreeOutput};
+use super::{row_id, AlignTarget, SearchFilesRows, TreeOutput};
 
 /// The reconstruction row's context menu.
 ///
@@ -55,8 +56,10 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     show_prune_covered_entry(ui, node, out);
     // Above the conversion because it is where a person looks first: the
     // reconstruction row is the row they have in hand when they find a search
-    // greyed, and the SIFT Index row below it offers the same entry.
-    show_build_index_entry(ui, node.id, out);
+    // greyed, and the Search Files rows below it offer the same entry.
+    if let Some(rows) = out.search_files.get(&node.id) {
+        show_build_search_files_entry(ui, node.id, rows, out);
+    }
     show_convert_entry(ui, node, out);
     ui.separator();
     if ui.button("Close").clicked() {
@@ -237,67 +240,122 @@ fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput)
     }
 }
 
-/// `Build SIFT Index` / `Rebuild SIFT Index`: every `.sift` file of the node
-/// indexed into a `.kdf` beside its `.sfmr`.
+/// `Build Search Files` / `Rebuild Search Files`: the node's SIFT index and
+/// its cluster patches, built beside its `.sfmr`.
 ///
-/// On both menus that name the index, under one function, so the two cannot
-/// drift apart in what they are called or in when they are live. Greyed rather
-/// than hidden on its own sentence, like every other refusable entry here: an
-/// entry that vanishes reads as one that was never built.
-fn show_build_index_entry(ui: &mut egui::Ui, id: ReconId, out: &mut TreeOutput) {
-    let Some(index) = out.indexes.get(&id) else {
-        return;
-    };
-    let refusal = index.build_refusal.clone();
+/// On every menu that names the search files, under one function, so they
+/// cannot drift apart in what the entry is called or in when it is live.
+/// Greyed rather than hidden on its own sentence, like every other refusable
+/// entry here: an entry that vanishes reads as one that was never built.
+fn show_build_search_files_entry(
+    ui: &mut egui::Ui,
+    id: ReconId,
+    rows: &SearchFilesRows,
+    out: &mut TreeOutput,
+) {
+    let refusal = rows.build_refusal.clone();
     let entry = ui
-        .add_enabled(refusal.is_none(), egui::Button::new(index.build_label()))
+        .add_enabled(refusal.is_none(), egui::Button::new(rows.build_label))
         .on_disabled_hover_text(refusal.unwrap_or_default())
         .on_hover_text(
-            "Index every .sift file of this reconstruction into a .kdf beside its .sfmr, and \
-             open it. What a bench search queries. Runs on a worker thread.",
+            "Index every .sift file of this reconstruction into a SIFT index, cluster its \
+             features and refine the clusters into patches, and write both files beside its \
+             .sfmr. What a bench search reads. A current SIFT index is kept when only the \
+             cluster patches are missing or out of date. Runs on a worker thread.",
         );
-    if out.hit(row_id(id, "build_sift_index"), entry).clicked() {
-        out.response.build_sift_index = Some(id);
+    if out.hit(row_id(id, "build_search_files"), entry).clicked() {
+        out.response.build_search_files = Some(id);
         ui.close();
     }
 }
 
-/// What the entry that lets go of an open index is called, in the menu and in
-/// the tests that aim at it.
-pub(crate) const CLOSE_SIFT_INDEX: &str = "Close Index";
+/// What the entry that lets go of a node's search files is called, in the
+/// menus and in the tests that aim at it.
+pub(crate) const CLOSE_SEARCH_FILES: &str = "Close Search Files";
 
-/// The SIFT Index row's own menu: the build, a file of the person's choosing,
-/// and letting go of what is open.
-pub(super) fn sift_index_menu(
+/// `Close Search Files`: let go of both files, leaving them on disk.
+fn show_close_search_files_entry(
     ui: &mut egui::Ui,
-    node: &SceneNode,
-    index: &SiftIndexRow,
+    id: ReconId,
+    rows: &SearchFilesRows,
     out: &mut TreeOutput,
 ) {
-    let id = node.id;
-    show_build_index_entry(ui, id, out);
+    let busy = out.busy_refusal(id).map(str::to_string);
+    let close = rows.close_refusal.clone().or(busy);
+    let entry = ui
+        .add_enabled(close.is_none(), egui::Button::new(CLOSE_SEARCH_FILES))
+        .on_disabled_hover_text(close.unwrap_or_default())
+        .on_hover_text("Let go of the open search files, leaving the files where they are.");
+    if out.hit(row_id(id, "close_search_files"), entry).clicked() {
+        out.response.close_search_files = Some(id);
+        ui.close();
+    }
+}
+
+/// `Open...`: a file of the person's choosing, of the kind the row names.
+fn show_open_entry(
+    ui: &mut egui::Ui,
+    id: ReconId,
+    key: &str,
+    hover: &str,
+    out: &mut TreeOutput,
+) -> bool {
     let busy = out.busy_refusal(id).map(str::to_string);
     let open = ui
         .add_enabled(busy.is_none(), egui::Button::new("Open..."))
-        .on_disabled_hover_text(busy.clone().unwrap_or_default())
-        .on_hover_text(
-            "Search a .kdf of your own choosing. One that is not over this \
-                        reconstruction's images opens all the same, and the row says why it \
-                        will not do.",
-        );
-    if out.hit(row_id(id, "open_sift_index"), open).clicked() {
+        .on_disabled_hover_text(busy.unwrap_or_default())
+        .on_hover_text(hover);
+    let clicked = out.hit(row_id(id, key), open).clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
+/// The Search Files group row's menu: the build and letting go of both files.
+pub(super) fn search_files_menu(
+    ui: &mut egui::Ui,
+    id: ReconId,
+    rows: &SearchFilesRows,
+    out: &mut TreeOutput,
+) {
+    show_build_search_files_entry(ui, id, rows, out);
+    show_close_search_files_entry(ui, id, rows, out);
+}
+
+/// The SIFT Index row's menu: the build, a `.kdf` of the person's choosing,
+/// and letting go of both files.
+pub(super) fn sift_index_menu(
+    ui: &mut egui::Ui,
+    id: ReconId,
+    rows: &SearchFilesRows,
+    out: &mut TreeOutput,
+) {
+    show_build_search_files_entry(ui, id, rows, out);
+    let hover = "Search a .kdf of your own choosing. One that is not over this reconstruction's \
+                 images opens all the same, and the row says why it will not do.";
+    if show_open_entry(ui, id, "open_sift_index", hover, out) {
         out.response.open_sift_index = Some(id);
-        ui.close();
     }
-    let close = index.close_refusal.clone().or(busy);
-    let entry = ui
-        .add_enabled(close.is_none(), egui::Button::new(CLOSE_SIFT_INDEX))
-        .on_disabled_hover_text(close.unwrap_or_default())
-        .on_hover_text("Let go of the open index, leaving the file where it is.");
-    if out.hit(row_id(id, "close_sift_index"), entry).clicked() {
-        out.response.close_sift_index = Some(id);
-        ui.close();
+    show_close_search_files_entry(ui, id, rows, out);
+}
+
+/// The Cluster Patches row's menu: the build, a `.matches` of the person's
+/// choosing, and letting go of both files.
+pub(super) fn cluster_patches_menu(
+    ui: &mut egui::Ui,
+    id: ReconId,
+    rows: &SearchFilesRows,
+    out: &mut TreeOutput,
+) {
+    show_build_search_files_entry(ui, id, rows, out);
+    let hover = "Open a cluster-patches .matches of your own choosing. One that is not over this \
+                 reconstruction's images, or not made from its SIFT index, opens all the same, \
+                 and the row says why it will not do.";
+    if show_open_entry(ui, id, "open_cluster_patches", hover, out) {
+        out.response.open_cluster_patches = Some(id);
     }
+    show_close_search_files_entry(ui, id, rows, out);
 }
 
 /// `Tint ▸`: `Original`, then the palette.

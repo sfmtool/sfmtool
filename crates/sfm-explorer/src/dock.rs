@@ -299,10 +299,10 @@ impl TabContext<'_> {
         id: ReconId,
         response: crate::track_view::TrackEditResponse,
     ) {
-        if response.build_sift_index {
+        if response.build_search_files {
             // A refusal to begin is logged by the starter, in the words its own
             // gate uses.
-            let _ = self.state.start_build_sift_index(id, None);
+            let _ = self.state.start_build_search_files(id);
         }
         let refuse = |state: &mut AppState, outcome: Result<(), String>| {
             if let Err(why) = outcome {
@@ -781,13 +781,14 @@ impl TabContext<'_> {
     /// says is on screen, with each gesture applied after the draw.
     fn show_track_view(&mut self, ui: &mut egui::Ui) {
         self.cache_track_view_images();
-        // The node's index, opened on sight in either mode: a `.kdf` opens
-        // without decoding a tree or a descriptor block, and a session that
-        // finds the file the last one built is a session that can search. The
-        // look is remembered, so a reconstruction with no index is not stat-ed
-        // once a frame.
+        // The node's search files, opened on sight in either mode: a `.kdf`
+        // opens without decoding a tree or a descriptor block and the
+        // cluster-patches file is read for its image table alone, so a session
+        // that finds the files the last one built is a session that can
+        // search. The look is remembered, so a reconstruction with neither is
+        // not stat-ed once a frame.
         if let Some(id) = self.state.selected_recon {
-            self.state.refresh_sift_index(id);
+            self.state.refresh_search_files(id);
         }
         let response = self
             .track_view
@@ -1085,26 +1086,36 @@ impl TabContext<'_> {
                 &sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default(),
             );
         }
-        if let Some(id) = response.build_sift_index {
+        if let Some(id) = response.build_search_files {
             // A refusal to begin is logged by the starter, in the words its own
             // gate uses.
-            let _ = self.state.start_build_sift_index(id, None);
+            let _ = self.state.start_build_search_files(id);
         }
+        // The choosers live here rather than in the panel, so the panel stays
+        // a pure egui function a headless frame can run: it reports the
+        // *gesture*, and the file it needs is found out here.
         if let Some(id) = response.open_sift_index {
-            // The chooser lives here rather than in the panel, so the panel
-            // stays a pure egui function a headless frame can run: it reports
-            // the *gesture*, and the file it needs is found out here.
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("SIFT index", &["kdf"])
                 .pick_file()
             {
-                if let Err(why) = self.state.open_sift_index(id, Some(path)) {
+                if let Err(why) = self.state.open_search_files(id, Some(path), None) {
                     self.state.action_log.fail(Kind::Bench, why);
                 }
             }
         }
-        if let Some(id) = response.close_sift_index {
-            if let Err(why) = self.state.close_sift_index(id) {
+        if let Some(id) = response.open_cluster_patches {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Cluster patches", &["matches"])
+                .pick_file()
+            {
+                if let Err(why) = self.state.open_search_files(id, None, Some(path)) {
+                    self.state.action_log.fail(Kind::Bench, why);
+                }
+            }
+        }
+        if let Some(id) = response.close_search_files {
+            if let Err(why) = self.state.close_search_files(id) {
                 self.state.action_log.fail(Kind::Bench, why);
             }
         }

@@ -81,28 +81,43 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
         // items can be once Track View's Edit box is cleared.
         "active": { "track": active },
         "items": items,
-        // The index a descriptor search would query, reported here rather than
-        // on the track because it is the node's: every track's search goes
-        // through the same file.
-        "sift_index": sift_index(state, id),
+        // The files a search reads, reported here rather than on the track
+        // because they are the node's: every track's search goes through the
+        // same files.
+        "search_files": search_files(state, id),
     }))
 }
 
-/// The SIFT index beside a node, as every reply that names one states it.
+/// The search files beside a node, as every reply that names them states
+/// them: one object per file.
 ///
 /// `state` is the fact a caller acts on -- `current` is the one a search runs
-/// against -- and `path` is the file, which is the node's own index path even
+/// against -- and `path` is the file, which is the node's own path for it even
 /// when nothing is open, so an agent can see where a build would put one.
-pub(super) fn sift_index(state: &AppState, id: ReconId) -> Value {
+pub(super) fn search_files(state: &AppState, id: ReconId) -> Value {
     let index = state.sift_index(id);
+    let patches = state.cluster_patches(id);
+    let shown = |path: Option<std::path::PathBuf>| path.map(|path| path.display().to_string());
     json!({
-        "state": state.sift_index_state(id).name(),
-        "path": index
-            .map(|index| index.path.display().to_string())
-            .or_else(|| state.sift_index_path(id).map(|path| path.display().to_string())),
-        "descriptors": index.map(|index| index.feature_count()),
-        "images": index.map(|index| index.images),
-        "stale_reason": index.and_then(|index| index.stale_reason()),
+        "sift_index": {
+            "state": state.sift_index_state(id).name(),
+            "path": shown(index.map(|index| index.path.clone()).or_else(|| state.sift_index_path(id))),
+            "descriptors": index.map(|index| index.feature_count()),
+            "images": index.map(|index| index.images),
+            "stale_reason": index.and_then(|index| index.stale_reason()),
+        },
+        "cluster_patches": {
+            "state": state.cluster_patches_state(id).name(),
+            "path": shown(
+                patches
+                    .map(|file| file.path.clone())
+                    .or_else(|| state.cluster_patches_path(id))
+            ),
+            "clusters": patches.map(|file| file.clusters),
+            "members": patches.map(|file| file.members),
+            "images": patches.map(|file| file.images),
+            "stale_reason": patches.and_then(|file| file.stale_reason()),
+        },
     })
 }
 
@@ -867,47 +882,57 @@ pub(super) fn search_bench_track_geometry(
     }
 }
 
-/// `open_sift_index`: the `.kdf` a search queries, adopted for one node.
+/// `open_search_files`: the node's search files, or files of the caller's
+/// naming, adopted for one node.
 ///
-/// Not an edit and not a version: the index is a file beside the node's `.sfmr`
-/// and a handle on it, and nothing about the reconstruction or the bench moves.
-/// So the reply is the index itself rather than a version, and there is nothing
-/// for `undo` to take back. A file that is not an index of this node opens all
-/// the same and reports `state: "stale"` with the sentence saying why.
-pub(super) fn open_sift_index(state: &mut AppState, label: &str, path: Option<&str>) -> JsonReply {
+/// Not an edit and not a version: the files sit beside the node's `.sfmr`,
+/// and nothing about the reconstruction or the bench moves. So the reply is
+/// the files rather than a version, and there is nothing for `undo` to take
+/// back. A file that is not this node's opens all the same and reports
+/// `state: "stale"` with the sentence saying why.
+pub(super) fn open_search_files(
+    state: &mut AppState,
+    label: &str,
+    sift_index: Option<&str>,
+    cluster_patches: Option<&str>,
+) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     state
-        .open_sift_index(id, path.map(std::path::PathBuf::from))
+        .open_search_files(
+            id,
+            sift_index.map(std::path::PathBuf::from),
+            cluster_patches.map(std::path::PathBuf::from),
+        )
         .map_err(ToolError::new)?;
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        "sift_index": sift_index(state, id),
+        "search_files": search_files(state, id),
     }))
 }
 
-/// `close_sift_index`: the open forest let go of, the file left where it is.
-pub(super) fn close_sift_index(state: &mut AppState, label: &str) -> JsonReply {
+/// `close_search_files`: both files let go of, left where they are.
+pub(super) fn close_search_files(state: &mut AppState, label: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
-    state.close_sift_index(id).map_err(ToolError::new)?;
+    state.close_search_files(id).map_err(ToolError::new)?;
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        "sift_index": sift_index(state, id),
+        "search_files": search_files(state, id),
     }))
 }
 
-/// `build_sift_index`: every `.sift` file of the node indexed, written beside
-/// its `.sfmr` and opened, on a worker thread.
-pub(super) fn build_sift_index(state: &mut AppState, label: &str, path: Option<&str>) -> Outcome {
+/// `build_search_files`: the node's SIFT index and its cluster patches,
+/// written beside its `.sfmr` and opened, on a worker thread.
+pub(super) fn build_search_files(state: &mut AppState, label: &str) -> Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    match state.start_build_sift_index(id, path.map(std::path::PathBuf::from)) {
+    match state.start_build_search_files(id) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started_or(state, id, |state| {
             Ok(json!({
                 "reconstruction_label": node_label(state, id),
-                "sift_index": sift_index(state, id),
+                "search_files": search_files(state, id),
             }))
         }),
     }

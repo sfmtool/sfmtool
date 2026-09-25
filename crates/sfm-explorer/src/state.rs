@@ -597,6 +597,12 @@ pub struct AppState {
     /// otherwise stat the same absent file every frame.
     pub(crate) sift_indexes: HashMap<ReconId, Option<crate::sift_index::SiftIndex>>,
 
+    /// The cluster-patches file open beside each node
+    /// ([`crate::cluster_patches`]), kept per node for the reasons
+    /// [`Self::sift_indexes`] is, with `None` remembering a look that found
+    /// none.
+    pub(crate) cluster_patches: HashMap<ReconId, Option<crate::cluster_patches::ClusterPatches>>,
+
     /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
     /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
     /// ImageDetail (builds its GPU texture from level 0) and PointTrackView
@@ -812,6 +818,7 @@ impl AppState {
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
             sift_indexes: HashMap::new(),
+            cluster_patches: HashMap::new(),
             full_res_cache: HashMap::new(),
             show_demo_dialog: false,
             demo_num_points: 1000,
@@ -929,6 +936,7 @@ impl AppState {
         self.hovered_point = None;
         self.sift_cache.clear();
         self.sift_indexes.clear();
+        self.cluster_patches.clear();
         self.full_res_cache.clear();
         self.resect_matches.clear();
         self.resect_matches_cache = None;
@@ -946,7 +954,7 @@ impl AppState {
     /// leaves them where they are).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
-        self.forget_sift_index(id);
+        self.forget_search_files(id);
         self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);

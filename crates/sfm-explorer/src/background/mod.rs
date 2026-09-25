@@ -193,17 +193,21 @@ impl Operation {
         kind: Kind::Bench,
     };
 
-    /// A node's SIFT index built over its `.sift` files and written beside its
-    /// `.sfmr` ([`crate::sift_index`]).
+    /// A node's search files built and written beside its `.sfmr`: the SIFT
+    /// index over its `.sift` files, then the cluster-patches file made from
+    /// that index ([`crate::search_files`]).
     ///
-    /// Cancellable in all three of its phases: the read polls the flag between
-    /// images, `KdForestU8::build` polls it as each leaf is placed, and
+    /// Cancellable in every phase. In the index: the read polls the flag
+    /// between images, `KdForestU8::build` polls it as each leaf is placed, and
     /// `sfmtool_kdf_format::write_kdf` polls it between batches of blocks and
-    /// hands back `KdfError::Cancelled`. The index that was there is left
-    /// standing, because the write streams into a temporary sibling and renames
-    /// over the target only once it has a whole file.
-    pub(crate) const BUILD_SIFT_INDEX: Operation = Operation {
-        name: "Build SIFT index",
+    /// hands back `KdfError::Cancelled`. In the cluster patches: the self-join
+    /// polls it in front of every query, the decode between photographs, and
+    /// the refinement between batches of clusters; the write is the last step
+    /// and runs to its end. A file that was there is left standing, because
+    /// both writes stream into a temporary sibling and rename over the target
+    /// only once they have a whole file.
+    pub(crate) const BUILD_SEARCH_FILES: Operation = Operation {
+        name: "Build search files",
         cancellable: true,
         kind: Kind::Bench,
     };
@@ -242,7 +246,7 @@ impl Operation {
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
-        Operation::BUILD_SIFT_INDEX,
+        Operation::BUILD_SEARCH_FILES,
     ];
 }
 
@@ -358,19 +362,25 @@ pub(crate) enum Finished {
         /// The Action Log sentence, up to the serials.
         text: String,
     },
-    /// A SIFT index built and reopened, for the node the task ran on.
+    /// A node's search files built, for the node the task ran on: the index
+    /// it wrote and reopened, if it wrote one, and the cluster-patches file, if
+    /// it got that far.
     ///
-    /// Not a version: the index is a file beside the node's `.sfmr` and a
-    /// handle on it, and nothing about the reconstruction or the bench moved.
-    /// So the GUI thread installs the handle and writes the row, and Undo has
-    /// nothing to take back.
-    SiftIndex {
-        /// The `.kdf` that was written.
-        path: std::path::PathBuf,
-        /// It, opened.
-        forest: Arc<sfmtool_core::features::kdforest::LazyKdForestU8>,
-        /// The Action Log sentence, up to the serials.
-        text: String,
+    /// Not a version: the files sit beside the node's `.sfmr`, and nothing
+    /// about the reconstruction or the bench moved. So the GUI thread installs
+    /// what was written and writes the row, and Undo has nothing to take back.
+    /// A build that wrote its index and then stopped still hands the index
+    /// back, so the node opens the file that is now on disk.
+    SearchFiles {
+        /// The `.kdf` that was written, and it opened.
+        index: Option<(
+            std::path::PathBuf,
+            Arc<sfmtool_core::features::kdforest::LazyKdForestU8>,
+        )>,
+        /// The `.matches` that was written.
+        cluster_patches: Option<std::path::PathBuf>,
+        /// How the build ended.
+        end: SearchFilesEnd,
     },
     /// The files an open read, each with what it filled in for display, and
     /// the ones it could not read.
@@ -390,6 +400,19 @@ pub(crate) enum Finished {
     /// The operation was asked to stop, and did.
     Cancelled,
     /// The kernel refused, in its own words.
+    Failed(String),
+}
+
+/// How a search-files build ended, beside whatever it wrote.
+///
+/// The three endings of [`Finished`] itself, for a build that may have written
+/// one of its two files before it stopped.
+pub(crate) enum SearchFilesEnd {
+    /// Both files were written; the Action Log sentence.
+    Built(String),
+    /// Asked to stop, and did.
+    Cancelled,
+    /// A stage refused, in its own words.
     Failed(String),
 }
 
@@ -801,22 +824,35 @@ impl AppState {
                     }
                 }
             },
-            // The index is the node's and not the version's, so nothing is
-            // pushed: the handle is installed and the row says what was built.
-            // A node that has left the scene in the meantime leaves the file on
-            // disk, which the next session opens.
-            Finished::SiftIndex { path, forest, text } => {
-                match locked.filter(|&node| self.scene.iter().any(|n| n.id == node)) {
-                    None => Err(format!(
-                        "{} of {label} finished, but it is no longer loaded.",
-                        operation.name
-                    )),
-                    Some(node) => {
-                        self.install_sift_index(node, path, forest);
-                        Ok(text)
+            // The files are the node's and not the version's, so nothing is
+            // pushed: what was written is opened and the row says what was
+            // built. A node that has left the scene in the meantime leaves the
+            // files on disk, which the next session opens.
+            Finished::SearchFiles {
+                index,
+                cluster_patches,
+                end,
+            } => match locked.filter(|&node| self.scene.iter().any(|n| n.id == node)) {
+                None => Err(format!(
+                    "{} of {label} finished, but it is no longer loaded.",
+                    operation.name
+                )),
+                Some(node) => {
+                    let wrote_index = index.as_ref().map(|(path, _)| path.display().to_string());
+                    self.install_search_files(node, index, cluster_patches);
+                    match end {
+                        SearchFilesEnd::Built(text) => Ok(text),
+                        SearchFilesEnd::Failed(message) => Err(message),
+                        SearchFilesEnd::Cancelled => Err(match wrote_index {
+                            None => format!("{} of {label} cancelled", operation.name),
+                            Some(path) => format!(
+                                "{} of {label} cancelled after it wrote the SIFT index {path}",
+                                operation.name
+                            ),
+                        }),
                     }
                 }
-            }
+            },
             // Each file becomes a node in the order it was asked for, and the
             // row names every one; a file the worker could not read is a failed
             // row of its own under the same actor. Nothing is installed into

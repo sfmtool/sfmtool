@@ -859,7 +859,9 @@ fn a_row_s_menu_offers_the_build_when_the_node_has_no_index() {
     let (state, _id, _label, mut panel, ctx) = on_the_bench();
     let texts = row_menu(&mut panel, &ctx, &state);
     assert!(
-        texts.iter().any(|t| t == super::BUILD_INDEX_TO_SEARCH),
+        texts
+            .iter()
+            .any(|t| t == crate::search_files::BUILD_SEARCH_FILES),
         "the build entry is not in the row's menu: {texts:?}"
     );
     assert!(
@@ -886,7 +888,9 @@ fn a_row_s_menu_offers_the_search_against_a_current_index() {
         "the search entry is not in the row's menu: {texts:?}"
     );
     assert!(
-        !texts.iter().any(|t| t == super::REBUILD_INDEX_TO_SEARCH),
+        !texts
+            .iter()
+            .any(|t| t == crate::search_files::REBUILD_SEARCH_FILES),
         "a current index is offered a rebuild: {texts:?}"
     );
     assert!(
@@ -923,7 +927,9 @@ fn geometry_search_is_track_stage_only_and_routes_its_own_response() {
         "a cluster-stage row offers geometry search: {texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t == super::BUILD_INDEX_TO_SEARCH),
+        texts
+            .iter()
+            .any(|t| t == crate::search_files::BUILD_SEARCH_FILES),
         "stage gating accidentally removed the SIFT/build action: {texts:?}"
     );
 }
@@ -946,10 +952,10 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
         );
     }
     let path = state.sift_index(id).expect("built").path.clone();
-    state.open_sift_index(id, Some(path)).expect("it opens");
+    state.open_sift_index(id, path).expect("it opens");
     assert_eq!(
         state.sift_index_state(id),
-        crate::sift_index::SiftIndexState::Stale
+        crate::search_files::SearchFileState::Stale
     );
 
     let (mut panel, ctx) = settled(&state);
@@ -963,14 +969,21 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
         vec![egui::Event::PointerMoved(at)],
     );
     assert!(
-        texts.iter().any(|t| t == super::REBUILD_INDEX_TO_SEARCH),
+        texts
+            .iter()
+            .any(|t| t == crate::search_files::REBUILD_SEARCH_FILES),
         "the rebuild entry is not in the row's menu: {texts:?}"
     );
 
     // Clicking it asks for the build, and asks for no search.
-    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::REBUILD_INDEX_TO_SEARCH);
+    let entry = menu_entry_pos(
+        &mut panel,
+        &ctx,
+        &state,
+        crate::search_files::REBUILD_SEARCH_FILES,
+    );
     let response = at_pointer(&mut panel, &ctx, &state, entry, true);
-    assert!(response.build_sift_index, "the entry started no build");
+    assert!(response.build_search_files, "the entry started no build");
     assert_eq!(
         response.search_descriptors, None,
         "the build does not run the search when it finishes, and does not run it now"

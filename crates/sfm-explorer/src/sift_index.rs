@@ -14,7 +14,8 @@
 //! a `.kdf` is opened without decoding a tree or a descriptor block
 //! (`specs/core/features/lazy-kdforest-query.md`) -- so the node's index path is
 //! opened on sight when the file is there; building one reads every `.sift` of
-//! the capture and is a background task the person asks for.
+//! the capture and is the first half of the background task that builds the
+//! node's search files ([`crate::search_files`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +32,8 @@ use sfmtool_core::{progress_note, SfmrReconstruction};
 use sfmtool_sift_format::DESCRIPTOR_DIM;
 
 use crate::action_log::{Actor, Kind};
-use crate::background::{Finished, Job, Operation};
 use crate::scene::{ReconId, SceneNode};
+use crate::search_files::{unsaved_refusal, SearchFileState, Stopped};
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -80,29 +81,6 @@ impl SiftIndex {
     }
 }
 
-/// Which of the three states a node's index is in.
-///
-/// `none` is a node with no file at its index path and none opened by hand;
-/// `current` is an index over exactly this node's images, in this node's order,
-/// from the `.sift` files that are on disk now; anything else is `stale`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SiftIndexState {
-    None,
-    Current,
-    Stale,
-}
-
-impl SiftIndexState {
-    /// The word the row and the wire both use.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Current => "current",
-            Self::Stale => "stale",
-        }
-    }
-}
-
 /// Where `node`'s index goes: the `.sfmr`'s sibling, named after its stem.
 ///
 /// Beside the reconstruction rather than beside the features, because the
@@ -132,74 +110,8 @@ fn normalized(path: &Path) -> PathBuf {
     path.components().collect()
 }
 
-/// `path` as the index of `node` may be written to, or why it may not.
-///
-/// A caller naming the file is worth keeping -- a second index over the same
-/// capture, under a name of its own, is a reasonable thing for an agent to ask
-/// for -- and what it is not worth is writing anywhere on the disk. So the path
-/// is resolved against the directory holding the node's `.sfmr` when it is
-/// relative, lexically normalised (`.` and `..` folded, no filesystem walked,
-/// since the file is not there yet), and refused when the answer leaves that
-/// directory.
-///
-/// Lexical rather than canonical on purpose: `canonicalize` needs the path to
-/// exist, and this one is about to be created. A symlink out of the directory
-/// therefore passes, which is a thing the person who made the symlink asked
-/// for.
-fn within_index_dir(node: &SceneNode, path: &Path) -> Result<PathBuf, String> {
-    let home = index_path(node)
-        .and_then(|index| index.parent().map(Path::to_path_buf))
-        .ok_or_else(|| unsaved_refusal(node))?;
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        home.join(path)
-    };
-    let resolved = lexically_normalized(&joined);
-    if resolved.starts_with(&home) {
-        return Ok(resolved);
-    }
-    Err(format!(
-        "{} is outside {}, and the SIFT index is written beside the .sfmr file.",
-        resolved.display(),
-        home.display()
-    ))
-}
-
-/// What a node with no path on disk is told when it is asked for an index.
-pub(crate) fn unsaved_refusal(node: &SceneNode) -> String {
-    format!(
-        "Save {} first: the SIFT index is written beside the .sfmr file.",
-        node.label
-    )
-}
-
-/// `path` with its `.` and `..` components folded and its separators this
-/// platform's, without touching the filesystem.
-///
-/// A `..` that would climb past the root is dropped, so the answer never
-/// escapes upwards through a prefix.
-fn lexically_normalized(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                if !out.pop() {
-                    // Nothing left to climb: keep the `..` so a relative path
-                    // that really does leave its root is not silently flattened
-                    // into one that does not.
-                    out.push("..");
-                }
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
 /// The `.sift` file of every image of `recon` that has one, by image index.
-fn readable_sift_files(recon: &SfmrReconstruction) -> Vec<(u32, PathBuf)> {
+pub(crate) fn readable_sift_files(recon: &SfmrReconstruction) -> Vec<(u32, PathBuf)> {
     (0..recon.image_table.images.len())
         .map(|image| (image as u32, recon.sift_path_for_image(image)))
         .filter(|(_, path)| path.is_file())
@@ -214,11 +126,11 @@ impl AppState {
     }
 
     /// Which of the three states `id`'s index is in.
-    pub(crate) fn sift_index_state(&self, id: ReconId) -> SiftIndexState {
+    pub(crate) fn sift_index_state(&self, id: ReconId) -> SearchFileState {
         match self.sift_index(id) {
-            None => SiftIndexState::None,
-            Some(index) if index.stale.is_some() => SiftIndexState::Stale,
-            Some(_) => SiftIndexState::Current,
+            None => SearchFileState::None,
+            Some(index) if index.stale.is_some() => SearchFileState::Stale,
+            Some(_) => SearchFileState::Current,
         }
     }
 
@@ -227,21 +139,15 @@ impl AppState {
         index_path(self.node(id)?)
     }
 
-    /// Whether the operation running on `id` is the index build.
-    pub(crate) fn building_sift_index(&self, id: ReconId) -> bool {
-        self.background_task().is_some_and(|task| {
-            task.node == Some(id) && task.operation.name == Operation::BUILD_SIFT_INDEX.name
-        })
-    }
-
     /// Look for `id`'s index if nothing has yet, and re-derive its state when
     /// the node's image table has moved since the state was derived.
     ///
-    /// What Track View, the Scene tree and the first item put on a
-    /// node's bench call. A `.kdf` opens without decoding a tree or a
-    /// descriptor block, so looking costs a stat and a header read, and a
-    /// session that finds the file the last one built is a session that can
-    /// search. It **builds nothing** and says nothing when there is no file: an
+    /// Called through [`Self::refresh_search_files`], which is what Track View,
+    /// the Scene tree and the first item put on a node's bench call, and which
+    /// asks the same of the cluster-patches file after it. A `.kdf` opens
+    /// without decoding a tree or a descriptor block, so looking costs a stat
+    /// and a header read, and a session that finds the file the last one built
+    /// is a session that can search. It **builds nothing** and says nothing when there is no file: an
     /// index that is not there is the normal state of a workspace, not a
     /// refusal.
     pub(crate) fn refresh_sift_index(&mut self, id: ReconId) {
@@ -264,7 +170,7 @@ impl AppState {
         // instead.
         let standing = self.action_log.actor();
         self.action_log.set_actor(Actor::Viewer);
-        let opened = self.open_sift_index(id, Some(path));
+        let opened = self.open_sift_index(id, path);
         if let Err(why) = opened {
             // Said out loud: a file sitting where the index goes and not opening
             // at all is worth a row, and this is the one chance to write it --
@@ -318,10 +224,12 @@ impl AppState {
             index.node_images = fingerprint;
         }
         index.checked_at = serial;
+        if moved {
+            self.recheck_cluster_patches(id);
+        }
     }
 
-    /// Open `path`, or the node's own index path when none is named, as `id`'s
-    /// SIFT index.
+    /// Open `path` as `id`'s SIFT index.
     ///
     /// **A file that opens is adopted**, current or stale: a person who asked
     /// for this one wants to see what is in it and why it will not do, and the
@@ -332,15 +240,11 @@ impl AppState {
     pub(crate) fn open_sift_index(
         &mut self,
         id: ReconId,
-        path: Option<PathBuf>,
+        path: PathBuf,
     ) -> Result<PathBuf, String> {
         let node = self
             .node(id)
             .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
-        let path = match path {
-            Some(path) => path,
-            None => index_path(node).ok_or_else(|| unsaved_refusal(node))?,
-        };
         let forest = LazyKdForestU8::open(&path, LazyKdForestOptions::default())
             .map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
         let stale = staleness(&forest, node.recon(), &path);
@@ -371,47 +275,10 @@ impl AppState {
             }),
         );
         self.action_log.record(Kind::Bench, text);
+        // The cluster-patches file is judged against the index that is open,
+        // so a different one open is a different answer for it too.
+        self.recheck_cluster_patches(id);
         Ok(path)
-    }
-
-    /// Let go of `id`'s index, leaving the file where it is.
-    ///
-    /// Recorded rather than silent: the search entry greys the moment this
-    /// happens, and a person reading the log should find out why.
-    pub(crate) fn close_sift_index(&mut self, id: ReconId) -> Result<(), String> {
-        let node = self
-            .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
-        let label = node.label.clone();
-        let Some(index) = self.sift_indexes.get(&id).and_then(Option::as_ref) else {
-            return Err(format!("No SIFT index is open beside {label}."));
-        };
-        let path = index.path.clone();
-        // `Some(None)`, not removed: the miss is what says nothing should stat
-        // that path again this session, and a person who just closed an index
-        // does not want it re-opened by the next frame that draws the row.
-        self.sift_indexes.insert(id, None);
-        self.action_log.record(
-            Kind::Bench,
-            format!("Closed the SIFT index of {label}: {}", path.display()),
-        );
-        Ok(())
-    }
-
-    /// Why `id` cannot have an index built for it, or `None` when it can.
-    ///
-    /// Asked by the step itself, so the menu entry and the task cannot disagree
-    /// about when there is something to index.
-    pub(crate) fn build_sift_index_refusal(&self, id: ReconId) -> Option<String> {
-        self.busy_refusal(id)
-            .or_else(|| self.sift_index_home_refusal(id))
-            .or_else(|| self.sift_sources_refusal(id))
-    }
-
-    /// Why there is nowhere to put `id`'s index, or `None` when there is.
-    pub(crate) fn sift_index_home_refusal(&self, id: ReconId) -> Option<String> {
-        let node = self.node(id)?;
-        node.path.is_none().then(|| unsaved_refusal(node))
     }
 
     /// Why there is nothing to index beside `id`, or `None` when there is.
@@ -439,8 +306,8 @@ impl AppState {
     pub(crate) fn sift_index_search_refusal(&self, id: ReconId) -> Option<String> {
         match self.sift_index(id) {
             None => Some(
-                "No SIFT index is open. Build one from the SIFT Index row in the Scene \
-                 tree, or from this menu."
+                "No SIFT index is open. Build the search files from the Search Files row in \
+                 the Scene tree, or from this menu."
                     .to_string(),
             ),
             Some(index) => index.stale.as_ref().map(|why| {
@@ -450,69 +317,6 @@ impl AppState {
                 )
             }),
         }
-    }
-
-    /// Build a SIFT index over every `.sift` file of `id`, write it beside the
-    /// node's `.sfmr`, and open it, on a worker thread.
-    ///
-    /// The corpus carries **one image-table row per image of the node**, in the
-    /// node's own order, including the images that have no `.sift` file: an
-    /// image with no features contributes no descriptor and still takes its
-    /// row, which is what keeps a corpus image index and a node image index the
-    /// same number.
-    ///
-    /// `progress` names three phases: `read descriptors`, `build forest` and
-    /// `write index`, each reporting within its own share.
-    pub(crate) fn start_build_sift_index(
-        &mut self,
-        id: ReconId,
-        path: Option<PathBuf>,
-    ) -> Result<(), String> {
-        let outcome = self.begin_build_sift_index(id, path);
-        if let Err(message) = &outcome {
-            self.action_log.fail(Kind::Bench, message.clone());
-        }
-        outcome
-    }
-
-    fn begin_build_sift_index(&mut self, id: ReconId, path: Option<PathBuf>) -> Result<(), String> {
-        let job = self.build_sift_index_job(id, path)?;
-        self.start_background_task(Operation::BUILD_SIFT_INDEX, id, job)
-    }
-
-    /// The work a build does, as a closure that owns everything it reads.
-    ///
-    /// Separated from starting it for the reason every other operation's job is:
-    /// the refusals and the plan are the state's to work out, and what crosses
-    /// to the worker is one closure holding no reference into the scene.
-    pub(crate) fn build_sift_index_job(
-        &self,
-        id: ReconId,
-        path: Option<PathBuf>,
-    ) -> Result<Job, String> {
-        if let Some(why) = self.build_sift_index_refusal(id) {
-            return Err(why);
-        }
-        let node = self
-            .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
-        let recon = node.recon();
-        let path = match path {
-            Some(path) => within_index_dir(node, &path)?,
-            None => index_path(node).ok_or_else(|| unsaved_refusal(node))?,
-        };
-        let plan = BuildPlan {
-            path,
-            sources: readable_sift_files(recon),
-            image_names: recon
-                .image_table
-                .images
-                .iter()
-                .map(|image| image.name.clone())
-                .collect(),
-            workspace: workspace_metadata(recon),
-        };
-        Ok(Box::new(move |progress| build(plan, progress)))
     }
 
     /// Install an index a background build produced.
@@ -545,6 +349,7 @@ impl AppState {
                 checked_at,
             }),
         );
+        self.recheck_cluster_patches(id);
     }
 
     /// Forget the index of a node that has left the scene.
@@ -553,8 +358,14 @@ impl AppState {
     }
 }
 
-/// Everything the build needs, owned, so the worker holds no reference into the
-/// scene.
+/// What the index half of the search-files build writes, and from what.
+///
+/// The corpus carries **one image-table row per image of the node**, in the
+/// node's own order, including the images that have no `.sift` file: an image
+/// with no features contributes no descriptor and still takes its row, which
+/// is what keeps a corpus image index and a node image index the same number.
+///
+/// Everything owned, so the worker holds no reference into the scene.
 pub(crate) struct BuildPlan {
     /// Where the `.kdf` goes.
     path: PathBuf,
@@ -567,8 +378,42 @@ pub(crate) struct BuildPlan {
     workspace: KdfWorkspaceMetadata,
 }
 
+impl BuildPlan {
+    /// The plan for `node`'s index, written at the node's own index path.
+    pub(crate) fn of(node: &SceneNode) -> Result<Self, String> {
+        let recon = node.recon();
+        let path = index_path(node).ok_or_else(|| unsaved_refusal(node))?;
+        Ok(Self {
+            path,
+            sources: readable_sift_files(recon),
+            image_names: recon
+                .image_table
+                .images
+                .iter()
+                .map(|image| image.name.clone())
+                .collect(),
+            workspace: workspace_metadata(recon),
+        })
+    }
+}
+
+/// An index the build wrote and opened.
+pub(crate) struct BuiltIndex {
+    /// The `.kdf` that was written.
+    pub(crate) path: PathBuf,
+    /// It, opened the way a lazy open opens one.
+    pub(crate) forest: LazyKdForestU8,
+    /// How many descriptors it holds.
+    pub(crate) descriptors: usize,
+    /// How many images its table has a row for.
+    pub(crate) images: usize,
+}
+
 /// The forest build itself: read, build, write, reopen.
-fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
+///
+/// `progress` names three phases: `read descriptors`, `build forest` and
+/// `write index`, each reporting within its own share.
+pub(crate) fn build_index(plan: BuildPlan, progress: &Progress<'_>) -> Result<BuiltIndex, Stopped> {
     let BuildPlan {
         path,
         sources,
@@ -595,16 +440,12 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         geometry,
         feature_tool_hashes,
         sift_content_hashes,
-    } = match read_corpus(&sources, images, &read) {
-        Ok(corpus) => corpus,
-        Err(Stopped::Cancelled) => return Finished::Cancelled,
-        Err(Stopped::Failed(why)) => return Finished::Failed(why),
-    };
+    } = read_corpus(&sources, images, &read)?;
     if origins.is_empty() {
-        return Finished::Failed(
+        return Err(Stopped::Failed(
             "Every .sift file of this reconstruction is empty, so there is nothing to index."
                 .to_string(),
-        );
+        ));
     }
 
     let count = origins.len();
@@ -618,7 +459,7 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
             &phase,
         ) {
             Ok(forest) => forest,
-            Err(_) => return Finished::Cancelled,
+            Err(_) => return Err(Stopped::Cancelled),
         }
     };
     // The forest keeps its own copy of the descriptors, so from here the corpus
@@ -638,7 +479,10 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         let phase = write.phase("write index");
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return Finished::Failed(format!("Cannot create {}: {e}", parent.display()));
+                return Err(Stopped::Failed(format!(
+                    "Cannot create {}: {e}",
+                    parent.display()
+                )));
             }
         }
         // Straight at the index path, replacing what is there: a rebuild is the
@@ -653,30 +497,25 @@ fn build(plan: BuildPlan, progress: &Progress<'_>) -> Finished {
         };
         let written = forest.write_kdf(&path, Some(&sources), &options, &phase);
         if let Err(e) = written {
-            return match e {
-                KdfError::Cancelled(_) => Finished::Cancelled,
-                e => Finished::Failed(format!("Cannot write {}: {e}", path.display())),
-            };
+            return Err(match e {
+                KdfError::Cancelled(_) => Stopped::Cancelled,
+                e => Stopped::Failed(format!("Cannot write {}: {e}", path.display())),
+            });
         }
     }
 
-    let opened = match LazyKdForestU8::open(&path, LazyKdForestOptions::default()) {
-        Ok(forest) => forest,
-        Err(e) => {
-            return Finished::Failed(format!(
-                "Wrote {} and then could not open it: {e}",
-                path.display()
-            ))
-        }
-    };
-    Finished::SiftIndex {
-        text: format!(
-            "Built the SIFT index {}: {count} descriptors of {images} images",
+    let opened = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).map_err(|e| {
+        Stopped::Failed(format!(
+            "Wrote {} and then could not open it: {e}",
             path.display()
-        ),
+        ))
+    })?;
+    Ok(BuiltIndex {
         path,
-        forest: Arc::new(opened),
-    }
+        forest: opened,
+        descriptors: count,
+        images,
+    })
 }
 
 /// One capture's `.sift` files, read into the arrays the forest and the file
@@ -719,13 +558,6 @@ struct Slot<'a> {
 /// What one image's read came back with: the value, `None` for a file the read
 /// skipped because the build is stopping, and `Err` with what to say about it.
 type Outcome<T> = Result<Option<T>, String>;
-
-/// Why a read handed back no corpus, which is the two ways the job can end
-/// without one.
-enum Stopped {
-    Cancelled,
-    Failed(String),
-}
 
 /// Read every `.sift` file of the capture into one corpus, in image order.
 ///
@@ -966,7 +798,7 @@ fn corpus_images(forest: &LazyKdForestU8) -> usize {
 /// else: only a table that has gained, lost, renamed or reordered an image can
 /// change what the index's three tests answer, and that is exactly what this
 /// value moves on.
-fn image_fingerprint(recon: &SfmrReconstruction) -> u64 {
+pub(crate) fn image_fingerprint(recon: &SfmrReconstruction) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     recon.image_table.images.len().hash(&mut hasher);
@@ -1077,7 +909,7 @@ fn staleness(forest: &LazyKdForestU8, recon: &SfmrReconstruction, path: &Path) -
 /// The first two hex digits are the first stored byte, which is the convention
 /// every archive format here writes its hashes in. `None` for anything that is
 /// not exactly 32 hex characters.
-fn decode_xxh128(digest: &str) -> Option<[u8; 16]> {
+pub(crate) fn decode_xxh128(digest: &str) -> Option<[u8; 16]> {
     (digest.len() == 32)
         .then(|| u128::from_str_radix(digest, 16).ok())
         .flatten()

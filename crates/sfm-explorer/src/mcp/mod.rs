@@ -481,21 +481,21 @@ pub(crate) enum Command {
         /// position in `get_bench_track`'s list.
         observation: usize,
     },
-    /// Adopt a `.kdf` as the node's SIFT index.
-    OpenSiftIndex {
+    /// Open the node's search files, or files of the caller's naming.
+    OpenSearchFiles {
         reconstruction_label: String,
-        /// The file, or `None` for the node's own index path beside its
+        /// The `.kdf`, or `None` for the node's own index path beside its
         /// `.sfmr`.
-        path: Option<String>,
+        sift_index_path: Option<String>,
+        /// The `.matches`, or `None` for the node's own cluster-patches path.
+        cluster_patches_path: Option<String>,
     },
-    /// Build a SIFT index over the node's `.sift` files, on a worker.
-    BuildSiftIndex {
+    /// Build the node's SIFT index and cluster patches, on a worker.
+    BuildSearchFiles {
         reconstruction_label: String,
-        /// Where to write it, or `None` for the node's own index path.
-        path: Option<String>,
     },
-    /// Let go of the node's open SIFT index.
-    CloseSiftIndex {
+    /// Let go of the node's open search files.
+    CloseSearchFiles {
         reconstruction_label: String,
     },
     /// What the background operation is doing, or what the last one did.
@@ -1446,21 +1446,22 @@ pub(crate) fn apply_with_window(
             track.as_deref(),
             observation,
         ),
-        Command::OpenSiftIndex {
+        Command::OpenSearchFiles {
             reconstruction_label,
-            path,
-        } => done(bench::open_sift_index(
+            sift_index_path,
+            cluster_patches_path,
+        } => done(bench::open_search_files(
             state,
             &reconstruction_label,
-            path.as_deref(),
+            sift_index_path.as_deref(),
+            cluster_patches_path.as_deref(),
         )),
-        Command::BuildSiftIndex {
+        Command::BuildSearchFiles {
             reconstruction_label,
-            path,
-        } => bench::build_sift_index(state, &reconstruction_label, path.as_deref()),
-        Command::CloseSiftIndex {
+        } => bench::build_search_files(state, &reconstruction_label),
+        Command::CloseSearchFiles {
             reconstruction_label,
-        } => done(bench::close_sift_index(state, &reconstruction_label)),
+        } => done(bench::close_search_files(state, &reconstruction_label)),
         Command::GetBackgroundTask => done(read::get_background_task(state)),
         Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {
