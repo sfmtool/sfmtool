@@ -87,6 +87,13 @@ const ROTATION_KEEP_FRACTION: f64 = 0.6;
 /// Inlier bound on a pair's residual, in pixels: the batch-registration
 /// primitive's own (`reconstruction_growth::INLIER_PX`). The reported inlier
 /// count and the fraction the gate is applied to are the same measurement.
+// This bound also decides which clusters count as inliers. Its use on clusters
+// has been checked by measurement on two reconstructions only, the seoul_bull
+// ground truth and Kerry Park, and it needs evaluating across a large number of
+// solves before it is relied on. The form to evaluate it against is a bound
+// derived from the reconstruction's own data, for example one scaled from the
+// reprojection residuals of its tracks, so a cluster is held to the
+// consistency its tracks show.
 const INLIER_PX: f64 = 3.0;
 
 /// One bearing correspondence of the rotation-only path: the point's held-out
@@ -137,6 +144,12 @@ pub struct ResectImageOptions {
 /// Default of [`ResectImageOptions::max_cluster_residual_px`], chosen by
 /// measurement on two reconstructions (the table is in
 /// `specs/gui/edits/resect-image.md`, "Correspondence sources").
+// The value was chosen by measurement on two reconstructions only, the
+// seoul_bull ground truth and Kerry Park. It needs evaluating across a large
+// number of solves before it is relied on. The form to evaluate it against is a
+// threshold derived from the reconstruction's own data, for example one scaled
+// from the reprojection residuals of its tracks, so a cluster is held to the
+// consistency its tracks show.
 pub const DEFAULT_MAX_CLUSTER_RESIDUAL_PX: f64 = 1.5;
 
 impl Default for ResectImageOptions {
