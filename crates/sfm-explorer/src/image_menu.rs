@@ -1,16 +1,28 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The image menu: the context menu of one image of a reconstruction, shown on
-//! a Scene tree image row (under a reconstruction's *Camera Images* group).
-//! [`show`] lays it out and gives back the chosen [`ImageMenuAction`], which
-//! the dock carries out. See `specs/gui/scene-graph.md`.
+//! The image menu: the context menu of one image of a reconstruction.
+//!
+//! One menu shown in two places, a Scene tree image row (under a
+//! reconstruction's *Camera Images* group) and a thumbnail of the Image
+//! Browser strip. Both call [`show`], so the entries, their order, their greyed
+//! states and their hover reasons are the same by construction, and both hand
+//! the chosen [`ImageMenuAction`] to the dock, which carries it out through one
+//! path. See `specs/gui/scene-graph.md` and
+//! `specs/gui/multi-panel-image-browser.md`.
+//!
+//! What a place adds is where it records the entries it laid out (the tree's
+//! row ids, the strip's own ids), which is what its headless tests aim clicks
+//! at.
 
 use eframe::egui;
 
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
 use sfmtool_core::geometry::MIN_OTHER_POSED_IMAGES;
+
+#[cfg(test)]
+mod tests;
 
 /// An entry of the image menu, chosen on one image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

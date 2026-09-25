@@ -7,6 +7,10 @@
 //!
 //! Uses manual offset-based panning instead of `ScrollArea` so that Windows
 //! DirectManipulation gesture events can drive the horizontal scroll.
+//!
+//! A right click on a thumbnail opens the image menu ([`crate::image_menu`]),
+//! the same menu the Scene tree shows on that image's row, for the image of the
+//! node the strip is showing.
 
 use std::collections::HashMap;
 
@@ -15,6 +19,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::{ActionLog, Actor, Kind};
 use crate::display_thumbnails::{row_for, DisplayThumbnails};
+use crate::image_menu::{ImageMenu, ImageMenuAction};
 use crate::platform::GestureEvent;
 use crate::scene::ReconId;
 use crate::texture::thumbnail_color_image;
@@ -37,6 +42,23 @@ pub struct ImageBrowserResponse {
     pub hovered_image: Option<usize>,
     /// Whether the pointer is currently inside the browser panel.
     pub has_pointer: bool,
+    /// An entry of the image menu chosen on a thumbnail: the image and the
+    /// entry. Carried out by the dock through the same path as the Scene
+    /// tree's image-row menu.
+    pub menu_action: Option<(usize, ImageMenuAction)>,
+}
+
+/// Where the image menu's entry `key` (one of [`crate::image_menu::ENTRIES`])
+/// is recorded when the menu is open on thumbnail `index`.
+#[cfg(test)]
+pub(crate) fn menu_entry_id(key: &str, index: usize) -> egui::Id {
+    egui::Id::new(("image_browser_menu", key, index))
+}
+
+/// Where thumbnail `index` is recorded.
+#[cfg(test)]
+pub(crate) fn thumbnail_id(index: usize) -> egui::Id {
+    egui::Id::new(("image_browser_thumbnail", index))
 }
 
 /// The `.sfmr` name of one image, for an Action Log entry, or `no image` where
@@ -139,6 +161,12 @@ pub struct ImageBrowser {
     minibar: NavigationMinibar,
     /// Animation playback state.
     animation: AnimationState,
+    /// The thumbnail the image menu was opened on, by image index.
+    menu_image: Option<usize>,
+    /// Where the thumbnails and the image menu's entries landed on the last
+    /// frame, for the headless tests to aim at.
+    #[cfg(test)]
+    hits: HashMap<egui::Id, egui::Rect>,
 }
 
 impl ImageBrowser {
@@ -154,7 +182,16 @@ impl ImageBrowser {
             prev_img_height: 0.0,
             minibar: NavigationMinibar::new(),
             animation: AnimationState::new(),
+            menu_image: None,
+            #[cfg(test)]
+            hits: HashMap::new(),
         }
+    }
+
+    /// Where the element recorded under `id` landed on the last frame.
+    #[cfg(test)]
+    pub(crate) fn hit_rect(&self, id: egui::Id) -> Option<egui::Rect> {
+        self.hits.get(&id).copied()
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -173,6 +210,7 @@ impl ImageBrowser {
             self.offset_x = 0.0;
             self.minibar.invalidate();
             self.animation.reset();
+            self.menu_image = None;
         }
     }
 
@@ -196,6 +234,8 @@ impl ImageBrowser {
         camera_view_image: Option<usize>,
         gesture_events: &[GestureEvent],
         scroll_input: &crate::platform::ScrollInput,
+        // The image menu's view of the node, or `None` for no menu.
+        menu: Option<&ImageMenu>,
         // Playback is a discrete command with a state of its own, so it
         // records; the per-frame selection advances it produces go through the
         // ordinary selection path and coalesce into one line under it.
@@ -207,7 +247,10 @@ impl ImageBrowser {
             request_camera_switch: None,
             hovered_image: None,
             has_pointer: false,
+            menu_action: None,
         };
+        #[cfg(test)]
+        self.hits.clear();
 
         let num_images = recon.image_table.images.len();
 
@@ -220,6 +263,7 @@ impl ImageBrowser {
             self.offset_x = 0.0;
             self.minibar.invalidate();
             self.animation.reset();
+            self.menu_image = None;
         }
 
         // Lazy-load up to 8 thumbnails per frame (background loading). An image
@@ -642,6 +686,9 @@ impl ImageBrowser {
                 egui::Color32::from_gray(180),
             );
 
+            #[cfg(test)]
+            self.hits.insert(thumbnail_id(i), thumb_rect);
+
             // Hit-test for click / double-click / hover on this thumbnail.
             if let Some(pos) = pointer_pos {
                 if thumb_rect.contains(pos) {
@@ -658,6 +705,35 @@ impl ImageBrowser {
                     }
                 }
             }
+        }
+
+        // ── Image menu ────────────────────────────────────────────────
+
+        // A right click selects nothing, as it selects nothing on a Scene tree
+        // image row: it opens the menu on the thumbnail under the pointer and
+        // remembers which one, and a right click anywhere else closes it.
+        let over = response.hovered_image.filter(|_| !pointer_in_minibar);
+        if panel_response.clicked_by(egui::PointerButton::Secondary) {
+            self.menu_image = over;
+        }
+        if let Some(menu) = menu {
+            let index = self.menu_image;
+            #[cfg(test)]
+            let hits = &mut self.hits;
+            crate::context_menu::on_secondary_click_where(&panel_response, over.is_some())
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    let Some(index) = index else {
+                        return;
+                    };
+                    let chosen = crate::image_menu::show(ui, index, menu, &mut |_key, _entry| {
+                        #[cfg(test)]
+                        hits.insert(menu_entry_id(_key, index), _entry.rect);
+                    });
+                    if let Some(action) = chosen {
+                        response.menu_action = Some((index, action));
+                    }
+                });
         }
 
         // ── Navigation minibar ────────────────────────────────────────

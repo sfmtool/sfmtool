@@ -44,8 +44,21 @@
 ///     .show(|ui| node_context_menu(ui, node, out));
 /// ```
 pub(crate) fn on_secondary_click(response: &egui::Response) -> egui::Popup<'static> {
+    on_secondary_click_where(response, true)
+}
+
+/// [`on_secondary_click`] for a widget only part of which carries the menu: a
+/// secondary click opens it when `here` is true and closes it otherwise.
+///
+/// For a widget that paints several things and hit-tests them itself, such as
+/// the Image Browser strip, whose thumbnails carry the image menu and whose
+/// gaps and minibar carry none.
+pub(crate) fn on_secondary_click_where(
+    response: &egui::Response,
+    here: bool,
+) -> egui::Popup<'static> {
     let open = if response.clicked_by(egui::PointerButton::Secondary) {
-        Some(egui::SetOpenCommand::Bool(true))
+        Some(egui::SetOpenCommand::Bool(here))
     } else if response.clicked() {
         // Without this an open menu would stay up when the widget under it is
         // clicked. It is also what keeps a long touch from leaving one open:

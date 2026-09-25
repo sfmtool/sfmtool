@@ -425,6 +425,15 @@ impl TabContext<'_> {
     /// The Image Browser tab: the selected reconstruction's image strip, and
     /// the selection and hover it reports back.
     fn show_image_browser(&mut self, ui: &mut egui::Ui) {
+        // The image menu the thumbnails open, read before the node is borrowed
+        // out of the scene. The strip shows the selected node, so that is the
+        // node the menu's image belongs to.
+        let image_menu = selected_node(&self.state.scene, self.state.selected_recon)
+            .map(|node| node.id)
+            .and_then(|id| {
+                self.state.refresh_index_files(id);
+                self.state.image_menu(id)
+            });
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
             let recon = node.recon();
@@ -465,6 +474,7 @@ impl TabContext<'_> {
                 camera_view_image,
                 self.gesture_events,
                 self.scroll_input,
+                image_menu.as_ref(),
                 &mut self.state.action_log,
             );
             // Held back rather than applied here: `select_image`
@@ -499,6 +509,9 @@ impl TabContext<'_> {
             // needs the state mutably.
             if let Some(img_idx) = requested_view {
                 self.look_through(ui, ImageRef::new(id, img_idx));
+            }
+            if let Some((img_idx, action)) = response.menu_action {
+                self.apply_image_menu_action(ImageRef::new(id, img_idx), action);
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -1150,8 +1163,8 @@ impl TabContext<'_> {
             .map(|entry| entry.label.clone())
     }
 
-    /// Carry out an entry of the image menu chosen on `image` from a Scene
-    /// tree image row.
+    /// Carry out an entry of the image menu chosen on `image`, from a Scene
+    /// tree image row or an Image Browser thumbnail: the one path both take.
     fn apply_image_menu_action(&mut self, image: ImageRef, action: ImageMenuAction) {
         match action {
             ImageMenuAction::Resect => {
