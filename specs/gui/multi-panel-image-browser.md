@@ -987,6 +987,7 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 | Zoom | DM Zoom gesture | Zoom toward cursor position |
 | Zoom | Double-click off a feature | One step of √2 in, toward the cursor position |
 | Fit | Z key | Reset pan and zoom to fit image in panel |
+| Create Track Here | Ctrl + Shift + left click | Build a track at the clicked pixel, put it on the bench and commit it (see "the context menu" below) |
 
 - **Sign conventions**: Mouse drag uses "grab the content" convention (content
   follows cursor). DM gestures and trackpad scroll use "push/scroll viewport"
@@ -1006,6 +1007,16 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   is what puts the steps on the round zooms a reader thinks in.
 - **Fit is the `Z` key**, with the pointer over the panel, and the wire's
   `set_image_detail_view { fit }` ([mcp-server.md](mcp-server.md)).
+- **A left click with Control and Shift held is `Create Track Here`** at the
+  pixel clicked, read against the geometry the click was made on. It is the
+  whole of what that click means: its press takes no bench handle, and it
+  selects no point and no bench row. With both keys held, a double-click is
+  neither `Edit on Bench` nor the zoom; its second click is a second request,
+  which the node, busy with the first, refuses in one failed row. Control is
+  the physical Control key on every platform (egui's `ctrl`, not `command`),
+  and Alt must be up. No other gesture of this panel reads that pair of
+  modifiers: a Shift or Control drag still pans, and Control with the scroll
+  wheel or a trackpad gesture still zooms.
 
 ### Image Detail: the context menu
 
@@ -1021,19 +1032,38 @@ long it is held: like every menu in this window it is built from
 reaches egui as a touch contact
 ([scene-graph.md](scene-graph.md) § "Panel plumbing").
 
-Its three entries act on the node's **bench** ([`bench.md`](bench.md)) rather
-than on the reconstruction, in this order:
+Its four entries work through the node's **bench** ([`bench.md`](bench.md)),
+in this order:
 
 | Entry | What it does |
 |-------|--------------|
+| `Create Track Here` (`Ctrl+Shift+Click`) | Builds a track at the clicked pixel with the track-at-pixel cascade, on a worker, puts it on the bench as the active item and commits it as a new point |
 | `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises Track View on it |
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
 | `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track |
 
-All three are edited afterwards in Track View
+The lower three are edited afterwards in Track View
 ([`track-view.md`](track-view.md)), and the commit there is what reaches the
-reconstruction. The lower two are the viewer's only way to name a pixel, so this
-is where every gesture that needs one lives.
+reconstruction. `Create Track Here` is the one that commits by itself, and its
+track stays on the bench afterwards, active and seated on the point it wrote,
+for Track View to work on if it needs it. Every entry but `Edit on Bench` names
+a pixel, and this menu is the viewer's only way to name one, so this is where
+every gesture that needs one lives.
+
+`Create Track Here` acts at the pixel the menu was opened at, **not** at a
+feature near it, so it is offered anywhere on the photograph, whether or not a
+feature is under the pointer. Its shortcut is drawn beside it, as the menu bar
+draws a key's. It is greyed, with the state's own sentence on hover
+(`AppState::create_track_here_refusal`, which the step and the wire also refuse
+with), while a background task holds the node, on an image with no pose (a
+non-finite rotation or translation), and on a node whose observations are
+`.sift` features, since the commit it ends in writes keypoints inline and only
+an `embedded_patches` reconstruction stores them. The index files do not grey
+it: two of the cascade's four members read neither file, and a run they would
+have helped says so in its refusal ([`bench.md`](bench.md) § "Create Track
+Here"). It raises no panel, so the dock applies it where it reads the panel's
+response: the point the commit writes becomes the selection, which Track View
+already follows.
 
 `Edit on Bench` is the same entry the 3D viewport's point menu offers, under the
 same name and reporting the same request
@@ -1059,7 +1089,7 @@ active. An image the active track already holds a sighting in is not a
 refusal -- a second one joins as a candidate and is scored like any other, and
 it is the `in` verdict a track cannot hold twice
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)). A busy
-node greys all three, carrying the state's own busy sentence.
+node greys all four, carrying the state's own busy sentence.
 
 The pixel is recorded on the frame the menu opens, in source-image coordinates
 through the same `panel_to_image` transform the feature hit-testing uses: the

@@ -20,7 +20,7 @@ and pure functions with no window in them.
 
 Related specs: [`track-view.md`](track-view.md) (the panel that edits the active
 track with its *Edit* box ticked), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
-Detail panel, which carries the two steps that name a pixel and draws the active
+Detail panel, which carries the three steps that name a pixel and draws the active
 track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
@@ -176,6 +176,13 @@ impl AppState {
     /// Image Detail's *Start cluster on the bench here*: the cluster put on,
     /// active, and Track View raised.
     pub(crate) fn start_cluster_here(&mut self, image: ImageRef, pixel: [f32; 2]);
+    /// Image Detail's *Create Track Here*: a track built at the pixel on a
+    /// worker, then put on the bench, active, and committed. A refusal in
+    /// front of the worker is one failed row and no task.
+    pub(crate) fn start_create_track_at_pixel(&mut self, image: ImageRef,
+                                              pixel: [f64; 2]) -> Result<(), String>;
+    /// Why that cannot run on this image, or `None`: what greys the entry.
+    pub(crate) fn create_track_here_refusal(&self, image: ImageRef) -> Option<String>;
     /// Discarding the active item leaves nothing active.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     /// A copy of the item beside it, active, with no origin: the label it took.
@@ -256,13 +263,14 @@ ellipses from, so a feature seeded here is the mark the person is looking at;
 its stored affine is already the cluster stage's own convention and is passed on
 as it stands.
 
-**The two steps that name a pixel are invoked from the Image Detail context
-menu.** `start_bench_cluster` and `add_bench_observation` take a seed, and the
-viewer's one way to name a pixel is a right-click in that panel, where the two
-point edits that need one already live
+**The three steps that name a pixel are invoked from the Image Detail context
+menu.** `start_bench_cluster` and `add_bench_observation` take a seed, and
+`start_create_track_at_pixel` takes the pixel itself; the viewer's one way to
+name a pixel is a right-click in that panel, where the two point edits that need
+one already live
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Image Detail:
-the context menu"). Every other step names an item and is a button in the Track
-Edit panel.
+the context menu"). The third also answers a Control+Shift click there. Every
+other step names an item and is a button in the Track Edit panel.
 
 **Each step returns `Result<_, String>`.** The `String` is the sentence a
 refusal shows, which is core's own wording behind a clause naming what was
@@ -360,6 +368,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 |---|---|
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207` |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
+| Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
 | Slide the patch | `Moved pt3d_a1b2c3d4_1207 by 0.123 units to (1.204, -0.318, 4.006)` |
@@ -439,14 +448,17 @@ A reading, a fit and a stage change run as **background tasks**
 track` and `Set track stage`, beside `Geometry search`, which reads
 photographs too, `Search descriptors`, which reads a `.kdf` and a capture's
 `.sift` files rather than photographs, and `Build index files`, which reads
-the `.sift` files and then the photographs ([`index-files.md`](index-files.md)).
-All but the index-files build are
+the `.sift` files and then the photographs ([`index-files.md`](index-files.md)),
+and `Create track at pixel`, which reads the photographs and the index files
+(§ "Create Track Here").
+All of them are
 **cancellable**: the kernels they run take the `Progress` for their phases and
 poll its flag as well -- between the reading's rounds, between the views the
 localizer or the geometry selector renders, in front of the forest query and
-between the candidates for the descriptor search, and between the candidates
-the geometry search appends -- so a cancelled step ends as a cancellation,
-pushing no version. The declaration is held to that by the background tests,
+between the candidates for the descriptor search, between the candidates the
+geometry search appends, and in every phase of the index-files build
+([`index-files.md`](index-files.md)) -- so a cancelled step ends as a
+cancellation, pushing no version. The declaration is held to that by the background tests,
 which cancel each one over a fixture that can really run it.
 
 **The three are one family, and the geometry search is beside them rather than
@@ -505,6 +517,84 @@ the duration of its own task, so nothing can take the item off in the meantime
 
 ---
 
+## Create Track Here
+
+*Create Track Here* builds a track at one pixel of a posed photograph and
+commits it, as one gesture: Image Detail's context-menu entry, directly above
+*Edit on Bench*, or a left click there with Control and Shift held
+([`multi-panel-image-browser.md`](multi-panel-image-browser.md)), and the wire's
+`create_track_at_pixel`. All three are `AppState::start_create_track_at_pixel`,
+in [bench/track_at_pixel.rs](../../crates/sfm-explorer/src/bench/track_at_pixel.rs).
+The track is core's `build_track_at_pixel`
+([`../core/bench/track-at-pixel.md`](../core/bench/track-at-pixel.md)), the
+cascade of four members that each find the pixel's sightings their own way.
+
+```rust
+// The menu entry and the Control+Shift click: a refusal is one failed row.
+state.create_track_here(ImageRef::new(id, 0), [142.0, 198.0]);
+// ... the worker lands: two versions, the put and the commit ...
+```
+
+**What stops it before the worker** is `create_track_here_refusal`, which the
+greyed entry, the step and the wire all read: a background task holding the
+node, an image with no pose, and a node whose observations are `.sift`
+features, because the commit it ends in writes keypoints inline. A pixel off
+the photograph is refused too, not clamped: the track is built at the pixel
+named or not at all.
+
+**It runs on a worker** as the background operation `Create track at pixel`,
+cancellable. What crosses to the worker is what a photometric step's worker
+gets (`ViewSources` for every image of the node, since the cascade may look in
+any of them, and a clone of the value at the cursor), plus what the members
+read beside the photographs: the SIFT index's forest handle and every image's
+`.sift` path, read there into the keypoints the constellation member queries
+with, and the cluster-patches `.matches` path, read there into the clusters
+the clusters member searches. **An index file is handed over only when it is
+`current`** ([`index-files.md`](index-files.md)). One that is missing or stale
+is left out, and the member that reads it refuses and names what it lacked; the
+transfer and sweep members read neither and run as usual. The node's files are
+opened on sight and re-judged when the run starts
+(`refresh_index_files`), so the states it reads are the node's as it stands.
+
+**The track arrives with its bitmap.** `build_track_at_pixel` fuses the
+consensus bitmap and colour where the track stands before it returns
+([`../core/bench/track-at-pixel.md`](../core/bench/track-at-pixel.md) § "The
+finish"), so the commit takes the track as the operation returned it, on a
+reconstruction that stores a bitmap per point as on one that does not.
+
+**A track that comes home is two versions**, in the order they happened. The
+first is a bench step: the track put on the bench under the label a cluster
+started at that pixel would take (`IMG_0042@142,198`), made active, one `Bench`
+row whose sentence names the pixel, the member that built it, its `in` count and
+median ZNCC, and any members that refused before it. The second is
+`commit_bench_track`, the step Track View's *Commit* takes, so its version, its
+`Edit` row, the selection of the written point and the item left seated on it
+are that step's own. The operation's row is written first and the commit's
+after it, both as whoever asked for the run. One Undo takes back the point and
+leaves the track on the bench, active, which is where a person who wants to
+work on it would want it. A commit that is refused, say over a track with fewer
+than two `in` sightings, is one failed `Edit` row naming the item the track
+stays on the bench as.
+
+**A run every member refuses pushes nothing** and writes one failed `Bench` row
+in one sentence: the pixel, the last member tried with the stage it refused at
+and its reason, and then what the index files lacked when the run started,
+naming the member each would have fed and ending on *Build Index Files* (or on
+why the node has nowhere to put them):
+
+> Cannot create a track at (135.0, 6.0) in IMG_0042.jpg: every member refused;
+> the last, constellation, at constellation: no indexed keypoint sits within 30
+> px of the observation, out of 2352 in the image. No cluster patches file is
+> open, so the clusters member had nothing to read. Build Index Files (the
+> Index Files row in the Scene tree) makes both.
+
+Every member's refusal is one of the row's detail lines, `clusters refused at
+clusters: no cluster has a member within 16 px of the pixel` and so on in the
+order tried, which is where the Action Log shows an operation's detail when the
+row is expanded; the wire's refusal carries the same lines.
+
+---
+
 ## The Bench groups in the Scene tree
 
 Each node gains two **Bench** children beside its Camera Intrinsics, Camera
@@ -545,7 +635,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through thirty MCP tools
+An agent gets the same bench a human does, through thirty-one MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -568,6 +658,10 @@ create_bench_cluster."*
 //                        "pixel": [142.0, 197.5], "affine": [[7.1, -0.4], [0.4, 7.1]] }
 // create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4, "feature": 847 }
 // create_bench_track   { "reconstruction_label": "bull", "point": 1207 }
+//
+// Create Track Here: built at the pixel, put on the bench and committed.
+// create_track_at_pixel { "reconstruction_label": "bull", "camera_image": 4,
+//                         "pixel": [142.0, 197.5] }
 //
 // The list.
 // get_bench            { "reconstruction_label": "bull" }
@@ -919,6 +1013,29 @@ across and every handle would otherwise sit inside every other one's reach.
 The steps themselves are core's and are tested there, over a synthetic textured
 plane whose numbers are known to the pixel.
 
+*Create Track Here* is tested in
+[bench/track_at_pixel/tests.rs](../../crates/sfm-explorer/src/bench/track_at_pixel/tests.rs),
+over that plane rebuilt in the viewer (core's is private to its own tests):
+pinhole cameras over a textured plane, a grid of points every camera sees at
+its exact projection, less the middle one, and a bitmap column. At the middle's
+pixel the run is two versions, a `Bench` row then the commit's `Edit` row and a
+`Selection`; it creates one point, the transfer member builds it (the demo node
+has no index files), the item is active and seated on the point, and one undo
+takes the point back and leaves the track on the bench. At a pixel further from
+every point than any member looks, nothing is pushed, one failed row gives the
+last member's stage and reason and names both missing index files, and its
+detail lines carry each member's refusal. The greyed states are the unposed
+image, the `sift_files` node and the busy node, and a pixel off the photograph
+is refused with no task. The panel's side is in
+[image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs):
+the entry is drawn first, directly above *Edit on Bench*, with its shortcut
+beside it and in the same place when greyed; a Control+Shift click on a feature
+asks for a track at the pixel clicked, not the feature's, and selects nothing,
+while the same click without the modifiers selects the point and Control or
+Shift alone asks for nothing; and a Control+Shift double-click is neither *Edit
+on Bench* nor a zoom. The background tests cancel the operation over the same
+plane, as they do every operation that says it is cancellable.
+
 The wire is tested in
 [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs), over the same
 fixture with a label on the node, for what the boundary owes: each tool being
@@ -930,7 +1047,11 @@ reply says rather than what a step does: a create on a node whose default index
 is there but not yet open reports the **create's** sentence and not the open's,
 and an observation added at a pixel a long way from the point's projection comes
 back from a reading with the reason on its row, the rows that could be read
-still read.
+still read. `create_track_at_pixel` is tested over the viewer's plane: it answers
+with the commit's version, the item, the member and the point, which `get_point`
+takes back by id; a pixel every member refuses is a tool error whose lines are
+each member's stage in the order tried; and a pixel off the photograph is
+refused in the call with no task.
 
 ---
 
@@ -957,5 +1078,5 @@ still read.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The thirty tools for the steps that exist
+  proposed in the same draft. The thirty-one tools for the steps that exist
   are § "The wire".

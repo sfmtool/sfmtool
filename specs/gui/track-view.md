@@ -248,6 +248,7 @@ track is being edited leaves the track on the bench, no longer active.
 | Either | Double-click a Bench row in the Scene tree | That item becomes active, its node is selected, and the panel is raised | Edit mode, on that item |
 | Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | As the ticked box from that point, then the panel is raised | Edit mode |
 | Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench, active, and the panel is raised | Edit mode, on the cluster |
+| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench, active, and committed; the point it wrote is selected. No panel is raised | Edit mode, on the new item |
 | Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and becomes active | Edit mode, on the new item |
 | Editing | *Discard* | The item leaves the bench and nothing is active | View mode |
 | Editing | *Commit* | The point is written and selected; the item stays on the bench and stays active | Edit mode, on the same item |

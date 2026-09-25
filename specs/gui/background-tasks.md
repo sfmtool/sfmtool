@@ -11,11 +11,12 @@ that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
 one, on one node (or, for an open, on none), with an id of its own. One task
-runs at a time. The eleven operations are `Open`, which reads files and makes
+runs at a time. The twelve operations are `Open`, which reads files and makes
 them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
 `Convert to embedded patches`, `Retriangulate all points` and `Prune covered
-observations`; and the six the bench runs, `Evaluate track`, `Fit track`, `Set
-track stage`, `Search descriptors`, `Geometry search` and `Build index files`
+observations`; and the seven the bench runs, `Evaluate track`, `Fit track`, `Set
+track stage`, `Search descriptors`, `Geometry search`, `Build index files` and
+`Create track at pixel`
 ([bench.md](bench.md)). Every one of them is **cancellable**. The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it fuses, and a
@@ -446,6 +447,12 @@ cancelled one ends as a cancellation rather than a failure of the kernel --
 pushed. Geometry search reports `decode images`, `build reference`, `score
 views`, and `add candidates`; its result is installed only after all four, so a
 cancelled search cannot leave a candidate prefix on the bench.
+`Create track at pixel` polls on either side of the decode and of its reads of
+the keypoints and the cluster patches, and the cascade polls in front of each
+member and hands back `TrackAtPixelError::Cancelled`; a member once entered
+runs to its end. Its phases are `decode images`, `read keypoints`, `read
+cluster patches`, and one per member tried. A cancelled run puts
+nothing on the bench and commits nothing.
 
 ## Rust API
 

@@ -32,6 +32,26 @@ cluster-patches`' refinement, both with their default options. Its consumers
 match its images to a reconstruction's by name
 (`sfmtool_core::bench::MatchesClusters`).
 
+## What reads them
+
+Two steps read the files, and each reads a file **only while it is
+`current`**; a file in either other state is treated as absent.
+
+- **The descriptor search** (`search_bench_track_descriptors`, Track View's
+  row menu) queries the SIFT index, and is refused naming the index's own state
+  when it is not current ([sift-index.md](sift-index.md)).
+- **Create Track Here** (Image Detail's menu entry and its Control+Shift click,
+  and `create_track_at_pixel` on the wire) reads both: the cluster patches for
+  the track-at-pixel cascade's clusters member, and the SIFT index, with every
+  image's `.sift` keypoints, for its constellation member
+  ([bench.md](bench.md) § "Create Track Here"). It is not refused when they are
+  missing or stale, because its transfer and sweep members read neither: the
+  member that would have read a file refuses and names what it lacked, and when
+  every member refuses, the refusal says which files were not current and names
+  *Build Index Files*. The contents are read on the worker, the clusters out of
+  the `.matches` and the keypoints out of the `.sift` files; what the node holds
+  open is the forest handle and the file's facts, as below.
+
 ## none, current, stale
 
 Each file is in one of three states, with the words the index uses:
