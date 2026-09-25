@@ -11,10 +11,10 @@ no longer support.
 
 It is not the solver. The solver is the staged robust array kernel in
 [`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md), which
-takes poses, points and observations as plain arrays over one shared camera.
+takes poses, points and observations as plain arrays over a list of cameras.
 What this adds is the layer between that kernel and a reconstruction: which
-images are posed, which observations carry a pixel, what each point's stored
-constraint means, and how the answer goes back into a value whose patch frames,
+images are posed, which cameras they were taken through, which observations
+carry a pixel, what each point's stored constraint means, and how the answer goes back into a value whose patch frames,
 colours and tracks have to come out the other side still describing the same
 scene.
 
@@ -38,13 +38,14 @@ viewer's edit over it).
 The function lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs),
 re-exported as `sfmtool_core::{bundle_adjust, BundleAdjustOptions,
-BundleAdjustReport, BundleAdjustError}` and bound as
+BundleAdjustReport, CameraAdjustment, BundleAdjustError}` and bound as
 `EditedReconstruction.bundle_adjust`.
 
 ```rust
 pub fn bundle_adjust(
     recon: &SfmrReconstruction,
     options: &BundleAdjustOptions,
+    progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, BundleAdjustReport), BundleAdjustError>;
 
 pub struct BundleAdjustOptions {
@@ -62,6 +63,12 @@ pub struct BundleAdjustReport {
     pub points_deleted: usize,
     pub median_residual_before: f64,
     pub median_residual_after: f64,
+    pub cameras: Vec<CameraAdjustment>, // one per camera in the solve
+}
+
+pub struct CameraAdjustment {
+    pub camera: usize,        // its index in the reconstruction's camera table
+    pub images: usize,        // posed images taken through it in the solve
     pub focal_before: f64,
     pub focal_after: f64,
     pub focal_released: bool,
@@ -69,12 +76,12 @@ pub struct BundleAdjustReport {
 
 pub enum BundleAdjustError {
     NoKeypoints,
-    MixedCameras { cameras: usize },
-    FocalNotReleasable(&'static str),
+    FocalNotReleasable { camera: usize, model: &'static str },
     NoPosedImages,
     NoObservations,
     EmptySchedule,
     Constraints(PointConstraintsError),
+    Cancelled,
     Degenerate { observations: usize, min_obs: usize },
 }
 
@@ -98,13 +105,21 @@ whether the lens moves; everything else is the schedule the rest of the toolkit
 runs. So `opt_f` is the first field and the rest are the kernel's own defaults,
 stated rather than hidden so a caller that does need to tighten a trim can.
 
-**`opt_f` refuses rather than degrades.** The kernel silently reduces a focal
-release on a model its analytic focal column is not exact for to a fixed-focal
-solve. That is right for a kernel with a parity requirement and wrong for a
-caller who asked a question: a report saying the focal was released when it was
-held would be false. [`focal_is_releasable`] is public for the same reason, so a
-caller offering the release as a choice can grey the choice instead of taking it
-and refusing.
+**`opt_f` refuses rather than degrades, over every camera.** The kernel holds
+the focal of a camera whose model its analytic focal column is not exact for,
+and releases the others. That is right for a kernel with a parity requirement
+and wrong for a caller who asked a question: a report saying the focal was
+released when it was held would be false. So under `opt_f` the call refuses
+when any camera in the solve is not releasable, and the error names that camera
+and its model. [`focal_is_releasable`] is public and per camera for the same
+reason, so a caller offering the release as a choice can grey the choice unless
+every camera the posed images use passes, instead of taking it and refusing.
+
+**The report is per camera.** Each camera in the solve has its own focal, so
+the single focal fields a one-camera report would carry become one
+`CameraAdjustment` per camera. Per-camera residual medians are not in it: the
+overall medians are the ones a caller reports in one line, and a caller wanting
+more runs the kernel.
 
 **The report names three populations.** `images`, `points` and `observations`
 are what went into the solve, which is not the whole reconstruction: an unposed
@@ -114,27 +129,30 @@ needs all four to write a true sentence.
 
 **The errors are an enum.** Every variant is a property of the value or the
 options that a caller could have checked, and two of them (`NoKeypoints`,
-`MixedCameras`) are exactly what a menu entry greys itself on. A
+`NoPosedImages`) are exactly what a menu entry greys itself on. A
 `Result<_, String>` would make that gate a string comparison.
 
 ### Example
 
 ```rust
+use sfmtool_core::progress::Progress;
 use sfmtool_core::{bundle_adjust, BundleAdjustOptions};
 
 let options = BundleAdjustOptions {
     opt_f: true,
     ..BundleAdjustOptions::default()
 };
-let (next, report) = bundle_adjust(&recon, &options)?;
+let (next, report) = bundle_adjust(&recon, &options, &Progress::none())?;
 println!(
-    "{} px -> {} px, focal {} -> {}, {} points dropped",
-    report.median_residual_before,
-    report.median_residual_after,
-    report.focal_before,
-    report.focal_after,
-    report.points_deleted,
+    "{} px -> {} px, {} points dropped",
+    report.median_residual_before, report.median_residual_after, report.points_deleted,
 );
+for camera in &report.cameras {
+    println!(
+        "camera {}: focal {} -> {} over {} images",
+        camera.camera, camera.focal_before, camera.focal_after, camera.images
+    );
+}
 ```
 
 ## What the call does
@@ -150,12 +168,9 @@ without solving anything:
   a sighting, and the residual has nothing to be measured against. The other
   observation mode always carries one.
 - No image with a finite pose (`NoPosedImages`).
-- Posed images that do not share one set of camera intrinsics
-  (`MixedCameras`). The kernel carries a single shared camera, and a value whose
-  images disagree about the lens has to be told so rather than adjusted through
-  one of them.
-- A focal release on a model the kernel's focal column is not exact for
-  (`FocalNotReleasable`).
+- A focal release when any camera the posed images use has a model the kernel's
+  focal column is not exact for (`FocalNotReleasable`, naming the first such
+  camera by its table index, and its model).
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -170,6 +185,12 @@ is one of them. An unposed image is not a camera a residual can be written
 against, so it sits the solve out and its observations do not enter; a point left
 with no observation in the solve is not in the solve either, and comes back
 exactly as it went in.
+
+The cameras of the solve are the camera-table entries the posed images use, in
+table order, and each posed image's index into that list goes to the kernel as
+its image-to-camera column. The posed images may use any number of cameras; each
+keeps its own lens in the solve. A camera only unposed images use, or none, is
+not in the solve and comes back exactly as it went in.
 
 Every live point goes in at the coordinate it holds, with the representation it
 holds: a `w = 0` row is a world-frame direction and enters the kernel's
@@ -204,8 +225,9 @@ on it.
 
 - **Poses.** Each posed image takes the rotation and translation the solve
   ended with.
-- **The focal.** Under `opt_f`, the shared camera is replaced by itself at the
-  solved focal. Nothing else about the lens moves.
+- **The cameras.** Each camera in the solve is replaced by the camera the
+  kernel returned for it: itself at its solved focal under `opt_f`, and itself
+  unchanged otherwise. Nothing else about any lens moves.
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
 - **The stored error.** Each point's error column becomes the RMS of that
@@ -288,7 +310,7 @@ would leave the frame carrying the gauge drift of the solve.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `opt_f` | `false` | Release the shared focal length. |
+| `opt_f` | `false` | Release the focal length of every camera the posed images use, each its own. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -305,12 +327,15 @@ max_iters=60, min_track=2, min_obs=12)` returns
 `(EditedReconstruction, report)`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
-The report is the fields above as a dict, and every refusal is a `ValueError`
-carrying the sentence the error writes.
+The report is the fields above as a dict, `cameras` a list with one dict per
+camera in the solve carrying the `CameraAdjustment` fields, and every refusal is
+a `ValueError` carrying the sentence the error writes.
 
 ```python
 adjusted, report = value.bundle_adjust(opt_f=True)
 print(report["median_residual_before"], "->", report["median_residual_after"])
+for camera in report["cameras"]:
+    print(camera["camera"], camera["focal_before"], "->", camera["focal_after"])
 ```
 
 ## Testing
@@ -325,6 +350,15 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   down.
 - The input value untouched.
 - A released focal found from 6 % off, reported, and written into the camera.
+- A value whose images are taken through two cameras adjusted rather than
+  refused, each image read through its own lens: the poses converge, and each
+  camera's report entry counts its images and holds its focal.
+- `opt_f` over two releasable cameras finding each its own planted focal and
+  moving nothing else about either lens, and refused, naming the camera and its
+  model, when one of them is not releasable.
+- A camera no posed image uses (one nothing references, one only an unposed
+  image uses) coming back untouched, left out of the report, and not refusing a
+  focal release on its model.
 - A point at infinity coming back a unit direction, and the infinity count with
   it.
 - A held point coming back at exactly the coordinate it went in at, with its
@@ -336,9 +370,9 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
 
 Bindings (`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`): the
 call's shape over a real reconstruction -- the poses moving, the residual median
-not getting worse, the report's populations, the value that came back being a new
-base with no overlay, and the object it came from untouched -- and the
-no-keypoints refusal.
+not getting worse, the report's populations and its per-camera entries, the value
+that came back being a new base with no overlay, and the object it came from
+untouched -- and the no-keypoints refusal.
 
 ## Non-goals
 
@@ -347,8 +381,10 @@ no-keypoints refusal.
 - Deciding which points are at infinity. The representation the value carries is
   honoured for the whole solve; re-deciding it is
   [`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md).
-- Adjusting a rig as a rig, or several cameras at once. One shared camera, or a
-  refusal.
+- Adjusting a rig as a rig. Every image keeps its own free pose, whichever
+  camera took it.
+- Releasing the focal of some cameras and not others. `opt_f` reaches every
+  camera in the solve, and is refused when any of them cannot take it.
 - Adding, removing or moving observations. The adjustment reads the track it is
   given.
 - Running in the background. The function is synchronous, and a caller that

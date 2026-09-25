@@ -16,7 +16,7 @@ invocation, the version's label and the history entry.
 
 | Document | Description |
 |----------|-------------|
-| [bundle-adjust.md](bundle-adjust.md) | Refine every pose and every point of the selected reconstruction against its observations, from the Edit menu, with the shared focal held or released. |
+| [bundle-adjust.md](bundle-adjust.md) | Refine every pose and every point of the selected reconstruction against its observations, from the Edit menu, with every camera's focal held or released. |
 | [move-camera.md](move-camera.md) | Move one image's pose by hand: camera view with the camera coming along, so every navigation input moves it, with a live residual readout and one version when the lock is released. |
 | [bake-transform.md](bake-transform.md) | Write a reconstruction's display transform into its points, poses and bench, from the reconstruction row's context menu, and return it to its own frame as one version, the picture holding still. |
 | [commit-track.md](commit-track.md) | Write the active bench track into the reconstruction: the one step of the bench that touches the file, replacing the point it came from or creating one, with the bench and the value stated in one version. |

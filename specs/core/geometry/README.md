@@ -15,7 +15,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 | [estimate-intrinsics.md](estimate-intrinsics.md) | One typed camera out of the focal vote: the model verdict, whether it is corroborated, the focal, and the votes behind them. |
 | [rotation-init.md](rotation-init.md) | Far-field, parallax-free correspondences fixing rotations before any translation is known. |
 | [reconstruction-growth.md](reconstruction-growth.md) | Registering the un-posed images of a cluster-track set against a seeded reconstruction, in batches. |
-| [bundle-adjustment.md](bundle-adjustment.md) | Staged bundle adjustment over a shared camera. |
+| [bundle-adjustment.md](bundle-adjustment.md) | Staged bundle adjustment over one or more cameras, each with its own lens block. |
 | [reprojection-residuals.md](reprojection-residuals.md) | Batched reprojection residuals and inlier fractions. |
 | [affine-factorization.md](affine-factorization.md) | Joint weak-perspective factorization over sparse, partly-junk cluster observations. |
 | [pose-verification.md](pose-verification.md) | Displacement-neighbourhood check that flags — and repairs — poses the structure disagrees with. |

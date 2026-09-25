@@ -1,14 +1,16 @@
-# Staged bundle adjustment (shared camera)
+# Staged bundle adjustment
 
 ## Purpose
 
 The staged robust bundle adjustment written for the cluster pinhole bootstrap
 experiments, whose scripts have since been removed: given
-images sharing one camera model, camera poses, world points, and pixel
+images taken through one or more cameras, camera poses, world points, and pixel
 observations tying them together, jointly refine the poses and points (and
-optionally the shared focal length and the shared distortion release — a
-radial coefficient or a spline) by minimizing
+optionally each camera's focal length and its distortion release, a radial
+coefficient or a spline) by minimizing
 robust pixel reprojection error over a trim schedule with inter-round retriangulation.
+Each camera keeps its own lens parameters in the solve, and every observation is
+read through the camera of its own image.
 
 This is the optimizer that the trimmed pose-only refinement
 (`crates/sfmtool-core/src/geometry/pose_refine.rs`) is the single-pose
@@ -18,7 +20,12 @@ handling dominated the bootstrap's wall-clock.
 
 ## Definitions
 
-- `n_img` **images** sharing one `CameraIntrinsics`, each with a
+- `n_cam` **cameras**, each a `CameraIntrinsics` with its own model,
+  parameters and initial focal. A camera here is what the `.sfmr` calls one:
+  an entry of the camera table, which images reference by index. Rigs are not
+  modelled: every image keeps its own free pose.
+- `n_img` **images**, each taken through one of the cameras (`image_camera[i]`)
+  and each with a
   world-to-camera pose `(R_i, t_i)` in the canonical convention
   (`x_cam = R·X + t`; the camera looks along `−Z`, a point in front has
   `z < 0`), rotations supplied as WXYZ unit quaternions.
@@ -41,9 +48,9 @@ callers refill).
 
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
-(`bundle_adjust`, `BaSchedule`, `BundleAdjustment`, `PointConstraint`,
-`PointConstraints`, `DistanceReference`, `FreePointPolicy`), bound as
-`sfmtool._sfmtool.geometry.bundle_adjust`.
+(`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
+`PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`),
+bound as `sfmtool._sfmtool.geometry.bundle_adjust`.
 
 ```rust
 pub struct BaSchedule {
@@ -51,8 +58,19 @@ pub struct BaSchedule {
     pub loss_scale: f64,  // soft-L1 scale for the round's solve, px
 }
 
+/// The cameras of a solve, and which of them took each image.
+pub struct BaCameras<'a> {
+    pub cameras: &'a [CameraIntrinsics], // n_cam, each with its initial focal
+    pub image_camera: Cow<'a, [u32]>,    // n_img, an index into `cameras`
+}
+
+impl<'a> BaCameras<'a> {
+    /// Every image taken by one camera: the single-camera case.
+    pub fn shared(camera: &'a CameraIntrinsics, n_img: usize) -> BaCameras<'a>;
+}
+
 pub fn bundle_adjust(
-    cam: &CameraIntrinsics,          // shared model; carries the initial focal
+    cameras: &BaCameras<'_>,             // the cameras and the image-to-camera column
     quats: &mut [UnitQuaternion<f64>],   // n_img, world-to-camera
     trans: &mut [Vector3<f64>],          // n_img
     points: &mut [[f64; 3]],             // n_pt (NaN allowed)
@@ -72,9 +90,41 @@ pub fn bundle_adjust(
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
     progress: &Progress<'_>,             // phases, counts and the cancel flag
-) -> BundleAdjustment;                   // { focal, k1, bspline, residual_norms,
-                                         //   point_at_infinity }
+) -> BundleAdjustment;
+
+pub struct BundleAdjustment {
+    pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
+    pub residual_norms: Vec<f64>,        // n_obs
+    pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
+}
 ```
+
+A single-camera caller passes `&BaCameras::shared(&cam, quats.len())`:
+
+```rust
+let out = bundle_adjust(
+    &BaCameras::shared(&cam, quats.len()),
+    &mut quats, &mut trans, &mut points, &uv, &obs_img, &obs_pt,
+    None, None, FreePointPolicy::default(), None, DEFAULT_PROTECTED_LOSS_SCALE,
+    true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none(),
+);
+let solved_focal = out.cameras[0].focal_lengths().0;
+```
+
+**Why `BaCameras` rather than two more arguments.** The camera list and the
+image-to-camera column only mean something together, and the checks on them
+belong in one place: an empty camera list, an `image_camera` whose length is not
+`n_img`, or an index past the list is a caller error and panics like the
+kernel's other shape checks. `image_camera` is a `Cow` so that
+`BaCameras::shared` can own the all-zero column it builds, while a caller with a
+column of its own lends it (`image_camera: column.as_slice().into()`).
+
+**Why the result returns cameras.** A caller wants each solved camera back to
+write into its own table. The result carries the whole `CameraIntrinsics` per
+input camera, in order: the input camera with its released parameters replaced
+by the solved ones (the focal under `opt_f`, `k1` under `opt_k1`, the spline
+under `opt_bspline`, where its model admits the release), and equal to the input
+camera otherwise. A caller copies it rather than reassembling it from scalars.
 
 `progress` is where the rounds and the LM iterations inside them are reported: a
 phase per schedule round with an iteration count under it, so a caller knows
@@ -97,7 +147,9 @@ Per schedule round, mirroring the experiment scripts exactly:
    on for the round's direction mask, `few = absent`, and the floor, cheirality
    and bar rules off, the settings a free point crossing representations moves
    off, and a ranged or held point never reads (see "Point constraints"):
-   world rays `R_iᵀ · pixel_to_ray(uv)` and centers `−R_iᵀ t_i` per
+   world rays `R_iᵀ · pixel_to_ray(uv)`, each through the camera of its own
+   image, so a track seen by two cameras back-projects each observation through
+   its own lens, and centers `−R_iᵀ t_i` per
    observation, grouped by point with a STABLE sort so a track
    accumulates its own observations in the order the caller listed them, and
    solved through [`reconstruction::triangulation::triangulate_batch`]. A track
@@ -106,9 +158,17 @@ Per schedule round, mirroring the experiment scripts exactly:
    the "refill after BA" rule of the bootstrap spec). Re-admission is the
    point: observations a bad init lost re-enter once the refined cameras
    explain them.
-2. **Trim.** Keep observations with residual norm `< trim_px`, in-front
-   depth `> 1e-3 · f` (canonical depth is `−z_cam`), and a finite point;
-   then drop observations of points with fewer than `min_track` survivors.
+2. **Trim.** Keep observations with residual norm `< trim_px`, an in-front
+   measure `> 1e-3 · f`, and a finite point; then drop observations of points
+   with fewer than `min_track` survivors. `f` is the focal of the observation's
+   own camera at the round's state (the model's first where it carries two). The
+   in-front measure is model-aware: the canonical depth `−z_cam` for the
+   perspective family, whose projection is defined only for `z_cam < 0`, and the
+   range `‖p_cam‖` for a ray-path model (fisheye, equirectangular), which images
+   rays out past `θ = 90°`; there the floor rejects only a point on the camera
+   centre and the domain test is `ray_to_pixel`, whose failure is an invalid
+   residual. A direction's measure is checked against zero (see "Points at
+   infinity").
    If fewer than `min_obs` observations survive, return degenerate: state
    passes through, `residual_norms` all `+∞` (the fast bootstrap's
    "wildly wrong focal" guard).
@@ -131,10 +191,12 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 ```
 
 - **Parameters.** Per touched image a local `SO(3) × ℝ³` perturbation
-  (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; when
-  `opt_f`, the shared focal `f ← f + δf`; when `opt_k1`, the shared
-  radial coefficient `k1 ← k1 + δk1`; when `opt_bspline`, the shared
-  spline `cᵢ ← cᵢ + δcᵢ`. Focal optimization requires a
+  (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; and per
+  camera, when `opt_f`, its focal `f_j ← f_j + δf_j`; when `opt_k1`, its
+  radial coefficient `k1_j ← k1_j + δk1_j`; when `opt_bspline`, its
+  spline `c_j,i ← c_j,i + δc_j,i`. The three flags are requests to every
+  camera, each decided on that camera's own model (below and "Several
+  cameras"). Focal optimization requires a
   single-focal model whose projection multiplies `f` onto a distorted
   coordinate that does not itself depend on `f` — `SIMPLE_PINHOLE`
   (`x_d = rx/(−rz)`), `EQUIDISTANT_FISHEYE` (`x_d = θ·ûx` with
@@ -154,8 +216,9 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   Every other model fails the conditions — a second focal `fy` (no slot
   in the camera block), or higher polynomial coefficients recovered
   through `f`-dependent normalization. The binding rejects `opt_f` /
-  `opt_k1` for those loudly, and the core silently degrades to the
-  fixed-parameter solve (never a half-modeled DOF). The rung also needs the
+  `opt_k1` for those loudly, and the core silently holds that camera's
+  parameter fixed (never a half-modeled DOF) while releasing it on the cameras
+  whose models admit it. The rung also needs the
   model's INVERSE to carry `k1`: retriangulation and direction
   re-estimation read `pixel_to_ray`, which for `SIMPLE_RADIAL_FISHEYE` is
   the Newton recovery of `θ` without the family's wide-angle blend — that
@@ -168,13 +231,14 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   and only when that spline is defined: at least two coefficients on a
   positive finite domain end (`bspline_theta_max` / `bspline_rho_max`;
   anything shorter evaluates as the identity and has nothing to release).
-  The released block is the whole coefficient vector `c₀..c_{N−1}`, shared by
-  every image like `f` and `k1`, so the reduced camera system is
-  `[f, k1, c₀..c_{N−1} | 6·n_im]` — width `2 + N + 6·n_im`. `opt_k1` and
-  `opt_bspline` are mutually exclusive: no model carries both parameters, so
-  the binding rejects the combination (checked before the model gates, so the
-  caller sees the real reason) and the core degrades each on its own model
-  test. Retriangulation and direction re-estimation read the model's Newton
+  The released block is the camera's whole coefficient vector `c₀..c_{N−1}`,
+  shared by every image that camera took like its `f` and `k1`, so with one
+  camera the reduced camera system is `[f, k1, c₀..c_{N−1} | 6·n_im]`, width
+  `2 + N + 6·n_im` (see "Several cameras" for more). `opt_k1` and
+  `opt_bspline` are mutually exclusive on any one camera: no model carries both
+  parameters, so the binding rejects the combination (checked before the model
+  gates, so the caller sees the real reason) and the core degrades each on its
+  own model test. Retriangulation and direction re-estimation read the model's Newton
   inverse, which carries the spline over the model's whole radial domain, for
   the same reason the `k1` rung needs its own (for the fisheye that means no
   wide-angle blend; for the pinhole, an explicit Newton arm rather than the
@@ -248,11 +312,12 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   valley model stopped the focal release short on seoul (kept f at the
   scan winner where scipy walked −20% to the reference focal).
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
-  inverted directly and the reduced camera system
-  (`[f?, k1?, c₀..c_{N−1}? | 6·n_im]`, dense) is solved by LU; point updates
-  back-substitute. Unreleased shared slots (and released coefficient slots
-  with no observation support) are pinned to an identity row/column with a
-  zero gradient entry, which is what keeps that system regular.
+  inverted directly and the reduced camera system (one lens block
+  `[f_j?, k1_j?, c_j,0..c_j,N_j−1?]` per camera, then `6·n_im`, dense) is
+  solved by LU; point updates back-substitute. Unreleased lens slots (and
+  released coefficient slots with no observation support, and every slot of a
+  camera no kept observation reaches) are pinned to an identity row/column with
+  a zero gradient entry, which is what keeps that system regular.
   Rejected steps re-damp and re-solve from the same linearization (no
   re-evaluation), with Marquardt scaling `λ·diag(JᵀJ)` for the
   `x_scale="jac"` parameter-scale invariance of the scipy original.
@@ -263,11 +328,78 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   bounded ladder (12 ×4 escalations, capped at `λ = 10¹²`) finds a
   downhill step.
 
+## Several cameras
+
+Everything above is stated for one camera, and a solve over several is the same
+solve with the lens parameters kept per camera. `BaCameras` carries the camera
+list and, per image, the index of the camera that took it.
+
+### The reduced camera system
+
+The reduced system has one lens block per camera, then the poses:
+
+```
+[ f₀?, k1₀?, c₀,₀..c₀,N₀−1? | f₁?, k1₁?, c₁,₀..c₁,N₁−1? | … | 6·n_im ]
+```
+
+Camera `j`'s block has a focal slot, a `k1` slot and `N_j` spline slots, where
+`N_j` is the length of its spline when its spline is released and `0`
+otherwise. Its width is `Σ_j (2 + N_j) + 6·n_im`. An observation of image `i`
+writes its lens columns into the block of camera `image_camera[i]` and into no
+other camera's block, so two cameras' lens parameters couple only through the
+poses and points they both observe. With a handful of cameras and a few hundred
+images the dense solve is unchanged in practice.
+
+The per-observation camera block keeps its fixed width. The spline
+instantiation (`2 + 4 + 6` columns) is used whenever any camera releases a
+spline; in it, a spline column that carries no coefficient (one of the
+gauge-anchored pair, or any spline column of a camera whose spline is not
+released) points at the observing camera's own `k1` slot and is exactly zero,
+so it adds exact zeros there whether or not that slot is released.
+
+Every rule the single block follows applies to each block separately:
+
+- **Release gates, per camera.** `opt_f`, `opt_k1` and `opt_bspline` are
+  requests to every camera. A camera whose model the release is not exact for
+  keeps that parameter fixed, so a `SIMPLE_PINHOLE` and an `OPENCV_FISHEYE` in
+  one solve under `opt_f` release the pinhole's focal and hold the fisheye's.
+- **Pinning.** A slot that is not released is pinned with an identity row and
+  column and a zero gradient entry, and so is every slot of a camera none of
+  whose images has a kept observation in the round. Such a camera is not
+  stepped, and comes back exactly as it went in.
+- **Step guards.** A candidate step is rejected, and re-damped, when any
+  camera's candidate focal is non-positive, its `k1` folds inside its own imaged
+  field (the largest pixel radius of its own kept observations about its own
+  principal point), or its spline breaks monotonicity on its own domain.
+- **Staged releases** are the caller's schedule, as with one camera.
+
+### What reads the camera, per observation
+
+Everything that reads a camera reads the camera of the observation's image,
+`cameras[image_camera[obs_img[k]]]`: the projection, its Jacobian and the lens
+columns; the trim's in-front measure and its `1e-3 · f` floor; and
+`pixel_to_ray` in the inter-round re-estimation.
+
+The noise floor under `FreePointPolicy::cross`, `θ_floor = c · s / f`, is an
+angle per track. A track takes `f` as the mean of the focal lengths of its
+observations' cameras, one term per observation (each camera's focal the mean
+of its two where the model carries two). A track seen through one camera takes
+that camera's focal as it is, which is the single-camera rule.
+
+### Parity
+
+With one camera and every image on it, the kernel is the single-camera kernel,
+bit for bit, on every output: poses, points, residual norms, representation and
+the returned camera. The layout above reduces to `[f, k1, c₀..c_{N−1} | 6·n_im]`
+and every per-camera read reads the one camera.
+
 ## Bindings
 
 ```python
 bundle_adjust(
-    camera,                    # CameraIntrinsics shared by all images (initial f)
+    cameras,                   # sequence of CameraIntrinsics, one per camera
+                               # (each carries its own initial f)
+    image_camera,              # (n_img,) uint32 index into `cameras`
     quaternions_wxyz,          # (n_img, 4) world-to-camera (WXYZ)
     translations,              # (n_img, 3)
     points,                    # (n_pt, 3), NaN allowed
@@ -286,8 +418,9 @@ bundle_adjust(
                                # none; a finite `distance` requires one
     free_points_cross=False,   # re-decide every free point's representation at
                                # each inter-round re-estimation
-    noise_floor_scale=2.0,     # the constant c in theta_floor = c*s/f
-                               # (positive and finite); read only under
+    noise_floor_scale=2.0,     # the constant c in theta_floor = c*s/f, f the
+                               # mean focal of the track's cameras (positive
+                               # and finite); read only under
                                # `free_points_cross`
     protected=None,            # (n_obs,) bool; protected observations survive
                                # every trim gate and take the wider loss scale.
@@ -295,30 +428,38 @@ bundle_adjust(
                                # behavior bit for bit
     protected_loss_scale=3.0,  # multiplier on each stage's loss scale for
                                # protected observations (positive and finite)
-    opt_f=False,               # SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
-                               # SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE
-                               # or SFMTOOL_PINHOLE
-    opt_k1=False,              # SIMPLE_RADIAL_FISHEYE only
-    opt_bspline=False,         # SFMTOOL_FISHEYE or SFMTOOL_PINHOLE,
-                               # defined spline; exclusive with opt_k1
+    opt_f=False,               # every camera SIMPLE_PINHOLE,
+                               # EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE,
+                               # SFMTOOL_FISHEYE or SFMTOOL_PINHOLE
+    opt_k1=False,              # every camera SIMPLE_RADIAL_FISHEYE
+    opt_bspline=False,         # every camera SFMTOOL_FISHEYE or
+                               # SFMTOOL_PINHOLE with a defined spline;
+                               # exclusive with opt_k1
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
     min_obs=12,
-) -> dict                      # focal, k1, bspline_coefficients (n_coeffs,),
+) -> dict                      # cameras (list of CameraIntrinsics),
                                # quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
                                # residual_norms (n_obs,),
                                # point_at_infinity (n_pt,)
 ```
 
-`bspline_coefficients` is always present: the coefficients after the solve —
-the camera's input ones unless `opt_bspline` — and an empty array for models
-that carry no spline, mirroring how `k1` reports `0.0` for models without
-one. `opt_bspline` raises for a camera that is neither `SFMTOOL_FISHEYE` nor
-`SFMTOOL_PINHOLE`, and for an undefined spline; `opt_k1` together with
-`opt_bspline` raises first, so the caller sees the exclusion rather than
-whichever model gate happens to fire.
+`cameras` in the result holds one `CameraIntrinsics` per input camera, in
+order: the kernel's returned cameras, each the input camera with its released
+parameters replaced by the solved ones. A caller reads a solved focal as
+`out["cameras"][j].focal_lengths[0]` and a solved `k1` or spline from the
+camera's `parameters`.
+
+The binding holds every camera to every release it is asked for: a release that
+some camera's model does not admit raises a `ValueError` naming that camera,
+rather than letting the kernel hold that camera's parameter fixed. `opt_bspline`
+raises for a camera that is neither `SFMTOOL_FISHEYE` nor `SFMTOOL_PINHOLE`, and
+for an undefined spline; `opt_k1` together with `opt_bspline` raises first, so
+the caller sees the exclusion rather than whichever model gate happens to fire.
+An empty `cameras`, an `image_camera` whose length is not `n_img`, and an index
+past `cameras` raise `ValueError` as well.
 
 `held`, `distance` and `distance_from` are the flat form of the kernel's
 `PointConstraints`: the binding assembles them, so a caller states each point's
@@ -439,6 +580,32 @@ Python's point of view).
   against silent transposition).
 - **Binding behavior**: the Python binding reproduces the kernel's
   behavior on analogous synthetic scenes (`tests/rust_bindings/`).
+- **Several cameras**:
+  - *Parity.* Every single-camera test runs through `BaCameras::shared`, and a
+    scene run through an explicit one-entry `BaCameras` matches it to the bit.
+  - *Two models.* A scene with a `PINHOLE` and an `OPENCV_FISHEYE` camera,
+    images from each, and perturbed poses and points converges to sub-pixel
+    reprojection; the same scene with every image read through the pinhole
+    does not, which shows each observation is read through its own camera.
+  - *Per-camera focal release.* Two releasable cameras with different planted
+    focal lengths, both started several percent off, recover each its own focal
+    under `opt_f`; with one releasable and one not, the releasable one moves and
+    the other comes back bit for bit.
+  - *Independent blocks.* Cameras no image uses come back bit for bit under
+    every release, whatever their models admit, while the used camera is solved.
+  - *Two distortion releases in one solve.* A `SIMPLE_RADIAL_FISHEYE` releasing
+    `k1` and a `SFMTOOL_FISHEYE` releasing its spline recover a planted `k1` and
+    a planted spline together.
+  - *Directions past 90°.* On an equidistant fisheye scene wider than 180°,
+    directions observed at `θ = 100°` survive the trim and recover the rotation
+    of an image whose only observations they are; on a perspective camera a
+    direction behind the image plane is trimmed.
+  - *The noise floor.* A track seen through two cameras takes the mean of their
+    focals, one term per observation; one seen through one camera takes that
+    camera's focal as it is.
+  - *Shape checks.* An index past the camera list, an `image_camera` of the
+    wrong length and an empty list panic; the binding raises `ValueError` for
+    each, and names the camera a refused release does not admit.
 
 ## Points at infinity
 
@@ -449,7 +616,7 @@ direction was marked; the copies were merged once the reduction was shown to
 hold bit for bit.)
 
 A point at infinity is a pure direction: its observations depend on the
-observing image's rotation and the shared camera model, never on any
+observing image's rotation and its camera's model, never on any
 translation. Supplying far-field tracks as directions therefore pins
 rotations (and, under `opt_f`, the focal) without touching the
 depth/translation side of the solve — exactly the coupling that lets a
@@ -476,9 +643,14 @@ focal.
 A direction projects like a point at infinite depth: `uv_pred =
 ray_to_pixel(R_i · d)`. The residual is the same pixel difference as a
 finite observation — same units, same soft-L1 loss, same trim thresholds.
-A direction "in front" satisfies `(R_i · d)_z < 0` (canonical −Z
-forward); a behind-camera or out-of-domain direction contributes the
-standard `(1e6, 0)` penalized residual with a zero Jacobian row.
+Whether a direction is "in front" is model-aware, like the finite in-front
+measure: for the perspective family it is `(R_i · d)_z < 0` (canonical −Z
+forward), and for a ray-path model, whose domain runs past `θ = 90°`, it is
+that `ray_to_pixel(R_i · d)` is defined, so a direction a wide fisheye sees past
+90° off-axis is in front. The trim reads the same measure it reads for a finite
+point, the range `‖R_i · d‖ = 1` for a ray-path model, against a floor of zero,
+and the domain test is the residual. A behind-camera or out-of-domain direction
+contributes the standard `(1e6, 0)` penalized residual with a zero Jacobian row.
 
 - **Parameters.** A direction perturbs in the 2-DOF tangent plane of the
   unit sphere: `d ← normalize(d + B(d) · δ)` with `B(d)` an orthonormal
@@ -496,7 +668,7 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
   would carry a zero-curvature translation block. The `min_obs` degenerate-exit floor is independent of
   that and counts **every trim survivor**, finite and direction alike: it
   measures whether the round retained enough evidence to solve on, and a
-  direction constrains the rotations and the shared camera parameters just
+  direction constrains the rotations and its camera's lens parameters just
   as a finite observation does. A directions-only observation set therefore
   runs at the default floor.
 
@@ -504,7 +676,7 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
 
 - **Trim** treats direction observations exactly like finite ones (pixel
   threshold, `min_track` survivors per point); the in-front check is the
-  cheirality test above instead of the depth floor.
+  model-aware test above, against a floor of zero instead of `1e-3 · f`.
 - **Re-estimation (rounds after the first).** Where finite points
   retriangulate, a direction re-estimates in closed form as the
   normalized mean of its observations' back-rotated rays
@@ -573,7 +745,8 @@ let mut cons = PointConstraints::all_free(points.len());
 cons.hold(survey_marker);                        // known in the solve's frame
 cons.constrain_distance(spire, 1045.0, Some(DistanceReference::Image(shot)));
 cons.constrain_distance(sky, f64::INFINITY, None);  // a bearing, no reference
-bundle_adjust(cam, quats, trans, points, uv, obs_img, obs_pt,
+bundle_adjust(&BaCameras::shared(&cam, quats.len()),
+              quats, trans, points, uv, obs_img, obs_pt,
               None, Some(&cons),
               FreePointPolicy { cross: true, noise_floor_scale: 2.0 },
               None, DEFAULT_PROTECTED_LOSS_SCALE,
@@ -603,8 +776,9 @@ re-estimation, which under `cross` runs the retriangulation operation with
 θ_floor = noise_floor_scale · s / f
 ```
 
-with `s` the round's `loss_scale` in pixels and `f` the camera's current focal
-(the mean of the two where a model carries two). That is the parallax the
+with `s` the round's `loss_scale` in pixels and `f` the current focal of the
+cameras the track was seen through, their mean over the track's observations
+(each camera's focal the mean of its two where a model carries two). That is the parallax the
 stage's own residual scale cannot tell from noise, so a wide-baseline stage
 keeps more tracks finite than a tight one, and the boundary walks with a
 released focal. A direction whose rays open past it becomes finite at the next
@@ -798,12 +972,16 @@ validation, and outputs are unchanged.
 
 ## Non-goals
 
-- Per-image or per-observation camera models — one shared
-  `CameraIntrinsics`.
-- Optimizing distortion beyond the single shared `k1` of
-  `SIMPLE_RADIAL_FISHEYE` and the shared spline of `SFMTOOL_FISHEYE` /
-  `SFMTOOL_PINHOLE`, or the principal point; `opt_f`/`opt_k1`/`opt_bspline`
-  cover the shared focal and those two radial releases only.
+- Rigs. Every image keeps its own free pose; a rig-aware adjustment would solve
+  one pose per frame plus camera-to-rig offsets, which is a different
+  parameterization.
+- Releasing some cameras and not others. The release flags are requests to
+  every camera, decided per camera only by what its model admits.
+- Per-observation camera models: an observation's camera is its image's.
+- Optimizing distortion beyond the `k1` of `SIMPLE_RADIAL_FISHEYE` and the
+  spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`, or the principal point;
+  `opt_f`/`opt_k1`/`opt_bspline` cover each camera's focal and those two radial
+  releases only.
 - Gauge fixing, covariance estimation, or constraint handling — callers
   own the gauge (the bootstrap's evaluation aligns by similarity anyway).
 - Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP); this

@@ -51,9 +51,10 @@ that node, and when the node cannot be adjusted:
 
 - its observations are `.sift` feature indexes with no inline keypoints, so
   there is no pixel to reproject against;
-- its posed images are taken through more than one lens, and the adjustment
-  solves one shared camera;
 - none of its images carries a pose.
+
+How many cameras the posed images are taken through is not a reason: the
+adjustment solves each of them through its own lens.
 
 The gate is the edit's own, in
 [bundle_adjust_prompt.rs](../../../crates/sfm-explorer/src/bundle_adjust_prompt.rs),
@@ -67,10 +68,13 @@ behind it, not one a hand should be able to fire by accident.
 `Bundle Adjust...` opens a small window rather than running immediately, because
 there is one decision to take:
 
-- **Release focal length**, a checkbox, clear by default. A focal that moves is a
-  different claim about the capture than a pose that does, so the smaller claim
-  is the default. It is **disabled**, with a hover explanation naming the camera
-  model, where the adjustment's focal column is not exact for that model.
+- **Release focal length**, a checkbox, clear by default. Ticked, it releases
+  the focal of every camera the posed images use, each its own. A focal that
+  moves is a different claim about the capture than a pose that does, so the
+  smaller claim is the default. It is **disabled** unless every one of those
+  cameras has a model the adjustment's focal column is exact for, with a hover
+  explanation naming the first camera that does not, by its table index, and its
+  model.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
   a window to leave lying open.
@@ -131,8 +135,11 @@ One entry, of kind `Edit`, the label plus what the solve did:
 `Bundle adjusted bull: 17 images, 4210 points, 19882 observations, median
 residual 1.402 → 0.631 px (v3 → v4)`
 
-with `, focal 2803.5 → 2794.1` appended when the focal was released and
-`, 12 points deleted` when the solve left points unsupported. The three counts
+with each camera's focal change appended when the focal was released, and
+`, 12 points deleted` when the solve left points unsupported. A solve over one
+camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
+its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
+1399.8`, because a list of numbers alone would not say which lens moved. The three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
 
@@ -165,9 +172,11 @@ Explorer (`sfm-explorer` lib tests, headless):
 - `state/edits/tests.rs`: the version pushed and its new base, the image table
   standing still, the perturbed camera coming back, the label with and without
   the focal, the log entry's counts and serials, an undo putting every pose back,
-  the selection following the map, and both gated refusals -- no inline
-  keypoints, and images that disagree about the lens -- pushing no version and
-  logging a failure.
+  the selection following the map, the gated refusal for no inline keypoints
+  pushing no version and logging a failure, a node whose images are taken
+  through two cameras adjusted rather than refused, each released camera named
+  in the entry, and the focal gate naming the first camera that cannot release
+  its focal.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (the focal held), the
   keys that run and cancel it, an ordinary frame answering nothing, and a second
   ask not stacking a second dialog.

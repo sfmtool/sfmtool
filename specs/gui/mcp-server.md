@@ -2109,9 +2109,12 @@ the wire: its three entries are the tools `resect_camera_image`,
 
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the one decision the
-dialog collects, whether the shared focal is released, as `release_focal`.
-Everything else is the core function's defaults. It needs inline keypoints and
-one shared lens, and says which is missing when it refuses.
+dialog collects, whether the focal of each camera the posed images use is
+released, as `release_focal`. Everything else is the core function's defaults.
+It needs inline keypoints and a posed image, and says which is missing when it
+refuses; `release_focal` is refused, naming the camera, when a camera the posed
+images use has a model whose focal the adjustment cannot solve. The report's
+focal clause names each released camera's focal before and after.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -3642,7 +3645,7 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 
-| `bundle_adjust` `release_focal` | `false`, the shared focal is held | The one decision the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The one decision the Bundle Adjust dialog collects. |
 
 ## Open questions
 
