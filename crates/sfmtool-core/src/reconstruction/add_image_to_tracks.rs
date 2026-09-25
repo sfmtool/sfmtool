@@ -17,8 +17,9 @@
 //! consensus ([`ReferenceConsensus`]), the image is searched once against it,
 //! optionally refined to sub-pixel against the same references
 //! ([`refine_view_against_references`]), and scored. See
-//! `specs/drafts/add-image-to-tracks.md` for the design and the evaluation that
-//! chose the default rule.
+//! `specs/core/reconstruction/add-image-to-tracks.md` for the design, and
+//! `scripts/add_image_to_tracks/README.md` for the evaluation that chose the
+//! default rule.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

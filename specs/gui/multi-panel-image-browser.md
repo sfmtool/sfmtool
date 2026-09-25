@@ -383,7 +383,7 @@ image, the same menu a camera image row of the Scene tree opens
 ([scene-graph.md](scene-graph.md) § "Image menu", which owns its entries). The
 two are one menu: the strip and the tree both call `image_menu::show` in
 [image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs), which lays out the
-entries (`Resect Image`, `Move Camera`, `Delete Image`) with their greyed states
+entries (`Resect Image`, `Add Image to Tracks`, `Move Camera`, `Delete Image`) with their greyed states
 and hover reasons and gives back the one chosen, and the dock carries it out
 through the same function whichever place it came from.
 

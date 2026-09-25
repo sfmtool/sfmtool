@@ -456,13 +456,22 @@ order:
    the reason as its hover text, for an unposed image, a node with fewer than
    three other posed images, or a node whose cluster-patches file is missing or
    stale; that last reason offers `Build Index Files`.
-2. `Move Camera` looks through this image and hands its camera to the
+2. `Add Image to Tracks` looks for every point this image does not observe in
+   its photograph and adds the sightings that agree with the point's other
+   observations, as a version of the reconstruction, on the background worker
+   -- see [edits/add-image-to-tracks.md](edits/add-image-to-tracks.md), which
+   owns it. Greyed, with the reason as its hover text, for an unposed image, a
+   node an operation is running on, a node with no points, a `sift_files` node,
+   a node with no patch frames, or an image whose photograph cannot be found.
+3. `Move Camera` looks through this image and hands its camera to the
    reviewer, so that every navigation input moves it -- see
    [edits/move-camera.md](edits/move-camera.md), which owns it.
-3. `Delete Image` removes this image from the reconstruction as one version of
+4. `Delete Image` removes this image from the reconstruction as one version of
    it -- see [edit-history.md](edit-history.md), which owns it.
 
-`Move Camera` sits between the estimator and the deletion because it is the
+`Add Image to Tracks` sits directly below `Resect Image` because it is what a
+re-posed image wants next: the pose is new, and the tracks it now sees are not
+yet its own. `Move Camera` sits between those and the deletion because it is the
 third answer to "this pose is wrong": re-estimate it from correspondences, place
 it by hand, or take the image out. The menu's view of a node (which images are
 posed, how many, and why the cluster-patches file will not do) is
@@ -1275,7 +1284,8 @@ bundle from `retain_nodes` on the next frame.
   while live on an embedded-patches node with a current file. The same menu
   opened on an Image Browser thumbnail lays out the same entries in the same
   order, an entry chosen there reports the action the tree reports, its greyed
-  `Resect Image` hovers the tree's reason, a right click on a thumbnail selects
+  `Resect Image` hovers the tree's reason, `Add Image to Tracks` sits between
+  `Resect Image` and `Move Camera` and is greyed with the step's own reason, a right click on a thumbnail selects
   nothing, and one off the thumbnails opens no menu (`image_menu/tests.rs`).
 - **The Bench rows**, through the same whole frames: a click on a row of a
   node that is not selected reports `select_recon` for it, no `edit_bench_item`

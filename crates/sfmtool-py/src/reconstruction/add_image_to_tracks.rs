@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `EditedReconstruction.add_image_to_tracks`: adding one image's observations
-//! to the tracks it can see (see ``specs/drafts/add-image-to-tracks.md``).
+//! to the tracks it can see (see ``specs/core/reconstruction/add-image-to-tracks.md``).
 //!
 //! The rule and the gates are spelled as strings plus their numbers, so a
 //! script can sweep them without building Rust enums; the report's per-point
@@ -142,7 +142,7 @@ impl PyEditedReconstruction {
     /// combined into a robust consensus; the image is searched once against it
     /// within ``search`` patch-grid pixels of the projection, refined to
     /// sub-pixel (``subpixel``), and scored. The rule then judges the score
-    /// (see ``specs/drafts/add-image-to-tracks.md``). Nothing but the added
+    /// (see ``specs/core/reconstruction/add-image-to-tracks.md``). Nothing but the added
     /// observations changes: no point, frame, bitmap or camera moves, and
     /// nothing is re-triangulated. A **bulk** edit, so the value that comes
     /// back is a whole new base with an empty overlay, every point at the index

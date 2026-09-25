@@ -815,7 +815,7 @@ fn finalize(
 /// `target_keypoint` by the same ECC Gauss-Newton solve every view gets there,
 /// with the never-worse guard, and its keypoint is returned. The target does
 /// not contribute to the consensus. This is the sub-pixel step of adding an
-/// observation to an existing track (`specs/drafts/add-image-to-tracks.md`),
+/// observation to an existing track (`specs/core/reconstruction/add-image-to-tracks.md`),
 /// where the references are the track's settled observations.
 ///
 /// `None` when fewer than two references render in frame, the target does not

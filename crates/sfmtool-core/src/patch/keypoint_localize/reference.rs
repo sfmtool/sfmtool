@@ -10,7 +10,7 @@
 //! observations are rendered where their keypoints already put them, their
 //! robust consensus is the template, and one other view is searched and scored
 //! against it. Nothing about the references moves. See
-//! `specs/drafts/add-image-to-tracks.md`, which is the operation built on it.
+//! `specs/core/reconstruction/add-image-to-tracks.md`, which is the operation built on it.
 //!
 //! The numbers it reports are all one kind of measurement: the windowed ZNCC of
 //! a core rendered on the patch grid at a given keypoint, against a template or

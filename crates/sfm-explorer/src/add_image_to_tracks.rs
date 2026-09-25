@@ -75,7 +75,7 @@ pub(crate) fn node_refusal(edited: &EditedReconstruction) -> Option<&'static str
 pub(crate) fn outcome_text(name: &str, report: &AddImageToTracksReport) -> String {
     let refused = report.candidates.len() - report.accepted;
     let mut counts = report.refusal_counts();
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|c| std::cmp::Reverse(c.1));
     let reasons: Vec<String> = counts
         .iter()
         .map(|(refusal, n)| format!("{n} {}", refusal.name().replace('_', " ")))
@@ -96,12 +96,9 @@ impl AppState {
     /// Why `Add Image to Tracks` cannot run on `image`, or `None` when it can.
     ///
     /// The one sentence the greyed entry's hover, the step and the wire all
-    /// refuse with. An operation already running on the node comes first, then
-    /// the image's and the node's own reasons in the order the menu asks them.
+    /// refuse with, in the order the menu asks them
+    /// ([`crate::image_menu::ImageMenu::add_to_tracks_refusal`]).
     pub(crate) fn add_image_to_tracks_refusal(&self, image: ImageRef) -> Option<String> {
-        if let Some(why) = self.busy_refusal(image.recon) {
-            return Some(why);
-        }
         let Some(menu) = self.image_menu(image.recon) else {
             return Some("That reconstruction is no longer loaded.".to_string());
         };

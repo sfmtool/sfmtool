@@ -16,6 +16,7 @@ invocation, the version's label and the history entry.
 
 | Document | Description |
 |----------|-------------|
+| [add-image-to-tracks.md](add-image-to-tracks.md) | Add one image's observations of the points it sees and does not observe, from the image menu below Resect Image, on the background worker, as the node's next version with nothing else moved. |
 | [bundle-adjust.md](bundle-adjust.md) | Refine every pose and every point of the selected reconstruction against its observations, from the Edit menu, with every camera's focal held or released. |
 | [move-camera.md](move-camera.md) | Move one image's pose by hand: camera view with the camera coming along, so every navigation input moves it, with a live residual readout and one version when the lock is released. |
 | [bake-transform.md](bake-transform.md) | Write a reconstruction's display transform into its points, poses and bench, from the reconstruction row's context menu, and return it to its own frame as one version, the picture holding still. |
