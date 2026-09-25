@@ -46,7 +46,6 @@ use crate::action_log::{version_step_text, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::document::{PointMap, VersionSerial};
 use crate::progress::Collector;
-use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
 use super::{AppState, PYRAMID_LEVELS};
@@ -877,6 +876,12 @@ impl AppState {
     /// remove one -- so image indexes, the image and camera selections, and the
     /// decoded pixels keyed by them all still mean what they meant.
     ///
+    /// The correspondences are the tracks and the clusters of the node's
+    /// cluster-patches file together, so the step needs that file to be
+    /// current: a missing or stale one is refused in
+    /// [`AppState::resect_image_refusal`]'s words, which are the greyed menu
+    /// entry's, and nothing falls back to the tracks alone.
+    ///
     /// A refused *estimate* pushes no version: installed as the original it
     /// would be a version that moved the points and left the pose alone. See
     /// `specs/gui/edits/resect-image.md`.
@@ -885,18 +890,13 @@ impl AppState {
     /// the `Err` is for the caller to know the node's caches are still good, not
     /// to be logged again.
     ///
-    /// The entry carries the four stages a bulk edit has -- the overlay fold,
-    /// the resection itself, the row map read off its two values, and the
-    /// version push -- and is recorded with
+    /// The entry carries the stages a bulk edit has -- the overlay fold, the
+    /// resection itself, the row map read off its two values, and the version
+    /// push -- after the read of the cluster-patches file, and is recorded with
     /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
     /// the row says what the resection cost rather than what writing the row
     /// cost.
-    pub fn resect_image(
-        &mut self,
-        source: ReconId,
-        image: usize,
-        from: ResectFrom,
-    ) -> Result<(), String> {
+    pub fn resect_image(&mut self, source: ReconId, image: usize) -> Result<(), String> {
         let started = Instant::now();
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
@@ -904,7 +904,7 @@ impl AppState {
         if let Some(why) = self.busy_refusal(source) {
             return Err(why);
         }
-        match self.resect_image_inner(source, image, from, &collector) {
+        match self.resect_image_inner(source, image, &collector) {
             Ok(message) => {
                 self.action_log
                     .record_done(Kind::Edit, started, message, collector.take());
@@ -923,7 +923,6 @@ impl AppState {
         &mut self,
         source: ReconId,
         image: usize,
-        from: ResectFrom,
         collector: &Collector,
     ) -> Result<String, String> {
         let index = self
@@ -940,10 +939,26 @@ impl AppState {
             .map(|i| i.name.clone())
             .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
         let basename = crate::resect::basename(&name).to_string();
-        if from == ResectFrom::Matches {
-            self.load_resect_matches(source)
-                .map_err(|why| crate::resect::failure_message(&basename, &label, &why))?;
+        // The file's state as the node stands, then the one refusal the menu
+        // greys the entry with.
+        self.refresh_index_files(source);
+        if let Some(why) = self.resect_image_refusal(ImageRef::new(source, image)) {
+            return Err(crate::resect::failure_message(&basename, &label, &why));
         }
+        let clusters = {
+            let _phase = collector.phase("read cluster patches");
+            let path = self
+                .cluster_patches(source)
+                .map(|file| file.path.clone())
+                .expect("a current file is open");
+            sfmtool_matches_format::read_matches(&path).map_err(|e| {
+                crate::resect::failure_message(
+                    &basename,
+                    &label,
+                    &format!("cannot read {}: {e}", path.display()),
+                )
+            })?
+        };
 
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the resection can read directly.
@@ -967,14 +982,12 @@ impl AppState {
         // are.
         let outcome = {
             let _phase = collector.phase("resect");
-            self.with_resect_source(from, |kind| {
-                crate::resect::resect_image_in_place(
-                    source_value,
-                    image,
-                    kind,
-                    &crate::resect::ResectImageOptions::default(),
-                )
-            })
+            crate::resect::resect_image_in_place(
+                source_value,
+                image,
+                crate::resect::ResectSource::TracksAndClusters(&clusters),
+                &crate::resect::ResectImageOptions::default(),
+            )
         };
         let (resected, report) = outcome.map_err(|error| {
             crate::resect::failure_message(&basename, &label, &error.to_string())

@@ -21,7 +21,7 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::{
-    resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError, ResectSource,
+    resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::{
@@ -495,10 +495,10 @@ impl PyEditedReconstruction {
     ///
     /// Args:
     ///     image: The image's index in this version's image table.
-    ///     matches_path: Optional ``.matches`` file. Without it the 2D-3D pairs
-    ///         are the image's own stored observations; with it they come from
-    ///         the file's match graph, which requires a ``sift_files``
-    ///         reconstruction.
+    ///     cluster_patches_path: Optional cluster-patches ``.matches`` file.
+    ///         Without it the 2D-3D pairs are the tracks' alone; with it the
+    ///         file's clusters are used beside them, each as a track of its
+    ///         own (see ``geometry.resect_images``).
     ///     min_obs: Held-out finite correspondences below which the estimate
     ///         takes the rotation-only path (default 8).
     ///     accept_gate: Accept the estimate at or above this inlier fraction
@@ -511,23 +511,20 @@ impl PyEditedReconstruction {
     ///     dict of ``geometry.resect_images``. Raises ``ValueError`` with the
     ///     reason when the estimate is refused or the call cannot be attempted,
     ///     and ``OSError`` when the observations cannot be read.
-    #[pyo3(signature = (image, *, matches_path=None, min_obs=8, accept_gate=0.30, seed=0))]
+    #[pyo3(signature = (image, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0))]
     fn resect_image_in_place(
         &self,
         py: Python<'_>,
         image: usize,
-        matches_path: Option<std::path::PathBuf>,
+        cluster_patches_path: Option<std::path::PathBuf>,
         min_obs: usize,
         accept_gate: f64,
         seed: u64,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
-        let matches: Option<sfmtool_matches_format::MatchesData> = match &matches_path {
-            Some(path) => Some(
-                py.detach(|| sfmtool_matches_format::read_matches(path))
-                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
-            ),
-            None => None,
-        };
+        let clusters = crate::geometry::resect_images::read_cluster_patches(
+            py,
+            cluster_patches_path.as_deref(),
+        )?;
         let options = ResectImageOptions {
             resect: ResectOptions {
                 min_obs,
@@ -538,11 +535,12 @@ impl PyEditedReconstruction {
         let value = materialised(&self.inner);
         let (next, report) = py
             .detach(|| {
-                let source = match &matches {
-                    Some(data) => ResectSource::Matches(data),
-                    None => ResectSource::StoredObservations,
-                };
-                resect_image_in_place(&value, image, source, &options)
+                resect_image_in_place(
+                    &value,
+                    image,
+                    crate::geometry::resect_images::source(clusters.as_ref()),
+                    &options,
+                )
             })
             .map_err(|e| match e {
                 ResectInPlaceError::Resect(e) => crate::geometry::resect_images::err_to_py(e),

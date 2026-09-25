@@ -38,10 +38,10 @@
 //! the dock reads back. The rest is one module per kind of thing a row is made
 //! of:
 //!
-//! - [`mod@cameras`] — the Camera Intrinsics and Camera Images groups, the
-//!   virtualized image list, and [`cameras::ResectAvailability`], which decides
-//!   whether a resection can be asked for at all.
-//! - [`mod@menus`] — the three context menus, one per row kind.
+//! - [`mod@cameras`] — the Camera Intrinsics and Camera Images groups, and the
+//!   virtualized image list, whose rows open the image menu
+//!   ([`crate::image_menu`]) that the Image Browser strip opens too.
+//! - [`mod@menus`] — the context menus of the other row kinds.
 //! - [`mod@widgets`] — the eye and glyph toggles every row is built from, and
 //!   the two spellings of a count.
 //!
@@ -61,7 +61,6 @@ use sfmtool_core::bench::{BenchEntry, StageKind};
 use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Layer};
 use crate::align::AlignOptions;
 use crate::index_files::IndexFileState;
-use crate::resect::ResectFrom;
 use crate::scene::{point_id, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -214,19 +213,10 @@ pub struct SceneGraphResponse {
     pub edit_bench_item: Option<(ReconId, usize)>,
     /// `Discard` chosen on a Bench row, the item named the same way.
     pub discard_bench_item: Option<(ReconId, usize)>,
-    /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
-    /// the image to resect and which correspondence source was asked for. The
-    /// `.matches` file itself is chosen a layer up, where the file dialog and
-    /// the per-node memory of the last path live — see [`crate::resect`]. A bulk
-    /// edit, carried out by `AppState::resect_image` after the frame.
-    pub resect_image: Option<(ImageRef, ResectFrom)>,
-    /// `Delete Image` chosen on an image row. A bulk edit on the node it
-    /// belongs to, carried out by `AppState::delete_image` after the frame.
-    pub delete_image: Option<ImageRef>,
-    /// `Move Camera` chosen on an image row: look through that image and take
-    /// its camera in hand. Not an edit yet -- the lock is viewport state, and
-    /// the edit is what committing it pushes. See `crate::camera_lock`.
-    pub move_camera: Option<ImageRef>,
+    /// An entry of the image menu chosen on an image row: the image and the
+    /// entry. The dock carries it out after the frame, through the same path
+    /// as the Image Browser strip's menu (`crate::image_menu`).
+    pub image_menu: Option<(ImageRef, crate::image_menu::ImageMenuAction)>,
 }
 
 /// Scene Graph panel state.
@@ -306,6 +296,13 @@ impl SceneGraphPanel {
             .iter()
             .map(|node| (node.id, IndexFilesRows::of(state, node.id)))
             .collect();
+        // The image menu's view of each node, for the image rows' menus, read
+        // out before the walk for the same reason.
+        let image_menus: std::collections::HashMap<ReconId, crate::image_menu::ImageMenu> = state
+            .scene
+            .iter()
+            .filter_map(|node| Some((node.id, state.image_menu(node.id)?)))
+            .collect();
         let targets: Vec<AlignTarget> = state
             .scene
             .iter()
@@ -362,6 +359,7 @@ impl SceneGraphPanel {
             targets: &targets,
             busy,
             index_files: &index_files,
+            image_menus: &image_menus,
             log,
         };
 
@@ -447,6 +445,9 @@ struct TreeOutput<'a> {
     /// What each node's Index Files rows say, read out before the walk for
     /// the same reason.
     index_files: &'a std::collections::HashMap<ReconId, IndexFilesRows>,
+    /// The image menu's view of each node, read out before the walk for the
+    /// same reason.
+    image_menus: &'a std::collections::HashMap<ReconId, crate::image_menu::ImageMenu>,
     /// Where the toggles that write straight into a node record what they did.
     log: &'a mut ActionLog,
 }

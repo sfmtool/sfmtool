@@ -1,0 +1,190 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The image menu: the context menu of one image of a reconstruction, shown on
+//! a Scene tree image row (under a reconstruction's *Camera Images* group).
+//! [`show`] lays it out and gives back the chosen [`ImageMenuAction`], which
+//! the dock carries out. See `specs/gui/scene-graph.md`.
+
+use eframe::egui;
+
+use crate::scene::{ImageRef, ReconId};
+use crate::state::AppState;
+use sfmtool_core::geometry::MIN_OTHER_POSED_IMAGES;
+
+/// An entry of the image menu, chosen on one image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageMenuAction {
+    /// `Resect Image`: re-estimate the image's pose against structure held out
+    /// from it, as the node's next version.
+    Resect,
+    /// `Move Camera`: look through the image and take its camera in hand.
+    MoveCamera,
+    /// `Delete Image`: remove the image, as the node's next version.
+    Delete,
+}
+
+/// The menu's entries in the order it shows them: the key each place records
+/// an entry's rect under, and its label.
+pub(crate) const ENTRIES: [(&str, &str); 3] = [
+    (RESECT, "Resect Image"),
+    (MOVE_CAMERA, "Move Camera"),
+    (DELETE_IMAGE, "Delete Image"),
+];
+
+/// The key of the `Resect Image` entry.
+pub(crate) const RESECT: &str = "resect";
+/// The key of the `Move Camera` entry.
+pub(crate) const MOVE_CAMERA: &str = "move_camera";
+/// The key of the `Delete Image` entry.
+pub(crate) const DELETE_IMAGE: &str = "delete_image";
+
+/// What the image menu needs to know about the node its image belongs to,
+/// computed once per node and frame rather than once per image.
+#[derive(Debug, Clone)]
+pub(crate) struct ImageMenu {
+    /// Whether each image carries a pose at all. A `.sfmr` row always has the
+    /// fields; a non-finite one is a placeholder rather than a registration.
+    posed: Vec<bool>,
+    /// How many images of the node are posed.
+    posed_count: usize,
+    /// Why the node's cluster-patches file will not do for a resection, or
+    /// `None` when it is current.
+    cluster_patches: Option<String>,
+}
+
+impl ImageMenu {
+    /// Why `Resect Image` is unavailable for image `index`, or `None` when it
+    /// is available.
+    ///
+    /// The image's own reasons first, since they hold whatever the node's
+    /// files say: an image with no pose, then too few other posed images, then
+    /// the cluster-patches file.
+    pub(crate) fn resect_refusal(&self, index: usize) -> Option<&str> {
+        if !self.posed.get(index).copied().unwrap_or(false) {
+            return Some(NOT_POSED_HINT);
+        }
+        // The target itself is one of the posed images, so "three others" is
+        // four in total.
+        if self.posed_count < MIN_OTHER_POSED_IMAGES + 1 {
+            return Some(TOO_FEW_POSED_HINT);
+        }
+        self.cluster_patches.as_deref()
+    }
+}
+
+/// Why `Resect Image` is greyed on an image with no pose.
+pub(crate) const NOT_POSED_HINT: &str =
+    "This image is not posed, so there is no pose to re-estimate against the rest.";
+
+/// Why `Resect Image` is greyed on a node with too little of a reconstruction
+/// to hold anything out from.
+pub(crate) const TOO_FEW_POSED_HINT: &str =
+    "Fewer than three other images of this reconstruction are posed. Two cameras fix \
+     structure only up to their own degenerate freedoms, so re-estimating a pose \
+     against them would measure the pair rather than the scene.";
+
+impl AppState {
+    /// The image menu's view of node `id` as it stands, or `None` when the node
+    /// is not loaded.
+    ///
+    /// Reads the cluster-patches state without refreshing it: the Scene tree
+    /// refreshes every node's index files once per frame before it asks, and
+    /// the step refreshes before it asks again.
+    pub(crate) fn image_menu(&self, id: ReconId) -> Option<ImageMenu> {
+        let node = self.node(id)?;
+        let posed: Vec<bool> = node
+            .recon()
+            .image_table
+            .images
+            .iter()
+            .map(|image| {
+                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
+                    && image.translation_xyz.iter().all(|c| c.is_finite())
+            })
+            .collect();
+        Some(ImageMenu {
+            posed_count: posed.iter().filter(|&&p| p).count(),
+            posed,
+            cluster_patches: self.resect_cluster_patches_refusal(id),
+        })
+    }
+
+    /// Why `Resect Image` cannot run on `image`, or `None` when it can.
+    ///
+    /// The one sentence the greyed entry's hover, the step and the wire all
+    /// refuse with.
+    pub(crate) fn resect_image_refusal(&self, image: ImageRef) -> Option<String> {
+        let Some(menu) = self.image_menu(image.recon) else {
+            return Some("That reconstruction is no longer loaded.".to_string());
+        };
+        menu.resect_refusal(image.index()).map(str::to_string)
+    }
+}
+
+/// Lay out the image menu for image `index` and give back the entry chosen,
+/// if one was.
+///
+/// `mark` is called with each entry's key (one of [`ENTRIES`]) and its
+/// response, in the order the entries are shown, so the place showing the menu
+/// can record where each landed. The menu is closed when an entry is chosen.
+///
+/// Every entry stays visible and is greyed rather than hidden when it is
+/// unavailable: the action exists on every image, and an entry that vanishes
+/// reads as an action that was never implemented. The hover text says which
+/// reason applies.
+pub(crate) fn show(
+    ui: &mut egui::Ui,
+    index: usize,
+    menu: &ImageMenu,
+    mark: &mut dyn FnMut(&'static str, &egui::Response),
+) -> Option<ImageMenuAction> {
+    let mut chosen = None;
+
+    let refusal = menu.resect_refusal(index);
+    let resect = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(ENTRIES[0].1))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Re-estimate this image's pose against structure re-triangulated without it, \
+             from the tracks and the clusters of the cluster patches file, and keep the \
+             answer as a version of this reconstruction. Undo (Ctrl+Z) puts the stored \
+             pose back.",
+        );
+    mark(RESECT, &resect);
+    if resect.clicked() {
+        chosen = Some(ImageMenuAction::Resect);
+    }
+
+    ui.separator();
+    // The hand, beside the estimator: where a resection re-computes a pose
+    // from correspondences, this hands the camera to the reviewer. It enters
+    // camera view first, because the lock *is* camera view with the camera
+    // coming along.
+    let move_camera = ui.add(egui::Button::new(ENTRIES[1].1)).on_hover_text(
+        "Look through this image and take its camera in hand: every navigation \
+         input moves it, and M or Enter keeps the pose as a version of this \
+         reconstruction.",
+    );
+    mark(MOVE_CAMERA, &move_camera);
+    if move_camera.clicked() {
+        chosen = Some(ImageMenuAction::MoveCamera);
+    }
+
+    ui.separator();
+    // No confirmation: this is an edit with a history behind it, and Undo is
+    // the answer to a mis-click, as it is for the entries above.
+    let delete = ui.add(egui::Button::new(ENTRIES[2].1)).on_hover_text(
+        "Remove this image from the reconstruction, with its observations and any \
+         track left with none. Undo (Ctrl+Z) puts it back.",
+    );
+    mark(DELETE_IMAGE, &delete);
+    if delete.clicked() {
+        chosen = Some(ImageMenuAction::Delete);
+    }
+
+    if chosen.is_some() {
+        ui.close();
+    }
+    chosen
+}

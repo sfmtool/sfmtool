@@ -270,7 +270,6 @@ pub(crate) enum Command {
     ResectCameraImage {
         reconstruction_label: String,
         camera_image: CameraImageSel,
-        from_matches: bool,
     },
     BundleAdjust {
         reconstruction_label: String,
@@ -1197,12 +1196,10 @@ pub(crate) fn apply_with_window(
         Command::ResectCameraImage {
             reconstruction_label,
             camera_image,
-            from_matches,
         } => done(edit::resect_camera_image(
             state,
             &reconstruction_label,
             &camera_image,
-            from_matches,
         )),
         Command::BundleAdjust {
             reconstruction_label,

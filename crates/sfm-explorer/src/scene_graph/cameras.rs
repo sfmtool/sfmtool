@@ -7,21 +7,15 @@
 //! `Camera Intrinsics` lists the models — one row per camera, with the
 //! parameters that fit on a line and the rest in a tooltip. `Camera Images`
 //! lists the photographs, virtualized because a reconstruction can carry
-//! thousands of them, and is where a resection is asked for.
-//!
-//! [`ResectAvailability`] is here rather than beside the menu it greys out,
-//! because deciding it needs what this module already has in hand: the node's
-//! pose count, the image's own pose, and whether a `.matches` file has been
-//! chosen. The menu takes the answer and the hint text that goes with it.
+//! thousands of them. Each image row opens the image menu of
+//! [`crate::image_menu`], the one the Image Browser strip opens on a thumbnail.
 
 use eframe::egui;
-use sfmtool_core::geometry::MIN_OTHER_POSED_IMAGES;
 use sfmtool_core::CameraIntrinsics;
 
 use crate::action_log::{visibility_text, Layer};
 use crate::scene::{CameraRef, ImageRef, SceneNode};
 
-use super::menus::image_context_menu;
 use super::widgets::eye_toggle;
 use super::{row_id, NodeContext, TreeOutput, LIST_MAX_HEIGHT, ROW_HEIGHT, TOGGLE_WIDTH};
 
@@ -241,66 +235,6 @@ pub(super) fn show_camera_images_group(
     header.body(|ui| show_camera_image_rows(ui, node, ctx, out));
 }
 
-/// What an image row's `Resect Image` entries need to know about the node they
-/// belong to, computed once for the whole list rather than once per row.
-pub(super) struct ResectAvailability {
-    /// Whether each image carries a pose at all. A `.sfmr` row always has the
-    /// fields; a non-finite one is a placeholder rather than a registration.
-    posed: Vec<bool>,
-    /// How many images of the node are posed.
-    posed_count: usize,
-    /// Whether the node's observations carry feature indexes — what the match
-    /// rows are joined through, and so what the matches variant needs.
-    pub(super) feature_indexed: bool,
-}
-
-impl ResectAvailability {
-    fn of(node: &SceneNode) -> Self {
-        let posed: Vec<bool> = node
-            .recon()
-            .image_table
-            .images
-            .iter()
-            .map(|image| {
-                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-                    && image.translation_xyz.iter().all(|c| c.is_finite())
-            })
-            .collect();
-        Self {
-            posed_count: posed.iter().filter(|&&p| p).count(),
-            posed,
-            feature_indexed: node.recon().feature_indexes().is_some(),
-        }
-    }
-
-    /// Why `Resect Image` is unavailable for image `index`, or `None` when it
-    /// is available.
-    pub(super) fn refusal(&self, index: usize) -> Option<&'static str> {
-        if !self.posed.get(index).copied().unwrap_or(false) {
-            return Some(NOT_POSED_HINT);
-        }
-        // The target itself is one of the posed images, so "three others" is
-        // four in total.
-        (self.posed_count < MIN_OTHER_POSED_IMAGES + 1).then_some(TOO_FEW_POSED_HINT)
-    }
-}
-
-/// Why `Resect Image` is greyed on an image with no pose.
-const NOT_POSED_HINT: &str =
-    "This image is not posed, so there is no pose to re-estimate against the rest.";
-
-/// Why `Resect Image` is greyed on a node with too little of a reconstruction
-/// to hold anything out from.
-const TOO_FEW_POSED_HINT: &str =
-    "Fewer than three other images of this reconstruction are posed. Two cameras fix \
-     structure only up to their own degenerate freedoms, so re-estimating a pose \
-     against them would measure the pair rather than the scene.";
-
-/// Why `Resect Image from Matches…` is greyed on an embedded-patches node.
-pub(super) const MATCHES_DISABLED_HINT: &str =
-    "Match rows are joined to observations by feature index, and this reconstruction \
-     carries embedded patches instead — there is no feature index to join on.";
-
 /// The per-image rows, laid out only for the visible slice of the list.
 fn show_camera_image_rows(
     ui: &mut egui::Ui,
@@ -313,7 +247,8 @@ fn show_camera_image_rows(
         ui.weak("No images");
         return;
     }
-    let resect = ResectAvailability::of(node);
+    let menus = out.image_menus;
+    let menu = menus.get(&node.id);
 
     // Scroll the selected row into view only when the selection moved and it
     // belongs to this node. Driven by an explicit offset rather than
@@ -373,9 +308,20 @@ fn show_camera_image_rows(
             // row's menu sets it: egui's default closes on any click inside the
             // menu, and a greyed entry the user clicks to read its explanation
             // would take the menu down with it.
-            crate::context_menu::on_secondary_click(&row)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show(|ui| image_context_menu(ui, node.id, index, image, &resect, out));
+            // The image menu, which the Image Browser strip shows on a
+            // thumbnail too (`crate::image_menu`).
+            if let Some(menu) = menu {
+                crate::context_menu::on_secondary_click(&row)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        let chosen = crate::image_menu::show(ui, index, menu, &mut |key, entry| {
+                            out.mark(row_id(node.id, &format!("{key}_{index}")), entry.rect);
+                        });
+                        if let Some(action) = chosen {
+                            out.response.image_menu = Some((image, action));
+                        }
+                    });
+            }
         }
     });
 }

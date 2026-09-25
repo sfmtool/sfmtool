@@ -270,21 +270,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "resect_camera_image",
             description: "Re-estimate one camera image's pose against structure held out from \
-                          it, and install the answer as the reconstruction's next version. A \
-                          bulk edit: the points the image observes are re-triangulated and the \
-                          surviving ones are renumbered, while the image table stays put. A \
-                          refused estimate pushes no version.",
+                          it, and install the answer as the reconstruction's next version. The \
+                          correspondences are the reconstruction's tracks and the clusters of \
+                          its cluster patches file, so that file must be current; a missing or \
+                          stale one is refused with the reason, and build_index_files makes \
+                          it. A bulk edit: the points the image observes are re-triangulated \
+                          and the surviving ones are renumbered, while the image table stays \
+                          put. A refused estimate pushes no version.",
             kind: Write,
             schema: object(
-                &[(
-                    "from_matches",
-                    flag(
-                        "Estimate against a .matches file rather than against the \
-                         reconstruction's own observations. The file is the one already chosen \
-                         for this reconstruction in the viewer; with none chosen the call is \
-                         refused, since this surface opens no file dialog.",
-                    ),
-                )],
+                &[],
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     ("camera_image", camera_image_schema()),

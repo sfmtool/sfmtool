@@ -408,6 +408,50 @@ impl AppState {
     pub(crate) fn forget_cluster_patches(&mut self, id: ReconId) {
         self.cluster_patches.remove(&id);
     }
+
+    /// Adopt `path` as `id`'s cluster-patches file and call it current,
+    /// without reading or judging it: for the tests of what a current file
+    /// greys, refuses or reads, over nodes with no SIFT index to judge by.
+    #[cfg(test)]
+    pub(crate) fn adopt_current_cluster_patches(&mut self, id: ReconId, path: PathBuf) {
+        let node = self.node(id).expect("a loaded node");
+        let recon = node.recon();
+        let judged = Judged {
+            serial: node.history.current_version().serial.as_u64(),
+            node_images: image_fingerprint(recon),
+            index: index_key(self.sift_index(id)),
+        };
+        let image_names: Vec<String> = recon
+            .image_table
+            .images
+            .iter()
+            .map(|image| image.name.clone())
+            .collect();
+        let file = ClusterPatches {
+            path,
+            images: image_names.len(),
+            clusters: 0,
+            members: 0,
+            image_names,
+            has_patches: true,
+            index_hash: None,
+            stale: None,
+            judged,
+        };
+        self.cluster_patches.insert(id, Some(file));
+    }
+
+    /// Mark `id`'s open cluster-patches file stale with `why`, for the tests of
+    /// what a stale file greys and refuses.
+    #[cfg(test)]
+    pub(crate) fn mark_cluster_patches_stale(&mut self, id: ReconId, why: &str) {
+        let file = self
+            .cluster_patches
+            .get_mut(&id)
+            .and_then(Option::as_mut)
+            .expect("an open file");
+        file.stale = Some(why.to_string());
+    }
 }
 
 /// What the cluster half of the build needs from the node, owned.

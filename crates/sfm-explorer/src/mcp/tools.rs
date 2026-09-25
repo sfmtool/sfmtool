@@ -345,7 +345,6 @@ pub(crate) fn parse(
         "resect_camera_image" => Command::ResectCameraImage {
             reconstruction_label: args.required_string("reconstruction_label")?,
             camera_image: args.camera_image("camera_image")?,
-            from_matches: args.optional_bool("from_matches")?.unwrap_or(false),
         },
         "bundle_adjust" => Command::BundleAdjust {
             reconstruction_label: args.required_string("reconstruction_label")?,

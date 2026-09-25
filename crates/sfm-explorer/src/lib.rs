@@ -33,6 +33,7 @@ mod elide;
 mod goto_point;
 mod image_browser;
 mod image_detail;
+mod image_menu;
 mod index_files;
 mod intrinsics_detail;
 mod layout;

@@ -677,6 +677,7 @@ fn resectable_state() -> (AppState, ReconId) {
     let id = state.scene[0].id;
     let image = &mut state.scene[0].recon_mut().image_table.images[1];
     image.translation_xyz += nalgebra::Vector3::new(0.30, -0.20, 0.15);
+    crate::resect::tests::give_cluster_patches(&mut state, id);
     (state, id)
 }
 
@@ -698,7 +699,7 @@ fn resecting_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
     let moved = centre_offset(&state, 1, truth);
 
     state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect("the ring corroborates image 1");
 
     let node = &state.scene[0];
@@ -724,19 +725,19 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
     let (mut state, id) = resectable_state();
     let entries = texts(&state).len();
     state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect("the ring corroborates image 1");
     let logged = texts(&state);
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
     let last = logged.last().expect("one entry");
     assert!(
-        last.starts_with("Resected image_001.jpg (run_a): 120 pts, inliers "),
+        last.starts_with("Resected image_001.jpg (run_a): 240 pts (120 tracks, 120 clusters), "),
         "{last}"
     );
     let serials = state.scene[0].history.versions();
     assert!(
         last.ends_with(&format!(
-            "re-triangulated ({} → {})",
+            "failed to triangulate ({} → {})",
             serials[0].serial, serials[1].serial
         )),
         "{last}"
@@ -754,7 +755,7 @@ fn an_undo_puts_the_stored_pose_and_the_selection_back() {
     state.selected_point = Some(PointRef::new(id, 9));
 
     state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect("the ring corroborates image 1");
     let selected = state.selected_point.expect("the point survived the edit");
     assert_eq!(selected.recon, id);
@@ -778,7 +779,7 @@ fn a_resection_that_cannot_be_attempted_pushes_no_version_and_logs_a_failure() {
         nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
 
     let why = state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect_err("an unposed target has no pose to re-estimate");
 
     assert!(why.contains("refused"), "{why}");
@@ -814,9 +815,12 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
             keypoints_xy[[*row, 1]] = (k % 53) as f32 * 11.0;
         }
     }
+    // The clusters say what the tracks now say, so they corroborate nothing
+    // either.
+    crate::resect::tests::give_cluster_patches(&mut state, id);
 
     let why = state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect_err("nothing corroborates that pose");
 
     assert!(why.contains("refused"), "{why}");
@@ -825,18 +829,6 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
         state.action_log.entries().last().expect("one entry").failed,
         "the refusal was logged as a success"
     );
-}
-
-#[test]
-fn the_matches_source_without_a_chosen_file_reports_itself() {
-    let (mut state, id) = resectable_state();
-
-    let why = state
-        .resect_image(id, 1, crate::resect::ResectFrom::Matches)
-        .expect_err("no .matches file was chosen for this node");
-
-    assert!(why.contains(".matches"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
 // ── Bundle adjust: the bulk edit that moves everything ──────────────────
@@ -1102,7 +1094,8 @@ fn an_undo_of_a_move_puts_the_pose_back() {
 
 /// The four stages every bulk edit has, over the one that is not the
 /// adjustment: the overlay fold, the kernel, the row map read off its two
-/// values, and the version push.
+/// values, and the version push, after the resection's own read of the
+/// cluster-patches file.
 #[test]
 fn a_bulk_edit_names_the_fold_the_kernel_the_map_and_the_push() {
     let (mut state, id) = adjustable_state();
@@ -1111,9 +1104,10 @@ fn a_bulk_edit_names_the_fold_the_kernel_the_map_and_the_push() {
     state
         .delete_point(PointRef::new(id, 7))
         .expect("a live point");
+    crate::resect::tests::give_cluster_patches(&mut state, id);
 
     state
-        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1)
         .expect("the fixture's image 1 resects from its own observations");
 
     let entry = newest(&state);
@@ -1121,6 +1115,7 @@ fn a_bulk_edit_names_the_fold_the_kernel_the_map_and_the_push() {
     assert_eq!(
         phase_rows(&entry.detail),
         [
+            ("read cluster patches", 0, 1),
             ("materialise", 0, 1),
             ("resect", 0, 1),
             ("row map", 0, 1),

@@ -284,6 +284,8 @@ fn delete_camera_image_renumbers_and_reports_the_version() {
 #[test]
 fn resecting_pushes_a_version_and_reports_the_estimate() {
     let (mut state, mut viewer) = editable();
+    let id = state.scene[0].id;
+    crate::resect::tests::give_cluster_patches(&mut state, id);
     perturb(&mut state, 0.30);
     let reply = call(
         &mut state,
@@ -295,22 +297,28 @@ fn resecting_pushes_a_version_and_reports_the_estimate() {
     let report = reply["report"].as_str().expect("a report");
     assert!(report.starts_with("Resected "), "{report}");
     assert!(report.contains("inliers"), "{report}");
+    assert!(report.contains(" clusters)"), "{report}");
 }
 
-/// From-matches reads the file chosen for the node in the viewer; with none
-/// chosen the state refuses in its own words, and that refusal is the one row
-/// the log gets.
+/// Without a current cluster-patches file the state refuses in its own words,
+/// which are the greyed menu entry's, and that refusal is the one row the log
+/// gets.
 #[test]
-fn resecting_from_matches_without_a_chosen_file_is_refused_in_the_states_words() {
+fn resecting_without_a_cluster_patches_file_is_refused_in_the_states_words() {
     let (mut state, mut viewer) = editable();
+    let id = state.scene[0].id;
+    let refusal = state
+        .resect_image_refusal(crate::scene::ImageRef::new(id, 1))
+        .expect("no file is open");
     state.action_log.clear();
     let error = refused_call(
         &mut state,
         &mut viewer,
         "resect_camera_image",
-        json!({ "reconstruction_label": "run_a", "camera_image": 1, "from_matches": true }),
+        json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
     );
-    assert!(error.0.contains(".matches"), "{error}");
+    assert!(error.0.contains(&refusal), "{error}");
+    assert!(error.0.contains("Build Index Files"), "{error}");
     assert_eq!(version_count(&state), 1);
 
     let failed = failures(&state);
@@ -1321,7 +1329,6 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         Command::ResectCameraImage {
             reconstruction_label: "a".to_string(),
             camera_image: super::super::CameraImageSel::Name("images/x.jpg".to_string()),
-            from_matches: false,
         }
     );
     // The pose arrives in a sub-object, and comes out of the parse as the two

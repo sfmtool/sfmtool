@@ -32,6 +32,8 @@ use crate::reconstruction::{
     TrackObservation,
 };
 
+use sfmtool_matches_format::{ClusterMemberStatus, ClusterPatchData, ClustersData, MatchesData};
+
 use super::{
     resect_images, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
     MIN_OTHER_POSED_IMAGES,
@@ -352,7 +354,7 @@ fn a_perturbed_pose_is_recovered_from_held_out_structure() {
     let out = resect_image(
         &source,
         target,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the orbit has support");
@@ -376,7 +378,7 @@ fn a_perturbed_pose_is_recovered_from_held_out_structure() {
     assert!(out.report.translation > 0.5);
     assert!(out.report.translation_scene.is_some());
     assert!(out.report.retriangulated > 0);
-    assert_eq!(out.report.source, "observations");
+    assert_eq!(out.report.source, "tracks");
     assert_eq!(out.reconstruction.metadata.operation, "explorer_resect");
 
     // The source is untouched under every outcome.
@@ -400,7 +402,7 @@ fn the_hold_out_never_reads_the_targets_own_observations() {
     let out = resect_image(
         &source,
         target,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the other cameras still supply support");
@@ -427,8 +429,8 @@ fn the_hold_out_never_reads_the_targets_own_observations() {
 fn the_same_input_gives_a_bit_identical_answer() {
     let source = orbit();
     let options = ResectImageOptions::default();
-    let one = resect_image(&source, 2, ResectSource::StoredObservations, &options).unwrap();
-    let two = resect_image(&source, 2, ResectSource::StoredObservations, &options).unwrap();
+    let one = resect_image(&source, 2, ResectSource::Tracks, &options).unwrap();
+    let two = resect_image(&source, 2, ResectSource::Tracks, &options).unwrap();
     assert_eq!(
         one.reconstruction.image_table.images[2].quaternion_wxyz,
         two.reconstruction.image_table.images[2].quaternion_wxyz
@@ -476,7 +478,7 @@ fn two_targets_held_out_together_both_recover() {
     let out = resect_images(
         &source,
         &targets,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("six non-target cameras still carry the scene");
@@ -536,7 +538,7 @@ fn the_hold_out_ignores_every_target_not_just_one() {
     let out = resect_images(
         &source,
         &targets,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the other six cameras still supply support");
@@ -575,7 +577,7 @@ fn an_empty_target_set_is_refused() {
     let err = resect_images(
         &source,
         &[],
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
@@ -588,7 +590,7 @@ fn a_target_named_twice_is_refused() {
     let err = resect_images(
         &source,
         &[2, 2],
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
@@ -602,7 +604,7 @@ fn a_set_that_leaves_too_few_posed_images_is_refused() {
     let err = resect_images(
         &source,
         &[0, 1, 2],
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
@@ -651,7 +653,7 @@ fn a_rotation_only_reconstruction_recovers_a_perturbed_rotation() {
     let out = resect_image(
         &source,
         target,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the dome has bearings");
@@ -679,7 +681,7 @@ fn an_out_of_range_image_is_refused() {
     let err = resect_image(
         &source,
         count,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
@@ -695,7 +697,7 @@ fn a_reconstruction_with_too_few_other_images_is_refused() {
     let err = resect_image(
         &source,
         0,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
@@ -736,7 +738,7 @@ fn too_few_held_out_points_and_no_bearings_is_refused() {
     let out = resect_image(
         &source,
         target,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the call itself is well formed");
@@ -773,7 +775,7 @@ fn bearings_that_span_no_angle_are_refused() {
     let out = resect_image(
         &source,
         0,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the call itself is well formed");
@@ -789,28 +791,11 @@ fn an_unposed_target_is_refused() {
     let err = resect_image(
         &source,
         1,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .unwrap_err();
     assert!(matches!(err, ResectImageError::NotPosed(1)), "{err}");
-}
-
-#[test]
-fn a_matches_join_needs_feature_indexes() {
-    // The synthetic fixtures are embedded_patches, which is exactly the case the
-    // matches source cannot serve — and it says so rather than joining nothing.
-    let source = orbit();
-    let empty = matches_fixture();
-    let err = resect_image(
-        &source,
-        0,
-        ResectSource::Matches(&empty),
-        &ResectImageOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(err, ResectImageError::Matches(_)), "{err}");
-    assert!(err.to_string().contains("sift_files"));
 }
 
 /// Keep only `rows` of the reconstruction's observations, rebuilding the
@@ -842,7 +827,7 @@ fn drop_all_but(mut recon: SfmrReconstruction, rows: &[usize]) -> SfmrReconstruc
     recon
 }
 
-/// An empty `.matches` value, enough to reach the join's own guards.
+/// An empty `.matches` value: no clusters section, no cluster-patches section.
 fn matches_fixture() -> sfmtool_matches_format::MatchesData {
     sfmtool_matches_format::MatchesData {
         metadata: sfmtool_matches_format::MatchesMetadata {
@@ -892,6 +877,441 @@ fn matches_fixture() -> sfmtool_matches_format::MatchesData {
     }
 }
 
+// ── Clusters ────────────────────────────────────────────────────────────────
+
+/// One cluster member: its image, its refined position, and its status.
+type Member = (usize, [f32; 2], ClusterMemberStatus);
+
+/// A cluster-patches file over `recon`'s images, holding `clusters`.
+fn cluster_file(recon: &SfmrReconstruction, clusters: &[Vec<Member>]) -> MatchesData {
+    let mut data = matches_fixture();
+    let n = recon.image_table.images.len();
+    data.image_names = recon
+        .image_table
+        .images
+        .iter()
+        .map(|image| image.name.clone())
+        .collect();
+    data.feature_tool_hashes = vec![[0u8; 16]; n];
+    data.sift_content_hashes = vec![[0u8; 16]; n];
+    data.feature_counts = ndarray::Array1::zeros(n);
+    let members: Vec<Member> = clusters.iter().flatten().copied().collect();
+    let m = members.len();
+    let mut starts = vec![0u32];
+    for cluster in clusters {
+        starts.push(starts.last().unwrap() + cluster.len() as u32);
+    }
+    let mut positions = Array2::<f32>::zeros((m, 2));
+    for (k, member) in members.iter().enumerate() {
+        positions[[k, 0]] = member.1[0];
+        positions[[k, 1]] = member.1[1];
+    }
+    let mut shapes = ndarray::Array3::<f32>::zeros((m, 2, 2));
+    for k in 0..m {
+        shapes[[k, 0, 0]] = 1.0;
+        shapes[[k, 1, 1]] = 1.0;
+    }
+    data.clusters = Some(ClustersData {
+        cluster_starts: ndarray::Array1::from(starts.clone()),
+        member_images: members.iter().map(|member| member.0 as u32).collect(),
+        member_features: (0..m as u32).collect(),
+        member_positions: Some(positions),
+        member_affine_shapes: Some(shapes),
+        matcher_options: serde_json::json!({}),
+    });
+    data.cluster_patches = Some(ClusterPatchData {
+        reference_members: starts[..clusters.len()].iter().copied().collect(),
+        member_status: members.iter().map(|member| member.2 as u8).collect(),
+        member_zncc: ndarray::Array1::from_elem(m, f32::NAN),
+        member_shift_px: ndarray::Array1::zeros(m),
+        member_consistency_residual: ndarray::Array1::from_elem(m, f32::NAN),
+        refine_options: serde_json::json!({}),
+    });
+    data
+}
+
+/// One cluster per point of `recon`, its members at the point's observations
+/// (the fixtures' exact projections), the first the reference and the rest
+/// kept: clusters that say what the tracks say.
+fn clusters_like_tracks(recon: &SfmrReconstruction) -> Vec<Vec<Member>> {
+    let keypoints = recon.keypoints_xy().expect("the fixtures are embedded");
+    (0..recon.point_set.points.len())
+        .map(|p| {
+            let rows =
+                recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1];
+            rows.enumerate()
+                .map(|(k, row)| {
+                    let image = recon.point_set.tracks[row].image_index as usize;
+                    let status = if k == 0 {
+                        ClusterMemberStatus::Reference
+                    } else {
+                        ClusterMemberStatus::Kept
+                    };
+                    (image, [keypoints[[row, 0]], keypoints[[row, 1]]], status)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `recon` with every observation of `image` removed: an image with no tracks.
+fn without_observations_of(recon: SfmrReconstruction, image: usize) -> SfmrReconstruction {
+    let rows: Vec<usize> = recon
+        .point_set
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.image_index as usize != image)
+        .map(|(row, _)| row)
+        .collect();
+    drop_all_but(recon, &rows)
+}
+
+/// The pixel `world` projects to in image `image` of `recon`, which must be in
+/// the frame.
+fn pixel_of(recon: &SfmrReconstruction, image: usize, world: &Point3<f64>) -> [f32; 2] {
+    project(
+        &recon.image_table.cameras[0],
+        &recon.image_table.images[image],
+        world,
+        false,
+    )
+    .expect("in the frame")
+}
+
+#[test]
+fn a_file_without_both_cluster_sections_is_refused() {
+    let source = orbit();
+    let empty = matches_fixture();
+    let err = resect_image(
+        &source,
+        0,
+        ResectSource::TracksAndClusters(&empty),
+        &ResectImageOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ResectImageError::Clusters(_)), "{err}");
+    assert!(err.to_string().contains("no clusters section"), "{err}");
+
+    let mut unrefined = cluster_file(&source, &clusters_like_tracks(&source));
+    unrefined.cluster_patches = None;
+    let err = resect_image(
+        &source,
+        0,
+        ResectSource::TracksAndClusters(&unrefined),
+        &ResectImageOptions::default(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("cluster patches section"), "{err}");
+}
+
+#[test]
+fn clusters_alone_resect_an_image_with_no_tracks() {
+    let truth = orbit();
+    let target = 0;
+    let file = cluster_file(&truth, &clusters_like_tracks(&truth));
+    let source = perturbed(without_observations_of(truth.clone(), target), target, 0.35);
+
+    // The tracks give this image nothing to fit.
+    let tracks = resect_image(
+        &source,
+        target,
+        ResectSource::Tracks,
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    assert!(!tracks.report.accepted);
+    assert!(tracks.report.refusal.unwrap().contains("no support"));
+
+    let out = resect_image(
+        &source,
+        target,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    let r = &out.report;
+    assert!(r.accepted, "refused: {:?}", r.refusal);
+    assert_eq!(r.source, "tracks_and_clusters");
+    assert_eq!(r.track_correspondences, 0);
+    assert!(r.cluster_correspondences >= 100, "{r:?}");
+    assert_eq!(r.correspondences, r.cluster_correspondences);
+    assert_eq!(r.inliers, r.cluster_inliers);
+    assert_eq!(r.track_inliers, 0);
+    assert_eq!(r.clusters_considered, r.cluster_correspondences);
+    assert_eq!((r.clusters_skipped, r.clusters_failed), (0, 0));
+
+    let fitted = &out.reconstruction.image_table.images[target];
+    let true_pose = &truth.image_table.images[target];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.1);
+    assert!((fitted.camera_center() - true_pose.camera_center()).norm() < 0.01);
+
+    // Clusters create no points and move none: the image observes no point, so
+    // the structure is the source's exactly.
+    assert_eq!(r.retriangulated, 0);
+    assert_eq!(
+        out.reconstruction.point_set.points.len(),
+        source.point_set.points.len()
+    );
+    for (a, b) in out
+        .reconstruction
+        .point_set
+        .points
+        .iter()
+        .zip(&source.point_set.points)
+    {
+        assert_eq!(a.position, b.position);
+    }
+}
+
+#[test]
+fn the_tracks_and_the_clusters_reach_the_estimate_side_by_side() {
+    let truth = orbit();
+    let target = 0;
+    let file = cluster_file(&truth, &clusters_like_tracks(&truth));
+    let source = perturbed(truth.clone(), target, 0.35);
+
+    let options = ResectImageOptions::default();
+    let tracks = resect_image(&source, target, ResectSource::Tracks, &options).unwrap();
+    let both = resect_images(
+        &source,
+        &[target],
+        ResectSource::TracksAndClusters(&file),
+        &options,
+    )
+    .unwrap();
+    let r = &both.reports[0];
+    assert!(r.accepted, "refused: {:?}", r.refusal);
+    // Every track pair is still there, and every cluster that mirrors one is a
+    // pair of its own beside it: nothing is merged or dropped.
+    assert_eq!(r.track_correspondences, tracks.report.correspondences);
+    assert_eq!(r.cluster_correspondences, tracks.report.correspondences);
+    assert_eq!(
+        r.correspondences,
+        r.track_correspondences + r.cluster_correspondences
+    );
+    assert_eq!(r.inliers, r.track_inliers + r.cluster_inliers);
+    assert_eq!(tracks.report.cluster_correspondences, 0);
+    assert_eq!(tracks.report.clusters_considered, 0);
+    assert_eq!(both.totals.track_correspondences, r.track_correspondences);
+    assert_eq!(
+        both.totals.cluster_correspondences,
+        r.cluster_correspondences
+    );
+    assert_eq!(both.totals.cluster_inliers, r.cluster_inliers);
+
+    let fitted = &both.reconstruction.image_table.images[target];
+    let true_pose = &truth.image_table.images[target];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.1);
+    // The structure is the tracks' own: clusters add no point.
+    assert_eq!(
+        both.reconstruction.point_set.points.len(),
+        tracks.reconstruction.point_set.points.len()
+    );
+}
+
+#[test]
+fn a_cluster_with_two_kept_members_in_the_target_contributes_nothing() {
+    let truth = orbit();
+    let target = 0;
+    let mut clusters = clusters_like_tracks(&truth);
+    let baseline = {
+        let file = cluster_file(&truth, &clusters);
+        resect_image(
+            &truth,
+            target,
+            ResectSource::TracksAndClusters(&file),
+            &ResectImageOptions::default(),
+        )
+        .unwrap()
+        .report
+    };
+    // A second kept member in the target, on a cluster that already has one.
+    let doubled = clusters
+        .iter()
+        .position(|c| c.iter().any(|m| m.0 == target))
+        .expect("the target is in some cluster");
+    let first = clusters[doubled]
+        .iter()
+        .find(|m| m.0 == target)
+        .copied()
+        .unwrap();
+    clusters[doubled].push((
+        target,
+        [first.1[0] + 5.0, first.1[1]],
+        ClusterMemberStatus::Kept,
+    ));
+    let file = cluster_file(&truth, &clusters);
+    let r = resect_image(
+        &truth,
+        target,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap()
+    .report;
+    assert_eq!(r.clusters_considered, baseline.clusters_considered);
+    assert_eq!(r.clusters_skipped, baseline.clusters_skipped + 1);
+    assert_eq!(
+        r.cluster_correspondences,
+        baseline.cluster_correspondences - 1
+    );
+    assert_eq!(r.track_correspondences, baseline.track_correspondences);
+}
+
+/// The first point of the cloud that images 0, 1 and 2 all see, by its
+/// world position.
+fn a_point_seen_by_0_1_and_2(recon: &SfmrReconstruction) -> Point3<f64> {
+    (0..recon.point_set.points.len())
+        .find(|&p| {
+            let seen: Vec<usize> = (recon.point_set.observation_offsets[p]
+                ..recon.point_set.observation_offsets[p + 1])
+                .map(|row| recon.point_set.tracks[row].image_index as usize)
+                .collect();
+            [0, 1, 2].iter().all(|i| seen.contains(i))
+        })
+        .map(|p| recon.point_set.points[p].position)
+        .expect("the orbit's cameras overlap")
+}
+
+#[test]
+fn a_cluster_is_held_out_from_the_whole_target_set() {
+    let truth = orbit();
+    let world = a_point_seen_by_0_1_and_2(&truth);
+    // Kept members in images 0, 1 and 2, and a rejected one in image 3.
+    let cluster: Vec<Member> = vec![
+        (
+            0,
+            pixel_of(&truth, 0, &world),
+            ClusterMemberStatus::Reference,
+        ),
+        (1, pixel_of(&truth, 1, &world), ClusterMemberStatus::Kept),
+        (2, pixel_of(&truth, 2, &world), ClusterMemberStatus::Kept),
+        (3, [10.0, 10.0], ClusterMemberStatus::RejectedLowZncc),
+    ];
+    let file = cluster_file(&truth, &[cluster]);
+
+    // Image 0 alone: images 1 and 2 are non-target, so the cluster is placed.
+    let alone = resect_image(
+        &truth,
+        0,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap()
+    .report;
+    assert_eq!(alone.clusters_considered, 1);
+    assert_eq!(alone.cluster_correspondences, 1);
+
+    // Images 0 and 1 together: image 1's member is a target's and places
+    // nothing, the rejected member is no evidence, and one non-target image is
+    // left, so the cluster is set aside for both targets.
+    let both = resect_images(
+        &truth,
+        &[0, 1],
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    for r in &both.reports {
+        assert_eq!(r.clusters_considered, 1, "{r:?}");
+        assert_eq!(r.clusters_skipped, 1, "{r:?}");
+        assert_eq!(r.cluster_correspondences, 0, "{r:?}");
+    }
+}
+
+/// The orbit with two more cameras side by side: the same rotation, centres a
+/// unit apart along the cameras' own x axis. Their optical axes are exactly
+/// parallel.
+fn orbit_with_a_side_pair() -> SfmrReconstruction {
+    let mut images = ring(8, 4.0);
+    let side_a = image_at(
+        "frames/side_a.jpg",
+        Point3::new(0.0, -7.0, 0.3),
+        Point3::origin(),
+    );
+    let rotation = side_a.quaternion_wxyz;
+    let right = rotation.inverse() * Vector3::x();
+    let eye_b = side_a.camera_center() + right;
+    let side_b = SfmrImage {
+        name: "frames/side_b.jpg".to_string(),
+        camera_index: 0,
+        quaternion_wxyz: rotation,
+        translation_xyz: rotation * (-eye_b.coords),
+    };
+    images.push(side_a);
+    images.push(side_b);
+    build(images, cloud(200), false, 800.0)
+}
+
+#[test]
+fn a_cluster_that_does_not_triangulate_contributes_nothing() {
+    let truth = orbit_with_a_side_pair();
+    let (a, b) = (8, 9);
+    let world = a_point_seen_by_0_1_and_2(&truth);
+    let target_pixel = pixel_of(&truth, 0, &world);
+    let member = |image, uv| (image, uv, ClusterMemberStatus::Kept);
+    let clusters = vec![
+        // Both principal points: two exactly parallel rays, whose depth is not
+        // observable.
+        vec![
+            member(0, target_pixel),
+            member(a, [320.0, 240.0]),
+            member(b, [320.0, 240.0]),
+        ],
+        // Rays that diverge: the left camera looks left and the right camera
+        // right, so the lines meet behind both.
+        vec![
+            member(0, target_pixel),
+            member(a, [220.0, 240.0]),
+            member(b, [420.0, 240.0]),
+        ],
+    ];
+    let file = cluster_file(&truth, &clusters);
+    let r = resect_image(
+        &truth,
+        0,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap()
+    .report;
+    assert_eq!(r.clusters_considered, 2);
+    assert_eq!(r.clusters_skipped, 0);
+    assert_eq!(r.clusters_failed, 2);
+    assert_eq!(r.cluster_correspondences, 0);
+    assert!(r.accepted, "the tracks still carry it: {:?}", r.refusal);
+}
+
+#[test]
+fn the_rotation_only_path_reads_the_tracks_bearings_only() {
+    let truth = dome();
+    let file = cluster_file(&truth, &clusters_like_tracks(&truth));
+    let mut source = truth.clone();
+    source.image_table.images[0].quaternion_wxyz =
+        UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.2)
+            * truth.image_table.images[0].quaternion_wxyz;
+    let out = resect_image(
+        &source,
+        0,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    let r = &out.report;
+    assert!(r.rotation_only, "{r:?}");
+    assert!(r.accepted, "refused: {:?}", r.refusal);
+    assert_eq!(r.cluster_correspondences, 0);
+    assert_eq!(r.cluster_inliers, 0);
+    assert_eq!(r.correspondences, r.track_correspondences);
+    // Cameras that share a centre give a cluster no depth to place it at.
+    assert!(r.clusters_considered > 0);
+    assert_eq!(
+        r.clusters_failed + r.clusters_skipped,
+        r.clusters_considered
+    );
+}
+
 // ── In place ────────────────────────────────────────────────────────────────
 
 /// The refusal of an in-place resection of `image`, panicking if there was
@@ -901,7 +1321,7 @@ fn in_place_error(recon: &SfmrReconstruction, image: usize) -> super::ResectInPl
     match super::resect_image_in_place(
         recon,
         image,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     ) {
         Ok((_, report)) => panic!("the estimate was accepted: {report:?}"),
@@ -918,7 +1338,7 @@ fn in_place_hands_back_the_accepted_value_and_its_report() {
     let (next, report) = super::resect_image_in_place(
         &source,
         target,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("the orbit corroborates the target");
@@ -988,7 +1408,7 @@ fn report_of(path: &str, image: &str) -> super::ResectImageReport {
     let out = resect_image(
         &recon,
         index,
-        ResectSource::StoredObservations,
+        ResectSource::Tracks,
         &ResectImageOptions::default(),
     )
     .expect("support");

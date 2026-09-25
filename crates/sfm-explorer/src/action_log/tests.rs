@@ -1320,8 +1320,9 @@ fn every_operation_names_at_least_one_stage() {
         }),
         ("resect image", |_| {
             let (mut state, id) = adjustable_scene();
+            crate::resect::tests::give_cluster_patches(&mut state, id);
             state
-                .resect_image(id, 1, crate::resect::ResectFrom::Observations)
+                .resect_image(id, 1)
                 .expect("the fixture's image 1 resects from its own observations");
             state
         }),

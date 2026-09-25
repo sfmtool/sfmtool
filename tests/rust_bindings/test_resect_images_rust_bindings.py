@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion, resect_images
+from sfmtool._sfmtool.io import write_matches
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 WIDTH, HEIGHT = 640, 480
@@ -251,7 +252,10 @@ class TestFinitePath:
         assert report["refusal"] is None
         assert report["image_index"] == 0
         assert report["image_name"] == "frames/000.jpg"
-        assert report["source"] == "observations"
+        assert report["source"] == "tracks"
+        assert report["track_correspondences"] == report["correspondences"]
+        assert report["cluster_correspondences"] == 0
+        assert report["clusters_considered"] == 0
         assert report["rotation_only"] is False
         assert report["correspondences"] >= 100
         assert report["inliers"] <= report["correspondences"]
@@ -410,3 +414,165 @@ class TestSet:
     def test_a_target_named_twice_raises(self, orbit):
         with pytest.raises(ValueError, match="twice"):
             resect_images(orbit, ["frames/002.jpg", "frames/002.jpg"])
+
+
+def _workspace(path) -> dict:
+    return {
+        "absolute_path": str(path),
+        "relative_path": ".",
+        "contents": {
+            "feature_tool": "none",
+            "feature_type": "sift",
+            "feature_options": {},
+            "feature_prefix_dir": "",
+        },
+    }
+
+
+def _write_cluster_patches(recon: SfmrReconstruction, path) -> None:
+    """A cluster-patches ``.matches`` file over ``recon`` with one cluster per
+    point, its members at the point's observations (the first the reference,
+    the rest kept): clusters that say what the tracks say."""
+    images = np.asarray(recon.track_image_indexes)
+    points = np.asarray(recon.track_point_indexes)
+    keypoints = np.asarray(recon.keypoints_xy, np.float32)
+    order = np.argsort(points, kind="stable")
+    images, points, keypoints = images[order], points[order], keypoints[order]
+    n_img, m = len(recon.image_names), len(images)
+    starts = np.concatenate([[0], np.flatnonzero(np.diff(points)) + 1, [m]])
+    features = np.zeros(m, np.uint32)
+    counts = np.zeros(n_img, np.uint32)
+    for k, image in enumerate(images):
+        features[k] = counts[image]
+        counts[image] += 1
+    status = np.ones(m, np.uint8)
+    status[starts[:-1]] = 0
+    write_matches(
+        path,
+        {
+            "metadata": {
+                "version": 6,
+                "matching_method": "cluster",
+                "matching_tool": "test",
+                "matching_tool_version": "0",
+                "matching_options": {},
+                "workspace": _workspace(path.parent),
+                "timestamp": "",
+                "image_count": n_img,
+                "cluster_count": len(starts) - 1,
+                "cluster_member_count": m,
+                "has_two_view_geometries": False,
+                "has_clusters": True,
+                "has_cluster_patches": True,
+            },
+            "image_names": list(recon.image_names),
+            "feature_tool_hashes": [bytes(16)] * n_img,
+            "sift_content_hashes": [bytes(16)] * n_img,
+            "feature_counts": counts,
+            "image_dims": np.tile(np.array([WIDTH, HEIGHT], np.uint32), (n_img, 1)),
+            "has_clusters": True,
+            "cluster_starts": starts.astype(np.uint32),
+            "member_images": images.astype(np.uint32),
+            "member_features": features,
+            "member_positions": keypoints,
+            "member_affine_shapes": np.tile(np.eye(2, dtype=np.float32), (m, 1, 1)),
+            "matcher_options": {},
+            "has_cluster_patches": True,
+            "reference_members": starts[:-1].astype(np.uint32),
+            "member_status": status,
+            "member_zncc": np.ones(m, np.float32),
+            "member_shift_px": np.zeros(m, np.float32),
+            "member_consistency_residual": np.zeros(m, np.float32),
+            "refine_options": {},
+            "has_two_view_geometries": False,
+        },
+    )
+
+
+class TestClusters:
+    def test_the_clusters_reach_the_estimate_beside_the_tracks(self, orbit, tmp_path):
+        """Each cluster is a track of its own: the report splits the pairs and
+        the inliers by source, and the tracks' share is what the tracks alone
+        give."""
+        path = tmp_path / "orbit-cluster-patches.matches"
+        _write_cluster_patches(orbit, path)
+        source = _perturb(orbit, 0)
+        truth_q = np.asarray(orbit.quaternions_wxyz, np.float64)[0].copy()
+
+        _, tracks = _resect_one(source, "frames/000.jpg")
+        derived, both = _resect_one(source, "frames/000.jpg", cluster_patches_path=path)
+
+        assert both["accepted"], both["refusal"]
+        assert both["source"] == "tracks_and_clusters"
+        assert both["track_correspondences"] == tracks["correspondences"]
+        assert both["cluster_correspondences"] == tracks["correspondences"]
+        assert both["correspondences"] == (
+            both["track_correspondences"] + both["cluster_correspondences"]
+        )
+        assert both["inliers"] == both["track_inliers"] + both["cluster_inliers"]
+        assert both["clusters_considered"] == both["cluster_correspondences"]
+        assert both["clusters_skipped"] == 0
+        assert both["clusters_failed"] == 0
+        fitted_q = np.asarray(derived.quaternions_wxyz, np.float64)[0]
+        assert _angle_deg(fitted_q, truth_q) < 0.1
+        # Clusters create no points.
+        assert len(np.asarray(derived.positions_xyzw)) == len(
+            np.asarray(source.positions_xyzw)
+        )
+
+    def test_the_set_totals_split_by_source(self, orbit, tmp_path):
+        path = tmp_path / "orbit-cluster-patches.matches"
+        _write_cluster_patches(orbit, path)
+        names = ["frames/000.jpg", "frames/001.jpg"]
+        _, report = resect_images(
+            _perturb(_perturb(orbit, 0), 1), names, cluster_patches_path=path
+        )
+        for key in (
+            "track_correspondences",
+            "cluster_correspondences",
+            "track_inliers",
+            "cluster_inliers",
+        ):
+            assert report[key] == sum(r[key] for r in report["images"]), key
+        assert report["cluster_correspondences"] > 0
+
+    def test_a_file_without_the_cluster_sections_raises(self, orbit, tmp_path):
+        path = tmp_path / "pairs.matches"
+        write_matches(
+            path,
+            {
+                "metadata": {
+                    "version": 6,
+                    "matching_method": "sequential",
+                    "matching_tool": "test",
+                    "matching_tool_version": "0",
+                    "matching_options": {},
+                    "workspace": _workspace(tmp_path),
+                    "timestamp": "",
+                    "image_count": 2,
+                    "image_pair_count": 1,
+                    "match_count": 1,
+                    "has_two_view_geometries": False,
+                },
+                "image_names": ["frames/000.jpg", "frames/001.jpg"],
+                "feature_tool_hashes": [bytes(16)] * 2,
+                "sift_content_hashes": [bytes(16)] * 2,
+                "feature_counts": np.array([1, 1], np.uint32),
+                "image_dims": np.array([[WIDTH, HEIGHT]] * 2, np.uint32),
+                "image_index_pairs": np.array([[0, 1]], np.uint32),
+                "match_counts": np.array([1], np.uint32),
+                "match_feature_indexes": np.array([[0, 0]], np.uint32),
+                "match_descriptor_distances": np.array([1.0], np.float32),
+                "has_two_view_geometries": False,
+            },
+        )
+        with pytest.raises(ValueError, match="no clusters section"):
+            _resect_one(orbit, "frames/000.jpg", cluster_patches_path=path)
+
+    def test_an_unreadable_file_raises_oserror(self, orbit, tmp_path):
+        with pytest.raises(OSError):
+            _resect_one(
+                orbit,
+                "frames/000.jpg",
+                cluster_patches_path=tmp_path / "none.matches",
+            )

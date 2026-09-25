@@ -25,7 +25,7 @@ use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::{row_id, SceneGraphPanel};
 use crate::align::{AlignOptions, AlignSource};
-use crate::resect::ResectFrom;
+use crate::image_menu::ImageMenuAction;
 use crate::scene::{CameraRef, ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
@@ -60,7 +60,7 @@ fn file_node(path: &str, images: usize, prefix: &str) -> SceneNode {
 
 /// State holding `n` file-backed nodes that all share image names — the
 /// comparison case: the same shoot solved several times.
-fn shared_shoot(n: usize) -> AppState {
+pub(crate) fn shared_shoot(n: usize) -> AppState {
     let mut state = AppState::new();
     for i in 0..n {
         state.append_node(file_node(&format!("/runs/run_{i}.sfmr"), 8, "IMG"));
@@ -175,7 +175,7 @@ fn worst_display_error(node: &SceneNode, target: &SceneNode, target_frame: &Se3T
 // ── Frame driving ───────────────────────────────────────────────────────
 
 /// Run one frame of the panel with `events` delivered, returning its response.
-fn run_frame(
+pub(crate) fn run_frame(
     panel: &mut SceneGraphPanel,
     ctx: &egui::Context,
     state: &mut AppState,
@@ -267,7 +267,7 @@ fn button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::
 
 /// Right-click the element recorded under `id`, opening its context menu. The
 /// menu's own rows are laid out (and recorded) on the frames that follow.
-fn open_context_menu(
+pub(crate) fn open_context_menu(
     panel: &mut SceneGraphPanel,
     ctx: &egui::Context,
     state: &mut AppState,
@@ -339,7 +339,7 @@ fn right_click_at(
 /// The delays go to zero first: a headless frame has no wall clock to pass, and
 /// what is under test is which sentence comes up rather than how long a reader
 /// waits for it.
-fn hover_texts_at(
+pub(crate) fn hover_texts_at(
     panel: &mut SceneGraphPanel,
     ctx: &egui::Context,
     state: &mut AppState,
@@ -370,7 +370,7 @@ fn context_menu_open(panel: &SceneGraphPanel, node: crate::scene::ReconId) -> bo
 /// Hover, press, release on the element recorded under `id` — the three frames
 /// egui needs to register a click. Returns the response of the frame the click
 /// landed in.
-fn click(
+pub(crate) fn click(
     panel: &mut SceneGraphPanel,
     ctx: &egui::Context,
     state: &mut AppState,
@@ -383,7 +383,7 @@ fn click(
     click_at(panel, ctx, state, pos)
 }
 
-fn click_at(
+pub(crate) fn click_at(
     panel: &mut SceneGraphPanel,
     ctx: &egui::Context,
     state: &mut AppState,
@@ -2894,7 +2894,7 @@ fn resectable_scene() -> AppState {
 }
 
 /// Expand a node's Camera Images group and settle the panel on it.
-fn with_image_list(
+pub(crate) fn with_image_list(
     state: &mut AppState,
 ) -> (SceneGraphPanel, egui::Context, crate::scene::ReconId) {
     let id = state.scene[0].id;
@@ -2906,7 +2906,7 @@ fn with_image_list(
 }
 
 #[test]
-fn the_resect_entries_are_on_image_rows_and_not_on_the_reconstruction_row() {
+fn the_resect_entry_is_on_image_rows_and_not_on_the_reconstruction_row() {
     let mut state = shared_shoot(1);
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
@@ -2914,10 +2914,6 @@ fn the_resect_entries_are_on_image_rows_and_not_on_the_reconstruction_row() {
     assert!(
         panel.hit_rect(row_id(id, "resect_0")).is_some(),
         "the image row's menu offered no Resect Image"
-    );
-    assert!(
-        panel.hit_rect(row_id(id, "resect_matches_0")).is_some(),
-        "the image row's menu offered no matches variant"
     );
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
@@ -2931,24 +2927,107 @@ fn the_resect_entries_are_on_image_rows_and_not_on_the_reconstruction_row() {
     );
 }
 
-#[test]
-fn choosing_resect_image_reports_the_image_and_the_source() {
+/// [`shared_shoot`] with its node's cluster-patches file current.
+pub(crate) fn resectable_shoot() -> AppState {
     let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    state.adopt_current_cluster_patches(
+        id,
+        std::path::PathBuf::from("/runs/run_0-cluster-patches.matches"),
+    );
+    state
+}
+
+#[test]
+fn choosing_resect_image_reports_the_image() {
+    let mut state = resectable_shoot();
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_2"));
     assert_eq!(
-        response.resect_image,
-        Some((ImageRef::new(id, 2), ResectFrom::Observations))
+        response.image_menu,
+        Some((ImageRef::new(id, 2), ImageMenuAction::Resect))
     );
+}
 
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
-    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_matches_2"));
-    assert_eq!(
-        response.resect_image,
-        Some((ImageRef::new(id, 2), ResectFrom::Matches))
-    );
+#[test]
+fn resect_is_greyed_without_a_current_cluster_patches_file() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx, _) = with_image_list(&mut state);
+
+    // No file at all. Hovered before it is clicked: egui puts no tooltip up
+    // over a widget clicked more recently than the pointer moved.
+    let refusal = state
+        .resect_image_refusal(ImageRef::new(id, 0))
+        .expect("no file is open");
+    assert_greyed_with(&mut panel, &ctx, &mut state, &refusal);
+
+    // A stale one.
+    state.adopt_current_cluster_patches(id, std::path::PathBuf::from("/runs/x.matches"));
+    state.mark_cluster_patches_stale(id, "It is over other images.");
+    let refusal = state
+        .resect_image_refusal(ImageRef::new(id, 0))
+        .expect("the file is stale");
+    assert!(refusal.contains("It is over other images."), "{refusal}");
+    assert_greyed_with(&mut panel, &ctx, &mut state, &refusal);
+}
+
+/// [`hover_texts_at`] shortly after a click, such as the right click that
+/// opened a menu.
+///
+/// A headless frame advances egui's clock by 1/60 s, and egui shows a tooltip
+/// only when the last click is at least 0.1 s older than the last pointer move
+/// and the pointer's smoothed velocity has fallen to zero. So the pointer rests
+/// before it moves onto `pos` and again after, and the texts are those of the
+/// frame after that, with no event in it.
+pub(crate) fn hover_texts_after_a_click(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    pos: egui::Pos2,
+) -> Vec<String> {
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    for _ in 0..8 {
+        run_frame(panel, ctx, state, Vec::new());
+    }
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    for _ in 0..12 {
+        run_frame(panel, ctx, state, Vec::new());
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            panel.show(ui, state);
+        });
+    })
+}
+
+/// Open image 0's menu, and check its `Resect Image` entry hovers `refusal` and
+/// does nothing when clicked.
+fn assert_greyed_with(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    refusal: &str,
+) {
+    let id = state.scene[0].id;
+    open_context_menu(panel, ctx, state, row_id(id, "image_0"));
+    let pos = panel
+        .hit_rect(row_id(id, "resect_0"))
+        .expect("the menu is up")
+        .center();
+    let texts = hover_texts_after_a_click(panel, ctx, state, pos);
+    assert!(texts.iter().any(|t| t == refusal), "{texts:?}");
+    let response = click(panel, ctx, state, row_id(id, "resect_0"));
+    assert_eq!(response.image_menu, None, "the greyed Resect Image ran");
 }
 
 #[test]
@@ -2956,65 +3035,51 @@ fn resect_is_greyed_on_a_reconstruction_with_too_few_posed_images() {
     let mut state = AppState::new();
     // Three images: the target plus two others, one short of the floor.
     state.append_node(file_node("/runs/thin.sfmr", 3, "IMG"));
+    let id = state.scene[0].id;
+    state.adopt_current_cluster_patches(id, std::path::PathBuf::from("/runs/thin.matches"));
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
     assert_eq!(
-        response.resect_image, None,
+        response.image_menu, None,
         "the greyed Resect Image still emitted the action"
     );
 }
 
 #[test]
 fn resect_is_greyed_on_an_image_that_is_not_posed() {
-    let mut state = shared_shoot(1);
+    let mut state = resectable_shoot();
     state.scene[0].recon_mut().image_table.images[1].translation_xyz =
         Vector3::new(f64::NAN, 0.0, 0.0);
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_1"));
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_1"));
-    assert_eq!(
-        response.resect_image, None,
-        "an unposed image was resectable"
-    );
+    assert_eq!(response.image_menu, None, "an unposed image was resectable");
 
-    // Its posed neighbours are unaffected.
+    // Its posed neighbours are unaffected -- and the menu is still standing on
+    // a greyed click, which is what `CloseOnClickOutside` is there for.
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
-    assert!(response.resect_image.is_some());
+    assert!(response.image_menu.is_some());
 }
 
 #[test]
-fn the_matches_variant_is_greyed_without_feature_indexes() {
-    // A resectable node carries embedded patches, which is exactly the case a
-    // match row cannot be joined to.
+fn resect_is_live_on_an_embedded_patches_node() {
+    // A resectable node carries embedded patches: clusters are used as tracks
+    // of their own and need no feature index, so nothing greys it.
     let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    state.adopt_current_cluster_patches(id, std::path::PathBuf::from("/runs/run_a.matches"));
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
-    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_matches_0"));
-    assert_eq!(response.resect_image, None, "the matches variant was live");
-
-    // The stored-observations entry beside it is unaffected — and the menu is
-    // still standing, which is what `CloseOnClickOutside` is there for.
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
     assert_eq!(
-        response.resect_image,
-        Some((ImageRef::new(id, 0), ResectFrom::Observations))
+        response.image_menu,
+        Some((ImageRef::new(id, 0), ImageMenuAction::Resect))
     );
-}
-
-#[test]
-fn closing_a_node_forgets_the_matches_file_chosen_for_it() {
-    let mut state = resectable_scene();
-    let source = state.scene[0].id;
-    state
-        .resect_matches
-        .insert(source, std::path::PathBuf::from("/runs/run_a.matches"));
-    state.close_node(source).expect("nothing is running");
-    assert!(state.resect_matches.is_empty());
 }
 
 // ── Move Camera ─────────────────────────────────────────────────────────
@@ -3030,7 +3095,10 @@ fn the_image_row_offers_move_camera_and_reports_the_image_it_was_chosen_on() {
         "the image row's menu offered no Move Camera"
     );
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "move_camera_2"));
-    assert_eq!(response.move_camera, Some(ImageRef::new(id, 2)));
+    assert_eq!(
+        response.image_menu,
+        Some((ImageRef::new(id, 2), ImageMenuAction::MoveCamera))
+    );
 
     // It is an image's action, not a reconstruction's: the row above offers
     // alignment and closing, not a camera to take in hand.

@@ -646,16 +646,6 @@ pub struct AppState {
     /// has named a file. See [`crate::save_minimal_prompt`].
     pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
 
-    /// The `.matches` file each node's matches-backed resection reads, chosen
-    /// once per source node and remembered for the session. See
-    /// [`crate::resect`].
-    pub resect_matches: HashMap<ReconId, std::path::PathBuf>,
-
-    /// The last `.matches` file parsed, kept so repeated resections against the
-    /// same file pay for the read once. One entry, not a map: a reviewer works
-    /// through one capture at a time, and these files are large.
-    resect_matches_cache: Option<(std::path::PathBuf, sfmtool_matches_format::MatchesData)>,
-
     /// The live MCP endpoint, or `None` when the viewer was started without
     /// `--mcp`. See [`crate::mcp`].
     #[cfg(feature = "mcp")]
@@ -826,8 +816,6 @@ impl AppState {
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
             save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt::default(),
-            resect_matches: HashMap::new(),
-            resect_matches_cache: None,
             #[cfg(feature = "mcp")]
             mcp: None,
             window: None,
@@ -902,7 +890,6 @@ impl AppState {
             // scene, with nothing left on screen to explain why.
             self.solo = None;
         }
-        self.resect_matches.remove(&id);
         self.action_log
             .record(Kind::File, format!("Closed {label}"));
         Ok(())
@@ -938,8 +925,6 @@ impl AppState {
         self.sift_indexes.clear();
         self.cluster_patches.clear();
         self.full_res_cache.clear();
-        self.resect_matches.clear();
-        self.resect_matches_cache = None;
         if closed > 0 {
             self.action_log
                 .record(Kind::File, format!("Closed all ({closed})"));

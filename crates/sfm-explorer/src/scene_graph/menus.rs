@@ -10,8 +10,8 @@
 //! build the index files, convert to embedded patches, close), the three
 //! Index Files rows' ([`index_files_menu`], [`sift_index_menu`],
 //! [`cluster_patches_menu`]) carry the ways to give a node its index files or
-//! let go of them, and the image row's ([`image_context_menu`]) carries the
-//! resection, the camera move and the image deletion. They are
+//! let go of them. The image row's menu is not here: it is the image menu of
+//! [`crate::image_menu`], which the Image Browser strip shows as well. They are
 //! together because a menu is the one place in the panel where an item is
 //! *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
@@ -26,10 +26,8 @@ use eframe::egui;
 
 use crate::action_log::{tint_text, Kind};
 use crate::align::AlignSource;
-use crate::resect::ResectFrom;
-use crate::scene::{ImageRef, NodeTint, ReconId, SceneNode, TINT_PALETTE};
+use crate::scene::{NodeTint, ReconId, SceneNode, TINT_PALETTE};
 
-use super::cameras::{ResectAvailability, MATCHES_DISABLED_HINT};
 use super::{row_id, AlignTarget, IndexFilesRows, TreeOutput};
 
 /// The reconstruction row's context menu.
@@ -465,91 +463,4 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
         }
     });
     out.hit(row_id(id, "align_menu"), menu.response);
-}
-/// The image row's context menu: the two `Resect Image` entries, one per
-/// correspondence source.
-///
-/// They share their greying rules, because what a resection needs of an image is
-/// the same question whichever correspondences answer it.
-///
-/// Both are kept visible and greyed rather than hidden when unavailable: the
-/// action exists on every image row, and an entry that vanishes reads as an
-/// action that was never implemented. The hover text says which of the
-/// reasons applies.
-pub(super) fn image_context_menu(
-    ui: &mut egui::Ui,
-    node: ReconId,
-    index: usize,
-    image: ImageRef,
-    resect: &ResectAvailability,
-    out: &mut TreeOutput,
-) {
-    let refusal = resect.refusal(index);
-    let observations = ui
-        .add_enabled(refusal.is_none(), egui::Button::new("Resect Image"))
-        .on_disabled_hover_text(refusal.unwrap_or_default())
-        .on_hover_text(
-            "Re-estimate this image's pose against structure re-triangulated without it, \
-             and keep the answer as a version of this reconstruction. Undo (Ctrl+Z) puts \
-             the stored pose back.",
-        );
-    if out
-        .hit(row_id(node, &format!("resect_{index}")), observations)
-        .clicked()
-    {
-        out.response.resect_image = Some((image, ResectFrom::Observations));
-        ui.close();
-    }
-
-    let matches_hint = refusal.or((!resect.feature_indexed).then_some(MATCHES_DISABLED_HINT));
-    let matches = ui
-        .add_enabled(
-            matches_hint.is_none(),
-            egui::Button::new("Resect Image from Matches…"),
-        )
-        .on_disabled_hover_text(matches_hint.unwrap_or_default())
-        .on_hover_text(
-            "The same, with the 2D-3D pairs taken from a .matches file, which admits \
-             points this reconstruction never assigned to the image.",
-        );
-    if out
-        .hit(row_id(node, &format!("resect_matches_{index}")), matches)
-        .clicked()
-    {
-        out.response.resect_image = Some((image, ResectFrom::Matches));
-        ui.close();
-    }
-
-    ui.separator();
-    // The hand, beside the two estimators: where a resection re-computes a
-    // pose from correspondences, this hands the camera to the reviewer. It
-    // enters camera view first, because the lock *is* camera view with the
-    // camera coming along.
-    let move_camera = ui.add(egui::Button::new("Move Camera")).on_hover_text(
-        "Look through this image and take its camera in hand: every navigation \
-         input moves it, and M or Enter keeps the pose as a version of this \
-         reconstruction.",
-    );
-    if out
-        .hit(row_id(node, &format!("move_camera_{index}")), move_camera)
-        .clicked()
-    {
-        out.response.move_camera = Some(image);
-        ui.close();
-    }
-
-    ui.separator();
-    // No confirmation: this is an edit with a history behind it, and Undo is
-    // the answer to a mis-click, as it is for the entries above.
-    let delete = ui.add(egui::Button::new("Delete Image")).on_hover_text(
-        "Remove this image from the reconstruction, with its observations and any \
-         track left with none. Undo (Ctrl+Z) puts it back.",
-    );
-    if out
-        .hit(row_id(node, &format!("delete_image_{index}")), delete)
-        .clicked()
-    {
-        out.response.delete_image = Some(image);
-        ui.close();
-    }
 }

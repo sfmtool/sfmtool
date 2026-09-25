@@ -300,26 +300,17 @@ pub(super) fn move_camera_image(
 
 /// `resect_camera_image`: the resection landed as the node's next version.
 ///
-/// `from_matches` chooses the correspondence source. The matches one reads the
-/// `.matches` file remembered for this node, which the Scene panel's own
-/// chooser puts there; with none remembered the state refuses in its own words,
-/// and this surface does not open a file dialog on an agent's behalf.
+/// The step the image menu's `Resect Image` takes, so a node without a current
+/// cluster-patches file is refused in the state's own words, which are the
+/// greyed entry's.
 pub(super) fn resect_camera_image(
     state: &mut AppState,
     label: &str,
     selector: &CameraImageSel,
-    from_matches: bool,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let image = resolve_camera_image(state, id, selector)?;
-    let from = if from_matches {
-        crate::resect::ResectFrom::Matches
-    } else {
-        crate::resect::ResectFrom::Observations
-    };
-    edited(state, id, |state| {
-        state.resect_image(id, image.index(), from)
-    })
+    edited(state, id, |state| state.resect_image(id, image.index()))
 }
 
 /// `bundle_adjust`: start the solve, and answer with its result or with a

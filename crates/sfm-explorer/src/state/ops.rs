@@ -20,7 +20,6 @@
 
 use crate::action_log::Kind;
 use crate::align::{self, AlignOptions};
-use crate::resect::{self, ResectFrom};
 use crate::scene::{ReconId, SceneNode};
 use sfmtool_core::SfmrReconstruction;
 
@@ -81,59 +80,6 @@ impl AppState {
             Err(reason) => {
                 let message = align::failure_message(&source_label, &target_label, &reason);
                 self.action_log.fail(Kind::Scene, message);
-            }
-        }
-    }
-    /// Run `run` over the correspondence source the menu entry `from` names.
-    ///
-    /// Here rather than beside the resection itself because this is where the
-    /// cache it reads lives: the `.matches` file is put there first by
-    /// [`AppState::load_resect_matches`], which the caller runs under its own
-    /// failure text, and this only names it. The reconstruction stays the
-    /// caller's, since what the resection reads is the version's whole value
-    /// rather than the node's base.
-    pub(super) fn with_resect_source<T>(
-        &self,
-        from: ResectFrom,
-        run: impl FnOnce(resect::ResectSource<'_>) -> T,
-    ) -> T {
-        let matches = match from {
-            ResectFrom::Observations => None,
-            ResectFrom::Matches => self.resect_matches_cache.as_ref().map(|(_, data)| data),
-        };
-        let kind = match matches {
-            Some(data) => resect::ResectSource::Matches(data),
-            None => resect::ResectSource::StoredObservations,
-        };
-        run(kind)
-    }
-    /// Make sure [`AppState::resect_matches_cache`] holds the `.matches` file
-    /// chosen for `source`, reading it if it does not. `Err` carries the reason
-    /// for the status line.
-    pub(super) fn load_resect_matches(&mut self, source: ReconId) -> Result<(), String> {
-        let path = self
-            .resect_matches
-            .get(&source)
-            .cloned()
-            .ok_or_else(|| "no .matches file chosen".to_string())?;
-        if self
-            .resect_matches_cache
-            .as_ref()
-            .is_some_and(|(cached, _)| *cached == path)
-        {
-            return Ok(());
-        }
-        match sfmtool_matches_format::read_matches(&path) {
-            Ok(data) => {
-                self.resect_matches_cache = Some((path, data));
-                Ok(())
-            }
-            Err(e) => {
-                // A path that cannot be read is not a path worth remembering:
-                // the next attempt should ask again rather than fail the same
-                // way silently.
-                self.resect_matches.remove(&source);
-                Err(format!("could not read {}: {e}", path.display()))
             }
         }
     }
