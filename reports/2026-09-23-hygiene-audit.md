@@ -167,6 +167,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 ## Python and test layout
 
 **Share only the duplicated solver setup**
+> _Status (2026-09-24): Done — both solve modes use one input/database preparation helper; incremental setup also uses `Path.mkdir` and seeds pycolmap once._
 - Location: `src/sfmtool/_global_sfm.py` (127 lines) and `src/sfmtool/_incremental_sfm.py` (292 lines).
 - Problem: The old report's “88% same runner” description is obsolete after an incremental save helper was added. The first roughly 100 setup lines still duplicate source and database preparation; incremental also seeds twice (46 and 96) and uses `os.makedirs` at 91 where global uses `Path.mkdir` at 86.
 - Proposed fix: Extract the common setup, then keep distinct global and incremental solve/save paths.

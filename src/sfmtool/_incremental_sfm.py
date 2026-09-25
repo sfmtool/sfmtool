@@ -3,21 +3,16 @@
 
 """Incremental Structure from Motion using COLMAP."""
 
-import os
-import textwrap
 from pathlib import Path
 
 import pycolmap
 
-from ._path_summary import summarize_path_list
-from .camera.config import CameraConfigResolver
-from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
+from ._solve_setup import prepare_solve_inputs
 from .colmap.io import (
     build_metadata,
     colmap_binary_to_rust_sfmr,
     pycolmap_to_rust_sfmr,
 )
-from .rig.config import _load_rig_config
 from ._sfmr_naming import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config
 
@@ -45,55 +40,25 @@ def run_incremental_sfm(
         print(f"Random seed: {random_seed}")
         pycolmap.set_random_seed(random_seed)
 
-    if matches_file is not None:
-        db_path, image_dir, image_paths, has_rig = _setup_for_sfm_from_matches(
-            matches_file,
-            colmap_dir,
-            camera_model=camera_model,
-            range_expr=range_expr,
-        )
-        workspace_dir = Path(image_dir).absolute()
-    else:
-        print("Image files:")
-        print(textwrap.indent(summarize_path_list(image_paths), "  "))
-        print(f"Workspace: {workspace_dir}")
+    db_path, image_dir, image_paths, has_rig, workspace_dir = prepare_solve_inputs(
+        image_paths,
+        workspace_dir,
+        colmap_dir,
+        max_feature_count=max_feature_count,
+        camera_model=camera_model,
+        matching_mode=matching_mode,
+        flow_preset=flow_preset,
+        flow_wide_baseline_skip=flow_wide_baseline_skip,
+        matches_file=matches_file,
+        range_expr=range_expr,
+    )
 
-        workspace_dir = Path(workspace_dir).absolute()
-
-        config = load_workspace_config(workspace_dir)
-        feature_tool = config["feature_tool"]
-        feature_options = config["feature_options"]
-        feature_prefix_dir = config["feature_prefix_dir"]
-
-        rig_config = _load_rig_config(workspace_dir)
-        if rig_config is not None:
-            print(f"Rig config: {len(rig_config)} rig(s) detected")
-
-        camera_config_resolver = CameraConfigResolver(workspace_dir)
-
-        db_path, image_dir, has_rig = _setup_for_sfm(
-            image_paths,
-            colmap_dir,
-            workspace_dir,
-            max_feature_count=max_feature_count,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
-            feature_prefix_dir=feature_prefix_dir,
-            rig_config=rig_config,
-            camera_model=camera_model,
-            matching_mode=matching_mode,
-            flow_preset=flow_preset,
-            flow_wide_baseline_skip=flow_wide_baseline_skip,
-            camera_config_resolver=camera_config_resolver,
-        )
-
-    reconstruction_path = os.path.join(colmap_dir, "reconstruction")
-    os.makedirs(reconstruction_path, exist_ok=True)
+    reconstruction_path = Path(colmap_dir) / "reconstruction"
+    reconstruction_path.mkdir(exist_ok=True)
 
     mapper_options = pycolmap.IncrementalPipelineOptions()
     if random_seed is not None:
         mapper_options.random_seed = random_seed
-        pycolmap.set_random_seed(random_seed)
     if has_rig:
         mapper_options.ba_refine_sensor_from_rig = refine_rig
 
@@ -119,7 +84,7 @@ def run_incremental_sfm(
     return _save_reconstructions(
         reconstructions,
         has_rig=has_rig,
-        reconstruction_path=Path(reconstruction_path),
+        reconstruction_path=reconstruction_path,
         image_dir=image_dir,
         workspace_dir=workspace_dir,
         workspace_config=workspace_config,
