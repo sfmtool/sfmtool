@@ -287,6 +287,34 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "add_camera_image_to_tracks",
+            description: "Add one camera image's observations of the points it sees and does \
+                          not already observe, as one version of its reconstruction. For each \
+                          such point the patch is projected into the image; where it is in \
+                          frame, not grazing and facing the camera, the image is searched for \
+                          it against the consensus of the point's existing observations, and \
+                          the sighting is added when its ZNCC reaches the image's pooled bar or \
+                          the point's own track's bar and its keypoint lies within the image's \
+                          positional bound of the projection. Nothing else moves: no point, \
+                          frame, bitmap or camera, and nothing is re-triangulated, so every \
+                          index still means what it meant. The step to take after \
+                          resect_camera_image. Runs on a worker thread, so one still going \
+                          after 200 ms replies with running: true and an operation_id instead \
+                          of the version; cancel_background_task stops it. A call that adds \
+                          nothing pushes no version. The Action Log row names how many tracks \
+                          were joined and why the other candidates were refused. Needs a posed \
+                          image whose photograph can be read, and a reconstruction with \
+                          embedded patches and a patch frame per point.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "bundle_adjust",
             description: "Refine every pose and every point of one reconstruction against its \
                           observations, as one version. A bulk edit, and it runs on a worker \

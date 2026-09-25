@@ -346,6 +346,10 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             camera_image: args.camera_image("camera_image")?,
         },
+        "add_camera_image_to_tracks" => Command::AddCameraImageToTracks {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+        },
         "bundle_adjust" => Command::BundleAdjust {
             reconstruction_label: args.required_string("reconstruction_label")?,
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),

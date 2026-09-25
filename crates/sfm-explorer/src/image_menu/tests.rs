@@ -199,6 +199,38 @@ fn an_entry_chosen_in_the_strip_is_the_action_the_tree_reports() {
 }
 
 #[test]
+fn add_to_tracks_sits_below_resect_and_is_greyed_with_the_step_s_reason() {
+    // The shoot's points carry no patch frame, so the entry is greyed, in the
+    // step's own words, and choosing it chooses nothing in either place.
+    let mut state = resectable_shoot();
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+    let refusal = state
+        .add_image_to_tracks_refusal(ImageRef::new(id, 2))
+        .expect("the shoot cannot be added to");
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    let resect = panel.hit_rect(row_id(id, "resect_2")).expect("drawn");
+    let add = panel
+        .hit_rect(row_id(id, "add_to_tracks_2"))
+        .expect("drawn");
+    let moved = panel.hit_rect(row_id(id, "move_camera_2")).expect("drawn");
+    assert!(resect.center().y < add.center().y && add.center().y < moved.center().y);
+    let tree_texts = hover_texts_after_a_click(&mut panel, &ctx, &mut state, add.center());
+    assert!(tree_texts.contains(&refusal), "{tree_texts:?}");
+
+    let (mut browser, strip_ctx) = settled_strip(&mut state);
+    open_strip_menu(&mut browser, &strip_ctx, &mut state, 2);
+    let strip = click_strip_entry(
+        &mut browser,
+        &strip_ctx,
+        &mut state,
+        super::ADD_TO_TRACKS,
+        2,
+    );
+    assert_eq!(strip.menu_action, None);
+}
+
+#[test]
 fn the_strip_greys_resect_with_the_tree_s_reason() {
     // No cluster-patches file: Resect Image is greyed in both, with one reason.
     let mut state = shared_shoot(1);

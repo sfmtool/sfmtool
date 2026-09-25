@@ -30,6 +30,9 @@ pub(crate) enum ImageMenuAction {
     /// `Resect Image`: re-estimate the image's pose against structure held out
     /// from it, as the node's next version.
     Resect,
+    /// `Add Image to Tracks`: add the image's observations of the points it
+    /// sees and does not observe, as the node's next version.
+    AddToTracks,
     /// `Move Camera`: look through the image and take its camera in hand.
     MoveCamera,
     /// `Delete Image`: remove the image, as the node's next version.
@@ -38,14 +41,17 @@ pub(crate) enum ImageMenuAction {
 
 /// The menu's entries in the order it shows them: the key each place records
 /// an entry's rect under, and its label.
-pub(crate) const ENTRIES: [(&str, &str); 3] = [
+pub(crate) const ENTRIES: [(&str, &str); 4] = [
     (RESECT, "Resect Image"),
+    (ADD_TO_TRACKS, "Add Image to Tracks"),
     (MOVE_CAMERA, "Move Camera"),
     (DELETE_IMAGE, "Delete Image"),
 ];
 
 /// The key of the `Resect Image` entry.
 pub(crate) const RESECT: &str = "resect";
+/// The key of the `Add Image to Tracks` entry.
+pub(crate) const ADD_TO_TRACKS: &str = "add_to_tracks";
 /// The key of the `Move Camera` entry.
 pub(crate) const MOVE_CAMERA: &str = "move_camera";
 /// The key of the `Delete Image` entry.
@@ -63,6 +69,24 @@ pub(crate) struct ImageMenu {
     /// Why the node's cluster-patches file will not do for a resection, or
     /// `None` when it is current.
     cluster_patches: Option<String>,
+    /// Why `Add Image to Tracks` cannot run on any image of the node, or
+    /// `None`: an operation running on it, or the node's own reasons
+    /// ([`crate::add_image_to_tracks::node_refusal`]).
+    add_to_tracks: Option<String>,
+    /// Per image, where its photograph would come from.
+    ///
+    /// A path is looked at lazily, by [`Self::add_to_tracks_refusal`], so a
+    /// frame that shows no menu reads nothing from the file system.
+    photographs: Vec<Photograph>,
+}
+
+/// Where one image's pixels would come from, for the menu's gate.
+#[derive(Debug, Clone)]
+enum Photograph {
+    /// Already decoded in the viewer's cache.
+    Cached,
+    /// To be read from this path.
+    File(std::path::PathBuf),
 }
 
 impl ImageMenu {
@@ -82,6 +106,25 @@ impl ImageMenu {
             return Some(TOO_FEW_POSED_HINT);
         }
         self.cluster_patches.as_deref()
+    }
+
+    /// Why `Add Image to Tracks` is unavailable for image `index`, or `None`
+    /// when it is available.
+    ///
+    /// The image's pose first, then the node's reasons, then the photograph,
+    /// the one reason that costs a look at the file system.
+    pub(crate) fn add_to_tracks_refusal(&self, index: usize) -> Option<&str> {
+        if !self.posed.get(index).copied().unwrap_or(false) {
+            return Some(crate::add_image_to_tracks::NOT_POSED_HINT);
+        }
+        if let Some(why) = self.add_to_tracks.as_deref() {
+            return Some(why);
+        }
+        match self.photographs.get(index) {
+            Some(Photograph::Cached) => None,
+            Some(Photograph::File(path)) if path.is_file() => None,
+            _ => Some(crate::add_image_to_tracks::NO_PHOTOGRAPH_HINT),
+        }
     }
 }
 
@@ -115,10 +158,33 @@ impl AppState {
                     && image.translation_xyz.iter().all(|c| c.is_finite())
             })
             .collect();
+        let recon = node.recon();
+        let photographs = recon
+            .image_table
+            .images
+            .iter()
+            .enumerate()
+            .map(|(i, image)| {
+                let cached = self
+                    .full_res_cache
+                    .get(&ImageRef::new(id, i))
+                    .is_some_and(|slot| slot.is_some());
+                if cached {
+                    Photograph::Cached
+                } else {
+                    Photograph::File(recon.workspace_dir.join(&image.name))
+                }
+            })
+            .collect();
+        let add_to_tracks = self.busy_refusal(id).or_else(|| {
+            crate::add_image_to_tracks::node_refusal(node.history.current()).map(str::to_string)
+        });
         Some(ImageMenu {
             posed_count: posed.iter().filter(|&&p| p).count(),
             posed,
             cluster_patches: self.resect_cluster_patches_refusal(id),
+            add_to_tracks,
+            photographs,
         })
     }
 
@@ -168,12 +234,29 @@ pub(crate) fn show(
         chosen = Some(ImageMenuAction::Resect);
     }
 
+    // Beside the resection, because it is what a re-posed image wants next:
+    // the pose is new, and the tracks it can now see are not yet its own.
+    let refusal = menu.add_to_tracks_refusal(index);
+    let add = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(ENTRIES[1].1))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Look for every point this image does not observe in its photograph, and add \
+             the observations whose appearance agrees with the point's other observations, \
+             as a version of this reconstruction. Nothing else moves. Runs in the \
+             background; Undo (Ctrl+Z) takes the observations back out.",
+        );
+    mark(ADD_TO_TRACKS, &add);
+    if add.clicked() {
+        chosen = Some(ImageMenuAction::AddToTracks);
+    }
+
     ui.separator();
     // The hand, beside the estimator: where a resection re-computes a pose
     // from correspondences, this hands the camera to the reviewer. It enters
     // camera view first, because the lock *is* camera view with the camera
     // coming along.
-    let move_camera = ui.add(egui::Button::new(ENTRIES[1].1)).on_hover_text(
+    let move_camera = ui.add(egui::Button::new(ENTRIES[2].1)).on_hover_text(
         "Look through this image and take its camera in hand: every navigation \
          input moves it, and M or Enter keeps the pose as a version of this \
          reconstruction.",
@@ -186,7 +269,7 @@ pub(crate) fn show(
     ui.separator();
     // No confirmation: this is an edit with a history behind it, and Undo is
     // the answer to a mis-click, as it is for the entries above.
-    let delete = ui.add(egui::Button::new(ENTRIES[2].1)).on_hover_text(
+    let delete = ui.add(egui::Button::new(ENTRIES[3].1)).on_hover_text(
         "Remove this image from the reconstruction, with its observations and any \
          track left with none. Undo (Ctrl+Z) puts it back.",
     );

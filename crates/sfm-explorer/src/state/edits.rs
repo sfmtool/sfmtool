@@ -262,6 +262,9 @@ pub(crate) struct DecodedViews {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
     pyramids: Vec<Arc<ImageU8Pyramid>>,
+    /// Per image, whether its pyramid is its photograph rather than the
+    /// placeholder an unused or unreadable image gets.
+    present: Vec<bool>,
 }
 
 /// Where one photometric step's photographs are to come from, before any of
@@ -319,9 +322,11 @@ impl ViewSources {
             PYRAMID_LEVELS,
         ));
         let mut pyramids = Vec::with_capacity(self.sources.len());
+        let mut present = Vec::with_capacity(self.sources.len());
         let mut read = 0usize;
         let mut reused = 0usize;
         for source in self.sources {
+            present.push(!matches!(source, ViewSource::Unused));
             pyramids.push(match source {
                 ViewSource::Decoded(pyramid) => {
                     reused += 1;
@@ -344,11 +349,76 @@ impl ViewSources {
             cameras: self.cameras,
             poses: self.poses,
             pyramids,
+            present,
+        })
+    }
+
+    /// [`Self::decode`] for a step that can do without some of its
+    /// photographs: one that cannot be read is left out, as an image the step
+    /// does not use is, rather than refusing the step. Polls `progress` between
+    /// photographs, and hands back [`Cancelled`](sfmtool_core::progress::Cancelled)
+    /// when asked to stop.
+    pub(crate) fn decode_available(
+        self,
+        progress: &sfmtool_core::progress::Progress<'_>,
+    ) -> Result<DecodedViews, sfmtool_core::progress::Cancelled> {
+        let mut phase = progress.phase("decode images");
+        let placeholder = Arc::new(ImageU8Pyramid::from_image(
+            ImageU8::new(1, 1, 3, vec![0u8; 3]),
+            PYRAMID_LEVELS,
+        ));
+        let total = self.sources.len();
+        let mut pyramids = Vec::with_capacity(total);
+        let mut present = Vec::with_capacity(total);
+        let (mut read, mut reused, mut missing) = (0usize, 0usize, 0usize);
+        for (i, source) in self.sources.into_iter().enumerate() {
+            phase.check_cancel()?;
+            let pyramid = match source {
+                ViewSource::Decoded(pyramid) => {
+                    reused += 1;
+                    Some(pyramid)
+                }
+                ViewSource::Read(path, _) => match crate::state::decode_full_res(&path) {
+                    Some(image) => {
+                        read += 1;
+                        Some(Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)))
+                    }
+                    None => {
+                        missing += 1;
+                        None
+                    }
+                },
+                ViewSource::Unused => None,
+            };
+            present.push(pyramid.is_some());
+            pyramids.push(pyramid.unwrap_or_else(|| Arc::clone(&placeholder)));
+            phase.count(i as u64 + 1, Some(total as u64), "images");
+        }
+        progress_note!(
+            phase,
+            "{read} read from disk, {reused} reused from the cache, {missing} unreadable"
+        );
+        Ok(DecodedViews {
+            cameras: self.cameras,
+            poses: self.poses,
+            pyramids,
+            present,
         })
     }
 }
 
 impl DecodedViews {
+    /// Per image, its photograph's pyramid, or `None` for an image the step
+    /// does not use or could not read: the form a step that tolerates missing
+    /// photographs takes.
+    pub(crate) fn pyramid_slots(&self) -> Vec<Option<&ImageU8Pyramid>> {
+        self.pyramids
+            .iter()
+            .zip(&self.present)
+            .map(|(pyramid, &present)| present.then_some(pyramid.as_ref()))
+            .collect()
+    }
+
     /// The borrowed form a patch kernel takes.
     pub(crate) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras

@@ -504,6 +504,21 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        // Add Image to Tracks, over the plane capture with image 0's
+        // observations taken out: it decodes the photographs and measures
+        // every point against them.
+        "Add image to tracks" => {
+            let (state, id) = crate::add_image_to_tracks::tests::untracked_state();
+            let job = state
+                .add_image_to_tracks_job(crate::scene::ImageRef::new(id, 0))
+                .expect("a posed image of an embedded_patches node with frames");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The three steps that read photographs, over the bench fixture: a
         // point on the bench and a textured photograph cached for every image.
         "Evaluate track" | "Fit track" | "Set track stage" => {

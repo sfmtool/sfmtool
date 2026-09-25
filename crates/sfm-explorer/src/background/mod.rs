@@ -134,6 +134,20 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// One image added to the tracks of its node it can see
+    /// (`specs/gui/edits/add-image-to-tracks.md`).
+    ///
+    /// Cancellable because the photographs are decoded with the flag polled
+    /// between them, and `sfmtool_core::reconstruction::add_image_to_tracks`
+    /// polls it while it measures the candidates and hands back
+    /// `AddImageToTracksError::Cancelled` rather than a value with some of
+    /// the observations added.
+    pub(crate) const ADD_IMAGE_TO_TRACKS: Operation = Operation {
+        name: "Add image to tracks",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One bench track read at the stage it is in (`specs/gui/track-view.md`).
     ///
     /// Cancellable: the reading polls the flag on either side of the decode,
@@ -251,12 +265,13 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 12] = [
+    pub(crate) const ALL: [Operation; 13] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
         Operation::PRUNE_COVERED_OBSERVATIONS,
+        Operation::ADD_IMAGE_TO_TRACKS,
         Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,

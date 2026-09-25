@@ -1178,6 +1178,12 @@ impl TabContext<'_> {
                     self.forget_recon(image.recon);
                 }
             }
+            // Nothing is logged here: the step logs its own refusal to begin,
+            // and the frame the answer lands on logs the outcome and drops the
+            // panels' caches for the node.
+            ImageMenuAction::AddToTracks => {
+                let _ = self.state.start_add_image_to_tracks(image);
+            }
             // Look through the image, then take it in hand. Two steps rather
             // than one because the lock is only ever entered from camera view,
             // which is the whole of what it is.

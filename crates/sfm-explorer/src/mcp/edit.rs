@@ -313,6 +313,40 @@ pub(super) fn resect_camera_image(
     edited(state, id, |state| state.resect_image(id, image.index()))
 }
 
+/// `add_camera_image_to_tracks`: start adding the image to the tracks it
+/// sees, and answer with its version or with a handle, whichever the clock
+/// reaches first.
+///
+/// The step the image menu's `Add Image to Tracks` takes, so a refusal to
+/// begin is in the state's own words, which are the greyed entry's. It replies
+/// the way the other background operations do: decoding the photographs and
+/// measuring every candidate point can outlast [`REPLY_DIRECTLY_WITHIN`], and
+/// then the answer is a [`BackgroundReply`] the frame resolves. A call that
+/// adds nothing pushes no version, and the Action Log row says so.
+pub(super) fn add_camera_image_to_tracks(
+    state: &mut AppState,
+    label: &str,
+    selector: &CameraImageSel,
+) -> super::Outcome {
+    let (id, image) = match resolve_reconstruction(state, Some(label))
+        .and_then(|id| resolve_camera_image(state, id, selector).map(|image| (id, image)))
+    {
+        Ok(found) => found,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_add_image_to_tracks(image) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::Version(id),
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
 /// `bundle_adjust`: start the solve, and answer with its result or with a
 /// handle, whichever the clock reaches first.
 ///

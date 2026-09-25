@@ -1227,6 +1227,7 @@ fn every_editing_tool_requires_its_reconstruction_label() {
                 "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
         ),
         ("resect_camera_image", json!({ "camera_image": 1 })),
+        ("add_camera_image_to_tracks", json!({ "camera_image": 1 })),
         ("bundle_adjust", json!({})),
         ("convert_to_embedded_patches", json!({})),
     ] {
@@ -1329,6 +1330,16 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         Command::ResectCameraImage {
             reconstruction_label: "a".to_string(),
             camera_image: super::super::CameraImageSel::Name("images/x.jpg".to_string()),
+        }
+    );
+    assert_eq!(
+        parse(
+            "add_camera_image_to_tracks",
+            json!({ "reconstruction_label": "a", "camera_image": 2 })
+        ),
+        Command::AddCameraImageToTracks {
+            reconstruction_label: "a".to_string(),
+            camera_image: super::super::CameraImageSel::Index(2),
         }
     );
     // The pose arrives in a sub-object, and comes out of the parse as the two

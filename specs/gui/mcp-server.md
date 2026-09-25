@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-seven tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-one
+Seventy-eight tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-two
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -147,6 +147,7 @@ write, and one writes a file.
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
+| `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
@@ -185,7 +186,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-one writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-two writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2104,8 +2105,32 @@ stale the state refuses in the greyed entry's own words -- *"…refused: Resect
 Image reads this reconstruction's cluster patches file, and none is open. Build
 Index Files (the Index Files row in the Scene tree) makes it."* -- and
 `build_index_files` is the call that makes it. The image menu itself is not on
-the wire: its three entries are the tools `resect_camera_image`,
-`move_camera_image` and `delete_camera_image`.
+the wire: its four entries are the tools `resect_camera_image`,
+`add_camera_image_to_tracks`, `move_camera_image` and `delete_camera_image`.
+
+### `add_camera_image_to_tracks`
+
+```jsonc
+// add_camera_image_to_tracks { "reconstruction_label": "kerry_park",
+//                              "camera_image": "fisheye_left/frame_23.jpg" }
+```
+
+The image menu's `Add Image to Tracks`
+([edits/add-image-to-tracks.md](edits/add-image-to-tracks.md)): every point the
+image does not observe is looked for in its photograph, and the sightings that
+agree with the point's other observations are added, as the node's next
+version. Nothing else moves and nothing is renumbered, so point and image
+indexes read before the call still mean what they meant. It is the call to make
+after `resect_camera_image`. It refuses, in the greyed entry's words, an unposed
+image, a node with no points, a `sift_files` node, a node with no patch frames
+and an image whose photograph cannot be found.
+
+**It runs on a worker thread** and replies the way `bundle_adjust` does (below):
+with the version and the Action Log sentence when it finishes within 200 ms,
+with a `running: true` handle otherwise, and `cancel_background_task` stops it.
+A call that adds nothing pushes no version. The Action Log row reads *"Added
+frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
+edge, 21 below bar, ...)"*.
 
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the one decision the
@@ -3457,7 +3482,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-seven tools**, fifteen of them reads and one of them
+- **The catalog is seventy-eight tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

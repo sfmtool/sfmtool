@@ -13,6 +13,7 @@
 //! and window creation directly.
 
 mod action_log;
+mod add_image_to_tracks;
 mod align;
 mod app;
 mod background;

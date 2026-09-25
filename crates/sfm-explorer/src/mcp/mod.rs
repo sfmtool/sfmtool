@@ -271,6 +271,12 @@ pub(crate) enum Command {
         reconstruction_label: String,
         camera_image: CameraImageSel,
     },
+    /// Add one camera image's observations of the points it sees and does not
+    /// observe, as one version of its reconstruction.
+    AddCameraImageToTracks {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+    },
     BundleAdjust {
         reconstruction_label: String,
         release_focal: bool,
@@ -1201,6 +1207,10 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &camera_image,
         )),
+        Command::AddCameraImageToTracks {
+            reconstruction_label,
+            camera_image,
+        } => edit::add_camera_image_to_tracks(state, &reconstruction_label, &camera_image),
         Command::BundleAdjust {
             reconstruction_label,
             release_focal,

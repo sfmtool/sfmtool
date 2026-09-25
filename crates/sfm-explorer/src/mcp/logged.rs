@@ -69,6 +69,7 @@ impl Command {
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImage { .. } => "resect_camera_image",
+            Command::AddCameraImageToTracks { .. } => "add_camera_image_to_tracks",
             Command::BundleAdjust { .. } => "bundle_adjust",
             Command::ConvertToEmbeddedPatches { .. } => "convert_to_embedded_patches",
             Command::GetBench { .. } => "get_bench",
@@ -139,6 +140,10 @@ impl Command {
                 ..
             }
             | Command::ResectCameraImage {
+                reconstruction_label,
+                ..
+            }
+            | Command::AddCameraImageToTracks {
                 reconstruction_label,
                 ..
             }
@@ -282,6 +287,7 @@ impl Command {
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImage { .. }
+            | Command::AddCameraImageToTracks { .. }
             | Command::BundleAdjust { .. }
             | Command::BakeReconstructionTransform { .. }
             | Command::ConvertToEmbeddedPatches { .. }

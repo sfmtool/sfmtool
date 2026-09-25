@@ -147,6 +147,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "resect_camera_image",
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
+        (
+            "add_camera_image_to_tracks",
+            json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
+        ),
         ("bundle_adjust", json!({ "reconstruction_label": "alpha" })),
         (
             "convert_to_embedded_patches",
@@ -662,15 +666,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, sixty-one writes, the one that writes a file, and the one
+    // Fifteen reads, sixty-two writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 77, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 78, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        61
+        62
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
