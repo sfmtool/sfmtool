@@ -39,6 +39,7 @@ pub mod prof;
 mod basis;
 mod kernels;
 mod params;
+mod reference;
 mod search;
 mod tail;
 
@@ -64,6 +65,7 @@ use rayon::prelude::*;
 
 // Public API, re-exported at the historical `keypoint_localize::` paths.
 pub use params::{BasisPick, KeypointLocalization, KeypointLocalizeParams, SearchStrategy};
+pub use reference::{ReferenceConsensus, ViewScore, ViewSearch};
 pub use tail::keypoint_grid_offset;
 
 pub(super) use tail::seed_offset;

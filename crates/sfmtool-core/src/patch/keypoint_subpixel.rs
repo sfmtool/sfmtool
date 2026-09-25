@@ -806,6 +806,133 @@ fn finalize(
     out
 }
 
+/// Refine one view's keypoint against the frozen consensus of `references`,
+/// moving nothing else.
+///
+/// The references are rendered at `reference_keypoints` (parallel to
+/// `references`, source px) and their robust consensus is built once, as the
+/// single-pass frozen variant builds it; `target` is then refined from
+/// `target_keypoint` by the same ECC Gauss-Newton solve every view gets there,
+/// with the never-worse guard, and its keypoint is returned. The target does
+/// not contribute to the consensus. This is the sub-pixel step of adding an
+/// observation to an existing track (`specs/drafts/add-image-to-tracks.md`),
+/// where the references are the track's settled observations.
+///
+/// `None` when fewer than two references render in frame, the target does not
+/// project into its frame, the views do not share one channel count, or the
+/// target's core is out of frame at its seed.
+///
+/// # Panics
+///
+/// Panics if `reference_keypoints.len() != references.len()` or an index is
+/// out of range for `views`.
+pub fn refine_view_against_references(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    references: &[u32],
+    reference_keypoints: &[[f64; 2]],
+    target: u32,
+    target_keypoint: [f64; 2],
+    params: &KeypointSubpixelParams,
+) -> Option<[f64; 2]> {
+    assert_eq!(
+        references.len(),
+        reference_keypoints.len(),
+        "reference_keypoints must be parallel to references"
+    );
+    let resolution = params.resolution.max(2);
+    let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
+    let support = build_support(params.window, resolution);
+    let n = support.pixels.len();
+    let target_view = &views[target as usize];
+    let channels = target_view.pyramid.level(0).channels() as usize;
+    if references
+        .iter()
+        .any(|&i| views[i as usize].pyramid.level(0).channels() as usize != channels)
+    {
+        return None;
+    }
+
+    let mut raw = vec![0f32; channels * n];
+    let mut znorm = vec![0f32; channels * n];
+    let mut xs: Vec<f32> = Vec::new();
+    let mut live = 0usize;
+    for (&i, &kp) in references.iter().zip(reference_keypoints) {
+        let view = &views[i as usize];
+        let Some(off) = seed_offset(patch, view, kp, wpp_u, wpp_v) else {
+            continue;
+        };
+        if core_value(
+            patch,
+            view,
+            None,
+            off[0],
+            off[1],
+            wpp_u,
+            wpp_v,
+            resolution,
+            params.sampler,
+            &support,
+            channels,
+            &mut raw,
+        ) {
+            znorm_core(&raw, &support, channels, &mut znorm);
+            xs.extend_from_slice(&znorm);
+            live += 1;
+        }
+    }
+    if live < 2 {
+        return None;
+    }
+    let mut sc = ConsensusScratch::default();
+    let mut tmpl = Vec::new();
+    irls_view_weights(&xs, live, channels, n, params.robust_iters, None, &mut sc);
+    weighted_unit_template_into(&xs, &sc.w, live, channels, n, &mut tmpl);
+
+    let proj = project(target_view, &patch.center, patch.w)?;
+    let seed = seed_offset(patch, target_view, target_keypoint, wpp_u, wpp_v)?;
+    let mut state = ViewState {
+        idx: target,
+        seed,
+        off: seed,
+        proj: [proj.0, proj.1],
+        score: f64::NAN,
+    };
+    let mut scratch = GnScratch::new(channels * n);
+    let pad = (params.max_offset_px.max(0.0).ceil() as u32).max(1) + 2;
+    let tile = try_render_refine_tile(
+        patch,
+        target_view,
+        seed,
+        wpp_u,
+        wpp_v,
+        resolution,
+        pad,
+        params.sampler,
+        &mut scratch.img,
+    );
+    refine_one_view(
+        patch,
+        target_view,
+        tile.as_ref(),
+        &mut state,
+        &support,
+        &tmpl,
+        channels,
+        resolution,
+        wpp_u,
+        wpp_v,
+        params,
+        &mut scratch,
+    );
+    if !state.score.is_finite() {
+        return None;
+    }
+    let center = shifted_center(patch, state.off[0], state.off[1], wpp_u, wpp_v);
+    project(target_view, &center, patch.w).map(|(x, y)| [x, y])
+}
+
 /// Batch [`refine_patch_keypoints`] over a [`PatchCloud`], parallel across patches
 /// (rayon). `view_sets[i]` lists, for patch `i`, the views to refine.
 /// `starting_keypoints`, when given, is parallel to `view_sets` (one seed per

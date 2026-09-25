@@ -4,6 +4,7 @@
 //! SfM reconstruction: the [`SfmrReconstruction`] data type plus per-point
 //! operations (triangulation, filtering, correspondence).
 
+pub mod add_image_to_tracks;
 pub mod bundle_adjust;
 pub(crate) mod data;
 mod edit;
