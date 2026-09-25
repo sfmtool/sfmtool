@@ -241,8 +241,9 @@ fn with_a_current_file_the_log_line_splits_the_correspondences_by_source() {
         last.text
     );
     assert!(
-        last.text
-            .contains("; clusters 120 considered, 0 skipped, 0 failed to triangulate"),
+        last.text.contains(
+            "; clusters 120 considered, 0 skipped, 0 failed to triangulate, 0 inconsistent"
+        ),
         "{}",
         last.text
     );

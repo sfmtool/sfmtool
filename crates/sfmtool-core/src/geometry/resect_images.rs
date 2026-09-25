@@ -118,12 +118,31 @@ impl ResectSource<'_> {
 }
 
 /// Settings of [`resect_images`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ResectImageOptions {
     /// The batch-registration primitive's own options: the observation floor
     /// below which the finite path is unavailable, the acceptance gate on the
     /// all-observation inlier fraction, and the RANSAC seed.
     pub resect: ResectOptions,
+    /// The largest distance, in pixels, a cluster's non-target member may lie
+    /// from the reprojection of the cluster's triangulated position into that
+    /// member's image. A cluster with any member farther away gives no pair.
+    /// Only read under [`ResectSource::TracksAndClusters`].
+    pub max_cluster_residual_px: f64,
+}
+
+/// Default of [`ResectImageOptions::max_cluster_residual_px`], chosen by
+/// measurement on two reconstructions (the table is in
+/// `specs/gui/edits/resect-image.md`, "Correspondence sources").
+pub const DEFAULT_MAX_CLUSTER_RESIDUAL_PX: f64 = 1.5;
+
+impl Default for ResectImageOptions {
+    fn default() -> Self {
+        Self {
+            resect: ResectOptions::default(),
+            max_cluster_residual_px: DEFAULT_MAX_CLUSTER_RESIDUAL_PX,
+        }
+    }
 }
 
 /// What one target's resection did, in the quantities the caller reports.
@@ -167,10 +186,13 @@ pub struct ResectImageReport {
     /// member in this image, or kept members in fewer than two non-target
     /// posed images.
     pub clusters_skipped: usize,
-    /// Of those, the ones whose non-target members did not triangulate. The
-    /// rest, `clusters_considered - clusters_skipped - clusters_failed`, each
-    /// gave this image one pair.
+    /// Of those, the ones whose non-target members did not triangulate.
     pub clusters_failed: usize,
+    /// Of those, the ones whose triangulated position lies farther than
+    /// [`ResectImageOptions::max_cluster_residual_px`] from one of its own
+    /// non-target members. The rest, `clusters_considered - clusters_skipped -
+    /// clusters_failed - clusters_inconsistent`, each gave this image one pair.
+    pub clusters_inconsistent: usize,
     /// `inliers / correspondences` — the fraction the acceptance gate was
     /// applied to.
     pub inlier_fraction: f64,
@@ -227,6 +249,8 @@ pub struct ResectTotals {
     pub track_inliers: usize,
     /// Cluster inliers summed over the targets' estimates.
     pub cluster_inliers: usize,
+    /// [`ResectImageReport::clusters_inconsistent`] summed over the targets.
+    pub clusters_inconsistent: usize,
     /// `inliers / correspondences` over the whole set; `0.0` when the set saw
     /// no correspondences at all.
     pub inlier_fraction: f64,
@@ -482,6 +506,7 @@ pub fn resect_images(
             &is_target,
             &posed_others,
             matches,
+            options.max_cluster_residual_px,
         )?),
     };
     if let Some(support) = &cluster_support {
@@ -640,6 +665,7 @@ pub fn resect_images(
                 clusters_considered: from_clusters.considered,
                 clusters_skipped: from_clusters.skipped,
                 clusters_failed: from_clusters.failed,
+                clusters_inconsistent: from_clusters.inconsistent,
                 inlier_fraction: estimate.inlier_fraction,
                 accepted: estimate.accepted,
                 refusal: estimate.refusal.clone(),
@@ -670,6 +696,7 @@ pub fn resect_images(
         inliers,
         track_inliers: reports.iter().map(|r| r.track_inliers).sum(),
         cluster_inliers: reports.iter().map(|r| r.cluster_inliers).sum(),
+        clusters_inconsistent: reports.iter().map(|r| r.clusters_inconsistent).sum(),
         inlier_fraction: if correspondences == 0 {
             0.0
         } else {

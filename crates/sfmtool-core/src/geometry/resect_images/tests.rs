@@ -34,6 +34,7 @@ use crate::reconstruction::{
 
 use sfmtool_matches_format::{ClusterMemberStatus, ClusterPatchData, ClustersData, MatchesData};
 
+use super::clusters::member_residual;
 use super::{
     resect_images, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
     MIN_OTHER_POSED_IMAGES,
@@ -1039,7 +1040,14 @@ fn clusters_alone_resect_an_image_with_no_tracks() {
     assert_eq!(r.inliers, r.cluster_inliers);
     assert_eq!(r.track_inliers, 0);
     assert_eq!(r.clusters_considered, r.cluster_correspondences);
-    assert_eq!((r.clusters_skipped, r.clusters_failed), (0, 0));
+    assert_eq!(
+        (
+            r.clusters_skipped,
+            r.clusters_failed,
+            r.clusters_inconsistent
+        ),
+        (0, 0, 0)
+    );
 
     let fitted = &out.reconstruction.image_table.images[target];
     let true_pose = &truth.image_table.images[target];
@@ -1159,16 +1167,16 @@ fn a_cluster_with_two_kept_members_in_the_target_contributes_nothing() {
     assert_eq!(r.track_correspondences, baseline.track_correspondences);
 }
 
-/// The first point of the cloud that images 0, 1 and 2 all see, by its
-/// world position.
-fn a_point_seen_by_0_1_and_2(recon: &SfmrReconstruction) -> Point3<f64> {
+/// The first point of the cloud that every one of `images` sees, by its world
+/// position.
+fn a_point_seen_by(recon: &SfmrReconstruction, images: &[usize]) -> Point3<f64> {
     (0..recon.point_set.points.len())
         .find(|&p| {
             let seen: Vec<usize> = (recon.point_set.observation_offsets[p]
                 ..recon.point_set.observation_offsets[p + 1])
                 .map(|row| recon.point_set.tracks[row].image_index as usize)
                 .collect();
-            [0, 1, 2].iter().all(|i| seen.contains(i))
+            images.iter().all(|i| seen.contains(i))
         })
         .map(|p| recon.point_set.points[p].position)
         .expect("the orbit's cameras overlap")
@@ -1177,7 +1185,7 @@ fn a_point_seen_by_0_1_and_2(recon: &SfmrReconstruction) -> Point3<f64> {
 #[test]
 fn a_cluster_is_held_out_from_the_whole_target_set() {
     let truth = orbit();
-    let world = a_point_seen_by_0_1_and_2(&truth);
+    let world = a_point_seen_by(&truth, &[0, 1, 2]);
     // Kept members in images 0, 1 and 2, and a rejected one in image 3.
     let cluster: Vec<Member> = vec![
         (
@@ -1248,7 +1256,7 @@ fn orbit_with_a_side_pair() -> SfmrReconstruction {
 fn a_cluster_that_does_not_triangulate_contributes_nothing() {
     let truth = orbit_with_a_side_pair();
     let (a, b) = (8, 9);
-    let world = a_point_seen_by_0_1_and_2(&truth);
+    let world = a_point_seen_by(&truth, &[0, 1, 2]);
     let target_pixel = pixel_of(&truth, 0, &world);
     let member = |image, uv| (image, uv, ClusterMemberStatus::Kept);
     let clusters = vec![
@@ -1281,6 +1289,110 @@ fn a_cluster_that_does_not_triangulate_contributes_nothing() {
     assert_eq!(r.clusters_failed, 2);
     assert_eq!(r.cluster_correspondences, 0);
     assert!(r.accepted, "the tracks still carry it: {:?}", r.refusal);
+}
+
+/// A cluster at `world` with a kept member at its exact pixel in each of
+/// `images`, the first the reference.
+fn cluster_at(recon: &SfmrReconstruction, world: &Point3<f64>, images: &[usize]) -> Vec<Member> {
+    images
+        .iter()
+        .enumerate()
+        .map(|(k, &image)| {
+            let status = if k == 0 {
+                ClusterMemberStatus::Reference
+            } else {
+                ClusterMemberStatus::Kept
+            };
+            (image, pixel_of(recon, image, world), status)
+        })
+        .collect()
+}
+
+#[test]
+fn a_cluster_whose_members_agree_with_its_position_is_kept() {
+    let truth = orbit();
+    let world = a_point_seen_by(&truth, &[0, 1, 2, 3]);
+    let file = cluster_file(&truth, &[cluster_at(&truth, &world, &[0, 1, 2, 3])]);
+    let r = resect_image(
+        &truth,
+        0,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap()
+    .report;
+    assert_eq!(r.clusters_considered, 1);
+    assert_eq!(r.clusters_inconsistent, 0);
+    assert_eq!(r.cluster_correspondences, 1);
+}
+
+#[test]
+fn a_cluster_with_a_member_off_its_position_contributes_nothing() {
+    let truth = orbit();
+    let world = a_point_seen_by(&truth, &[0, 1, 2, 3]);
+    let mut cluster = cluster_at(&truth, &world, &[0, 1, 2, 3]);
+    // Image 3's member 10 px away from where the point is: the three
+    // non-target rays no longer meet, and no position fits all of them.
+    cluster[3].1[0] += 10.0;
+    let file = cluster_file(&truth, &[cluster]);
+
+    let out = resect_images(
+        &truth,
+        &[0],
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    let r = &out.reports[0];
+    assert_eq!(r.clusters_considered, 1);
+    assert_eq!(
+        (
+            r.clusters_skipped,
+            r.clusters_failed,
+            r.clusters_inconsistent
+        ),
+        (0, 0, 1)
+    );
+    assert_eq!(r.cluster_correspondences, 0);
+    assert_eq!(out.totals.clusters_inconsistent, 1);
+    assert!(r.accepted, "the tracks still carry it: {:?}", r.refusal);
+
+    // A threshold wider than the offset keeps it.
+    let wide = ResectImageOptions {
+        max_cluster_residual_px: 20.0,
+        ..ResectImageOptions::default()
+    };
+    let r = resect_image(&truth, 0, ResectSource::TracksAndClusters(&file), &wide)
+        .unwrap()
+        .report;
+    assert_eq!(r.clusters_inconsistent, 0);
+    assert_eq!(r.cluster_correspondences, 1);
+}
+
+#[test]
+fn a_member_behind_its_camera_or_outside_its_frame_does_not_agree() {
+    let truth = orbit();
+    let world = a_point_seen_by(&truth, &[0]);
+    let uv = pixel_of(&truth, 0, &world);
+    let uv = [f64::from(uv[0]), f64::from(uv[1])];
+    let residual = |p: Point3<f64>, uv: [f64; 2]| member_residual(&truth, 0, uv, [p.x, p.y, p.z]);
+    assert!(residual(world, uv) < 1e-3);
+
+    // The point mirrored through the camera centre: on the line of the
+    // member's ray, but behind the camera.
+    let image = &truth.image_table.images[0];
+    let centre = image.camera_center();
+    assert_eq!(residual(centre - (world - centre), uv), f64::INFINITY);
+
+    // In front of the camera, but where the frame does not reach: past its left
+    // edge.
+    let ray = truth.image_table.cameras[0].pixel_to_ray(-50.0, 240.0);
+    let outside =
+        centre + image.quaternion_wxyz.inverse() * Vector3::new(ray[0], ray[1], ray[2]) * 4.0;
+    assert_eq!(residual(outside, [10.0, 240.0]), f64::INFINITY);
+
+    // A member whose position is not a pixel.
+    assert_eq!(residual(world, [f64::NAN, uv[1]]), f64::INFINITY);
 }
 
 #[test]

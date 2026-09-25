@@ -55,8 +55,8 @@ pub use relative_pose::{
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_images::{
     resect_image_in_place, resect_images, ResectImageError, ResectImageOptions, ResectImageReport,
-    ResectInPlaceError, ResectSource, ResectTotals, ResectedImages, MIN_BEARINGS,
-    MIN_OTHER_POSED_IMAGES,
+    ResectInPlaceError, ResectSource, ResectTotals, ResectedImages,
+    DEFAULT_MAX_CLUSTER_RESIDUAL_PX, MIN_BEARINGS, MIN_OTHER_POSED_IMAGES,
 };
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;

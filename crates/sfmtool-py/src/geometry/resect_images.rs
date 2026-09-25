@@ -18,7 +18,7 @@ use pyo3::types::PyDict;
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::resect_images::{
     resect_images as core_resect_images, ResectImageError, ResectImageOptions, ResectImageReport,
-    ResectSource, ResectTotals,
+    ResectSource, ResectTotals, DEFAULT_MAX_CLUSTER_RESIDUAL_PX,
 };
 use sfmtool_matches_format::MatchesData;
 
@@ -55,6 +55,7 @@ pub(crate) fn report_to_py<'py>(
     d.set_item("clusters_considered", r.clusters_considered)?;
     d.set_item("clusters_skipped", r.clusters_skipped)?;
     d.set_item("clusters_failed", r.clusters_failed)?;
+    d.set_item("clusters_inconsistent", r.clusters_inconsistent)?;
     d.set_item("inlier_fraction", r.inlier_fraction)?;
     d.set_item("accepted", r.accepted)?;
     d.set_item("refused", !r.accepted)?;
@@ -90,6 +91,7 @@ fn totals_to_py<'py>(
     d.set_item("inliers", t.inliers)?;
     d.set_item("track_inliers", t.track_inliers)?;
     d.set_item("cluster_inliers", t.cluster_inliers)?;
+    d.set_item("clusters_inconsistent", t.clusters_inconsistent)?;
     d.set_item("inlier_fraction", t.inlier_fraction)?;
     d.set_item("held_out_points", t.held_out_points)?;
     d.set_item("retriangulated", t.retriangulated)?;
@@ -144,8 +146,11 @@ fn totals_to_py<'py>(
 ///         also used as a track of its own: a cluster with exactly one kept
 ///         member in the target and kept members in at least two non-target
 ///         posed images is triangulated from those non-target members at their
-///         stored poses, and paired with the target member's refined position.
-///         Clusters feed the pose estimate only; they create no points. Works
+///         stored poses, and paired with the target member's refined position
+///         when every one of those members lies within
+///         ``max_cluster_residual_px`` of the triangulated point's reprojection
+///         in its own image. Clusters feed the pose estimate only; they create
+///         no points. Works
 ///         the same on ``sift_files`` and ``embedded_patches``
 ///         reconstructions.
 ///     min_obs: Held-out finite correspondences below which a target takes the
@@ -154,6 +159,12 @@ fn totals_to_py<'py>(
 ///         (default 0.30).
 ///     seed: RANSAC seed; the same inputs and seed give a bit-identical
 ///         answer (default 0).
+///     max_cluster_residual_px: The farthest, in pixels, a cluster's
+///         non-target member may lie from the reprojection of the cluster's
+///         triangulated position into its image; a cluster with a member
+///         farther away, behind its camera or outside its frame gives no pair
+///         (default 1.5). Pass ``float("inf")`` to keep every cluster that
+///         triangulates.
 ///
 /// Returns:
 ///     ``(reconstruction, report)``. The derived ``SfmrReconstruction``
@@ -164,7 +175,8 @@ fn totals_to_py<'py>(
 ///     names were given — plus the set's totals: ``targets``, ``accepted``,
 ///     ``refused``, ``correspondences``, ``track_correspondences``,
 ///     ``cluster_correspondences``, ``inliers``, ``track_inliers``,
-///     ``cluster_inliers``, ``inlier_fraction``, ``held_out_points``,
+///     ``cluster_inliers``, ``clusters_inconsistent`` (summed over the
+///     targets), ``inlier_fraction``, ``held_out_points``,
 ///     ``retriangulated``, ``removed_points`` (each point counted once however
 ///     many targets observe it) and ``scene_scale``. Each per-target dict
 ///     carries ``image_index``, ``image_name``, ``source`` (``"tracks"`` or
@@ -173,7 +185,9 @@ fn totals_to_py<'py>(
 ///     ``inliers`` and its split ``track_inliers`` / ``cluster_inliers``,
 ///     ``clusters_considered`` (clusters with a kept member in the image),
 ///     ``clusters_skipped`` (set aside by the member rules),
-///     ``clusters_failed`` (did not triangulate), ``inlier_fraction``,
+///     ``clusters_failed`` (did not triangulate), ``clusters_inconsistent``
+///     (triangulated, but a member lies farther than
+///     ``max_cluster_residual_px`` from the point), ``inlier_fraction``,
 ///     ``accepted``,
 ///     ``refused``, ``refusal`` (the reason or ``None``), ``rotation_deg`` and
 ///     ``translation`` (the move away from that image's stored pose),
@@ -182,7 +196,8 @@ fn totals_to_py<'py>(
 ///     both ``None`` when it is undefined), and that target's share of
 ///     ``held_out_points``, ``retriangulated`` and ``removed_points``.
 #[pyfunction]
-#[pyo3(signature = (reconstruction, image_names, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0))]
+#[pyo3(signature = (reconstruction, image_names, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0, max_cluster_residual_px=DEFAULT_MAX_CLUSTER_RESIDUAL_PX))]
+#[allow(clippy::too_many_arguments)]
 pub fn resect_images<'py>(
     py: Python<'py>,
     reconstruction: &PySfmrReconstruction,
@@ -191,6 +206,7 @@ pub fn resect_images<'py>(
     min_obs: usize,
     accept_gate: f64,
     seed: u64,
+    max_cluster_residual_px: f64,
 ) -> PyResult<(PySfmrReconstruction, Bound<'py, PyDict>)> {
     let image_indexes: Vec<usize> = image_names
         .iter()
@@ -218,6 +234,7 @@ pub fn resect_images<'py>(
             accept_gate,
             seed,
         },
+        max_cluster_residual_px,
     };
 
     let out = py

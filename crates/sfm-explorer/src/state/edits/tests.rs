@@ -737,7 +737,7 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
     let serials = state.scene[0].history.versions();
     assert!(
         last.ends_with(&format!(
-            "failed to triangulate ({} → {})",
+            "failed to triangulate, 0 inconsistent ({} → {})",
             serials[0].serial, serials[1].serial
         )),
         "{last}"

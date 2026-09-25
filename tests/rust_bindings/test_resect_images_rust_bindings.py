@@ -429,15 +429,20 @@ def _workspace(path) -> dict:
     }
 
 
-def _write_cluster_patches(recon: SfmrReconstruction, path) -> None:
+def _write_cluster_patches(recon: SfmrReconstruction, path, moved=None) -> None:
     """A cluster-patches ``.matches`` file over ``recon`` with one cluster per
     point, its members at the point's observations (the first the reference,
-    the rest kept): clusters that say what the tracks say."""
+    the rest kept): clusters that say what the tracks say.
+
+    ``moved`` optionally maps a member's row in the file to a pixel offset
+    added to its position."""
     images = np.asarray(recon.track_image_indexes)
     points = np.asarray(recon.track_point_indexes)
     keypoints = np.asarray(recon.keypoints_xy, np.float32)
     order = np.argsort(points, kind="stable")
-    images, points, keypoints = images[order], points[order], keypoints[order]
+    images, points, keypoints = images[order], points[order], keypoints[order].copy()
+    for row, offset in (moved or {}).items():
+        keypoints[row] += np.asarray(offset, np.float32)
     n_img, m = len(recon.image_names), len(images)
     starts = np.concatenate([[0], np.flatnonzero(np.diff(points)) + 1, [m]])
     features = np.zeros(m, np.uint32)
@@ -513,6 +518,7 @@ class TestClusters:
         assert both["clusters_considered"] == both["cluster_correspondences"]
         assert both["clusters_skipped"] == 0
         assert both["clusters_failed"] == 0
+        assert both["clusters_inconsistent"] == 0
         fitted_q = np.asarray(derived.quaternions_wxyz, np.float64)[0]
         assert _angle_deg(fitted_q, truth_q) < 0.1
         # Clusters create no points.
@@ -532,9 +538,42 @@ class TestClusters:
             "cluster_correspondences",
             "track_inliers",
             "cluster_inliers",
+            "clusters_inconsistent",
         ):
             assert report[key] == sum(r[key] for r in report["images"]), key
         assert report["cluster_correspondences"] > 0
+
+    def test_a_cluster_its_own_members_disagree_with_gives_no_pair(
+        self, orbit, tmp_path
+    ):
+        """A cluster whose triangulated position misses one of its non-target
+        members by more than ``max_cluster_residual_px`` is counted in
+        ``clusters_inconsistent`` and gives no pair."""
+        images = np.asarray(orbit.track_image_indexes)
+        points = np.asarray(orbit.track_point_indexes)
+        order = np.argsort(points, kind="stable")
+        images, points = images[order], points[order]
+        # The first point image 0 sees along with three other images, and the
+        # file row of its member in one of those others.
+        for p in np.unique(points):
+            rows = np.flatnonzero(points == p)
+            if 0 in images[rows] and len(rows) >= 4:
+                moved_row = int(next(r for r in rows if images[r] != 0))
+                break
+        path = tmp_path / "orbit-cluster-patches.matches"
+        _write_cluster_patches(orbit, path, moved={moved_row: (10.0, 0.0)})
+
+        _, strict = _resect_one(orbit, "frames/000.jpg", cluster_patches_path=path)
+        _, loose = _resect_one(
+            orbit,
+            "frames/000.jpg",
+            cluster_patches_path=path,
+            max_cluster_residual_px=float("inf"),
+        )
+        assert strict["clusters_inconsistent"] == 1
+        assert loose["clusters_inconsistent"] == 0
+        assert strict["cluster_correspondences"] == loose["cluster_correspondences"] - 1
+        assert strict["clusters_considered"] == loose["clusters_considered"]
 
     def test_a_file_without_the_cluster_sections_raises(self, orbit, tmp_path):
         path = tmp_path / "pairs.matches"

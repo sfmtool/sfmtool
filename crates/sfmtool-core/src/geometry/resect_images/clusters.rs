@@ -14,7 +14,12 @@
 //! - it has kept members in at least two *non-target* posed images;
 //! - those non-target members triangulate, at their images' stored poses,
 //!   under the rules the held-out re-triangulation of the tracks uses (at
-//!   least two usable rays, in front of every camera, an observable depth).
+//!   least two usable rays, in front of every camera, an observable depth);
+//! - the triangulated position agrees with every one of those members: it
+//!   reprojects, at the member's image's stored pose, within the caller's
+//!   pixel threshold of the member's refined position. A position behind a
+//!   member's camera, or one that projects outside the member's frame, does
+//!   not agree.
 //!
 //! The pair is the target member's refined position against that triangulated
 //! position. Members in any target image never contribute a ray, so the
@@ -26,6 +31,7 @@
 
 use std::collections::HashMap;
 
+use nalgebra::Vector3;
 use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 
 use crate::reconstruction::SfmrReconstruction;
@@ -51,6 +57,9 @@ pub(super) struct TargetClusters {
     pub(super) skipped: usize,
     /// Of those, the ones whose non-target members did not triangulate.
     pub(super) failed: usize,
+    /// Of those, the ones whose triangulated position lies farther than the
+    /// threshold from one of its own non-target members.
+    pub(super) inconsistent: usize,
 }
 
 /// The clusters that reached at least one target's estimate.
@@ -78,12 +87,16 @@ fn is_kept(status: u8) -> bool {
 ///
 /// `is_target` and `posed_others` are per reconstruction image. Each cluster is
 /// triangulated at most once, however many targets it reaches.
+/// `max_residual_px` is the self-consistency threshold: a triangulated cluster
+/// with a non-target member farther than this from its reprojection gives no
+/// pair.
 pub(super) fn cluster_support(
     recon: &SfmrReconstruction,
     targets: &[usize],
     is_target: &[bool],
     posed_others: &[bool],
     matches: &MatchesData,
+    max_residual_px: f64,
 ) -> Result<ClusterSupport, ResectImageError> {
     let clusters = matches.clusters.as_ref().ok_or_else(|| {
         ResectImageError::Clusters("the .matches file has no clusters section".to_string())
@@ -186,6 +199,12 @@ pub(super) fn cluster_support(
             }
             continue;
         };
+        if worst_residual(recon, &others, world) > max_residual_px {
+            for (t, _) in answers {
+                targets_out.get_mut(&t).expect("a target").inconsistent += 1;
+            }
+            continue;
+        }
         let id = id_base + members.len();
         members.push(others);
         for (t, uv) in answers {
@@ -201,6 +220,48 @@ pub(super) fn cluster_support(
         members,
         targets: targets_out,
     })
+}
+
+/// The largest distance, in pixels, between a member of `sightings` and where
+/// `world` projects in that member's image ([`member_residual`]).
+fn worst_residual(recon: &SfmrReconstruction, sightings: &Sightings, world: [f64; 3]) -> f64 {
+    sightings
+        .iter()
+        .map(|&(image, uv)| member_residual(recon, image, uv, world))
+        .fold(0.0, f64::max)
+}
+
+/// How far, in pixels, `world` projects from `uv` in image `image` at its
+/// stored pose.
+///
+/// Infinite when the point is behind the camera, when its projection falls
+/// outside the frame, or when `uv` is not a finite pixel. "Behind" is judged
+/// along the ray through `uv`, as the triangulation judges "in front", so a
+/// fisheye wider than 180° keeps the points it can see beside its image plane.
+pub(super) fn member_residual(
+    recon: &SfmrReconstruction,
+    image: usize,
+    uv: [f64; 2],
+    world: [f64; 3],
+) -> f64 {
+    let stored = &recon.image_table.images[image];
+    let camera = &recon.image_table.cameras[stored.camera_index as usize];
+    let local = stored.quaternion_wxyz * Vector3::new(world[0], world[1], world[2])
+        + stored.translation_xyz;
+    let ray = camera.pixel_to_ray(uv[0], uv[1]);
+    let along = local.dot(&Vector3::new(ray[0], ray[1], ray[2]));
+    if along.is_nan() || along <= 0.0 {
+        return f64::INFINITY;
+    }
+    match camera.ray_to_pixel([local.x, local.y, local.z]) {
+        Some((u, v))
+            if (0.0..=f64::from(camera.width)).contains(&u)
+                && (0.0..=f64::from(camera.height)).contains(&v) =>
+        {
+            (u - uv[0]).hypot(v - uv[1])
+        }
+        _ => f64::INFINITY,
+    }
 }
 
 /// One spelling of an image path: forward slashes, so a `.matches` file written

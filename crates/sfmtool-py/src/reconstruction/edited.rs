@@ -22,6 +22,7 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::{
     resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError,
+    DEFAULT_MAX_CLUSTER_RESIDUAL_PX,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::{
@@ -505,13 +506,16 @@ impl PyEditedReconstruction {
     ///         (default 0.30).
     ///     seed: RANSAC seed; the same inputs and seed give a bit-identical
     ///         answer (default 0).
+    ///     max_cluster_residual_px: The clusters' self-consistency threshold in
+    ///         pixels (default 1.5; see ``geometry.resect_images``).
     ///
     /// Returns:
     ///     ``(EditedReconstruction, report)``, the report being the one target's
     ///     dict of ``geometry.resect_images``. Raises ``ValueError`` with the
     ///     reason when the estimate is refused or the call cannot be attempted,
     ///     and ``OSError`` when the observations cannot be read.
-    #[pyo3(signature = (image, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0))]
+    #[pyo3(signature = (image, *, cluster_patches_path=None, min_obs=8, accept_gate=0.30, seed=0, max_cluster_residual_px=DEFAULT_MAX_CLUSTER_RESIDUAL_PX))]
+    #[allow(clippy::too_many_arguments)]
     fn resect_image_in_place(
         &self,
         py: Python<'_>,
@@ -520,6 +524,7 @@ impl PyEditedReconstruction {
         min_obs: usize,
         accept_gate: f64,
         seed: u64,
+        max_cluster_residual_px: f64,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
         let clusters = crate::geometry::resect_images::read_cluster_patches(
             py,
@@ -531,6 +536,7 @@ impl PyEditedReconstruction {
                 accept_gate,
                 seed,
             },
+            max_cluster_residual_px,
         };
         let value = materialised(&self.inner);
         let (next, report) = py
