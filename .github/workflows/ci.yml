@@ -471,6 +471,10 @@ jobs:
       - name: Rust tests
         run: pixi run -e test-ci cargo test --workspace
 
+      - name: Check DirectManipulation examples
+        if: runner.os == 'Windows'
+        run: pixi run -e test-ci cargo check -p sfm-explorer --features directmanipulation --examples
+
       - name: Save Rust target
         # Main only, and only a new generation (the cache-hit guard): a PR's
         # entry is scoped to its merge ref, where nothing else can restore it.

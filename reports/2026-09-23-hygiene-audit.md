@@ -60,6 +60,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low. Risk: medium, due to the public tool name.
 
 **Build the DirectManipulation examples in CI**
+> _Status (2026-09-24): Done — the Windows Rust CI job checks all three examples with the `directmanipulation` feature._
 - Location: three `crates/sfm-explorer/examples/*directmanipulation.rs` programs, selected only by the nondefault `directmanipulation` feature in `crates/sfm-explorer/Cargo.toml:20–33`.
 - Problem: Their 1,088-line September baseline has not acquired a CI build path, and the two winit variants still share 98 normalized long code lines. The viewport spec still cites them.
 - Proposed fix: Add a Windows `cargo check -p sfm-explorer --features directmanipulation --examples` job step, then decide whether the variants should remain separate reference programs.

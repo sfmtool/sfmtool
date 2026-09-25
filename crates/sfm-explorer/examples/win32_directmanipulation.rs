@@ -28,7 +28,7 @@ mod platform {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
 
-    use windows::core::implement;
+    use windows::core::{implement, Ref};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::Graphics::DirectManipulation::{
         DirectManipulationManager, IDirectManipulationContent, IDirectManipulationManager,
@@ -71,7 +71,7 @@ mod platform {
     impl IDirectManipulationViewportEventHandler_Impl for GestureHandler_Impl {
         fn OnViewportStatusChanged(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
             current: DIRECTMANIPULATION_STATUS,
             previous: DIRECTMANIPULATION_STATUS,
         ) -> windows::core::Result<()> {
@@ -99,18 +99,18 @@ mod platform {
 
         fn OnViewportUpdated(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
         ) -> windows::core::Result<()> {
             Ok(())
         }
 
         fn OnContentUpdated(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
-            content: Option<&IDirectManipulationContent>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
+            content: Ref<'_, IDirectManipulationContent>,
         ) -> windows::core::Result<()> {
             let count = CONTENT_UPDATE_COUNT.fetch_add(1, Ordering::Relaxed);
-            let Some(content) = content else {
+            let Some(content) = content.as_ref() else {
                 return Ok(());
             };
 
@@ -216,7 +216,7 @@ mod platform {
                 600,
                 None,
                 None,
-                instance,
+                Some(instance.into()),
                 None,
             )?;
 
@@ -236,7 +236,7 @@ mod platform {
             viewport.SetViewportOptions(DIRECTMANIPULATION_VIEWPORT_OPTIONS(2))?; // MANUALUPDATE
 
             let handler: IDirectManipulationViewportEventHandler = GestureHandler.into();
-            viewport.AddEventHandler(hwnd, &handler)?;
+            viewport.AddEventHandler(Some(hwnd), &handler)?;
 
             let rect = RECT {
                 left: 0,
@@ -257,7 +257,7 @@ mod platform {
             })));
 
             // Timer drives update_manager.Update() at ~60fps
-            SetTimer(hwnd, 1, 16, None);
+            SetTimer(Some(hwnd), 1, 16, None);
 
             println!("Setup complete. Listening for gestures...");
             println!();

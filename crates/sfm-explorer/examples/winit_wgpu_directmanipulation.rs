@@ -35,7 +35,7 @@ mod platform {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use winit::window::{Window, WindowAttributes, WindowId};
 
-    use windows::core::implement;
+    use windows::core::{implement, Ref};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::Graphics::DirectManipulation::{
         DirectManipulationManager, IDirectManipulationContent, IDirectManipulationManager,
@@ -78,7 +78,7 @@ mod platform {
     impl IDirectManipulationViewportEventHandler_Impl for GestureHandler_Impl {
         fn OnViewportStatusChanged(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
             current: DIRECTMANIPULATION_STATUS,
             previous: DIRECTMANIPULATION_STATUS,
         ) -> windows::core::Result<()> {
@@ -104,18 +104,18 @@ mod platform {
 
         fn OnViewportUpdated(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
         ) -> windows::core::Result<()> {
             Ok(())
         }
 
         fn OnContentUpdated(
             &self,
-            _viewport: Option<&IDirectManipulationViewport>,
-            content: Option<&IDirectManipulationContent>,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
+            content: Ref<'_, IDirectManipulationContent>,
         ) -> windows::core::Result<()> {
             let count = CONTENT_UPDATE_COUNT.fetch_add(1, Ordering::Relaxed);
-            let Some(content) = content else {
+            let Some(content) = content.as_ref() else {
                 return Ok(());
             };
             let mut transform = [0.0f32; 6];
@@ -206,9 +206,9 @@ mod platform {
 
             // --- wgpu initialization ---
             println!("[wgpu] Creating instance...");
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::DX12,
-                ..Default::default()
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
 
             println!("[wgpu] Creating surface...");
@@ -267,7 +267,7 @@ mod platform {
 
                     let handler: IDirectManipulationViewportEventHandler = GestureHandler.into();
                     viewport
-                        .AddEventHandler(hwnd, &handler)
+                        .AddEventHandler(Some(hwnd), &handler)
                         .expect("AddEventHandler");
 
                     let rect = RECT {
