@@ -48,12 +48,15 @@ pub(crate) fn report_to_py<'py>(
     d.set_item("rotation_only", r.rotation_only)?;
     d.set_item("correspondences", r.correspondences)?;
     d.set_item("track_correspondences", r.track_correspondences)?;
+    d.set_item("bearing_correspondences", r.bearing_correspondences)?;
     d.set_item("cluster_correspondences", r.cluster_correspondences)?;
     d.set_item("inliers", r.inliers)?;
     d.set_item("track_inliers", r.track_inliers)?;
+    d.set_item("bearing_inliers", r.bearing_inliers)?;
     d.set_item("cluster_inliers", r.cluster_inliers)?;
     d.set_item("clusters_considered", r.clusters_considered)?;
     d.set_item("clusters_skipped", r.clusters_skipped)?;
+    d.set_item("clusters_untracked", r.clusters_untracked)?;
     d.set_item("clusters_failed", r.clusters_failed)?;
     d.set_item("clusters_inconsistent", r.clusters_inconsistent)?;
     d.set_item("inlier_fraction", r.inlier_fraction)?;
@@ -87,10 +90,13 @@ fn totals_to_py<'py>(
     d.set_item("refused", t.refused)?;
     d.set_item("correspondences", t.correspondences)?;
     d.set_item("track_correspondences", t.track_correspondences)?;
+    d.set_item("bearing_correspondences", t.bearing_correspondences)?;
     d.set_item("cluster_correspondences", t.cluster_correspondences)?;
     d.set_item("inliers", t.inliers)?;
     d.set_item("track_inliers", t.track_inliers)?;
+    d.set_item("bearing_inliers", t.bearing_inliers)?;
     d.set_item("cluster_inliers", t.cluster_inliers)?;
+    d.set_item("clusters_untracked", t.clusters_untracked)?;
     d.set_item("clusters_inconsistent", t.clusters_inconsistent)?;
     d.set_item("inlier_fraction", t.inlier_fraction)?;
     d.set_item("held_out_points", t.held_out_points)?;
@@ -114,16 +120,18 @@ fn totals_to_py<'py>(
 /// re-triangulated from neither, so holding a set out together questions the
 /// group rather than its members one at a time.
 ///
-/// A target's finite correspondences are its tracks' pairs (its observations
-/// of points with a held-out position) and, when ``cluster_patches_path`` is
-/// given, its clusters' pairs beside them. A target with at least ``min_obs``
-/// of them takes the finite path: RANSAC P3P polished by trimmed pose-only
-/// refinement through the image's own camera model, scored by the
-/// all-observation inlier fraction at the 3 px bound, run as one batch over
-/// every target sharing a camera. A target below that floor takes the
-/// rotation-only path — its rotation is fit in closed form to the held-out
-/// bearings its tracks observe (trimmed and iterated) and its translation is
-/// left at its stored value.
+/// A target's track pairs are its observations of points with a held-out
+/// position and, as bearings, of points at infinity with a held-out direction.
+/// When ``cluster_patches_path`` is given, its cluster pairs stand beside them.
+/// A target with at least ``min_obs`` finite pairs (tracks and clusters) takes
+/// the finite path: RANSAC P3P through the image's own camera model, whose
+/// minimal samples are the finite track pairs when there are at least three
+/// (the tracks lead and the clusters only support) and every finite pair
+/// otherwise, scored over every pair at the 3 px bound, then a trimmed
+/// refinement. A bearing's residual is its angle times the camera's focal
+/// length, so it constrains the rotation only. A target below that floor takes
+/// the rotation-only path: its rotation is fit in closed form to the bearings
+/// (trimmed and iterated) and its translation is left at its stored value.
 ///
 /// The input reconstruction is never modified; the answer is a new one. A
 /// target whose estimate misses ``accept_gate``, or that has no support on
@@ -142,17 +150,17 @@ fn totals_to_py<'py>(
 ///         ``ValueError`` when a name is not one of its images.
 ///     cluster_patches_path: Optional cluster-patches ``.matches`` file (one
 ///         with both the clusters and the cluster-patches sections). Without
-///         it the 2D-3D pairs are the tracks' alone. With it each cluster is
-///         also used as a track of its own: a cluster with exactly one kept
-///         member in the target and kept members in at least two non-target
-///         posed images is triangulated from those non-target members at their
-///         stored poses, and paired with the target member's refined position
-///         when every one of those members lies within
-///         ``max_cluster_residual_px`` of the triangulated point's reprojection
-///         in its own image. Clusters feed the pose estimate only; they create
-///         no points. Works
-///         the same on ``sift_files`` and ``embedded_patches``
-///         reconstructions.
+///         it the pairs are the tracks' alone. With it each cluster is also
+///         used as a track of its own: a cluster with exactly one kept member
+///         in the target and kept members in at least two non-target posed
+///         images that have tracks is triangulated from those members at
+///         their stored poses, and paired with the target member's refined
+///         position when every one of those members lies within
+///         ``max_cluster_residual_px`` of the triangulated point's
+///         reprojection in its own image. A member in an image with no track
+///         observation does not count. Clusters feed the pose estimate only;
+///         they create no points. Works the same on ``sift_files`` and
+///         ``embedded_patches`` reconstructions.
 ///     min_obs: Held-out finite correspondences below which a target takes the
 ///         rotation-only path (default 8).
 ///     accept_gate: Accept an estimate at or above this inlier fraction
@@ -171,24 +179,28 @@ fn totals_to_py<'py>(
 ///     differs from the source only in the accepted targets' poses and in the
 ///     points the set observes, and records the operation, the targets, the
 ///     correspondence source and the inlier fractions in its metadata. The
-///     report dict carries ``images`` — one per-target dict, in the order the
-///     names were given — plus the set's totals: ``targets``, ``accepted``,
+///     report dict carries ``images`` (one per-target dict, in the order the
+///     names were given) plus the set's totals: ``targets``, ``accepted``,
 ///     ``refused``, ``correspondences``, ``track_correspondences``,
-///     ``cluster_correspondences``, ``inliers``, ``track_inliers``,
-///     ``cluster_inliers``, ``clusters_inconsistent`` (summed over the
+///     ``bearing_correspondences``, ``cluster_correspondences``, ``inliers``,
+///     ``track_inliers``, ``bearing_inliers``, ``cluster_inliers``,
+///     ``clusters_untracked``, ``clusters_inconsistent`` (summed over the
 ///     targets), ``inlier_fraction``, ``held_out_points``,
 ///     ``retriangulated``, ``removed_points`` (each point counted once however
 ///     many targets observe it) and ``scene_scale``. Each per-target dict
 ///     carries ``image_index``, ``image_name``, ``source`` (``"tracks"`` or
 ///     ``"tracks_and_clusters"``), ``rotation_only``, ``correspondences`` and
-///     its split ``track_correspondences`` / ``cluster_correspondences``,
-///     ``inliers`` and its split ``track_inliers`` / ``cluster_inliers``,
+///     its split ``track_correspondences`` / ``cluster_correspondences``, with
+///     ``bearing_correspondences`` the track pairs at infinity, ``inliers``
+///     and its split ``track_inliers`` / ``cluster_inliers``, with
+///     ``bearing_inliers`` the track inliers at infinity,
 ///     ``clusters_considered`` (clusters with a kept member in the image),
 ///     ``clusters_skipped`` (set aside by the member rules),
-///     ``clusters_failed`` (did not triangulate), ``clusters_inconsistent``
-///     (triangulated, but a member lies farther than
-///     ``max_cluster_residual_px`` from the point), ``inlier_fraction``,
-///     ``accepted``,
+///     ``clusters_untracked`` (kept members in two or more non-target posed
+///     images, but in fewer than two with tracks), ``clusters_failed`` (did
+///     not triangulate), ``clusters_inconsistent`` (triangulated, but a member
+///     lies farther than ``max_cluster_residual_px`` from the point),
+///     ``inlier_fraction``, ``accepted``,
 ///     ``refused``, ``refusal`` (the reason or ``None``), ``rotation_deg`` and
 ///     ``translation`` (the move away from that image's stored pose),
 ///     ``translation_scene`` and ``scene_scale`` (the translation in units of

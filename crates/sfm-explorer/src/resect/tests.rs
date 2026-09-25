@@ -236,13 +236,13 @@ fn with_a_current_file_the_log_line_splits_the_correspondences_by_source() {
     assert!(!last.failed, "{}", last.text);
     assert!(
         last.text
-            .starts_with("Resected image_001.jpg (run_a): 240 pts (120 tracks, 120 clusters), "),
+            .starts_with("Resected image_001.jpg (run_a): 240 pts (120 finite tracks, 0 tracks at infinity, 120 clusters), "),
         "{}",
         last.text
     );
     assert!(
         last.text.contains(
-            "; clusters 120 considered, 0 skipped, 0 failed to triangulate, 0 inconsistent"
+            "; clusters 120 considered, 0 skipped, 0 untracked, 0 failed to triangulate, 0 inconsistent"
         ),
         "{}",
         last.text

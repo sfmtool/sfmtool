@@ -23,23 +23,28 @@
 //! Two correspondence sources (see [`ResectSource`]): the reconstruction's
 //! tracks alone, or the tracks together with the clusters of a cluster-patches
 //! `.matches` file, each cluster used as a track of its own. The two sets go to
-//! the estimate side by side and are never joined to each other.
+//! the estimate side by side and are never joined to each other. The tracks
+//! lead: when a target has at least three finite track pairs, the pose
+//! hypotheses are drawn from the tracks alone and the clusters only support
+//! them.
 //!
-//! Deterministic: the finite path is [`resect_images_batch`] at the caller's
-//! seed (which seeds each image as a pure function of `(seed, image index)`),
-//! the rotation-only path is a closed-form fit with a fixed trimming schedule,
-//! and every gather below walks the reconstruction in storage order.
+//! Deterministic: the finite path seeds each target's RANSAC as a pure function
+//! of `(seed, image index)`, the rotation-only path is a closed-form fit with a
+//! fixed trimming schedule, and every gather below walks the reconstruction in
+//! storage order.
 
 use std::collections::{HashMap, HashSet};
 
-use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
+use rayon::prelude::*;
 
 use sfmtool_matches_format::MatchesData;
 
 use crate::camera::report::angle_between;
 use crate::camera::CameraIntrinsics;
-use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
+use crate::geometry::batch_resection::ResectOptions;
 use crate::geometry::focal_vote::column_scan::kabsch;
+use crate::geometry::reconstruction_growth::per_image_seed;
 use crate::geometry::rotation::orthonormalized;
 use crate::numeric::median_in_place;
 use crate::reconstruction::triangulation::triangulate_batch;
@@ -47,7 +52,10 @@ use crate::reconstruction::{
     ObservationSource, ReconstructionError, SfmrImage, SfmrReconstruction,
 };
 
+use finite::{Pair, Source, World};
+
 mod clusters;
+mod finite;
 
 #[cfg(test)]
 mod tests;
@@ -76,16 +84,10 @@ const ROTATION_TRIM_ROUNDS: usize = 5;
 /// Fraction of the bearings the rotation-only fit keeps per trimming round.
 const ROTATION_KEEP_FRACTION: f64 = 0.6;
 
-/// Inlier bound on a reprojection, in pixels — the batch-registration
-/// primitive's own (`reconstruction_growth::INLIER_PX`), so the reported inlier
+/// Inlier bound on a pair's residual, in pixels: the batch-registration
+/// primitive's own (`reconstruction_growth::INLIER_PX`). The reported inlier
 /// count and the fraction the gate is applied to are the same measurement.
 const INLIER_PX: f64 = 3.0;
-
-/// One 2D–3D pair the estimate is fit to: the id of what it stands for (a
-/// point index for a track, an id past the point indexes for a cluster), the
-/// pixel the target observed it at, and the world position it is scored
-/// against.
-type Correspondence = (usize, [f64; 2], [f64; 3]);
 
 /// One bearing correspondence of the rotation-only path: the point's held-out
 /// world direction, and the unit ray the target sees it along.
@@ -95,15 +97,15 @@ type BearingPair = (Vector3<f64>, Vector3<f64>);
 #[derive(Clone, Copy)]
 pub enum ResectSource<'a> {
     /// The reconstruction's tracks: each target's own observations, joined to
-    /// the held-out positions of the points the set observes.
+    /// the held-out positions and bearings of the points the set observes.
     Tracks,
     /// The tracks, and beside them the clusters of a parsed cluster-patches
     /// `.matches` file, each cluster used as a track of its own: placed by
-    /// triangulating its kept members in the non-target posed images, and
-    /// paired with its kept member's refined position in the target. The file
-    /// must carry the clusters section, the cluster-patches section and the
-    /// member positions. Clusters feed the pose estimate only: they create no
-    /// points and are not re-triangulated.
+    /// triangulating its kept members in the non-target posed images that
+    /// have tracks, and paired with its kept member's refined position in the
+    /// target. The file must carry the clusters section, the cluster-patches
+    /// section and the member positions. Clusters feed the pose estimate only:
+    /// they create no points and are not re-triangulated.
     TracksAndClusters(&'a MatchesData),
 }
 
@@ -120,11 +122,12 @@ impl ResectSource<'_> {
 /// Settings of [`resect_images`].
 #[derive(Clone, Debug)]
 pub struct ResectImageOptions {
-    /// The batch-registration primitive's own options: the observation floor
-    /// below which the finite path is unavailable, the acceptance gate on the
-    /// all-observation inlier fraction, and the RANSAC seed.
+    /// The batch-registration primitive's options, read here as: the floor of
+    /// finite pairs below which the finite path is unavailable, the
+    /// acceptance gate on the inlier fraction over all pairs, and the RANSAC
+    /// seed.
     pub resect: ResectOptions,
-    /// The largest distance, in pixels, a cluster's non-target member may lie
+    /// The largest distance, in pixels, a cluster's counted member may lie
     /// from the reprojection of the cluster's triangulated position into that
     /// member's image. A cluster with any member farther away gives no pair.
     /// Only read under [`ResectSource::TracksAndClusters`].
@@ -162,21 +165,25 @@ pub struct ResectImageReport {
     /// Whether the rotation-only path ran (the finite support was below
     /// `ResectOptions::min_obs`, or the reconstruction is rotation-only).
     pub rotation_only: bool,
-    /// 2D–3D pairs the estimate saw: `track_correspondences +
+    /// Pairs the estimate saw: `track_correspondences +
     /// cluster_correspondences`.
     pub correspondences: usize,
-    /// Of those, the pairs from the tracks (on the rotation-only path, the
-    /// bearings).
+    /// Of those, the pairs from the tracks, finite and at infinity.
     pub track_correspondences: usize,
+    /// Of the track pairs, the bearings: tracks whose point is at infinity.
+    /// On the rotation-only path every track pair is one.
+    pub bearing_correspondences: usize,
     /// Of those, the pairs from the clusters. Zero on the rotation-only path,
     /// which reads the tracks' bearings only.
     pub cluster_correspondences: usize,
-    /// How many of them the resected pose puts within the batch-registration
-    /// primitive's 3 px inlier bound (`INLIER_PX`); the rotation-only path
-    /// counts bearings within that bound's angular equivalent on this camera.
+    /// How many of them the resected pose puts within the 3 px inlier bound
+    /// (`INLIER_PX`). A bearing's residual is its angle times the camera's
+    /// focal length.
     pub inliers: usize,
-    /// Of the inliers, the ones from the tracks.
+    /// Of the inliers, the ones from the tracks, finite and at infinity.
     pub track_inliers: usize,
+    /// Of the track inliers, the bearings.
+    pub bearing_inliers: usize,
     /// Of the inliers, the ones from the clusters.
     pub cluster_inliers: usize,
     /// Clusters with at least one kept member in this image. Zero when the
@@ -186,12 +193,18 @@ pub struct ResectImageReport {
     /// member in this image, or kept members in fewer than two non-target
     /// posed images.
     pub clusters_skipped: usize,
-    /// Of those, the ones whose non-target members did not triangulate.
+    /// Of those, the ones with kept members in two or more non-target posed
+    /// images, but in fewer than two images that have tracks. A member in an
+    /// image with no track observation does not count.
+    pub clusters_untracked: usize,
+    /// Of those, the ones whose members in tracked images did not
+    /// triangulate.
     pub clusters_failed: usize,
     /// Of those, the ones whose triangulated position lies farther than
-    /// [`ResectImageOptions::max_cluster_residual_px`] from one of its own
-    /// non-target members. The rest, `clusters_considered - clusters_skipped -
-    /// clusters_failed - clusters_inconsistent`, each gave this image one pair.
+    /// [`ResectImageOptions::max_cluster_residual_px`] from one of the members
+    /// it was triangulated from. The rest, `clusters_considered -
+    /// clusters_skipped - clusters_untracked - clusters_failed -
+    /// clusters_inconsistent`, each gave this image one pair.
     pub clusters_inconsistent: usize,
     /// `inliers / correspondences` — the fraction the acceptance gate was
     /// applied to.
@@ -241,14 +254,20 @@ pub struct ResectTotals {
     pub correspondences: usize,
     /// Track pairs summed over the targets' estimates.
     pub track_correspondences: usize,
+    /// Bearings summed over the targets' estimates.
+    pub bearing_correspondences: usize,
     /// Cluster pairs summed over the targets' estimates.
     pub cluster_correspondences: usize,
     /// Inliers summed over the targets' estimates.
     pub inliers: usize,
     /// Track inliers summed over the targets' estimates.
     pub track_inliers: usize,
+    /// Bearing inliers summed over the targets' estimates.
+    pub bearing_inliers: usize,
     /// Cluster inliers summed over the targets' estimates.
     pub cluster_inliers: usize,
+    /// [`ResectImageReport::clusters_untracked`] summed over the targets.
+    pub clusters_untracked: usize,
     /// [`ResectImageReport::clusters_inconsistent`] summed over the targets.
     pub clusters_inconsistent: usize,
     /// `inliers / correspondences` over the whole set; `0.0` when the set saw
@@ -361,19 +380,20 @@ impl From<ReconstructionError> for ResectImageError {
 ///    held-out position and is excluded from the estimates. A point at infinity
 ///    is a direction, which one rotation already fixes, so its held-out bearing
 ///    is the mean of the non-target observations' world rays.
-/// 2. **Pose estimates.** A target's finite correspondences are its tracks'
-///    pairs (its observations of points with a held-out position) and, under
-///    [`ResectSource::TracksAndClusters`], its clusters' pairs beside them (see
-///    the `clusters` submodule). A target with at least `ResectOptions::min_obs`
-///    of them takes the finite path:
-///    [`resect_images_batch`] resects every such target of a shared camera
-///    together, against the held-out structure. A target below that floor takes
-///    the rotation-only path — its rotation is fit in closed form to the
-///    bearings its tracks observe (trimmed, iterated) and its translation is
-///    left at its stored value. Each estimate is accepted or refused on
-///    `ResectOptions::accept_gate`, independently of the others; a refusal
-///    keeps that image's stored pose and reports itself rather than failing the
-///    call.
+/// 2. **Pose estimates.** A target's track pairs are its observations of
+///    points with a held-out position or a held-out bearing. Under
+///    [`ResectSource::TracksAndClusters`] its cluster pairs stand beside them
+///    (see the `clusters` submodule). A target with at least
+///    `ResectOptions::min_obs` finite pairs (tracks and clusters) takes the
+///    finite path (the `finite` submodule): RANSAC P3P whose minimal samples
+///    are the finite track pairs when there are at least three, and every
+///    finite pair otherwise, scored over all pairs including the bearings, then
+///    a trimmed refinement. A target below that floor takes the rotation-only
+///    path: its rotation is fit in closed form to the bearings (trimmed,
+///    iterated) and its translation is left at its stored value. Each estimate
+///    is accepted or refused on `ResectOptions::accept_gate`, independently of
+///    the others; a refusal keeps that image's stored pose and reports itself
+///    rather than failing the call.
 /// 3. **Re-triangulation.** With the accepted targets at their resected poses,
 ///    the finite points they observe are re-triangulated from *all* their
 ///    observations. A point that fails keeps its held-out position when it has
@@ -417,13 +437,16 @@ pub fn resect_images(
     let posed_others: Vec<bool> = (0..count).map(|i| posed[i] && !is_target[i]).collect();
 
     // ── The targets' own observations, and the points behind them ──────────
-    // `tracks` is sorted by point then image, so each target's rows are already
-    // ascending in point index — which is what the batch primitive's cluster
-    // ordering wants.
+    // `tracks` is sorted by point then image, so each target's rows are
+    // ascending in point index.
     let mut target_rows: HashMap<usize, Vec<usize>> =
         image_indexes.iter().map(|&t| (t, Vec::new())).collect();
+    // Which images have at least one track observation: the clusters count
+    // members in these images only.
+    let mut tracked = vec![false; count];
     for (row, obs) in recon.point_set.tracks.iter().enumerate() {
         let image = obs.image_index as usize;
+        tracked[image] = true;
         if is_target[image] {
             target_rows.get_mut(&image).expect("target row").push(row);
         }
@@ -482,22 +505,27 @@ pub fn resect_images(
 
     // ── Step 2: the pose estimates ─────────────────────────────────────────
     // The tracks' pairs: each target's observations of the points that have a
-    // held-out position, in point order.
-    let mut pairs_of: HashMap<usize, Vec<Correspondence>> = HashMap::new();
+    // held-out position or a held-out bearing, in point order.
+    let mut pairs_of: HashMap<usize, Vec<Pair>> = HashMap::new();
     for &t in image_indexes {
+        let camera = &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
         let rows = &target_rows[&t];
         let points = &observed[&t];
         let mut out = Vec::with_capacity(rows.len());
         for (k, &row) in rows.iter().enumerate() {
             let p = points[k];
-            if let Some(&world) = held_out.get(&p) {
-                out.push((p, pixel_of[&row], world));
-            }
+            let world = if let Some(&x) = held_out.get(&p) {
+                (Source::Track, World::Point(x))
+            } else if let Some(&d) = bearing_of.get(&p) {
+                (Source::Bearing, World::Direction(d))
+            } else {
+                continue;
+            };
+            out.extend(Pair::new(world.0, pixel_of[&row], world.1, camera));
         }
         pairs_of.insert(t, out);
     }
-    // The clusters' pairs, appended beside them. Their ids start past the
-    // point indexes, so each target's pairs stay in ascending id order.
+    // The clusters' pairs, appended beside them.
     let cluster_support = match source {
         ResectSource::Tracks => None,
         ResectSource::TracksAndClusters(matches) => Some(clusters::cluster_support(
@@ -505,70 +533,51 @@ pub fn resect_images(
             image_indexes,
             &is_target,
             &posed_others,
+            &tracked,
             matches,
             options.max_cluster_residual_px,
         )?),
     };
     if let Some(support) = &cluster_support {
         for &t in image_indexes {
+            let camera =
+                &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
             let pairs = pairs_of.get_mut(&t).expect("every target has pairs");
-            pairs.extend(support.targets[&t].pairs.iter().copied());
+            pairs.extend(
+                support[&t]
+                    .pairs
+                    .iter()
+                    .filter_map(|&(uv, x)| Pair::new(Source::Cluster, uv, World::Point(x), camera)),
+            );
         }
     }
 
-    let bearings_of: HashMap<usize, Vec<BearingPair>> = image_indexes
-        .iter()
+    // Each target is estimated on its own, seeded from its own index, so the
+    // order they run in changes no answer.
+    let estimates: HashMap<usize, Estimate> = image_indexes
+        .par_iter()
         .map(|&t| {
             let camera =
                 &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
-            (
-                t,
-                gather_bearings(
-                    &target_rows[&t],
-                    &observed[&t],
-                    &pixel_of,
-                    &bearing_of,
-                    camera,
-                ),
-            )
+            let pairs = &pairs_of[&t];
+            let finite = pairs.iter().filter(|p| p.source != Source::Bearing).count();
+            let bearings: Vec<BearingPair> = pairs
+                .iter()
+                .filter_map(|p| match p.world {
+                    World::Direction(d) => Some((d, p.ray)),
+                    World::Point(_) => None,
+                })
+                .collect();
+            let estimate = if finite >= options.resect.min_obs {
+                finite_estimate(recon, t, pairs, camera, options)
+            } else if bearings.len() >= MIN_BEARINGS {
+                rotation_estimate(recon, t, &bearings, camera, options)
+            } else {
+                Estimate::no_support(recon, t, Counts::of(pairs, |_| true))
+            };
+            (t, estimate)
         })
         .collect();
-
-    // The finite path runs as one batch per camera model, so every target that
-    // shares a camera is resected against the held-out structure together.
-    let finite_targets: Vec<usize> = image_indexes
-        .iter()
-        .copied()
-        .filter(|t| pairs_of[t].len() >= options.resect.min_obs)
-        .collect();
-    let mut estimates = finite_estimates(
-        recon,
-        &finite_targets,
-        &pairs_of,
-        cluster_support.as_ref(),
-        &posed_others,
-        &gathered,
-        &pixel_of,
-        options,
-    );
-    for &t in image_indexes {
-        if estimates.contains_key(&t) {
-            continue;
-        }
-        let bearings = &bearings_of[&t];
-        let camera = &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
-        let estimate = if bearings.len() >= MIN_BEARINGS {
-            rotation_estimate(recon, t, bearings, camera, options)
-        } else {
-            let pairs = &pairs_of[&t];
-            let tracks = pairs
-                .iter()
-                .filter(|p| p.0 < recon.point_set.points.len())
-                .count();
-            Estimate::no_support(recon, t, tracks, pairs.len() - tracks, bearings.len())
-        };
-        estimates.insert(t, estimate);
-    }
 
     // ── Step 3: re-triangulation at the resected poses ─────────────────────
     let mut replacement: Vec<Option<Pose>> = vec![None; count];
@@ -649,21 +658,24 @@ pub fn resect_images(
             let mine = &observed[&t];
             let from_clusters = cluster_support
                 .as_ref()
-                .map(|support| support.targets[&t].clone())
+                .map(|support| support[&t].clone())
                 .unwrap_or_default();
             ResectImageReport {
                 image_index: t,
                 image_name: stored.name.clone(),
                 source: source.name(),
                 rotation_only: estimate.rotation_only,
-                correspondences: estimate.track_correspondences + estimate.cluster_correspondences,
-                track_correspondences: estimate.track_correspondences,
-                cluster_correspondences: estimate.cluster_correspondences,
-                inliers: estimate.track_inliers + estimate.cluster_inliers,
-                track_inliers: estimate.track_inliers,
-                cluster_inliers: estimate.cluster_inliers,
+                correspondences: estimate.pairs.total(),
+                track_correspondences: estimate.pairs.tracks,
+                bearing_correspondences: estimate.pairs.bearings,
+                cluster_correspondences: estimate.pairs.clusters,
+                inliers: estimate.inliers.total(),
+                track_inliers: estimate.inliers.tracks,
+                bearing_inliers: estimate.inliers.bearings,
+                cluster_inliers: estimate.inliers.clusters,
                 clusters_considered: from_clusters.considered,
                 clusters_skipped: from_clusters.skipped,
+                clusters_untracked: from_clusters.untracked,
                 clusters_failed: from_clusters.failed,
                 clusters_inconsistent: from_clusters.inconsistent,
                 inlier_fraction: estimate.inlier_fraction,
@@ -692,10 +704,13 @@ pub fn resect_images(
         refused: reports.len() - accepted,
         correspondences,
         track_correspondences: reports.iter().map(|r| r.track_correspondences).sum(),
+        bearing_correspondences: reports.iter().map(|r| r.bearing_correspondences).sum(),
         cluster_correspondences: reports.iter().map(|r| r.cluster_correspondences).sum(),
         inliers,
         track_inliers: reports.iter().map(|r| r.track_inliers).sum(),
+        bearing_inliers: reports.iter().map(|r| r.bearing_inliers).sum(),
         cluster_inliers: reports.iter().map(|r| r.cluster_inliers).sum(),
+        clusters_untracked: reports.iter().map(|r| r.clusters_untracked).sum(),
         clusters_inconsistent: reports.iter().map(|r| r.clusters_inconsistent).sum(),
         inlier_fraction: if correspondences == 0 {
             0.0
@@ -1020,32 +1035,38 @@ fn held_out_bearings(
     out
 }
 
-/// One target's observations of points at infinity, as
-/// `(held-out world bearing, camera ray)` pairs — the rotation-only path's
-/// whole input.
-fn gather_bearings(
-    target_rows: &[usize],
-    observed: &[usize],
-    pixel_of: &HashMap<usize, [f64; 2]>,
-    bearing_of: &HashMap<usize, Vector3<f64>>,
-    camera: &CameraIntrinsics,
-) -> Vec<BearingPair> {
-    let mut out = Vec::new();
-    for (k, &row) in target_rows.iter().enumerate() {
-        let Some(&bearing) = bearing_of.get(&observed[k]) else {
-            continue;
-        };
-        let Some(uv) = pixel_of.get(&row) else {
-            continue;
-        };
-        let ray = camera.pixel_to_ray(uv[0], uv[1]);
-        let ray = Vector3::new(ray[0], ray[1], ray[2]);
-        let rn = ray.norm();
-        if rn > 0.0 {
-            out.push((bearing, ray / rn));
+/// Pairs counted by source. `tracks` counts every track pair, finite and at
+/// infinity; `bearings` counts the ones at infinity.
+#[derive(Clone, Copy, Debug, Default)]
+struct Counts {
+    tracks: usize,
+    bearings: usize,
+    clusters: usize,
+}
+
+impl Counts {
+    /// The pairs of `pairs` that `keep` selects, counted by source.
+    fn of(pairs: &[Pair], keep: impl Fn(usize) -> bool) -> Self {
+        let mut counts = Counts::default();
+        for (k, pair) in pairs.iter().enumerate() {
+            if !keep(k) {
+                continue;
+            }
+            match pair.source {
+                Source::Track => counts.tracks += 1,
+                Source::Bearing => {
+                    counts.tracks += 1;
+                    counts.bearings += 1;
+                }
+                Source::Cluster => counts.clusters += 1,
+            }
         }
+        counts
     }
-    out
+
+    fn total(&self) -> usize {
+        self.tracks + self.clusters
+    }
 }
 
 /// The outcome of one pose estimate, before it reaches the reconstruction.
@@ -1053,216 +1074,88 @@ struct Estimate {
     rotation: UnitQuaternion<f64>,
     translation: Vector3<f64>,
     rotation_only: bool,
-    track_correspondences: usize,
-    cluster_correspondences: usize,
-    track_inliers: usize,
-    cluster_inliers: usize,
+    /// The pairs the estimate saw.
+    pairs: Counts,
+    /// Of those, the ones the estimated pose puts within `INLIER_PX`.
+    inliers: Counts,
     inlier_fraction: f64,
     accepted: bool,
     refusal: Option<String>,
 }
 
 impl Estimate {
+    /// An estimate that leaves the stored pose standing, with its reason.
+    fn refused(
+        recon: &SfmrReconstruction,
+        image_index: usize,
+        rotation_only: bool,
+        pairs: Counts,
+        reason: String,
+    ) -> Self {
+        Estimate {
+            rotation: recon.image_table.images[image_index].quaternion_wxyz,
+            translation: recon.image_table.images[image_index].translation_xyz,
+            rotation_only,
+            pairs,
+            inliers: Counts::default(),
+            inlier_fraction: 0.0,
+            accepted: false,
+            refusal: Some(reason),
+        }
+    }
+
     /// A target neither path has support for: too few finite correspondences
     /// for the finite path, and too few bearings for the rotation-only one. Its
     /// stored pose stands, and the hold-out is still what the derived
     /// reconstruction shows for the points it observes.
-    fn no_support(
-        recon: &SfmrReconstruction,
-        image_index: usize,
-        tracks: usize,
-        clusters: usize,
-        bearings: usize,
-    ) -> Self {
+    fn no_support(recon: &SfmrReconstruction, image_index: usize, pairs: Counts) -> Self {
+        let tracks = pairs.tracks - pairs.bearings;
+        let clusters = pairs.clusters;
         let finite = tracks + clusters;
-        Estimate {
-            rotation: recon.image_table.images[image_index].quaternion_wxyz,
-            translation: recon.image_table.images[image_index].translation_xyz,
-            rotation_only: false,
-            track_correspondences: tracks,
-            cluster_correspondences: clusters,
-            track_inliers: 0,
-            cluster_inliers: 0,
-            inlier_fraction: 0.0,
-            accepted: false,
-            refusal: Some(format!(
-                "no support: {finite} finite correspondence{} ({tracks} from tracks, \
-                 {clusters} from clusters) and {bearings} bearing{}",
-                if finite == 1 { "" } else { "s" },
-                if bearings == 1 { "" } else { "s" }
-            )),
-        }
+        let bearings = pairs.bearings;
+        let reason = format!(
+            "no support: {finite} finite correspondence{} ({tracks} from tracks, \
+             {clusters} from clusters) and {bearings} bearing{}",
+            if finite == 1 { "" } else { "s" },
+            if bearings == 1 { "" } else { "s" }
+        );
+        Estimate::refused(recon, image_index, false, pairs, reason)
     }
 }
 
-/// The finite path: [`resect_images_batch`] over every target of a shared
-/// camera, against the held-out positions.
-///
-/// The observation arrays it is handed are the targets' correspondences plus —
-/// for the covisibility ranking its neighbour-initialized fallback uses — the
-/// non-target images' own observations of the same points and clusters.
-/// Correspondence ids double as the primitive's cluster ids: a point index
-/// names that point's held-out position, and an id past the point indexes
-/// names a cluster's triangulated one. Targets are grouped by camera because
-/// the primitive resects one camera model at a time; each image's RANSAC is
-/// seeded from its own index, so the grouping does not change any answer.
-#[allow(clippy::too_many_arguments)]
-fn finite_estimates(
+/// The finite path for one target: the `finite` submodule's estimate, gated on
+/// `ResectOptions::accept_gate`.
+fn finite_estimate(
     recon: &SfmrReconstruction,
-    targets: &[usize],
-    pairs_of: &HashMap<usize, Vec<Correspondence>>,
-    cluster_support: Option<&clusters::ClusterSupport>,
-    posed_others: &[bool],
-    gathered: &[usize],
-    pixel_of: &HashMap<usize, [f64; 2]>,
+    image_index: usize,
+    pairs: &[Pair],
+    camera: &CameraIntrinsics,
     options: &ResectImageOptions,
-) -> HashMap<usize, Estimate> {
-    let mut out = HashMap::new();
-    if targets.is_empty() {
-        return out;
+) -> Estimate {
+    let counts = Counts::of(pairs, |_| true);
+    let seed = per_image_seed(options.resect.seed, image_index as u32);
+    let fit = match finite::estimate(camera, pairs, seed) {
+        Ok(fit) => fit,
+        Err(reason) => return Estimate::refused(recon, image_index, false, counts, reason),
+    };
+    let inliers = Counts::of(pairs, |k| fit.inliers[k]);
+    let inlier_fraction = inliers.total() as f64 / counts.total() as f64;
+    let accepted = inlier_fraction >= options.resect.accept_gate;
+    Estimate {
+        rotation: fit.pose.0,
+        translation: fit.pose.1,
+        rotation_only: false,
+        pairs: counts,
+        inliers,
+        inlier_fraction,
+        accepted,
+        refusal: (!accepted).then(|| {
+            format!(
+                "inlier fraction {inlier_fraction:.2} below the {:.2} gate",
+                options.resect.accept_gate
+            )
+        }),
     }
-
-    // Positions of everything any target is scored against — shared by all
-    // the groups below, so an id means the same thing to each.
-    let point_count = recon.point_set.points.len();
-    let cluster_count = cluster_support.map_or(0, |s| s.members.len());
-    let mut points = vec![[f64::NAN; 3]; point_count + cluster_count];
-    for t in targets {
-        for &(p, _, world) in &pairs_of[t] {
-            points[p] = world;
-        }
-    }
-
-    let posed_indexes: Vec<u32> = (0..recon.image_table.images.len() as u32)
-        .filter(|&i| posed_others[i as usize])
-        .collect();
-    let posed_quaternions: Vec<[f64; 4]> = posed_indexes
-        .iter()
-        .map(|&i| {
-            let q = recon.image_table.images[i as usize]
-                .quaternion_wxyz
-                .into_inner();
-            [q.w, q.i, q.j, q.k]
-        })
-        .collect();
-    let posed_translations: Vec<[f64; 3]> = posed_indexes
-        .iter()
-        .map(|&i| {
-            let t = recon.image_table.images[i as usize].translation_xyz;
-            [t.x, t.y, t.z]
-        })
-        .collect();
-
-    // Group the targets by camera model, keeping the caller's order within each
-    // group.
-    let mut cameras: Vec<u32> = targets
-        .iter()
-        .map(|&t| recon.image_table.images[t].camera_index)
-        .collect();
-    cameras.sort_unstable();
-    cameras.dedup();
-
-    for camera_index in cameras {
-        let group: Vec<usize> = targets
-            .iter()
-            .copied()
-            .filter(|&t| recon.image_table.images[t].camera_index == camera_index)
-            .collect();
-        let camera = &recon.image_table.cameras[camera_index as usize];
-
-        // (cluster, image, pixel) rows, sorted by cluster: the group's
-        // correspondences, and every non-target posed image's observation of a
-        // point that has a held-out position.
-        let mut rows: Vec<(u32, u32, [f64; 2])> = Vec::new();
-        for &t in &group {
-            rows.extend(
-                pairs_of[&t]
-                    .iter()
-                    .map(|&(p, uv, _)| (p as u32, t as u32, uv)),
-            );
-        }
-        for &row in gathered {
-            let image = recon.point_set.tracks[row].image_index as usize;
-            let p = recon.point_set.tracks[row].point_index as usize;
-            if !posed_others[image] || !points[p][0].is_finite() {
-                continue;
-            }
-            rows.push((p as u32, image as u32, pixel_of[&row]));
-        }
-        if let Some(support) = cluster_support {
-            for (slot, members) in support.members.iter().enumerate() {
-                let id = support.id_base + slot;
-                if !points[id][0].is_finite() {
-                    continue;
-                }
-                rows.extend(
-                    members
-                        .iter()
-                        .map(|&(image, uv)| (id as u32, image as u32, uv)),
-                );
-            }
-        }
-        rows.sort_by_key(|&(cluster, image, _)| (cluster, image));
-
-        let cluster_indexes: Vec<u32> = rows.iter().map(|r| r.0).collect();
-        let image_indexes: Vec<u32> = rows.iter().map(|r| r.1).collect();
-        let positions_xy: Vec<[f64; 2]> = rows.iter().map(|r| r.2).collect();
-        let image_list: Vec<u32> = group.iter().map(|&t| t as u32).collect();
-
-        let batch = resect_images_batch(
-            &cluster_indexes,
-            &image_indexes,
-            &positions_xy,
-            camera,
-            &points,
-            &image_list,
-            &posed_quaternions,
-            &posed_translations,
-            &posed_indexes,
-            &options.resect,
-        );
-
-        for (slot, &t) in group.iter().enumerate() {
-            let q = batch.quaternions_wxyz[slot];
-            let rotation = UnitQuaternion::from_quaternion(Quaternion::new(q[0], q[1], q[2], q[3]));
-            let translation = Vector3::new(
-                batch.translations[slot][0],
-                batch.translations[slot][1],
-                batch.translations[slot][2],
-            );
-            let pairs = &pairs_of[&t];
-            let is_inlier = |&(_, uv, world): &Correspondence| {
-                let local = rotation * Vector3::new(world[0], world[1], world[2]) + translation;
-                camera
-                    .ray_to_pixel([local.x, local.y, local.z])
-                    .is_some_and(|(u, v)| (u - uv[0]).hypot(v - uv[1]) < INLIER_PX)
-            };
-            let (from_tracks, from_clusters): (Vec<Correspondence>, Vec<Correspondence>) =
-                pairs.iter().partition(|pair| pair.0 < point_count);
-            let accepted = batch.accepted[slot];
-            out.insert(
-                t,
-                Estimate {
-                    rotation,
-                    translation,
-                    rotation_only: false,
-                    track_correspondences: from_tracks.len(),
-                    cluster_correspondences: from_clusters.len(),
-                    track_inliers: from_tracks.iter().filter(|p| is_inlier(p)).count(),
-                    cluster_inliers: from_clusters.iter().filter(|p| is_inlier(p)).count(),
-                    inlier_fraction: batch.inlier_fractions[slot],
-                    accepted,
-                    refusal: (!accepted).then(|| {
-                        format!(
-                            "inlier fraction {:.2} below the {:.2} gate",
-                            batch.inlier_fractions[slot], options.resect.accept_gate
-                        )
-                    }),
-                },
-            );
-        }
-    }
-    out
 }
 
 /// The rotation-only path: closed-form absolute orientation between the
@@ -1280,18 +1173,20 @@ fn rotation_estimate(
     camera: &CameraIntrinsics,
     options: &ResectImageOptions,
 ) -> Estimate {
-    let stored = &recon.image_table.images[image_index];
-    let degenerate = |n: usize| Estimate {
-        rotation: stored.quaternion_wxyz,
-        translation: stored.translation_xyz,
-        rotation_only: true,
-        track_correspondences: n,
-        cluster_correspondences: 0,
-        track_inliers: 0,
-        cluster_inliers: 0,
-        inlier_fraction: 0.0,
-        accepted: false,
-        refusal: Some("the bearings span no measurable angle".to_string()),
+    let n = bearings.len();
+    let only_bearings = |k: usize| Counts {
+        tracks: k,
+        bearings: k,
+        clusters: 0,
+    };
+    let degenerate = || {
+        Estimate::refused(
+            recon,
+            image_index,
+            true,
+            only_bearings(n),
+            "the bearings span no measurable angle".to_string(),
+        )
     };
 
     let world: Vec<Vector3<f64>> = bearings.iter().map(|b| b.0).collect();
@@ -1299,16 +1194,14 @@ fn rotation_estimate(
     // The angular bound the pixel inlier bound is worth on this camera, and the
     // floor the bearing spread has to clear: one pixel's worth of angle at the
     // focal the model is carrying.
-    let (fx, fy) = camera.focal_lengths();
-    let pixel_angle = 1.0 / fx.max(fy).max(1.0);
-    let n = bearings.len();
+    let pixel_angle = 1.0 / finite::pixels_per_radian(camera);
     if bearing_span(&world) <= pixel_angle {
-        return degenerate(n);
+        return degenerate();
     }
 
     let mut keep: Vec<usize> = (0..n).collect();
     let Some(mut rotation) = kabsch(&world, &rays, &keep) else {
-        return degenerate(n);
+        return degenerate();
     };
     for _ in 1..ROTATION_TRIM_ROUNDS {
         let mut ranked: Vec<(f64, usize)> = (0..n)
@@ -1340,12 +1233,10 @@ fn rotation_estimate(
     );
     Estimate {
         rotation,
-        translation: stored.translation_xyz,
+        translation: recon.image_table.images[image_index].translation_xyz,
         rotation_only: true,
-        track_correspondences: n,
-        cluster_correspondences: 0,
-        track_inliers: inliers,
-        cluster_inliers: 0,
+        pairs: only_bearings(n),
+        inliers: only_bearings(inliers),
         inlier_fraction,
         accepted,
         refusal: (!accepted).then(|| {
@@ -1422,9 +1313,11 @@ fn write_provenance(
                 "rotation_only": r.rotation_only,
                 "correspondences": r.correspondences,
                 "track_correspondences": r.track_correspondences,
+                "bearing_correspondences": r.bearing_correspondences,
                 "cluster_correspondences": r.cluster_correspondences,
                 "inliers": r.inliers,
                 "track_inliers": r.track_inliers,
+                "bearing_inliers": r.bearing_inliers,
                 "cluster_inliers": r.cluster_inliers,
                 "inlier_fraction": r.inlier_fraction,
                 "accepted": r.accepted,

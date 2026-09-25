@@ -27,9 +27,11 @@ use crate::scene::ReconId;
 use crate::state::AppState;
 
 /// What the estimate did, with nothing about where the answer went: `214 pts
-/// (150 tracks, 64 clusters), inliers 198/214 (0.93; 140 tracks, 58 clusters),
-/// rotation 12.40°, translation 0.081 (scene-scale), 190 re-triangulated;
-/// clusters 80 considered, 12 skipped, 4 failed to triangulate, 6 inconsistent`.
+/// (147 finite tracks, 3 tracks at infinity, 64 clusters), inliers 198/214
+/// (0.93; 137 finite tracks, 3 tracks at infinity, 58 clusters), rotation
+/// 12.40°, translation 0.081 (scene-scale), 190 re-triangulated; clusters 80
+/// considered, 12 skipped, 2 untracked, 4 failed to triangulate, 6
+/// inconsistent`.
 ///
 /// The translation is reported in scene-scale units when the reconstruction has
 /// a camera-to-structure distance to divide by, and in its own units when it
@@ -40,21 +42,25 @@ pub fn outcome_summary(report: &ResectImageReport) -> String {
         None => format!("{:.3}", report.translation),
     };
     format!(
-        "{} pts ({} tracks, {} clusters), inliers {}/{} ({:.2}; {} tracks, {} clusters), \
-         rotation {:.2}°, translation {translation}, {} re-triangulated; clusters {} \
-         considered, {} skipped, {} failed to triangulate, {} inconsistent",
+        "{} pts ({} finite tracks, {} tracks at infinity, {} clusters), inliers {}/{} ({:.2}; \
+         {} finite tracks, {} tracks at infinity, {} clusters), rotation {:.2}°, translation \
+         {translation}, {} re-triangulated; clusters {} considered, {} skipped, {} untracked, \
+         {} failed to triangulate, {} inconsistent",
         report.correspondences,
-        report.track_correspondences,
+        report.track_correspondences - report.bearing_correspondences,
+        report.bearing_correspondences,
         report.cluster_correspondences,
         report.inliers,
         report.correspondences,
         report.inlier_fraction,
-        report.track_inliers,
+        report.track_inliers - report.bearing_inliers,
+        report.bearing_inliers,
         report.cluster_inliers,
         report.rotation_deg,
         report.retriangulated,
         report.clusters_considered,
         report.clusters_skipped,
+        report.clusters_untracked,
         report.clusters_failed,
         report.clusters_inconsistent,
     )

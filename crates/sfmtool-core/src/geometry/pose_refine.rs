@@ -21,7 +21,7 @@ use crate::CameraIntrinsics;
 /// A point behind the camera / outside the model domain contributes this pixel
 /// residual per component — large enough to be trimmed, finite so the normal
 /// equations stay well-posed.
-const INVALID_RESIDUAL: f64 = 1e6;
+pub(crate) const INVALID_RESIDUAL: f64 = 1e6;
 
 /// Result of [`refine_absolute_pose`].
 #[derive(Clone, Debug)]
@@ -90,7 +90,7 @@ fn cost(
 /// difference of `ray_to_pixel` for fisheye / equirectangular models, which
 /// have no analytic Jacobian yet. `None` when the point is outside the model
 /// domain (behind the camera / non-invertible).
-fn project_with_jac(
+pub(crate) fn project_with_jac(
     cam: &CameraIntrinsics,
     p_cam: Vector3<f64>,
     analytic: bool,
@@ -118,7 +118,7 @@ fn project_with_jac(
 /// block `jp` composed with the camera-point-to-pose block. The rotation block
 /// `∂p_cam/∂δθ = −[R·X]ₓ` is the local (left) `SO(3)` perturbation; the
 /// translation block is the identity.
-fn compose_pose_jacobian(jp: &[[f64; 3]; 2], rot_pt: &Vector3<f64>) -> [[f64; 6]; 2] {
+pub(crate) fn compose_pose_jacobian(jp: &[[f64; 3]; 2], rot_pt: &Vector3<f64>) -> [[f64; 6]; 2] {
     let (a, b, c) = (rot_pt.x, rot_pt.y, rot_pt.z);
     // −[rot_pt]ₓ (columns are ∂p_cam/∂δθ).
     let nskew = [[0.0, c, -b], [-c, 0.0, a], [b, -a, 0.0]];
@@ -217,7 +217,7 @@ fn lm_fit(
 }
 
 /// numpy-compatible linear-interpolation quantile of `values` at `q ∈ [0, 1]`.
-fn quantile(values: &[f64], q: f64) -> f64 {
+pub(crate) fn quantile(values: &[f64], q: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
     }

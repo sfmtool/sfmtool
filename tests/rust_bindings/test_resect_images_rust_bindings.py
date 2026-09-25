@@ -519,6 +519,10 @@ class TestClusters:
         assert both["clusters_skipped"] == 0
         assert both["clusters_failed"] == 0
         assert both["clusters_inconsistent"] == 0
+        assert both["clusters_untracked"] == 0
+        # The orbit has no points at infinity, so no track pair is a bearing.
+        assert both["bearing_correspondences"] == 0
+        assert both["bearing_inliers"] == 0
         fitted_q = np.asarray(derived.quaternions_wxyz, np.float64)[0]
         assert _angle_deg(fitted_q, truth_q) < 0.1
         # Clusters create no points.
@@ -535,13 +539,41 @@ class TestClusters:
         )
         for key in (
             "track_correspondences",
+            "bearing_correspondences",
             "cluster_correspondences",
             "track_inliers",
+            "bearing_inliers",
             "cluster_inliers",
+            "clusters_untracked",
             "clusters_inconsistent",
         ):
             assert report[key] == sum(r[key] for r in report["images"]), key
         assert report["cluster_correspondences"] > 0
+
+    def test_members_in_images_without_tracks_do_not_count(self, orbit, tmp_path):
+        """A member in an image with no track observation does not count, so a
+        cluster left with members in fewer than two tracked images is counted
+        in ``clusters_untracked`` and gives no pair."""
+        path = tmp_path / "orbit-cluster-patches.matches"
+        _write_cluster_patches(orbit, path)
+        # The same ring, with images 2 to 7 turned to look away from the ball:
+        # they stay posed but observe nothing, so only images 0 and 1 have
+        # tracks.
+        images = _ring(8, 4.0)
+        for i in range(2, 8):
+            name, _, _ = images[i]
+            eye = _camera_centers(orbit)[i]
+            images[i] = _image_at(name, eye, 2.0 * eye)
+        away = _build(images, _cloud(200), 800.0, tmp_path)
+        assert set(np.asarray(away.track_image_indexes).tolist()) == {0, 1}
+
+        _, report = resect_images(away, ["frames/000.jpg"], cluster_patches_path=path)
+        r = report["images"][0]
+        assert r["clusters_considered"] > 0
+        assert r["clusters_untracked"] == r["clusters_considered"]
+        assert r["cluster_correspondences"] == 0
+        assert report["clusters_untracked"] == r["clusters_untracked"]
+        assert r["refused"]
 
     def test_a_cluster_its_own_members_disagree_with_gives_no_pair(
         self, orbit, tmp_path

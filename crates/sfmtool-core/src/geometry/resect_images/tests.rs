@@ -176,16 +176,27 @@ fn build(
     at_infinity: bool,
     focal: f64,
 ) -> SfmrReconstruction {
+    let points = positions.into_iter().map(|p| (p, at_infinity)).collect();
+    build_points(images, points, focal)
+}
+
+/// [`build`] with each point's own `at_infinity`, so one reconstruction can
+/// hold finite points and points at infinity.
+fn build_points(
+    images: Vec<SfmrImage>,
+    positions: Vec<(Point3<f64>, bool)>,
+    focal: f64,
+) -> SfmrReconstruction {
     let camera = camera(focal);
     let mut points = Vec::new();
     let mut tracks = Vec::new();
     let mut observation_counts = Vec::new();
     let mut keypoints: Vec<[f32; 2]> = Vec::new();
-    for position in &positions {
+    for &(position, at_infinity) in &positions {
         let position = if at_infinity {
             Point3::from(position.coords.normalize())
         } else {
-            *position
+            position
         };
         let mut rows = Vec::new();
         for (i, image) in images.iter().enumerate() {
@@ -244,7 +255,7 @@ fn build(
         timestamp: String::new(),
         image_count: n_images as u32,
         point_count: points.len() as u32,
-        infinity_point_count: if at_infinity { points.len() as u32 } else { 0 },
+        infinity_point_count: points.iter().filter(|p: &&Point3D| p.w == 0.0).count() as u32,
         observation_count: tracks.len() as u32,
         camera_count: 1,
         rig_count: None,
@@ -1421,6 +1432,413 @@ fn the_rotation_only_path_reads_the_tracks_bearings_only() {
     assert_eq!(
         r.clusters_failed + r.clusters_skipped,
         r.clusters_considered
+    );
+}
+
+// ── Images without tracks ───────────────────────────────────────────────────
+
+#[test]
+fn a_member_in_an_image_with_no_tracks_does_not_count() {
+    let truth = orbit();
+    let untracked = 3;
+    let world = a_point_seen_by(&truth, &[0, 1, 2, untracked]);
+    let mut cluster = cluster_at(&truth, &world, &[0, 1, 2, untracked]);
+    // Image 3's member 10 px off: counted, it makes the cluster inconsistent.
+    cluster[3].1[0] += 10.0;
+    let file = cluster_file(&truth, &[cluster]);
+    let options = ResectImageOptions::default();
+
+    let tracked = resect_image(&truth, 0, ResectSource::TracksAndClusters(&file), &options)
+        .unwrap()
+        .report;
+    assert_eq!(tracked.clusters_inconsistent, 1, "{tracked:?}");
+    assert_eq!(tracked.cluster_correspondences, 0);
+
+    // With image 3 holding no track observation, its member is not counted:
+    // the cluster is placed from images 1 and 2 alone and agrees with them.
+    let source = without_observations_of(truth, untracked);
+    let r = resect_image(&source, 0, ResectSource::TracksAndClusters(&file), &options)
+        .unwrap()
+        .report;
+    assert_eq!(
+        (
+            r.clusters_considered,
+            r.clusters_untracked,
+            r.clusters_inconsistent
+        ),
+        (1, 0, 0),
+        "{r:?}"
+    );
+    assert_eq!(r.cluster_correspondences, 1);
+    assert_eq!(r.cluster_inliers, 1);
+}
+
+#[test]
+fn a_cluster_left_with_one_tracked_image_gives_no_pair() {
+    let truth = orbit();
+    let untracked = 3;
+    let world = a_point_seen_by(&truth, &[0, 1, untracked]);
+    let file = cluster_file(&truth, &[cluster_at(&truth, &world, &[0, 1, untracked])]);
+    let options = ResectImageOptions::default();
+
+    let tracked = resect_image(&truth, 0, ResectSource::TracksAndClusters(&file), &options)
+        .unwrap()
+        .report;
+    assert_eq!(tracked.cluster_correspondences, 1, "{tracked:?}");
+    assert_eq!(tracked.clusters_untracked, 0);
+
+    let source = without_observations_of(truth, untracked);
+    let out = resect_images(
+        &source,
+        &[0],
+        ResectSource::TracksAndClusters(&file),
+        &options,
+    )
+    .unwrap();
+    let r = &out.reports[0];
+    assert_eq!(
+        (
+            r.clusters_considered,
+            r.clusters_skipped,
+            r.clusters_untracked
+        ),
+        (1, 0, 1),
+        "{r:?}"
+    );
+    assert_eq!(r.cluster_correspondences, 0);
+    assert_eq!(out.totals.clusters_untracked, 1);
+}
+
+#[test]
+fn the_cluster_counts_add_up() {
+    let truth = orbit_with_a_side_pair();
+    let (a, b) = (8, 9);
+    let untracked = 5;
+    let world = a_point_seen_by(&truth, &[0, 1, 2, 3, untracked]);
+    let member = |image, uv| (image, uv, ClusterMemberStatus::Kept);
+    let target_pixel = pixel_of(&truth, 0, &world);
+    let mut inconsistent = cluster_at(&truth, &world, &[0, 1, 2, 3]);
+    inconsistent[3].1[0] += 10.0;
+    let clusters = vec![
+        // Two kept members in the target: skipped.
+        vec![
+            member(0, target_pixel),
+            member(0, [target_pixel[0] + 5.0, target_pixel[1]]),
+            member(1, pixel_of(&truth, 1, &world)),
+            member(2, pixel_of(&truth, 2, &world)),
+        ],
+        // One tracked non-target image and one untracked: untracked.
+        cluster_at(&truth, &world, &[0, 1, untracked]),
+        // Parallel rays: fails to triangulate.
+        vec![
+            member(0, target_pixel),
+            member(a, [320.0, 240.0]),
+            member(b, [320.0, 240.0]),
+        ],
+        inconsistent,
+        // Agrees with its position: one pair.
+        cluster_at(&truth, &world, &[0, 1, 2, 3]),
+    ];
+    let file = cluster_file(&truth, &clusters);
+    let source = without_observations_of(truth, untracked);
+    let out = resect_images(
+        &source,
+        &[0],
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    let r = &out.reports[0];
+    assert!(r.accepted, "refused: {:?}", r.refusal);
+    assert_eq!(r.clusters_considered, 5);
+    assert_eq!(
+        (
+            r.clusters_skipped,
+            r.clusters_untracked,
+            r.clusters_failed,
+            r.clusters_inconsistent,
+            r.cluster_correspondences
+        ),
+        (1, 1, 1, 1, 1),
+        "{r:?}"
+    );
+    assert_eq!(
+        r.correspondences,
+        r.track_correspondences + r.cluster_correspondences
+    );
+    assert_eq!(r.inliers, r.track_inliers + r.cluster_inliers);
+    assert!(r.bearing_correspondences <= r.track_correspondences);
+    assert!(r.bearing_inliers <= r.track_inliers);
+    let t = &out.totals;
+    assert_eq!(
+        (
+            t.correspondences,
+            t.track_correspondences,
+            t.bearing_correspondences,
+            t.cluster_correspondences
+        ),
+        (
+            r.correspondences,
+            r.track_correspondences,
+            r.bearing_correspondences,
+            r.cluster_correspondences
+        )
+    );
+    assert_eq!(
+        (
+            t.inliers,
+            t.track_inliers,
+            t.bearing_inliers,
+            t.cluster_inliers
+        ),
+        (
+            r.inliers,
+            r.track_inliers,
+            r.bearing_inliers,
+            r.cluster_inliers
+        )
+    );
+    assert_eq!((t.clusters_untracked, t.clusters_inconsistent), (1, 1));
+}
+
+// ── Tracks lead, clusters support ───────────────────────────────────────────
+
+/// `recon` with image `image` keeping only its first `keep` observations.
+fn with_first_observations_of(
+    recon: SfmrReconstruction,
+    image: usize,
+    keep: usize,
+) -> SfmrReconstruction {
+    let mut seen = 0;
+    let rows: Vec<usize> = (0..recon.point_set.tracks.len())
+        .filter(|&row| {
+            if recon.point_set.tracks[row].image_index as usize != image {
+                return true;
+            }
+            seen += 1;
+            seen <= keep
+        })
+        .collect();
+    drop_all_but(recon, &rows)
+}
+
+/// Clusters over the orbit's points past the first `tracked_points`: the first
+/// `agree` put image 0's member where the true pose puts it, and the next
+/// `disagree` where `other` (a different pose of image 0) puts it. Every
+/// cluster's non-target members sit at their exact pixels, so each one
+/// triangulates to its point and agrees with its own members.
+fn clusters_for_image_0(
+    truth: &SfmrReconstruction,
+    tracked_points: usize,
+    agree: usize,
+    disagree: usize,
+    other: &SfmrImage,
+) -> Vec<Vec<Member>> {
+    let camera = &truth.image_table.cameras[0];
+    let mut out = Vec::new();
+    for p in tracked_points..truth.point_set.points.len() {
+        if out.len() == agree + disagree {
+            break;
+        }
+        let world = truth.point_set.points[p].position;
+        let rows =
+            truth.point_set.observation_offsets[p]..truth.point_set.observation_offsets[p + 1];
+        let images: Vec<usize> = rows
+            .map(|row| truth.point_set.tracks[row].image_index as usize)
+            .collect();
+        if images.first() != Some(&0) || images.len() < 3 {
+            continue;
+        }
+        let target_pixel = if out.len() < agree {
+            pixel_of(truth, 0, &world)
+        } else {
+            match project(camera, other, &world, false) {
+                Some(uv) => uv,
+                None => continue,
+            }
+        };
+        let mut cluster = vec![(0, target_pixel, ClusterMemberStatus::Reference)];
+        for &image in &images[1..] {
+            cluster.push((
+                image,
+                pixel_of(truth, image, &world),
+                ClusterMemberStatus::Kept,
+            ));
+        }
+        out.push(cluster);
+    }
+    assert_eq!(out.len(), agree + disagree, "the orbit has too few points");
+    out
+}
+
+/// Image 0 of `truth` at a different pose: turned 4° and moved.
+fn another_pose_of_image_0(truth: &SfmrReconstruction) -> SfmrImage {
+    let mut other = truth.image_table.images[0].clone();
+    other.quaternion_wxyz = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 4f64.to_radians())
+        * other.quaternion_wxyz;
+    other.translation_xyz += Vector3::new(0.3, 0.1, 0.0);
+    other
+}
+
+#[test]
+fn tracks_lead_over_a_larger_set_of_clusters_that_agree_with_another_pose() {
+    let truth = orbit();
+    let other = another_pose_of_image_0(&truth);
+    // Ten tracks and fifteen clusters say where image 0 is; thirty clusters
+    // agree with each other on a pose four degrees away.
+    let tracks = 10;
+    let file = cluster_file(
+        &truth,
+        &clusters_for_image_0(&truth, tracks, 15, 30, &other),
+    );
+    let source = perturbed(
+        with_first_observations_of(truth.clone(), 0, tracks),
+        0,
+        0.35,
+    );
+
+    let r = resect_image(
+        &source,
+        0,
+        ResectSource::TracksAndClusters(&file),
+        &ResectImageOptions::default(),
+    )
+    .unwrap();
+    let report = &r.report;
+    assert!(report.accepted, "refused: {:?}", report.refusal);
+    assert_eq!(report.track_correspondences, tracks);
+    assert_eq!(report.track_inliers, tracks);
+    assert_eq!(report.cluster_correspondences, 45);
+    assert_eq!(report.cluster_inliers, 15, "{report:?}");
+    let fitted = &r.reconstruction.image_table.images[0];
+    let true_pose = &truth.image_table.images[0];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.05);
+    assert!((fitted.camera_center() - true_pose.camera_center()).norm() < 0.005);
+}
+
+#[test]
+fn below_three_finite_tracks_the_tracks_and_the_clusters_are_sampled_together() {
+    let truth = orbit();
+    let other = another_pose_of_image_0(&truth);
+    let options = ResectImageOptions::default();
+
+    // Two tracks and clusters that agree with them: the pairs are sampled
+    // together, and the two tracks are inliers of the pose they give.
+    let tracks = 2;
+    let source = perturbed(
+        with_first_observations_of(truth.clone(), 0, tracks),
+        0,
+        0.35,
+    );
+    let file = cluster_file(&truth, &clusters_for_image_0(&truth, tracks, 40, 0, &other));
+    let r = resect_image(&source, 0, ResectSource::TracksAndClusters(&file), &options).unwrap();
+    assert!(r.report.accepted, "refused: {:?}", r.report.refusal);
+    assert_eq!(r.report.track_correspondences, tracks);
+    assert_eq!(r.report.track_inliers, tracks);
+    assert_eq!(r.report.cluster_inliers, 40);
+    let fitted = &r.reconstruction.image_table.images[0];
+    let true_pose = &truth.image_table.images[0];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.05);
+
+    // With the clusters of the test above, two tracks do not lead: the thirty
+    // clusters that agree on the other pose outnumber the rest, and the tracks
+    // are outliers of the pose they give.
+    let file = cluster_file(
+        &truth,
+        &clusters_for_image_0(&truth, tracks, 15, 30, &other),
+    );
+    let r = resect_image(&source, 0, ResectSource::TracksAndClusters(&file), &options).unwrap();
+    assert_eq!(r.report.track_correspondences, tracks);
+    assert_eq!(r.report.track_inliers, 0, "{:?}", r.report);
+    let fitted = &r.reconstruction.image_table.images[0];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &other.quaternion_wxyz) < 0.05);
+}
+
+// ── Bearings in the finite path ─────────────────────────────────────────────
+
+/// The orbit under a sky: its cameras at a wide focal, so neighbours share
+/// directions, observing the ball and sixty points at infinity.
+fn orbit_under_a_sky() -> SfmrReconstruction {
+    let mut points: Vec<(Point3<f64>, bool)> = cloud(200).into_iter().map(|p| (p, false)).collect();
+    points.extend(cloud(60).into_iter().map(|p| (p, true)));
+    build_points(ring(8, 4.0), points, 300.0)
+}
+
+#[test]
+fn a_bearing_is_a_correspondence_of_the_finite_path() {
+    let truth = orbit_under_a_sky();
+    let source = perturbed(truth.clone(), 0, 0.35);
+    let options = ResectImageOptions::default();
+    let r = resect_image(&source, 0, ResectSource::Tracks, &options).unwrap();
+    let report = &r.report;
+    assert!(report.accepted, "refused: {:?}", report.refusal);
+    assert!(!report.rotation_only);
+    assert!(report.bearing_correspondences >= 3, "{report:?}");
+    assert_eq!(report.bearing_inliers, report.bearing_correspondences);
+    assert_eq!(
+        report.track_correspondences,
+        report.held_out_points + report.bearing_correspondences
+    );
+    assert_eq!(report.correspondences, report.track_correspondences);
+    let fitted = &r.reconstruction.image_table.images[0];
+    let true_pose = &truth.image_table.images[0];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.05);
+
+    // One bearing observed 30 px from where it is: an outlier.
+    let row = (0..source.point_set.tracks.len())
+        .find(|&row| {
+            let t = source.point_set.tracks[row];
+            t.image_index == 0 && source.point_set.points[t.point_index as usize].is_at_infinity()
+        })
+        .expect("image 0 observes a point at infinity");
+    let mut moved = source.clone();
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut moved.point_set.observations
+    else {
+        unreachable!("the fixtures are embedded_patches");
+    };
+    keypoints_xy[[row, 0]] += 30.0;
+    let r = resect_image(&moved, 0, ResectSource::Tracks, &options)
+        .unwrap()
+        .report;
+    assert_eq!(r.bearing_correspondences, report.bearing_correspondences);
+    assert_eq!(r.bearing_inliers, report.bearing_correspondences - 1);
+}
+
+#[test]
+fn a_bearing_constrains_the_rotation_and_not_the_translation() {
+    use super::finite::{pixels_per_radian, residual_px, Pair, Source, World};
+    let recon = orbit_under_a_sky();
+    let camera = &recon.image_table.cameras[0];
+    let image = &recon.image_table.images[0];
+    let ppr = pixels_per_radian(camera);
+    let pose = (image.quaternion_wxyz, image.translation_xyz);
+    let direction = (image.quaternion_wxyz.inverse() * Vector3::new(0.1, 0.05, -1.0)).normalize();
+    let uv = project(camera, image, &Point3::from(direction), true).expect("in the frame");
+    let pair = Pair::new(
+        Source::Bearing,
+        [f64::from(uv[0]), f64::from(uv[1])],
+        World::Direction(direction),
+        camera,
+    )
+    .expect("a ray");
+    assert!(residual_px(camera, ppr, &pair, &pose) < 1e-3);
+
+    // Moving the camera moves nothing at infinity.
+    let moved = (pose.0, pose.1 + Vector3::new(5.0, -3.0, 2.0));
+    assert!(residual_px(camera, ppr, &pair, &moved) < 1e-3);
+
+    // Turning it by an angle across the ray costs that angle in focal-length
+    // pixels.
+    let angle = 0.004;
+    let axis = nalgebra::Unit::new_normalize(pair.ray.cross(&Vector3::x()));
+    let turned = (
+        UnitQuaternion::from_axis_angle(&axis, angle) * pose.0,
+        pose.1,
+    );
+    assert_relative_eq!(
+        residual_px(camera, ppr, &pair, &turned),
+        angle * 300.0,
+        max_relative = 1e-3
     );
 }
 

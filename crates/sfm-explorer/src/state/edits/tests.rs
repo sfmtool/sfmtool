@@ -731,7 +731,7 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
     let last = logged.last().expect("one entry");
     assert!(
-        last.starts_with("Resected image_001.jpg (run_a): 240 pts (120 tracks, 120 clusters), "),
+        last.starts_with("Resected image_001.jpg (run_a): 240 pts (120 finite tracks, 0 tracks at infinity, 120 clusters), "),
         "{last}"
     );
     let serials = state.scene[0].history.versions();

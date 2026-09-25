@@ -11,10 +11,11 @@
 //! A cluster gives a target image one pair when all of these hold:
 //!
 //! - it has exactly one kept member (`Reference` or `Kept`) in the target;
-//! - it has kept members in at least two *non-target* posed images;
-//! - those non-target members triangulate, at their images' stored poses,
-//!   under the rules the held-out re-triangulation of the tracks uses (at
-//!   least two usable rays, in front of every camera, an observable depth);
+//! - it has kept members in at least two *non-target* posed images that have
+//!   tracks; a member in an image with no track observation does not count;
+//! - those members triangulate, at their images' stored poses, under the rules
+//!   the held-out re-triangulation of the tracks uses (at least two usable
+//!   rays, in front of every camera, an observable depth);
 //! - the triangulated position agrees with every one of those members: it
 //!   reprojects, at the member's image's stored pose, within the caller's
 //!   pixel threshold of the member's refined position. A position behind a
@@ -26,6 +27,12 @@
 //! cluster's position is held out from the whole target set exactly as a
 //! track's is.
 //!
+//! A member in an image with no tracks does not count because nothing in the
+//! reconstruction corroborates that image's pose: no point it observes was
+//! triangulated together with any other image. A group of such images can hold
+//! poses that agree with each other and with nothing else, and clusters placed
+//! from them can outnumber a target's tracks.
+//!
 //! A cluster with two or more kept members in the target does not say which of
 //! its pixels the point is at, so it contributes nothing to that target.
 
@@ -36,7 +43,7 @@ use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 
 use crate::reconstruction::SfmrReconstruction;
 
-use super::{triangulate_groups, Correspondence, Pose, ResectImageError};
+use super::{triangulate_groups, Pose, ResectImageError};
 
 /// Sightings of one cluster as `(image, refined pixel)`.
 type Sightings = Vec<(usize, [f64; 2])>;
@@ -45,33 +52,22 @@ type Sightings = Vec<(usize, [f64; 2])>;
 /// a member in.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TargetClusters {
-    /// The target's cluster pairs, as `(cluster id, target pixel, position)`.
-    /// The id is the cluster's slot in [`ClusterSupport`] offset past the
-    /// reconstruction's point indexes, so it cannot collide with a track.
-    pub(super) pairs: Vec<Correspondence>,
+    /// The target's cluster pairs, as `(target pixel, position)`.
+    pub(super) pairs: Vec<([f64; 2], [f64; 3])>,
     /// Clusters with at least one kept member in this target.
     pub(super) considered: usize,
     /// Of those, the ones the member rules set aside: more than one kept
     /// member in this target, or kept members in fewer than two non-target
     /// posed images.
     pub(super) skipped: usize,
-    /// Of those, the ones whose non-target members did not triangulate.
+    /// Of those, the ones with kept members in two or more non-target posed
+    /// images, but in fewer than two that have tracks.
+    pub(super) untracked: usize,
+    /// Of those, the ones whose members in tracked images did not triangulate.
     pub(super) failed: usize,
     /// Of those, the ones whose triangulated position lies farther than the
-    /// threshold from one of its own non-target members.
+    /// threshold from one of the members it was triangulated from.
     pub(super) inconsistent: usize,
-}
-
-/// The clusters that reached at least one target's estimate.
-pub(super) struct ClusterSupport {
-    /// The first id a cluster pair carries: the reconstruction's point count.
-    pub(super) id_base: usize,
-    /// Each placed cluster's non-target kept members as `(image, refined
-    /// pixel)`, by slot. The estimate reads them for its covisibility ranking,
-    /// as it reads the non-target observations of a track.
-    pub(super) members: Vec<Sightings>,
-    /// What each target got, by target image index.
-    pub(super) targets: HashMap<usize, TargetClusters>,
 }
 
 /// Whether a member's refined position is a claim about the world: the
@@ -83,21 +79,30 @@ fn is_kept(status: u8) -> bool {
     )
 }
 
-/// Gather every target's cluster pairs from `matches`.
+/// How many distinct images the sightings are in.
+fn distinct_images(sightings: &Sightings) -> usize {
+    let mut images: Vec<usize> = sightings.iter().map(|&(image, _)| image).collect();
+    images.sort_unstable();
+    images.dedup();
+    images.len()
+}
+
+/// Gather every target's cluster pairs from `matches`, by target image index.
 ///
-/// `is_target` and `posed_others` are per reconstruction image. Each cluster is
-/// triangulated at most once, however many targets it reaches.
+/// `is_target`, `posed_others` and `tracked` are per reconstruction image;
+/// `tracked` says which images have at least one track observation. Each
+/// cluster is triangulated at most once, however many targets it reaches.
 /// `max_residual_px` is the self-consistency threshold: a triangulated cluster
-/// with a non-target member farther than this from its reprojection gives no
-/// pair.
+/// with a member farther than this from its reprojection gives no pair.
 pub(super) fn cluster_support(
     recon: &SfmrReconstruction,
     targets: &[usize],
     is_target: &[bool],
     posed_others: &[bool],
+    tracked: &[bool],
     matches: &MatchesData,
     max_residual_px: f64,
-) -> Result<ClusterSupport, ResectImageError> {
+) -> Result<HashMap<usize, TargetClusters>, ResectImageError> {
     let clusters = matches.clusters.as_ref().ok_or_else(|| {
         ResectImageError::Clusters("the .matches file has no clusters section".to_string())
     })?;
@@ -128,19 +133,19 @@ pub(super) fn cluster_support(
         .map(|name| by_name.get(&normalize(name)).copied())
         .collect();
 
-    let id_base = recon.point_set.points.len();
     let mut targets_out: HashMap<usize, TargetClusters> = targets
         .iter()
         .map(|&t| (t, TargetClusters::default()))
         .collect();
-    // Per cluster that passed the member rules for some target: its
-    // non-target members, and which targets it answers with which pixel.
+    // Per cluster that passed the member rules for some target: its members in
+    // tracked non-target images, and which targets it answers with which pixel.
     let mut candidates: Vec<(Sightings, Sightings)> = Vec::new();
 
     let starts = &clusters.cluster_starts;
     for c in 0..starts.len().saturating_sub(1) {
         let mut in_targets: Sightings = Vec::new();
         let mut others: Sightings = Vec::new();
+        let mut untracked_others: Sightings = Vec::new();
         for m in starts[c] as usize..starts[c + 1] as usize {
             if !is_kept(patches.member_status[m]) {
                 continue;
@@ -156,15 +161,18 @@ pub(super) fn cluster_support(
             if is_target[image] {
                 in_targets.push((image, uv));
             } else if posed_others[image] {
-                others.push((image, uv));
+                if tracked[image] {
+                    others.push((image, uv));
+                } else {
+                    untracked_others.push((image, uv));
+                }
             }
         }
         if in_targets.is_empty() {
             continue;
         }
-        let mut other_images: Vec<usize> = others.iter().map(|&(image, _)| image).collect();
-        other_images.sort_unstable();
-        other_images.dedup();
+        let tracked_images = distinct_images(&others);
+        let posed_images = tracked_images + distinct_images(&untracked_others);
 
         let mut answers: Sightings = Vec::new();
         let mut seen: Vec<usize> = in_targets.iter().map(|&(image, _)| image).collect();
@@ -175,8 +183,12 @@ pub(super) fn cluster_support(
             counts.considered += 1;
             let mut mine = in_targets.iter().filter(|&&(image, _)| image == t);
             let first = mine.next().expect("the target has a member");
-            if mine.next().is_some() || other_images.len() < 2 {
+            if mine.next().is_some() || posed_images < 2 {
                 counts.skipped += 1;
+                continue;
+            }
+            if tracked_images < 2 {
+                counts.untracked += 1;
                 continue;
             }
             answers.push((t, first.1));
@@ -186,12 +198,11 @@ pub(super) fn cluster_support(
         }
     }
 
-    // One triangulation per candidate, at the non-target images' stored poses.
+    // One triangulation per candidate, at the tracked images' stored poses.
     let groups: Vec<Sightings> = candidates.iter().map(|c| c.0.clone()).collect();
     let no_replacement: Vec<Option<Pose>> = vec![None; recon.image_table.images.len()];
     let placed = triangulate_groups(recon, &groups, &no_replacement);
 
-    let mut members: Vec<Sightings> = Vec::new();
     for ((others, answers), position) in candidates.into_iter().zip(placed) {
         let Some(world) = position else {
             for (t, _) in answers {
@@ -205,21 +216,15 @@ pub(super) fn cluster_support(
             }
             continue;
         }
-        let id = id_base + members.len();
-        members.push(others);
         for (t, uv) in answers {
             targets_out
                 .get_mut(&t)
                 .expect("a target")
                 .pairs
-                .push((id, uv, world));
+                .push((uv, world));
         }
     }
-    Ok(ClusterSupport {
-        id_base,
-        members,
-        targets: targets_out,
-    })
+    Ok(targets_out)
 }
 
 /// The largest distance, in pixels, between a member of `sightings` and where
