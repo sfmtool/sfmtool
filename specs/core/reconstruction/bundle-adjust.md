@@ -116,8 +116,8 @@ reason, so a caller offering the release as a choice can grey the choice unless
 every camera the posed images use passes, instead of taking it and refusing.
 
 **The report is per camera.** Each camera in the solve has its own focal, so
-the single focal fields a one-camera report would carry become one
-`CameraAdjustment` per camera. Per-camera residual medians are not in it: the
+the report carries one `CameraAdjustment` per camera rather than one focal for
+the whole solve. Per-camera residual medians are not in it: the
 overall medians are the ones a caller reports in one line, and a caller wanting
 more runs the kernel.
 

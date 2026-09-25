@@ -344,11 +344,11 @@ The reduced system has one lens block per camera, then the poses:
 
 Camera `j`'s block has a focal slot, a `k1` slot and `N_j` spline slots, where
 `N_j` is the length of its spline when its spline is released and `0`
-otherwise. Its width is `Σ_j (2 + N_j) + 6·n_im`. An observation of image `i`
+otherwise. The system's width is `Σ_j (2 + N_j) + 6·n_im`. An observation of image `i`
 writes its lens columns into the block of camera `image_camera[i]` and into no
 other camera's block, so two cameras' lens parameters couple only through the
-poses and points they both observe. With a handful of cameras and a few hundred
-images the dense solve is unchanged in practice.
+poses and points they both observe. A few cameras add a few slots beside the
+`6·n_im` pose slots, so the dense solve costs what it does with one.
 
 The per-observation camera block keeps its fixed width. The spline
 instantiation (`2 + 4 + 6` columns) is used whenever any camera releases a
@@ -388,10 +388,11 @@ that camera's focal as it is, which is the single-camera rule.
 
 ### Parity
 
-With one camera and every image on it, the kernel is the single-camera kernel,
-bit for bit, on every output: poses, points, residual norms, representation and
-the returned camera. The layout above reduces to `[f, k1, c₀..c_{N−1} | 6·n_im]`
-and every per-camera read reads the one camera.
+With one camera and every image on it, the layout above reduces to
+`[f, k1, c₀..c_{N−1} | 6·n_im]` and every per-camera read reads that camera, so
+the solve is the one the sections before "Several cameras" describe, bit for bit
+on every output: poses, points, residual norms, representation and the returned
+camera.
 
 ## Bindings
 
