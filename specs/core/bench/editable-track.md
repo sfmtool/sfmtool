@@ -886,12 +886,54 @@ the fit is the classification's, applied to the frame the fit ran against:
 | Was | Is | The frame |
 |-----|----|-----------|
 | bearing | bearing | the refined direction, the tangent frame re-pinned on it, at the angular half-extents it had |
-| bearing | place | the angular half-extents become world ones at the placement distance from the camera-cloud centroid, which is what keeps the patch the apparent size it had when a second sighting gives a bearing its depth |
-| place | bearing | the world half-extents become angular by the distance the frame stood at, the rescale `classify_points_at_infinity` applies to a demoted point, and the frame is re-expressed as the tangent one |
+| bearing | place | the axes are kept, and the half-extents become the world ones that keep the patch the size it looked as a bearing in the images of the `in` observations |
+| place | bearing | the frame is re-expressed as the tangent one, and the half-extents become the angular ones that keep the patch the size it looked as a point in the images of the `in` observations |
 | place | place | the centre moves and nothing else does |
 
-All four keep the patch the apparent size it had, so the next round registers
-the square the person has been looking at.
+All four keep the patch the size it looked in the photographs the track is
+seen in, so the next round registers the square the person has been looking at.
+
+**The size is matched in the observing images, one scale for both axes.** The
+patch's size in one image is the geometric mean of its two projected
+half-axes, each half the pixel distance between the projections of two opposite
+edge midpoints, measured through that image's own camera model and pose -- so a
+fisheye's compression toward its rim is part of the number, and a bearing's
+edge midpoints project as directions. With `t_i` the old frame's size in the
+image of the `i`-th `in` observation and `c_i` the new frame's at a trial
+extent, a small patch's projected size is linear in its half-extent, so scaling
+the trial by `k` makes it `k c_i`, and the `k` that minimises
+`sum_i (ln(k c_i) - ln t_i)^2` is
+
+```text
+k = exp( mean_i ln(t_i / c_i) )
+```
+
+the geometric mean of the per-view ratios. The fit is in logarithms because the
+error is a ratio -- a patch twice too large in one image and half the size in
+another is equally wrong in both -- and so that an image seeing the patch far
+larger than the others, from a camera much closer to it, does not outweigh them
+by the size of its numbers. The trial extent is the old one multiplied (to a
+place) or divided (to a bearing) by the geometric mean distance from the `in`
+observations' cameras to the point, which is the exact answer for a camera
+looking straight at the patch; the fit then corrects for the obliquity and the
+lens across a factor near one, where the linearity holds best. Both directions
+are the same criterion, so a place taken to a bearing and back is the size it
+started at, up to that linearity and to the tangent frame's axes being the ones
+it is re-expressed on.
+
+Where no `in` image measures both frames -- nothing projects, or a size is not a
+positive finite number -- the trial extent stands, and where the observing
+distance is not defined either, the numbers are carried over unchanged.
+
+The reference is the `in` observations' images and not the camera cloud,
+although `materialize_points_at_infinity` gives a whole reconstruction's bearings
+their world size at the distance from the camera-cloud centroid. That rule has
+no particular photograph to answer to; the bench's does, because what the person
+judges is the patch in the photographs that see it. The two differ by the ratio
+of the two distances, which on a capture that walks away from the point is large:
+a point two metres from the three cameras that see it and eleven from the
+centroid comes out more than five times too large in every one of them, which
+on a fisheye runs it off the image circle and the localization then fails.
 
 **The cluster-to-track upgrade goes through the same criterion**, over the
 refined cluster positions: a capture that only ever stated a direction becomes a
@@ -2096,8 +2138,13 @@ rounds then walk sightings onto some other facade detail; a bearing's per-row ra
 angle agrees with the direction to a thousandth of a degree, where measuring it
 against a phantom point one unit from the origin reads tens of degrees; the same
 sightings plus the offset camera's promote to a point on the plane with the frame
-grown by the placement distance; the same eight sightings stored as a *finite*
-point demote to a bearing with the frame shrunk by the distance it stood at; a
+grown by about the observing distance; the same eight sightings stored as a
+*finite* point demote to a bearing with the frame shrunk by about the distance it
+stood at; on a capture whose camera cloud is spread wide while the three cameras
+that see the point stand close to it, a bearing placed at the point looks within
+3% of its old size in each of those three images, a point taken to a bearing and
+back looks within 1% of its old size, and with nothing to measure in the extents
+fall back to the observing distance and then to the numbers they had; a
 sighting moved four pixels off with the bar at two keeps its seed, carries
 `walked_px` and is still scored there while the other seven move; a bearing taken
 down to the cluster stage and back up comes back a bearing at the size it was and

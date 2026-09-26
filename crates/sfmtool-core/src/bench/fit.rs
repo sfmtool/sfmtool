@@ -441,75 +441,169 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     Ok(())
 }
 
-/// The distance an angular patch extent is multiplied by to become a world one
-/// at `position`: the distance from the camera-cloud centroid, which is the
-/// reference `SfmrReconstruction::materialize_points_at_infinity` measures its
-/// own placement from.
-fn placement_scale(position: &Point3<f64>, images: &[ProjectedImage<'_>]) -> f64 {
-    let mut centroid = Vector3::zeros();
-    for view in images {
-        centroid += view.cam_from_world.inverse_translation_origin().coords;
-    }
-    if !images.is_empty() {
-        centroid /= images.len() as f64;
-    }
-    (position.coords - centroid).norm()
+/// How large `frame` looks in `view`, in source-image px: the geometric mean of
+/// its two projected half-axes, each half the pixel distance between the
+/// projections of the patch's two opposite edge midpoints.
+///
+/// Measured through the view's own camera model, so a fisheye's compression
+/// toward the rim of its image circle is in the number. The edge midpoints are
+/// homogeneous with the frame's own `w`, so a bearing's project as directions.
+/// `None` where one of them does not project or the size is not a positive
+/// finite number.
+fn projected_size_px(frame: &OrientedPatch, view: &ProjectedImage<'_>) -> Option<f64> {
+    let project = |s: f64, t: f64| -> Option<[f64; 2]> {
+        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let cam = view.cam_from_world.transform_point_homogeneous(xyz, w);
+        let (x, y) = view.camera.ray_to_pixel([cam.x, cam.y, cam.z])?;
+        Some([x, y])
+    };
+    let half_axis = |a: [f64; 2], b: [f64; 2]| 0.5 * (a[0] - b[0]).hypot(a[1] - b[1]);
+    let u = half_axis(project(1.0, 0.0)?, project(-1.0, 0.0)?);
+    let v = half_axis(project(0.0, 1.0)?, project(0.0, -1.0)?);
+    let size = (u * v).sqrt();
+    (size.is_finite() && size > 0.0).then_some(size)
 }
 
-/// The patch `classification` says the track now stands on, built from the one
-/// it was fitted against.
+/// The factor `candidate`'s half-extents are multiplied by so that it looks the
+/// size `target` looks in the views `in_images` names, or `None` when no view
+/// measures both.
 ///
-/// Four cases, and all four keep the patch the apparent size it had:
+/// With `t_i` the target's projected size in view `i` and `c_i` the
+/// candidate's ([`projected_size_px`]), a small patch's projected size is
+/// linear in its half-extent, so the scaled candidate measures `k c_i`, and the
+/// `k` that minimises `sum_i (ln(k c_i) - ln t_i)^2` is
+/// `exp(mean_i ln(t_i / c_i))`: the geometric mean of the per-view ratios. The
+/// fit is in logarithms because the error is a ratio -- a view where the patch
+/// comes out twice too large and one where it comes out half the size are
+/// equally wrong -- and so that a view which sees the patch much larger than the
+/// others, from a camera much closer to it, does not outvote them by the size
+/// of its numbers.
+fn size_matching_factor(
+    target: &OrientedPatch,
+    candidate: &OrientedPatch,
+    images: &[ProjectedImage<'_>],
+    in_images: &[usize],
+) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for view in in_images.iter().filter_map(|&i| images.get(i)) {
+        let (Some(t), Some(c)) = (
+            projected_size_px(target, view),
+            projected_size_px(candidate, view),
+        ) else {
+            continue;
+        };
+        sum += (t / c).ln();
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    let k = (sum / count as f64).exp();
+    (k.is_finite() && k > 0.0).then_some(k)
+}
+
+/// The geometric mean of the distances from the cameras of `in_images` to
+/// `position`, or `None` when none of them is a positive finite distance.
+///
+/// The distance at which an angular extent and a world one are the same size
+/// for a camera looking straight at the patch, so it is where the size match
+/// starts: [`size_matching_factor`]'s linearity then only has to hold across
+/// the small correction that is left, rather than across the whole distance
+/// from one unit to the patch.
+fn observing_distance(
+    position: &Point3<f64>,
+    images: &[ProjectedImage<'_>],
+    in_images: &[usize],
+) -> Option<f64> {
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for view in in_images.iter().filter_map(|&i| images.get(i)) {
+        let d = (position - view.cam_from_world.inverse_translation_origin()).norm();
+        if d.is_finite() && d > 0.0 {
+            sum += d.ln();
+            count += 1;
+        }
+    }
+    (count > 0).then(|| (sum / count as f64).exp())
+}
+
+/// `half_extent` multiplied by `by` on both axes.
+fn scaled_extent(half_extent: [f64; 2], by: f64) -> [f64; 2] {
+    [half_extent[0] * by, half_extent[1] * by]
+}
+
+/// The patch the fit's classification says the track now stands on --
+/// `coordinate`, a place or a bearing as `at_infinity` says -- built from the
+/// one it was fitted against.
+///
+/// Four cases:
 ///
 /// - **Bearing to bearing.** The direction moves to the refined one and the
 ///   tangent frame is re-pinned on it, at the half-extents it already had, which
 ///   are angular.
-/// - **Bearing to point.** The angular half-extents become world ones at the
-///   placement distance, which is what keeps the patch the apparent size it had
-///   when a second sighting gives a bearing its depth, measured from the
-///   reference `SfmrReconstruction::materialize_points_at_infinity` measures its
-///   own placement from: the camera-cloud centroid ([`placement_scale`]).
-/// - **Point to bearing.** The world half-extents become angular by dividing by
-///   the distance the frame stood at, which is the rescale
-///   `classify_points_at_infinity` applies to a demoted point, and the frame is
-///   re-expressed as the tangent one the format states for a `w = 0` row.
+/// - **Bearing to point.** The frame keeps its axes and takes the world
+///   half-extents that make the patch look, in each image `in_images` names, as
+///   large as the bearing did there, as nearly as one scale can
+///   ([`size_matching_factor`]).
+/// - **Point to bearing.** The frame is re-expressed as the tangent one the
+///   format states for a `w = 0` row, and takes the angular half-extents that
+///   best keep the size the point's patch had in those images, by the same
+///   criterion. One criterion for both directions is what makes a round trip
+///   keep the size.
 /// - **Point to point.** The centre moves and nothing else does.
-fn placed_frame(
+///
+/// The sizes are those in the `in` observations' images because the patch in
+/// those images is what the person judges and what the next round registers.
+/// The distance to the camera-cloud centroid, which
+/// `SfmrReconstruction::materialize_points_at_infinity` places a whole
+/// reconstruction's bearings by, is not a size in any photograph: a point two
+/// units from the three cameras that see it and eleven from the centroid would
+/// come out five times too large in every one of them.
+///
+/// Where no `in` view measures both patches -- none projects, or a size is not
+/// finite -- the half-extents are the ones a camera at the observing cameras'
+/// geometric mean distance ([`observing_distance`]), looking straight at the
+/// patch, would see at the same size; and where that distance is not defined
+/// either, the numbers are carried over unchanged.
+pub(super) fn placed_frame(
     frame: &OrientedPatch,
-    classification: &TrackClassification,
+    coordinate: Point3<f64>,
+    at_infinity: bool,
     images: &[ProjectedImage<'_>],
+    in_images: &[usize],
 ) -> OrientedPatch {
-    let coordinate = classification.coordinate;
-    match (frame.w == 0.0, classification.at_infinity) {
+    match (frame.w == 0.0, at_infinity) {
         (true, true) => {
             OrientedPatch::from_infinity_direction(coordinate, frame.v_axis, frame.half_extent)
         }
         (true, false) => {
-            let scale = placement_scale(&coordinate, images);
-            let scale = if scale.is_finite() && scale > 0.0 {
-                scale
-            } else {
-                1.0
-            };
-            OrientedPatch::new(
+            let start = observing_distance(&coordinate, images, in_images).unwrap_or(1.0);
+            let trial = OrientedPatch::new(
                 coordinate,
                 frame.u_axis,
                 frame.v_axis,
-                [frame.half_extent[0] * scale, frame.half_extent[1] * scale],
-            )
+                scaled_extent(frame.half_extent, start),
+            );
+            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            OrientedPatch {
+                half_extent: scaled_extent(trial.half_extent, k),
+                ..trial
+            }
         }
         (false, true) => {
-            let distance = placement_scale(&frame.center, images);
-            let inv = if distance.is_finite() && distance > 0.0 {
-                1.0 / distance
-            } else {
-                1.0
-            };
-            OrientedPatch::from_infinity_direction(
+            let start = observing_distance(&frame.center, images, in_images)
+                .map_or(1.0, |distance| 1.0 / distance);
+            let trial = OrientedPatch::from_infinity_direction(
                 coordinate,
                 frame.v_axis,
-                [frame.half_extent[0] * inv, frame.half_extent[1] * inv],
-            )
+                scaled_extent(frame.half_extent, start),
+            );
+            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            OrientedPatch {
+                half_extent: scaled_extent(trial.half_extent, k),
+                ..trial
+            }
         }
         (false, false) => OrientedPatch {
             center: coordinate,
@@ -623,7 +717,17 @@ pub(super) fn fit_track(
     let position = classification.coordinate;
 
     // ── The frame at the coordinate the fit found, and the consensus it shows ──
-    let placed = placed_frame(frame, &classification, images);
+    let in_images: Vec<usize> = ins
+        .iter()
+        .map(|&i| next.observations[i].image as usize)
+        .collect();
+    let placed = placed_frame(
+        frame,
+        classification.coordinate,
+        classification.at_infinity,
+        images,
+        &in_images,
+    );
     let (bitmap, color) = {
         let mut phase = progress.phase("fuse");
         let fused = fuse_bitmap(&next, edited, images, &placed, &ins, options);

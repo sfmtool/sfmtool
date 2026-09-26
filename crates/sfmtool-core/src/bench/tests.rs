@@ -32,7 +32,7 @@ use crate::reconstruction::SfmrReconstruction;
 
 use scene::{
     edited as edited_fixture, fixture_of, fixture_with_columns, with_columns, Scene, IMG_H, IMG_W,
-    WORLD,
+    PLANE_Z, WORLD,
 };
 
 use super::*;
@@ -4484,12 +4484,13 @@ fn a_bearing_given_a_sighting_with_real_baseline_becomes_a_point() {
     let after = placement_of(&fitted);
     assert_eq!(after.w, 1.0, "a promotion writes a place");
     assert_eq!(after.center, call.coordinate);
-    // The angular extents became world ones at the placement distance, so the
-    // patch is the apparent size it was.
+    // The angular extents became world ones that keep the patch the size it
+    // looked in the images that see it, which from cameras about FAR_Z away
+    // is a factor of about FAR_Z.
     let grew = after.half_extent[0] / before.half_extent[0];
     assert!(
         (grew / FAR_Z - 1.0).abs() < 0.1,
-        "the frame grew by {grew} where the placement distance is about {FAR_Z}"
+        "the frame grew by {grew} where the observing cameras are about {FAR_Z} away"
     );
 }
 
@@ -4520,7 +4521,9 @@ fn a_finite_track_whose_rays_no_longer_resolve_a_depth_becomes_a_bearing() {
         "the bearing should be the direction the sightings agree on, it is {}",
         after.center
     );
-    // The world extents became angular ones by the distance the frame stood at.
+    // The world extents became the angular ones that keep the size the patch
+    // looked in the images that see it, a factor of about the distance the
+    // frame stood at from them.
     let shrank = before.half_extent[0] / after.half_extent[0];
     assert!(
         (shrank / FAR_Z - 1.0).abs() < 0.1,
@@ -4530,6 +4533,144 @@ fn a_finite_track_whose_rays_no_longer_resolve_a_depth_becomes_a_bearing() {
         fitted.track().expect("the track stage").position,
         Some(after.center)
     );
+}
+
+/// The images the size tests call `in`: three cameras about two units from the
+/// point, the way the Kerry Park capture's three observing cameras were.
+const NEAR_IN_VIEWS: [usize; 3] = [0, 1, 2];
+
+/// A capture whose camera cloud is spread wide while the three cameras that see
+/// the point stand close to it, so the cloud's centroid is several times further
+/// from the point than they are.
+fn spread_scene() -> Scene {
+    Scene::from_centers(
+        &[
+            [-0.4, 0.0, 0.0],
+            [0.4, 0.1, 0.0],
+            [0.0, -0.4, 0.0],
+            [40.0, 40.0, -30.0],
+            [-40.0, 40.0, -30.0],
+            [40.0, -40.0, -30.0],
+            [-40.0, -40.0, -30.0],
+        ],
+        PLANE_Z,
+    )
+}
+
+/// The point the size tests place, two units in front of the near cameras.
+fn spread_point() -> Point3<f64> {
+    Point3::new(0.0, 0.0, 2.0)
+}
+
+/// How large `frame` looks in image `i` of `scene`, in px: the geometric mean
+/// of its two projected half-axes, read off the projections of its edge
+/// midpoints.
+fn looks_px(scene: &Scene, i: usize, frame: &OrientedPatch) -> f64 {
+    let at = |s: f64, t: f64| {
+        let (xyz, w) = frame.corner_homogeneous(s, t);
+        scene.project_homogeneous(i, Point3::from(xyz), w)
+    };
+    let half = |a: [f64; 2], b: [f64; 2]| 0.5 * (a[0] - b[0]).hypot(a[1] - b[1]);
+    (half(at(1.0, 0.0), at(-1.0, 0.0)) * half(at(0.0, 1.0), at(0.0, -1.0))).sqrt()
+}
+
+/// The size a finite point's patch is given is the one it looked as a bearing
+/// in the images that see it, not the one the camera cloud's centroid would
+/// scale it to.
+#[test]
+fn a_bearing_placed_at_a_depth_keeps_its_size_in_the_images_that_see_it() {
+    let scene = spread_scene();
+    let views = scene.views();
+    let point = spread_point();
+
+    // The fixture has to be one the old rule got wrong: the centroid is several
+    // times further from the point than the cameras that see it.
+    let centroid = (0..scene.len())
+        .map(|i| views[i].cam_from_world.inverse_translation_origin().coords)
+        .sum::<Vector3<f64>>()
+        / scene.len() as f64;
+    let near = views[0].cam_from_world.inverse_translation_origin();
+    assert!((point.coords - centroid).norm() > 5.0 * (point - near).norm());
+
+    let direction = Point3::from(Vector3::new(0.05, -0.03, 1.0).normalize());
+    let bearing = OrientedPatch::from_infinity_direction(direction, Vector3::y(), [0.03, 0.02]);
+    let placed = super::fit::placed_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
+
+    assert_eq!(placed.w, 1.0);
+    assert_eq!(placed.center, point);
+    assert_eq!(placed.u_axis, bearing.u_axis, "the axes are kept");
+    assert_eq!(placed.v_axis, bearing.v_axis, "the axes are kept");
+    assert!(
+        (placed.half_extent[0] / placed.half_extent[1] - 1.5).abs() < 1e-12,
+        "one scale for both axes keeps the aspect"
+    );
+    for i in NEAR_IN_VIEWS {
+        let was = looks_px(&scene, i, &bearing);
+        let is = looks_px(&scene, i, &placed);
+        assert!(
+            (is / was - 1.0).abs() < 0.03,
+            "image {i}: the bearing looked {was:.2} px and the point looks {is:.2} px"
+        );
+    }
+}
+
+/// A point turned into a bearing and back is the size it started at, and the
+/// bearing in between is the size the point was.
+#[test]
+fn a_point_turned_bearing_and_back_keeps_its_size() {
+    let scene = spread_scene();
+    let views = scene.views();
+    let point = spread_point();
+    let direction = Point3::from(Vector3::new(0.05, -0.03, 1.0).normalize());
+    let finite =
+        OrientedPatch::from_center_normal(point, -direction.coords, Vector3::y(), [0.05, 0.05]);
+
+    let bearing = super::fit::placed_frame(&finite, direction, true, &views, &NEAR_IN_VIEWS);
+    assert_eq!(bearing.w, 0.0);
+    assert_eq!(bearing.center, direction);
+    let back = super::fit::placed_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
+
+    for i in NEAR_IN_VIEWS {
+        let was = looks_px(&scene, i, &finite);
+        let far = looks_px(&scene, i, &bearing);
+        let is = looks_px(&scene, i, &back);
+        assert!(
+            (far / was - 1.0).abs() < 0.03,
+            "image {i}: the point looked {was:.2} px and the bearing looks {far:.2} px"
+        );
+        assert!(
+            (is / was - 1.0).abs() < 0.01,
+            "image {i}: the point looked {was:.2} px and looks {is:.2} px after the round trip"
+        );
+    }
+}
+
+/// With no `in` image to measure in, the extents fall back to the observing
+/// cameras' distance, and with none of those either they are carried over.
+#[test]
+fn a_placement_with_nothing_to_measure_falls_back_to_the_observing_distance() {
+    let scene = spread_scene();
+    let views = scene.views();
+    let point = spread_point();
+    let bearing = OrientedPatch::from_infinity_direction(
+        Point3::from(Vector3::z()),
+        Vector3::y(),
+        [0.03, 0.03],
+    );
+
+    // A bearing pointing away from every camera projects into none of them, so
+    // nothing measures it; the start is the one camera's distance to the point.
+    let behind = OrientedPatch::from_infinity_direction(
+        Point3::from(-Vector3::z()),
+        Vector3::y(),
+        [0.03, 0.03],
+    );
+    let placed = super::fit::placed_frame(&behind, point, false, &views, &[0]);
+    let distance = (point - views[0].cam_from_world.inverse_translation_origin()).norm();
+    assert!((placed.half_extent[0] / (0.03 * distance) - 1.0).abs() < 1e-12);
+
+    let carried = super::fit::placed_frame(&bearing, point, false, &views, &[]);
+    assert_eq!(carried.half_extent, bearing.half_extent);
 }
 
 #[test]
