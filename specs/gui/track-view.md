@@ -429,7 +429,7 @@ scroll under them.
 | Name | The image file name, shortened by a cut out of the **middle** so the directory and the file name both survive (`images/seatt…yard_13.jpg`); the full path on hover. A path with a directory above its parent keeps a leading `…/` for what was left out. |
 | Feat # | The feature index in the image's SIFT file, or the observation index for an embedded-keypoint reconstruction with no SIFT file. |
 | Size | The feature's two full extents in pixels (below); `N/A` when there is no shape. |
-| Error | The observation's reprojection error, `‖project(R_i P + t_i) - x_i‖`; `N/A` when undefined. A point at infinity has one too: its unit direction rotates into camera space without translating and projects like any homogeneous coordinate, so only a point or direction behind the camera is undefined. |
+| Error | The observation's reprojection error, `‖project(R_i P + t_i) - x_i‖`; `N/A` when undefined. A point at infinity has one too: its unit direction rotates into camera space without translating and projects like any homogeneous coordinate. The projection is of the ray, through the camera's own model, so a fisheye observation more than 90° off the axis has an error like any other; it is undefined only where the model has no pixel for the ray, which for a perspective model means a point or direction behind the camera. |
 | Angle | The angle at the camera centre between the observation ray and the direction to the point, in degrees; for a point at infinity, to its direction. |
 | Feature (x, y) | The feature position in image pixels. |
 

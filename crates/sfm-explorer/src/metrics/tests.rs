@@ -69,6 +69,37 @@ fn observation_metrics_of_a_backward_bearing_are_undefined() {
 }
 
 #[test]
+fn observation_metrics_are_defined_past_90_degrees_in_a_fisheye() {
+    // A fisheye sees rays with z >= 0 in camera space. At 100° off the axis
+    // the equidistant radius is f·θ, so a keypoint there reprojects exactly.
+    let camera = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let theta = 100f64.to_radians();
+    let direction = [theta.sin(), 0.0, -theta.cos()];
+    let keypoint = [(240.0 + 130.0 * theta) as f32, 240.0];
+    for point in [
+        bearing(direction),
+        Point3D {
+            position: Point3::new(3.0 * direction[0], 0.0, 3.0 * direction[2]),
+            w: 1.0,
+            ..bearing(direction)
+        },
+    ] {
+        let (err, angle) =
+            compute_observation_metrics(&point, &image_at([0.0, 0.0, 0.0]), &camera, keypoint);
+        assert!(err.abs() < 1e-3, "reproj error {err}");
+        assert!(angle.abs() < 1e-3, "ray angle {angle}");
+    }
+}
+
+#[test]
 fn max_pairwise_angle_finds_the_widest_pair() {
     // Three rays: 0°, 45° and 90° from +X. The widest pair is the outer two.
     let s = std::f64::consts::FRAC_1_SQRT_2;

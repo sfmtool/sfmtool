@@ -26,8 +26,11 @@ mod tests;
 ///
 /// Returns `(reproj_error_px, ray_angle_deg)`. Both are defined for a point at
 /// infinity too: its stored direction rotates into camera space without
-/// translating and then projects like any homogeneous coordinate. If the point
-/// (or direction) is behind the camera, returns `(NaN, NaN)`.
+/// translating and then projects like any homogeneous coordinate. The point is
+/// projected as a ray through the camera's own model, so a fisheye observation
+/// more than 90° off the axis has an error like any other. If the camera model
+/// has no pixel for the ray (a perspective model and a point behind the camera,
+/// or a ray past a model's valid domain), returns `(NaN, NaN)`.
 ///
 /// Crate-visible because the MCP surface reports the same number in a point
 /// track (`mcp::read::get_point`), and an agent told one figure while the human
@@ -49,19 +52,16 @@ pub(crate) fn compute_observation_metrics(
         r * point.position.coords + image.translation_xyz
     };
 
-    // Canonical cameras look down -Z, so in-front points have z < 0 and depth
-    // is -z. Point behind camera — return NaN to signal invalid.
-    let depth = -p_cam.z;
-    if depth <= 0.0 {
+    // Project the ray, not the image-plane point `p / (-z)`: that division is
+    // only meaningful in front of the camera, and a fisheye sees past 90° off
+    // the axis, where `z >= 0`. The model decides which rays have a pixel.
+    let Some(point_dir) = p_cam.try_normalize(0.0) else {
         return (f32::NAN, f32::NAN);
-    }
-
-    // Project to image plane (undistorted normalized canonical coords, p/(-z))
-    let x = p_cam.x / depth;
-    let y = p_cam.y / depth;
-
-    // Apply distortion + intrinsics to get pixel coordinates
-    let (u_proj, v_proj) = camera.project(x, y);
+    };
+    let Some((u_proj, v_proj)) = camera.ray_to_pixel([point_dir.x, point_dir.y, point_dir.z])
+    else {
+        return (f32::NAN, f32::NAN);
+    };
 
     // Reprojection error in pixels
     let du = u_proj - feature_xy[0] as f64;
@@ -72,8 +72,6 @@ pub(crate) fn compute_observation_metrics(
     // Both computed in camera space.
     let obs_ray = camera.pixel_to_ray(feature_xy[0] as f64, feature_xy[1] as f64);
     let obs_ray = Vector3::new(obs_ray[0], obs_ray[1], obs_ray[2]);
-
-    let point_dir = p_cam.normalize();
 
     let dot = obs_ray.dot(&point_dir).clamp(-1.0, 1.0);
     let ray_angle_deg = dot.acos().to_degrees() as f32;

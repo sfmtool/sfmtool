@@ -615,8 +615,10 @@ Both can be absent, and say so rather than inventing a number.
 computed — the source reads the image's `.sift` file, which an
 `embedded_patches` reconstruction does not have, and which a `sift_files` one
 whose workspace has moved cannot find. A track observation's `reproj_error` is
-`null` where the point falls behind that camera, which the metric reports as
-`NaN` and JSON cannot carry.
+`null` where that camera's model has no pixel for the point's ray, which the
+metric reports as `NaN` and JSON cannot carry. For a perspective model that is
+a point behind the camera; a fisheye observation more than 90° off the axis has
+an error like any other.
 
 `params` is a name→value map rather than the model's positional parameter
 vector, because a positional vector is unreadable without also shipping the
