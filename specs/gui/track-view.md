@@ -766,9 +766,12 @@ entries in that panel's context menu, *Start cluster on the bench here* and
 the context menu"). *Start cluster* puts the cluster on the bench active and
 raises Track View on it (`AppState::start_cluster_here`); its radius is the
 node's own default patch radius in that image (`AppState::default_patch_radius`),
-converted to the cluster stage's keypoint-frame units. *Add observation* greys
-while nothing is active, with *"No track is being edited: tick Edit in Track
-View, or double-click a Bench item in the Scene tree."*
+converted to the cluster stage's keypoint-frame units. *Add observation* adds a
+candidate at the clicked pixel; on a track-stage track that pixel is its
+keypoint, so the row reads from it and, once turned `in`, commits at it without a
+*Fit* first, while on a cluster it is a seed. It greys while nothing is active,
+with *"No track is being edited: tick Edit in Track View, or double-click a Bench
+item in the Scene tree."*
 
 ---
 

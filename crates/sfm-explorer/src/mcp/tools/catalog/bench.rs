@@ -144,7 +144,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Add one candidate observation of a bench track, in a camera image, at \
                           the place the seed names — a pixel, a pixel with a radius_px or an \
                           affine shape, or a .sift feature. It joins as a candidate and unpinned: \
-                          something proposed it and nobody has ruled on it. A second observation \
+                          something proposed it and nobody has ruled on it. On a track-stage \
+                          track the pixel is also its keypoint, so a reading measures it there \
+                          and, once it is turned in, a commit writes it without a fit. A second \
+                          observation \
                           in an image the track already sees is allowed and is measured like any \
                           other; what it cannot do is be turned in while the other is. The reply \
                           names the index it took.",

@@ -230,8 +230,9 @@ impl std::fmt::Display for Unmeasured {
 /// at zero.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TrackMeasurement {
-    /// Where the localizer put the observation, in that image's pixels. This is
-    /// the pixel a commit writes.
+    /// Where the observation sits, in that image's pixels: where the localizer
+    /// put it, or, until a fit moves it, the pixel it was added or placed at
+    /// by hand. This is the pixel a commit writes.
     ///
     /// An evaluation never writes it: it reads the track as it stands, and this
     /// pixel is the thing it reads.

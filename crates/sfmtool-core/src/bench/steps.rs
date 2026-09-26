@@ -676,6 +676,16 @@ pub struct AddObservationReport {
 /// reference with a seed, so a pixel gesture on a track that already has a
 /// scale needs no radius prompt and lands at that track's size.
 ///
+/// **At the track stage the pixel is also the observation's keypoint.** The
+/// track slot is written with a keypoint at the named pixel and nothing
+/// measured, which is what [`sight_observation`] writes for a sighting placed by
+/// hand. The pixel the person or the search named is then where the sighting
+/// is: an evaluation reads the observation there, and a commit can write it
+/// without a fit first. The cluster seed is written as well, at the same pixel
+/// and with the same shape, because the track stage keeps no shape of its own
+/// per observation and a later step reads this one: a descriptor search from
+/// the row warps it ([`search_descriptors`](super::search::search_descriptors)).
+///
 /// With no reference to copy the shape is the identity, which is one pixel to
 /// the keypoint-frame unit: a patch of `[-r, r]` **pixels** at the track's
 /// [`ClusterPayload::radius`]. That is the cluster stage's convention like any
@@ -703,13 +713,15 @@ pub fn add_observation(
         .or_else(|| reference_shape(track))
         .unwrap_or([[1.0, 0.0], [0.0, 1.0]]);
 
+    let mut observation = Observation::seeded(seed.image, seed.provenance, seed.pixel, shape);
+    if let Stage::Track(_) = track.stage {
+        observation.track = Some(TrackMeasurement {
+            keypoint: Some([seed.pixel[0] as f32, seed.pixel[1] as f32]),
+            ..TrackMeasurement::default()
+        });
+    }
     let mut next = track.clone();
-    next.observations.push(Observation::seeded(
-        seed.image,
-        seed.provenance,
-        seed.pixel,
-        shape,
-    ));
+    next.observations.push(observation);
     Ok((
         next,
         AddObservationReport {

@@ -93,18 +93,28 @@ fn geometry_search_adds_projected_candidate_without_moving_existing_rows() {
     assert_eq!(added.verdict, Verdict::Candidate);
     assert!(!added.pinned);
     assert_eq!(added.provenance, Provenance::Sweep);
+    let expected = scene.project(2, WORLD);
+    let measured = added
+        .track
+        .as_ref()
+        .expect("the track stage writes a keypoint");
+    assert_eq!(
+        measured.keypoint,
+        Some([expected[0] as f32, expected[1] as f32]),
+        "the projection is the candidate's keypoint"
+    );
     assert!(
-        added.track.is_none(),
+        measured.zncc.is_none(),
         "the candidate has not been evaluated"
     );
-    let expected = scene.project(2, WORLD);
+    // The keypoint is stored in `f32`, so the site agrees to its rounding.
     let site = added.site().expect("the projection seeds the candidate");
     assert!(
-        (site[0] - expected[0]).abs() < 1e-6,
+        (site[0] - expected[0]).abs() < 1e-4,
         "{site:?} vs {expected:?}"
     );
     assert!(
-        (site[1] - expected[1]).abs() < 1e-6,
+        (site[1] - expected[1]).abs() < 1e-4,
         "{site:?} vs {expected:?}"
     );
     let shape = added.shape().expect("the projected frame seeds a shape");
@@ -596,6 +606,74 @@ fn an_added_observation_joins_as_an_unruled_candidate() {
     assert_eq!(
         added.cluster.as_ref().expect("a seed").seed_position,
         [64.0, 64.0]
+    );
+}
+
+/// At the track stage the pixel a person adds is the sighting's keypoint, so
+/// the reading measures from it and a commit can write it without a fit.
+#[test]
+fn an_observation_added_at_the_track_stage_is_a_keypoint_a_commit_can_write() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let pixel = scene.project(2, WORLD);
+    let (track, report) = add_observation(
+        &track_of(&bench, &label),
+        &ObservationSeed::at_pixel(2, pixel),
+    )
+    .expect("a finite pixel");
+
+    let added = &track.observations[report.observation];
+    assert_eq!(added.verdict, Verdict::Candidate);
+    assert!(!added.pinned);
+    let measured = added.track.as_ref().expect("a track slot");
+    assert_eq!(
+        measured.keypoint,
+        Some([pixel[0] as f32, pixel[1] as f32]),
+        "the pixel is the keypoint"
+    );
+    assert_eq!(
+        measured,
+        &TrackMeasurement {
+            keypoint: measured.keypoint,
+            ..TrackMeasurement::default()
+        },
+        "nothing else is measured yet"
+    );
+    let seeded = added.cluster.as_ref().expect("a seed");
+    assert_eq!(seeded.seed_position, pixel);
+    assert_eq!(seeded.seed_shape, [[1.0, 0.0], [0.0, 1.0]]);
+
+    let (track, _) = set_verdict(&track, report.observation, Verdict::In).expect("image 2 is free");
+    let (next, committed) = commit(&edited, &track).expect("every in sighting has a keypoint");
+    assert_eq!(committed.observation_count, 3);
+    let written = next.point(committed.point).expect("just written");
+    let slot = written
+        .observations()
+        .iter()
+        .position(|o| o.image_index == 2)
+        .expect("the added image is written");
+    assert_eq!(
+        written.keypoint_xy(slot),
+        Some([pixel[0] as f32, pixel[1] as f32])
+    );
+}
+
+/// At the cluster stage a click is a seed and nothing more.
+#[test]
+fn an_observation_added_at_the_cluster_stage_is_a_seed_only() {
+    let (bench, created) =
+        create_cluster(&Bench::new(), &pixel_seed(0, [40.0, 40.0])).expect("a usable seed");
+    let (track, report) = add_observation(
+        &track_of(&bench, &created.label),
+        &ObservationSeed::at_pixel(1, [50.0, 60.0]),
+    )
+    .expect("a finite pixel");
+    let added = &track.observations[report.observation];
+    assert!(added.track.is_none(), "a cluster has no keypoints");
+    assert_eq!(
+        added.cluster.as_ref().expect("a seed").seed_position,
+        [50.0, 60.0]
     );
 }
 

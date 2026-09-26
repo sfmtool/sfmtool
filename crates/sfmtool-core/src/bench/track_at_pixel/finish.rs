@@ -105,8 +105,8 @@ fn max_projection_offset(track: &EditableTrack) -> f64 {
         .unwrap_or(f64::INFINITY)
 }
 
-/// Whether an `in` observation has no keypoint yet, which is the state of a
-/// view the geometry search added before a fit places it.
+/// Whether an `in` observation has no keypoint, which is the state of a view
+/// the moved patch no longer projects into.
 fn unplaced(track: &EditableTrack) -> bool {
     track
         .observations
@@ -161,22 +161,27 @@ fn anchor(
 /// reading.
 ///
 /// A round's fit is taken whatever the reading says when the track has an `in`
-/// view with no keypoint, because only a fit places one; otherwise it is taken
-/// only when the median ZNCC does not fall. The first anchor's refusal is the
-/// call's; a later round's refusal ends the rounds.
+/// view with no keypoint, because the fit gives it one, and in the first round
+/// when `unfitted` says the track holds `in` views no fit has localized yet: a
+/// geometry search's candidates, whose keypoints are the patch centre's
+/// projection rather than anything a correlation found. Otherwise a round's fit
+/// is taken only when the median ZNCC does not fall. The first anchor's refusal
+/// is the call's; a later round's refusal ends the rounds.
 pub(super) fn anchored_fit(
     ctx: &Ctx<'_>,
     track: &EditableTrack,
     q: usize,
     pixel: [f64; 2],
     refits: usize,
+    unfitted: bool,
 ) -> Result<EditableTrack, String> {
     let mut best = anchor(ctx, track, q, pixel)?;
-    for _ in 0..refits {
+    for round in 0..refits {
         let Ok(fitted) = fit_track(ctx, &best).and_then(|f| anchor(ctx, &f, q, pixel)) else {
             break;
         };
-        if !unplaced(&best) && median_zncc(&fitted) < median_zncc(&best) {
+        let forced = unplaced(&best) || (unfitted && round == 0);
+        if !forced && median_zncc(&fitted) < median_zncc(&best) {
             break;
         }
         best = fitted;
@@ -328,7 +333,7 @@ fn clean(
         if in_count(&track) < 2 {
             break;
         }
-        match anchored_fit(ctx, &track, q, pixel, opts.anchor_refits) {
+        match anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false) {
             Ok(next) => track = next,
             Err(_) => break,
         }
@@ -349,7 +354,7 @@ pub(super) fn finish(
     opts: &FinishOptions,
     stages: &mut Vec<StageRecord>,
 ) -> Result<EditableTrack, Refusal> {
-    let mut track = anchored_fit(ctx, &track, q, pixel, opts.anchor_refits)
+    let mut track = anchored_fit(ctx, &track, q, pixel, opts.anchor_refits, false)
         .map_err(|e| Refusal::new(RefusalStage::Anchor, e))?;
     track = thresholds(&track);
     stages.push(StageRecord::Anchor {
@@ -366,7 +371,7 @@ pub(super) fn finish(
         if let Some(normal) = normal {
             let before = median_zncc(&track);
             let tilted = shape_track(ctx, &track, q, Some(normal), None);
-            let record = anchored_fit(ctx, &tilted, q, pixel, opts.anchor_refits).map(|t| {
+            let record = anchored_fit(ctx, &tilted, q, pixel, opts.anchor_refits, false).map(|t| {
                 let t = thresholds(&t);
                 let after = median_zncc(&t);
                 let kept = after >= before - opts.normal_prior_tolerance;
@@ -400,7 +405,7 @@ pub(super) fn finish(
                 return Ok((None, found));
             }
             let grown = thresholds(&read(ctx, &grown)?);
-            let grown = anchored_fit(ctx, &grown, q, pixel, opts.anchor_refits)?;
+            let grown = anchored_fit(ctx, &grown, q, pixel, opts.anchor_refits, true)?;
             Ok((Some(grown), found))
         });
         match grown {

@@ -263,6 +263,13 @@ ellipses from, so a feature seeded here is the mark the person is looking at;
 its stored affine is already the cluster stage's own convention and is passed on
 as it stands.
 
+**At the track stage the added pixel is the observation's keypoint.** Core's
+`add_observation` writes it into the track slot as well as the seed, so a
+right-click Add, the wire's `add_bench_track_observation` and a search all leave
+a sighting that a reading measures where it was put and that, once `in`, a
+commit writes without a fit first. At the cluster stage the same gesture is a
+seed alone.
+
 **The three steps that name a pixel are invoked from the Image Detail context
 menu.** `start_bench_cluster` and `add_bench_observation` take a seed, and
 `start_create_track_at_pixel` takes the pixel itself; the viewer's one way to
@@ -747,13 +754,13 @@ a verdict or an evaluation still names the same observation. The template's
 samples and the consensus bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
 
-**`pixel` is where the observation sits, whatever said so**: the keypoint a
-reading wrote, else the refined cluster position, else the seed the step that
+**`pixel` is where the observation sits, whatever said so**: the keypoint the
+track stage carries, else the refined cluster position, else the seed the step that
 proposed it left. It is a field of its own rather than something a caller
 assembles out of the two measurement blocks, because that one answer is what
-every reader of a sighting wants and a candidate a descriptor search has just
-added has no keypoint at all -- an agent would otherwise have to know which slot
-to fall back to before it could look at one. It is `crate::bench::observation_site`'s
+every reader of a sighting wants, and a cluster's observations carry a seed and
+no keypoint while a track's carry a keypoint -- an agent would otherwise have to
+know which slot to fall back to before it could look at one. It is `crate::bench::observation_site`'s
 rule, so the number an agent reads here is the pixel the Image Detail panel
 marks, the place the Track View row click reveals, the centre of the tile that
 row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`

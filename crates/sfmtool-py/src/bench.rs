@@ -608,6 +608,10 @@ fn create_cluster(
 /// is scored like any other; what it cannot do is be turned ``in`` while the
 /// other is.
 ///
+/// At the track stage `pixel` is also the observation's keypoint, so an
+/// evaluation measures it there and, once it is ``in``, a commit writes it
+/// without a fit. At the cluster stage it is a seed alone.
+///
 /// `shape` is in the cluster stage's own convention (keypoint-frame units to
 /// pixels, over ``[-radius, radius]``) and defaults to the reference
 /// observation's own, so a pixel gesture on a track that already has a scale

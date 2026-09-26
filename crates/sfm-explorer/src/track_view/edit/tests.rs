@@ -335,11 +335,11 @@ fn every_row_draws_a_tile_at_either_stage() {
     );
 }
 
-/// A candidate a descriptor search has just added carries no keypoint -- only
-/// the seed the index's warp gave it -- and its tile is cut around **that**,
-/// which is the whole of what says whether the search found the right surface.
-/// Before this, the row drew the patch wherever the bare projection of the
-/// point happened to land in a photograph nothing had yet tied it to.
+/// A candidate a descriptor search has just added sits where the index's warp
+/// put it -- its keypoint and its seed are that pixel, and nothing has read it
+/// -- and its tile is cut around **that**, which is the whole of what says
+/// whether the search found the right surface, rather than wherever the bare
+/// projection of the point happens to land in the photograph.
 #[test]
 fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     use sfmtool_core::bench::Stage;
@@ -367,10 +367,15 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         row.provenance
     );
     assert!(
-        row.track.is_none(),
+        row.track.as_ref().is_none_or(|m| m.zncc.is_none()),
         "the candidate arrived already read, so this proves nothing"
     );
     let seed = row.cluster.as_ref().expect("a searched seed").seed_position;
+    let site = row.site().expect("the candidate sits somewhere");
+    assert!(
+        (site[0] - seed[0]).abs() < 1e-3 && (site[1] - seed[1]).abs() < 1e-3,
+        "the candidate sits at {site:?}, not at the seed {seed:?}"
+    );
     let image = ImageRef::new(id, row.image as usize);
     let src = state
         .full_res_cache
@@ -397,7 +402,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         &frame,
         camera,
         &cam_from_world,
-        Some(seed),
+        Some(site),
         src.level(0),
     );
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");

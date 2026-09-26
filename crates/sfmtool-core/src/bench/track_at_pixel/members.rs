@@ -95,7 +95,7 @@ fn fit_sightings(
     refits: usize,
 ) -> Result<EditableTrack, String> {
     let track = track_from_sightings(ctx, image, pixel, radius_px, sightings)?;
-    anchored_fit(ctx, &track, 0, pixel, refits)
+    anchored_fit(ctx, &track, 0, pixel, refits, false)
 }
 
 // ---- Clusters ------------------------------------------------------------
@@ -560,7 +560,7 @@ pub(super) fn sweep(
         }
         let fitted = track_from_sightings(ctx, image, pixel, h.half_px, &sightings).and_then(|t| {
             let shaped = shape_track(ctx, &t, 0, Some(h.normal), Some(h.half));
-            anchored_fit(ctx, &shaped, 0, pixel, options.finish.anchor_refits)
+            anchored_fit(ctx, &shaped, 0, pixel, options.finish.anchor_refits, false)
         });
         best.offer(fitted, &mut record);
         tried.push(record);

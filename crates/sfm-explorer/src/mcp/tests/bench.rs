@@ -1108,11 +1108,11 @@ fn the_shape_tools_size_a_cluster_sighting_and_refuse_a_track_stage_track() {
 /// Every observation says where it sits, whether or not anything has read it.
 ///
 /// A candidate added to a track-stage track -- by the wire here, by a
-/// descriptor search in the panel -- carries a seed and no keypoint until a
-/// reading is run, and `pixel` is that one answer: the keypoint where there is
-/// one, the seed where there is not. So an agent can look at a fresh candidate
-/// without first evaluating the track, and it is looking at the place the
-/// panel's own mark and tile are drawn at
+/// descriptor search in the panel -- carries its pixel as its keypoint and
+/// nothing measured until a reading is run, and `pixel` is that one answer: the
+/// keypoint where there is one, the seed where there is not. So an agent can
+/// look at a fresh candidate without first evaluating the track, and it is
+/// looking at the place the panel's own mark and tile are drawn at
 /// ([`crate::bench::observation_site`]).
 #[test]
 fn every_observation_reports_where_it_sits_read_or_not() {
@@ -1137,7 +1137,16 @@ fn every_observation_reports_where_it_sits_read_or_not() {
         json!({ "reconstruction_label": "run_a" }),
     );
     let rows = track["observations"].as_array().expect("the observations");
-    assert_eq!(rows[candidate]["track"], Value::Null, "{track}");
+    assert_eq!(
+        rows[candidate]["track"]["keypoint"],
+        json!([130.5, 95.25]),
+        "the added pixel is the candidate's keypoint: {track}"
+    );
+    assert_eq!(
+        rows[candidate]["track"]["zncc"],
+        Value::Null,
+        "nothing has read the candidate yet: {track}"
+    );
     assert_eq!(
         rows[candidate]["pixel"],
         json!([130.5, 95.25]),
@@ -1149,6 +1158,53 @@ fn every_observation_reports_where_it_sits_read_or_not() {
         rows[0]["pixel"], rows[0]["track"]["keypoint"],
         "a read observation reports something other than its keypoint: {track}"
     );
+}
+
+/// A pixel added to a track-stage track is a keypoint a commit can write: turned
+/// `in`, it commits with no fit in between, at the pixel the call named.
+#[test]
+fn an_added_observation_commits_at_its_pixel_without_a_fit() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let added = call(
+        &mut state,
+        &mut viewer,
+        "add_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 3,
+            "pixel": [130.5, 95.25],
+        }),
+    );
+    let candidate = added["observation"].as_u64().expect("the index it took");
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": candidate,
+            "verdict": "in",
+        }),
+    );
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let index = committed["point"]["index"]
+        .as_u64()
+        .expect("the commit names the point it wrote") as u32;
+
+    let edited = state.scene[0].edited();
+    let written = edited.point(index).expect("the committed point");
+    let slot = written
+        .observations()
+        .iter()
+        .position(|o| o.image_index == 3)
+        .expect("the added image is written");
+    assert_eq!(written.keypoint_xy(slot), Some([130.5, 95.25]));
 }
 
 /// A seed carrying an affine shape puts that shape on the observation, which is

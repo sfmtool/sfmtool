@@ -161,7 +161,7 @@ write, and one writes a file.
 | `rename_bench_item` | write | Give one item a label of your own |
 | `discard_bench_item` | write | Take one item off the bench |
 | `duplicate_bench_item` | write | Put a copy of one item on the bench beside it |
-| `add_bench_track_observation` | write | Add a candidate observation of a bench track, in one camera image |
+| `add_bench_track_observation` | write | Add a candidate observation of a bench track, in one camera image; on a track-stage track the pixel is its keypoint, so it commits without a fit |
 | `translate_bench_patch` | write | Move the patch, on its own axes or to a pixel; every sighting follows |
 | `sight_bench_observation` | write | Put one observation's own sighting at a pixel, by hand; the Image Detail dot with Track View's Lock cleared |
 | `shape_bench_observation` | write | Give one cluster sighting its affine shape outright |

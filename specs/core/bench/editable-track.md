@@ -599,10 +599,13 @@ one track take the track alone, and the caller installs the result with
 
 **The measurement slots are per stage and optional.** A track put on the bench
 from a point has a keypoint and no cluster seed; one started from a pixel has a
-seed and no keypoint. Two slots, each `Option`, say which of those a given
-sighting is without a third state to keep coherent, and they say it per
+seed and no keypoint; an observation added to a track-stage track has both, the
+keypoint where it sits and a seed carrying the shape it was added with. Two
+slots, each `Option`, say which of those a given sighting is, and they say it per
 observation rather than per track, so a report computed against the track as it
-stood when a task began still applies when it finishes.
+stood when a task began still applies when it finishes. Where both are present
+the keypoint is where the sighting is: every reader that asks where an
+observation sits takes the keypoint first (`Observation::site`).
 
 **The verdict and the pin are separate fields.** `verdict` is what the person
 has decided and `pinned` is whether they decided it by hand. Without the second,
@@ -977,6 +980,19 @@ that track's size. With no reference to copy it is the identity, which is one
 pixel to the keypoint-frame unit: a patch of `[-radius, radius]` pixels, and
 what a track with nothing to say about its own scale is worth.
 
+**At the track stage the named pixel is also the observation's keypoint.** The
+track slot is written with a keypoint at that pixel and nothing measured, which
+is what `sight_observation` writes for a sighting placed by hand. The pixel a
+person clicked, or a search placed, is then where the sighting is: an evaluation
+measures from it, and once the observation is `in` a commit can write it without
+a fit first. An observation with no keypoint is one a commit refuses, so without
+this a person who had pointed at the sighting would have to run a correlation
+they did not ask for before the track could be written. The cluster seed is
+written too, at the same pixel and with the same shape, because the track stage
+keeps no shape of its own per observation and a descriptor search run from that
+row warps the one it carries. At the cluster stage the step writes the seed
+alone: a cluster has no keypoints.
+
 `set_verdict` sets one verdict **by hand** and pins it. `apply_thresholds`
 paints the proposed verdicts from the stored measurements onto the unpinned
 observations, and leaves a pinned one where it is. An observation nothing has
@@ -1332,8 +1348,8 @@ to the consensus, weighted towards the centre
 three-point model RANSAC drew. Both are the cluster stage's own convention (§ "The cluster
 stage's units"), which is what the next evaluation reads at either stage: at the
 cluster stage the refinement registers the seed, and at the track stage the
-candidate is a row the reading measures and the thresholds propose a verdict
-for. The step sets no verdict and moves nothing that was already on the track.
+candidate's pixel is also its keypoint (§ "Growing and judging") and it is a row
+the reading measures and the thresholds propose a verdict for. The step sets no verdict and moves nothing that was already on the track.
 
 **Where the search runs from** is one observation, named by index, and its pixel
 is the one everything that draws an observation uses: the track stage's keypoint,
@@ -1390,11 +1406,12 @@ reference mode: the row gesture chooses real source appearance without giving
 up the robust consensus of the observations already accepted.
 
 **An admitted image arrives as a seed and no decision.** Its pixel is the
-patch centre's projection. Its shape is the projected `u`/`v` half-frame,
+patch centre's projection, which is also its keypoint, as for any observation
+added at the track stage. Its shape is the projected `u`/`v` half-frame,
 converted from the negative-determinant patch-frame convention into the
 positive-determinant cluster/SIFT convention and divided by the cluster radius,
 exactly as a track-to-cluster stage change seeds an observation. The row is a
-`candidate` with `Provenance::Sweep`, carries no evaluation, and the next
+`candidate` with `Provenance::Sweep`, carries no measurement, and the next
 Evaluate or Fit judges it. An image the track already names is reported and
 left byte-for-byte alone, including an `out` verdict or a pin; the source image
 and all other reference images are excluded by the selector itself. Repeating
@@ -1936,7 +1953,9 @@ builds, wrapped as an
 `embedded_patches` reconstruction whose stored keypoints are the exact
 projections, so what a commit should have written is known to the pixel. It
 covers: a point put on the bench being at the track stage with every observation
-`in` and the stored numbers carried; two observations in one image not both
+`in` and the stored numbers carried; an observation added at the track stage
+carrying its pixel as its keypoint and committing without a fit, and one added at
+the cluster stage carrying a seed alone; two observations in one image not both
 being `in`; the painting proposing from the measurements, leaving a pinned
 verdict alone and giving one image one `in`; a split taking exactly the named
 observations, handing the half it takes off back as a cluster, and refusing an

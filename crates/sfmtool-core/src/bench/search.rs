@@ -288,8 +288,9 @@ impl std::fmt::Display for SearchReport {
 /// evaluation is what then scores it.
 ///
 /// Works at both stages. At the cluster stage the seed is what the refinement
-/// reads; at the track stage the candidate is a row the next reading measures
-/// and the thresholds propose a verdict for. The step sets no verdict and moves
+/// reads; at the track stage the candidate's pixel is also its keypoint, and
+/// it is a row the next reading measures and the thresholds propose a verdict
+/// for. The step sets no verdict and moves
 /// no observation that was already on the track.
 ///
 /// `progress` names one phase, `query index`: the corpus reads that resolve the

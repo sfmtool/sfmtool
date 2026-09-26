@@ -691,12 +691,12 @@ class TestCommitting:
         with pytest.raises(ValueError, match="embedded_patches"):
             commit(sift_files, track)
 
-    def test_a_kept_sighting_with_no_keypoint_refuses_by_name(
+    def test_a_sighting_added_at_the_track_stage_commits_at_its_pixel(
         self, edited, embedded, long_track_point
     ):
-        # A sighting pulled from another point carries a seed and no keypoint:
-        # only the track stage's evaluation places one, and there is no pixel to
-        # store until it has.
+        # At the track stage the pixel an observation is added at is its
+        # keypoint, so a kept one commits there without a fit, and a sighting
+        # pulled from another point absorbs that point.
         other = (long_track_point + 1) % embedded.point_count
         _, track = create_track(Bench(), edited, long_track_point)
         held = {int(o["image"]) for o in track.observations}
@@ -708,9 +708,14 @@ class TestCommitting:
             "kind": "point",
             "point": other,
         }
+        added = pulled.observation(report["observation"])
+        np.testing.assert_allclose(added["track"]["keypoint"], [10.0, 10.0])
         kept, _ = set_verdict(pulled, report["observation"], "in")
-        with pytest.raises(ValueError, match="has no keypoint to store"):
-            commit(edited, kept)
+        after, committed = commit(edited, kept)
+        assert list(committed["absorbed"]) == [other]
+        written = after.point(committed["point"])
+        slot = [int(i) for i in written["image_indexes"]].index(image)
+        np.testing.assert_allclose(written["keypoints_xy"][slot], [10.0, 10.0])
 
     def test_a_point_provenance_needs_the_point_it_came_from(
         self, edited, long_track_point

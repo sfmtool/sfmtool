@@ -189,8 +189,8 @@ impl std::fmt::Display for GeometrySearchReport {
 /// [`select_patch_views`]'s existing projection, front-facing,
 /// cheirality, support, self-agreement and relative-ZNCC gates. Every admitted
 /// view not already named by the track is appended at the patch centre's
-/// projection with the projected patch frame converted to the cluster seed
-/// convention. Existing observations, verdicts and measurements are never
+/// projection, which is its keypoint, with the projected patch frame converted
+/// to the cluster seed convention. Existing observations, verdicts and measurements are never
 /// moved or overwritten.
 ///
 /// Progress reports `build reference`, `score views`, and `add candidates`,

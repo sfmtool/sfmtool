@@ -1282,13 +1282,13 @@ fn provenance(provenance: Provenance) -> Value {
 /// Where the observation sits, whatever said so.
 ///
 /// [`crate::bench::observation_site`]'s rule, which is the panel's: the
-/// keypoint a reading wrote, else the refined cluster position, else the seed
+/// keypoint the track stage carries, else the refined cluster position, else the seed
 /// the step that proposed it left. It is a top level field rather than
 /// something a caller assembles out of the two measurement blocks below,
 /// because every reader of this surface wants the one answer those blocks are
-/// read for -- a candidate a search has just added has no keypoint at all, and
-/// an agent should not have to know which slot to fall back to before it can
-/// look at one.
+/// read for -- an observation of a cluster has a seed and no keypoint, one of a
+/// track has a keypoint, and an agent should not have to know which slot to
+/// fall back to before it can look at one.
 fn observation_pixel(observation: &Observation) -> Value {
     match crate::bench::observation_site(observation) {
         Some(site) => json!(site.pixel),

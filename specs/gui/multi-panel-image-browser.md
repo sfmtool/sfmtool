@@ -1062,7 +1062,7 @@ in this order:
 | `Create Track Here` (`Ctrl+Shift+Click`) | Builds a track at the clicked pixel with the track-at-pixel cascade, on a worker, puts it on the bench as the active item and commits it as a new point |
 | `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises Track View on it |
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
-| `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track |
+| `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track: at the track stage the pixel is its keypoint, at the cluster stage its seed |
 
 The lower three are edited afterwards in Track View
 ([`track-view.md`](track-view.md)), and the commit there is what reaches the

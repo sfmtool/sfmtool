@@ -249,7 +249,9 @@ queried photograph is the pixel (`translate_patch_to_pixel`), which carries ever
 sighting by the same in-plane displacement, and reads the track there
 (`evaluate`). An **anchored fit** is an anchor followed by `anchor_refits` rounds
 of fit-then-anchor. A round is kept when the median ZNCC does not fall, and
-always when an `in` sighting has no keypoint yet, since only a fit places one.
+always when an `in` sighting has no keypoint, since the fit gives it one. The
+first round is also kept always after growth, whose new sightings sit at the
+patch centre's projection until a fit localizes them.
 
 ### Steps
 
@@ -263,7 +265,8 @@ always when an `in` sighting has no keypoint yet, since only a fit places one.
    `normal_prior_tolerance`.
 3. **Growth.** With two or more `in` views, the geometry search from the queried
    sighting adds the photographs the patch projects into and reads well in. When
-   it adds any, the track is read, thresholded and given an anchored fit.
+   it adds any, the track is read, thresholded and given an anchored fit whose
+   first round is always kept.
 4. **Cleaning.** Up to `clean_rounds` times: every `in` view other than the
    query whose correlation peak sits more than `clean_max_shift_px` from its
    keypoint, or whose keypoint sits more than `clean_max_projection_px` from the
