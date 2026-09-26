@@ -165,10 +165,27 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// Whether a refit moved the spline's domain end, rather than keeping it.
+fn domain_moved(refit: &sfmtool_core::reconstruction::bundle_adjust::SplineRefit) -> bool {
+    (refit.domain_after_deg - refit.domain_before_deg).abs() > 1e-9
+}
+
+/// The version label's spline clause: the new count and, when it moved, the
+/// new domain end, which every refitted camera shares, e.g. `, spline refitted
+/// to 12 coefficients on a 108.0° domain`.
+fn spline_refit_label(refit: &sfmtool_core::reconstruction::bundle_adjust::SplineRefit) -> String {
+    let mut label = format!(", spline refitted to {} coefficients", refit.coeffs_after);
+    if domain_moved(refit) {
+        label.push_str(&format!(" on a {:.1}° domain", refit.domain_after_deg));
+    }
+    label
+}
+
 /// The spline refit clause of a bundle adjustment's Action Log entry: each
-/// camera whose spline was refitted to a new coefficient count before the
-/// solve, with how closely the refit reproduced the old curve. Named by table
-/// index when the solve holds more than one camera, as the focal clause is.
+/// camera whose spline was refitted to a new coefficient count or domain
+/// before the solve, with how closely the refit reproduced the old curve.
+/// Named by table index when the solve holds more than one camera, as the
+/// focal clause is.
 fn spline_refit_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     cameras
         .iter()
@@ -179,8 +196,16 @@ fn spline_refit_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
             } else {
                 format!("camera {} ", c.camera)
             };
+            let domain = if domain_moved(r) {
+                format!(
+                    ", domain {:.1}° → {:.1}°",
+                    r.domain_before_deg, r.domain_after_deg
+                )
+            } else {
+                String::new()
+            };
             format!(
-                ", {who}spline {} → {} coefficients (refit max {:.3} px)",
+                ", {who}spline {} → {} coefficients{domain} (refit max {:.3} px)",
                 r.coeffs_before, r.coeffs_after, r.max_px
             )
         })
@@ -1409,12 +1434,8 @@ impl AppState {
             } else if report.cameras.iter().any(|c| c.focal_released) {
                 version_label.push_str(", focal released");
             }
-            if let Some(count) = report
-                .cameras
-                .iter()
-                .find_map(|c| c.spline_refit.as_ref().map(|r| r.coeffs_after))
-            {
-                version_label.push_str(&format!(", spline refitted to {count} coefficients"));
+            if let Some(refit) = report.cameras.iter().find_map(|c| c.spline_refit.as_ref()) {
+                version_label.push_str(&spline_refit_label(refit));
             }
             let focal = focal_changes(&report.cameras);
             let spline = spline_refit_changes(&report.cameras);

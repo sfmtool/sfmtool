@@ -568,7 +568,12 @@ one at the cursor, and this block reports it.
               "principal_point_x": 135.0, "principal_point_y": 240.0,
               "radial_distortion_k1": -0.031, "radial_distortion_k2": 0.004,
               "tangential_distortion_p1": 0.0, "tangential_distortion_p2": 0.0 },
-  "camera_image_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] }
+  "camera_image_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  "outermost_keypoint": {
+    "observed": { "radius_px": 262.4, "theta_deg": 34.1,
+                  "camera_image_index": 7, "xy": [12.8, 470.1] },
+    "detected": null,                    // no readable .sift file
+    "detected_camera_images": 0 } }
 
 // get_point { "point": "pt3d_a1b2c3d4_1207" }
 { "id": "pt3d_a1b2c3d4_1207", "reconstruction_label": "seoul_bull",
@@ -580,6 +585,16 @@ one at the cursor, and this block reports it.
 
 // get_point { "point": 1207 }   // bare index, in the selected reconstruction
 ```
+
+`get_camera_intrinsics`'s `outermost_keypoint` is how far out the camera's
+photographs reach
+([../core/reconstruction/outermost-keypoint.md](../core/reconstruction/outermost-keypoint.md)):
+the keypoint furthest from the principal point among the reconstruction's
+observations, and among every feature of the images' `.sift` files, each as a
+radius and an incidence angle under this camera's model. `detected` is `null`
+where no `.sift` file can be read. The files' positions are read on every call,
+a few milliseconds per camera, and the angle is the one to give
+`bundle_adjust`'s `spline_domain_deg`.
 
 `list_camera_images` defaults to 50 rows and caps at 500 (`read::MAX_LIMIT`).
 An `offset` past the end is an empty page and not a refusal: a caller walking a
@@ -2093,6 +2108,8 @@ The two bulk edits.
 //                 "release_distortion": true }
 // bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
 //                 "release_distortion": true, "spline_coeff_count": 12 }
+// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
+//                 "release_distortion": true, "spline_domain_deg": 108.8 }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -2144,7 +2161,10 @@ cameras whose model the adjustment can free it on (`k1` on
 `SIMPLE_RADIAL_FISHEYE`, the spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`)
 is released with it, as `release_distortion`, and the coefficient count every
 spline camera is refitted to before the solve, as `spline_coeff_count` (2 to
-32; omitted keeps each count). Everything else is the core function's defaults.
+32; omitted keeps each count), and the incidence angle its domain is moved to in
+the same refit, as `spline_domain_deg` (omitted keeps each domain).
+`get_camera_intrinsics` reports the outermost keypoint an agent sets the domain
+from. Everything else is the core function's defaults.
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses; `release_focal` is refused, naming the camera, when a camera the posed
 images use has a model whose focal the adjustment cannot solve, and
@@ -2153,8 +2173,10 @@ posed images use has one of those three models. The report's focal clause names
 each released camera's focal before and after and each spline refit's counts
 and largest distance from the old curve, and the version's label says `focal
 and lens distortion released` when a distortion was released and `spline
-refitted to N coefficients` when a count changed. `spline_coeff_count` is
-refused without `release_distortion` and when no camera is a spline model.
+refitted to N coefficients` (and `on a D° domain`) when a count or domain
+changed. `spline_coeff_count` and `spline_domain_deg` are refused without
+`release_distortion` and when no camera is a spline model, and a domain the
+model cannot end at is refused naming the camera.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -2896,7 +2918,7 @@ pub(crate) enum Command {
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
     BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
-                   spline_coeff_count: Option<usize> },
+                   spline_coeff_count: Option<usize>, spline_domain_deg: Option<f64> },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
     Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },

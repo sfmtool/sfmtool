@@ -52,6 +52,7 @@ pub struct BundleAdjustOptions {
     pub opt_f: bool,
     pub opt_distortion: bool,
     pub spline_coeff_count: Option<usize>,
+    pub spline_domain_deg: Option<f64>,
     pub schedule: Vec<BaSchedule>,
     pub max_iters: usize,
     pub min_track: usize,
@@ -75,12 +76,15 @@ pub struct CameraAdjustment {
     pub focal_after: f64,
     pub focal_released: bool,
     pub distortion_released: bool,
-    pub spline_refit: Option<SplineRefit>, // Some where the count was changed
+    pub spline_refit: Option<SplineRefit>, // Some where the count or domain changed
+    pub outermost_observed: Option<KeypointReach>, // under the solved camera
 }
 
 pub struct SplineRefit {
     pub coeffs_before: usize,
     pub coeffs_after: usize,
+    pub domain_before_deg: f64,
+    pub domain_after_deg: f64,
     pub rms_px: f64, // the refit's distance from the old camera,
     pub max_px: f64, // over the whole spline domain
 }
@@ -110,6 +114,10 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool;
 
 /// Whether this camera has lens distortion the adjustment can release.
 pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool;
+
+/// A spline camera's domain end as an incidence angle in degrees, the unit
+/// `spline_domain_deg` takes; `None` for a camera with no spline.
+pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64>;
 ```
 
 ### Why it is shaped this way
@@ -180,6 +188,27 @@ not refitted. Each refit is reported with the old and new count and its pixel
 distance from the old camera, so a caller can say how much of the change was
 the refit and how much the solve.
 
+**`spline_domain_deg` moves the domain end in the same refit.** Where the spline
+stops is the other half of its shape: past the domain end the model is a
+straight line the solve cannot bend. A new domain end is given as an incidence
+angle, whichever radial coordinate the model stores, and every spline camera
+whose domain differs (by more than a nanodegree) is refitted by `refit_spline`
+on the new domain, together with any new count, in one refit over the whole new
+domain. The old model is defined everywhere, on its domain and along its linear
+tail, so the new domain can be shorter or longer than the old one. The refusals
+are the count's, and a domain end the model cannot have (past 180°, or 90° and
+more for `SFMTOOL_PINHOLE`) is the refit's refusal, naming the camera. The
+report gives the domain before and after. A domain shorter than the
+observations' reach leaves the outermost ones on the tail, which the solve fits
+less well, and that is why callers show the outermost keypoint beside the value
+([`outermost-keypoint.md`](outermost-keypoint.md)).
+
+**The report carries each camera's outermost observation.** Measured under the
+camera the solve returned, as a radius and an incidence angle, because that is
+the camera whose domain the next adjustment would edit. Only the observations:
+the adjustment reads nothing off disk, so the features detected in the images'
+`.sift` files are for a caller to read with `outermost_keypoints`.
+
 **The report is per camera.** Each camera in the solve has its own focal, so
 the report carries one `CameraAdjustment` per camera rather than one focal for
 the whole solve. Per-camera residual medians are not in it: the
@@ -237,11 +266,11 @@ without solving anything:
   focal column is not exact for (`FocalNotReleasable`, naming the first such
   camera by its table index, and its model).
 - A distortion release without the focal release (`DistortionWithoutFocal`).
-- A spline coefficient count without the distortion release
-  (`SplineRefitWithoutDistortion`), outside 2 to 32 (`SplineCoeffCount`), or with
-  no spline camera in the solve (`SplineRefitWithoutSpline`); then each spline
-  camera whose count differs is refitted, and the first refit refused refuses
-  the adjustment (`SplineRefit`).
+- A spline coefficient count or domain without the distortion release
+  (`SplineRefitWithoutDistortion`), a count outside 2 to 32 (`SplineCoeffCount`),
+  or either with no spline camera in the solve (`SplineRefitWithoutSpline`); then
+  each spline camera whose count or domain differs is refitted, and the first
+  refit refused refuses the adjustment (`SplineRefit`).
 - A distortion release when no camera the posed images use, after any refit, is
   a `SIMPLE_RADIAL_FISHEYE` or a spline model whose spline is defined, at least
   two coefficients on a positive finite domain end (`DistortionNotReleasable`).
@@ -391,6 +420,7 @@ would leave the frame carrying the gauge drift of the solve.
 | `opt_f` | `false` | Release the focal length of every camera the posed images use, each its own. |
 | `opt_distortion` | `false` | Release the lens distortion of every camera the posed images use whose model admits it (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on the spline models), each its own; needs `opt_f`. |
 | `spline_coeff_count` | `None` | Refit every spline camera in the solve whose coefficient count differs to this count, over its whole domain, before the solve; needs `opt_distortion`; 2 to 32. |
+| `spline_domain_deg` | `None` | Refit every spline camera in the solve whose domain end differs on a domain ending at this incidence angle, in degrees, in the same refit as the count; needs `opt_distortion`. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -403,14 +433,15 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-spline_coeff_count=None, schedule=None, max_iters=60, min_track=2,
-min_obs=12)` returns
+spline_coeff_count=None, spline_domain_deg=None, schedule=None, max_iters=60,
+min_track=2, min_obs=12)` returns
 `(EditedReconstruction, report)`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
 camera in the solve carrying the `CameraAdjustment` fields (`spline_refit` a
-dict of the `SplineRefit` fields, or `None`), and every refusal is a
+dict of the `SplineRefit` fields, or `None`; `outermost_observed` a dict of
+`radius_px`, `theta_deg`, `image` and `xy`, or `None`), and every refusal is a
 `ValueError` carrying the sentence the error writes.
 
 ```python
@@ -448,6 +479,13 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   order of magnitude; a camera already at the count not refitted beside one that
   is; the count refused without `opt_distortion`, at 0, 1 and 33, with no spline
   camera, and, naming the camera, when the refit is.
+- A new domain end, shorter and longer than the old one, refitting the spline
+  over the new domain and reporting both ends; a new count and domain in one
+  refit; the domain the camera already has not refitted; the domain refused
+  without `opt_distortion`, with no spline camera, and, naming the camera, past
+  180°.
+- Each camera's outermost observation one of its own images', its radius
+  measured from its principal point.
 - `opt_f` over two releasable cameras finding each its own planted focal and
   moving nothing else about either lens, and refused, naming the camera and its
   model, when one of them is not releasable.

@@ -90,6 +90,7 @@ fn enter_runs_it_with_the_focal_held_which_is_the_default() {
             release_focal: false,
             release_distortion: false,
             spline_coeff_count: None,
+            spline_domain_deg: None,
         })
     );
     assert!(prompt.pending.is_none(), "the answered dialog stayed up");
@@ -195,4 +196,100 @@ fn a_count_without_the_distortion_or_a_spline_is_not_asked_for() {
         p.coeff_count = 12;
     });
     assert_eq!(answer.spline_coeff_count, None);
+}
+
+/// Gates for a node whose spline cameras end their domains at `domains` and
+/// whose outermost keypoints are the given angles.
+fn with_domains(
+    domains: &[f64],
+    observed_deg: Option<f64>,
+    detected_deg: Option<f64>,
+) -> BundleAdjustGates {
+    let reach = |theta_deg: f64| KeypointReach {
+        radius_px: 2.0 * theta_deg,
+        theta_deg,
+        image: 0,
+        xy: [0.0, 0.0],
+    };
+    BundleAdjustGates {
+        spline_coeff_counts: vec![8],
+        spline_domains_deg: domains.to_vec(),
+        keypoint_extent: KeypointExtent {
+            observed: observed_deg.map(reach),
+            detected: detected_deg.map(reach),
+        },
+        ..BundleAdjustGates::default()
+    }
+}
+
+/// Ask with `gates`, release the focal and the distortion, let `set` touch the
+/// pending question, and answer it with Enter.
+fn answered_with(gates: BundleAdjustGates, set: impl FnOnce(&mut Pending)) -> BundleAdjustAnswer {
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "kerry".to_string(), gates);
+    let pending = prompt.pending.as_mut().unwrap();
+    pending.release_focal = true;
+    pending.release_distortion = true;
+    set(pending);
+    frame(&mut prompt, press(egui::Key::Enter)).expect("one answer")
+}
+
+#[test]
+fn the_domain_is_kept_by_default_and_asked_for_only_when_it_changes() {
+    let answer = answered_with(with_domains(&[150.0], None, None), |_| {});
+    assert_eq!(answer.spline_domain_deg, None);
+
+    let answer = answered_with(with_domains(&[150.0], None, None), |p| {
+        p.keep_domain = false;
+        p.domain_deg = 108.0;
+    });
+    assert_eq!(answer.spline_domain_deg, Some(108.0));
+
+    // The domain every spline camera already has is no change.
+    let answer = answered_with(with_domains(&[150.0], None, None), |p| {
+        p.keep_domain = false
+    });
+    assert_eq!(answer.spline_domain_deg, None);
+
+    // Not without the distortion release.
+    let answer = answered_with(with_domains(&[150.0], None, None), |p| {
+        p.release_distortion = false;
+        p.keep_domain = false;
+        p.domain_deg = 108.0;
+    });
+    assert_eq!(answer.spline_domain_deg, None);
+}
+
+#[test]
+fn the_button_takes_the_detected_keypoint_and_else_the_observed_one() {
+    let answer = answered_with(with_domains(&[150.0], Some(101.2), Some(107.9)), |p| {
+        p.use_outermost_keypoint()
+    });
+    assert_eq!(answer.spline_domain_deg, Some(107.9));
+
+    let answer = answered_with(with_domains(&[150.0], Some(101.2), None), |p| {
+        p.use_outermost_keypoint()
+    });
+    assert_eq!(answer.spline_domain_deg, Some(101.2));
+
+    // With no keypoint the button changes nothing.
+    let answer = answered_with(with_domains(&[150.0], None, None), |p| {
+        p.use_outermost_keypoint()
+    });
+    assert_eq!(answer.spline_domain_deg, None);
+}
+
+#[test]
+fn the_outermost_keypoint_is_labelled_by_its_source() {
+    let extent = with_domains(&[150.0], Some(101.2), Some(107.9)).keypoint_extent;
+    assert_eq!(
+        extent.describe().as_deref(),
+        Some("outermost keypoint: 202.4 px, 101.2° observed; 215.8 px, 107.9° detected")
+    );
+    let observed_only = with_domains(&[150.0], Some(101.2), None).keypoint_extent;
+    assert_eq!(
+        observed_only.describe().as_deref(),
+        Some("outermost keypoint: 202.4 px, 101.2° observed")
+    );
+    assert_eq!(KeypointExtent::default().describe(), None);
 }

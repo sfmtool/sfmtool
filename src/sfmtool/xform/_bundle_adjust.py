@@ -18,6 +18,7 @@ import numpy as np
 import pycolmap
 
 from .._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from ._switch_camera_model import format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
 SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
@@ -28,10 +29,13 @@ class BundleAdjustTransform:
 
     Args:
         coeff_count: Refit every spline camera to this many spline coefficients
-            before the solve (``--bundle-adjust coeffs=N``). Only a
-            reconstruction with a spline camera takes it, which the sfmtool
-            path adjusts; given for one without, ``apply`` raises
-            ``click.UsageError``.
+            before the solve (``--bundle-adjust coeffs=N``).
+        spline_domain_deg: Refit every spline camera on a domain ending at this
+            incidence angle, in degrees, before the solve, in the same refit as
+            ``coeff_count`` (``--bundle-adjust domain=DEG``).
+
+    Only a reconstruction with a spline camera takes either, which the sfmtool
+    path adjusts; given for one without, ``apply`` raises ``click.UsageError``.
     """
 
     def __init__(
@@ -40,18 +44,20 @@ class BundleAdjustTransform:
         refine_principal_point: bool = False,
         refine_extra_params: bool = True,
         coeff_count: int | None = None,
+        spline_domain_deg: float | None = None,
     ):
         self.refine_focal_length = refine_focal_length
         self.refine_principal_point = refine_principal_point
         self.refine_extra_params = refine_extra_params
         self.coeff_count = coeff_count
+        self.spline_domain_deg = spline_domain_deg
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
-        if self.coeff_count is not None:
+        if self.coeff_count is not None or self.spline_domain_deg is not None:
             raise click.UsageError(
-                "--bundle-adjust coeffs= applies only to a reconstruction with a "
+                "--bundle-adjust coeffs= and domain= apply only to a reconstruction with a "
                 f"{' or '.join(SPLINE_MODELS)} camera, and this one has none "
                 "(switch a camera with --camera-model first)"
             )
@@ -74,6 +80,7 @@ class BundleAdjustTransform:
             opt_f=self.refine_focal_length,
             opt_distortion=self.refine_focal_length and self.refine_extra_params,
             spline_coeff_count=self.coeff_count,
+            spline_domain_deg=self.spline_domain_deg,
         )
         print(
             f"    {report['images']} images, {report['points']} points, "
@@ -99,13 +106,29 @@ class BundleAdjustTransform:
             )
             refit = camera["spline_refit"]
             if refit is not None:
+                domain = ""
+                if abs(refit["domain_after_deg"] - refit["domain_before_deg"]) > 1e-9:
+                    domain = (
+                        f", domain {refit['domain_before_deg']:.1f}° -> "
+                        f"{refit['domain_after_deg']:.1f}°"
+                    )
                 print(
                     f"      spline refitted {refit['coeffs_before']} -> "
-                    f"{refit['coeffs_after']} coefficients before the solve: "
+                    f"{refit['coeffs_after']} coefficients{domain} before the solve: "
                     f"rms {refit['rms_px']:.4f} px, max {refit['max_px']:.4f} px "
                     "from the old curve over its domain"
                 )
-        return adjusted.materialize()[0]
+        result = adjusted.materialize()[0]
+        # How far out the photographs reach, under the adjusted cameras: the
+        # outermost observation, and the outermost feature detected in the
+        # images' .sift files where they can be read.
+        for outermost in result.outermost_keypoints(
+            cameras=[c["camera"] for c in report["cameras"]]
+        ):
+            line = format_outermost_keypoint(outermost)
+            if line:
+                print(f"    Camera {outermost['camera']} {line}")
+        return result
 
     def _apply_pycolmap(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         from ..colmap.io import save_colmap_binary
@@ -305,5 +328,9 @@ class BundleAdjustTransform:
         if self.refine_extra_params:
             opts.append("extra")
         opt_str = ",".join(opts) if opts else "none"
-        coeffs = "" if self.coeff_count is None else f", coeffs={self.coeff_count}"
-        return f"Bundle adjustment (refine: {opt_str}{coeffs})"
+        params = ""
+        if self.coeff_count is not None:
+            params += f", coeffs={self.coeff_count}"
+        if self.spline_domain_deg is not None:
+            params += f", domain={self.spline_domain_deg:g}"
+        return f"Bundle adjustment (refine: {opt_str}{params})"

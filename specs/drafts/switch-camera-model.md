@@ -105,7 +105,12 @@ The panel shows a strip of controls at the top:
   first for a fisheye source.
 - **Coefficients** (2–16, default 8), for a spline target.
 - **Fit to θ**: shows the default and where it came from; can be lowered.
-- **Spline domain**: shows the default corner angle; can be edited.
+- **Spline domain**: shows the default corner angle; can be edited. Beside it,
+  the outermost keypoint of the camera's images
+  ([`../core/reconstruction/outermost-keypoint.md`](../core/reconstruction/outermost-keypoint.md)),
+  detected where the `.sift` files can be read and observed otherwise, labelled
+  by its source, with the same button the Bundle Adjust dialog's domain row has,
+  which sets the domain to its angle. The default stays the corner.
 - **Cameras**: this camera, or all cameras of this node.
 - **Apply** and **Cancel**.
 
@@ -232,5 +237,9 @@ then apply or cancel. This is the check a reviewer would make.
   source never fitted it. Today nothing frees it anywhere, and the switch keeps
   that.
 
-The spline domain and the regularization weight are open questions of the fit
-itself, in [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).
+The regularization weight is an open question of the fit itself, in
+[`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).
+The spline domain is settled there: the default is the far image corner, the
+model's own reach, and the outermost keypoint with its button is shown wherever
+the domain is edited, so a circular fisheye is trimmed to its image circle by
+choice.

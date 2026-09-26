@@ -282,6 +282,7 @@ pub(crate) enum Command {
         release_focal: bool,
         release_distortion: bool,
         spline_coeff_count: Option<usize>,
+        spline_domain_deg: Option<f64>,
     },
     /// Convert one node's observations from `sift_files` to
     /// `embedded_patches`, then render bitmaps from readable photographs
@@ -1218,6 +1219,7 @@ pub(crate) fn apply_with_window(
             release_focal,
             release_distortion,
             spline_coeff_count,
+            spline_domain_deg,
         } => edit::bundle_adjust(
             state,
             &reconstruction_label,
@@ -1225,6 +1227,7 @@ pub(crate) fn apply_with_window(
                 opt_f: release_focal,
                 opt_distortion: release_distortion,
                 spline_coeff_count,
+                spline_domain_deg,
                 ..sfmtool_core::BundleAdjustOptions::default()
             },
         ),

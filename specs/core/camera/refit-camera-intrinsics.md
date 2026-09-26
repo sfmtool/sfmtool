@@ -369,15 +369,19 @@ bindings are tested in
   keeps that.
 - An aspect for the spline models. They have one focal, and a lens whose `fx`
   and `fy` really differ loses the difference; the report says so.
-- Choosing `d_max` from the image circle of a circular fisheye. Nothing detects
-  the circle, so the far corner is used, which spends part of the knot span on
-  black pixels past the circle.
+- Choosing `d_max` from the image circle of a circular fisheye. The default is
+  the far image corner, because that is the model's own reach: every pixel of
+  the frame has a ray under it. On a circular fisheye it spends part of the
+  knot span on black pixels past the circle, and trimming the domain to the
+  circle is a choice a person makes: wherever the domain is edited, the
+  outermost keypoint is shown beside it
+  ([`../reconstruction/outermost-keypoint.md`](../reconstruction/outermost-keypoint.md)),
+  the detected one where the images' `.sift` files can be read and otherwise
+  the observed one, labelled as such, with a button that sets the domain to its
+  angle. `refit_spline` makes the change on a camera already switched.
 
 ## Open questions
 
 - **The regularization weight** past `θ_fit`, and whether a smooth continuation
   or the linear tail starting at `θ_fit` serves a later bundle adjustment better.
-- **The spline domain for a circular fisheye**: the corner (about 150° on
-  `kerry_park`) or the image circle (about 108°), which would give the observed
-  field more knots but, on the `kerry_park` first lens, makes the fit's
-  continuation turn over.
+

@@ -434,6 +434,33 @@ pub(super) fn get_camera_intrinsics(
     object.insert("reconstruction_label".into(), json!(node.label));
     object.insert("camera_intrinsics_index".into(), json!(index));
     object.insert("camera_image_indices".into(), json!(users));
+    // How far out this camera's photographs reach, beside the spline domain
+    // an agent may set from it. The detected keypoint reads the images'
+    // `.sift` positions, a few milliseconds per camera, so it is read on
+    // every call rather than cached.
+    let reach = |r: Option<&sfmtool_core::reconstruction::outermost_keypoint::KeypointReach>| {
+        r.map(|r| {
+            json!({
+                "radius_px": r.radius_px,
+                "theta_deg": r.theta_deg.is_finite().then_some(r.theta_deg),
+                "camera_image_index": r.image,
+                "xy": [r.xy[0], r.xy[1]],
+            })
+        })
+    };
+    if let Some(outermost) =
+        sfmtool_core::reconstruction::outermost_keypoint::outermost_keypoints(recon, &[index], true)
+            .first()
+    {
+        object.insert(
+            "outermost_keypoint".into(),
+            json!({
+                "observed": reach(outermost.observed.as_ref()),
+                "detected": reach(outermost.detected.as_ref()),
+                "detected_camera_images": outermost.detected_images,
+            }),
+        );
+    }
     Ok(out)
 }
 

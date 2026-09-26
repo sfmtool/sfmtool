@@ -280,5 +280,61 @@ def test_bundle_adjust_coefficients_need_a_spline_camera(seoul_bull_ground_truth
     from sfmtool.xform import BundleAdjustTransform
 
     recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
-    with pytest.raises(click.UsageError, match="coeffs= applies only"):
+    with pytest.raises(click.UsageError, match="apply only to a reconstruction"):
         BundleAdjustTransform(coeff_count=8).apply(recon)
+
+
+def test_bundle_adjust_option_takes_a_domain():
+    from sfmtool.xform._arg_parser import parse_transform_args
+
+    (both,) = parse_transform_args(["--bundle-adjust", "coeffs=12,domain=108.5"])
+    assert (both.coeff_count, both.spline_domain_deg) == (12, 108.5)
+    assert "coeffs=12, domain=108.5" in both.description()
+    (domain,) = parse_transform_args(["--bundle-adjust=domain=100"])
+    assert (domain.coeff_count, domain.spline_domain_deg) == (None, 100.0)
+    with pytest.raises(click.UsageError, match="not a valid float"):
+        parse_transform_args(["--bundle-adjust", "domain=wide"])
+
+
+def test_bundle_adjust_moves_the_spline_domain(
+    seoul_bull_ground_truth_sfmr, tmp_path, capsys
+):
+    """A new domain end is one refit with the count, over the whole new
+    domain, and the outermost observation is printed beside it."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    output_path = tmp_path / "adjusted.sfmr"
+    apply_transforms_to_file(
+        seoul_bull_ground_truth_sfmr,
+        output_path,
+        [
+            SwitchCameraModelTransform("SFMTOOL_FISHEYE", coeff_count=6),
+            BundleAdjustTransform(coeff_count=8, spline_domain_deg=40.0),
+        ],
+    )
+    out = capsys.readouterr().out
+    assert "spline refitted 6 -> 8 coefficients, domain " in out
+    assert "-> 40.0° before the solve" in out
+    # The switch and the adjustment both print how far out the keypoints
+    # reach; the ground truth sits beside no .sift file, so only observed.
+    assert out.count("outermost keypoint: ") >= 2
+    assert "° observed" in out and "detected" not in out.split("outermost")[-1]
+    result = SfmrReconstruction.load(output_path)
+    params = result.cameras[0].to_dict()["parameters"]
+    assert params["bspline_coeff_count"] == 8
+    assert params["bspline_theta_max"] == pytest.approx(np.radians(40.0))
+
+
+def test_the_switch_report_names_the_outermost_keypoint(seoul_bull_ground_truth_sfmr):
+    from sfmtool.xform._switch_camera_model import format_camera_report
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    _, report = recon.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=4)
+    (entry,) = report["cameras"]
+    outermost = entry["outermost"]
+    assert outermost["detected"] is None and outermost["detected_images"] == 0
+    observed = outermost["observed"]
+    assert 0.0 < observed["radius_px"] and 0.0 < observed["theta_deg"] < 90.0
+    lines = format_camera_report(entry)
+    assert lines[-1].startswith("  outermost keypoint: ")
+    assert lines[-1].endswith("° observed")

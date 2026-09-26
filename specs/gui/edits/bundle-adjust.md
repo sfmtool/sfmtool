@@ -98,6 +98,26 @@ there is one decision to take, how much of the lens may move and in what form:
   model, and while **Release lens distortion** is clear: a new coefficient
   scheme only approximates the old curve until the solve fits it, so the core
   function refuses the count without the release.
+- **Spline domain (°)**, a row under it, built the same way: **Keep**, ticked
+  by default, the domain end in degrees (1 to 180), and `now 150.1°` (or several)
+  naming the domain ends the node's spline cameras have; the value starts at
+  the largest of them. With **Keep** clear, every spline camera whose domain
+  differs is refitted on the new domain, in the same refit as the count. Under
+  it is the **outermost keypoint** of the node's spline cameras
+  ([`../../core/reconstruction/outermost-keypoint.md`](../../core/reconstruction/outermost-keypoint.md)),
+  the one at the largest incidence angle over all of them: `outermost keypoint:
+  230.3 px, 95.8° observed; 259.2 px, 108.8° detected`, and a **Use 108.8°**
+  button that sets the domain to that angle and clears **Keep**. The button
+  takes the detected keypoint, and the observed one where no `.sift` file could
+  be read, in which case the text names only the observed one. The default
+  domain is not changed: it stays the model's own reach, the far image corner,
+  and a circular fisheye is trimmed to its image circle by choice. The row is
+  disabled for the coefficient row's two reasons.
+
+  The keypoints are read once, when the dialog opens, on the GUI thread: the
+  observed one from the node's base value, and the detected one from the
+  positions entry of each image's `.sift` file. On the `kerry_park` rig's 48
+  images that is about 8 ms, short enough not to need a worker.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
   a window to leave lying open.
@@ -116,8 +136,9 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The two checkboxes and the coefficients row are the only options the dialog
-sets, as `opt_f`, `opt_distortion` and `spline_coeff_count`. The schedule, the iteration
+The two checkboxes and the two spline rows are the only options the dialog
+sets, as `opt_f`, `opt_distortion`, `spline_coeff_count` and
+`spline_domain_deg`. The schedule, the iteration
 budget and the two floors are the core function's defaults, which are the
 kernel's.
 
@@ -153,7 +174,8 @@ The version's label is
 with `, focal released` appended when the focal was released, or `, focal and
 lens distortion released` when a camera's distortion was released too, and then
 `, spline refitted to 12 coefficients` when a spline camera's coefficient count
-was changed before the solve.
+or domain was changed before the solve, with ` on a 108.8° domain` when the
+domain moved.
 
 ### The Action Log
 
@@ -167,8 +189,9 @@ with each camera's focal change appended when the focal was released, and
 camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
 its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
 1399.8`, because a list of numbers alone would not say which lens moved. A
-spline refitted to a new count before the solve adds `, spline 8 → 12
-coefficients (refit max 0.004 px)` after the focal clause, with the same
+spline refitted to a new count or domain before the solve adds `, spline 8 → 12
+coefficients, domain 150.1° → 108.8° (refit max 0.013 px)` after the focal
+clause (the domain only when it moved), with the same
 `camera N ` prefix when the solve holds several cameras: the refit's largest
 pixel distance from the old curve says how much of the lens change was the
 refit rather than the solve. The three counts
@@ -216,7 +239,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   ordinary frame answering nothing, a second ask not stacking a second dialog,
   and the coefficient count: kept by default and starting at the largest count,
   asked for only when it changes some camera's count, and never without the
-  distortion release or a spline camera.
+  distortion release or a spline camera; the domain under the same rules; the
+  outermost keypoint's button taking the detected angle, the observed one
+  without a detected, and nothing without either; and the keypoint text
+  labelled by its source.
 - `scene_graph/tests.rs`: the context-menu entry live on an adjustable node,
   directly above `Retriangulate All Points`, reporting the node it was opened
   on; and drawn but dead on a node with no inline keypoints and on a busy one.

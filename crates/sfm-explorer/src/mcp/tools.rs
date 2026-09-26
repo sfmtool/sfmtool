@@ -355,6 +355,7 @@ pub(crate) fn parse(
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
             spline_coeff_count: args.optional_usize("spline_coeff_count")?,
+            spline_domain_deg: args.optional_f64("spline_domain_deg")?,
         },
         "convert_to_embedded_patches" => Command::ConvertToEmbeddedPatches {
             reconstruction_label: args.required_string("reconstruction_label")?,

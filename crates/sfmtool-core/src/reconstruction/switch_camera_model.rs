@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::data::{observation_reprojection_error, SfmrReconstruction};
+use super::outermost_keypoint::{outermost_keypoints, OutermostKeypoints};
 use crate::camera::refit_intrinsics::{
     image_corner_deg, refit_camera_intrinsics_over, CameraIntrinsicsRefit, RefitError,
     RefitOptions, RefitTarget, ThetaFitSource,
@@ -142,6 +143,10 @@ pub struct CameraSwitch {
     pub images: usize,
     /// The observation comparison.
     pub observations: ObservationComparison,
+    /// The outermost keypoint of the camera's images, observed and detected,
+    /// measured under the camera after the switch: how far out the
+    /// photographs reach, beside the spline domain the fit placed.
+    pub outermost: OutermostKeypoints,
 }
 
 /// What one switch did, one entry per switched camera in table order.
@@ -170,6 +175,11 @@ pub struct SwitchCameraModelReport {
 ///
 /// The observations' pixels come from the inline keypoint column where the
 /// value carries one, and otherwise from each image's `.sift` file.
+///
+/// Each camera's entry also carries its outermost keypoint
+/// ([`outermost_keypoints`]), observed and, where the images' `.sift` files can
+/// be read, detected, measured under the switched camera. A file that cannot
+/// be read leaves `detected` empty rather than refusing the switch.
 ///
 /// # Example
 ///
@@ -316,8 +326,9 @@ pub fn switch_camera_model(
             after: row_error(&out, row, pixels[row]),
         });
     }
+    let outermost = outermost_keypoints(&out, &chosen, true);
     let mut entries = Vec::with_capacity(chosen.len());
-    for ((&c, refit), rows) in chosen.iter().zip(refits).zip(rows_of) {
+    for (((&c, refit), rows), outermost) in chosen.iter().zip(refits).zip(rows_of).zip(outermost) {
         let images = table
             .images
             .iter()
@@ -330,6 +341,7 @@ pub fn switch_camera_model(
             refit,
             images,
             observations,
+            outermost,
         });
     }
     Ok((out, SwitchCameraModelReport { cameras: entries }))

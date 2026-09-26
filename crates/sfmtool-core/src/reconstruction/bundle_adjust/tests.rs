@@ -529,6 +529,7 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_released: false,
                 distortion_released: false,
                 spline_refit: None,
+                outermost_observed: report.cameras[0].outermost_observed,
             },
             CameraAdjustment {
                 camera: 1,
@@ -538,9 +539,18 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_released: false,
                 distortion_released: false,
                 spline_refit: None,
+                outermost_observed: report.cameras[1].outermost_observed,
             },
         ]
     );
+    // Each camera's outermost observation is one of its own images', measured
+    // under its own lens.
+    for (c, camera) in report.cameras.iter().enumerate() {
+        let reach = camera.outermost_observed.expect("observed");
+        assert_eq!(out.image_table.images[reach.image].camera_index as usize, c);
+        let (cx, cy) = out.image_table.cameras[c].principal_point();
+        assert!((reach.radius_px - (reach.xy[0] - cx).hypot(reach.xy[1] - cy)).abs() < 1e-9);
+    }
     assert_eq!(out.image_table.cameras, truth.image_table.cameras);
 }
 
@@ -1453,4 +1463,99 @@ fn a_new_coefficient_count_is_refused_where_it_cannot_be_made() {
     );
     let sentence = error.unwrap().to_string();
     assert!(sentence.starts_with("the spline of camera 0"), "{sentence}");
+}
+
+#[test]
+fn a_new_domain_refits_the_spline_before_the_solve() {
+    let truth = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
+    let source = perturb(truth);
+    let before_deg = 0.3f64.to_degrees();
+    // A domain shorter than the observations' reach leaves the outermost ones
+    // on the linear tail, which the solve cannot bend, so it fits them less
+    // well than a domain that covers them.
+    for (domain_deg, ratio) in [(before_deg - 3.0, 0.2), (before_deg + 5.0, 0.1)] {
+        let options = BundleAdjustOptions {
+            spline_domain_deg: Some(domain_deg),
+            ..distortion_released()
+        };
+        let (out, report) =
+            bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+        let refit = report.cameras[0]
+            .spline_refit
+            .as_ref()
+            .expect("the domain moved");
+        assert_eq!((refit.coeffs_before, refit.coeffs_after), (8, 8));
+        assert!(
+            (refit.domain_before_deg - before_deg).abs() < 1e-9,
+            "{refit:?}"
+        );
+        assert!(
+            (refit.domain_after_deg - domain_deg).abs() < 1e-9,
+            "{refit:?}"
+        );
+        assert!(refit.max_px < 0.25, "{refit:?}");
+        assert_eq!(
+            spline_domain_deg(&out.image_table.cameras[0]).map(|d| (d - domain_deg).abs() < 1e-9),
+            Some(true)
+        );
+        assert!(
+            report.median_residual_after < ratio * report.median_residual_before,
+            "{report:?}"
+        );
+    }
+
+    // Both at once is one refit.
+    let options = BundleAdjustOptions {
+        spline_coeff_count: Some(10),
+        spline_domain_deg: Some(before_deg + 2.0),
+        ..distortion_released()
+    };
+    let (_, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    let refit = report.cameras[0].spline_refit.as_ref().expect("both moved");
+    assert_eq!(refit.coeffs_after, 10);
+    assert!((refit.domain_after_deg - (before_deg + 2.0)).abs() < 1e-9);
+
+    // The domain the camera already has is no change.
+    let options = BundleAdjustOptions {
+        spline_domain_deg: Some(before_deg),
+        ..distortion_released()
+    };
+    let (_, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    assert_eq!(report.cameras[0].spline_refit, None);
+}
+
+#[test]
+fn a_new_domain_is_refused_where_it_cannot_be_made() {
+    let spline = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
+    let held = BundleAdjustOptions {
+        opt_f: true,
+        spline_domain_deg: Some(20.0),
+        ..BundleAdjustOptions::default()
+    };
+    assert_eq!(
+        bundle_adjust(&spline, &held, &Progress::none()).err(),
+        Some(BundleAdjustError::SplineRefitWithoutDistortion)
+    );
+    let k1 = truth_through(vec![radial_fisheye(0.0)], |_| 0);
+    let options = BundleAdjustOptions {
+        spline_domain_deg: Some(20.0),
+        ..distortion_released()
+    };
+    assert_eq!(
+        bundle_adjust(&k1, &options, &Progress::none()).err(),
+        Some(BundleAdjustError::SplineRefitWithoutSpline)
+    );
+    let options = BundleAdjustOptions {
+        spline_domain_deg: Some(200.0),
+        ..distortion_released()
+    };
+    assert_eq!(
+        bundle_adjust(&spline, &options, &Progress::none()).err(),
+        Some(BundleAdjustError::SplineRefit {
+            camera: 0,
+            error: RefitError::SplineDomainInvalid {
+                spline_domain_deg: 200.0
+            }
+        })
+    );
 }

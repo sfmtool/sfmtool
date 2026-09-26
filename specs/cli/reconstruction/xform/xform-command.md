@@ -325,7 +325,14 @@ represent (for example `fx/fy aspect 0.9978 dropped (single focal)`), the extent
 (the new model's edge and corner angles, the source's trusted bound and fold),
 and the observation comparison over one fixed set: median, 90th percentile and
 maximum error before and after, how many changed by more than a pixel, and the
-same for the observations past the source's trusted bound.
+same for the observations past the source's trusted bound. Last comes the
+camera's outermost keypoint under the new model
+([`../../../core/reconstruction/outermost-keypoint.md`](../../../core/reconstruction/outermost-keypoint.md)):
+observed, and detected where the images' `.sift` files can be read, for
+example `outermost keypoint: 230.3 px, 95.8° observed; 259.2 px, 108.8° detected
+(24 .sift files)`. On a circular fisheye the detected angle is the image
+circle's, and `spline_domain=` or `--bundle-adjust domain=` can be set from it;
+the default domain stays the far corner.
 
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8
@@ -335,12 +342,12 @@ same for the observations past the source's trusted bound.
 
 ### Optimization
 
-#### `--bundle-adjust [coeffs=N]`
+#### `--bundle-adjust [coeffs=N,domain=DEG]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
 The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
-parameters, and `coeffs=N` (also `--bundle-adjust=coeffs=N`) applies only to the
-sfmtool path below.
+parameters, and `coeffs=N` and `domain=DEG` (also `--bundle-adjust=coeffs=N`)
+apply only to the sfmtool path below.
 
 ```bash
 --remove-short-tracks 2 --bundle-adjust
@@ -365,14 +372,22 @@ through pycolmap as described below, unchanged.
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
 --bundle-adjust coeffs=12
+--bundle-adjust coeffs=12,domain=108.8
 ```
 
 `coeffs=N` refits every spline camera whose coefficient count differs to `N`
 coefficients before that solve, over its whole spline domain with the domain
 end held, and the solve starts from the refitted cameras (`spline_coeff_count`,
-2 to 32). Each refit prints its old and new count and its rms and largest pixel
-distance from the old curve. On a reconstruction with no spline camera,
-`coeffs=` is a usage error rather than being ignored.
+2 to 32). `domain=DEG` moves each spline camera's domain end to `DEG` degrees
+of incidence angle in the same refit, over the whole new domain
+(`spline_domain_deg`). Each refit prints its old and new count, the domain
+before and after when it moved, and its rms and largest pixel distance from the
+old curve. After the solve each camera's outermost keypoint is printed under the
+adjusted camera, observed and, where the images' `.sift` files can be read,
+detected: `outermost keypoint: 230.3 px, 95.8° observed; 259.2 px, 108.8°
+detected (24 .sift files)`, the angle to give `domain=`. On a reconstruction
+with no spline camera, `coeffs=` and `domain=` are a usage error rather than
+being ignored.
 
 Works on both `sift_files` and `embedded_patches` reconstructions. The transform
 round-trips through COLMAP binary files, which need a 2D keypoint per

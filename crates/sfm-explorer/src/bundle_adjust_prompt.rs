@@ -15,7 +15,10 @@
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
 
-use sfmtool_core::reconstruction::bundle_adjust::{distortion_is_releasable, focal_is_releasable};
+use sfmtool_core::reconstruction::bundle_adjust::{
+    distortion_is_releasable, focal_is_releasable, spline_domain_deg,
+};
+use sfmtool_core::reconstruction::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use sfmtool_core::EditedReconstruction;
 
 use crate::scene::ReconId;
@@ -103,8 +106,93 @@ pub(crate) fn spline_coeff_counts(edited: &EditedReconstruction) -> Vec<usize> {
     counts
 }
 
+/// The camera-table indexes of the cameras the posed images use that are
+/// spline models.
+fn spline_cameras(edited: &EditedReconstruction) -> Vec<usize> {
+    let table = &edited.base.image_table;
+    edited
+        .posed_lenses()
+        .into_iter()
+        .map(|c| c as usize)
+        .filter(|&c| table.cameras[c].model.radial_spline().is_some())
+        .collect()
+}
+
+/// The distinct spline domain ends, in degrees, of the cameras the posed images
+/// use that are spline models, ascending; empty when none is. The domain row
+/// shows them as what the domain is now.
+pub(crate) fn spline_domains_deg(edited: &EditedReconstruction) -> Vec<f64> {
+    let table = &edited.base.image_table;
+    let mut domains: Vec<f64> = spline_cameras(edited)
+        .into_iter()
+        .filter_map(|c| spline_domain_deg(&table.cameras[c]))
+        .collect();
+    domains.sort_unstable_by(f64::total_cmp);
+    domains.dedup_by(|a, b| (*a - *b).abs() <= 1e-9);
+    domains
+}
+
+/// How far out the photographs of the node's spline cameras reach: the
+/// outermost keypoint, by incidence angle, over all of those cameras, among the
+/// observations and among the features detected in the images' `.sift` files.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct KeypointExtent {
+    /// The outermost observation.
+    pub(crate) observed: Option<KeypointReach>,
+    /// The outermost detected feature, `None` when no `.sift` file is readable.
+    pub(crate) detected: Option<KeypointReach>,
+}
+
+impl KeypointExtent {
+    /// The angle the domain row's button sets: the detected keypoint's, or the
+    /// observed one's when nothing was detected.
+    pub(crate) fn suggested_domain_deg(&self) -> Option<f64> {
+        self.detected.or(self.observed).map(|r| r.theta_deg)
+    }
+
+    /// The sentence the domain row shows, e.g. `outermost keypoint: 229.7 px,
+    /// 101.2° observed; 244.1 px, 107.9° detected`; `None` with no keypoint.
+    pub(crate) fn describe(&self) -> Option<String> {
+        let part = |r: &KeypointReach, source: &str| {
+            format!("{:.1} px, {:.1}° {source}", r.radius_px, r.theta_deg)
+        };
+        let parts: Vec<String> = [
+            self.observed.as_ref().map(|r| part(r, "observed")),
+            self.detected.as_ref().map(|r| part(r, "detected")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!parts.is_empty()).then(|| format!("outermost keypoint: {}", parts.join("; ")))
+    }
+}
+
+/// The node's [`KeypointExtent`], each keypoint measured under its own camera's
+/// model, over the base value's observations and, when `read_sift_files`, its
+/// images' `.sift` files.
+pub(crate) fn spline_keypoint_extent(
+    edited: &EditedReconstruction,
+    read_sift_files: bool,
+) -> KeypointExtent {
+    let cameras = spline_cameras(edited);
+    if cameras.is_empty() {
+        return KeypointExtent::default();
+    }
+    let outer = |a: Option<KeypointReach>, b: Option<KeypointReach>| match (a, b) {
+        (Some(a), Some(b)) => Some(if b.theta_deg > a.theta_deg { b } else { a }),
+        (a, b) => a.or(b),
+    };
+    outermost_keypoints(&edited.base, &cameras, read_sift_files)
+        .into_iter()
+        .fold(KeypointExtent::default(), |acc, c| KeypointExtent {
+            observed: outer(acc.observed, c.observed),
+            detected: outer(acc.detected, c.detected),
+        })
+}
+
 /// What the dialog reads off the node when it opens: why each checkbox is
-/// greyed, and the spline coefficient counts the node holds.
+/// greyed, the spline coefficient counts and domains the node holds, and how
+/// far out its photographs reach.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BundleAdjustGates {
     /// [`focal_refusal`].
@@ -113,21 +201,29 @@ pub(crate) struct BundleAdjustGates {
     pub(crate) distortion_refusal: Option<String>,
     /// [`spline_coeff_counts`].
     pub(crate) spline_coeff_counts: Vec<usize>,
+    /// [`spline_domains_deg`].
+    pub(crate) spline_domains_deg: Vec<f64>,
+    /// [`spline_keypoint_extent`].
+    pub(crate) keypoint_extent: KeypointExtent,
 }
 
 impl BundleAdjustGates {
-    /// Every gate, read off `edited`.
+    /// Every gate, read off `edited`. This reads the images' `.sift` files for
+    /// the detected keypoint, once, when the dialog opens; the positions alone
+    /// are a small read (see `specs/gui/edits/bundle-adjust.md`).
     pub(crate) fn of(edited: &EditedReconstruction) -> Self {
         Self {
             focal_refusal: focal_refusal(edited),
             distortion_refusal: distortion_refusal(edited),
             spline_coeff_counts: spline_coeff_counts(edited),
+            spline_domains_deg: spline_domains_deg(edited),
+            keypoint_extent: spline_keypoint_extent(edited, true),
         }
     }
 }
 
 /// What the user asked for, once they pressed `Run`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BundleAdjustAnswer {
     /// The node to adjust.
     pub recon: ReconId,
@@ -142,6 +238,10 @@ pub struct BundleAdjustAnswer {
     /// `release_distortion`, and never to the one count every spline camera
     /// already has.
     pub spline_coeff_count: Option<usize>,
+    /// The incidence angle, in degrees, every spline camera's domain is moved
+    /// to before the solve, or `None` to keep each domain. Set under the same
+    /// conditions as `spline_coeff_count`.
+    pub spline_domain_deg: Option<f64>,
 }
 
 /// The dialog, and what it remembers while it is up.
@@ -163,9 +263,37 @@ struct Pending {
     /// The count the control shows, and the one asked for once `keep_coeffs`
     /// is clear.
     coeff_count: usize,
+    /// Keep each spline camera's domain, which is the default.
+    keep_domain: bool,
+    /// The domain end the control shows, in degrees, and the one asked for
+    /// once `keep_domain` is clear.
+    domain_deg: f64,
 }
 
 impl Pending {
+    /// The domain the answer carries, under the rule the count follows.
+    fn spline_domain_deg(&self) -> Option<f64> {
+        let asked = self.release_focal
+            && self.release_distortion
+            && !self.keep_domain
+            && !self.gates.spline_domains_deg.is_empty();
+        let unchanged = matches!(
+            self.gates.spline_domains_deg.as_slice(),
+            [only] if (only - self.domain_deg).abs() <= 1e-9
+        );
+        (asked && !unchanged).then_some(self.domain_deg)
+    }
+
+    /// The domain row's button: the domain set to the outermost keypoint's
+    /// angle, detected where there is one and observed otherwise, and `Keep`
+    /// cleared. Nothing happens with no keypoint to take it from.
+    fn use_outermost_keypoint(&mut self) {
+        if let Some(deg) = self.gates.keypoint_extent.suggested_domain_deg() {
+            self.domain_deg = deg;
+            self.keep_domain = false;
+        }
+    }
+
     /// The count the answer carries: `None` unless the distortion is released,
     /// the count is not kept, and it differs from a single count every spline
     /// camera already has.
@@ -184,8 +312,9 @@ impl BundleAdjustPrompt {
     /// Idempotent while the dialog is already up, so a menu item racing itself
     /// cannot stack two of them. Both checkboxes start **clear**: a lens that
     /// moves is a different claim about the capture than a pose that does, and
-    /// the default should be the smaller one. The coefficient count starts at
-    /// **keep**, showing the node's largest count.
+    /// the default should be the smaller one. The coefficient count and the
+    /// spline domain start at **keep**, showing the node's largest count and
+    /// domain.
     pub(crate) fn ask(&mut self, recon: ReconId, label: String, gates: BundleAdjustGates) {
         if self.pending.is_none() {
             let coeff_count = gates
@@ -193,6 +322,7 @@ impl BundleAdjustPrompt {
                 .last()
                 .copied()
                 .unwrap_or(sfmtool_core::camera::refit_intrinsics::DEFAULT_COEFF_COUNT);
+            let domain_deg = gates.spline_domains_deg.last().copied().unwrap_or(90.0);
             self.pending = Some(Pending {
                 recon,
                 label,
@@ -201,6 +331,8 @@ impl BundleAdjustPrompt {
                 release_distortion: false,
                 keep_coeffs: true,
                 coeff_count,
+                keep_domain: true,
+                domain_deg,
             });
         }
     }
@@ -259,6 +391,7 @@ impl BundleAdjustPrompt {
                         );
                 });
                 spline_coeffs_row(ui, pending);
+                spline_domain_row(ui, pending);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Run").clicked() {
@@ -277,6 +410,7 @@ impl BundleAdjustPrompt {
             release_focal: pending.release_focal,
             release_distortion: pending.release_focal && pending.release_distortion,
             spline_coeff_count: pending.spline_coeff_count(),
+            spline_domain_deg: pending.spline_domain_deg(),
         });
         if answer.is_some() || cancel || !still_open {
             self.pending = None;
@@ -293,13 +427,7 @@ impl BundleAdjustPrompt {
 /// release it would only approximate the old curve. Editing the count clears
 /// `Keep`.
 fn spline_coeffs_row(ui: &mut egui::Ui, pending: &mut Pending) {
-    let why = if pending.gates.spline_coeff_counts.is_empty() {
-        Some("No camera of this reconstruction is a spline model (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE).")
-    } else if !pending.release_distortion {
-        Some("The coefficient count changes only while the lens distortion is released.")
-    } else {
-        None
-    };
+    let why = spline_row_refusal(pending, "coefficient count");
     let now = pending
         .gates
         .spline_coeff_counts
@@ -328,5 +456,87 @@ fn spline_coeffs_row(ui: &mut egui::Ui, pending: &mut Pending) {
         })
         .response
         .on_disabled_hover_text(why.unwrap_or_default());
+    });
+}
+
+/// Why the spline rows are disabled, or `None` while they are live: the same
+/// two reasons for the coefficient count and the domain.
+fn spline_row_refusal(pending: &Pending, what: &str) -> Option<String> {
+    if pending.gates.spline_coeff_counts.is_empty() {
+        Some(
+            "No camera of this reconstruction is a spline model (SFMTOOL_FISHEYE, \
+             SFMTOOL_PINHOLE)."
+                .to_string(),
+        )
+    } else if !pending.release_distortion {
+        Some(format!(
+            "The {what} changes only while the lens distortion is released."
+        ))
+    } else {
+        None
+    }
+}
+
+/// The "Spline domain (°)" row under the coefficients row: a `Keep` checkbox,
+/// the domain end, the domain(s) the node's spline cameras have now, and under
+/// them the outermost keypoint with a button that sets the domain to it.
+///
+/// The default domain is the model's own reach, the far image corner, and the
+/// row does not change it: the outermost keypoint is offered, so a circular
+/// fisheye can be trimmed to its image circle by choice. The button takes the
+/// detected keypoint, and where no `.sift` file could be read the observed one,
+/// which the text labels as observed.
+fn spline_domain_row(ui: &mut egui::Ui, pending: &mut Pending) {
+    let why = spline_row_refusal(pending, "spline domain");
+    let now = pending
+        .gates
+        .spline_domains_deg
+        .iter()
+        .map(|d| format!("{d:.1}°"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    ui.add_enabled_ui(why.is_none(), |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Spline domain (°)");
+            ui.checkbox(&mut pending.keep_domain, "Keep")
+                .on_hover_text("Keep each spline camera's domain.");
+            let domain = ui
+                .add(
+                    egui::DragValue::new(&mut pending.domain_deg)
+                        .range(1.0..=180.0)
+                        .speed(0.1)
+                        .fixed_decimals(1),
+                )
+                .on_hover_text(
+                    "Refit each spline camera on a domain ending at this incidence angle, \
+                     over the whole of it, before the solve. Past the domain the model is \
+                     a straight line the solve cannot bend.",
+                );
+            if domain.changed() {
+                pending.keep_domain = false;
+            }
+            if !now.is_empty() {
+                ui.label(format!("now {now}"));
+            }
+        })
+        .response
+        .on_disabled_hover_text(why.clone().unwrap_or_default());
+        if let Some(text) = pending.gates.keypoint_extent.describe() {
+            ui.horizontal(|ui| {
+                ui.label(text);
+                if let Some(deg) = pending.gates.keypoint_extent.suggested_domain_deg() {
+                    if ui
+                        .small_button(format!("Use {deg:.1}°"))
+                        .on_hover_text(
+                            "Set the domain to the outermost keypoint's angle: the detected \
+                             one, or the observed one where no .sift file could be read.",
+                        )
+                        .clicked()
+                    {
+                        pending.use_outermost_keypoint();
+                    }
+                }
+            });
+        }
     });
 }

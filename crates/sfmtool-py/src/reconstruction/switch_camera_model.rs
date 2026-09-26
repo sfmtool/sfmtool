@@ -17,6 +17,9 @@ use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
 use sfmtool_core::reconstruction::edited::EditedReconstruction;
+use sfmtool_core::reconstruction::outermost_keypoint::{
+    outermost_keypoints as core_outermost, KeypointReach, OutermostKeypoints,
+};
 use sfmtool_core::reconstruction::switch_camera_model::{
     switch_camera_model as core_switch, ErrorSummary, SwitchCameraModelReport,
 };
@@ -32,6 +35,33 @@ fn summary_to_py<'py>(py: Python<'py>, s: &ErrorSummary) -> PyResult<Bound<'py, 
     d.set_item("median_px", s.median_px)?;
     d.set_item("p90_px", s.p90_px)?;
     d.set_item("max_px", s.max_px)?;
+    Ok(d)
+}
+
+/// One keypoint's reach as a dict: ``radius_px``, ``theta_deg``, ``image``
+/// and ``xy``; ``None`` for no keypoint.
+pub(crate) fn reach_to_py(py: Python<'_>, r: Option<&KeypointReach>) -> PyResult<Py<PyAny>> {
+    let Some(r) = r else {
+        return Ok(py.None());
+    };
+    let d = PyDict::new(py);
+    d.set_item("radius_px", r.radius_px)?;
+    d.set_item("theta_deg", r.theta_deg)?;
+    d.set_item("image", r.image)?;
+    d.set_item("xy", (r.xy[0], r.xy[1]))?;
+    Ok(d.into_any().unbind())
+}
+
+/// One camera's outermost keypoints as a dict: ``camera``, ``images``,
+/// ``observed`` and ``detected`` (each a reach dict or ``None``) and
+/// ``detected_images``.
+fn outermost_to_py<'py>(py: Python<'py>, o: &OutermostKeypoints) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("camera", o.camera)?;
+    d.set_item("images", o.images)?;
+    d.set_item("observed", reach_to_py(py, o.observed.as_ref())?)?;
+    d.set_item("detected", reach_to_py(py, o.detected.as_ref())?)?;
+    d.set_item("detected_images", o.detected_images)?;
     Ok(d)
 }
 
@@ -73,6 +103,7 @@ fn report_to_py<'py>(py: Python<'py>, r: &SwitchCameraModelReport) -> PyResult<B
             summary_to_py(py, &o.past_trusted_after)?,
         )?;
         c.set_item("observations", obs)?;
+        c.set_item("outermost", outermost_to_py(py, &entry.outermost)?)?;
         cameras.append(c)?;
     }
     let d = PyDict::new(py);
@@ -138,8 +169,11 @@ impl PyEditedReconstruction {
     ///     ``unmeasured``, ``max_theta_deg``, ``before`` and ``after`` (each
     ///     ``median_px``, ``p90_px``, ``max_px``), ``changed_over_1px``,
     ///     ``trusted_deg``, ``past_trusted``, ``past_trusted_before`` and
-    ///     ``past_trusted_after``. Raises ``ValueError`` naming the camera,
-    ///     the rule and the value when the switch is refused.
+    ///     ``past_trusted_after``; and ``outermost``, the camera's outermost
+    ///     keypoint under the switched camera, as
+    ///     ``SfmrReconstruction.outermost_keypoints`` reports it. Raises
+    ///     ``ValueError`` naming the camera, the rule and the value when the
+    ///     switch is refused.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -200,5 +234,43 @@ impl PySfmrReconstruction {
             spline_domain_deg,
         )?;
         Ok((PySfmrReconstruction { inner: next }, report))
+    }
+
+    /// The keypoint of each camera's images that lies furthest from its
+    /// principal point, observed and detected.
+    ///
+    /// See ``specs/core/reconstruction/outermost-keypoint.md``. **Observed**
+    /// is over this reconstruction's observations; **detected** is over every
+    /// feature of the images' ``.sift`` files, read when ``read_sift_files``
+    /// is set, skipping any file that cannot be read. Each keypoint's angle is
+    /// the incidence angle this reconstruction's camera model gives its pixel.
+    ///
+    /// Args:
+    ///     cameras: Camera-table indexes (default: every camera).
+    ///     read_sift_files: Read the images' ``.sift`` files (default
+    ///         ``True``). Without them a ``sift_files`` reconstruction has no
+    ///         observed pixel either.
+    ///
+    /// Returns:
+    ///     A list with one dict per camera, in ascending order: ``camera``,
+    ///     ``images``, ``observed`` and ``detected`` (each ``None`` or a dict
+    ///     of ``radius_px``, ``theta_deg``, ``image`` and ``xy``) and
+    ///     ``detected_images``, the number of ``.sift`` files read.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
+    #[pyo3(signature = (*, cameras=None, read_sift_files=true))]
+    fn outermost_keypoints<'py>(
+        &self,
+        py: Python<'py>,
+        cameras: Option<Vec<usize>>,
+        read_sift_files: bool,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let cameras =
+            cameras.unwrap_or_else(|| (0..self.inner.image_table.cameras.len()).collect());
+        let reach = py.detach(|| core_outermost(&self.inner, &cameras, read_sift_files));
+        let out = PyList::empty(py);
+        for entry in &reach {
+            out.append(outermost_to_py(py, entry)?)?;
+        }
+        Ok(out)
     }
 }

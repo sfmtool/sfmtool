@@ -191,6 +191,17 @@ fn poses_points_and_keypoints_are_unchanged() {
     assert!(obs.trusted_deg.unwrap() < WIDE_DEG);
     assert_eq!(obs.past_trusted, 1);
     assert!(obs.past_trusted_before.max_px < 1e-3);
+
+    // The outermost observation is the wide one, measured under the switched
+    // camera; the fixture sits beside no .sift file, so nothing is detected.
+    let outermost = &entry.outermost;
+    assert_eq!((outermost.camera, outermost.images), (0, IMAGES));
+    let observed = outermost.observed.expect("inline keypoints");
+    assert_eq!(observed.image, 0);
+    // Past the source's trusted bound the two models disagree by a degree or
+    // two about the angle of the same pixel.
+    assert!((observed.theta_deg - WIDE_DEG).abs() < 3.0, "{observed:?}");
+    assert_eq!((outermost.detected, outermost.detected_images), (None, 0));
 }
 
 #[test]

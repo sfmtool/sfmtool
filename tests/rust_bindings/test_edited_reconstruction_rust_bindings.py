@@ -408,6 +408,39 @@ class TestSwitchCameraModel:
         _, kept = switched.bundle_adjust(opt_f=True, opt_distortion=True)
         assert kept["cameras"][0]["spline_refit"] is None
 
+    def test_the_spline_domain_is_moved_before_the_solve(self, embedded):
+        switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
+        with pytest.raises(ValueError, match="count or domain"):
+            switched.bundle_adjust(opt_f=True, spline_domain_deg=40.0)
+        with pytest.raises(ValueError, match="camera 0 could not be refitted"):
+            switched.bundle_adjust(
+                opt_f=True, opt_distortion=True, spline_domain_deg=200.0
+            )
+
+        adjusted, report = switched.bundle_adjust(
+            opt_f=True, opt_distortion=True, spline_domain_deg=40.0
+        )
+        (camera,) = report["cameras"]
+        refit = camera["spline_refit"]
+        assert (refit["coeffs_before"], refit["coeffs_after"]) == (6, 6)
+        assert refit["domain_after_deg"] == pytest.approx(40.0)
+        assert refit["domain_before_deg"] != pytest.approx(40.0)
+        observed = camera["outermost_observed"]
+        assert observed["radius_px"] > 0 and observed["theta_deg"] > 0
+        params = adjusted.materialize()[0].cameras[0].to_dict()["parameters"]
+        assert params["bspline_theta_max"] == pytest.approx(np.radians(40.0))
+
+    def test_the_outermost_keypoints_are_observed_and_detected(self, embedded):
+        recon = embedded.materialize()[0]
+        (camera,) = recon.outermost_keypoints()
+        assert camera["camera"] == 0 and camera["images"] == recon.image_count
+        observed = camera["observed"]
+        assert set(observed) == {"radius_px", "theta_deg", "image", "xy"}
+        # The fixture sits beside no .sift file.
+        assert camera["detected"] is None and camera["detected_images"] == 0
+        assert recon.outermost_keypoints(read_sift_files=False) == [camera]
+        assert recon.outermost_keypoints(cameras=[5]) == []
+
     def test_a_refusal_names_the_camera(self, embedded):
         with pytest.raises(ValueError, match="camera 0: .*90°"):
             embedded.switch_camera_model("SFMTOOL_PINHOLE", theta_fit_deg=95.0)

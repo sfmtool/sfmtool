@@ -152,6 +152,11 @@ fn get_camera_intrinsics_names_its_parameters_and_its_users() {
         params.values().all(|v| v.is_number()),
         "parameters are numbers keyed by name: {params:?}"
     );
+    // The fixture sits beside no .sift file, so nothing is detected and a
+    // sift_files value has no observed pixel either; the field is still there.
+    let outermost = &lens["outermost_keypoint"];
+    assert_eq!(outermost["detected"], Value::Null, "{outermost}");
+    assert_eq!(outermost["detected_camera_images"], 0, "{outermost}");
 }
 
 /// An intrinsics handle copied from any reply is the argument for the next

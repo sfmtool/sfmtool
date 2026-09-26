@@ -42,6 +42,7 @@ pub struct CameraSwitch {
     pub refit: CameraIntrinsicsRefit,          // carries the new camera
     pub images: usize,
     pub observations: ObservationComparison,
+    pub outermost: OutermostKeypoints,         // under the switched camera
 }
 
 pub struct ObservationComparison {
@@ -150,6 +151,18 @@ angle is past the source's trusted bound, which are the observations the switch
 is for. `unmeasured` counts the rest: an unposed image, a point behind the
 camera, a row with no pixel.
 
+### The outermost keypoint
+
+Each entry also carries the camera's outermost keypoint
+([`outermost-keypoint.md`](outermost-keypoint.md)): among its images'
+observations, and among every feature detected in their `.sift` files where
+those can be read, each as a radius from the principal point and an incidence
+angle under the **switched** camera, the model whose spline domain the fit just
+placed. It is reported beside that domain so a person can see how far out the
+photographs reach; the domain itself still defaults to the far image corner. A
+`.sift` file that cannot be read leaves the detected keypoint empty and does not
+refuse the switch.
+
 Comparing on a fixed set is deliberate. A following bundle adjustment or Add
 Image to Tracks changes the set, and a metric over a moving set cannot separate
 the lens from the population.
@@ -166,8 +179,9 @@ arguments and returns `(SfmrReconstruction, report)`; it is what `sfm xform
 
 The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict
-`CameraIntrinsics.refit` reports) and `observations` (the comparison's fields,
-each summary a dict of `median_px`, `p90_px` and `max_px`). A refusal is a
+`CameraIntrinsics.refit` reports), `observations` (the comparison's fields,
+each summary a dict of `median_px`, `p90_px` and `max_px`) and `outermost` (as
+`SfmrReconstruction.outermost_keypoints` reports it). A refusal is a
 `ValueError` carrying the error's sentence.
 
 ```python
@@ -187,6 +201,8 @@ exact projection, plus one point 95° off the first image's axis:
   errors recomputed, the input untouched;
 - the report's fixed set covering every observation, and the one past the
   trusted bound counted;
+- the outermost observation being the wide one, at its angle under the switched
+  camera, with nothing detected beside no `.sift` file;
 - only the named cameras changing;
 - a source with no trusted bound fitted out to its observations' extent;
 - a perspective target refused for a camera observed past 90°, and every

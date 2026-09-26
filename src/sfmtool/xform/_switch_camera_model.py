@@ -144,4 +144,26 @@ def format_camera_report(entry: dict) -> list[str]:
         if obs["past_trusted"]:
             lines.append(f"      before: {_summary(obs['past_trusted_before'])}")
             lines.append(f"      after:  {_summary(obs['past_trusted_after'])}")
+    outermost = format_outermost_keypoint(entry["outermost"])
+    if outermost:
+        lines.append(f"  {outermost}")
     return lines
+
+
+def format_outermost_keypoint(outermost: dict) -> str | None:
+    """``outermost keypoint: 229.7 px, 101.2° observed; 244.1 px, 107.9°
+    detected (24 .sift files)`` for one camera's outermost keypoints, as
+    ``SfmrReconstruction.outermost_keypoints`` reports them; ``None`` when there
+    is neither."""
+    parts = []
+    for source in ("observed", "detected"):
+        reach = outermost[source]
+        if reach is not None:
+            parts.append(
+                f"{reach['radius_px']:.1f} px, {reach['theta_deg']:.1f}° {source}"
+            )
+    if not parts:
+        return None
+    files = outermost["detected_images"]
+    read = f" ({files} .sift files)" if outermost["detected"] is not None else ""
+    return f"outermost keypoint: {'; '.join(parts)}{read}"
