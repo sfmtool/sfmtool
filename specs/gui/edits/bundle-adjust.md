@@ -66,7 +66,7 @@ behind it, not one a hand should be able to fire by accident.
 ### The dialog
 
 `Bundle Adjust...` opens a small window rather than running immediately, because
-there is one decision to take, how much of the lens may move:
+there is one decision to take, how much of the lens may move and in what form:
 
 - **Release focal length**, a checkbox, clear by default. Ticked, it releases
   the focal of every camera the posed images use, each its own. A focal that
@@ -86,6 +86,18 @@ there is one decision to take, how much of the lens may move:
   `k1` nor the spline can change the scale at the centre of the image, which is
   the focal's job, so the distortion is released only together with the focal
   ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
+- **Spline coefficients**, a row under it: a **Keep** checkbox, ticked by
+  default, a count from 2 to 32, and `now 8` (or `now 6, 8` when the node's
+  spline cameras differ) naming the counts the spline cameras of the posed
+  images have. The count starts at the largest of them. Editing the count
+  clears **Keep**. With **Keep** clear, every spline camera whose count differs
+  is refitted to the count over its whole spline domain before the solve, which
+  then fits the new coefficients to the observations; a count equal to the one
+  every spline camera already has asks for nothing. The row is **disabled**,
+  with a hover explanation, when no camera of the posed images is a spline
+  model, and while **Release lens distortion** is clear: a new coefficient
+  scheme only approximates the old curve until the solve fits it, so the core
+  function refuses the count without the release.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
   a window to leave lying open.
@@ -104,8 +116,8 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The two checkboxes are the only options the dialog sets, as `opt_f` and
-`opt_distortion`. The schedule, the iteration
+The two checkboxes and the coefficients row are the only options the dialog
+sets, as `opt_f`, `opt_distortion` and `spline_coeff_count`. The schedule, the iteration
 budget and the two floors are the core function's defaults, which are the
 kernel's.
 
@@ -139,7 +151,9 @@ The version's label is
 `Bundle adjusted <node label>`
 
 with `, focal released` appended when the focal was released, or `, focal and
-lens distortion released` when a camera's distortion was released too.
+lens distortion released` when a camera's distortion was released too, and then
+`, spline refitted to 12 coefficients` when a spline camera's coefficient count
+was changed before the solve.
 
 ### The Action Log
 
@@ -152,7 +166,12 @@ with each camera's focal change appended when the focal was released, and
 `, 12 points deleted` when the solve left points unsupported. A solve over one
 camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
 its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
-1399.8`, because a list of numbers alone would not say which lens moved. The three counts
+1399.8`, because a list of numbers alone would not say which lens moved. A
+spline refitted to a new count before the solve adds `, spline 8 → 12
+coefficients (refit max 0.004 px)` after the focal clause, with the same
+`camera N ` prefix when the solve holds several cameras: the refit's largest
+pixel distance from the old curve says how much of the lens change was the
+refit rather than the solve. The three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
 
@@ -191,10 +210,13 @@ Explorer (`sfm-explorer` lib tests, headless):
   in the entry, the focal gate naming the first camera that cannot release its
   focal, and the distortion gate closed on a node with no spline and open, with
   the label naming the release, once a camera is a spline model or a
-  `SIMPLE_RADIAL_FISHEYE`.
+  `SIMPLE_RADIAL_FISHEYE`, and the spline counts the coefficients row shows.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (the focal held), the
-  distortion released only with the focal, the keys that run and cancel it, an ordinary frame answering nothing, and a second
-  ask not stacking a second dialog.
+  distortion released only with the focal, the keys that run and cancel it, an
+  ordinary frame answering nothing, a second ask not stacking a second dialog,
+  and the coefficient count: kept by default and starting at the largest count,
+  asked for only when it changes some camera's count, and never without the
+  distortion release or a spline camera.
 - `scene_graph/tests.rs`: the context-menu entry live on an adjustable node,
   directly above `Retriangulate All Points`, reporting the node it was opened
   on; and drawn but dead on a node with no inline keypoints and on a busy one.

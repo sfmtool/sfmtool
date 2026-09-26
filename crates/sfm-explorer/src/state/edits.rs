@@ -165,6 +165,28 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// The spline refit clause of a bundle adjustment's Action Log entry: each
+/// camera whose spline was refitted to a new coefficient count before the
+/// solve, with how closely the refit reproduced the old curve. Named by table
+/// index when the solve holds more than one camera, as the focal clause is.
+fn spline_refit_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    cameras
+        .iter()
+        .filter_map(|c| c.spline_refit.as_ref().map(|r| (c, r)))
+        .map(|(c, r)| {
+            let who = if cameras.len() == 1 {
+                String::new()
+            } else {
+                format!("camera {} ", c.camera)
+            };
+            format!(
+                ", {who}spline {} → {} coefficients (refit max {:.3} px)",
+                r.coeffs_before, r.coeffs_after, r.max_px
+            )
+        })
+        .collect()
+}
+
 /// Why `node`'s covered observations cannot be pruned, or `None` when they can.
 ///
 /// The three reasons a caller can see without reading a single footprint, and
@@ -1387,14 +1409,22 @@ impl AppState {
             } else if report.cameras.iter().any(|c| c.focal_released) {
                 version_label.push_str(", focal released");
             }
+            if let Some(count) = report
+                .cameras
+                .iter()
+                .find_map(|c| c.spline_refit.as_ref().map(|r| r.coeffs_after))
+            {
+                version_label.push_str(&format!(", spline refitted to {count} coefficients"));
+            }
             let focal = focal_changes(&report.cameras);
+            let spline = spline_refit_changes(&report.cameras);
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
             } else {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{spline}{deleted}",
                 report.images,
                 report.points,
                 report.observations,

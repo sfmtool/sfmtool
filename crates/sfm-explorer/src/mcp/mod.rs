@@ -281,6 +281,7 @@ pub(crate) enum Command {
         reconstruction_label: String,
         release_focal: bool,
         release_distortion: bool,
+        spline_coeff_count: Option<usize>,
     },
     /// Convert one node's observations from `sift_files` to
     /// `embedded_patches`, then render bitmaps from readable photographs
@@ -1216,11 +1217,16 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
             release_distortion,
+            spline_coeff_count,
         } => edit::bundle_adjust(
             state,
             &reconstruction_label,
-            release_focal,
-            release_distortion,
+            &sfmtool_core::BundleAdjustOptions {
+                opt_f: release_focal,
+                opt_distortion: release_distortion,
+                spline_coeff_count,
+                ..sfmtool_core::BundleAdjustOptions::default()
+            },
         ),
         Command::ConvertToEmbeddedPatches {
             reconstruction_label,

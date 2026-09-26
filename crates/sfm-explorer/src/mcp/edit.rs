@@ -364,19 +364,13 @@ pub(super) fn add_camera_image_to_tracks(
 pub(super) fn bundle_adjust(
     state: &mut AppState,
     label: &str,
-    release_focal: bool,
-    release_distortion: bool,
+    options: &sfmtool_core::BundleAdjustOptions,
 ) -> super::Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    let options = sfmtool_core::BundleAdjustOptions {
-        opt_f: release_focal,
-        opt_distortion: release_distortion,
-        ..sfmtool_core::BundleAdjustOptions::default()
-    };
-    if let Err(message) = state.start_bundle_adjust(id, &options) {
+    if let Err(message) = state.start_bundle_adjust(id, options) {
         return super::Outcome::Done(Err(ToolError::new(message)));
     }
     let task = state.background_task().expect("the operation just started");

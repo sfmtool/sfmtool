@@ -383,6 +383,31 @@ class TestSwitchCameraModel:
         )
         assert adjusted.materialize()[0].cameras[0].model == "SIMPLE_RADIAL_FISHEYE"
 
+    def test_the_spline_is_refitted_to_a_new_coefficient_count(self, embedded):
+        switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
+        with pytest.raises(ValueError, match="only while the lens distortion"):
+            switched.bundle_adjust(opt_f=True, spline_coeff_count=8)
+        with pytest.raises(ValueError, match="2 to 32 coefficients, not 40"):
+            switched.bundle_adjust(
+                opt_f=True, opt_distortion=True, spline_coeff_count=40
+            )
+        fisheye, _ = embedded.switch_camera_model("SIMPLE_RADIAL_FISHEYE")
+        with pytest.raises(ValueError, match="no camera .* coefficient count"):
+            fisheye.bundle_adjust(opt_f=True, opt_distortion=True, spline_coeff_count=8)
+
+        adjusted, report = switched.bundle_adjust(
+            opt_f=True, opt_distortion=True, spline_coeff_count=8
+        )
+        (camera,) = report["cameras"]
+        refit = camera["spline_refit"]
+        assert (refit["coeffs_before"], refit["coeffs_after"]) == (6, 8)
+        assert 0.0 <= refit["rms_px"] <= refit["max_px"] < 1.0
+        params = adjusted.materialize()[0].cameras[0].to_dict()["parameters"]
+        assert params["bspline_coeff_count"] == 8
+
+        _, kept = switched.bundle_adjust(opt_f=True, opt_distortion=True)
+        assert kept["cameras"][0]["spline_refit"] is None
+
     def test_a_refusal_names_the_camera(self, embedded):
         with pytest.raises(ValueError, match="camera 0: .*90°"):
             embedded.switch_camera_model("SFMTOOL_PINHOLE", theta_fit_deg=95.0)

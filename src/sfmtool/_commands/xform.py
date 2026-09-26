@@ -40,9 +40,17 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
 )
 @click.option(
     "--bundle-adjust",
-    is_flag=True,
+    is_flag=False,
+    flag_value="",
     multiple=True,
-    help="Apply bundle adjustment to refine camera poses and 3D points",
+    help=(
+        "Apply bundle adjustment to refine camera poses and 3D points. A "
+        "reconstruction with a SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is "
+        "adjusted by sfmtool with the focal and the lens distortion released; "
+        "the optional 'coeffs=N' refits every spline camera to N spline "
+        "coefficients over its whole domain before that solve (e.g. "
+        "'--bundle-adjust coeffs=12')."
+    ),
 )
 @click.option(
     "--refine-normals",
@@ -323,7 +331,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Optimization:
-      --bundle-adjust                     Apply bundle adjustment
+      --bundle-adjust [coeffs=N]          Apply bundle adjustment (coeffs= refits spline cameras first)
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
@@ -518,5 +526,10 @@ def xform(ctx, input_path, output_path, **kwargs):
         click.echo("\nTransformed reconstruction saved to:")
         click.echo(f"  {output_path}")
 
+    except click.UsageError:
+        # A step that finds the chain misapplied to this reconstruction (e.g.
+        # ``--bundle-adjust coeffs=`` with no spline camera) says so as a usage
+        # error rather than as a failure of the step.
+        raise
     except Exception as e:
         raise click.ClickException(str(e))

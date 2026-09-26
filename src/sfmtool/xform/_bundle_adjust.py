@@ -13,6 +13,7 @@ and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
 import tempfile
 from pathlib import Path
 
+import click
 import numpy as np
 import pycolmap
 
@@ -23,21 +24,37 @@ SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
 
 
 class BundleAdjustTransform:
-    """Apply bundle adjustment to refine camera poses and 3D points."""
+    """Apply bundle adjustment to refine camera poses and 3D points.
+
+    Args:
+        coeff_count: Refit every spline camera to this many spline coefficients
+            before the solve (``--bundle-adjust coeffs=N``). Only a
+            reconstruction with a spline camera takes it, which the sfmtool
+            path adjusts; given for one without, ``apply`` raises
+            ``click.UsageError``.
+    """
 
     def __init__(
         self,
         refine_focal_length: bool = True,
         refine_principal_point: bool = False,
         refine_extra_params: bool = True,
+        coeff_count: int | None = None,
     ):
         self.refine_focal_length = refine_focal_length
         self.refine_principal_point = refine_principal_point
         self.refine_extra_params = refine_extra_params
+        self.coeff_count = coeff_count
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
+        if self.coeff_count is not None:
+            raise click.UsageError(
+                "--bundle-adjust coeffs= applies only to a reconstruction with a "
+                f"{' or '.join(SPLINE_MODELS)} camera, and this one has none "
+                "(switch a camera with --camera-model first)"
+            )
         return self._apply_pycolmap(recon)
 
     def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
@@ -56,6 +73,7 @@ class BundleAdjustTransform:
         adjusted, report = EditedReconstruction(recon).bundle_adjust(
             opt_f=self.refine_focal_length,
             opt_distortion=self.refine_focal_length and self.refine_extra_params,
+            spline_coeff_count=self.coeff_count,
         )
         print(
             f"    {report['images']} images, {report['points']} points, "
@@ -79,6 +97,14 @@ class BundleAdjustTransform:
                 f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}; "
                 f"released: {', '.join(released) or 'none'}"
             )
+            refit = camera["spline_refit"]
+            if refit is not None:
+                print(
+                    f"      spline refitted {refit['coeffs_before']} -> "
+                    f"{refit['coeffs_after']} coefficients before the solve: "
+                    f"rms {refit['rms_px']:.4f} px, max {refit['max_px']:.4f} px "
+                    "from the old curve over its domain"
+                )
         return adjusted.materialize()[0]
 
     def _apply_pycolmap(self, recon: SfmrReconstruction) -> SfmrReconstruction:
@@ -279,4 +305,5 @@ class BundleAdjustTransform:
         if self.refine_extra_params:
             opts.append("extra")
         opt_str = ",".join(opts) if opts else "none"
-        return f"Bundle adjustment (refine: {opt_str})"
+        coeffs = "" if self.coeff_count is None else f", coeffs={self.coeff_count}"
+        return f"Bundle adjustment (refine: {opt_str}{coeffs})"

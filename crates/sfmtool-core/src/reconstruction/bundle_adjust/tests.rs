@@ -528,6 +528,7 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_after: FOCAL,
                 focal_released: false,
                 distortion_released: false,
+                spline_refit: None,
             },
             CameraAdjustment {
                 camera: 1,
@@ -536,6 +537,7 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_after: 620.0,
                 focal_released: false,
                 distortion_released: false,
+                spline_refit: None,
             },
         ]
     );
@@ -1342,4 +1344,113 @@ fn a_camera_without_distortion_keeps_its_lens_beside_one_that_releases() {
         bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
     assert!(report.cameras[0].distortion_released);
     assert!(!report.cameras[1].distortion_released);
+}
+
+/// [`spline_fisheye`] on its own domain end.
+fn spline_fisheye_on(theta_max: f64, bspline: Vec<f64>) -> CameraIntrinsics {
+    let mut camera = spline_fisheye(bspline);
+    if let CameraModel::SfmtoolFisheye {
+        bspline_theta_max, ..
+    } = &mut camera.model
+    {
+        *bspline_theta_max = theta_max;
+    }
+    camera
+}
+
+/// A smooth eight-coefficient curve over the fixture's field.
+fn eight_coefficients() -> Vec<f64> {
+    (0..8).map(|i| -0.0004 * (i * i) as f64).collect()
+}
+
+fn with_coeff_count(count: usize) -> BundleAdjustOptions {
+    BundleAdjustOptions {
+        spline_coeff_count: Some(count),
+        ..distortion_released()
+    }
+}
+
+#[test]
+fn a_new_coefficient_count_refits_the_spline_before_the_solve() {
+    let truth = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
+    let source = perturb(truth);
+    for (count, refit_tolerance_px) in [(12, 0.01), (5, 0.25)] {
+        let (out, report) = bundle_adjust(&source, &with_coeff_count(count), &Progress::none())
+            .expect("well posed");
+        let camera = &report.cameras[0];
+        let refit = camera.spline_refit.as_ref().expect("the count changed");
+        assert_eq!((refit.coeffs_before, refit.coeffs_after), (8, count));
+        assert!(
+            refit.max_px < refit_tolerance_px && refit.rms_px <= refit.max_px,
+            "{count}: {refit:?}"
+        );
+        assert!(camera.distortion_released);
+        let Some((solved, d_max, _)) = out.image_table.cameras[0].model.radial_spline() else {
+            panic!("the camera is still a spline model");
+        };
+        assert_eq!(solved.len(), count);
+        assert_eq!(d_max, 0.3);
+        assert!(
+            report.median_residual_after < 0.1 * report.median_residual_before,
+            "{report:?}"
+        );
+    }
+}
+
+#[test]
+fn a_spline_already_at_the_count_is_not_refitted() {
+    let truth = truth_through(
+        vec![
+            spline_fisheye(eight_coefficients()),
+            spline_fisheye(vec![0.0; 4]),
+        ],
+        |i| (i % 2) as u32,
+    );
+    let (_, report) =
+        bundle_adjust(&perturb(truth), &with_coeff_count(8), &Progress::none()).expect("posed");
+    assert_eq!(report.cameras[0].spline_refit, None);
+    let refit = report.cameras[1].spline_refit.as_ref().expect("4 -> 8");
+    assert_eq!((refit.coeffs_before, refit.coeffs_after), (4, 8));
+}
+
+#[test]
+fn a_new_coefficient_count_is_refused_where_it_cannot_be_made() {
+    let spline = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
+    let held = BundleAdjustOptions {
+        opt_f: true,
+        spline_coeff_count: Some(12),
+        ..BundleAdjustOptions::default()
+    };
+    assert_eq!(
+        bundle_adjust(&spline, &held, &Progress::none()).err(),
+        Some(BundleAdjustError::SplineRefitWithoutDistortion)
+    );
+    for count in [0, 1, 33] {
+        let error = bundle_adjust(&spline, &with_coeff_count(count), &Progress::none()).err();
+        assert_eq!(error, Some(BundleAdjustError::SplineCoeffCount { count }));
+        assert!(error.unwrap().to_string().contains("2 to 32"));
+    }
+
+    let k1 = truth_through(vec![radial_fisheye(0.0)], |_| 0);
+    assert_eq!(
+        bundle_adjust(&k1, &with_coeff_count(12), &Progress::none()).err(),
+        Some(BundleAdjustError::SplineRefitWithoutSpline)
+    );
+
+    // A spline on a domain with no extent evaluates as the identity, and has
+    // no curve to refit.
+    let flat = truth_through(vec![spline_fisheye_on(0.0, vec![0.0; 4])], |_| 0);
+    let error = bundle_adjust(&flat, &with_coeff_count(6), &Progress::none()).err();
+    assert!(
+        matches!(
+            error,
+            Some(BundleAdjustError::SplineRefit {
+                camera: 0,
+                error: RefitError::Degenerate { .. }
+            })
+        ),
+        "{error:?}"
+    );
+    let sentence = error.unwrap().to_string();
+    assert!(sentence.starts_with("the spline of camera 0"), "{sentence}");
 }

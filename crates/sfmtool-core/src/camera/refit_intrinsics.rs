@@ -196,6 +196,9 @@ pub enum ThetaFitSource {
     ImageCorner,
     /// The caller's own value.
     Given,
+    /// The whole domain of a spline source refitted as the same spline model,
+    /// by [`refit_spline`].
+    SplineDomain,
 }
 
 impl ThetaFitSource {
@@ -206,6 +209,7 @@ impl ThetaFitSource {
             ThetaFitSource::Observations => "observations",
             ThetaFitSource::ImageCorner => "image_corner",
             ThetaFitSource::Given => "given",
+            ThetaFitSource::SplineDomain => "spline_domain",
         }
     }
 }
@@ -347,6 +351,11 @@ pub enum RefitError {
         /// The fit's largest angle, in degrees.
         theta_fit_deg: f64,
     },
+    /// [`refit_spline`] was handed a camera with no spline.
+    NotSplineSource {
+        /// The source's model.
+        model: &'static str,
+    },
     /// The samples do not determine the target's parameters.
     Degenerate {
         /// What did not hold.
@@ -413,6 +422,10 @@ impl fmt::Display for RefitError {
                 f,
                 "the fitted polynomial is trusted only to {trusted_deg:.2}°, short of the fit's \
                  largest angle {theta_fit_deg:.2}°"
+            ),
+            RefitError::NotSplineSource { model } => write!(
+                f,
+                "a {model} camera has no spline; only SFMTOOL_FISHEYE and SFMTOOL_PINHOLE carry one"
             ),
             RefitError::Degenerate { reason } => write!(f, "the fit is degenerate: {reason}"),
         }
@@ -543,6 +556,109 @@ pub(crate) fn refit_camera_intrinsics_over(
         }
     };
 
+    measured(
+        source,
+        camera,
+        &samples,
+        theta_fit_deg,
+        theta_fit_source,
+        domain,
+    )
+}
+
+/// Refit a spline camera as the same spline model with `coeff_count`
+/// coefficients, and with its domain ending at `spline_domain_deg` where that
+/// is given, or where the source's ends otherwise.
+///
+/// The fit samples the source over the **whole** new domain, `θ ∈ (0, θ_max]`
+/// with `θ_max` the domain end as an incidence angle, rather than over a
+/// trusted bound or the observations: a spline model is defined everywhere on
+/// its domain and along its linear tail past it, so the source states the
+/// curve at every angle the new spline covers, whether the new domain is
+/// shorter or longer than the old. The result is the best least-squares
+/// description of the source's curve on the new coefficient scheme, focal
+/// included. A domain end that is not given is copied exactly
+/// (`SFMTOOL_PINHOLE`'s `tan θ` is not taken through degrees and back). The
+/// fitted camera is checked for monotonicity like every spline fit.
+///
+/// Refused for a source without a spline (`NotSplineSource`), a count the
+/// model does not allow, and a domain end the model cannot have.
+///
+/// # Example
+///
+/// ```
+/// use sfmtool_core::camera::refit_intrinsics::refit_spline;
+/// use sfmtool_core::{CameraIntrinsics, CameraModel};
+///
+/// let source = CameraIntrinsics {
+///     model: CameraModel::SfmtoolFisheye {
+///         focal_length: 130.0,
+///         principal_point_x: 240.0,
+///         principal_point_y: 240.0,
+///         bspline_theta_max: 2.0,
+///         bspline: vec![0.0, -0.01, -0.03, -0.05, -0.07, -0.09, -0.11, -0.13],
+///     },
+///     width: 480,
+///     height: 480,
+/// };
+/// let refit = refit_spline(&source, 12, None).unwrap();
+/// assert!(refit.max_px < 0.05, "{}", refit.max_px);
+/// ```
+pub fn refit_spline(
+    source: &CameraIntrinsics,
+    coeff_count: usize,
+    spline_domain_deg: Option<f64>,
+) -> Result<CameraIntrinsicsRefit, RefitError> {
+    let Some((_, source_d_max, radial)) = source.model.radial_spline() else {
+        return Err(RefitError::NotSplineSource {
+            model: source.model_name(),
+        });
+    };
+    let target = match radial {
+        SplineRadial::IncidenceAngle => RefitTarget::SfmtoolFisheye { coeff_count },
+        SplineRadial::ImagePlaneRadius => RefitTarget::SfmtoolPinhole { coeff_count },
+    };
+    target.check()?;
+    let d_max = match spline_domain_deg {
+        Some(deg) => domain_end_of(radial, deg)?,
+        None => source_d_max,
+    };
+    if !(d_max > 0.0 && d_max.is_finite()) {
+        return Err(RefitError::Degenerate {
+            reason: "the spline domain has no extent",
+        });
+    }
+    let theta_fit = match radial {
+        SplineRadial::IncidenceAngle => d_max,
+        SplineRadial::ImagePlaneRadius => d_max.atan(),
+    };
+    if theta_fit > std::f64::consts::PI {
+        return Err(RefitError::SplineDomainInvalid {
+            spline_domain_deg: theta_fit.to_degrees(),
+        });
+    }
+    let samples = Samples::new(source, theta_fit)?;
+    let (camera, domain_deg) = fit_spline_camera_on(source, &samples, radial, coeff_count, d_max)?;
+    measured(
+        source,
+        camera,
+        &samples,
+        theta_fit.to_degrees(),
+        ThetaFitSource::SplineDomain,
+        Some(domain_deg),
+    )
+}
+
+/// The report of a fitted `camera` against its `source` over `samples`.
+fn measured(
+    source: &CameraIntrinsics,
+    camera: CameraIntrinsics,
+    samples: &Samples,
+    theta_fit_deg: f64,
+    theta_fit_source: ThetaFitSource,
+    spline_domain_deg: Option<f64>,
+) -> Result<CameraIntrinsicsRefit, RefitError> {
+    let (cx, cy) = source.principal_point();
     let fitted = samples.pixels(&camera).ok_or(RefitError::Degenerate {
         reason: "the fitted camera has no pixel for a sampled ray",
     })?;
@@ -553,13 +669,13 @@ pub(crate) fn refit_camera_intrinsics_over(
         extent: ModelExtent {
             edge_deg: extreme_angle_deg(&camera, &EDGE_MIDPOINTS),
             corner_deg: extreme_angle_deg(&camera, &CORNERS),
-            source_trusted_deg: trusted,
+            source_trusted_deg: trustworthy_max_theta_deg(source),
             source_fold_deg: forward_fold_deg(source),
         },
         camera,
         theta_fit_deg,
         theta_fit_source,
-        spline_domain_deg: domain,
+        spline_domain_deg,
         rms_px,
         max_px,
         radial_rms_px,
@@ -706,6 +822,22 @@ fn radial_coordinate(radial: SplineRadial, theta: f64) -> f64 {
     }
 }
 
+/// A spline family's domain end, in its own radial coordinate, for an
+/// incidence angle in degrees; refused where the family cannot end there.
+fn domain_end_of(radial: SplineRadial, deg: f64) -> Result<f64, RefitError> {
+    let valid = deg > 0.0
+        && match radial {
+            SplineRadial::IncidenceAngle => deg <= 180.0,
+            SplineRadial::ImagePlaneRadius => deg < 90.0,
+        };
+    if !valid {
+        return Err(RefitError::SplineDomainInvalid {
+            spline_domain_deg: deg,
+        });
+    }
+    Ok(radial_coordinate(radial, deg.to_radians()))
+}
+
 /// Fit a spline camera: place the domain, solve, build, and check the result
 /// is monotone. Returns the camera and its domain end in degrees.
 fn fit_spline_camera(
@@ -717,23 +849,7 @@ fn fit_spline_camera(
 ) -> Result<(CameraIntrinsics, Option<f64>), RefitError> {
     let (cx, cy) = source.principal_point();
     let d_max = match spline_domain_deg {
-        Some(deg) => {
-            let limit = match radial {
-                SplineRadial::IncidenceAngle => 180.0,
-                SplineRadial::ImagePlaneRadius => 90.0,
-            };
-            let valid = deg > 0.0
-                && match radial {
-                    SplineRadial::IncidenceAngle => deg <= limit,
-                    SplineRadial::ImagePlaneRadius => deg < limit,
-                };
-            if !valid {
-                return Err(RefitError::SplineDomainInvalid {
-                    spline_domain_deg: deg,
-                });
-            }
-            radial_coordinate(radial, deg.to_radians())
-        }
+        Some(deg) => domain_end_of(radial, deg)?,
         None => {
             // The far corner's pixel radius over the source's focal on the
             // axis, where every model family agrees with its base: the format
@@ -757,6 +873,21 @@ fn fit_spline_camera(
             reason: "the spline domain has no extent",
         });
     }
+    let (camera, domain_deg) = fit_spline_camera_on(source, samples, radial, coeff_count, d_max)?;
+    Ok((camera, Some(domain_deg)))
+}
+
+/// Fit a spline camera on the domain ending at `d_max`, in the family's radial
+/// coordinate: solve, build, and check the result is monotone. Returns the
+/// camera and its domain end in degrees.
+fn fit_spline_camera_on(
+    source: &CameraIntrinsics,
+    samples: &Samples,
+    radial: SplineRadial,
+    coeff_count: usize,
+    d_max: f64,
+) -> Result<(CameraIntrinsics, f64), RefitError> {
+    let (cx, cy) = source.principal_point();
     let (f, coeffs) = fit_spline(samples, cx, cy, radial, coeff_count, d_max)?;
     if coeff_count > 0 && !bspline_is_monotone(&coeffs, d_max, d_max) {
         return Err(RefitError::NotMonotone);
@@ -787,7 +918,7 @@ fn fit_spline_camera(
             width: source.width,
             height: source.height,
         },
-        Some(domain_deg),
+        domain_deg,
     ))
 }
 

@@ -2091,6 +2091,8 @@ The two bulk edits.
 // bundle_adjust { "reconstruction_label": "seoul_bull", "release_focal": true }
 // bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
 //                 "release_distortion": true }
+// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
+//                 "release_distortion": true, "spline_coeff_count": 12 }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -2140,14 +2142,19 @@ dialog collects: whether the focal of each camera the posed images use is
 released, as `release_focal`, and whether the lens distortion of each of those
 cameras whose model the adjustment can free it on (`k1` on
 `SIMPLE_RADIAL_FISHEYE`, the spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`)
-is released with it, as `release_distortion`. Everything else is the core function's defaults.
+is released with it, as `release_distortion`, and the coefficient count every
+spline camera is refitted to before the solve, as `spline_coeff_count` (2 to
+32; omitted keeps each count). Everything else is the core function's defaults.
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses; `release_focal` is refused, naming the camera, when a camera the posed
 images use has a model whose focal the adjustment cannot solve, and
 `release_distortion` is refused without `release_focal` and when no camera the
 posed images use has one of those three models. The report's focal clause names
-each released camera's focal before and after, and the version's label says
-`focal and lens distortion released` when a distortion was released.
+each released camera's focal before and after and each spline refit's counts
+and largest distance from the old curve, and the version's label says `focal
+and lens distortion released` when a distortion was released and `spline
+refitted to N coefficients` when a count changed. `spline_coeff_count` is
+refused without `release_distortion` and when no camera is a spline model.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -2888,7 +2895,8 @@ pub(crate) enum Command {
     MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool },
+    BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
+                   spline_coeff_count: Option<usize> },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
     Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },

@@ -355,6 +355,83 @@ pub(super) fn adjusted(state: &mut AppState, viewer: &mut Viewer3D, arguments: V
     }
 }
 
+/// Every camera of the node's value switched to a four-coefficient
+/// `SFMTOOL_PINHOLE` whose spline is flat, which projects exactly as the
+/// pinhole it replaces.
+fn with_flat_spline_cameras(state: &mut AppState) {
+    let recon = state.scene[0].recon_mut();
+    for camera in &mut recon.image_table.cameras {
+        let (f, _) = camera.focal_lengths();
+        let (cx, cy) = camera.principal_point();
+        camera.model = sfmtool_core::CameraModel::SfmtoolPinhole {
+            focal_length: f,
+            principal_point_x: cx,
+            principal_point_y: cy,
+            bspline_rho_max: 1.0,
+            bspline: vec![0.0; 4],
+        };
+    }
+}
+
+/// A coefficient count refits the spline before the solve, and the reply and
+/// the version say so.
+#[test]
+fn bundle_adjust_refits_the_spline_to_a_new_coefficient_count() {
+    let (mut state, mut viewer) = editable();
+    with_flat_spline_cameras(&mut state);
+    perturb(&mut state, 0.02);
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({
+            "reconstruction_label": "run_a",
+            "release_focal": true,
+            "release_distortion": true,
+            "spline_coeff_count": 6
+        }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("spline 4 → 6 coefficients"), "{report}");
+    let label = reply["label"].as_str().expect("a label");
+    assert!(
+        label.ends_with(", spline refitted to 6 coefficients"),
+        "{label}"
+    );
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let (bspline, _, _) = camera.model.radial_spline().expect("a spline");
+    assert_eq!(bspline.len(), 6);
+}
+
+/// A coefficient count without the distortion release is the core function's
+/// refusal, in its words.
+#[test]
+fn bundle_adjust_refuses_a_coefficient_count_without_the_distortion() {
+    let (mut state, mut viewer) = editable();
+    with_flat_spline_cameras(&mut state);
+    let map = json!({
+        "reconstruction_label": "run_a",
+        "release_focal": true,
+        "spline_coeff_count": 6
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("bundle_adjust must defer"),
+    };
+    state.finish_background_task();
+    let Err(error) =
+        super::super::edit::background_reply(&mut state, &pending).expect("the operation finished")
+    else {
+        panic!("expected a refusal");
+    };
+    assert!(error.0.contains("coefficient count"), "{error}");
+    assert_eq!(version_count(&state), 1);
+}
+
 /// The adjustment runs on the node's value and reports its residuals.
 #[test]
 fn bundle_adjust_pushes_a_version_and_reports_its_residuals() {
@@ -1367,6 +1444,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: false,
+            spline_coeff_count: None,
         }
     );
     assert_eq!(
@@ -1382,6 +1460,24 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: true,
+            spline_coeff_count: None,
+        }
+    );
+    assert_eq!(
+        parse(
+            "bundle_adjust",
+            json!({
+                "reconstruction_label": "a",
+                "release_focal": true,
+                "release_distortion": true,
+                "spline_coeff_count": 12
+            })
+        ),
+        Command::BundleAdjust {
+            reconstruction_label: "a".to_string(),
+            release_focal: true,
+            release_distortion: true,
+            spline_coeff_count: Some(12),
         }
     );
     assert_eq!(

@@ -42,7 +42,7 @@ pub struct RefitOptions {
     pub spline_domain_deg: Option<f64>, // None: far image corner
 }
 
-pub enum ThetaFitSource { TrustedBound, Observations, ImageCorner, Given }
+pub enum ThetaFitSource { TrustedBound, Observations, ImageCorner, Given, SplineDomain }
 
 pub enum DroppedTerm {
     FocalAspect { fy_over_fx: f64 },
@@ -80,6 +80,7 @@ pub enum RefitError {
     SplineDomainInvalid { spline_domain_deg: f64 },
     NotMonotone,
     TrustedBoundShort { trusted_deg: f64, theta_fit_deg: f64 },
+    NotSplineSource { model: &'static str },
     Degenerate { reason: &'static str },
 }
 
@@ -87,6 +88,14 @@ pub fn refit_camera_intrinsics(
     source: &CameraIntrinsics,
     target: &RefitTarget,
     options: &RefitOptions,
+) -> Result<CameraIntrinsicsRefit, RefitError>;
+
+/// A spline camera as the same spline model with another coefficient count
+/// and, optionally, another domain end, fitted over the whole new domain.
+pub fn refit_spline(
+    source: &CameraIntrinsics,
+    coeff_count: usize,
+    spline_domain_deg: Option<f64>, // None: the source's domain end, copied exactly
 ) -> Result<CameraIntrinsicsRefit, RefitError>;
 ```
 
@@ -114,6 +123,15 @@ to a lens with `fx ≠ fy` has an irreducible error that grows with the radius a
 varies with the azimuth. Without the `dropped` list and the separate
 `radial_rms_px`, a reader would see a large overall rms and could not tell a bad
 fit from a lost aspect.
+
+**A spline-to-spline refit is its own function.** Changing a spline camera's
+coefficient count is not a move between model families, and none of the
+defaults of `refit_camera_intrinsics` fit it: the domain end should stay where it
+is, exactly, and the fit should cover that whole domain rather than a trusted
+bound the source does not have. `refit_spline` states both, and takes only what
+can change. The bundle adjustment's coefficient count
+([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md)) is
+its caller.
 
 **Refusals are values.** Every refusal names the rule and the value it measured,
 so a caller can print it as the one sentence a menu or a CLI needs, and a test
@@ -163,6 +181,26 @@ A caller may give a smaller `θ_fit`, never a larger one than the trusted bound
 the fold into the new model: on the `kerry_park` rig's first lens the
 polynomial's radius flattens between 95° and 102°, and a spline fitted there
 flattens with it.
+
+### A spline source refitted as a spline
+
+A spline model has no trusted bound: its curve is defined everywhere on its
+domain `[0, d_max]` by construction, and along its linear tail past it. So when
+a spline camera is refitted as the same spline model with another coefficient
+count (`refit_spline`), the fit samples the **whole** new domain, `θ_fit` equal
+to the domain end as an incidence angle (`ThetaFitSource::SplineDomain`), and the
+result is the best least-squares description of the old curve on the new
+coefficient scheme, focal included. When no new domain end is given, the
+source's is copied bit for bit; `SFMTOOL_PINHOLE`'s `tan θ` is not taken through
+degrees and back. A new domain end is sampled the same way whether it is shorter
+or longer than the old one, since the old model states a pixel at every angle
+either way.
+
+The old and new bases are not nested (a spline of `N` coefficients has `N − 1`
+knot spans on the same domain), so the refit is not exact. On the `kerry_park`
+first lens as an eight-coefficient `SFMTOOL_FISHEYE` over about 150°, twelve
+coefficients reproduce the curve to under 0.05 px and five to under 1 px. The
+refit is checked for monotonicity like every spline fit.
 
 ### Spline targets: one linear solve
 
@@ -297,7 +335,7 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
 
 ## Testing
 
-[refit/tests.rs](../../../crates/sfmtool-core/src/camera/refit/tests.rs):
+[refit_intrinsics/tests.rs](../../../crates/sfmtool-core/src/camera/refit_intrinsics/tests.rs):
 
 - `EQUIDISTANT_FISHEYE` to `SFMTOOL_FISHEYE` fits to zero error with zero
   coefficients, and `EQUIDISTANT_FISHEYE` as a target is the spline fit with
@@ -310,6 +348,12 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   of its fold at about 101.6°; the fitted spline is monotone, its domain ends
   near 150°, and the aspect is reported as dropped.
 - A polynomial fitted to a spline over 80°.
+- `refit_spline`: the `kerry_park` first lens as an eight-coefficient spline
+  refitted to twelve and to five coefficients over its whole domain, the domain
+  end copied bit for bit and the curve reproduced within 0.05 px and 1 px; the
+  same count coming back as itself; an `SFMTOOL_PINHOLE` keeping its `ρ_max`
+  exactly; refusals for a source without a spline, counts of 1 and 33, and a
+  domain end past 180°.
 - Refusals: a perspective target past 90°; a fit past the trusted bound; a
   non-monotone spline; a polynomial trusted short of the fit; target names and
   coefficient counts.

@@ -1080,6 +1080,10 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
         crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited()),
         None
     );
+    assert_eq!(
+        crate::bundle_adjust_prompt::spline_coeff_counts(state.scene[0].edited()),
+        vec![4]
+    );
     let options = sfmtool_core::BundleAdjustOptions {
         opt_f: true,
         opt_distortion: true,

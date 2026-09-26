@@ -774,6 +774,13 @@ impl PyEditedReconstruction {
     ///         ``opt_f``: neither ``k1`` nor the spline can change the scale at
     ///         the centre, which is the focal's job. Raises when ``opt_f`` is
     ///         off or no camera has such a model.
+    ///     spline_coeff_count: Refit every spline camera in the solve whose
+    ///         coefficient count differs to this many coefficients before the
+    ///         solve, over its whole spline domain, and start the solve from
+    ///         the refitted cameras (default ``None``, which keeps each count).
+    ///         Needs ``opt_distortion``. Raises when it is off, when no camera
+    ///         is a spline model, for a count outside 2 to 32, and, naming the
+    ///         camera, when a refit is refused.
     ///     schedule: ``[(trim_px, loss_scale), ...]`` staged rounds (default
     ///         ``[(50, 5), (12, 2), (4, 1)]``).
     ///     max_iters: LM iteration budget per round (default 60).
@@ -790,15 +797,20 @@ impl PyEditedReconstruction {
     ///     ``cameras``, a list with one dict per camera in the solve, in
     ///     camera-table order: ``camera`` (its table index), ``images`` (the
     ///     posed images taken through it), ``focal_before``, ``focal_after``,
-    ///     ``focal_released`` and ``distortion_released``. Raises ``ValueError``
-    ///     with the reason when the adjustment is refused.
+    ///     ``focal_released``, ``distortion_released`` and ``spline_refit``:
+    ///     ``None`` where the coefficient count was kept, otherwise a dict of
+    ///     ``coeffs_before``, ``coeffs_after``, ``rms_px`` and ``max_px`` (the
+    ///     refit's pixel distance from the old camera over the spline domain).
+    ///     Raises ``ValueError`` with the reason when the adjustment is
+    ///     refused.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, spline_coeff_count=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
         opt_distortion: bool,
+        spline_coeff_count: Option<usize>,
         schedule: Option<Vec<(f64, f64)>>,
         max_iters: usize,
         min_track: usize,
@@ -807,6 +819,7 @@ impl PyEditedReconstruction {
         let options = BundleAdjustOptions {
             opt_f,
             opt_distortion,
+            spline_coeff_count,
             schedule: match schedule {
                 Some(rounds) => rounds
                     .into_iter()
@@ -842,6 +855,17 @@ impl PyEditedReconstruction {
             c.set_item("focal_after", camera.focal_after)?;
             c.set_item("focal_released", camera.focal_released)?;
             c.set_item("distortion_released", camera.distortion_released)?;
+            match &camera.spline_refit {
+                Some(refit) => {
+                    let r = PyDict::new(py);
+                    r.set_item("coeffs_before", refit.coeffs_before)?;
+                    r.set_item("coeffs_after", refit.coeffs_after)?;
+                    r.set_item("rms_px", refit.rms_px)?;
+                    r.set_item("max_px", refit.max_px)?;
+                    c.set_item("spline_refit", r)?;
+                }
+                None => c.set_item("spline_refit", py.None())?,
+            }
             cameras.append(c)?;
         }
         d.set_item("cameras", cameras)?;

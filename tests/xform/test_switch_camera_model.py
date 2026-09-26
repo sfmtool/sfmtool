@@ -228,3 +228,57 @@ def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
     assert "released: focal, distortion" in out
     result = SfmrReconstruction.load(output_path)
     assert result.cameras[0].model == "SFMTOOL_PINHOLE"
+
+
+def test_bundle_adjust_option_takes_a_coefficient_count():
+    """``--bundle-adjust`` bare keeps working; ``coeffs=N`` is its one key."""
+    from sfmtool.xform import BundleAdjustTransform
+    from sfmtool.xform._arg_parser import parse_transform_args
+
+    (bare,) = parse_transform_args(["--bundle-adjust"])
+    assert isinstance(bare, BundleAdjustTransform)
+    assert bare.coeff_count is None
+    (spaced,) = parse_transform_args(["--bundle-adjust", "coeffs=12"])
+    (joined,) = parse_transform_args(["--bundle-adjust=coeffs=12"])
+    assert spaced.coeff_count == joined.coeff_count == 12
+    assert "coeffs=12" in spaced.description()
+    # A following option is not taken as the value.
+    bare, scale = parse_transform_args(["--bundle-adjust", "--scale", "2"])
+    assert bare.coeff_count is None and scale.scale == 2.0
+    with pytest.raises(click.UsageError, match="Unknown --bundle-adjust key"):
+        parse_transform_args(["--bundle-adjust", "knots=4"])
+    with pytest.raises(click.UsageError, match="not a valid int"):
+        parse_transform_args(["--bundle-adjust", "coeffs=many"])
+
+
+def test_bundle_adjust_refits_the_spline_to_a_new_coefficient_count(
+    seoul_bull_ground_truth_sfmr, tmp_path, capsys
+):
+    """A camera switched to six spline coefficients is refitted to eight over
+    its whole domain before the solve, which then starts from the refit."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    output_path = tmp_path / "adjusted.sfmr"
+    apply_transforms_to_file(
+        seoul_bull_ground_truth_sfmr,
+        output_path,
+        [
+            SwitchCameraModelTransform("SFMTOOL_FISHEYE", coeff_count=6),
+            BundleAdjustTransform(coeff_count=8),
+        ],
+    )
+    out = capsys.readouterr().out
+    assert "spline refitted 6 -> 8 coefficients before the solve" in out
+    result = SfmrReconstruction.load(output_path)
+    (camera,) = result.cameras
+    assert camera.model == "SFMTOOL_FISHEYE"
+    params = camera.to_dict()["parameters"]
+    assert params["bspline_coeff_count"] == 8
+
+
+def test_bundle_adjust_coefficients_need_a_spline_camera(seoul_bull_ground_truth_sfmr):
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    with pytest.raises(click.UsageError, match="coeffs= applies only"):
+        BundleAdjustTransform(coeff_count=8).apply(recon)

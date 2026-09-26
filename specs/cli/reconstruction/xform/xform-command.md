@@ -335,9 +335,12 @@ same for the observations past the source's trusted bound.
 
 ### Optimization
 
-#### `--bundle-adjust`
+#### `--bundle-adjust [coeffs=N]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
+The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
+parameters, and `coeffs=N` (also `--bundle-adjust=coeffs=N`) applies only to the
+sfmtool path below.
 
 ```bash
 --remove-short-tracks 2 --bundle-adjust
@@ -361,7 +364,15 @@ through pycolmap as described below, unchanged.
 
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
+--bundle-adjust coeffs=12
 ```
+
+`coeffs=N` refits every spline camera whose coefficient count differs to `N`
+coefficients before that solve, over its whole spline domain with the domain
+end held, and the solve starts from the refitted cameras (`spline_coeff_count`,
+2 to 32). Each refit prints its old and new count and its rms and largest pixel
+distance from the old curve. On a reconstruction with no spline camera,
+`coeffs=` is a usage error rather than being ignored.
 
 Works on both `sift_files` and `embedded_patches` reconstructions. The transform
 round-trips through COLMAP binary files, which need a 2D keypoint per

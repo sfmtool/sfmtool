@@ -51,6 +51,7 @@ pub fn bundle_adjust(
 pub struct BundleAdjustOptions {
     pub opt_f: bool,
     pub opt_distortion: bool,
+    pub spline_coeff_count: Option<usize>,
     pub schedule: Vec<BaSchedule>,
     pub max_iters: usize,
     pub min_track: usize,
@@ -74,13 +75,28 @@ pub struct CameraAdjustment {
     pub focal_after: f64,
     pub focal_released: bool,
     pub distortion_released: bool,
+    pub spline_refit: Option<SplineRefit>, // Some where the count was changed
 }
+
+pub struct SplineRefit {
+    pub coeffs_before: usize,
+    pub coeffs_after: usize,
+    pub rms_px: f64, // the refit's distance from the old camera,
+    pub max_px: f64, // over the whole spline domain
+}
+
+/// The counts `spline_coeff_count` accepts: 2 to 32.
+pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize>;
 
 pub enum BundleAdjustError {
     NoKeypoints,
     FocalNotReleasable { camera: usize, model: &'static str },
     DistortionWithoutFocal,
     DistortionNotReleasable,
+    SplineRefitWithoutDistortion,
+    SplineRefitWithoutSpline,
+    SplineCoeffCount { count: usize },
+    SplineRefit { camera: usize, error: RefitError },
     NoPosedImages,
     NoObservations,
     EmptySchedule,
@@ -142,6 +158,28 @@ because then the caller asked for something that cannot happen anywhere.
 [`distortion_is_releasable`] is public for the same reason
 [`focal_is_releasable`] is.
 
+**`spline_coeff_count` refits before it solves, and only with the release.** A
+spline's coefficient count is a choice of how finely the lens curve can bend,
+and the solve cannot change it: the kernel's spline block has one column per
+coefficient. So a new count is a refit of each spline camera whose count
+differs, by `refit_spline`
+([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md)),
+as the same spline model with the domain end held and the fit taken over the
+whole domain, and the solve starts from the refitted cameras. The refit is the
+best least-squares description of the old curve on the new scheme, but it is not
+the old curve, and only the solve brings the new coefficients back to the
+observations, so the count is refused without `opt_distortion`
+(`SplineRefitWithoutDistortion`). It is refused when no camera in the solve is a
+spline model (`SplineRefitWithoutSpline`), outside `SPLINE_COEFF_COUNT_RANGE`
+(`SplineCoeffCount`), and, naming the camera, when a refit is
+(`SplineRefit`, carrying the refit's own refusal, such as a spline that is no
+longer monotone). The range is 2 to 32: fewer than two coefficients evaluate as
+the identity, and 32 is the refit's own ceiling, past which the knot spans are
+narrower than a lens calibration can support. A camera already at the count is
+not refitted. Each refit is reported with the old and new count and its pixel
+distance from the old camera, so a caller can say how much of the change was
+the refit and how much the solve.
+
 **The report is per camera.** Each camera in the solve has its own focal, so
 the report carries one `CameraAdjustment` per camera rather than one focal for
 the whole solve. Per-camera residual medians are not in it: the
@@ -198,10 +236,15 @@ without solving anything:
 - A focal release when any camera the posed images use has a model the kernel's
   focal column is not exact for (`FocalNotReleasable`, naming the first such
   camera by its table index, and its model).
-- A distortion release without the focal release (`DistortionWithoutFocal`),
-  and one when no camera the posed images use is a `SIMPLE_RADIAL_FISHEYE` or a
-  spline model whose spline is defined, at least two coefficients on a positive
-  finite domain end (`DistortionNotReleasable`).
+- A distortion release without the focal release (`DistortionWithoutFocal`).
+- A spline coefficient count without the distortion release
+  (`SplineRefitWithoutDistortion`), outside 2 to 32 (`SplineCoeffCount`), or with
+  no spline camera in the solve (`SplineRefitWithoutSpline`); then each spline
+  camera whose count differs is refitted, and the first refit refused refuses
+  the adjustment (`SplineRefit`).
+- A distortion release when no camera the posed images use, after any refit, is
+  a `SIMPLE_RADIAL_FISHEYE` or a spline model whose spline is defined, at least
+  two coefficients on a positive finite domain end (`DistortionNotReleasable`).
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -246,7 +289,9 @@ The kernel runs twice. The second is the adjustment. The **first** runs it over
 an **empty** schedule, which executes no round and reports the residuals at the
 state it was handed: the "before" median is then measured by the same projection
 the "after" one is, through the same camera model, rather than by a second
-spelling of the reprojection in this module.
+spelling of the reprojection in this module. The first run reads the cameras the
+value holds, and the second starts from the refitted ones where a coefficient
+count changed, so the "before" median describes the input value.
 
 Both medians are taken over the finite residuals of the points that survive, so
 the two numbers describe one population and their difference is the improvement
@@ -345,6 +390,7 @@ would leave the frame carrying the gauge drift of the solve.
 |-----------|---------|---------|
 | `opt_f` | `false` | Release the focal length of every camera the posed images use, each its own. |
 | `opt_distortion` | `false` | Release the lens distortion of every camera the posed images use whose model admits it (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on the spline models), each its own; needs `opt_f`. |
+| `spline_coeff_count` | `None` | Refit every spline camera in the solve whose coefficient count differs to this count, over its whole domain, before the solve; needs `opt_distortion`; 2 to 32. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -357,13 +403,15 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-schedule=None, max_iters=60, min_track=2, min_obs=12)` returns
+spline_coeff_count=None, schedule=None, max_iters=60, min_track=2,
+min_obs=12)` returns
 `(EditedReconstruction, report)`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
-camera in the solve carrying the `CameraAdjustment` fields, and every refusal is
-a `ValueError` carrying the sentence the error writes.
+camera in the solve carrying the `CameraAdjustment` fields (`spline_refit` a
+dict of the `SplineRefit` fields, or `None`), and every refusal is a
+`ValueError` carrying the sentence the error writes.
 
 ```python
 adjusted, report = value.bundle_adjust(opt_f=True)
@@ -394,6 +442,12 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   the first two released and the third holding its lens; the release refused
   without `opt_f` and on a value with nothing to release, in one-line
   sentences.
+- A new coefficient count, 8 → 12 and 8 → 5, refitting the spline before the
+  solve within 0.01 px and 0.25 px of the old curve, the domain end kept, the
+  camera coming back with the new count and the residual median falling by an
+  order of magnitude; a camera already at the count not refitted beside one that
+  is; the count refused without `opt_distortion`, at 0, 1 and 33, with no spline
+  camera, and, naming the camera, when the refit is.
 - `opt_f` over two releasable cameras finding each its own planted focal and
   moving nothing else about either lens, and refused, naming the camera and its
   model, when one of them is not releasable.

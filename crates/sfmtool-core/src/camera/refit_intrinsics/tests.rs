@@ -307,3 +307,106 @@ fn targets_are_checked_by_name() {
         RefitTarget::Colmap("OPENCV_FISHEYE")
     );
 }
+
+/// The `kerry_park` first lens as an eight-coefficient `SFMTOOL_FISHEYE`, its
+/// domain at the far corner (about 150°): a real lens's curve, with the
+/// continuation past the trusted bound the fit made up.
+fn kerry_spline(coeff_count: usize) -> CameraIntrinsics {
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(coeff_count)).unwrap();
+    refit_camera_intrinsics(&kerry_cam0(), &target, &RefitOptions::default())
+        .expect("the switch the draft quotes")
+        .camera
+}
+
+#[test]
+fn a_spline_refitted_to_another_count_keeps_its_curve_over_the_whole_domain() {
+    let source = kerry_spline(8);
+    let (_, d_max, _) = spline_of(&source);
+    for (count, tolerance_px) in [(12, 0.05), (5, 1.0)] {
+        let refit = refit_spline(&source, count, None).expect("a monotone refit");
+        let (_, refit_d_max, coeffs) = spline_of(&refit.camera);
+        assert_eq!(coeffs.len(), count);
+        // The domain is copied, not taken through degrees and back.
+        assert_eq!(refit_d_max.to_bits(), d_max.to_bits());
+        assert_eq!(refit.theta_fit_source, ThetaFitSource::SplineDomain);
+        assert!((refit.theta_fit_deg - d_max.to_degrees()).abs() < 1e-9);
+        assert!(refit.dropped.is_empty(), "{:?}", refit.dropped);
+        assert!(
+            refit.max_px < tolerance_px,
+            "{count} coefficients: max {} px, rms {} px",
+            refit.max_px,
+            refit.rms_px
+        );
+    }
+}
+
+#[test]
+fn a_spline_refitted_to_its_own_count_comes_back_itself() {
+    let source = kerry_spline(8);
+    let refit = refit_spline(&source, 8, None).expect("a monotone refit");
+    let (f0, _, c0) = spline_of(&source);
+    let (f1, _, c1) = spline_of(&refit.camera);
+    assert!((f1 - f0).abs() < 1e-5 * f0, "{f0} -> {f1}");
+    for (a, b) in c0.iter().zip(&c1) {
+        assert!((a - b).abs() < 1e-3, "{c0:?} -> {c1:?}");
+    }
+    assert!(refit.max_px < 1e-2, "{}", refit.max_px);
+}
+
+#[test]
+fn a_pinhole_spline_keeps_its_domain_exactly() {
+    let source = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.8,
+            bspline: vec![0.0, -0.002, -0.006, -0.012, -0.02, -0.03],
+        },
+        width: 640,
+        height: 480,
+    };
+    let refit = refit_spline(&source, 9, None).expect("a monotone refit");
+    let CameraModel::SfmtoolPinhole {
+        bspline_rho_max,
+        ref bspline,
+        ..
+    } = refit.camera.model
+    else {
+        panic!("still SFMTOOL_PINHOLE");
+    };
+    assert_eq!(bspline_rho_max, 0.8);
+    assert_eq!(bspline.len(), 9);
+    assert!(refit.max_px < 0.05, "{}", refit.max_px);
+}
+
+#[test]
+fn a_spline_refit_is_refused_where_it_cannot_be_made() {
+    assert_eq!(
+        refit_spline(&kerry_cam0(), 8, None).err(),
+        Some(RefitError::NotSplineSource {
+            model: "OPENCV_FISHEYE"
+        })
+    );
+    let source = kerry_spline(8);
+    assert_eq!(
+        refit_spline(&source, 1, None).err(),
+        Some(RefitError::CoeffCount {
+            model: "SFMTOOL_FISHEYE",
+            count: 1
+        })
+    );
+    assert_eq!(
+        refit_spline(&source, MAX_COEFF_COUNT + 1, None).err(),
+        Some(RefitError::CoeffCount {
+            model: "SFMTOOL_FISHEYE",
+            count: MAX_COEFF_COUNT + 1
+        })
+    );
+    assert_eq!(
+        refit_spline(&source, 8, Some(190.0)).err(),
+        Some(RefitError::SplineDomainInvalid {
+            spline_domain_deg: 190.0
+        })
+    );
+}

@@ -302,6 +302,23 @@ def parse_localize_keypoints_params(param: str) -> LocalizeKeypointsTransform:
     )
 
 
+# Each --bundle-adjust key maps to a caster; the transform and the adjustment
+# own the range checks.
+_BUNDLE_ADJUST_KEYS: dict[str, Callable[[str], object]] = {
+    "coeffs": int,
+}
+
+
+def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
+    """Parse a ``--bundle-adjust`` comma-separated ``key=value`` string.
+
+    An empty string is the bare option. ``coeffs=N`` refits every spline camera
+    to ``N`` spline coefficients before the solve.
+    """
+    kwargs = _parse_kv_params(param, "--bundle-adjust", _BUNDLE_ADJUST_KEYS)
+    return BundleAdjustTransform(coeff_count=kwargs.get("coeffs"))
+
+
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns
 # range/enum validation. Keys mirror the ToEmbeddedPatchesTransform parameters.
 _TO_EMBEDDED_PATCHES_KEYS: dict[str, Callable[[str], object]] = {
@@ -523,7 +540,10 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
             p, "--remove-short-tracks", int, RemoveShortTracksFilter
         ),
     ),
-    "--bundle-adjust": ("none", lambda _p, _: BundleAdjustTransform()),
+    "--bundle-adjust": (
+        "optional",
+        lambda p, _: _parse_optional(p, "--bundle-adjust", parse_bundle_adjust_params),
+    ),
     "--drop-thumbnails": ("none", lambda _p, _: DropThumbnailsTransform()),
     "--drop-patch-bitmaps": ("none", lambda _p, _: DropPatchBitmapsTransform()),
     "--add-thumbnails": ("none", lambda _p, _: AddThumbnailsTransform()),

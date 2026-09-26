@@ -14,7 +14,10 @@
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use super::data::SfmrReconstruction;
+use std::ops::RangeInclusive;
+
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
+use crate::camera::refit_intrinsics::{refit_spline, RefitError, MAX_COEFF_COUNT};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::bundle_adjust::{
     BaCameras, BaSchedule, DistanceReference, FreePointPolicy, PointConstraints,
@@ -32,6 +35,13 @@ const DEFAULT_MIN_TRACK: usize = 2;
 /// Trim survivors below which a round exits degenerate, the kernel's own
 /// default.
 const DEFAULT_MIN_OBS: usize = 12;
+
+/// The spline coefficient counts [`BundleAdjustOptions::spline_coeff_count`]
+/// accepts. The floor is the fewest coefficients a spline is defined with
+/// (fewer evaluate as the identity, which has nothing to release); the ceiling
+/// is the refit's own, [`MAX_COEFF_COUNT`], past which the knot spans are
+/// narrower than a lens calibration can support.
+pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize> = MIN_BSPLINE_COEFFS..=MAX_COEFF_COUNT;
 
 /// What the adjustment is allowed to move, and how hard it tries.
 ///
@@ -64,6 +74,21 @@ pub struct BundleAdjustOptions {
     /// of any other model keeps its distortion where it is, and the report says
     /// which cameras released theirs.
     pub opt_distortion: bool,
+    /// Change the coefficient count of every spline camera in the solve to
+    /// this, before the solve starts. `None`, the default, keeps each count.
+    ///
+    /// Each spline camera whose count differs is refitted by
+    /// [`refit_spline`] as the same spline model with this many coefficients,
+    /// its domain end held, fitted over the whole domain: the best
+    /// least-squares description of the old spline's curve on the new
+    /// coefficient scheme. The solve then starts from the refitted cameras.
+    /// Refused unless [`Self::opt_distortion`] is on, because a new
+    /// coefficient scheme can only approximate the old curve and it is the
+    /// solve that brings it back to the observations; refused when no camera
+    /// in the solve is a spline model; refused outside
+    /// [`SPLINE_COEFF_COUNT_RANGE`]; and refused, naming the camera, when a
+    /// refit is.
+    pub spline_coeff_count: Option<usize>,
     /// The staged trim schedule, `(trim_px, loss_scale)` per round.
     pub schedule: Vec<BaSchedule>,
     /// LM iteration budget per round.
@@ -81,6 +106,7 @@ impl Default for BundleAdjustOptions {
         Self {
             opt_f: false,
             opt_distortion: false,
+            spline_coeff_count: None,
             schedule: DEFAULT_SCHEDULE.to_vec(),
             max_iters: DEFAULT_MAX_ITERS,
             min_track: DEFAULT_MIN_TRACK,
@@ -109,6 +135,24 @@ pub enum BundleAdjustError {
     /// The distortion release was asked for, and no camera in the solve has a
     /// model whose distortion the adjustment can release.
     DistortionNotReleasable,
+    /// A spline coefficient count was asked for without the distortion
+    /// release.
+    SplineRefitWithoutDistortion,
+    /// A spline coefficient count was asked for, and no camera in the solve is
+    /// a spline model.
+    SplineRefitWithoutSpline,
+    /// A spline coefficient count outside [`SPLINE_COEFF_COUNT_RANGE`].
+    SplineCoeffCount {
+        /// The count asked for.
+        count: usize,
+    },
+    /// The refit of one spline camera to the new count was refused.
+    SplineRefit {
+        /// The camera's index in the reconstruction's camera table.
+        camera: usize,
+        /// The refit's refusal.
+        error: RefitError,
+    },
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,
     /// No observation of a live point falls in a posed image.
@@ -157,6 +201,27 @@ impl std::fmt::Display for BundleAdjustError {
                 "no camera of this reconstruction has lens distortion the adjustment can \
                  release; it releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
                  SFMTOOL_FISHEYE and SFMTOOL_PINHOLE"
+            ),
+            BundleAdjustError::SplineRefitWithoutDistortion => write!(
+                f,
+                "a spline's coefficient count is changed only while the lens distortion is \
+                 released, because the new coefficients can only approximate the old curve \
+                 until the solve fits them to the observations"
+            ),
+            BundleAdjustError::SplineRefitWithoutSpline => write!(
+                f,
+                "no camera of this reconstruction has a spline whose coefficient count could \
+                 change; only SFMTOOL_FISHEYE and SFMTOOL_PINHOLE carry one"
+            ),
+            BundleAdjustError::SplineCoeffCount { count } => write!(
+                f,
+                "a spline takes {} to {} coefficients, not {count}",
+                SPLINE_COEFF_COUNT_RANGE.start(),
+                SPLINE_COEFF_COUNT_RANGE.end()
+            ),
+            BundleAdjustError::SplineRefit { camera, error } => write!(
+                f,
+                "the spline of camera {camera} could not be refitted: {error}"
             ),
             BundleAdjustError::NoPosedImages => {
                 write!(f, "no image of this reconstruction carries a pose")
@@ -232,6 +297,24 @@ pub struct CameraAdjustment {
     /// Whether its lens distortion was released: `k1` on a
     /// `SIMPLE_RADIAL_FISHEYE`, the spline on a spline model.
     pub distortion_released: bool,
+    /// The refit that gave its spline a new coefficient count before the
+    /// solve, or `None` where the count was kept.
+    pub spline_refit: Option<SplineRefit>,
+}
+
+/// How one camera's spline was refitted to a new coefficient count before the
+/// solve.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplineRefit {
+    /// The coefficient count it had.
+    pub coeffs_before: usize,
+    /// The coefficient count it was refitted to.
+    pub coeffs_after: usize,
+    /// RMS pixel distance between the old and the refitted camera over the
+    /// refit's samples, which cover the whole spline domain.
+    pub rms_px: f64,
+    /// The largest such distance.
+    pub max_px: f64,
 }
 
 /// Bundle-adjust `recon`, returning the adjusted value and a report.
@@ -329,7 +412,7 @@ pub fn bundle_adjust(
         .collect();
     used.sort_unstable();
     used.dedup();
-    let cameras: Vec<CameraIntrinsics> = used
+    let source_cameras: Vec<CameraIntrinsics> = used
         .iter()
         .map(|&c| table.cameras[c as usize].clone())
         .collect();
@@ -346,7 +429,7 @@ pub fn bundle_adjust(
     if options.opt_f {
         if let Some((&c, camera)) = used
             .iter()
-            .zip(&cameras)
+            .zip(&source_cameras)
             .find(|(_, camera)| !focal_is_releasable(camera))
         {
             return Err(BundleAdjustError::FocalNotReleasable {
@@ -355,14 +438,56 @@ pub fn bundle_adjust(
             });
         }
     }
-    if options.opt_distortion {
-        if !options.opt_f {
-            return Err(BundleAdjustError::DistortionWithoutFocal);
+    if options.opt_distortion && !options.opt_f {
+        return Err(BundleAdjustError::DistortionWithoutFocal);
+    }
+    // A new coefficient count is a refit of each spline camera whose count
+    // differs, before the solve, and the solve starts from the refitted
+    // cameras. The "before" residuals are still measured through the cameras
+    // the value holds, so the report's two medians describe the input and the
+    // output.
+    let mut spline_refits: Vec<Option<SplineRefit>> = vec![None; used.len()];
+    let mut cameras = source_cameras.clone();
+    if let Some(count) = options.spline_coeff_count {
+        if !options.opt_distortion {
+            return Err(BundleAdjustError::SplineRefitWithoutDistortion);
         }
-        if !cameras.iter().any(distortion_is_releasable) {
-            return Err(BundleAdjustError::DistortionNotReleasable);
+        if !SPLINE_COEFF_COUNT_RANGE.contains(&count) {
+            return Err(BundleAdjustError::SplineCoeffCount { count });
+        }
+        if !cameras.iter().any(|c| c.model.radial_spline().is_some()) {
+            return Err(BundleAdjustError::SplineRefitWithoutSpline);
+        }
+        for (j, &c) in used.iter().enumerate() {
+            let Some((bspline, _, _)) = source_cameras[j].model.radial_spline() else {
+                continue;
+            };
+            let coeffs_before = bspline.len();
+            if coeffs_before == count {
+                continue;
+            }
+            let refit = refit_spline(&source_cameras[j], count, None).map_err(|error| {
+                BundleAdjustError::SplineRefit {
+                    camera: c as usize,
+                    error,
+                }
+            })?;
+            spline_refits[j] = Some(SplineRefit {
+                coeffs_before,
+                coeffs_after: count,
+                rms_px: refit.rms_px,
+                max_px: refit.max_px,
+            });
+            cameras[j] = refit.camera;
         }
     }
+    if options.opt_distortion && !cameras.iter().any(distortion_is_releasable) {
+        return Err(BundleAdjustError::DistortionNotReleasable);
+    }
+    let source_ba_cameras = BaCameras {
+        cameras: &source_cameras,
+        image_camera: image_camera.as_slice().into(),
+    };
     let ba_cameras = BaCameras {
         cameras: &cameras,
         image_camera: image_camera.as_slice().into(),
@@ -475,7 +600,7 @@ pub fn bundle_adjust(
     // a second spelling of it here.
     let residuals = p_before.phase("residuals before");
     let before = crate::geometry::bundle_adjust::bundle_adjust(
-        &ba_cameras,
+        &source_ba_cameras,
         &mut quats.clone(),
         &mut trans.clone(),
         &mut points.clone(),
@@ -572,10 +697,11 @@ pub fn bundle_adjust(
         .map(|(j, &c)| CameraAdjustment {
             camera: c as usize,
             images: image_camera.iter().filter(|&&k| k as usize == j).count(),
-            focal_before: cameras[j].focal_lengths().0,
+            focal_before: source_cameras[j].focal_lengths().0,
             focal_after: solved.cameras[j].focal_lengths().0,
             focal_released: options.opt_f,
             distortion_released: options.opt_distortion && distortion_is_releasable(&cameras[j]),
+            spline_refit: spline_refits[j].clone(),
         })
         .collect();
 

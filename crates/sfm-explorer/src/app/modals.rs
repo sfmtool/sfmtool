@@ -32,6 +32,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         let options = sfmtool_core::BundleAdjustOptions {
             opt_f: answer.release_focal,
             opt_distortion: answer.release_distortion,
+            spline_coeff_count: answer.spline_coeff_count,
             ..sfmtool_core::BundleAdjustOptions::default()
         };
         // The refusal is already an Action Log row: the start writes it

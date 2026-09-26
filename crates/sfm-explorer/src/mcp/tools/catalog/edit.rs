@@ -350,6 +350,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              camera the posed images use has such a model. Defaults to false.",
                         ),
                     ),
+                    (
+                        "spline_coeff_count",
+                        json!({
+                            "type": "integer",
+                            "minimum": 2,
+                            "maximum": 32,
+                            "description":
+                                "Refit every SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera the posed                                  images use to this many spline coefficients before the solve,                                  over its whole spline domain, and start the solve from the                                  refitted cameras; a camera already at the count is left alone.                                  Refused without release_distortion, since the new coefficients                                  only approximate the old curve until the solve fits them, and                                  when no camera is a spline model. The report names each refit                                  and its largest pixel distance from the old curve. Omit to keep                                  each count.",
+                        }),
+                    ),
                 ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
