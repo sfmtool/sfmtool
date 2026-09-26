@@ -341,11 +341,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     (
                         "release_distortion",
                         flag(
-                            "Solve the radial spline of each camera that carries one \
-                             (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE) together with its focal. \
-                             Refused without release_focal, since the spline cannot change \
-                             the scale at the centre of the image, and refused when no camera \
-                             the posed images use carries a spline. Defaults to false.",
+                            "Solve each camera's lens distortion together with its focal, \
+                             where its model has distortion the adjustment can free: k1 on \
+                             SIMPLE_RADIAL_FISHEYE, the radial spline on SFMTOOL_FISHEYE and \
+                             SFMTOOL_PINHOLE. Cameras of other models keep theirs. Refused \
+                             without release_focal, since neither k1 nor the spline can \
+                             change the scale at the centre of the image, and refused when no \
+                             camera the posed images use has such a model. Defaults to false.",
                         ),
                     ),
                 ],

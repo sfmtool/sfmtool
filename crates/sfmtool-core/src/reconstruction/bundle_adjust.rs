@@ -51,18 +51,19 @@ pub struct BundleAdjustOptions {
     /// asked for a focal solve and got a fixed-focal one back would have no way
     /// to tell.
     pub opt_f: bool,
-    /// Release the radial spline of every camera the posed images use that
-    /// carries one (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`), each camera its own.
-    /// Off by default.
+    /// Release each camera's lens distortion where its model admits one: `k1`
+    /// on `SIMPLE_RADIAL_FISHEYE`, the radial spline on `SFMTOOL_FISHEYE` and
+    /// `SFMTOOL_PINHOLE`, each camera its own. Off by default.
     ///
-    /// The spline is released only together with the focal: the spline's gauge
-    /// pins its value and slope on the axis, so it cannot correct a central
-    /// scale, and a spline released against a held focal could only bend the
-    /// periphery around a scale it cannot fix. So this is refused without
-    /// [`Self::opt_f`], and refused when no camera in the solve has a spline to
-    /// release. A camera without one keeps its distortion where it is, and the
-    /// report says which cameras released theirs.
-    pub opt_bspline: bool,
+    /// The distortion is released only together with the focal: neither `k1`
+    /// nor the spline can change the scale at the centre of the image (both
+    /// leave the slope of the radial map on the axis at one), and a distortion
+    /// released against a held focal could only bend the periphery around a
+    /// scale it cannot fix. So this is refused without [`Self::opt_f`], and
+    /// refused when no camera in the solve has distortion to release. A camera
+    /// of any other model keeps its distortion where it is, and the report says
+    /// which cameras released theirs.
+    pub opt_distortion: bool,
     /// The staged trim schedule, `(trim_px, loss_scale)` per round.
     pub schedule: Vec<BaSchedule>,
     /// LM iteration budget per round.
@@ -79,7 +80,7 @@ impl Default for BundleAdjustOptions {
     fn default() -> Self {
         Self {
             opt_f: false,
-            opt_bspline: false,
+            opt_distortion: false,
             schedule: DEFAULT_SCHEDULE.to_vec(),
             max_iters: DEFAULT_MAX_ITERS,
             min_track: DEFAULT_MIN_TRACK,
@@ -103,10 +104,10 @@ pub enum BundleAdjustError {
         /// Its model's name.
         model: &'static str,
     },
-    /// The spline release was asked for without the focal release.
+    /// The distortion release was asked for without the focal release.
     DistortionWithoutFocal,
-    /// The spline release was asked for, and no camera in the solve carries a
-    /// spline to release.
+    /// The distortion release was asked for, and no camera in the solve has a
+    /// model whose distortion the adjustment can release.
     DistortionNotReleasable,
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,
@@ -147,13 +148,15 @@ impl std::fmt::Display for BundleAdjustError {
             ),
             BundleAdjustError::DistortionWithoutFocal => write!(
                 f,
-                "the lens distortion is released only together with the focal length, 
-                 because the spline cannot change the scale at the centre of the image"
+                "the lens distortion is released only together with the focal length, \
+                 because neither k1 nor the spline can change the scale at the centre of \
+                 the image"
             ),
             BundleAdjustError::DistortionNotReleasable => write!(
                 f,
-                "no camera of this reconstruction has a spline to release; only 
-                 SFMTOOL_FISHEYE and SFMTOOL_PINHOLE carry one"
+                "no camera of this reconstruction has lens distortion the adjustment can \
+                 release; it releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
+                 SFMTOOL_FISHEYE and SFMTOOL_PINHOLE"
             ),
             BundleAdjustError::NoPosedImages => {
                 write!(f, "no image of this reconstruction carries a pose")
@@ -226,7 +229,8 @@ pub struct CameraAdjustment {
     pub focal_after: f64,
     /// Whether its focal was released.
     pub focal_released: bool,
-    /// Whether its radial spline was released.
+    /// Whether its lens distortion was released: `k1` on a
+    /// `SIMPLE_RADIAL_FISHEYE`, the spline on a spline model.
     pub distortion_released: bool,
 }
 
@@ -234,7 +238,8 @@ pub struct CameraAdjustment {
 ///
 /// Every posed image's pose, every live point's position and, under
 /// [`BundleAdjustOptions::opt_f`], each camera's focal (and under
-/// [`BundleAdjustOptions::opt_bspline`] each camera's radial spline) are refined together
+/// [`BundleAdjustOptions::opt_distortion`] each camera's `k1` or radial spline)
+/// are refined together
 /// against every observation that carries a pixel, by the staged robust solve in
 /// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
 /// any number of the table's cameras; each keeps its own lens in the solve, and a
@@ -350,7 +355,7 @@ pub fn bundle_adjust(
             });
         }
     }
-    if options.opt_bspline {
+    if options.opt_distortion {
         if !options.opt_f {
             return Err(BundleAdjustError::DistortionWithoutFocal);
         }
@@ -513,8 +518,10 @@ pub fn bundle_adjust(
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         options.opt_f,
-        false,
-        options.opt_bspline,
+        // One request, both kernel rungs: `k1` and the spline live on different
+        // models, and the kernel decides each per camera.
+        options.opt_distortion,
+        options.opt_distortion,
         &options.schedule,
         options.max_iters,
         options.min_track,
@@ -552,8 +559,9 @@ pub fn bundle_adjust(
         out.image_table.images[i].translation_xyz = trans[slot];
     }
     // Each camera in the solve takes the one the kernel returned, which is
-    // itself at its solved focal under `opt_f`, with its solved spline under
-    // `opt_bspline` where it carries one, and itself unchanged otherwise:
+    // itself at its solved focal under `opt_f`, with its solved `k1` or spline
+    // under `opt_distortion` where its model has one, and itself unchanged
+    // otherwise:
     // nothing else about any lens moves.
     for (&c, solved_camera) in used.iter().zip(&solved.cameras) {
         out.image_table.cameras[c as usize] = solved_camera.clone();
@@ -567,7 +575,7 @@ pub fn bundle_adjust(
             focal_before: cameras[j].focal_lengths().0,
             focal_after: solved.cameras[j].focal_lengths().0,
             focal_released: options.opt_f,
-            distortion_released: options.opt_bspline && distortion_is_releasable(&cameras[j]),
+            distortion_released: options.opt_distortion && distortion_is_releasable(&cameras[j]),
         })
         .collect();
 
@@ -657,12 +665,18 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool {
     )
 }
 
-/// Whether this camera carries a radial spline the adjustment can release: an
+/// Whether this camera has lens distortion the adjustment can release: a
+/// `SIMPLE_RADIAL_FISHEYE`, whose `k1` the kernel frees, or an
 /// `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` whose spline is defined, at least two
 /// coefficients on a positive finite domain end. A shorter spline evaluates as
-/// the identity and has nothing to release. A caller offering the release as a
-/// choice asks this first, as it asks [`focal_is_releasable`].
+/// the identity and has nothing to release. The kernel's releases are exact on
+/// these models alone, so every other model's distortion stays where it is. A
+/// caller offering the release as a choice asks this first, as it asks
+/// [`focal_is_releasable`].
 pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
+    if matches!(camera.model, CameraModel::SimpleRadialFisheye { .. }) {
+        return true;
+    }
     camera
         .model
         .radial_spline()

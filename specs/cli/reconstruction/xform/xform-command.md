@@ -347,11 +347,12 @@ pycolmap knows neither sfmtool spline model, so a reconstruction with any camera
 of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
 adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
-with every camera's focal and every spline released (`opt_f` and `opt_bspline`).
-That path needs inline keypoints (an `embedded_patches` reconstruction) and a
-camera model whose focal it can release for every posed image, and stops with
+with every camera's focal and lens distortion released (`opt_f` and
+`opt_distortion`: the spline, and `k1` on a `SIMPLE_RADIAL_FISHEYE` camera beside
+it). That path needs inline keypoints (an `embedded_patches` reconstruction) and
+a camera model whose focal it can release for every posed image, and stops with
 the adjustment's own refusal otherwise; a rig with one spline camera and one
-polynomial camera is refused rather than half-adjusted. It honours points at
+`OPENCV_FISHEYE` camera is refused rather than half-adjusted. It honours points at
 infinity as they are, deletes the points the solve leaves unsupported, and
 rescales patch frames with their depth, as the viewer's Bundle Adjust does. It
 prints the median residual before and after and each camera's focal change and

@@ -6,8 +6,8 @@
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes one decision
 //! from the user -- whether the cameras' focal lengths are released, and with
-//! them any spline lens distortion -- and that is the whole dialog: two
-//! checkboxes, `Run` and `Cancel`. Everything else about the solve is the core
+//! them any lens distortion the adjustment can free -- and that is the whole
+//! dialog: two checkboxes, `Run` and `Cancel`. Everything else about the solve is the core
 //! function's defaults.
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
@@ -64,9 +64,11 @@ pub(crate) fn focal_refusal(edited: &EditedReconstruction) -> Option<String> {
 /// Why the lens distortion cannot be released on this value, or `None` when it
 /// can. The checkbox carries this as its disabled hover text.
 ///
-/// The release reaches the cameras the posed images use that carry a spline, so
-/// the checkbox is live when at least one does; the core function refuses the
-/// release when none does. A camera without one keeps its distortion.
+/// The release reaches the cameras the posed images use whose model has
+/// distortion the adjustment can free (`k1` on `SIMPLE_RADIAL_FISHEYE`, the
+/// spline on the spline models), so the checkbox is live when at least one
+/// does; the core function refuses the release when none does. A camera of any
+/// other model keeps its distortion.
 pub(crate) fn distortion_refusal(edited: &EditedReconstruction) -> Option<String> {
     let table = &edited.base.image_table;
     let any = edited
@@ -74,7 +76,9 @@ pub(crate) fn distortion_refusal(edited: &EditedReconstruction) -> Option<String
         .into_iter()
         .any(|c| distortion_is_releasable(&table.cameras[c as usize]));
     (!any).then(|| {
-        "No camera of this reconstruction carries a spline to release. Switch a camera to \n         SFMTOOL_FISHEYE or SFMTOOL_PINHOLE first."
+        "No camera of this reconstruction has lens distortion the adjustment can release. \
+         It releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on SFMTOOL_FISHEYE and \
+         SFMTOOL_PINHOLE; switch a camera to one of those first."
             .to_string()
     })
 }
@@ -86,8 +90,9 @@ pub struct BundleAdjustAnswer {
     pub recon: ReconId,
     /// Whether to release each camera's focal length.
     pub release_focal: bool,
-    /// Whether to release each camera's spline, where it carries one. Only
-    /// ever true together with `release_focal`.
+    /// Whether to release each camera's lens distortion, where its model has
+    /// one the adjustment can free. Only ever true together with
+    /// `release_focal`.
     pub release_distortion: bool,
 }
 
@@ -164,8 +169,9 @@ impl BundleAdjustPrompt {
                              points, instead of holding them where they are.",
                         );
                 });
-                // The spline cannot change the scale at the centre of the image,
-                // which is the focal's job, so it is released only with the focal.
+                // Neither k1 nor the spline can change the scale at the centre of
+                // the image, which is the focal's job, so the distortion is
+                // released only with the focal.
                 if !pending.release_focal {
                     pending.release_distortion = false;
                 }
@@ -179,8 +185,9 @@ impl BundleAdjustPrompt {
                     ui.checkbox(&mut pending.release_distortion, "Release lens distortion")
                         .on_disabled_hover_text(distortion_why.unwrap_or_default())
                         .on_hover_text(
-                            "Solve the spline of each camera that carries one along with its \
-                             focal length.",
+                            "Solve each camera's lens distortion along with its focal length: \
+                             k1 on SIMPLE_RADIAL_FISHEYE, the spline on SFMTOOL_FISHEYE and \
+                             SFMTOOL_PINHOLE. Cameras of other models keep theirs.",
                         );
                 });
                 ui.add_space(8.0);

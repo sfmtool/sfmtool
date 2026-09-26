@@ -1082,7 +1082,38 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
     );
     let options = sfmtool_core::BundleAdjustOptions {
         opt_f: true,
-        opt_bspline: true,
+        opt_distortion: true,
+        ..sfmtool_core::BundleAdjustOptions::default()
+    };
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_task();
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, focal and lens distortion released"
+    );
+}
+
+#[test]
+fn the_distortion_gate_opens_on_a_simple_radial_fisheye() {
+    let (mut state, id) = two_camera_state();
+    {
+        let recon = state.scene[0].recon_mut();
+        let (f, _) = recon.image_table.cameras[0].focal_lengths();
+        let (cx, cy) = recon.image_table.cameras[0].principal_point();
+        recon.image_table.cameras[0].model = sfmtool_core::CameraModel::SimpleRadialFisheye {
+            focal_length: f,
+            principal_point_x: cx,
+            principal_point_y: cy,
+            radial_distortion_k1: 0.0,
+        };
+    }
+    assert_eq!(
+        crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited()),
+        None
+    );
+    let options = sfmtool_core::BundleAdjustOptions {
+        opt_f: true,
+        opt_distortion: true,
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");

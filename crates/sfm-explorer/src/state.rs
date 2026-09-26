@@ -1231,7 +1231,7 @@ impl AppState {
 
     /// Open the Bundle Adjust dialog on `id`, with the focal checkbox greyed
     /// where a camera's focal cannot be released and the distortion checkbox
-    /// greyed where no camera carries a spline.
+    /// greyed where no camera has distortion the adjustment can release.
     ///
     /// The one entry point, so whatever opens the dialog asks the same question
     /// about the same node.

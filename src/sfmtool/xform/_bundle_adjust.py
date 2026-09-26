@@ -6,7 +6,8 @@
 A reconstruction whose cameras are all COLMAP models goes through pycolmap. One
 with a camera of an sfmtool spline model (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`),
 which pycolmap does not know, goes through sfmtool's own reconstruction-level
-bundle adjustment with the focal and the spline released.
+bundle adjustment with the focal and the lens distortion released (the spline,
+and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
 """
 
 import tempfile
@@ -41,7 +42,7 @@ class BundleAdjustTransform:
 
     def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         """Adjust through sfmtool's own solve, releasing each camera's focal and,
-        where it carries one, its spline.
+        where its model has one the solve can free, its lens distortion.
 
         The solve needs a pixel per observation (inline keypoints) and a camera
         model whose focal it can release for every posed image; it raises
@@ -54,7 +55,7 @@ class BundleAdjustTransform:
         )
         adjusted, report = EditedReconstruction(recon).bundle_adjust(
             opt_f=self.refine_focal_length,
-            opt_bspline=self.refine_focal_length and self.refine_extra_params,
+            opt_distortion=self.refine_focal_length and self.refine_extra_params,
         )
         print(
             f"    {report['images']} images, {report['points']} points, "
@@ -69,7 +70,7 @@ class BundleAdjustTransform:
                 name
                 for name, flag in (
                     ("focal", camera["focal_released"]),
-                    ("spline", camera["distortion_released"]),
+                    ("distortion", camera["distortion_released"]),
                 )
                 if flag
             ]

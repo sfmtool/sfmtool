@@ -752,7 +752,7 @@ impl PyEditedReconstruction {
     /// Bundle-adjust this version, and give back the answer as its successor.
     ///
     /// Every posed image's pose, every point's position and, under ``opt_f``,
-    /// each camera's focal (and under ``opt_bspline`` each camera's radial
+    /// each camera's focal (and under ``opt_distortion`` each camera's k1 or radial
     /// spline) are refined together against every observation that
     /// carries a pixel (see
     /// ``specs/core/reconstruction/bundle-adjust.md``). The posed images may be
@@ -767,11 +767,13 @@ impl PyEditedReconstruction {
     ///     opt_f: Release the focal length of every camera the posed images
     ///         use (default ``False``). Raises, naming the camera, when any of
     ///         them has a model whose focal the adjustment cannot solve.
-    ///     opt_bspline: Release the radial spline of every camera that carries
-    ///         one (``SFMTOOL_FISHEYE``, ``SFMTOOL_PINHOLE``; default ``False``).
-    ///         Needs ``opt_f``: the spline cannot change the scale at the
-    ///         centre, which is the focal's job. Raises when ``opt_f`` is off or
-    ///         no camera has a spline.
+    ///     opt_distortion: Release each camera's lens distortion where its
+    ///         model admits one: ``k1`` on ``SIMPLE_RADIAL_FISHEYE``, the
+    ///         spline on ``SFMTOOL_FISHEYE`` and ``SFMTOOL_PINHOLE`` (default
+    ///         ``False``). Cameras of other models keep theirs. Needs
+    ///         ``opt_f``: neither ``k1`` nor the spline can change the scale at
+    ///         the centre, which is the focal's job. Raises when ``opt_f`` is
+    ///         off or no camera has such a model.
     ///     schedule: ``[(trim_px, loss_scale), ...]`` staged rounds (default
     ///         ``[(50, 5), (12, 2), (4, 1)]``).
     ///     max_iters: LM iteration budget per round (default 60).
@@ -791,12 +793,12 @@ impl PyEditedReconstruction {
     ///     ``focal_released`` and ``distortion_released``. Raises ``ValueError``
     ///     with the reason when the adjustment is refused.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_bspline=false, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, schedule=None, max_iters=60, min_track=2, min_obs=12))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
-        opt_bspline: bool,
+        opt_distortion: bool,
         schedule: Option<Vec<(f64, f64)>>,
         max_iters: usize,
         min_track: usize,
@@ -804,7 +806,7 @@ impl PyEditedReconstruction {
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
         let options = BundleAdjustOptions {
             opt_f,
-            opt_bspline,
+            opt_distortion,
             schedule: match schedule {
                 Some(rounds) => rounds
                     .into_iter()

@@ -1177,6 +1177,40 @@ fn spline_fisheye(bspline: Vec<f64>) -> CameraIntrinsics {
     }
 }
 
+/// A `SIMPLE_RADIAL_FISHEYE` lens: at the cloud's edge `k1 = 0.2` moves a ray
+/// by about two pixels.
+fn radial_fisheye(k1: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimpleRadialFisheye {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+            radial_distortion_k1: k1,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
+fn k1_of(camera: &CameraIntrinsics) -> f64 {
+    match camera.model {
+        CameraModel::SimpleRadialFisheye {
+            radial_distortion_k1,
+            ..
+        } => radial_distortion_k1,
+        _ => panic!("not a SIMPLE_RADIAL_FISHEYE: {camera:?}"),
+    }
+}
+
+/// The focal and the distortion released together.
+fn distortion_released() -> BundleAdjustOptions {
+    BundleAdjustOptions {
+        opt_f: true,
+        opt_distortion: true,
+        ..BundleAdjustOptions::default()
+    }
+}
+
 #[test]
 fn a_released_spline_moves_toward_the_lens() {
     let planted = vec![-0.002, -0.006, -0.012, -0.02];
@@ -1186,12 +1220,8 @@ fn a_released_spline_moves_toward_the_lens() {
     // move together for the residuals to come down.
     source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
 
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        opt_bspline: true,
-        ..BundleAdjustOptions::default()
-    };
-    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    let (out, report) =
+        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
 
     let camera = &report.cameras[0];
     assert!(camera.focal_released && camera.distortion_released);
@@ -1208,46 +1238,108 @@ fn a_released_spline_moves_toward_the_lens() {
 }
 
 #[test]
-fn a_spline_release_without_the_focal_is_refused() {
-    let truth = truth_through(vec![spline_fisheye(vec![0.0; 4])], |_| 0);
-    let options = BundleAdjustOptions {
-        opt_bspline: true,
-        ..BundleAdjustOptions::default()
-    };
-    assert_eq!(
-        bundle_adjust(&truth, &options, &Progress::none()).err(),
-        Some(BundleAdjustError::DistortionWithoutFocal)
+fn a_released_k1_moves_toward_the_lens() {
+    let truth = truth_through(vec![radial_fisheye(0.2)], |_| 0);
+    let mut source = perturb(truth);
+    source.image_table.cameras[0] = radial_fisheye(0.0);
+
+    let (out, report) =
+        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
+
+    let camera = &report.cameras[0];
+    assert!(camera.focal_released && camera.distortion_released);
+    assert!(
+        report.median_residual_after < 0.1 * report.median_residual_before,
+        "{report:?}"
     );
+    let k1 = k1_of(&out.image_table.cameras[0]);
+    assert!(k1 > 0.1, "k1 {k1}");
 }
 
 #[test]
-fn a_spline_release_with_no_spline_is_refused() {
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        opt_bspline: true,
-        ..BundleAdjustOptions::default()
-    };
-    assert_eq!(
-        bundle_adjust(&truth(), &options, &Progress::none()).err(),
-        Some(BundleAdjustError::DistortionNotReleasable)
+fn a_mixed_solve_releases_each_camera_its_own_distortion() {
+    // A spline camera, a k1 camera and a pinhole in one solve: the kernel
+    // frees the spline on the first and k1 on the second, and holds the third.
+    let planted = vec![-0.002, -0.006, -0.012, -0.02];
+    let truth = truth_through(
+        vec![
+            spline_fisheye(planted.clone()),
+            radial_fisheye(0.2),
+            pinhole(),
+        ],
+        |i| (i % 3) as u32,
     );
+    let mut source = perturb(truth);
+    source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
+    source.image_table.cameras[1] = radial_fisheye(0.0);
+
+    let (out, report) =
+        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
+
+    let released: Vec<bool> = report
+        .cameras
+        .iter()
+        .map(|c| c.distortion_released)
+        .collect();
+    assert_eq!(released, vec![true, true, false]);
+    assert!(
+        report.median_residual_after < 0.2 * report.median_residual_before,
+        "{report:?}"
+    );
+    let Some((solved, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+        panic!("camera 0 is still a spline model");
+    };
+    assert!(solved.iter().any(|&c| c != 0.0), "{solved:?}");
+    assert!(k1_of(&out.image_table.cameras[1]) > 0.05);
+    assert!(matches!(
+        out.image_table.cameras[2].model,
+        CameraModel::SimplePinhole { .. }
+    ));
+}
+
+#[test]
+fn a_distortion_release_without_the_focal_is_refused() {
+    for camera in [spline_fisheye(vec![0.0; 4]), radial_fisheye(0.0)] {
+        let truth = truth_through(vec![camera], |_| 0);
+        let options = BundleAdjustOptions {
+            opt_distortion: true,
+            ..BundleAdjustOptions::default()
+        };
+        let error = bundle_adjust(&truth, &options, &Progress::none()).err();
+        assert_eq!(error, Some(BundleAdjustError::DistortionWithoutFocal));
+        let sentence = error.unwrap().to_string();
+        assert!(!sentence.contains('\n'), "{sentence:?}");
+    }
+}
+
+#[test]
+fn a_distortion_release_with_nothing_to_release_is_refused() {
+    let error = bundle_adjust(&truth(), &distortion_released(), &Progress::none()).err();
+    assert_eq!(error, Some(BundleAdjustError::DistortionNotReleasable));
+    let sentence = error.unwrap().to_string();
+    for model in [
+        "SIMPLE_RADIAL_FISHEYE",
+        "SFMTOOL_FISHEYE",
+        "SFMTOOL_PINHOLE",
+    ] {
+        assert!(sentence.contains(model), "{sentence}");
+    }
+    assert!(!sentence.contains('\n'), "{sentence:?}");
     // An empty spline evaluates as the identity and has nothing to release.
     assert!(!distortion_is_releasable(&spline_fisheye(Vec::new())));
     assert!(distortion_is_releasable(&spline_fisheye(vec![0.0; 2])));
+    assert!(distortion_is_releasable(&radial_fisheye(0.0)));
+    assert!(!distortion_is_releasable(&pinhole()));
 }
 
 #[test]
-fn a_camera_without_a_spline_keeps_its_lens_beside_one_that_releases() {
+fn a_camera_without_distortion_keeps_its_lens_beside_one_that_releases() {
     let truth = truth_through(vec![spline_fisheye(vec![0.0; 4]), pinhole()], |i| {
         (i % 2) as u32
     });
     let source = perturb(truth);
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        opt_bspline: true,
-        ..BundleAdjustOptions::default()
-    };
-    let (_, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    let (_, report) =
+        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
     assert!(report.cameras[0].distortion_released);
     assert!(!report.cameras[1].distortion_released);
 }

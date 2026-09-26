@@ -225,6 +225,6 @@ def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
     )
     out = capsys.readouterr().out
     assert "sfmtool; a camera has a spline model" in out
-    assert "released: focal, spline" in out
+    assert "released: focal, distortion" in out
     result = SfmrReconstruction.load(output_path)
     assert result.cameras[0].model == "SFMTOOL_PINHOLE"

@@ -373,7 +373,7 @@ pub(super) fn bundle_adjust(
     };
     let options = sfmtool_core::BundleAdjustOptions {
         opt_f: release_focal,
-        opt_bspline: release_distortion,
+        opt_distortion: release_distortion,
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     if let Err(message) = state.start_bundle_adjust(id, &options) {

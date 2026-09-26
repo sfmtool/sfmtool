@@ -1272,8 +1272,8 @@ impl AppState {
     /// Start a bundle adjustment of `id`'s current value on a worker thread.
     ///
     /// A bulk edit: every posed image's pose, every point's position and, when
-    /// the options release them, the cameras' focals and splines move together, so the next
-    /// version is a whole new base under the row map `RowMap::by_scan` reads off
+    /// the options release them, the cameras' focals and lens distortion move
+    /// together, so the next version is a whole new base under the row map `RowMap::by_scan` reads off
     /// the call's input and output. The map is not decoration here -- a point
     /// the solve leaves unsupported is deleted, and the map is what carries a
     /// selection over that.

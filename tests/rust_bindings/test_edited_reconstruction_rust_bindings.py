@@ -357,21 +357,31 @@ class TestSwitchCameraModel:
             obs["before"]["median_px"], abs=0.05
         )
 
-    def test_the_spline_is_released_by_the_adjustment(self, embedded):
+    def test_the_distortion_is_released_by_the_adjustment(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=4)
         with pytest.raises(ValueError, match="together with the focal"):
-            switched.bundle_adjust(opt_bspline=True)
+            switched.bundle_adjust(opt_distortion=True)
         pinhole, _ = embedded.switch_camera_model("SIMPLE_PINHOLE")
         with pytest.raises(ValueError, match="no camera"):
-            pinhole.bundle_adjust(opt_f=True, opt_bspline=True)
+            pinhole.bundle_adjust(opt_f=True, opt_distortion=True)
 
-        adjusted, report = switched.bundle_adjust(opt_f=True, opt_bspline=True)
+        adjusted, report = switched.bundle_adjust(opt_f=True, opt_distortion=True)
         (camera,) = report["cameras"]
         assert camera["focal_released"] and camera["distortion_released"]
         assert (
             report["median_residual_after"] <= report["median_residual_before"] + 1e-9
         )
         assert adjusted.materialize()[0].cameras[0].model == "SFMTOOL_PINHOLE"
+
+    def test_k1_is_released_on_a_simple_radial_fisheye(self, embedded):
+        fisheye, _ = embedded.switch_camera_model("SIMPLE_RADIAL_FISHEYE")
+        adjusted, report = fisheye.bundle_adjust(opt_f=True, opt_distortion=True)
+        (camera,) = report["cameras"]
+        assert camera["distortion_released"]
+        assert (
+            report["median_residual_after"] <= report["median_residual_before"] + 1e-9
+        )
+        assert adjusted.materialize()[0].cameras[0].model == "SIMPLE_RADIAL_FISHEYE"
 
     def test_a_refusal_names_the_camera(self, embedded):
         with pytest.raises(ValueError, match="camera 0: .*90°"):

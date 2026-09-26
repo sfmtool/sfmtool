@@ -2137,16 +2137,17 @@ edge, 21 below bar, ...)"*.
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the two decisions the
 dialog collects: whether the focal of each camera the posed images use is
-released, as `release_focal`, and whether the radial spline of each of those
-cameras that carries one (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) is released with
-it, as `release_distortion`. Everything else is the core function's defaults.
+released, as `release_focal`, and whether the lens distortion of each of those
+cameras whose model the adjustment can free it on (`k1` on
+`SIMPLE_RADIAL_FISHEYE`, the spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`)
+is released with it, as `release_distortion`. Everything else is the core function's defaults.
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses; `release_focal` is refused, naming the camera, when a camera the posed
 images use has a model whose focal the adjustment cannot solve, and
 `release_distortion` is refused without `release_focal` and when no camera the
-posed images use carries a spline. The report's focal clause names each
-released camera's focal before and after, and the version's label says
-`focal and lens distortion released` when a spline was released.
+posed images use has one of those three models. The report's focal clause names
+each released camera's focal before and after, and the version's label says
+`focal and lens distortion released` when a distortion was released.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
