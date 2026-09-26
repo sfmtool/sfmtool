@@ -465,7 +465,7 @@ fn bundle_adjust_refuses_a_coefficient_count_without_the_distortion() {
     };
     state.finish_background_task();
     let Err(error) =
-        super::super::edit::background_reply(&mut state, &pending).expect("the operation finished")
+        super::super::edit::background_reply(&state, &pending).expect("the operation finished")
     else {
         panic!("expected a refusal");
     };
