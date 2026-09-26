@@ -462,12 +462,9 @@ class TestSwitchCameraModel:
         assert params["bspline_theta_max"] == pytest.approx(np.radians(40.0))
         assert params["bspline_coeff_count"] == 6
 
-    def test_the_adjustment_takes_no_spline_count_or_domain(self, embedded):
+    def test_the_adjustment_reports_the_outermost_observation(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
-        with pytest.raises(TypeError):
-            switched.bundle_adjust(opt_f=True, spline_coeff_count=8)
         _, report = switched.bundle_adjust(opt_f=True, opt_distortion=True)
-        assert "spline_refit" not in report["cameras"][0]
         observed = report["cameras"][0]["outermost_observed"]
         assert observed["radius_px"] > 0 and observed["theta_deg"] > 0
 

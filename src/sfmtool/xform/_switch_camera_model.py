@@ -27,7 +27,9 @@ class SwitchCameraModelTransform:
     Args:
         target_model: The model name, case-insensitive: a COLMAP lens model,
             ``EQUIDISTANT_FISHEYE``, ``SFMTOOL_FISHEYE`` or ``SFMTOOL_PINHOLE``.
-        coeff_count: Spline coefficients for a spline target (default 8).
+        coeff_count: Spline coefficients for a spline target (default: the
+            camera's own count when it already has that spline model,
+            otherwise 8).
         theta_fit_deg: The largest incidence angle the fit samples (default:
             the camera's trusted bound, or its observations' extent).
         spline_domain_deg: Where a spline target's domain ends (default: the

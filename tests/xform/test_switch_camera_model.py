@@ -230,9 +230,9 @@ def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
     assert result.cameras[0].model == "SFMTOOL_PINHOLE"
 
 
-def test_bundle_adjust_option_refuses_the_spline_refit_keys():
-    """``--bundle-adjust`` bare keeps working. A spline's count and domain are a
-    refit of the camera, and the refusal says which option makes it."""
+def test_bundle_adjust_option_parses_bare_and_with_keys():
+    """``--bundle-adjust`` bare, followed by another option, and with an
+    unknown key."""
     from sfmtool.xform import BundleAdjustTransform
     from sfmtool.xform._arg_parser import parse_transform_args
 
@@ -242,9 +242,6 @@ def test_bundle_adjust_option_refuses_the_spline_refit_keys():
     # A following option is not taken as the value.
     bare, scale = parse_transform_args(["--bundle-adjust", "--scale", "2"])
     assert bare.cameras is None and scale.scale == 2.0
-    for value in ("coeffs=12", "domain=108.5", "cameras=0,coeffs=8"):
-        with pytest.raises(click.UsageError, match="--camera-model SFMTOOL_FISHEYE"):
-            parse_transform_args(["--bundle-adjust", value])
     with pytest.raises(click.UsageError, match="Unknown --bundle-adjust key"):
         parse_transform_args(["--bundle-adjust", "knots=4"])
 

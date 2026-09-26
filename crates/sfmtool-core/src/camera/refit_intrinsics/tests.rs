@@ -412,9 +412,7 @@ fn targets_are_checked_by_name() {
     ));
     assert_eq!(
         RefitTarget::from_name("sfmtool_fisheye", None).unwrap(),
-        RefitTarget::SfmtoolFisheye {
-            coeff_count: DEFAULT_COEFF_COUNT
-        }
+        RefitTarget::SfmtoolFisheye { coeff_count: None }
     );
     assert_eq!(
         RefitTarget::from_name("opencv_fisheye", None).unwrap(),
@@ -523,4 +521,22 @@ fn a_spline_refit_is_refused_where_it_cannot_be_made() {
             spline_domain_deg: 190.0
         })
     );
+}
+
+#[test]
+fn an_unstated_count_keeps_a_spline_source_s_own() {
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", None).unwrap();
+    let six = sfmtool_fisheye(130.0, 1.8, vec![0.0, 0.01, 0.03, 0.06, 0.09, 0.12]);
+    assert_eq!(target.coeff_count_for(&six), Some(6));
+    assert_eq!(
+        target.coeff_count_for(&kerry_cam0()),
+        Some(DEFAULT_COEFF_COUNT)
+    );
+    // A spline of the other radial coordinate is not this model's spline.
+    let pinhole = RefitTarget::from_name("SFMTOOL_PINHOLE", None).unwrap();
+    assert_eq!(pinhole.coeff_count_for(&six), Some(DEFAULT_COEFF_COUNT));
+    // A stated count wins.
+    let ten = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(10)).unwrap();
+    assert_eq!(ten.coeff_count_for(&six), Some(10));
+    assert_eq!(RefitTarget::EquidistantFisheye.coeff_count_for(&six), None);
 }

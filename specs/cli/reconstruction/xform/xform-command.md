@@ -324,8 +324,9 @@ observations' extent, constrained to stay monotone, with the domain end kept
 exactly unless `spline_domain=` is given. The domain may be shorter or longer
 than the old one. The fit line then reads `fit over the whole spline domain θ ≤
 108.0°`, with the refit's rms and largest pixel distance from the old curve, and
-the monotone constraint line where it bound. `coeffs=` still defaults to 8, so
-give the count the camera has to move only the domain. Bundle adjustment then
+the monotone constraint line where it bound. Without `coeffs=` the camera keeps
+its own count, so `spline_domain=` alone moves only the domain; switching from
+any other model defaults to 8. Bundle adjustment then
 refines the refitted coefficients.
 A refusal stops the command, names the camera, the rule and the value, and
 writes nothing. The observations' pixels come from the inline keypoints, or
@@ -406,8 +407,7 @@ released and which held. An index past the camera table is a usage error.
 The adjustment refines the spline coefficients a camera has; it does not change
 their count or the spline's domain. Those are a refit of the camera,
 `--camera-model` to its own spline model (above), which can come before
-`--bundle-adjust` in the same command. `coeffs=` or `domain=` given to
-`--bundle-adjust` is a usage error naming that option. After the solve each
+`--bundle-adjust` in the same command. After the solve each
 camera's outermost keypoint is printed under the adjusted camera, observed and,
 where the images' `.sift` files can be read, detected: `outermost keypoint:
 230.3 px, 95.8° observed; 259.2 px, 108.8° detected (24 .sift files)`, the angle

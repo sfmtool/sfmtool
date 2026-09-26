@@ -364,13 +364,14 @@ pub fn switch_camera_model(
 
 /// The coefficient count `target` asks of `source` when `source` is a spline
 /// camera and `target` is its own spline model, which makes the switch a
-/// refit of its spline; `None` for a switch between models.
+/// refit of its spline; `None` for a switch between models. With no count
+/// stated the refit keeps the source's.
 fn spline_refit_count(source: &CameraIntrinsics, target: &RefitTarget) -> Option<usize> {
     let (_, _, radial) = source.model.radial_spline()?;
     match (radial, target) {
-        (SplineRadial::IncidenceAngle, RefitTarget::SfmtoolFisheye { coeff_count })
-        | (SplineRadial::ImagePlaneRadius, RefitTarget::SfmtoolPinhole { coeff_count }) => {
-            Some(*coeff_count)
+        (SplineRadial::IncidenceAngle, RefitTarget::SfmtoolFisheye { .. })
+        | (SplineRadial::ImagePlaneRadius, RefitTarget::SfmtoolPinhole { .. }) => {
+            target.coeff_count_for(source)
         }
         _ => None,
     }

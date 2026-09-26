@@ -514,8 +514,9 @@ impl PyCameraIntrinsics {
     ///     target: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
     ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
     ///         model.
-    ///     coeff_count: Spline coefficients for the two spline models (default
-    ///         8). Refused for any other model.
+    ///     coeff_count: Spline coefficients for the two spline models.
+    ///         Default: this camera's own count when it already has this
+    ///         model's spline, otherwise 8. Refused for any other model.
     ///     theta_fit_deg: The largest incidence angle sampled. Default: this
     ///         camera's trusted bound, or its far image corner for a model with
     ///         none. A value past the trusted bound is refused.

@@ -24,8 +24,8 @@ as `sfmtool_core::camera::refit_intrinsics`, and is bound as `CameraIntrinsics.r
 
 ```rust
 pub enum RefitTarget {
-    SfmtoolFisheye { coeff_count: usize },
-    SfmtoolPinhole { coeff_count: usize },
+    SfmtoolFisheye { coeff_count: Option<usize> }, // None: resolved per source
+    SfmtoolPinhole { coeff_count: Option<usize> },
     EquidistantFisheye,
     Colmap(&'static str),
 }
@@ -33,7 +33,8 @@ pub enum RefitTarget {
 impl RefitTarget {
     pub fn from_name(model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError>;
     pub fn model_name(&self) -> &'static str;
-    pub fn coeff_count(&self) -> Option<usize>;
+    pub fn coeff_count(&self) -> Option<usize>;              // as stated
+    pub fn coeff_count_for(&self, source: &CameraIntrinsics) -> Option<usize>;
     pub fn is_perspective(&self) -> bool;
 }
 
@@ -409,7 +410,7 @@ no dependency of the workspace carries a quadratic-programming or NNLS routine.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `coeff_count` | `DEFAULT_COEFF_COUNT`, `8` | Spline coefficients for a spline target named without a count; `0` or `2..=MAX_COEFF_COUNT` (`32`). |
+| `coeff_count` | the source's own count when it carries the target's spline, else `DEFAULT_COEFF_COUNT`, `8` | Spline coefficients for a spline target named without a count, resolved per source by `RefitTarget::coeff_count_for`; `0` or `2..=MAX_COEFF_COUNT` (`32`). |
 | `theta_fit_deg` | trusted bound, else far image corner | The largest incidence angle sampled. |
 | `spline_domain_deg` | far image corner, `r_corner / √(fx·fy)` | Where a spline target's domain ends. |
 | `THETA_SAMPLES` | `96` | Incidence angles sampled over `(0, θ_fit]`. |

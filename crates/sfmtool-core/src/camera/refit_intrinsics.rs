@@ -40,7 +40,8 @@ use constrained_lsq::least_squares_with_inequalities;
 mod constrained_lsq;
 
 /// The spline coefficient count a caller gets when it names a spline model
-/// and no count.
+/// and no count, and the source has no spline of that model to keep the
+/// count of.
 pub const DEFAULT_COEFF_COUNT: usize = 8;
 
 /// The largest spline coefficient count the fit accepts. The basis has one
@@ -96,12 +97,15 @@ pub enum RefitTarget {
     /// `SFMTOOL_FISHEYE` with this many spline coefficients.
     SfmtoolFisheye {
         /// The spline's coefficient count, `0` or `2..=MAX_COEFF_COUNT`.
-        coeff_count: usize,
+        /// `None` keeps the source's count when the source is an
+        /// `SFMTOOL_FISHEYE` with a spline, and is [`DEFAULT_COEFF_COUNT`]
+        /// otherwise; see [`RefitTarget::coeff_count_for`].
+        coeff_count: Option<usize>,
     },
     /// `SFMTOOL_PINHOLE` with this many spline coefficients.
     SfmtoolPinhole {
-        /// The spline's coefficient count, `0` or `2..=MAX_COEFF_COUNT`.
-        coeff_count: usize,
+        /// The spline's coefficient count, as for `SfmtoolFisheye`.
+        coeff_count: Option<usize>,
     },
     /// `EQUIDISTANT_FISHEYE`: the fisheye spline fit with no coefficients.
     EquidistantFisheye,
@@ -113,18 +117,14 @@ impl RefitTarget {
     /// The target a model name asks for, case-insensitively.
     ///
     /// `coeff_count` applies to the two spline models, where `None` is
-    /// [`DEFAULT_COEFF_COUNT`], and is refused for every other model rather
-    /// than ignored. `EQUIRECTANGULAR` is not a lens model and is refused as a
+    /// resolved against each source by [`RefitTarget::coeff_count_for`], and
+    /// is refused for every other model rather than ignored. `EQUIRECTANGULAR` is not a lens model and is refused as a
     /// target, as is any name the registry does not know.
     pub fn from_name(model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError> {
         let upper = model.trim().to_ascii_uppercase();
         let target = match upper.as_str() {
-            "SFMTOOL_FISHEYE" => RefitTarget::SfmtoolFisheye {
-                coeff_count: coeff_count.unwrap_or(DEFAULT_COEFF_COUNT),
-            },
-            "SFMTOOL_PINHOLE" => RefitTarget::SfmtoolPinhole {
-                coeff_count: coeff_count.unwrap_or(DEFAULT_COEFF_COUNT),
-            },
+            "SFMTOOL_FISHEYE" => RefitTarget::SfmtoolFisheye { coeff_count },
+            "SFMTOOL_PINHOLE" => RefitTarget::SfmtoolPinhole { coeff_count },
             "EQUIDISTANT_FISHEYE" => RefitTarget::EquidistantFisheye,
             "EQUIRECTANGULAR" => return Err(RefitError::UnknownTarget { model: upper }),
             other => match fixed_arity_model_by_name(other) {
@@ -132,7 +132,7 @@ impl RefitTarget {
                 None => return Err(RefitError::UnknownTarget { model: upper }),
             },
         };
-        if coeff_count.is_some() && target.coeff_count().is_none() {
+        if coeff_count.is_some() && target.spline_radial().is_none() {
             return Err(RefitError::CoeffCountNotApplicable {
                 model: target.model_name(),
             });
@@ -151,13 +151,44 @@ impl RefitTarget {
         }
     }
 
-    /// The spline coefficient count, for the two spline models.
+    /// The spline coefficient count the caller stated, for the two spline
+    /// models.
     pub fn coeff_count(&self) -> Option<usize> {
         match self {
             RefitTarget::SfmtoolFisheye { coeff_count }
-            | RefitTarget::SfmtoolPinhole { coeff_count } => Some(*coeff_count),
+            | RefitTarget::SfmtoolPinhole { coeff_count } => *coeff_count,
             _ => None,
         }
+    }
+
+    /// The radial coordinate of the target's spline, for the two spline
+    /// models.
+    fn spline_radial(&self) -> Option<SplineRadial> {
+        match self {
+            RefitTarget::SfmtoolFisheye { .. } => Some(SplineRadial::IncidenceAngle),
+            RefitTarget::SfmtoolPinhole { .. } => Some(SplineRadial::ImagePlaneRadius),
+            _ => None,
+        }
+    }
+
+    /// The coefficient count the target's spline gets when `source` is fitted
+    /// to it: the stated count, or with none stated, the source's own count
+    /// when the source carries a spline of this model, so a refit that changes
+    /// only the domain keeps the camera's count; [`DEFAULT_COEFF_COUNT`] for any
+    /// other source. `None` for a target with no spline.
+    pub fn coeff_count_for(&self, source: &CameraIntrinsics) -> Option<usize> {
+        let radial = self.spline_radial()?;
+        Some(
+            self.coeff_count()
+                .unwrap_or_else(|| match source.model.radial_spline() {
+                    Some((bspline, _, source_radial))
+                        if source_radial == radial && bspline.len() >= MIN_BSPLINE_COEFFS =>
+                    {
+                        bspline.len()
+                    }
+                    _ => DEFAULT_COEFF_COUNT,
+                }),
+        )
     }
 
     /// Whether the target is a perspective model, which has no pixel for a ray
@@ -572,20 +603,13 @@ pub(crate) fn refit_camera_intrinsics_over(
     let (cx, cy) = source.principal_point();
 
     let (camera, domain, constraint) = match target {
-        RefitTarget::SfmtoolFisheye { coeff_count } => fit_spline_camera(
-            source,
-            &samples,
-            SplineRadial::IncidenceAngle,
-            *coeff_count,
-            spline_domain_deg,
-        )?,
-        RefitTarget::SfmtoolPinhole { coeff_count } => fit_spline_camera(
-            source,
-            &samples,
-            SplineRadial::ImagePlaneRadius,
-            *coeff_count,
-            spline_domain_deg,
-        )?,
+        RefitTarget::SfmtoolFisheye { .. } | RefitTarget::SfmtoolPinhole { .. } => {
+            let radial = target.spline_radial().expect("a spline target");
+            let coeff_count = target
+                .coeff_count_for(source)
+                .expect("a spline target has a count");
+            fit_spline_camera(source, &samples, radial, coeff_count, spline_domain_deg)?
+        }
         RefitTarget::EquidistantFisheye => {
             let f = fit_spline(&samples, cx, cy, SplineRadial::IncidenceAngle, 0, 1.0)?.0;
             let camera = CameraIntrinsics {
@@ -676,8 +700,12 @@ pub fn refit_spline(
         });
     };
     let target = match radial {
-        SplineRadial::IncidenceAngle => RefitTarget::SfmtoolFisheye { coeff_count },
-        SplineRadial::ImagePlaneRadius => RefitTarget::SfmtoolPinhole { coeff_count },
+        SplineRadial::IncidenceAngle => RefitTarget::SfmtoolFisheye {
+            coeff_count: Some(coeff_count),
+        },
+        SplineRadial::ImagePlaneRadius => RefitTarget::SfmtoolPinhole {
+            coeff_count: Some(coeff_count),
+        },
     };
     target.check()?;
     let d_max = match spline_domain_deg {

@@ -531,20 +531,6 @@ fn bundle_adjust_parses_its_camera_entries() {
     }
 }
 
-/// `bundle_adjust` no longer takes a spline's count or domain: those are a
-/// refit of one camera, `switch_camera_model`'s to make.
-#[test]
-fn bundle_adjust_takes_no_spline_count_or_domain() {
-    for key in ["spline_coeff_count", "spline_domain_deg"] {
-        let map = json!({ "reconstruction_label": "a", key: 6 })
-            .as_object()
-            .cloned()
-            .expect("an object");
-        let error = tools::parse("bundle_adjust", Some(&map)).expect_err("refused at the parse");
-        assert!(error.0.contains("has no argument"), "{error}");
-    }
-}
-
 /// `switch_camera_model`'s arguments parse into the request the edit takes,
 /// with every default left open.
 #[test]

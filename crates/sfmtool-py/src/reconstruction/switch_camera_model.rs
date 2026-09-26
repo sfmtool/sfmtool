@@ -152,8 +152,9 @@ impl PyEditedReconstruction {
     ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
     ///         model.
     ///     cameras: Camera-table indexes to switch (default: every camera).
-    ///     coeff_count: Spline coefficients for the two spline models (default
-    ///         8). Refused for any other model.
+    ///     coeff_count: Spline coefficients for the two spline models.
+    ///         Default: the camera's own count when it already has this
+    ///         model's spline, otherwise 8. Refused for any other model.
     ///     theta_fit_deg: The largest incidence angle the fit samples.
     ///         Default: the camera's trusted bound, or, for a model with none,
     ///         the largest incidence angle among its images' observations.
@@ -165,7 +166,7 @@ impl PyEditedReconstruction {
     /// no ``theta_fit_deg`` is a refit of its spline: fitted over the whole new
     /// domain and constrained to stay monotone, its domain end kept exactly
     /// when ``spline_domain_deg`` is not given, at ``coeff_count``
-    /// coefficients (still 8 when not given). The fit's ``theta_fit_source``
+    /// coefficients (its own count when not given). The fit's ``theta_fit_source``
     /// is then ``"spline_domain"``, and its ``monotone_constraint`` says where
     /// the refit departs from the old curve. This is how a spline's count and
     /// domain change; ``bundle_adjust`` refines the coefficients a camera has.

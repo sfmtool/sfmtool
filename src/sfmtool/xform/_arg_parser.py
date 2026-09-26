@@ -313,27 +313,13 @@ _BUNDLE_ADJUST_KEYS: dict[str, Callable[[str], object]] = {
     "cameras": _parse_camera_list,
 }
 
-# Keys --bundle-adjust once took, which now belong to a camera refit.
-_BUNDLE_ADJUST_REFIT_KEYS = ("coeffs", "domain")
-
 
 def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
     """Parse a ``--bundle-adjust`` comma-separated ``key=value`` string.
 
     An empty string is the bare option. ``cameras=0+1`` releases the lens of
-    those cameras only and holds the rest. A spline's coefficient count and
-    domain are not the adjustment's: ``coeffs=`` or ``domain=`` is refused,
-    pointing at the ``--camera-model`` refit that changes them.
+    those cameras only and holds the rest.
     """
-    for token in param.split(","):
-        key = token.split("=", 1)[0].strip()
-        if key in _BUNDLE_ADJUST_REFIT_KEYS:
-            raise click.UsageError(
-                f"--bundle-adjust no longer takes {key}=: a spline's coefficient "
-                "count and domain are changed by refitting the camera, "
-                "--camera-model SFMTOOL_FISHEYE,coeffs=N,spline_domain=DEG,cameras=I "
-                "(or SFMTOOL_PINHOLE), before --bundle-adjust"
-            )
     kwargs = _parse_kv_params(param, "--bundle-adjust", _BUNDLE_ADJUST_KEYS)
     return BundleAdjustTransform(cameras=kwargs.get("cameras"))
 
