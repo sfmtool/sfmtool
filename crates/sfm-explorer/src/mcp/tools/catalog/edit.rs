@@ -384,14 +384,53 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             },
                         }),
                     ),
+                ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "switch_camera_model",
+            description: "Switch one camera intrinsics record to a camera model fitted to it, \
+                          and install the answer as the reconstruction's next version. The new \
+                          model is fitted to the old one where the old one is trusted; poses, \
+                          points, keypoints and tracks do not move, and the stored errors of \
+                          the points the camera's images observe are recomputed. With model \
+                          omitted the target is the camera's own model, which for an \
+                          SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is a refit of its spline \
+                          to another coefficient count or domain end: fitted over the whole \
+                          new domain and kept monotone, the domain end kept exactly unless \
+                          spline_domain_deg is given. This is how a spline's count or domain \
+                          changes; bundle_adjust then refines the coefficients it has. The \
+                          reply carries the version, the Action Log sentence, and fit: the \
+                          fit's rms and max pixel distance from the old camera, \
+                          theta_fit_deg and its source, the spline domain, the range of \
+                          incidence angles where the monotonicity constraint bound, and the \
+                          median reprojection error of the camera's observations before and \
+                          after. A refusal names the camera and the rule.",
+            kind: Write,
+            schema: object(
+                &[
                     (
-                        "spline_coeff_count",
+                        "model",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The target model, case-insensitive: SFMTOOL_FISHEYE, \
+                                 SFMTOOL_PINHOLE, EQUIDISTANT_FISHEYE or a COLMAP lens model. \
+                                 Omit for the camera's own model.",
+                        }),
+                    ),
+                    (
+                        "coeff_count",
                         json!({
                             "type": "integer",
-                            "minimum": 2,
+                            "minimum": 0,
                             "maximum": 32,
                             "description":
-                                "Refit every SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera the posed                                  images use and that releases its distortion to this many spline coefficients before the solve,                                  over its whole spline domain, and start the solve from the                                  refitted cameras; a camera already at the count is left alone.                                  Refused unless a spline camera releases its distortion, since the new coefficients                                  only approximate the old curve until the solve fits them, and                                  when no camera is a spline model. The report names each refit                                  and its largest pixel distance from the old curve. Omit to keep                                  each count.",
+                                "The spline coefficient count of a spline target, 0 or 2 to \
+                                 32. Omit for the camera's own count when the target is its \
+                                 own spline model, and 8 otherwise. Refused for a model \
+                                 without a spline.",
                         }),
                     ),
                     (
@@ -401,20 +440,40 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "exclusiveMinimum": 0,
                             "maximum": 180,
                             "description":
-                                "Move the domain end of every SFMTOOL_FISHEYE or SFMTOOL_PINHOLE \
-                                 camera the posed images use to this incidence angle, in \
-                                 degrees, before the solve, in the same refit as \
-                                 spline_coeff_count and over the whole new domain; a camera \
-                                 already there is left alone. Past its domain the model is a \
-                                 straight line the solve cannot bend. get_camera_intrinsics \
-                                 reports the outermost keypoint's angle to set it from. Refused \
-                                 as spline_coeff_count is, and for an angle the model cannot \
-                                 end at (90 or more for SFMTOOL_PINHOLE). Omit to keep each \
-                                 domain.",
+                                "Where a spline target's domain ends, as an incidence angle in \
+                                 degrees (below 90 for SFMTOOL_PINHOLE). Omit to keep the \
+                                 camera's own in a refit of its spline, and for the far image \
+                                 corner otherwise. get_camera_intrinsics reports the outermost \
+                                 keypoint's angle to set it from.",
+                        }),
+                    ),
+                    (
+                        "theta_fit_deg",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 180,
+                            "description":
+                                "The largest incidence angle the fit samples. Omit for the \
+                                 camera's trusted bound, or its observations' extent for a \
+                                 model without one; a refit of a spline samples its whole \
+                                 domain. Given, even a refit of a spline is fitted over this \
+                                 angle alone.",
                         }),
                     ),
                 ],
-                &[("reconstruction_label", edited_label_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "camera_intrinsics_index",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "The camera's index in the reconstruction's camera \
+                                            table, as get_camera_intrinsics takes it.",
+                        }),
+                    ),
+                ],
             ),
         },
         ToolSpec {

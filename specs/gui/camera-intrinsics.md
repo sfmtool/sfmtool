@@ -872,7 +872,7 @@ it.
 ### 1. Header
 
 ```
-kerry_park · Camera #0 · OPENCV_FISHEYE · 480×480 · 24 images        [Copy ▾]
+kerry_park · Camera #0 · SFMTOOL_FISHEYE · 480×480 · 24 images  [Refit spline…] [Copy ▾]
 ```
 
 The reconstruction name is included because several nodes can be loaded at once
@@ -887,6 +887,15 @@ widget in its own right.
 `Copy ▾` offers `Parameters (text)`, `Parameters (JSON)`, `K matrix`, and —
 when the extrinsics section is showing — `Pose matrix`. A viewer whose numbers
 cannot leave it makes users retype them.
+
+`Refit spline…`, beside it, is the panel's one edit: it opens a small dialog
+that refits the camera's spline to another coefficient count or domain end, with
+the outermost keypoint of its images shown beside the domain, and applies the
+refit as one version of the node
+([edits/switch-camera-model.md](edits/switch-camera-model.md)). It is greyed,
+with the reason as hover text, for a camera whose model has no spline. The
+panel reports the click as `IntrinsicsDetailResponse::refit_spline`, and the
+dock opens the dialog.
 
 ### 2. Parameters
 
@@ -1100,12 +1109,15 @@ nothing else in the viewer surfaces.
 
 ### Response type
 
-The panel is nearly read-only; it needs to report only navigation:
+The panel is nearly read-only; it reports navigation and the one edit it
+offers, which the dock turns into a dialog:
 
 ```rust
 pub struct IntrinsicsDetailResponse {
     /// The user clicked the image name in the extrinsics header.
     pub select_image: Option<ImageRef>,
+    /// The user clicked `Refit spline…` for this camera.
+    pub refit_spline: Option<CameraRef>,
     pub has_pointer: bool,
 }
 ```
@@ -1377,11 +1389,12 @@ Layers checkbox is matched by name, and phase 3 renames it to
 
 ## Deliberately out of scope
 
-- **Editing intrinsics.** The viewer is a viewer. Refining a camera is
-  `sfm xform bundle-adjust`'s job, and a panel that let you type a focal length
-  would immediately raise the question of what it means for the loaded file.
-  Switching a camera to another model as a fit, shown here as a proposal
-  before it is applied, is proposed in
+- **Typing intrinsics.** A panel that let you type a focal length would
+  immediately raise the question of what it means for the loaded file.
+  Intrinsics change here only as a fit: `Refit spline…` refits a spline
+  camera's spline as a version of the node, and refining a camera against the
+  observations is the Bundle Adjust edit's. Switching a camera to another model
+  as a fit, shown here as a proposal before it is applied, is proposed in
   [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
 - **Comparing two cameras side by side.** Real for rig work (how do the two
   kerry_park fisheyes differ?), but it needs a second selection and a diff

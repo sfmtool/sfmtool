@@ -53,8 +53,6 @@ pub fn bundle_adjust(
 pub struct BundleAdjustOptions {
     /// One per camera in the camera table, or empty for every camera held.
     pub releases: Vec<CameraRelease>,
-    pub spline_coeff_count: Option<usize>,
-    pub spline_domain_deg: Option<f64>,
     pub schedule: Vec<BaSchedule>,
     pub max_iters: usize,
     pub min_track: usize,
@@ -95,22 +93,8 @@ pub struct CameraAdjustment {
     pub focal_after: f64,
     pub focal_released: bool,      // what its release asked for, and so what moved
     pub distortion_released: bool,
-    pub spline_refit: Option<SplineRefit>, // Some where the count or domain changed
     pub outermost_observed: Option<KeypointReach>, // under the solved camera
 }
-
-pub struct SplineRefit {
-    pub coeffs_before: usize,
-    pub coeffs_after: usize,
-    pub domain_before_deg: f64,
-    pub domain_after_deg: f64,
-    pub rms_px: f64, // the refit's distance from the old camera,
-    pub max_px: f64, // over the whole spline domain
-    pub monotone_constraint: MonotoneConstraint, // where the refit held the slope floor
-}
-
-/// The counts `spline_coeff_count` accepts: 2 to 32.
-pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize>;
 
 pub enum BundleAdjustError {
     NoKeypoints,
@@ -118,10 +102,6 @@ pub enum BundleAdjustError {
     FocalNotReleasable { camera: usize, model: &'static str },
     DistortionWithoutFocal { camera: usize },
     DistortionNotReleasable { camera: usize, model: &'static str },
-    SplineRefitWithoutDistortion,
-    SplineRefitWithoutSpline,
-    SplineCoeffCount { count: usize },
-    SplineRefit { camera: usize, error: RefitError },
     NoPosedImages,
     NoObservations,
     EmptySchedule,
@@ -135,10 +115,6 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool;
 
 /// Whether this camera has lens distortion the adjustment can release.
 pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool;
-
-/// A spline camera's domain end as an incidence angle in degrees, the unit
-/// `spline_domain_deg` takes; `None` for a camera with no spline.
-pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64>;
 ```
 
 ### Why it is shaped this way
@@ -210,47 +186,14 @@ are requests to every camera; `BaCameras::releases` narrows them per camera
 function passes every flag on and each camera's checked release in that list,
 so the kernel frees exactly what the report says it did.
 
-**`spline_coeff_count` refits before it solves, and only with the release.** A
-spline's coefficient count is a choice of how finely the lens curve can bend,
-and the solve cannot change it: the kernel's spline block has one column per
-coefficient. So a new count is a refit of each spline camera whose count
-differs, by `refit_spline`
-([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md)),
-as the same spline model with the domain end held and the fit taken over the
-whole domain, and the solve starts from the refitted cameras. The refit is the
-best least-squares description of the old curve on the new scheme, but it is not
-the old curve, and only the solve brings the new coefficients back to the
-observations, so the count is refused unless some camera in the solve releases
-its distortion (`SplineRefitWithoutDistortion`), and only the spline cameras
-that do are refitted. It is refused when no camera in the solve is a
-spline model (`SplineRefitWithoutSpline`), outside `SPLINE_COEFF_COUNT_RANGE`
-(`SplineCoeffCount`), and, naming the camera, when a refit is
-(`SplineRefit`, carrying the refit's own refusal). The range is 2 to 32: fewer than two coefficients evaluate as
-the identity, and 32 is the refit's own ceiling, past which the knot spans are
-narrower than a lens calibration can support. A camera already at the count is
-not refitted. The refit is constrained to keep the new spline monotone, so a
-source with a deep dip in its slope, which a fit with more coefficients rings
-through, is refitted as the closest invertible curve rather than refused. Each
-refit is reported with the old and new count, its pixel distance from the old
-camera, and its `monotone_constraint`: whether the constraint bound, and the
-range of incidence angles where it did, which is where the refit departs from
-the old curve. So a caller can say how much of the change was the refit and how
-much the solve.
-
-**`spline_domain_deg` moves the domain end in the same refit.** Where the spline
-stops is the other half of its shape: past the domain end the model is a
-straight line the solve cannot bend. A new domain end is given as an incidence
-angle, whichever radial coordinate the model stores, and every spline camera
-whose domain differs (by more than a nanodegree) is refitted by `refit_spline`
-on the new domain, together with any new count, in one refit over the whole new
-domain. The old model is defined everywhere, on its domain and along its linear
-tail, so the new domain can be shorter or longer than the old one. The refusals
-are the count's, and a domain end the model cannot have (past 180°, or 90° and
-more for `SFMTOOL_PINHOLE`) is the refit's refusal, naming the camera. The
-report gives the domain before and after. A domain shorter than the
-observations' reach leaves the outermost ones on the tail, which the solve fits
-less well, and that is why callers show the outermost keypoint beside the value
-([`outermost-keypoint.md`](outermost-keypoint.md)).
+**The coefficient count and the domain are not the adjustment's.** How many
+coefficients a spline has, and where its domain ends, choose how the lens curve
+is parameterized; the solve refines the coefficients it is given and cannot
+change either. Changing them is a refit of one camera, a switch of that camera
+to its own spline model
+([`switch-camera-model.md`](switch-camera-model.md)), after which an
+adjustment with its distortion released brings the new coefficients to the
+observations.
 
 **The report carries each camera's outermost observation.** Measured under the
 camera the solve returned, as a radius and an incidence angle, because that is
@@ -317,19 +260,12 @@ without solving anything:
 - A release list whose length is neither zero nor the camera table's
   (`ReleaseCount`).
 - Then, for each camera the posed images use, in table order, the first of: a
-  distortion release without the focal (`DistortionWithoutFocal`), and a focal
+  distortion release without the focal (`DistortionWithoutFocal`); a focal
   release on a model the kernel's focal column is not exact for
-  (`FocalNotReleasable`). Each names the camera by its table index, and the
-  second its model.
-- A spline coefficient count or domain with no camera in the solve releasing its
-  distortion (`SplineRefitWithoutDistortion`), a count outside 2 to 32 (`SplineCoeffCount`),
-  or either with no spline camera in the solve (`SplineRefitWithoutSpline`); then
-  each spline camera releasing its distortion whose count or domain differs is
-  refitted, and the first refit refused refuses the adjustment (`SplineRefit`).
-- A distortion release on a camera the posed images use that, after any refit,
-  is neither a `SIMPLE_RADIAL_FISHEYE` nor a spline model whose spline is
-  defined, at least two coefficients on a positive finite domain end
-  (`DistortionNotReleasable`, naming the first such camera and its model).
+  (`FocalNotReleasable`); and a distortion release on a camera that is neither a
+  `SIMPLE_RADIAL_FISHEYE` nor a spline model whose spline is defined, at least
+  two coefficients on a positive finite domain end (`DistortionNotReleasable`).
+  Each names the camera by its table index, and the last two its model.
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -374,9 +310,8 @@ The kernel runs twice. The second is the adjustment. The **first** runs it over
 an **empty** schedule, which executes no round and reports the residuals at the
 state it was handed: the "before" median is then measured by the same projection
 the "after" one is, through the same camera model, rather than by a second
-spelling of the reprojection in this module. The first run reads the cameras the
-value holds, and the second starts from the refitted ones where a coefficient
-count changed, so the "before" median describes the input value.
+spelling of the reprojection in this module. Both runs start from the cameras
+the value holds, so the "before" median describes the input value.
 
 Both medians are taken over the finite residuals of the points that survive, so
 the two numbers describe one population and their difference is the improvement
@@ -474,8 +409,6 @@ would leave the frame carrying the gauge drift of the solve.
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `releases` | empty: every camera held | One `CameraRelease` per camera-table entry: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`. |
-| `spline_coeff_count` | `None` | Refit every spline camera releasing its distortion whose coefficient count differs to this count, over its whole domain, before the solve; 2 to 32. |
-| `spline_domain_deg` | `None` | Refit every spline camera releasing its distortion whose domain end differs on a domain ending at this incidence angle, in degrees, in the same refit as the count. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -488,8 +421,7 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-releases=None, spline_coeff_count=None, spline_domain_deg=None, schedule=None,
-max_iters=60, min_track=2, min_obs=12)` returns
+releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12)` returns
 `(EditedReconstruction, report)`. `opt_f` and `opt_distortion` are the release
 given to every camera of the table. `releases`, when given, replaces them: a
 list with one dict per camera in the table, in table order, each
@@ -498,8 +430,7 @@ unknown key or a value that is not a bool is a `ValueError`. It materialises the
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
-camera in the solve carrying the `CameraAdjustment` fields (`spline_refit` a
-dict of the `SplineRefit` fields, or `None`; `outermost_observed` a dict of
+camera in the solve carrying the `CameraAdjustment` fields (`outermost_observed` a dict of
 `radius_px`, `theta_deg`, `image` and `xy`, or `None`), and every refusal is a
 `ValueError` carrying the sentence the error writes.
 
@@ -544,17 +475,6 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
 - Every camera held, by an empty list and by an explicit one, giving the same
   solve bit for bit, the residual median falling and no lens moving.
 - A release list one camera short and one camera long, refused.
-- A new coefficient count, 8 → 12 and 8 → 5, refitting the spline before the
-  solve within 0.01 px and 0.25 px of the old curve, the domain end kept, the
-  camera coming back with the new count and the residual median falling by an
-  order of magnitude; a camera already at the count not refitted beside one that
-  is; the count refused with no distortion released, at 0, 1 and 33, with no spline
-  camera, and, naming the camera, when the refit is.
-- A new domain end, shorter and longer than the old one, refitting the spline
-  over the new domain and reporting both ends; a new count and domain in one
-  refit; the domain the camera already has not refitted; the domain refused
-  with no distortion released, with no spline camera, and, naming the camera, past
-  180°.
 - Each camera's outermost observation one of its own images', its radius
   measured from its principal point.
 - The focal released on two cameras finding each its own planted focal and

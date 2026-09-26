@@ -299,8 +299,13 @@ pub(crate) enum Command {
         release_focal: bool,
         release_distortion: bool,
         cameras: Vec<CameraReleaseOverride>,
-        spline_coeff_count: Option<usize>,
-        spline_domain_deg: Option<f64>,
+    },
+    /// Switch one camera of a node to a model fitted to it, as one version: a
+    /// change of model, or, for a spline camera switched to its own model, a
+    /// refit of its spline to a new coefficient count or domain end.
+    SwitchCameraModel {
+        reconstruction_label: String,
+        request: crate::state::edits::SwitchCameraModelRequest,
     },
     /// Convert one node's observations from `sift_files` to
     /// `embedded_patches`, then render bitmaps from readable photographs
@@ -1237,8 +1242,6 @@ pub(crate) fn apply_with_window(
             release_focal,
             release_distortion,
             cameras,
-            spline_coeff_count,
-            spline_domain_deg,
         } => edit::bundle_adjust(
             state,
             &reconstruction_label,
@@ -1247,12 +1250,16 @@ pub(crate) fn apply_with_window(
                 distortion: release_distortion,
             },
             &cameras,
-            sfmtool_core::BundleAdjustOptions {
-                spline_coeff_count,
-                spline_domain_deg,
-                ..sfmtool_core::BundleAdjustOptions::default()
-            },
+            sfmtool_core::BundleAdjustOptions::default(),
         ),
+        Command::SwitchCameraModel {
+            reconstruction_label,
+            request,
+        } => done(edit::switch_camera_model(
+            state,
+            &reconstruction_label,
+            &request,
+        )),
         Command::ConvertToEmbeddedPatches {
             reconstruction_label,
         } => edit::convert_to_embedded_patches(state, &reconstruction_label),

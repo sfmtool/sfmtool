@@ -9,7 +9,11 @@ so reprojection errors change, and the operation reports by how much, measured
 on one fixed set of observations. The main use is moving a fisheye camera from a
 COLMAP polynomial model, whose inverse fails a little past 90° off the axis, to
 `SFMTOOL_FISHEYE`, whose spline and linear tail are defined out to 180°, so that
-a later bundle adjustment can refine the lens out to the image circle.
+a later bundle adjustment can refine the lens out to the image circle. The same
+operation, asked to switch a spline camera to its own spline model, gives it a
+new coefficient count or a new domain end: that is how a spline camera's
+parameterization changes, since bundle adjustment only refines the coefficients
+it has.
 
 The lens fit itself is [`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md). This spec is
 the layer that adds the reconstruction: which observations belong to a camera,
@@ -22,7 +26,10 @@ The function lives in
 [switch_camera_model.rs](../../../crates/sfmtool-core/src/reconstruction/switch_camera_model.rs),
 as `sfmtool_core::reconstruction::switch_camera_model`, and is bound as
 `EditedReconstruction.switch_camera_model` and
-`SfmrReconstruction.switch_camera_model`.
+`SfmrReconstruction.switch_camera_model`. `sfm xform --camera-model`, the
+viewer's "Refit spline…" action
+([`../../gui/edits/switch-camera-model.md`](../../gui/edits/switch-camera-model.md)) and the MCP
+tool `switch_camera_model` reach it.
 
 ```rust
 pub fn switch_camera_model(
@@ -85,6 +92,12 @@ needs the observations.
 written, and the first refusal refuses the whole switch with the camera's index
 and the fit's own reason.
 
+**A spline camera switched to its own model is a refit, in the same call.** A
+new coefficient count or domain end is a change of how the lens curve is
+parameterized, and is a choice about one camera, like a change of model. One
+operation covers both, so every surface that switches a model also refits a
+spline, and the report is the same shape either way.
+
 ### Example
 
 ```rust
@@ -119,7 +132,9 @@ index, each file read once. A value with neither is refused
 
 ### The fit's largest angle
 
-With no `theta_fit_deg` given, each camera's fit reaches:
+A spline camera switched to its own spline model is refitted as described in
+"A spline refitted as itself" below. For every other camera, with no
+`theta_fit_deg` given, each camera's fit reaches:
 
 1. its trusted bound, where the model has one;
 2. otherwise the largest incidence angle among its observations;
@@ -129,6 +144,34 @@ A caller's value is used as given, and the fit refuses one past the trusted
 bound. A perspective target is refused for a camera observed at 90° or more
 (`ObservationsPast90`), whatever `θ_fit` is, because those observations would
 have no pixel under it.
+
+### A spline refitted as itself
+
+An `SFMTOOL_FISHEYE` camera switched to `SFMTOOL_FISHEYE`, or an
+`SFMTOOL_PINHOLE` switched to `SFMTOOL_PINHOLE`, with no `theta_fit_deg` given,
+is fitted by `refit_spline`
+([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md))
+at the target's coefficient count: over the **whole** new domain rather than
+the observations' extent, because a spline states its curve at every angle of
+its domain and along its linear tail, and constrained to stay monotone. The
+domain end is the `spline_domain_deg` given, or the camera's own, kept bit for
+bit, when none is; so a caller changing only the count keeps the domain, and
+one changing only the domain names the count the camera has. The domain may be
+shorter or longer than the old one.
+
+The fit's report says what the refit did: `theta_fit_source` is
+`spline_domain`, `rms_px` and `max_px` are the refitted camera's distance from
+the old one over the whole domain, and `monotone_constraint` gives the range of
+incidence angles where the monotonicity constraint held the slope at its floor,
+which is where the refit departs from the old curve. The observation
+comparison is taken as for any switch. A domain end the model cannot have (past
+180°, or at 90° or more for `SFMTOOL_PINHOLE`) is refused, naming the camera; a count
+outside 0 and 2 to 32 is refused by `RefitTarget::from_name`, before any camera.
+
+With a `theta_fit_deg` given, the camera is fitted like any other source, over
+that angle, with the domain end at the far image corner unless one is given.
+Switching a spline camera to the *other* spline model is a switch between
+models, and is fitted like any other source too.
 
 ### What is written back
 
@@ -207,6 +250,10 @@ exact projection, plus one point 95° off the first image's axis:
 - a source with no trusted bound fitted out to its observations' extent;
 - a perspective target refused for a camera observed past 90°, and every
   refusal naming its camera;
+- a spline camera switched to its own model at a new count and domain giving
+  exactly `refit_spline`'s camera and report, over the whole domain; the domain
+  end kept bit for bit when none is given; a given fit angle taking the general
+  fit instead; and a domain end past 180° refused, naming the camera;
 - an empty or out-of-range camera list refused.
 
 Bindings: `tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`
@@ -222,6 +269,6 @@ without them.
 - Adding observations. Add Image to Tracks
   ([`add-image-to-tracks.md`](add-image-to-tracks.md)) adds those the old
   model's inverse kept out.
-- A proposal the viewer shows before the switch is applied, and the MCP tools
-  for it. Both are proposed in
+- A proposal the viewer shows before the switch is applied, and the MCP tool
+  that opens one. Both are proposed in
   [`../../drafts/switch-camera-model.md`](../../drafts/switch-camera-model.md).

@@ -10,7 +10,9 @@ bundle adjustment with the focal and the lens distortion released (the spline,
 and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
-release to the cameras it names and holds the rest.
+release to the cameras it names and holds the rest. The adjustment refines the
+spline coefficients a camera has; a new coefficient count or spline domain is a
+refit of the camera, ``--camera-model SFMTOOL_FISHEYE,coeffs=N,spline_domain=DEG``.
 """
 
 import tempfile
@@ -21,7 +23,7 @@ import numpy as np
 import pycolmap
 
 from .._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
-from ._switch_camera_model import format_monotone_constraint, format_outermost_keypoint
+from ._switch_camera_model import format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
 SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
@@ -31,17 +33,9 @@ class BundleAdjustTransform:
     """Apply bundle adjustment to refine camera poses and 3D points.
 
     Args:
-        coeff_count: Refit every spline camera to this many spline coefficients
-            before the solve (``--bundle-adjust coeffs=N``).
-        spline_domain_deg: Refit every spline camera on a domain ending at this
-            incidence angle, in degrees, before the solve, in the same refit as
-            ``coeff_count`` (``--bundle-adjust domain=DEG``).
         cameras: Camera-table indexes whose lens is released
             (``--bundle-adjust cameras=0+1``); every other camera is held, its
             intrinsics unchanged. ``None``, the default, releases every camera.
-
-    Only a reconstruction with a spline camera takes either, which the sfmtool
-    path adjusts; given for one without, ``apply`` raises ``click.UsageError``.
     """
 
     def __init__(
@@ -49,15 +43,11 @@ class BundleAdjustTransform:
         refine_focal_length: bool = True,
         refine_principal_point: bool = False,
         refine_extra_params: bool = True,
-        coeff_count: int | None = None,
-        spline_domain_deg: float | None = None,
         cameras: list[int] | None = None,
     ):
         self.refine_focal_length = refine_focal_length
         self.refine_principal_point = refine_principal_point
         self.refine_extra_params = refine_extra_params
-        self.coeff_count = coeff_count
-        self.spline_domain_deg = spline_domain_deg
         self.cameras = None if cameras is None else sorted(set(cameras))
 
     def _released(self, recon: SfmrReconstruction) -> list[bool]:
@@ -79,12 +69,6 @@ class BundleAdjustTransform:
         self._released(recon)
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
-        if self.coeff_count is not None or self.spline_domain_deg is not None:
-            raise click.UsageError(
-                "--bundle-adjust coeffs= and domain= apply only to a reconstruction with a "
-                f"{' or '.join(SPLINE_MODELS)} camera, and this one has none "
-                "(switch a camera with --camera-model first)"
-            )
         return self._apply_pycolmap(recon)
 
     def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
@@ -112,11 +96,7 @@ class BundleAdjustTransform:
             }
             for camera, released in zip(recon.cameras, self._released(recon))
         ]
-        adjusted, report = EditedReconstruction(recon).bundle_adjust(
-            releases=releases,
-            spline_coeff_count=self.coeff_count,
-            spline_domain_deg=self.spline_domain_deg,
-        )
+        adjusted, report = EditedReconstruction(recon).bundle_adjust(releases=releases)
         print(
             f"    {report['images']} images, {report['points']} points, "
             f"{report['observations']} observations; median residual "
@@ -139,23 +119,6 @@ class BundleAdjustTransform:
                 f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}; "
                 f"released: {', '.join(released) or 'none'}"
             )
-            refit = camera["spline_refit"]
-            if refit is not None:
-                domain = ""
-                if abs(refit["domain_after_deg"] - refit["domain_before_deg"]) > 1e-9:
-                    domain = (
-                        f", domain {refit['domain_before_deg']:.1f}° -> "
-                        f"{refit['domain_after_deg']:.1f}°"
-                    )
-                print(
-                    f"      spline refitted {refit['coeffs_before']} -> "
-                    f"{refit['coeffs_after']} coefficients{domain} before the solve: "
-                    f"rms {refit['rms_px']:.4f} px, max {refit['max_px']:.4f} px "
-                    "from the old curve over its domain"
-                )
-                held = format_monotone_constraint(refit["monotone_constraint"])
-                if held:
-                    print(f"        {held}")
         result = adjusted.materialize()[0]
         # How far out the photographs reach, under the adjusted cameras: the
         # outermost observation, and the outermost feature detected in the
@@ -397,10 +360,6 @@ class BundleAdjustTransform:
             opts.append("extra")
         opt_str = ",".join(opts) if opts else "none"
         params = ""
-        if self.coeff_count is not None:
-            params += f", coeffs={self.coeff_count}"
-        if self.spline_domain_deg is not None:
-            params += f", domain={self.spline_domain_deg:g}"
         if self.cameras is not None:
             params += ", cameras=" + "+".join(str(c) for c in self.cameras)
         return f"Bundle adjustment (refine: {opt_str}{params})"

@@ -31,13 +31,27 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
         let options = sfmtool_core::BundleAdjustOptions {
             releases: answer.releases,
-            spline_coeff_count: answer.spline_coeff_count,
-            spline_domain_deg: answer.spline_domain_deg,
             ..sfmtool_core::BundleAdjustOptions::default()
         };
         // The refusal is already an Action Log row: the start writes it
         // itself, in the words the menu's own gate uses.
         let _ = app_state.start_bundle_adjust(answer.recon, &options);
+    }
+
+    // The `Refit spline…` dialog, and the switch it asks for. The switch is a
+    // quick fit and runs here; it records its own Action Log row, success or
+    // refusal, and a new base means every panel cache of the node describes a
+    // value it no longer holds.
+    if let Some(answer) = app_state.refit_spline_prompt.show(root_ui.ctx()) {
+        if app_state
+            .switch_camera_model(answer.recon, &answer.request())
+            .is_ok()
+        {
+            image_browser.forget_recon(answer.recon);
+            image_detail.forget_recon(answer.recon);
+            track_view.forget_recon(answer.recon);
+            intrinsics_detail.forget_recon(answer.recon);
+        }
     }
 
     // The workspace path a minimal copy records. The file was chosen in the

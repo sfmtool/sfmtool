@@ -298,3 +298,116 @@ fn camera_lists_are_checked() {
         }
     );
 }
+
+/// The `kerry_park` first lens switched to an eight-coefficient
+/// `SFMTOOL_FISHEYE`, the camera a spline refit starts from.
+fn kerry_spline() -> CameraIntrinsics {
+    crate::camera::refit_intrinsics::refit_camera_intrinsics(
+        &kerry_cam0(),
+        &RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap(),
+        &RefitOptions::default(),
+    )
+    .unwrap()
+    .camera
+}
+
+#[test]
+fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
+    let source = kerry_spline();
+    let recon = scene(vec![source.clone(), kerry_cam0()], |i| (i % 2) as u32);
+    let ten = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(10)).unwrap();
+    let options = RefitOptions {
+        theta_fit_deg: None,
+        spline_domain_deg: Some(108.0),
+    };
+
+    let (out, report) = switch_camera_model(&recon, &[0], &ten, &options).unwrap();
+
+    // Exactly the lens-only refit of the spline, which samples the whole new
+    // domain rather than the observations' extent.
+    let expected = refit_spline(&source, 10, Some(108.0)).unwrap();
+    let entry = &report.cameras[0];
+    assert_eq!(entry.refit, expected);
+    assert_eq!(entry.refit.theta_fit_source, ThetaFitSource::SplineDomain);
+    assert!((entry.refit.theta_fit_deg - 108.0).abs() < 1e-9);
+    assert_eq!(out.image_table.cameras[0], expected.camera);
+    let Some((coeffs, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+        panic!("still a spline");
+    };
+    assert_eq!(coeffs.len(), 10);
+    assert!(
+        (crate::camera::refit_intrinsics::spline_domain_deg(&out.image_table.cameras[0]).unwrap()
+            - 108.0)
+            .abs()
+            < 1e-9
+    );
+    // The other camera is not touched, and the comparison still covers the
+    // switched camera's observations.
+    assert_eq!(out.image_table.cameras[1], kerry_cam0());
+    assert!(entry.observations.observations > 0);
+
+    // With no domain given the domain end is kept bit for bit.
+    let (out, report) = switch_camera_model(&recon, &[0], &ten, &RefitOptions::default()).unwrap();
+    assert_eq!(
+        report.cameras[0].refit,
+        refit_spline(&source, 10, None).unwrap()
+    );
+    let (Some((_, before, _)), Some((_, after, _))) = (
+        source.model.radial_spline(),
+        out.image_table.cameras[0].model.radial_spline(),
+    ) else {
+        panic!("spline models");
+    };
+    assert_eq!(before.to_bits(), after.to_bits());
+
+    // A fit angle given is a fit like any other source's, over that angle.
+    let given = RefitOptions {
+        theta_fit_deg: Some(80.0),
+        spline_domain_deg: None,
+    };
+    let (_, report) = switch_camera_model(&recon, &[0], &ten, &given).unwrap();
+    assert_eq!(
+        report.cameras[0].refit.theta_fit_source,
+        ThetaFitSource::Given
+    );
+
+    // The other spline model is a switch between models, not a refit.
+    let pinhole = RefitTarget::from_name("SFMTOOL_PINHOLE", Some(8)).unwrap();
+    let scene_narrow = scene(vec![source.clone()], |_| 0);
+    let error = switch_camera_model(&scene_narrow, &[0], &pinhole, &RefitOptions::default())
+        .err()
+        .expect("observed past 90°");
+    assert!(matches!(
+        error,
+        SwitchCameraModelError::Refit {
+            camera: 0,
+            error: RefitError::ObservationsPast90 { .. }
+        }
+    ));
+}
+
+#[test]
+fn a_spline_refit_the_model_cannot_have_is_refused_naming_the_camera() {
+    let recon = scene(vec![kerry_cam0(), kerry_spline()], |i| (i % 2) as u32);
+    let options = RefitOptions {
+        theta_fit_deg: None,
+        spline_domain_deg: Some(200.0),
+    };
+    let error = switch_camera_model(
+        &recon,
+        &[1],
+        &RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap(),
+        &options,
+    )
+    .err();
+    assert_eq!(
+        error,
+        Some(SwitchCameraModelError::Refit {
+            camera: 1,
+            error: RefitError::SplineDomainInvalid {
+                spline_domain_deg: 200.0
+            }
+        })
+    );
+    assert!(error.unwrap().to_string().starts_with("camera 1:"));
+}

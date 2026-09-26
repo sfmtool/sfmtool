@@ -73,7 +73,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           as a radius in pixels and an incidence angle under this model: \
                           observed among the reconstruction's observations, and detected \
                           among every feature of the images' .sift files (null when none is \
-                          readable). It is the angle to set bundle_adjust's \
+                          readable). It is the angle to set switch_camera_model's \
                           spline_domain_deg from.",
             kind: Read,
             schema: object(

@@ -160,6 +160,16 @@ impl PyEditedReconstruction {
     ///     spline_domain_deg: Where a spline target's domain ends, as an
     ///         incidence angle. Default: the far image corner.
     ///
+    /// A spline camera switched to its own spline model (``SFMTOOL_FISHEYE``
+    /// to ``SFMTOOL_FISHEYE``, ``SFMTOOL_PINHOLE`` to ``SFMTOOL_PINHOLE``) with
+    /// no ``theta_fit_deg`` is a refit of its spline: fitted over the whole new
+    /// domain and constrained to stay monotone, its domain end kept exactly
+    /// when ``spline_domain_deg`` is not given, at ``coeff_count``
+    /// coefficients (still 8 when not given). The fit's ``theta_fit_source``
+    /// is then ``"spline_domain"``, and its ``monotone_constraint`` says where
+    /// the refit departs from the old curve. This is how a spline's count and
+    /// domain change; ``bundle_adjust`` refines the coefficients a camera has.
+    ///
     /// Returns:
     ///     ``(EditedReconstruction, report)``. The report's ``cameras`` holds
     ///     one dict per switched camera: ``camera``, ``images``, ``source`` and

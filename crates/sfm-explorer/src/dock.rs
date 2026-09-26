@@ -970,6 +970,9 @@ impl TabContext<'_> {
             if let Some(image) = response.select_image {
                 self.state.select_image(Some(image));
             }
+            if let Some(camera) = response.refit_spline {
+                self.state.open_refit_spline(camera);
+            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");

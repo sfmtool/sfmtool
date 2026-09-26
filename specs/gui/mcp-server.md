@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-eight tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-two
+Seventy-nine tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-three
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -149,6 +149,7 @@ write, and one writes a file.
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
 | `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
+| `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
 | `get_bench` | read | One reconstruction's bench: every item on it, and which is active |
@@ -186,7 +187,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-two writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-three writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -594,7 +595,7 @@ observations, and among every feature of the images' `.sift` files, each as a
 radius and an incidence angle under this camera's model. `detected` is `null`
 where no `.sift` file can be read. The files' positions are read on every call,
 a few milliseconds per camera, and the angle is the one to give
-`bundle_adjust`'s `spline_domain_deg`.
+`switch_camera_model`'s `spline_domain_deg`.
 
 `list_camera_images` defaults to 50 rows and caps at 500 (`read::MAX_LIMIT`).
 An `offset` past the end is an empty page and not a refusal: a caller walking a
@@ -1869,8 +1870,9 @@ past the deleted one; it, the resection, the adjustment and every cursor move
 renumber points. An agent holding an index it
 read before such a call is holding a statement about something else, and should
 re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
-is what it is for. `move_camera_image` renumbers nothing, and is with them only
-in what the drain forgets afterwards: the panels' cached geometry.
+is what it is for. `move_camera_image` and `switch_camera_model` renumber
+nothing, and are with them only in what the drain forgets afterwards: the
+panels' cached geometry and lens curves.
 
 **A camera the human is holding is committed first.** An edit arriving on a node
 somebody is placing a camera on with the Move Camera lock ends that lock before
@@ -2112,10 +2114,6 @@ The two bulk edits.
 //                 "release_distortion": true,
 //                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
 //                               "release_distortion": false }] }
-// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
-//                 "release_distortion": true, "spline_coeff_count": 12 }
-// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
-//                 "release_distortion": true, "spline_domain_deg": 108.8 }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -2134,6 +2132,56 @@ Index Files (the Index Files row in the Scene tree) makes it."* -- and
 `build_index_files` is the call that makes it. The image menu itself is not on
 the wire: its four entries are the tools `resect_camera_image`,
 `add_camera_image_to_tracks`, `move_camera_image` and `delete_camera_image`.
+
+### `switch_camera_model`
+
+```jsonc
+// switch_camera_model { "reconstruction_label": "kerry_park",
+//                       "camera_intrinsics_index": 0, "model": "SFMTOOL_FISHEYE",
+//                       "coeff_count": 8 }
+// switch_camera_model { "reconstruction_label": "kerry_park",
+//                       "camera_intrinsics_index": 0, "coeff_count": 12,
+//                       "spline_domain_deg": 108.8 }
+```
+
+One camera switched to a model fitted to it, applied directly as the node's
+next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
+the reconstruction-level switch
+([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
+Poses, points, keypoints and tracks do not move, and nothing is renumbered; the
+stored errors of the points the camera's images observe are recomputed. It is
+the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
+model.
+
+- `camera_intrinsics_index` names the camera, as `get_camera_intrinsics` takes
+  it.
+- `model` is the target, case-insensitive. Omitted, it is the camera's own
+  model, and for an `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` camera the switch is
+  then a **refit of its spline**: fitted over the whole new domain and kept
+  monotone.
+- `coeff_count` is a spline target's coefficient count. Omitted, it is the
+  camera's own count when the target is its own spline model, and 8 otherwise.
+- `spline_domain_deg` is where a spline target's domain ends, as an incidence
+  angle. Omitted, a refit keeps the camera's own domain end exactly, and a
+  change of model puts it at the far image corner. `get_camera_intrinsics`
+  reports the outermost keypoint an agent sets it from.
+- `theta_fit_deg` is the largest angle the fit samples. Omitted, it is the
+  core switch's default; given, even a refit of a spline is fitted over that
+  angle alone.
+
+The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
+`fit` object beside it: `camera_intrinsics_index`, `model_before`,
+`model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
+refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
+distance from the old over the fit), `monotone_constraint` (`active`,
+`active_angles`, `range_deg`), and `observations` with
+`median_error_before_px` and `median_error_after_px` over them. The label reads
+`Refit spline of camera 0 of kerry_park: 8 → 12 coefficients, domain 150.2° →
+108.8°` for a refit, naming a part it kept as kept, and `Switched camera 0 of
+kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A
+camera the node does not have, a count on a model without a spline, and a
+domain end the model cannot have are refused naming the camera, and push
+nothing. It runs on the GUI thread: a fit takes milliseconds.
 
 ### `add_camera_image_to_tracks`
 
@@ -2171,13 +2219,10 @@ naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
 report, and a field it leaves out taking the call's default. A camera with
 neither is held. An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
-not in the solve, so what it is given is ignored. Then the coefficient count
-every spline camera that releases its distortion is refitted to before the
-solve, as `spline_coeff_count` (2 to 32; omitted keeps each count), and the
-incidence angle its domain is moved to in the same refit, as
-`spline_domain_deg` (omitted keeps each domain). `get_camera_intrinsics`
-reports the outermost keypoint an agent sets the domain from. Everything else
-is the core function's defaults.
+not in the solve, so what it is given is ignored. Everything else is the core
+function's defaults. A spline camera's coefficient count and domain end are not
+the adjustment's: they are a refit of that camera, `switch_camera_model`
+(below), made before the adjustment that refines the coefficients.
 
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses. Each camera's release is checked against its own model, and a release
@@ -2189,14 +2234,8 @@ the defaults on and a `cameras` entry holding the `OPENCV_FISHEYE`. The
 version's label says what each camera released -- `, focal and lens distortion
 released` when every camera released the same, ` on every camera` added over
 several, and `, camera 0 focal and lens distortion released, camera 1 held`
-when they differ -- and `spline refitted to N coefficients` (and `on a D°
-domain`) when a count or domain changed. The report's focal clause names each
-released camera's focal before and after and each spline refit's counts,
-largest distance from the old curve and, where its monotonicity constraint
-bound, the angles where it did. `spline_coeff_count` and `spline_domain_deg`
-are refused when no spline camera releases its distortion and when no camera is
-a spline model, and a domain the model cannot end at is refused naming the
-camera.
+when they differ. The report's focal clause names each released camera's focal
+before and after.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -2938,8 +2977,8 @@ pub(crate) enum Command {
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
     BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
-                   cameras: Vec<CameraReleaseOverride>,
-                   spline_coeff_count: Option<usize>, spline_domain_deg: Option<f64> },
+                   cameras: Vec<CameraReleaseOverride> },
+    SwitchCameraModel { reconstruction_label: String, request: SwitchCameraModelRequest },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
     Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },
@@ -3541,7 +3580,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-eight tools**, fifteen of them reads and one of them
+- **The catalog is seventy-nine tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
@@ -3734,6 +3773,9 @@ Other candidates, in rough order of value:
 | `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
 | `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
+| `switch_camera_model` `model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
+| `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
+| `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |
 
 ## Open questions
 

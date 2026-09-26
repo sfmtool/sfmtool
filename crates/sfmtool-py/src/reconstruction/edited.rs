@@ -781,19 +781,6 @@ impl PyEditedReconstruction {
     ///         image uses is ignored. Every refusal ``opt_f`` and
     ///         ``opt_distortion`` raise applies to each entry and names the
     ///         camera; a list whose length is not the camera count raises.
-    ///     spline_coeff_count: Refit every spline camera in the solve whose
-    ///         distortion is released and whose coefficient count differs to
-    ///         this many coefficients before the solve, over its whole spline
-    ///         domain, and start the solve from the refitted cameras (default
-    ///         ``None``, which keeps each count). Needs a released distortion.
-    ///         Raises when there is none, when no camera
-    ///         is a spline model, for a count outside 2 to 32, and, naming the
-    ///         camera, when a refit is refused.
-    ///     spline_domain_deg: Move every spline camera's domain end to this
-    ///         incidence angle, in degrees, before the solve, in the same refit
-    ///         as ``spline_coeff_count`` (default ``None``, which keeps each
-    ///         domain). The refit is over the whole new domain, shorter or
-    ///         longer than the old one. Refused as the count is.
     ///     schedule: ``[(trim_px, loss_scale), ...]`` staged rounds (default
     ///         ``[(50, 5), (12, 2), (4, 1)]``).
     ///     max_iters: LM iteration budget per round (default 60).
@@ -810,28 +797,25 @@ impl PyEditedReconstruction {
     ///     ``cameras``, a list with one dict per camera in the solve, in
     ///     camera-table order: ``camera`` (its table index), ``images`` (the
     ///     posed images taken through it), ``focal_before``, ``focal_after``,
-    ///     ``focal_released``, ``distortion_released``, ``spline_refit``:
-    ///     ``None`` where the coefficient count and the domain were kept,
-    ///     otherwise a dict of ``coeffs_before``, ``coeffs_after``,
-    ///     ``domain_before_deg``, ``domain_after_deg``, ``rms_px`` and
-    ///     ``max_px`` (the refit's pixel distance from the old camera over the
-    ///     new domain) and ``monotone_constraint`` (as ``CameraIntrinsics.refit``
-    ///     reports it: where the refit held the new spline's slope at its floor);
-    ///     and ``outermost_observed``, the camera's outermost
+    ///     ``focal_released``, ``distortion_released`` and
+    ///     ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
     ///     ``theta_deg``, ``image`` and ``xy``, or ``None``).
     ///     Raises ``ValueError`` with the reason when the adjustment is
     ///     refused.
+    ///
+    /// The adjustment refines the spline coefficients a camera has; it does
+    /// not change their count or the spline's domain. That is a refit of the
+    /// camera, ``switch_camera_model`` to its own spline model with
+    /// ``coeff_count`` and ``spline_domain_deg``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, spline_coeff_count=None, spline_domain_deg=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
         opt_distortion: bool,
         releases: Option<Vec<Bound<'_, PyDict>>>,
-        spline_coeff_count: Option<usize>,
-        spline_domain_deg: Option<f64>,
         schedule: Option<Vec<(f64, f64)>>,
         max_iters: usize,
         min_track: usize,
@@ -854,8 +838,6 @@ impl PyEditedReconstruction {
         };
         let options = BundleAdjustOptions {
             releases,
-            spline_coeff_count,
-            spline_domain_deg,
             schedule: match schedule {
                 Some(rounds) => rounds
                     .into_iter()
@@ -890,26 +872,6 @@ impl PyEditedReconstruction {
             c.set_item("focal_after", camera.focal_after)?;
             c.set_item("focal_released", camera.focal_released)?;
             c.set_item("distortion_released", camera.distortion_released)?;
-            match &camera.spline_refit {
-                Some(refit) => {
-                    let r = PyDict::new(py);
-                    r.set_item("coeffs_before", refit.coeffs_before)?;
-                    r.set_item("coeffs_after", refit.coeffs_after)?;
-                    r.set_item("domain_before_deg", refit.domain_before_deg)?;
-                    r.set_item("domain_after_deg", refit.domain_after_deg)?;
-                    r.set_item("rms_px", refit.rms_px)?;
-                    r.set_item("max_px", refit.max_px)?;
-                    r.set_item(
-                        "monotone_constraint",
-                        crate::geometry::camera_intrinsics::monotone_constraint_to_py(
-                            py,
-                            &refit.monotone_constraint,
-                        )?,
-                    )?;
-                    c.set_item("spline_refit", r)?;
-                }
-                None => c.set_item("spline_refit", py.None())?,
-            }
             c.set_item(
                 "outermost_observed",
                 super::switch_camera_model::reach_to_py(py, camera.outermost_observed.as_ref())?,

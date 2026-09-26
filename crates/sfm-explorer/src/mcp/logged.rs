@@ -71,6 +71,7 @@ impl Command {
             Command::ResectCameraImage { .. } => "resect_camera_image",
             Command::AddCameraImageToTracks { .. } => "add_camera_image_to_tracks",
             Command::BundleAdjust { .. } => "bundle_adjust",
+            Command::SwitchCameraModel { .. } => "switch_camera_model",
             Command::ConvertToEmbeddedPatches { .. } => "convert_to_embedded_patches",
             Command::GetBench { .. } => "get_bench",
             Command::GetBenchTrack { .. } => "get_bench_track",
@@ -151,6 +152,10 @@ impl Command {
                 reconstruction_label,
                 ..
             }
+            | Command::SwitchCameraModel {
+                reconstruction_label,
+                ..
+            }
             | Command::BakeReconstructionTransform {
                 reconstruction_label,
             }
@@ -203,6 +208,13 @@ impl Command {
                 ..
             }
             | Command::ResectCameraImage {
+                reconstruction_label,
+                ..
+            }
+            // The switch renumbers nothing either, but it installs a whole new
+            // base with another camera, which is what the intrinsics panel and
+            // the image overlay cached their curves from.
+            | Command::SwitchCameraModel {
                 reconstruction_label,
                 ..
             }
@@ -289,6 +301,7 @@ impl Command {
             | Command::ResectCameraImage { .. }
             | Command::AddCameraImageToTracks { .. }
             | Command::BundleAdjust { .. }
+            | Command::SwitchCameraModel { .. }
             | Command::BakeReconstructionTransform { .. }
             | Command::ConvertToEmbeddedPatches { .. }
             // The one bench step whose row is an `Edit`, because it is one

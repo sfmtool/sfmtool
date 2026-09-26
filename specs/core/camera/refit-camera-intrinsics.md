@@ -107,6 +107,14 @@ pub fn refit_spline(
     coeff_count: usize,
     spline_domain_deg: Option<f64>, // None: the source's domain end, copied exactly
 ) -> Result<CameraIntrinsicsRefit, RefitError>;
+
+/// A spline camera's domain end as an incidence angle in degrees, the unit
+/// `spline_domain_deg` takes; `None` for a camera with no spline.
+pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64>;
+
+/// The counts a spline with a curve takes, 2 to 32: what a count field is
+/// bounded by.
+pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize>;
 ```
 
 The source's trusted bound is
@@ -139,9 +147,12 @@ coefficient count is not a move between model families, and none of the
 defaults of `refit_camera_intrinsics` fit it: the domain end should stay where it
 is, exactly, and the fit should cover that whole domain rather than a trusted
 bound the source does not have. `refit_spline` states both, and takes only what
-can change. The bundle adjustment's coefficient count
-([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md)) is
-its caller.
+can change. The reconstruction-level switch
+([`../reconstruction/switch-camera-model.md`](../reconstruction/switch-camera-model.md))
+is its caller, for a spline camera switched to its own spline model: that is how
+`sfm xform --camera-model`, the viewer's "Refit spline…" action and the MCP tool
+`switch_camera_model` change a spline's count or domain. Bundle adjustment then
+refines the coefficients the refit gave it.
 
 **A spline fit is constrained to be monotone, not refused when it is not.** A
 lens model must be invertible, since every keypoint's ray comes from the
@@ -415,7 +426,7 @@ All are constants in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/came
 `CameraIntrinsics.refit(target, *, coeff_count=None, theta_fit_deg=None,
 spline_domain_deg=None)` returns `(CameraIntrinsics, report)`. The report is a
 dict: `model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
-`"observations"`, `"image_corner"` or `"given"`), `spline_domain_deg` (`None` for
+`"observations"`, `"image_corner"`, `"given"` or `"spline_domain"`), `spline_domain_deg` (`None` for
 a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
 sentence per term) and `extent` (`edge_deg`, `corner_deg`, `source_trusted_deg`,
 `source_fold_deg`) and `monotone_constraint` (`active`, `active_angles`, and
@@ -478,7 +489,8 @@ bindings are tested in
   ([`../reconstruction/outermost-keypoint.md`](../reconstruction/outermost-keypoint.md)),
   the detected one where the images' `.sift` files can be read and otherwise
   the observed one, labelled as such, with a button that sets the domain to its
-  angle. `refit_spline` makes the change on a camera already switched.
+  angle. `refit_spline` makes the change on a camera already switched, reached
+  as a switch of the camera to its own spline model.
 
 ## Open questions
 

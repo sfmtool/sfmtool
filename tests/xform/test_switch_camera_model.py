@@ -230,99 +230,83 @@ def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
     assert result.cameras[0].model == "SFMTOOL_PINHOLE"
 
 
-def test_bundle_adjust_option_takes_a_coefficient_count():
-    """``--bundle-adjust`` bare keeps working; ``coeffs=N`` is its one key."""
+def test_bundle_adjust_option_refuses_the_spline_refit_keys():
+    """``--bundle-adjust`` bare keeps working. A spline's count and domain are a
+    refit of the camera, and the refusal says which option makes it."""
     from sfmtool.xform import BundleAdjustTransform
     from sfmtool.xform._arg_parser import parse_transform_args
 
     (bare,) = parse_transform_args(["--bundle-adjust"])
     assert isinstance(bare, BundleAdjustTransform)
-    assert bare.coeff_count is None
-    (spaced,) = parse_transform_args(["--bundle-adjust", "coeffs=12"])
-    (joined,) = parse_transform_args(["--bundle-adjust=coeffs=12"])
-    assert spaced.coeff_count == joined.coeff_count == 12
-    assert "coeffs=12" in spaced.description()
+    assert bare.description() == "Bundle adjustment (refine: focal,extra)"
     # A following option is not taken as the value.
     bare, scale = parse_transform_args(["--bundle-adjust", "--scale", "2"])
-    assert bare.coeff_count is None and scale.scale == 2.0
+    assert bare.cameras is None and scale.scale == 2.0
+    for value in ("coeffs=12", "domain=108.5", "cameras=0,coeffs=8"):
+        with pytest.raises(click.UsageError, match="--camera-model SFMTOOL_FISHEYE"):
+            parse_transform_args(["--bundle-adjust", value])
     with pytest.raises(click.UsageError, match="Unknown --bundle-adjust key"):
         parse_transform_args(["--bundle-adjust", "knots=4"])
-    with pytest.raises(click.UsageError, match="not a valid int"):
-        parse_transform_args(["--bundle-adjust", "coeffs=many"])
 
 
-def test_bundle_adjust_refits_the_spline_to_a_new_coefficient_count(
+def test_camera_model_refits_a_spline_camera_to_a_new_count_and_domain(
     seoul_bull_ground_truth_sfmr, tmp_path, capsys
 ):
-    """A camera switched to six spline coefficients is refitted to eight over
-    its whole domain before the solve, which then starts from the refit."""
-    from sfmtool.xform import BundleAdjustTransform
-
-    output_path = tmp_path / "adjusted.sfmr"
-    apply_transforms_to_file(
-        seoul_bull_ground_truth_sfmr,
-        output_path,
-        [
-            SwitchCameraModelTransform("SFMTOOL_FISHEYE", coeff_count=6),
-            BundleAdjustTransform(coeff_count=8),
-        ],
-    )
-    out = capsys.readouterr().out
-    assert "spline refitted 6 -> 8 coefficients before the solve" in out
-    result = SfmrReconstruction.load(output_path)
-    (camera,) = result.cameras
-    assert camera.model == "SFMTOOL_FISHEYE"
-    params = camera.to_dict()["parameters"]
-    assert params["bspline_coeff_count"] == 8
-
-
-def test_bundle_adjust_coefficients_need_a_spline_camera(seoul_bull_ground_truth_sfmr):
-    from sfmtool.xform import BundleAdjustTransform
-
-    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
-    with pytest.raises(click.UsageError, match="apply only to a reconstruction"):
-        BundleAdjustTransform(coeff_count=8).apply(recon)
-
-
-def test_bundle_adjust_option_takes_a_domain():
+    """A camera switched to six spline coefficients, switched again to its own
+    model with eight coefficients on a 108° domain, is refitted over the whole
+    new domain; a following adjustment refines the refitted spline."""
     from sfmtool.xform._arg_parser import parse_transform_args
 
-    (both,) = parse_transform_args(["--bundle-adjust", "coeffs=12,domain=108.5"])
-    assert (both.coeff_count, both.spline_domain_deg) == (12, 108.5)
-    assert "coeffs=12, domain=108.5" in both.description()
-    (domain,) = parse_transform_args(["--bundle-adjust=domain=100"])
-    assert (domain.coeff_count, domain.spline_domain_deg) == (None, 100.0)
-    with pytest.raises(click.UsageError, match="not a valid float"):
-        parse_transform_args(["--bundle-adjust", "domain=wide"])
-
-
-def test_bundle_adjust_moves_the_spline_domain(
-    seoul_bull_ground_truth_sfmr, tmp_path, capsys
-):
-    """A new domain end is one refit with the count, over the whole new
-    domain, and the outermost observation is printed beside it."""
-    from sfmtool.xform import BundleAdjustTransform
-
-    output_path = tmp_path / "adjusted.sfmr"
+    switched_path = tmp_path / "switched.sfmr"
     apply_transforms_to_file(
         seoul_bull_ground_truth_sfmr,
+        switched_path,
+        parse_transform_args(["--camera-model", "SFMTOOL_FISHEYE,coeffs=6"]),
+    )
+    source = SfmrReconstruction.load(switched_path)
+    source_params = source.cameras[0].to_dict()["parameters"]
+    assert source_params["bspline_coeff_count"] == 6
+    capsys.readouterr()
+
+    output_path = tmp_path / "refitted.sfmr"
+    apply_transforms_to_file(
+        switched_path,
         output_path,
-        [
-            SwitchCameraModelTransform("SFMTOOL_FISHEYE", coeff_count=6),
-            BundleAdjustTransform(coeff_count=8, spline_domain_deg=40.0),
-        ],
+        parse_transform_args(
+            ["--camera-model", "SFMTOOL_FISHEYE,coeffs=8,spline_domain=108,cameras=0"]
+        ),
     )
     out = capsys.readouterr().out
-    assert "spline refitted 6 -> 8 coefficients, domain " in out
-    assert "-> 40.0° before the solve" in out
-    # The switch and the adjustment both print how far out the keypoints
-    # reach; the ground truth sits beside no .sift file, so only observed.
-    assert out.count("outermost keypoint: ") >= 2
-    assert "° observed" in out and "detected" not in out.split("outermost")[-1]
+    assert "SFMTOOL_FISHEYE -> SFMTOOL_FISHEYE" in out
+    assert "fit over the whole spline domain θ ≤ 108.0°" in out
     result = SfmrReconstruction.load(output_path)
     params = result.cameras[0].to_dict()["parameters"]
     assert params["bspline_coeff_count"] == 8
-    assert params["bspline_theta_max"] == pytest.approx(np.radians(40.0))
+    assert params["bspline_theta_max"] == pytest.approx(np.radians(108.0))
+    # Exactly the switch's own refit of that camera, poses untouched.
+    expected, report = source.switch_camera_model(
+        "SFMTOOL_FISHEYE", cameras=[0], coeff_count=8, spline_domain_deg=108.0
+    )
+    assert result.cameras[0] == expected.cameras[0]
+    fit = report["cameras"][0]["fit"]
+    assert fit["theta_fit_source"] == "spline_domain"
+    assert fit["theta_fit_deg"] == pytest.approx(108.0)
+    np.testing.assert_array_equal(result.translations, source.translations)
+
+    # With no domain given the domain end is kept exactly.
+    kept, _ = source.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=8)
+    kept_params = kept.cameras[0].to_dict()["parameters"]
+    assert kept_params["bspline_theta_max"] == source_params["bspline_theta_max"]
+
+    # The adjustment then refines the refitted spline.
+    adjusted_path = tmp_path / "adjusted.sfmr"
+    apply_transforms_to_file(
+        output_path, adjusted_path, parse_transform_args(["--bundle-adjust"])
+    )
+    out = capsys.readouterr().out
+    assert "released: focal, distortion" in out
+    adjusted = SfmrReconstruction.load(adjusted_path)
+    assert adjusted.cameras[0].to_dict()["parameters"]["bspline_coeff_count"] == 8
 
 
 def test_the_switch_report_names_the_outermost_keypoint(seoul_bull_ground_truth_sfmr):

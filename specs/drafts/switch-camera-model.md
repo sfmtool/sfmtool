@@ -5,25 +5,33 @@
 Decided in outline:
 
 - The switch is a fit, one core operation, reached from the Camera Intrinsics
-  panel, from MCP and from `sfm xform --camera-model`. The core operation and the
-  CLI are built: the lens fit is
+  panel, from MCP and from `sfm xform --camera-model`. The core operation, the
+  CLI and the direct switch are built: the lens fit is
   [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md), the reconstruction-level
   switch is
   [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
-  and the CLI is
+  the CLI is
   [`../cli/reconstruction/xform/xform-command.md`](../cli/reconstruction/xform/xform-command.md)
-  § "Camera Model".
-- In the viewer, the change is shown as a proposal, drawn against the current
-  model, before it is applied. That is what remains, with the MCP tools.
+  § "Camera Model", and the viewer's direct switch is
+  [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md):
+  the "Refit spline…" action in the Camera Intrinsics panel header, which
+  gives a spline camera a new coefficient count or domain, and the MCP tool
+  `switch_camera_model`, which applies a switch or a refit at once.
+- In the viewer, a change of model is shown as a proposal, drawn against the
+  current model, before it is applied. That is what remains, with the MCP tool
+  `propose_camera_model` and the proposal form of `switch_camera_model`.
 
 Not decided: see [Open questions](#open-questions).
 
 Amends:
 
-- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md). It lists
-  "Editing intrinsics" as out of scope, which this draft replaces for the model
-  switch.
-- [`../gui/mcp-server.md`](../gui/mcp-server.md), which gains two tools.
+- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md), whose header
+  gains the Switch Model… button beside "Refit spline…".
+- [`../gui/mcp-server.md`](../gui/mcp-server.md), which gains
+  `propose_camera_model`, and whose `switch_camera_model` gains the proposal
+  form.
+- [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
+  the direct switch the proposal's Apply pushes.
 - [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
   whose non-goals name the proposal this draft describes.
 
@@ -61,9 +69,10 @@ exists so the reviewer can see the change, not only read its numbers.
 
 The switch alone changes little, since it moves pixels by under a pixel where
 there are observations. What it gives is a model that can be refined out to the
-image circle: bundle adjustment with the spline released (the Bundle Adjust
-dialog's "Release lens distortion", MCP `bundle_adjust`'s `release_distortion`,
-or `sfm xform --bundle-adjust` on a spline camera), then Add Image to Tracks on
+image circle: bundle adjustment with the camera's spline released (its row's
+"Release lens distortion" in the Bundle Adjust dialog, MCP `bundle_adjust`'s
+`release_distortion` or a `cameras` entry naming it, or `sfm xform
+--bundle-adjust` on a spline camera), then Add Image to Tracks on
 the images, now that tracks project past 86° to the right pixel, then bundle
 adjustment again with observations where the spline had none. The proposal's
 observation counts past the old trusted bound show whether the second step
@@ -86,7 +95,7 @@ produces describes the lens or those observations is judged in the viewer.
 ### Invocation
 
 - A **Switch Model…** button in the Camera Intrinsics panel header, beside
-  `Copy ▾`.
+  "Refit spline…" and `Copy ▾`.
 - A **Switch Camera Model…** entry on a new context menu on the camera rows of the
   Scene tree. The rows have no context menu today.
 - `Edit > Switch Camera Model…`, greyed when no camera is selected.
@@ -197,13 +206,12 @@ then apply or cancel. This is the check a reviewer would make.
   theta_fit?, spline_domain_max?, all_cameras? }`** opens or replaces the
   proposal exactly as the panel does, and answers with the fit report. It pushes
   nothing.
-- **`switch_camera_model { reconstruction_label, camera?, model?, ... }`** applies:
-  - the open proposal, when no model is named;
-  - a direct switch, when one is named. The direct form ends an open proposal
-    first, by the rule above.
-
-  It answers like every edit tool: the version, its label, the sentence recorded,
-  and the report, including the observation comparison.
+- **`switch_camera_model`** exists and applies a direct switch or a spline
+  refit ([`../gui/mcp-server.md`](../gui/mcp-server.md)). It gains a
+  `proposal: true` form that applies the open proposal instead of fitting one;
+  the direct form ends an open proposal first, by the rule above. Either answers
+  like every edit tool: the version, its label, the sentence recorded, and the
+  report, including the observation comparison.
 
 `get_camera_intrinsics` gains a `proposed` block while a proposal is open, and
 `get/set_image_detail_display` gains the field mode.
@@ -214,8 +222,8 @@ then apply or cancel. This is the check a reviewer would make.
 - **Viewer lib tests:** a proposal leaves the history unchanged; Apply pushes one
   version; Cancel restores; the two caches do not cross.
 - **MCP tests:** `propose_camera_model` pushes nothing and answers with the fit
-  report; `switch_camera_model` applies the open proposal or a direct switch,
-  and answers like every edit tool.
+  report; `switch_camera_model { proposal: true }` applies the open proposal,
+  and a direct switch ends one.
 - **A Kerry evaluation run**, kept as a script rather than a test:
   1. switch tk107 → Add Image to Tracks over all images;
   2. bundle adjust with the spline freed;
@@ -229,7 +237,7 @@ then apply or cancel. This is the check a reviewer would make.
 1. The proposal in the Camera Intrinsics panel: the controls, the two-model
    plots, the change plot and the rug. Apply as an edit.
 2. The Image Detail change field and observation layer.
-3. The MCP tools.
+3. `propose_camera_model`, and the proposal form of `switch_camera_model`.
 
 ## Open questions
 

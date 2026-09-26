@@ -1089,11 +1089,6 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
     let gates = crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited());
     assert!(gates[0].distortion_refusal.is_some());
     assert_eq!(gates[1].distortion_refusal, None);
-    assert!(gates[1].spline && !gates[0].spline);
-    assert_eq!(
-        crate::bundle_adjust_prompt::spline_coeff_counts(state.scene[0].edited()),
-        vec![4]
-    );
     let options = sfmtool_core::BundleAdjustOptions {
         releases: vec![
             sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL,
@@ -2141,4 +2136,114 @@ fn a_gesture_applied_while_the_dock_is_swapped_out_loses_the_raise() {
         !state.is_panel_open(crate::dock::Tab::TrackView),
         "the raise reached the real dock from inside the swap",
     );
+}
+
+/// [`two_camera_state`] with camera 1 a four-coefficient `SFMTOOL_PINHOLE` on
+/// a 45° domain whose spline is flat, so it is still the pinhole the
+/// observations were made through.
+fn spline_camera_state() -> (AppState, ReconId) {
+    let (mut state, id) = two_camera_state();
+    let recon = state.scene[0].recon_mut();
+    let (f, _) = recon.image_table.cameras[1].focal_lengths();
+    let (cx, cy) = recon.image_table.cameras[1].principal_point();
+    recon.image_table.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
+        focal_length: f,
+        principal_point_x: cx,
+        principal_point_y: cy,
+        bspline_rho_max: 1.0,
+        bspline: vec![0.0; 4],
+    };
+    (state, id)
+}
+
+#[test]
+fn the_refit_dialog_reads_its_fields_off_a_spline_camera_and_refuses_the_rest() {
+    let (state, _) = spline_camera_state();
+    let edited = state.scene[0].edited();
+    let gates = crate::refit_spline_prompt::RefitSplineGates::of(edited, 1).expect("a spline");
+    assert_eq!(
+        (gates.camera, gates.model, gates.coeff_count),
+        (1, "SFMTOOL_PINHOLE", 4)
+    );
+    assert!(
+        (gates.domain_deg - 45.0).abs() < 1e-9,
+        "{}",
+        gates.domain_deg
+    );
+    // The node has inline keypoints, so the outermost observation is known.
+    assert!(gates.keypoint_extent.observed.is_some());
+
+    let why = crate::refit_spline_prompt::RefitSplineGates::of(edited, 0).expect_err("a pinhole");
+    assert!(why.contains("SIMPLE_PINHOLE camera has no spline"), "{why}");
+    let why = crate::refit_spline_prompt::RefitSplineGates::of(edited, 7).expect_err("no camera");
+    assert!(why.contains("Camera 7 does not exist"), "{why}");
+}
+
+#[test]
+fn a_refit_of_a_spline_pushes_one_version_labelled_with_the_change() {
+    let (mut state, id) = spline_camera_state();
+    let request = crate::state::edits::SwitchCameraModelRequest {
+        camera: 1,
+        coeff_count: Some(6),
+        spline_domain_deg: Some(50.0),
+        ..Default::default()
+    };
+    let entry = state.switch_camera_model(id, &request).expect("a refit");
+    assert_eq!(
+        entry.refit.theta_fit_source,
+        sfmtool_core::camera::refit_intrinsics::ThetaFitSource::SplineDomain
+    );
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert_eq!(
+        node.history.current_version().label,
+        "Refit spline of camera 1 of run_a: 4 → 6 coefficients, domain 45.0° → 50.0°"
+    );
+    let camera = &node.recon().image_table.cameras[1];
+    assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 6);
+    // Only the named camera changed.
+    assert_eq!(
+        node.recon().image_table.cameras[0].model_name(),
+        "SIMPLE_PINHOLE"
+    );
+    let row = newest(&state);
+    assert!(!row.failed);
+    assert!(
+        row.text.contains("fit rms ") && row.text.contains("median error"),
+        "{}",
+        row.text
+    );
+
+    // Undo is the old camera back.
+    state.undo(id).expect("one edit to undo");
+    let camera = &state.scene[0].recon().image_table.cameras[1];
+    assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 4);
+}
+
+#[test]
+fn a_refused_switch_names_the_camera_and_pushes_nothing() {
+    let (mut state, id) = spline_camera_state();
+    let request = crate::state::edits::SwitchCameraModelRequest {
+        camera: 1,
+        spline_domain_deg: Some(95.0),
+        ..Default::default()
+    };
+    let why = state
+        .switch_camera_model(id, &request)
+        .expect_err("past 90°");
+    assert!(why.contains("camera 1"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(newest(&state).failed);
+
+    // A coefficient count on a model without a spline is refused too.
+    let request = crate::state::edits::SwitchCameraModelRequest {
+        camera: 0,
+        coeff_count: Some(6),
+        ..Default::default()
+    };
+    let why = state
+        .switch_camera_model(id, &request)
+        .expect_err("no spline");
+    assert!(why.contains("camera 0"), "{why}");
 }

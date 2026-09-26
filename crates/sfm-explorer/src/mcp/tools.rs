@@ -355,8 +355,16 @@ pub(crate) fn parse(
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
             cameras: args.camera_releases("cameras")?,
-            spline_coeff_count: args.optional_usize("spline_coeff_count")?,
-            spline_domain_deg: args.optional_f64("spline_domain_deg")?,
+        },
+        "switch_camera_model" => Command::SwitchCameraModel {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            request: crate::state::edits::SwitchCameraModelRequest {
+                camera: args.required_usize("camera_intrinsics_index")?,
+                model: args.optional_string("model")?,
+                coeff_count: args.optional_usize("coeff_count")?,
+                spline_domain_deg: args.optional_f64("spline_domain_deg")?,
+                theta_fit_deg: args.optional_f64("theta_fit_deg")?,
+            },
         },
         "convert_to_embedded_patches" => Command::ConvertToEmbeddedPatches {
             reconstruction_label: args.required_string("reconstruction_label")?,

@@ -16,7 +16,8 @@
 //!
 //! - [`derived`] — the per-camera derived report ([`sfmtool_core::camera::report`]),
 //!   computed once per camera and cached.
-//! - [`header`] — the identity line and its `Copy ▾` menu.
+//! - [`header`] — the identity line, its `Refit spline…` button and its
+//!   `Copy ▾` menu.
 //! - [`parameters`] — the parameter table, the derived table and `K`.
 //! - [`mod@projection_plot`] — the radial map, the residual and the domain
 //!   the model can be held to.
@@ -73,11 +74,14 @@ pub struct IntrinsicsDetail {
 
 /// Response from the Camera Intrinsics panel.
 ///
-/// The panel is nearly read-only — it reports only navigation, and the one
-/// navigation it offers is the image name in the extrinsics header.
+/// The panel is nearly read-only — it reports navigation, the image name in
+/// the extrinsics header, and the one edit it offers, `Refit spline…`, which
+/// the dock turns into the dialog.
 pub struct IntrinsicsDetailResponse {
     /// The user clicked the image name in the extrinsics header.
     pub select_image: Option<ImageRef>,
+    /// The user clicked `Refit spline…` for this camera.
+    pub refit_spline: Option<CameraRef>,
     /// Whether the pointer is currently inside the panel.
     pub has_pointer: bool,
 }
@@ -105,6 +109,7 @@ impl IntrinsicsDetail {
     ) -> IntrinsicsDetailResponse {
         let mut response = IntrinsicsDetailResponse {
             select_image: None,
+            refit_spline: None,
             has_pointer: false,
         };
 
@@ -142,7 +147,9 @@ impl IntrinsicsDetail {
             .id_salt("intrinsics_detail")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                header::show_header(ui, node, index, camera, pose.as_ref());
+                if header::show_header(ui, node, index, camera, pose.as_ref()) {
+                    response.refit_spline = Some(reference);
+                }
                 ui.separator();
                 parameters::show_parameters(ui, camera);
                 ui.separator();

@@ -25,11 +25,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use nalgebra::{DMatrix, DVector};
 use sfmtool_sfmr_format::SfmrCamera;
 
-use super::distortion::bspline::{basis_at, bspline_is_monotone, BSPLINE_SUPPORT};
+use super::distortion::bspline::{
+    basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+};
 use super::intrinsics::{fixed_arity_model_by_name, CameraIntrinsics, CameraModel, SplineRadial};
 use super::report::{forward_fold_deg, off_axis_angle_deg, trustworthy_max_theta_deg};
 use constrained_lsq::least_squares_with_inequalities;
@@ -44,6 +47,13 @@ pub const DEFAULT_COEFF_COUNT: usize = 8;
 /// knot span per coefficient past the first, so past this the spans are
 /// narrower than anything a lens calibration can support.
 pub const MAX_COEFF_COUNT: usize = 32;
+
+/// The coefficient counts a spline with a curve takes, which is what a caller
+/// offering the count as a choice bounds its field by. The floor is the fewest
+/// coefficients a spline is defined with (fewer evaluate as the identity); the
+/// ceiling is [`MAX_COEFF_COUNT`]. A target may also have none, which is the
+/// base model alone.
+pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize> = MIN_BSPLINE_COEFFS..=MAX_COEFF_COUNT;
 
 /// Incidence angles the fit samples, evenly spaced over `(0, θ_fit]`.
 const THETA_SAMPLES: usize = 96;
@@ -700,6 +710,18 @@ pub fn refit_spline(
         Some(domain_deg),
         constraint,
     )
+}
+
+/// Where a spline camera's domain ends, as an incidence angle in degrees:
+/// `bspline_theta_max` itself for `SFMTOOL_FISHEYE`, and the angle whose
+/// tangent is `bspline_rho_max` for `SFMTOOL_PINHOLE`. `None` for a camera with
+/// no spline. A caller showing the domain as an editable value reads it here,
+/// in the unit [`refit_spline`] and [`RefitOptions::spline_domain_deg`] take.
+pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
+    camera
+        .model
+        .radial_spline()
+        .map(|(_, d_max, radial)| incidence_angle(radial, d_max).to_degrees())
 }
 
 /// The report of a fitted `camera` against its `source` over `samples`.

@@ -415,6 +415,66 @@ pub(super) fn bundle_adjust(
     }))
 }
 
+/// `switch_camera_model`: one camera switched to a model fitted to it, landed
+/// as the node's next version.
+///
+/// The step the Camera Intrinsics panel's `Refit spline…` takes, with any
+/// target model: an omitted `model` is the camera's own, which for a spline
+/// camera makes the switch a refit of its spline, keeping its count and its
+/// domain end unless they are named. Beside the version the reply carries
+/// `fit`, the numbers the Action Log sentence is written from: the fit's
+/// distance from the old camera, where its monotonicity constraint bound, and
+/// the median reprojection error of the camera's observations before and
+/// after.
+pub(super) fn switch_camera_model(
+    state: &mut AppState,
+    label: &str,
+    request: &crate::state::edits::SwitchCameraModelRequest,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let mut entry = None;
+    let mut reply = edited(state, id, |state| {
+        entry = Some(state.switch_camera_model(id, request)?);
+        Ok(())
+    })?;
+    let entry = entry.expect("the edit succeeded");
+    let refit = &entry.refit;
+    let constraint = &refit.monotone_constraint;
+    let o = &entry.observations;
+    let fit = json!({
+        "camera_intrinsics_index": entry.camera,
+        "model_before": entry.source.model_name(),
+        "model_after": refit.camera.model_name(),
+        "theta_fit_deg": refit.theta_fit_deg,
+        "theta_fit_source": refit.theta_fit_source.as_str(),
+        "spline_domain_deg": refit.spline_domain_deg,
+        "rms_px": refit.rms_px,
+        "max_px": refit.max_px,
+        "monotone_constraint": {
+            "active": constraint.active,
+            "active_angles": constraint.active_angles,
+            "range_deg": constraint.range_deg,
+        },
+        "observations": o.observations,
+        "median_error_before_px": finite(o.before.median_px),
+        "median_error_after_px": finite(o.after.median_px),
+    });
+    reply
+        .as_object_mut()
+        .expect("a version reply is an object")
+        .insert("fit".into(), fit);
+    Ok(reply)
+}
+
+/// A number the wire can carry: `null` where it is not finite.
+fn finite(value: f64) -> Value {
+    if value.is_finite() {
+        json!(value)
+    } else {
+        Value::Null
+    }
+}
+
 /// `convert_to_embedded_patches`: start the conversion, and answer with its
 /// version or with a handle, whichever the clock reaches first.
 ///

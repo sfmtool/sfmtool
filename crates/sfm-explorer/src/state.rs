@@ -642,6 +642,10 @@ pub struct AppState {
     /// [`crate::bundle_adjust_prompt`].
     pub bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
 
+    /// The dialog the Camera Intrinsics panel's `Refit spline…` opens. See
+    /// [`crate::refit_spline_prompt`].
+    pub refit_spline_prompt: crate::refit_spline_prompt::RefitSplinePrompt,
+
     /// The workspace path `Save As Minimal...` asks about once its file dialog
     /// has named a file. See [`crate::save_minimal_prompt`].
     pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
@@ -815,6 +819,7 @@ impl AppState {
             goto_point: GotoPointDialog::default(),
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
+            refit_spline_prompt: crate::refit_spline_prompt::RefitSplinePrompt::default(),
             save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt::default(),
             #[cfg(feature = "mcp")]
             mcp: None,
@@ -1241,6 +1246,29 @@ impl AppState {
         let label = node.label.clone();
         let gates = crate::bundle_adjust_prompt::BundleAdjustGates::of(node.edited());
         self.bundle_adjust_prompt.ask(id, label, gates);
+    }
+
+    /// Open the `Refit spline…` dialog on one camera, with its fields showing
+    /// the camera's coefficient count and domain and its images' outermost
+    /// keypoint beside the domain.
+    ///
+    /// A camera with no spline, or one no longer in the table, is refused in
+    /// the Action Log in the words the greyed button carries.
+    pub fn open_refit_spline(&mut self, camera: crate::scene::CameraRef) {
+        let Some(node) = self.node(camera.recon) else {
+            return;
+        };
+        let label = node.label.clone();
+        match crate::refit_spline_prompt::RefitSplineGates::of(
+            node.edited(),
+            camera.camera as usize,
+        ) {
+            Ok(gates) => self.refit_spline_prompt.ask(camera.recon, label, gates),
+            Err(why) => self.action_log.fail(
+                crate::action_log::Kind::Edit,
+                format!("Refit spline refused: {why}"),
+            ),
+        }
     }
 
     /// Select a 3D point, and with it the reconstruction that owns it.

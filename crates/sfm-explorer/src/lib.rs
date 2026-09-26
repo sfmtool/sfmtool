@@ -44,6 +44,7 @@ mod metrics;
 mod platform;
 mod point_ids;
 mod progress;
+mod refit_spline_prompt;
 mod resect;
 mod save_minimal_prompt;
 mod scene;

@@ -17,9 +17,10 @@ use std::fmt;
 
 use super::data::{observation_reprojection_error, SfmrReconstruction};
 use super::outermost_keypoint::{outermost_keypoints, OutermostKeypoints};
+use crate::camera::intrinsics::SplineRadial;
 use crate::camera::refit_intrinsics::{
-    image_corner_deg, refit_camera_intrinsics_over, CameraIntrinsicsRefit, RefitError,
-    RefitOptions, RefitTarget, ThetaFitSource,
+    image_corner_deg, refit_camera_intrinsics_over, refit_spline, CameraIntrinsicsRefit,
+    RefitError, RefitOptions, RefitTarget, ThetaFitSource,
 };
 use crate::camera::report::trustworthy_max_theta_deg;
 use crate::camera::CameraIntrinsics;
@@ -164,7 +165,18 @@ pub struct SwitchCameraModelReport {
 /// [`RefitOptions::theta_fit_deg`] is `None` the fit's largest angle is the
 /// source's trusted bound, or, for a source without one, the largest incidence
 /// angle among the observations of the camera's images (the far image corner
-/// when it has none). A perspective target is refused for a camera observed at
+/// when it has none).
+///
+/// A spline camera switched to its own spline model -- an `SFMTOOL_FISHEYE`
+/// to `SFMTOOL_FISHEYE`, an `SFMTOOL_PINHOLE` to `SFMTOOL_PINHOLE` -- is a
+/// change of coefficient count or domain rather than of model, and with
+/// [`RefitOptions::theta_fit_deg`] `None` it is fitted by [`refit_spline`]
+/// instead: over the whole new domain, with the domain end kept exactly where
+/// [`RefitOptions::spline_domain_deg`] is `None`, and constrained to stay
+/// monotone. The entry's `refit` then reports `ThetaFitSource::SplineDomain`,
+/// the distance from the old curve and where the monotonicity constraint
+/// bound. With a `theta_fit_deg` given, the camera is fitted like any other
+/// source, over that angle. A perspective target is refused for a camera observed at
 /// 90° or more. The first camera refused refuses the whole switch, and nothing
 /// changes.
 ///
@@ -278,13 +290,16 @@ pub fn switch_camera_model(
                 ),
             },
         };
-        let refit = refit_camera_intrinsics_over(
-            source,
-            target,
-            theta_fit_deg,
-            theta_fit_source,
-            options.spline_domain_deg,
-        )
+        let refit = match (spline_refit_count(source, target), options.theta_fit_deg) {
+            (Some(count), None) => refit_spline(source, count, options.spline_domain_deg),
+            _ => refit_camera_intrinsics_over(
+                source,
+                target,
+                theta_fit_deg,
+                theta_fit_source,
+                options.spline_domain_deg,
+            ),
+        }
         .map_err(|error| SwitchCameraModelError::Refit { camera: c, error })?;
         refits.push(refit);
     }
@@ -345,6 +360,20 @@ pub fn switch_camera_model(
         });
     }
     Ok((out, SwitchCameraModelReport { cameras: entries }))
+}
+
+/// The coefficient count `target` asks of `source` when `source` is a spline
+/// camera and `target` is its own spline model, which makes the switch a
+/// refit of its spline; `None` for a switch between models.
+fn spline_refit_count(source: &CameraIntrinsics, target: &RefitTarget) -> Option<usize> {
+    let (_, _, radial) = source.model.radial_spline()?;
+    match (radial, target) {
+        (SplineRadial::IncidenceAngle, RefitTarget::SfmtoolFisheye { coeff_count })
+        | (SplineRadial::ImagePlaneRadius, RefitTarget::SfmtoolPinhole { coeff_count }) => {
+            Some(*coeff_count)
+        }
+        _ => None,
+    }
 }
 
 /// One observation of a switched camera's image: its incidence angle and its

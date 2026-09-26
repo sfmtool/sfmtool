@@ -33,6 +33,12 @@ class SwitchCameraModelTransform:
         spline_domain_deg: Where a spline target's domain ends (default: the
             far image corner).
         cameras: Camera-table indexes to switch (default: every camera).
+
+    A spline camera switched to its own spline model, with no
+    ``theta_fit_deg``, is refitted over its whole spline domain: that is how a
+    spline's coefficient count and domain change. Its domain end is kept
+    exactly unless ``spline_domain_deg`` is given; its count is
+    ``coeff_count``, which defaults to 8 here as for any spline target.
     """
 
     def __init__(
@@ -113,8 +119,13 @@ def format_camera_report(entry: dict) -> list[str]:
         f"{k}={v:.6g}" for k, v in target.to_dict()["parameters"].items()
     )
     lines.append(f"  parameters: {params}")
+    if fit["theta_fit_source"] == "spline_domain":
+        # A spline refitted as its own model: the fit covers its whole domain.
+        over = f"the whole spline domain θ ≤ {fit['theta_fit_deg']:.1f}°"
+    else:
+        over = f"θ ≤ {fit['theta_fit_deg']:.1f}° ({fit['theta_fit_source']})"
     fit_line = (
-        f"  fit over θ ≤ {fit['theta_fit_deg']:.1f}° ({fit['theta_fit_source']}): "
+        f"  fit over {over}: "
         f"rms {fit['rms_px']:.3f} px, radial rms {fit['radial_rms_px']:.3f} px, "
         f"max {fit['max_px']:.3f} px"
     )
