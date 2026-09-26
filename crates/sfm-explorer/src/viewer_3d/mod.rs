@@ -16,6 +16,7 @@ mod input;
 /// Crate-visible so the overlay text builders can be asserted on directly —
 /// they are the user-facing wording of the scene stats and hover lines.
 pub(crate) mod overlay;
+mod righting;
 
 #[cfg(test)]
 mod tests;
@@ -308,6 +309,15 @@ pub struct Viewer3D {
     /// the point of the panel, and a viewport that starts by hiding them just
     /// trades a menu round-trip for a click. Never persisted across runs.
     pub hud_open: bool,
+    /// Whether the view turns itself back to Z-up whenever it is not looking
+    /// through a camera: the HUD's **Maintain Z-up**. On at launch; Q and E
+    /// turn it off, since rolling the view is a request for a view that is not
+    /// level. Never persisted across runs. See [`Self::right_toward_z_up`].
+    pub maintain_z_up: bool,
+    /// How fast [`Self::right_toward_z_up`] turned `world_up` on the last
+    /// frame, in radians per second, and zero when it did not turn it. The only
+    /// state the turn carries between frames.
+    righting_speed: f64,
     /// Screen rect the HUD occupied on the last frame it was built — the gear
     /// when collapsed, gear plus panel when expanded. Every viewport input path
     /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
@@ -366,6 +376,11 @@ pub struct Viewer3D {
 /// The Image Detail panel's feature menu offers the same entry under the same
 /// name ([`crate::image_detail`]), so the two cannot drift.
 pub const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
+
+/// What the HUD's checkbox for [`Viewer3D::maintain_z_up`] is called, and the
+/// word its Action Log entries open with, whether the checkbox or Q and E
+/// changed it.
+pub const MAINTAIN_Z_UP_LABEL: &str = "Maintain Z-up";
 
 /// What the entry that re-solves one point is called, in the menu and in the
 /// tests that aim at it.
@@ -437,6 +452,8 @@ impl Viewer3D {
             fly_drag_locked: false,
             target_transition: None,
             hud_open: true,
+            maintain_z_up: true,
+            righting_speed: 0.0,
             hud_rect: None,
             menu_target: None,
             point_menu: None,
@@ -743,7 +760,7 @@ impl Viewer3D {
 
         let gesture_events = if pointer_over { gesture_events } else { &[] };
         self.handle_gestures(ui, gesture_events, rect, fly_keys_held);
-        self.handle_fly_keys(ui, fly_keys_held);
+        self.handle_fly_keys(ui, fly_keys_held, log);
         if keyboard_free {
             self.handle_keyboard(ui, rect, node, selected_image, log);
         }
@@ -754,6 +771,12 @@ impl Viewer3D {
             self.handle_click(ui, &response, rect);
         }
         self.show_viewport_menu(&response, rect, hover_pick, busy, bench.as_ref());
+
+        // After this frame's input, so the step starts from the view the input
+        // left and the frame draws the result.
+        if self.right_toward_z_up(dt as f64) {
+            ui.ctx().request_repaint();
+        }
 
         // Record mouse position in texture pixels for GPU depth readback
         let ppp = ui.ctx().pixels_per_point();
@@ -1140,6 +1163,49 @@ impl Viewer3D {
         if self.camera_lock.is_none() {
             self.camera_view = None;
         }
+    }
+
+    /// One frame of **Maintain Z-up**: turn `world_up` a step of `dt` seconds
+    /// toward +Z, and roll the view to stay level with it.
+    ///
+    /// The view direction, the camera position and the orbit target are kept;
+    /// only the roll about the view direction changes, as `Home` changes it but
+    /// eased over a fraction of a second. The step is chosen from the angle left
+    /// and the last frame's speed alone ([`righting::step`]), so any other
+    /// motion of the view between two frames is taken as found.
+    ///
+    /// Nothing turns, and the speed is forgotten, while the setting is off,
+    /// while looking through a camera, whose own up is part of what camera view
+    /// shows, and while an animated transition runs, since a transition sets
+    /// `world_up` itself on every frame. A turn that one of these interrupts
+    /// starts again from rest.
+    ///
+    /// Returns whether the view is still turning, so the caller keeps frames
+    /// coming.
+    pub(crate) fn right_toward_z_up(&mut self, dt: f64) -> bool {
+        if !self.maintain_z_up
+            || self.camera_view.is_some()
+            || self.camera_lock.is_some()
+            || self.target_transition.is_some()
+        {
+            self.righting_speed = 0.0;
+            return false;
+        }
+        if self.camera.world_up == Vector3::z() {
+            self.righting_speed = 0.0;
+            return false;
+        }
+        let forward = self.camera.camera.forward();
+        let (up, speed) = righting::step(self.camera.world_up, forward, self.righting_speed, dt);
+        self.camera.world_up = up;
+        self.righting_speed = speed;
+        // Looking straight along the new up there is no roll to level to, and
+        // re-deriving the orientation there would pick an arbitrary one, so the
+        // orientation is left as it was.
+        if forward.cross(&up).norm() > 1e-9 {
+            self.camera.set_orientation_from_forward(forward);
+        }
+        up != Vector3::z()
     }
 
     /// Cancels any in-progress camera transition, snapping to the current interpolated state.

@@ -1131,6 +1131,15 @@ rotating `world_up`. So `world_up` is live view state that changes as the user
 tilts, and it is what makes `position` + `target` + `up` a complete description
 of the camera.
 
+While the HUD's **Maintain Z-up** is on, which it is at launch, the viewer turns
+`world_up` back to +Z over the second after the view leaves camera view
+([viewport-navigation.md](viewport-navigation.md#maintain-z-up)). So a
+`set_view` that exits camera view, or places a free view while `world_up` is
+still a camera's up, lands immediately, and the roll then eases back to level
+over the following frames. A `set_view` whose `up` or `world_up` is not +Z asks
+for a rolled view and turns Maintain Z-up off, as Q and E do, so the roll it
+set is kept.
+
 **`fov_short_axis_deg` is the field of view of the shorter viewport dimension** —
 vertical in a landscape window, horizontal in a portrait one — which is how
 `ViewportCamera::fov` keeps the amount of scene on screen steady as the window is

@@ -25,7 +25,7 @@ The viewport uses an **orbit camera** model with these properties:
 | `position` | Camera location in world space |
 | `orientation` | Quaternion rotation from world to camera coordinates |
 | `target_distance` | Distance from camera to the target/pivot point |
-| `world_up` | The world up direction, default (0, 0, 1). Modified by tilt/roll controls (see [Dolly / Fly Navigation](#dolly--fly-navigation)). |
+| `world_up` | The world up direction, default (0, 0, 1). Modified by tilt/roll controls (see [Dolly / Fly Navigation](#dolly--fly-navigation)) and by looking through a camera, and turned back to (0, 0, 1) by [Maintain Z-up](#maintain-z-up). |
 | `fov` | Vertical field of view in radians, adjustable via FOV zoom (see [FOV and aspect ratio](#fov-and-aspect-ratio)) |
 
 ### Target Point
@@ -168,7 +168,7 @@ while a camera is in hand.
 | Alt (double-tap) | Target Toggle | Toggle target indicator to stay visible without holding Alt |
 | WASD | Fly Movement | W=forward, S=back, A=left, D=right (camera-relative) |
 | R / F | Fly Up / Down | Camera-relative up/down movement |
-| Q / E | Tilt / Roll | Rotate horizon left/right around view axis |
+| Q / E | Tilt / Roll | Rotate horizon left/right around view axis, and turn [Maintain Z-up](#maintain-z-up) off |
 | , | Previous Camera | In camera view mode: switch to previous camera image index |
 | . | Next Camera | In camera view mode: switch to next camera image index |
 | M | Move Camera | In camera view mode: take that camera in hand, so every navigation input moves it; again to commit |
@@ -224,7 +224,8 @@ This feels like grabbing the camera and moving it around the scene.
 
 - Theta is clamped to (0.01, PI - 0.01) to prevent gimbal lock at poles
 - The camera always maintains `world_up` orientation (no roll). `world_up`
-  defaults to Z-up but can be tilted via fly mode controls.
+  defaults to Z-up but can be tilted via fly mode controls. While
+  [Maintain Z-up](#maintain-z-up) is on it is turned back to Z-up.
 - The target distance is preserved during orbiting
 
 ### Sensitivity
@@ -356,6 +357,57 @@ up orientation, so you can see how tilted you are.
 Home levels the horizon by resetting `world_up` to (0, 0, 1) without moving
 the camera. Shift+Home does a full view reset (position, orientation, and
 `world_up`).
+
+Q and E turn [Maintain Z-up](#maintain-z-up) off, since rolling the view by
+hand asks for a view that is not level. The Action Log records
+`Maintain Z-up off`.
+
+### Maintain Z-up
+
+**Maintain Z-up** is a checkbox in the HUD's Camera section
+([viewport-hud.md](viewport-hud.md)), on at launch and not persisted. While it
+is on and the viewport is not looking through a camera, the view turns itself
+back to Z-up: `world_up` turns toward (0, 0, 1) and the view rolls to stay level
+with it. The view direction, the camera position and the orbit target do not
+move, so the result is what Home does, eased over up to a second.
+
+Looking through a camera sets `world_up` to that camera's up, and nothing turns
+it back while camera view lasts, including a free look inside it. Leaving
+camera view, by any input that leaves it, starts the turn. So does ticking the
+checkbox on a rolled view. Q and E, and an MCP `set_view` whose `up` or
+`world_up` is not +Z, turn the setting off.
+
+The turn is decided one frame at a time
+([`righting::step`](../../crates/sfm-explorer/src/viewer_3d/righting.rs)). The
+only state carried between frames is the turning speed. Each frame reads the
+angle left between `world_up` and +Z and the last frame's speed, and sets the
+new speed to the smallest of three values:
+
+- the last speed plus `ACCELERATION · dt`,
+- `MAX_SPEED`,
+- the speed that, slowing down at `ACCELERATION`, stops after exactly the angle
+  left.
+
+`world_up` then turns by `speed · dt` along the great circle to +Z. The speed
+profile is a trapezoid with continuous speed, so the view starts and stops
+turning without a jump. There is no planned trajectory, so a view that some
+other input moved between two frames is taken as it is found. A turn is
+paused, with its speed reset to zero, while the setting is off, while looking
+through a camera, and while an animated transition runs (a transition sets
+`world_up` itself on every frame). It starts again from rest.
+
+`MAX_SPEED` is 4 rad/s and `ACCELERATION` is 20 rad/s². With these, 180° takes
+about 1 s and 90° about 0.6 s. A time exactly proportional to the angle would
+need the speed to jump straight to its maximum and drop straight from it. These
+constants give 0.2 s ramps at each end, which is the easing.
+
+Two cases need a choice of how to turn:
+
+- **Upside down.** When `world_up` points almost straight down, the great
+  circle to +Z is undefined. The turn is then taken about the view direction,
+  so the view rolls over rather than pitching.
+- **Looking straight along the new up.** Here there is no roll to level to, so
+  the orientation is left as it is while `world_up` still turns.
 
 **Open question**: Should there also be a mouse-drag binding for tilt/roll?
 A natural candidate would be Ctrl+drag (or Ctrl+left-drag), since Ctrl is

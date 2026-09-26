@@ -117,6 +117,21 @@ fn assert_close(actual: [f64; 3], expected: [f64; 3], what: &str) {
     }
 }
 
+/// A stated up that is not +Z is a rolled view the agent asked for, so it
+/// turns Maintain Z-up off rather than being turned back; +Z leaves it on.
+#[test]
+fn a_rolled_up_turns_maintain_z_up_off() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let look =
+        |up: [f64; 3]| json!({ "position": [2.0, -3.0, 1.0], "target": [0.0, 0.0, 0.0], "up": up });
+
+    call(&mut state, &mut viewer, "set_view", look([0.0, 0.0, 1.0]));
+    assert!(viewer.maintain_z_up);
+
+    call(&mut state, &mut viewer, "set_view", look([1.0, 0.0, 1.0]));
+    assert!(!viewer.maintain_z_up);
+}
+
 /// A view the explicit camera can be moved a piece at a time from: three
 /// distinct coordinates, a known distance, and nothing axis-aligned about it.
 fn a_placed_view(state: &mut AppState, viewer: &mut Viewer3D) -> Value {

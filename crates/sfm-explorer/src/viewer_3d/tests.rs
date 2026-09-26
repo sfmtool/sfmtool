@@ -673,6 +673,102 @@ fn looking_through_toward_a_central_feature_is_looking_straight_through() {
     assert!(transition.end_orientation.angle_to(&straight.orientation) < 1e-12);
 }
 
+/// A free view rolled a quarter turn about its view direction, as looking
+/// through a camera held on its side and then panning out of it leaves it.
+fn rolled_on_its_side() -> Viewer3D {
+    let mut viewer = Viewer3D::new();
+    // The default view looks along +Y and down, so +X is square to it.
+    viewer.camera.world_up = Vector3::x();
+    let forward = viewer.camera.camera.forward();
+    viewer.camera.set_orientation_from_forward(forward);
+    viewer
+}
+
+/// Frames of `right_toward_z_up` at 60 Hz until it stops, and how many it took.
+fn right_until_still(viewer: &mut Viewer3D) -> usize {
+    let mut frames = 1;
+    while viewer.right_toward_z_up(1.0 / 60.0) {
+        frames += 1;
+        assert!(frames < 600, "the view never came level");
+    }
+    frames
+}
+
+#[test]
+fn maintain_z_up_levels_the_view_and_keeps_where_it_looks() {
+    let mut viewer = rolled_on_its_side();
+    let position = viewer.camera.camera.position;
+    let target = viewer.camera.target();
+    let forward = viewer.camera.camera.forward();
+
+    let frames = right_until_still(&mut viewer);
+
+    assert_eq!(viewer.camera.world_up, Vector3::z());
+    assert!(
+        viewer.camera.camera.right().z.abs() < 1e-9,
+        "the view is still rolled"
+    );
+    assert_eq!(viewer.camera.camera.position, position);
+    assert!((viewer.camera.camera.forward() - forward).norm() < 1e-9);
+    assert!((viewer.camera.target() - target).norm() < 1e-9);
+    // A quarter turn, at 60 Hz.
+    assert!((33..=39).contains(&frames), "took {frames} frames");
+}
+
+#[test]
+fn maintain_z_up_leaves_a_camera_view_rolled() {
+    let mut viewer = rolled_on_its_side();
+    viewer.camera_view = Some(super::CameraViewMode {
+        image: crate::scene::ImageRef::new(ReconId::from_raw(7), 3),
+        r_world_from_cam: viewer.camera.camera.orientation.inverse(),
+    });
+    assert!(!viewer.right_toward_z_up(1.0 / 60.0));
+    assert_eq!(viewer.camera.world_up, Vector3::x());
+
+    // Leaving camera view is what starts the turn.
+    viewer.leave_camera_view();
+    assert!(viewer.right_toward_z_up(1.0 / 60.0));
+    assert_ne!(viewer.camera.world_up, Vector3::x());
+}
+
+#[test]
+fn with_maintain_z_up_off_the_roll_is_kept() {
+    let mut viewer = rolled_on_its_side();
+    viewer.maintain_z_up = false;
+    assert!(!viewer.right_toward_z_up(1.0 / 60.0));
+    assert_eq!(viewer.camera.world_up, Vector3::x());
+}
+
+/// A transition sets `world_up` on every frame, so the turn waits for it to end
+/// and then starts from rest.
+#[test]
+fn maintain_z_up_waits_for_a_transition() {
+    let mut viewer = rolled_on_its_side();
+    right_toward_a_few_frames(&mut viewer);
+    let camera = &viewer.camera.camera;
+    viewer.start_transition(
+        camera.position,
+        camera.orientation,
+        camera.target_distance,
+        viewer.camera.fov,
+        viewer.camera.world_up,
+        None,
+        false,
+        0.0,
+    );
+    let up = viewer.camera.world_up;
+    assert!(!viewer.right_toward_z_up(1.0 / 60.0));
+    assert_eq!(viewer.camera.world_up, up);
+    assert_eq!(viewer.righting_speed, 0.0);
+}
+
+fn right_toward_a_few_frames(viewer: &mut Viewer3D) {
+    for _ in 0..5 {
+        assert!(viewer.right_toward_z_up(1.0 / 60.0));
+    }
+    assert!(viewer.righting_speed > 0.0);
+}
+
 /// `count` primary press/release pairs at one place, in one frame: what egui
 /// counts as a single click, a double-click, and so on.
 fn primary_clicks(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, count: usize) {

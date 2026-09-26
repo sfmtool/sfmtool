@@ -10,8 +10,8 @@ use eframe::egui::{self, Rect};
 use nalgebra::Vector3;
 
 use super::{
-    bench_track, Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED,
-    TRACKPAD_ZOOM_SPEED,
+    bench_track, Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MAINTAIN_Z_UP_LABEL,
+    MOUSE_WHEEL_ZOOM_SPEED, TRACKPAD_ZOOM_SPEED,
 };
 use crate::bench::geometry;
 use crate::platform::GestureEvent;
@@ -677,7 +677,12 @@ impl Viewer3D {
     }
 
     /// Handles WASD fly navigation (continuous movement while keys held).
-    pub(super) fn handle_fly_keys(&mut self, ui: &egui::Ui, fly_keys_held: bool) {
+    pub(super) fn handle_fly_keys(
+        &mut self,
+        ui: &egui::Ui,
+        fly_keys_held: bool,
+        log: &mut crate::action_log::ActionLog,
+    ) {
         if !fly_keys_held {
             return;
         }
@@ -724,16 +729,25 @@ impl Viewer3D {
             );
         }
 
-        // QE tilt — orientation only, keeps camera view
+        // QE tilt — orientation only, keeps camera view. Rolling the view asks
+        // for a view that is not level, so it turns Maintain Z-up off rather
+        // than being turned back.
         let tilt_speed = std::f64::consts::FRAC_PI_2 * dt * sprint;
-        ui.input(|i| {
-            if i.key_down(egui::Key::Q) {
-                self.camera.tilt(-tilt_speed);
-            }
-            if i.key_down(egui::Key::E) {
-                self.camera.tilt(tilt_speed);
-            }
-        });
+        let (left, right) = ui.input(|i| (i.key_down(egui::Key::Q), i.key_down(egui::Key::E)));
+        if (left || right) && self.maintain_z_up {
+            self.maintain_z_up = false;
+            log.record_run(
+                crate::action_log::Kind::Display,
+                MAINTAIN_Z_UP_LABEL,
+                format!("{MAINTAIN_Z_UP_LABEL} off"),
+            );
+        }
+        if left {
+            self.camera.tilt(-tilt_speed);
+        }
+        if right {
+            self.camera.tilt(tilt_speed);
+        }
 
         ui.ctx().request_repaint(); // continuous animation while flying
     }

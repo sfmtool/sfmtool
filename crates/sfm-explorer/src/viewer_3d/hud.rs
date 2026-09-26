@@ -118,7 +118,7 @@ fn checkbox(
     log: &mut crate::action_log::ActionLog,
     on: &mut bool,
     label: &'static str,
-) {
+) -> egui::Response {
     let response = ui.checkbox(on, label);
     let value = *on;
     // The label is the run as well as the word the entry opens with: two
@@ -126,6 +126,7 @@ fn checkbox(
     log.changed(&response, Kind::Display, label, || {
         format!("{label} {}", on_off(value))
     });
+    response
 }
 
 /// One HUD slider, recorded as `Point size 3.0` when the drag changed it.
@@ -373,6 +374,16 @@ impl Viewer3D {
         }
 
         section(ui, "camera", "Camera", true, |ui| {
+            checkbox(
+                ui,
+                &mut state.action_log,
+                &mut self.maintain_z_up,
+                super::MAINTAIN_Z_UP_LABEL,
+            )
+            .on_hover_text(
+                "Turn the view back to +Z up whenever it is not looking through a camera. \
+                 Q and E turn this off.",
+            );
             let mut fov_degrees = self.camera.fov.to_degrees();
             let response = ui.add(
                 egui::Slider::new(&mut fov_degrees, 10.0..=120.0)

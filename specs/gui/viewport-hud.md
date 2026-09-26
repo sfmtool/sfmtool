@@ -81,6 +81,7 @@ keeps it from fighting the scene while open.
 │                                      │   Scene   ──●──   │ │
 │                                      │ ▸ Patches         │ │
 │                                      │ ▾ Camera          │ │
+│                                      │   ☑ Maintain Z-up │ │
 │                                      │   FOV 45°  ─●──   │ │
 │                                      │   [Reset FOV]     │ │
 │                                      │ ▸ Advanced        │ │
@@ -157,7 +158,7 @@ Debug closed.
 | **Layers** | Show Points, Show Camera Images, Show Grid, Show Patches, Show Points at Infinity |
 | **Size** | Point Size (log₂, −3…+3) + reset, Infinity Point Size (1–16 px), Length Scale (0.001–100, log) |
 | **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff |
-| **Camera** | Field of View (10°–120°) + reset |
+| **Camera** | Maintain Z-up ([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), Field of View (10°–120°) + reset |
 | **Advanced** | EDL Line Thickness (0.5–8 px), Frustum Size (0.05–5, log), Target Size (0.05–5, log), Target Fog (0.5–100, log) |
 | **Debug** | Controls-help toggle, fps toggle, touchpad diagnostic counters |
 
@@ -229,6 +230,7 @@ adjustments to existing ones.
 |-------|------|-----------|
 | The setting values themselves | `AppState` (unchanged) | The renderer already reads them there; moving them would be churn for no gain |
 | `hud_open`, `hud_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
+| `maintain_z_up` | `Viewer3D` | Navigation state, beside the camera it turns, as the field of view the same section edits is. Q and E in the viewport's own input turn it off |
 | Per-section collapsed flags | egui's own `CollapsingState` memory, under the stable ids from `hud::section_id` | Already exactly session-scoped, with per-section defaults via `load_with_default_open`; duplicating it into `Viewer3D` fields would only add a sync step. The explicit ids keep it addressable from outside the HUD |
 
 Nothing is persisted across runs; the HUD opens expanded each launch

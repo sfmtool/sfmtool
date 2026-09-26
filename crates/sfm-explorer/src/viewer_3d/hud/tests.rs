@@ -119,6 +119,17 @@ impl Frame {
         self
     }
 
+    fn key_up(mut self, key: egui::Key) -> Self {
+        self.events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        self
+    }
+
     fn grabbing_keyboard(mut self) -> Self {
         self.grab_keyboard = true;
         self
@@ -728,6 +739,40 @@ fn fly_keys_are_disarmed_while_a_widget_holds_the_keyboard() {
         before,
         "W typed into a widget moved the camera"
     );
+}
+
+/// Rolling the view by hand asks for a view that is not level, so E turns
+/// Maintain Z-up off, says so in the Action Log, and the roll then stays.
+#[test]
+fn e_turns_maintain_z_up_off_and_the_roll_stays() {
+    let mut state = demo_state();
+    let (mut viewer, ctx) = settled(&mut state);
+    assert!(viewer.maintain_z_up, "Maintain Z-up should be on at launch");
+
+    run_frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        Frame::new().key_down(egui::Key::E),
+    );
+    run_frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        Frame::new().key_up(egui::Key::E),
+    );
+    assert!(!viewer.maintain_z_up, "E left Maintain Z-up on");
+    assert_eq!(
+        state.action_log.entries().last().map(|e| e.text.as_str()),
+        Some("Maintain Z-up off")
+    );
+
+    let rolled = viewer.camera.world_up;
+    assert_ne!(rolled, nalgebra::Vector3::z(), "E did not roll the view");
+    for _ in 0..30 {
+        run_frame(&mut viewer, &ctx, &mut state, Frame::new());
+    }
+    assert_eq!(viewer.camera.world_up, rolled, "the roll was turned back");
 }
 
 #[test]

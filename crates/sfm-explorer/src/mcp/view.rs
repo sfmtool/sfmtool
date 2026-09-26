@@ -180,6 +180,14 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
     // Leaving camera view: this is a free camera placement, and the background
     // image belongs to a viewpoint that has just been left.
     viewer.camera_view = None;
+    // A stated up that is not +Z asks for a rolled view, as Q and E do, so it
+    // turns Maintain Z-up off rather than being turned back over the next
+    // second.
+    if (placement.up.is_some() || placement.world_up.is_some())
+        && world_up.angle(&Vector3::z()) > 1e-9
+    {
+        viewer.maintain_z_up = false;
+    }
     viewer.camera.world_up = world_up;
     match facing {
         Facing::Stated(orientation) => viewer.camera.camera.orientation = orientation,
