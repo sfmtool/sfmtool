@@ -56,7 +56,7 @@ during Zoom to Fit to center on the point cloud.
 | Set target | Alt + Click | Set target to the point under the cursor (depth pick) |
 | Enter camera view | Double-click frustum | Select frustum and enter camera view mode (see [camera-views.md](camera-views.md)) |
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
-| Edit on Bench | Double-click a point | Select that point, put its track on the bench and raise Track View (see [The point context menu](#the-point-context-menu)) |
+| Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point (see [The point context menu](#the-point-context-menu)) |
 
 ### The point context menu
 
@@ -110,6 +110,18 @@ already came from activates that track rather than putting a second one on
 ([bench.md](bench.md)), so a repeated double-click raises the panel on the item
 that is already there. A double-click on a frustum or on empty space keeps its
 own meaning: camera view, and clearing the selection.
+
+The double-click also moves the viewport, which the menu entry does not: it
+pans so the orbit target lands on the point, by the smallest camera motion that
+does it (`Viewer3D::move_target_to`). The orientation is kept, the camera moves
+by the component of its offset to the point that is perpendicular to the view
+direction, and the orbit distance becomes the point's depth. The point moves to
+the centre of the viewport at the size it was drawn, over the same ~200ms eased
+transition and target flash as Alt + Click. Being a pan, it leaves camera view.
+It moves nothing when a camera is in hand (the motion would move the held
+camera, which the double-click does not ask for), for a point at infinity (whose
+stored coordinates are a direction), for a point behind the camera, or with Alt
+held, where the Alt + Click depth pick has already set the target.
 
 ### Trackpad Controls
 

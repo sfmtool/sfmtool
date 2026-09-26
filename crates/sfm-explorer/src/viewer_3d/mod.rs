@@ -829,6 +829,47 @@ impl Viewer3D {
         );
     }
 
+    /// Move the orbit target onto `point` by the smallest camera motion that
+    /// does it, with the same animated transition as [`Self::apply_pick_result`].
+    ///
+    /// The orientation is kept, so the motion is a pan parallel to the view
+    /// plane: the camera moves by the component of the offset to `point` that
+    /// is perpendicular to the view direction, and the orbit distance becomes
+    /// the remaining component, the point's depth. The point slides to the
+    /// centre of the viewport and keeps its apparent size. What a double-click
+    /// on a point does after putting it on the bench.
+    ///
+    /// Returns whether a transition was started. It is not when a camera is in
+    /// hand, since every viewport motion then moves the held camera and a
+    /// double-click is not a request to move it; nor when `point` is not in
+    /// front of the camera, where no pan brings it onto the view axis.
+    pub(crate) fn move_target_to(&mut self, point: Point3<f64>, current_time: f64) -> bool {
+        if self.camera_lock.is_some() {
+            return false;
+        }
+        let position = self.camera.camera.position;
+        let forward = self.camera.camera.forward();
+        let offset = point - position;
+        let depth = offset.dot(&forward);
+        if depth <= 1e-10 {
+            return false;
+        }
+        let end_position = position + (offset - forward * depth);
+        // A pan is a step away from the pose being looked through.
+        self.leave_camera_view();
+        self.start_transition(
+            end_position,
+            self.camera.camera.orientation,
+            depth,
+            self.camera.fov,
+            self.camera.world_up,
+            None,
+            true,
+            current_time,
+        );
+        true
+    }
+
     /// Starts a smooth animated transition to the given camera end state.
     ///
     /// Captures the current camera state as the start and interpolates over

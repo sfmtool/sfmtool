@@ -350,6 +350,50 @@ fn a_double_click_is_recorded_on_the_pending_click() {
     assert!(viewer.pending_click_is_double, "two clicks read as one");
 }
 
+/// What `app.rs` does to the viewport after a double-click on a point: pan so
+/// the target lands on it. The orientation is kept, the camera moves only
+/// across the view direction, and the orbit distance becomes the point's depth.
+#[test]
+fn moving_the_target_to_a_point_pans_across_the_view_direction() {
+    let mut viewer = Viewer3D::new();
+    let eye = Point3::new(0.0, -10.0, 0.0);
+    viewer.camera.world_up = Vector3::z();
+    viewer.camera.camera = Camera::look_at(eye, Point3::origin(), Vector3::z());
+    let orientation = viewer.camera.camera.orientation;
+    let point = Point3::new(2.0, -4.0, 1.5);
+
+    assert!(
+        viewer.move_target_to(point, 0.0),
+        "no transition was started"
+    );
+    let transition = viewer
+        .target_transition
+        .as_ref()
+        .expect("a transition in flight");
+    assert!(transition.end_orientation.angle_to(&orientation) < 1e-12);
+    assert!((transition.end_distance - 6.0).abs() < 1e-12);
+    assert!((transition.end_position - Point3::new(2.0, -10.0, 1.5)).norm() < 1e-12);
+    // The end state's target is the point itself.
+    let mut end = viewer.camera.camera.clone();
+    end.position = transition.end_position;
+    end.orientation = transition.end_orientation;
+    end.target_distance = transition.end_distance;
+    assert!((end.target() - point).norm() < 1e-12);
+}
+
+/// A point behind the camera is not on the view axis after any pan, so the
+/// viewport is left where it is.
+#[test]
+fn moving_the_target_to_a_point_behind_the_camera_does_nothing() {
+    let mut viewer = Viewer3D::new();
+    viewer.camera.world_up = Vector3::z();
+    viewer.camera.camera =
+        Camera::look_at(Point3::new(0.0, -10.0, 0.0), Point3::origin(), Vector3::z());
+
+    assert!(!viewer.move_target_to(Point3::new(1.0, -12.0, 0.0), 0.0));
+    assert!(viewer.target_transition.is_none());
+}
+
 /// `count` primary press/release pairs at one place, in one frame: what egui
 /// counts as a single click, a double-click, and so on.
 fn primary_clicks(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, count: usize) {

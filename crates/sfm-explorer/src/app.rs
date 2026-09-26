@@ -1049,11 +1049,16 @@ impl App {
                     }
                 }
                 Some(PickTarget::Point(point)) if point_is_live(&self.state, point) => {
-                    apply_point_click(
-                        &mut self.state,
-                        point,
-                        self.viewer_3d.pending_click_is_double,
-                    );
+                    let is_double = self.viewer_3d.pending_click_is_double;
+                    apply_point_click(&mut self.state, point, is_double);
+                    // An Alt double-click has already set the target from the
+                    // depth pick above; the pan is the plain double-click's.
+                    if is_double && !self.viewer_3d.pending_click_is_alt {
+                        if let Some(position) = point_world_position(&self.state, point) {
+                            let current_time = self.egui_ctx.input(|i| i.time);
+                            self.viewer_3d.move_target_to(position, current_time);
+                        }
+                    }
                 }
                 None if !self.viewer_3d.pending_click_is_alt => {
                     // Clicked on background (non-Alt) — deselect. The image
@@ -1102,8 +1107,10 @@ fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
     }
 }
 
-/// What a viewport click that picked a point does: select it, and on a
-/// double-click put its track on the bench and raise Track View.
+/// What a viewport click that picked a point does to the document: select it,
+/// and on a double-click put its track on the bench and raise Track View. The
+/// double-click's pan onto the point is the viewport's half, applied beside
+/// this by the caller ([`crate::viewer_3d::Viewer3D::move_target_to`]).
 ///
 /// The pick arrives one frame late through the GPU readback, so this is reached
 /// from [`App::process_pick_readback`] rather than from the panel body -- which
@@ -1127,6 +1134,22 @@ fn apply_point_click(
     } else {
         state.select_point(point);
     }
+}
+
+/// Where `point` is drawn, in the shared world space: its position in the
+/// version on screen put through its node's transform.
+///
+/// `None` for a point at infinity, whose stored coordinates are a direction
+/// rather than a place, and for a point the version no longer holds.
+fn point_world_position(
+    state: &crate::state::AppState,
+    point: crate::scene::PointRef,
+) -> Option<nalgebra::Point3<f64>> {
+    let node = crate::scene::node_by_id(&state.scene, point.recon)?;
+    let edited = node.edited();
+    let view = edited.point(point.point)?;
+    let stored = view.point();
+    (!stored.is_at_infinity()).then(|| node.transform().apply_to_point(&stored.position))
 }
 
 /// Whether `point` names a point the version on screen still holds.
