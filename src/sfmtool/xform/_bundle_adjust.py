@@ -18,7 +18,7 @@ import numpy as np
 import pycolmap
 
 from .._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
-from ._switch_camera_model import format_outermost_keypoint
+from ._switch_camera_model import format_monotone_constraint, format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
 SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
@@ -118,6 +118,9 @@ class BundleAdjustTransform:
                     f"rms {refit['rms_px']:.4f} px, max {refit['max_px']:.4f} px "
                     "from the old curve over its domain"
                 )
+                held = format_monotone_constraint(refit["monotone_constraint"])
+                if held:
+                    print(f"        {held}")
         result = adjusted.materialize()[0]
         # How far out the photographs reach, under the adjusted cameras: the
         # outermost observation, and the outermost feature detected in the

@@ -2170,8 +2170,9 @@ refuses; `release_focal` is refused, naming the camera, when a camera the posed
 images use has a model whose focal the adjustment cannot solve, and
 `release_distortion` is refused without `release_focal` and when no camera the
 posed images use has one of those three models. The report's focal clause names
-each released camera's focal before and after and each spline refit's counts
-and largest distance from the old curve, and the version's label says `focal
+each released camera's focal before and after and each spline refit's counts,
+largest distance from the old curve and, where its monotonicity constraint
+bound, the angles where it did, and the version's label says `focal
 and lens distortion released` when a distortion was released and `spline
 refitted to N coefficients` (and `on a D° domain`) when a count or domain
 changed. `spline_coeff_count` and `spline_domain_deg` are refused without

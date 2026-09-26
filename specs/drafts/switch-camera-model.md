@@ -116,7 +116,10 @@ The panel shows a strip of controls at the top:
 
 Every change refits at once. The fit report is one line under the strip, for
 example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; fx/fy aspect
-0.9978 dropped". The observation comparison, which needs the reconstruction, is
+0.9978 dropped". A spline fit is constrained to stay monotone, so it has an
+inverse; where that constraint bound, the line adds its range, for example
+"monotone constraint bound at 1 angle, 113.2°", because there the proposed
+curve is the closest invertible one rather than the current one. The observation comparison, which needs the reconstruction, is
 computed on a worker when the controls rest.
 
 While the proposal is open, the rest of the panel compares the two models:
@@ -131,6 +134,8 @@ While the proposal is open, the rest of the panel compares the two models:
   A fitting error shows as the centre line's departure from zero inside θ_fit.
   Past θ_fit it shows how far the new model departs from where the old one was
   going.
+  The range where the monotonicity constraint bound is marked on the θ axis,
+  so a departure there reads as the constraint rather than as a poor fit.
 - **An observation rug** under the shared θ axis: one tick per observation of
   the camera's images, at its incidence angle under the current model. It shows
   where the data is: the Kerry rug thins out at 86°. Beside the rug is the count

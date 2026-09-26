@@ -56,6 +56,15 @@ pub struct ModelExtent {
     pub source_fold_deg: Option<f64>,
 }
 
+/// Where a spline fit held the slope at its floor to stay invertible.
+pub struct MonotoneConstraint {
+    pub active: bool,
+    pub active_angles: usize,          // grid angles held at the floor
+    pub range_deg: Option<[f64; 2]>,   // the smallest and largest of them
+}
+
+pub const MIN_SLOPE: f64 = 0.05;       // the floor, as r′(d) ≥ MIN_SLOPE·f
+
 pub struct CameraIntrinsicsRefit {
     pub camera: CameraIntrinsics,
     pub theta_fit_deg: f64,
@@ -66,6 +75,7 @@ pub struct CameraIntrinsicsRefit {
     pub radial_rms_px: f64,
     pub dropped: Vec<DroppedTerm>,
     pub extent: ModelExtent,
+    pub monotone_constraint: MonotoneConstraint,
 }
 
 pub enum RefitError {
@@ -133,6 +143,14 @@ can change. The bundle adjustment's coefficient count
 ([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md)) is
 its caller.
 
+**A spline fit is constrained to be monotone, not refused when it is not.** A
+lens model must be invertible, since every keypoint's ray comes from the
+inverse. The least-squares optimum under that requirement is the closest
+invertible curve to the source, which is what a caller asking for the switch or
+a new coefficient count wants; refusing instead left the caller to guess another
+count or domain. The report's `monotone_constraint` says where the requirement
+bound, so a reader can see where the fit departed from the source.
+
 **Refusals are values.** Every refusal names the rule and the value it measured,
 so a caller can print it as the one sentence a menu or a CLI needs, and a test
 can match on the variant.
@@ -199,8 +217,11 @@ either way.
 The old and new bases are not nested (a spline of `N` coefficients has `N − 1`
 knot spans on the same domain), so the refit is not exact. On the `kerry_park`
 first lens as an eight-coefficient `SFMTOOL_FISHEYE` over about 150°, twelve
-coefficients reproduce the curve to under 0.05 px and five to under 1 px. The
-refit is checked for monotonicity like every spline fit.
+coefficients reproduce the curve to under 0.05 px and five to under 1 px. Like
+every spline fit, the refit is constrained to be monotone (below), which matters
+most here: a source with a deep dip, where its slope comes close to zero, is
+monotone, but a fit with more coefficients rings through the dip and can cross
+below zero without the constraint.
 
 ### Spline targets: one linear solve
 
@@ -237,13 +258,61 @@ data. The penalty's weight is small (see [Parameters](#parameters)): on a source
 the target represents exactly it moves the fit by well under a thousandth of a
 pixel.
 
-**The result is checked, not repaired.** A fitted spline that fails
-`bspline_is_monotone` over its whole domain and its linear tail is refused
-(`NotMonotone`). The continuation of a lens that is flattening at `θ_fit` can
-turn over past it; the `kerry_park` first lens does, with `d_max` at 110°. A
-monotone spline is the model's construction invariant, so a caller changes
-`θ_fit`, the domain or the coefficient count rather than receiving a camera
-with no inverse.
+### Spline targets: the monotonicity constraint
+
+A monotone spline is the model's construction invariant: the radial map has to
+be strictly increasing over its domain and along its linear tail, or the camera
+has no inverse. The unconstrained least-squares solution does not always have
+one. The continuation of a lens that is flattening at `θ_fit` can turn over past
+it (the `kerry_park` first lens does, with `d_max` at 110°), and a fit with more
+coefficients than its source rings through a deep dip in the source's slope.
+
+So the fit is solved under the constraint that the slope stays above a floor.
+The radial map's slope is linear in the unknowns,
+
+```
+r′(d) = f·(1 + Σ cᵢ·Bᵢ′(d)) = x₀ + Σ xᵢ₊₁·Bᵢ′(d),
+```
+
+and the fit requires `r′(d_k) ≥ MIN_SLOPE · f` at a grid of `d_k` over
+`[0, d_max]`. `MIN_SLOPE` is relative to the focal, so each constraint is the
+homogeneous linear inequality `(1 − MIN_SLOPE)·x₀ + Σ xᵢ₊₁·Bᵢ′(d_k) ≥ 0`, and
+the problem stays a linear least-squares problem with linear inequality
+constraints. The last grid point is `d_max`, whose slope is the end tangent the
+linear tail carries, so the constraint covers the tail too.
+
+- **The grid is the monotonicity check's own.** It has 64 points per knot span,
+  at the same angles `bspline_is_monotone` samples when its sufficient test
+  fails, so a fit that holds the floor at every grid point passes that check by
+  construction.
+- **The floor is positive.** `MIN_SLOPE = 0.05` rather than zero, so the fitted
+  camera is invertible with a margin: at the floor one pixel of radius is at
+  most twenty times the angle it is at the centre, which keeps the inverse's
+  Newton steps bounded. It is below what a real lens reaches inside its field:
+  the orthographic projection `r = f·sin θ`, the most compressive of the
+  classical fisheye projections, falls to it only at 87°, and the equisolid
+  projection only at 174°. It binds on a fold or a near-flat dip, not on an
+  optical design.
+- **An unconstrained fit is unchanged.** The unconstrained solution is computed
+  first and kept, bit for bit, when it already holds the floor at every grid
+  point. Only a fit that breaks it goes through the constrained solve.
+- **The result is still checked.** The fitted spline is checked with
+  `bspline_is_monotone` as before. With the constraint in place a failure means
+  the constrained solve itself went wrong, and is refused (`NotMonotone`) with a
+  sentence that says so.
+
+The report's `monotone_constraint` gives whether the constraint bound, at how
+many grid angles, and the smallest and largest of those angles as incidence
+angles. Over that range the fit is not the source's curve but the closest
+invertible one, and the pixel error there is part of `rms_px` and `max_px`.
+
+On the `tk107` capture's first camera after an eight-coefficient bundle
+adjustment (`SFMTOOL_FISHEYE`, f ≈ 129.53, domain 150.1°, a dip where
+`1 + δ′` comes close to zero), refits to twelve and sixteen coefficients break
+the floor without the constraint. With it, twelve coefficients reproduce the old curve to
+rms 0.49 px and max 1.52 px over the whole domain, the floor binding at one grid
+angle, 113.2°, the bottom of the dip; sixteen give rms 0.18 px and max 0.56 px,
+binding at 113.3°.
 
 ### Polynomial targets: a small nonlinear fit
 
@@ -264,6 +333,11 @@ trusted bound must reach `θ_fit`, or the fit is refused (`TrustedBoundShort`).
 Past 90° of distorted angle the fisheye polynomials' inverse blends toward the
 identity ray, so a polynomial fitted to a near-equidistant lens out to 120° is
 trusted only to about 90°.
+
+The polynomial fit is not constrained to be monotone. Its parameters enter the
+pixel nonlinearly, so the slope floor is not a linear constraint there, and the
+polynomial models already state how far they can be inverted as their trusted
+bound, which the check above holds the fit to.
 
 ### Perspective targets
 
@@ -286,6 +360,9 @@ or more, so it is refused when `θ_fit` reaches 90° (`PerspectivePast90`).
 - **`extent`**: the largest incidence angle the fitted camera gives the midpoints
   of the image edges and the image corners, and the source's trusted bound and
   fold.
+- **`monotone_constraint`**: for a spline target, whether the slope floor bound,
+  at how many grid angles, and the range of incidence angles they cover. Always
+  inactive for the other targets.
 
 On the `kerry_park` first lens (`OPENCV_FISHEYE`, `fx` 129.718, `fy` 129.430),
 an eight-coefficient `SFMTOOL_FISHEYE` fitted over its trusted bound of about
@@ -304,6 +381,19 @@ with coefficients of 1e-11 instead of zero to rounding. The matrix is
 is `SMOOTHING · rows / N`, so the penalty's share of the solve does not change
 with the sample or coefficient count.
 
+**The constrained solve reuses the SVD.** With the design matrix `A = U·S·Vᵀ`,
+the substitution `z = S·Vᵀ·x − Uᵀ·b` turns `min ‖A·x − b‖²` subject to
+`G·x ≥ 0` into the least-distance problem `min ‖z‖` subject to `E·z ≥ f`, with
+`E = G·V·S⁻¹` and `f = −G·x_unconstrained`. Its dual is a non-negative least
+squares problem over one variable per constraint, solved by the Lawson–Hanson
+active-set algorithm (Lawson & Hanson, *Solving Least Squares Problems*,
+chapter 23), and the constraints with a positive dual variable are the ones the
+report counts as bound. Each row of `E` is scaled to unit length first, which
+changes neither the feasible set nor the solution. The problem is at most 33
+unknowns and `64·(N − 1) + 1` constraints, and it is in
+[constrained_lsq.rs](../../../crates/sfmtool-core/src/camera/refit_intrinsics/constrained_lsq.rs);
+no dependency of the workspace carries a quadratic-programming or NNLS routine.
+
 ## Parameters
 
 | Parameter | Default | Meaning |
@@ -314,6 +404,8 @@ with the sample or coefficient count.
 | `THETA_SAMPLES` | `96` | Incidence angles sampled over `(0, θ_fit]`. |
 | `AZIMUTHS` | `64` | Azimuths sampled at each angle. |
 | `SMOOTHING` | `1e-6` | Weight of the second-difference penalty, per data row and per coefficient. |
+| `MIN_SLOPE` | `0.05` | The spline fit's slope floor, `r′(d) ≥ MIN_SLOPE·f`. |
+| `SLOPE_GRID_PER_SPAN` | `64` | Constraint grid points per knot span, the monotonicity check's density. |
 | `LM_MAX_ITERS` | `200` | Iteration budget of the polynomial fit. |
 
 All are constants in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/camera/refit_intrinsics.rs).
@@ -326,7 +418,9 @@ dict: `model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
 `"observations"`, `"image_corner"` or `"given"`), `spline_domain_deg` (`None` for
 a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
 sentence per term) and `extent` (`edge_deg`, `corner_deg`, `source_trusted_deg`,
-`source_fold_deg`). A refusal is a `ValueError` carrying the error's sentence.
+`source_fold_deg`) and `monotone_constraint` (`active`, `active_angles`, and
+`range_deg`, a `(from, to)` pair of incidence angles or `None`). A refusal is a
+`ValueError` carrying the error's sentence.
 
 ```python
 camera, report = source.refit("SFMTOOL_FISHEYE", coeff_count=8)
@@ -354,9 +448,15 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   same count coming back as itself; an `SFMTOOL_PINHOLE` keeping its `ρ_max`
   exactly; refusals for a source without a spline, counts of 1 and 33, and a
   domain end past 180°.
+- The monotonicity constraint: a folded source fitted to a spline whose
+  smallest slope is the floor; the `tk107` first camera refitted to twelve and
+  sixteen coefficients, monotone with the constraint reported active; a
+  nearly-flat source lifted to the floor in its flat stretch only; and an
+  unconstrained refit equal bit for bit to the plain least-squares solve.
+  `constrained_lsq.rs` tests the solver on hand-solved problems and an
+  infeasible one.
 - Refusals: a perspective target past 90°; a fit past the trusted bound; a
-  non-monotone spline; a polynomial trusted short of the fit; target names and
-  coefficient counts.
+  polynomial trusted short of the fit; target names and coefficient counts.
 
 `forward_fold_deg` is tested in
 [report/tests.rs](../../../crates/sfmtool-core/src/camera/report/tests.rs). The

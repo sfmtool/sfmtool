@@ -408,6 +408,44 @@ class TestSwitchCameraModel:
         _, kept = switched.bundle_adjust(opt_f=True, opt_distortion=True)
         assert kept["cameras"][0]["spline_refit"] is None
 
+    def test_a_dipped_spline_is_refitted_under_the_monotone_constraint(self, embedded):
+        from sfmtool._sfmtool.geometry import CameraIntrinsics
+
+        # A spline whose slope dips close to zero near 113°: monotone, but a
+        # twelve-coefficient least-squares refit rings through the dip and
+        # crosses below zero. The refit is constrained instead of refused.
+        switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=8)
+        value = switched.materialize()[0]
+        camera = value.cameras[0].to_dict()
+        dip = [0.0003, 0.0091, 0.0403, 0.1131, 0.0994, -0.4755, 0.0809, 0.0702]
+        params = dict(camera["parameters"])
+        params["bspline_theta_max"] = 2.6194
+        for i, c in enumerate(dip):
+            params[f"bspline_c{i}"] = c
+        dipped = CameraIntrinsics(
+            "SFMTOOL_FISHEYE", camera["width"], camera["height"], params
+        )
+        edited = EditedReconstruction(value.clone_with_changes(cameras=[dipped]))
+
+        _, report = edited.bundle_adjust(
+            opt_f=True, opt_distortion=True, max_iters=1, spline_coeff_count=12
+        )
+        (camera,) = report["cameras"]
+        refit = camera["spline_refit"]
+        assert (refit["coeffs_before"], refit["coeffs_after"]) == (8, 12)
+        constraint = refit["monotone_constraint"]
+        assert constraint["active"]
+        assert constraint["active_angles"] >= 1
+        low, high = constraint["range_deg"]
+        assert 100.0 < low <= high < 130.0
+        assert refit["max_px"] < 5.0
+
+        _, unconstrained = switched.bundle_adjust(
+            opt_f=True, opt_distortion=True, max_iters=1, spline_coeff_count=12
+        )
+        kept = unconstrained["cameras"][0]["spline_refit"]["monotone_constraint"]
+        assert kept == {"active": False, "active_angles": 0, "range_deg": None}
+
     def test_the_spline_domain_is_moved_before_the_solve(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
         with pytest.raises(ValueError, match="count or domain"):
@@ -481,6 +519,11 @@ class TestCameraIntrinsicsRefit:
         assert report["radial_rms_px"] < 0.05
         assert report["dropped"] == ["fx/fy aspect 0.9978 dropped (single focal)"]
         assert report["spline_domain_deg"] == pytest.approx(150.0, abs=1.0)
+        assert report["monotone_constraint"] == {
+            "active": False,
+            "active_angles": 0,
+            "range_deg": None,
+        }
 
     def test_refusals_are_value_errors(self):
         with pytest.raises(ValueError, match="trusted bound"):

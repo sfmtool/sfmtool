@@ -183,7 +183,8 @@ fn spline_refit_label(refit: &sfmtool_core::reconstruction::bundle_adjust::Splin
 
 /// The spline refit clause of a bundle adjustment's Action Log entry: each
 /// camera whose spline was refitted to a new coefficient count or domain
-/// before the solve, with how closely the refit reproduced the old curve.
+/// before the solve, with how closely the refit reproduced the old curve and,
+/// where its monotonicity constraint bound, the angles where it departed.
 /// Named by table index when the solve holds more than one camera, as the
 /// focal clause is.
 fn spline_refit_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
@@ -204,8 +205,22 @@ fn spline_refit_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
             } else {
                 String::new()
             };
+            let held = match r.monotone_constraint.range_deg {
+                Some([from, to]) if r.monotone_constraint.active => {
+                    let count = r.monotone_constraint.active_angles;
+                    let plural = if count == 1 { "" } else { "s" };
+                    let (from, to) = (format!("{from:.1}"), format!("{to:.1}"));
+                    let range = if from == to {
+                        format!("{from}°")
+                    } else {
+                        format!("{from}°–{to}°")
+                    };
+                    format!(", monotone constraint bound at {count} angle{plural}, {range}")
+                }
+                _ => String::new(),
+            };
             format!(
-                ", {who}spline {} → {} coefficients{domain} (refit max {:.3} px)",
+                ", {who}spline {} → {} coefficients{domain} (refit max {:.3} px{held})",
                 r.coeffs_before, r.coeffs_after, r.max_px
             )
         })

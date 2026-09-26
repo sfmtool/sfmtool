@@ -194,7 +194,10 @@ coefficients, domain 150.1° → 108.8° (refit max 0.013 px)` after the focal
 clause (the domain only when it moved), with the same
 `camera N ` prefix when the solve holds several cameras: the refit's largest
 pixel distance from the old curve says how much of the lens change was the
-refit rather than the solve. The three counts
+refit rather than the solve. Where the refit's monotonicity constraint bound, the
+parenthesis adds where, `(refit max 1.519 px, monotone constraint bound at 1
+angle, 113.2°)`, since over that range the refit is the closest invertible curve
+rather than the old one. The three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
 

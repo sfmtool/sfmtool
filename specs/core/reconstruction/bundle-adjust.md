@@ -87,6 +87,7 @@ pub struct SplineRefit {
     pub domain_after_deg: f64,
     pub rms_px: f64, // the refit's distance from the old camera,
     pub max_px: f64, // over the whole spline domain
+    pub monotone_constraint: MonotoneConstraint, // where the refit held the slope floor
 }
 
 /// The counts `spline_coeff_count` accepts: 2 to 32.
@@ -180,13 +181,17 @@ observations, so the count is refused without `opt_distortion`
 (`SplineRefitWithoutDistortion`). It is refused when no camera in the solve is a
 spline model (`SplineRefitWithoutSpline`), outside `SPLINE_COEFF_COUNT_RANGE`
 (`SplineCoeffCount`), and, naming the camera, when a refit is
-(`SplineRefit`, carrying the refit's own refusal, such as a spline that is no
-longer monotone). The range is 2 to 32: fewer than two coefficients evaluate as
+(`SplineRefit`, carrying the refit's own refusal). The range is 2 to 32: fewer than two coefficients evaluate as
 the identity, and 32 is the refit's own ceiling, past which the knot spans are
 narrower than a lens calibration can support. A camera already at the count is
-not refitted. Each refit is reported with the old and new count and its pixel
-distance from the old camera, so a caller can say how much of the change was
-the refit and how much the solve.
+not refitted. The refit is constrained to keep the new spline monotone, so a
+source with a deep dip in its slope, which a fit with more coefficients rings
+through, is refitted as the closest invertible curve rather than refused. Each
+refit is reported with the old and new count, its pixel distance from the old
+camera, and its `monotone_constraint`: whether the constraint bound, and the
+range of incidence angles where it did, which is where the refit departs from
+the old curve. So a caller can say how much of the change was the refit and how
+much the solve.
 
 **`spline_domain_deg` moves the domain end in the same refit.** Where the spline
 stops is the other half of its shape: past the domain end the model is a

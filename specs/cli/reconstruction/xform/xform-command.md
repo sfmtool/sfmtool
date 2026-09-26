@@ -312,15 +312,19 @@ same focal and coefficients, the new terms at zero, so `SIMPLE_RADIAL` to
 `RADIAL` gives `k2 = 0`. A switch across radial coordinates (a polynomial fisheye
 to a spline, a fisheye to a perspective model below 90°) gives the target's best
 fit to the same lens. A perspective target is refused for a camera with
-observations at 90° or more; a spline fit that is not monotone and a fitted
-polynomial fisheye whose trusted bound falls short of the fit are refused too.
+observations at 90° or more, and a fitted polynomial fisheye whose trusted bound
+falls short of the fit is refused too. A spline fit is not refused for turning
+over: it is constrained to stay monotone, the closest invertible curve to the
+source.
 A refusal stops the command, names the camera, the rule and the value, and
 writes nothing. The observations' pixels come from the inline keypoints, or
 from the `.sift` files for a `sift_files` reconstruction without them.
 
 For each switched camera the transform prints the source and target models, the
 fitted parameters, the fit (its largest angle and where it came from, rms,
-radial rms and max pixel error, the spline domain), each term the target cannot
+radial rms and max pixel error, the spline domain), where a spline fit's
+monotonicity constraint bound (for example `monotone constraint bound at 1
+angle, 113.2°, where the fit departs from the source`), each term the target cannot
 represent (for example `fx/fy aspect 0.9978 dropped (single focal)`), the extent
 (the new model's edge and corner angles, the source's trusted bound and fold),
 and the observation comparison over one fixed set: median, 90th percentile and
@@ -382,7 +386,9 @@ end held, and the solve starts from the refitted cameras (`spline_coeff_count`,
 of incidence angle in the same refit, over the whole new domain
 (`spline_domain_deg`). Each refit prints its old and new count, the domain
 before and after when it moved, and its rms and largest pixel distance from the
-old curve. After the solve each camera's outermost keypoint is printed under the
+old curve. The refit is constrained to keep the spline monotone, and where that
+constraint bound the refit prints where, for example `monotone constraint bound
+at 1 angle, 113.2°, where the fit departs from the source`. After the solve each camera's outermost keypoint is printed under the
 adjusted camera, observed and, where the images' `.sift` files can be read,
 detected: `outermost keypoint: 230.3 px, 95.8° observed; 259.2 px, 108.8°
 detected (24 .sift files)`, the angle to give `domain=`. On a reconstruction

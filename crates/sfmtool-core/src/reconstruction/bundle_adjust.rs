@@ -19,7 +19,9 @@ use std::ops::RangeInclusive;
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
 use crate::camera::intrinsics::SplineRadial;
-use crate::camera::refit_intrinsics::{refit_spline, RefitError, MAX_COEFF_COUNT};
+use crate::camera::refit_intrinsics::{
+    refit_spline, MonotoneConstraint, RefitError, MAX_COEFF_COUNT,
+};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::bundle_adjust::{
     BaCameras, BaSchedule, DistanceReference, FreePointPolicy, PointConstraints,
@@ -341,6 +343,9 @@ pub struct SplineRefit {
     pub rms_px: f64,
     /// The largest such distance.
     pub max_px: f64,
+    /// What the refit's monotonicity constraint did: where it held the new
+    /// spline's slope at the floor, and so departed from the old curve.
+    pub monotone_constraint: MonotoneConstraint,
 }
 
 /// Bundle-adjust `recon`, returning the adjusted value and a report.
@@ -515,6 +520,7 @@ pub fn bundle_adjust(
                 domain_after_deg: refit.spline_domain_deg.unwrap_or(f64::NAN),
                 rms_px: refit.rms_px,
                 max_px: refit.max_px,
+                monotone_constraint: refit.monotone_constraint,
             });
             cameras[j] = refit.camera;
         }

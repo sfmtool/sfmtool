@@ -121,6 +121,9 @@ def format_camera_report(entry: dict) -> list[str]:
     if fit["spline_domain_deg"] is not None:
         fit_line += f"; spline domain {fit['spline_domain_deg']:.1f}°"
     lines.append(fit_line)
+    held = format_monotone_constraint(fit["monotone_constraint"])
+    if held:
+        lines.append(f"  {held}")
     for dropped in fit["dropped"]:
         lines.append(f"  {dropped}")
     lines.append(
@@ -148,6 +151,23 @@ def format_camera_report(entry: dict) -> list[str]:
     if outermost:
         lines.append(f"  {outermost}")
     return lines
+
+
+def format_monotone_constraint(constraint: dict) -> str | None:
+    """``monotone constraint bound at 23 angles, 95.2°-118.7°, where the fit
+    departs from the source`` when a spline fit's monotonicity constraint bound, as
+    ``CameraIntrinsics.refit`` reports it; ``None`` when it did not."""
+    if not constraint["active"]:
+        return None
+    count = constraint["active_angles"]
+    low, high = constraint["range_deg"]
+    where = (
+        f"{low:.1f}°" if f"{low:.1f}" == f"{high:.1f}" else f"{low:.1f}°-{high:.1f}°"
+    )
+    return (
+        f"monotone constraint bound at {count} angle{'' if count == 1 else 's'}, "
+        f"{where}, where the fit departs from the source"
+    )
 
 
 def format_outermost_keypoint(outermost: dict) -> str | None:

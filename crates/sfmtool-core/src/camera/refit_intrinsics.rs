@@ -32,6 +32,9 @@ use sfmtool_sfmr_format::SfmrCamera;
 use super::distortion::bspline::{basis_at, bspline_is_monotone, BSPLINE_SUPPORT};
 use super::intrinsics::{fixed_arity_model_by_name, CameraIntrinsics, CameraModel, SplineRadial};
 use super::report::{forward_fold_deg, off_axis_angle_deg, trustworthy_max_theta_deg};
+use constrained_lsq::least_squares_with_inequalities;
+
+mod constrained_lsq;
 
 /// The spline coefficient count a caller gets when it names a spline model
 /// and no count.
@@ -57,6 +60,25 @@ const SMOOTHING: f64 = 1e-6;
 
 /// Iteration budget of the polynomial fit.
 const LM_MAX_ITERS: usize = 200;
+
+/// The smallest slope a fitted spline's radial map may have, as a fraction of
+/// its focal: the fit requires `r′(d) ≥ MIN_SLOPE · f` over the whole domain
+/// and along the linear tail.
+///
+/// A positive floor rather than zero, so the fitted camera is invertible with
+/// a margin rather than only just: the inverse's Newton step is `Δr / r′`, and
+/// at this floor a pixel of radius is never more than twenty times the angle
+/// it is at the centre. It is below what a real lens reaches inside its field:
+/// the orthographic projection `r = f·sin θ`, the most compressive of the
+/// classical fisheye projections, falls to it only at 87°, and the equisolid
+/// projection only at 174°, so the floor binds on a curve with a fold or a
+/// near-flat dip, not on an optical design.
+pub const MIN_SLOPE: f64 = 0.05;
+
+/// Constraint grid points per knot span. The same density as the dense test in
+/// `bspline_is_monotone`, at the same angles, so a fit that holds the floor at
+/// every grid point passes that test by construction.
+const SLOPE_GRID_PER_SPAN: usize = 64;
 
 /// The model a camera is refitted to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +282,25 @@ pub struct ModelExtent {
     pub source_fold_deg: Option<f64>,
 }
 
+/// What the monotonicity constraint of a spline fit did.
+///
+/// A spline fit requires the fitted radial map's slope to stay at or above
+/// [`MIN_SLOPE`] times its focal at a dense grid of angles over the domain and
+/// along the tail. Where the least-squares curve would fall below that, the
+/// fit is the closest curve that does not, and it departs from the source
+/// there.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MonotoneConstraint {
+    /// Whether the constraint changed the fit: at least one grid angle holds
+    /// the slope at the floor.
+    pub active: bool,
+    /// How many grid angles hold the slope at the floor.
+    pub active_angles: usize,
+    /// The smallest and the largest of those angles, as incidence angles in
+    /// degrees, or `None` when the constraint is not active.
+    pub range_deg: Option<[f64; 2]>,
+}
+
 /// The fitted camera and how well it matches its source.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraIntrinsicsRefit {
@@ -286,6 +327,9 @@ pub struct CameraIntrinsicsRefit {
     pub dropped: Vec<DroppedTerm>,
     /// How far the fitted camera and its source reach.
     pub extent: ModelExtent,
+    /// What the monotonicity constraint did to a spline fit; inactive for
+    /// every other target.
+    pub monotone_constraint: MonotoneConstraint,
 }
 
 /// Why a fit produced no camera. Each variant names the rule and the value it
@@ -341,7 +385,9 @@ pub enum RefitError {
         /// The angle asked for, in degrees.
         spline_domain_deg: f64,
     },
-    /// The fitted spline is not strictly increasing, so it has no inverse.
+    /// The fitted spline is not strictly increasing despite the fit's
+    /// monotonicity constraint, so it has no inverse: a failure of the
+    /// constrained solve, not of the source.
     NotMonotone,
     /// A fitted polynomial fisheye whose own trusted bound falls short of the
     /// fit's largest angle.
@@ -413,7 +459,8 @@ impl fmt::Display for RefitError {
             ),
             RefitError::NotMonotone => write!(
                 f,
-                "the fitted spline is not strictly increasing, so it has no inverse"
+                "the fitted spline is not strictly increasing even though the fit constrains \
+                 it to be, so it has no inverse"
             ),
             RefitError::TrustedBoundShort {
                 trusted_deg,
@@ -514,7 +561,7 @@ pub(crate) fn refit_camera_intrinsics_over(
     let samples = Samples::new(source, theta_fit_deg.to_radians())?;
     let (cx, cy) = source.principal_point();
 
-    let (camera, domain) = match target {
+    let (camera, domain, constraint) = match target {
         RefitTarget::SfmtoolFisheye { coeff_count } => fit_spline_camera(
             source,
             &samples,
@@ -540,7 +587,7 @@ pub(crate) fn refit_camera_intrinsics_over(
                 width: source.width,
                 height: source.height,
             };
-            (camera, None)
+            (camera, None, MonotoneConstraint::default())
         }
         RefitTarget::Colmap(name) => {
             let camera = fit_colmap(source, name, &samples)?;
@@ -552,7 +599,7 @@ pub(crate) fn refit_camera_intrinsics_over(
                     });
                 }
             }
-            (camera, None)
+            (camera, None, MonotoneConstraint::default())
         }
     };
 
@@ -563,6 +610,7 @@ pub(crate) fn refit_camera_intrinsics_over(
         theta_fit_deg,
         theta_fit_source,
         domain,
+        constraint,
     )
 }
 
@@ -578,8 +626,11 @@ pub(crate) fn refit_camera_intrinsics_over(
 /// shorter or longer than the old. The result is the best least-squares
 /// description of the source's curve on the new coefficient scheme, focal
 /// included. A domain end that is not given is copied exactly
-/// (`SFMTOOL_PINHOLE`'s `tan θ` is not taken through degrees and back). The
-/// fitted camera is checked for monotonicity like every spline fit.
+/// (`SFMTOOL_PINHOLE`'s `tan θ` is not taken through degrees and back). Like
+/// every spline fit it is constrained to be monotone, which makes it the best
+/// description with an inverse; the report's
+/// [`monotone_constraint`](CameraIntrinsicsRefit::monotone_constraint) says
+/// where that departed from the source.
 ///
 /// Refused for a source without a spline (`NotSplineSource`), a count the
 /// model does not allow, and a domain end the model cannot have.
@@ -638,7 +689,8 @@ pub fn refit_spline(
         });
     }
     let samples = Samples::new(source, theta_fit)?;
-    let (camera, domain_deg) = fit_spline_camera_on(source, &samples, radial, coeff_count, d_max)?;
+    let (camera, domain_deg, constraint) =
+        fit_spline_camera_on(source, &samples, radial, coeff_count, d_max)?;
     measured(
         source,
         camera,
@@ -646,6 +698,7 @@ pub fn refit_spline(
         theta_fit.to_degrees(),
         ThetaFitSource::SplineDomain,
         Some(domain_deg),
+        constraint,
     )
 }
 
@@ -657,6 +710,7 @@ fn measured(
     theta_fit_deg: f64,
     theta_fit_source: ThetaFitSource,
     spline_domain_deg: Option<f64>,
+    monotone_constraint: MonotoneConstraint,
 ) -> Result<CameraIntrinsicsRefit, RefitError> {
     let (cx, cy) = source.principal_point();
     let fitted = samples.pixels(&camera).ok_or(RefitError::Degenerate {
@@ -679,6 +733,7 @@ fn measured(
         rms_px,
         max_px,
         radial_rms_px,
+        monotone_constraint,
     })
 }
 
@@ -839,14 +894,15 @@ fn domain_end_of(radial: SplineRadial, deg: f64) -> Result<f64, RefitError> {
 }
 
 /// Fit a spline camera: place the domain, solve, build, and check the result
-/// is monotone. Returns the camera and its domain end in degrees.
+/// is monotone. Returns the camera, its domain end in degrees and what the
+/// monotonicity constraint did.
 fn fit_spline_camera(
     source: &CameraIntrinsics,
     samples: &Samples,
     radial: SplineRadial,
     coeff_count: usize,
     spline_domain_deg: Option<f64>,
-) -> Result<(CameraIntrinsics, Option<f64>), RefitError> {
+) -> Result<(CameraIntrinsics, Option<f64>, MonotoneConstraint), RefitError> {
     let (cx, cy) = source.principal_point();
     let d_max = match spline_domain_deg {
         Some(deg) => domain_end_of(radial, deg)?,
@@ -873,22 +929,26 @@ fn fit_spline_camera(
             reason: "the spline domain has no extent",
         });
     }
-    let (camera, domain_deg) = fit_spline_camera_on(source, samples, radial, coeff_count, d_max)?;
-    Ok((camera, Some(domain_deg)))
+    let (camera, domain_deg, constraint) =
+        fit_spline_camera_on(source, samples, radial, coeff_count, d_max)?;
+    Ok((camera, Some(domain_deg), constraint))
 }
 
 /// Fit a spline camera on the domain ending at `d_max`, in the family's radial
-/// coordinate: solve, build, and check the result is monotone. Returns the
-/// camera and its domain end in degrees.
+/// coordinate: solve under the monotonicity constraint, build, and check the
+/// result is monotone. Returns the camera, its domain end in degrees and what
+/// the constraint did. A failed check refuses: the constraint holds the slope
+/// above [`MIN_SLOPE`] at the check's own sample angles, so it fails only where
+/// the constrained solve itself went wrong.
 fn fit_spline_camera_on(
     source: &CameraIntrinsics,
     samples: &Samples,
     radial: SplineRadial,
     coeff_count: usize,
     d_max: f64,
-) -> Result<(CameraIntrinsics, f64), RefitError> {
+) -> Result<(CameraIntrinsics, f64, MonotoneConstraint), RefitError> {
     let (cx, cy) = source.principal_point();
-    let (f, coeffs) = fit_spline(samples, cx, cy, radial, coeff_count, d_max)?;
+    let (f, coeffs, constraint) = fit_spline(samples, cx, cy, radial, coeff_count, d_max)?;
     if coeff_count > 0 && !bspline_is_monotone(&coeffs, d_max, d_max) {
         return Err(RefitError::NotMonotone);
     }
@@ -919,6 +979,7 @@ fn fit_spline_camera_on(
             height: source.height,
         },
         domain_deg,
+        constraint,
     ))
 }
 
@@ -945,11 +1006,19 @@ fn coefficient_basis(n: usize, d_max: f64, d: f64) -> [(usize, f64); BSPLINE_SUP
 ///
 /// The model's pixel is `(cx, cy) + f·(d + Σ cᵢ·Bᵢ(d))·û`, which is linear in
 /// `x = (f, f·c₀, …, f·c_{N−1})`, so the fit is one solve of the normal
-/// equations, `N + 1` unknowns wide. The second difference of `f·c` is
-/// penalized, so a coefficient no sample reaches continues its neighbours
-/// along the smoothest curve instead of leaving the solve rank-deficient.
+/// equations, `N + 1` unknowns wide, without the constraint below. The second
+/// difference of `f·c` is penalized, so a coefficient no sample reaches
+/// continues its neighbours along the smoothest curve instead of leaving the
+/// solve rank-deficient.
 ///
-/// Returns `(f, c)`. `n = 0` fits the focal alone and `d_max` is unused.
+/// The radial map must be invertible, so the fit is constrained to keep its
+/// slope at or above [`MIN_SLOPE`] times the focal ([`slope_floor_rows`]).
+/// Where the unconstrained solution already does, it is the result, unchanged;
+/// where it does not, the result is the least-squares optimum under the
+/// constraint, the closest invertible curve to the source on this basis.
+///
+/// Returns `(f, c, constraint)`. `n = 0` fits the focal alone, has no
+/// constraint, and leaves `d_max` unused.
 fn fit_spline(
     samples: &Samples,
     cx: f64,
@@ -957,7 +1026,7 @@ fn fit_spline(
     radial: SplineRadial,
     n: usize,
     d_max: f64,
-) -> Result<(f64, Vec<f64>), RefitError> {
+) -> Result<(f64, Vec<f64>, MonotoneConstraint), RefitError> {
     let base = unit_base(radial);
     let width = n + 1;
     let penalty_rows = n.saturating_sub(2);
@@ -1018,6 +1087,45 @@ fn fit_spline(
         .map_err(|_| RefitError::Degenerate {
             reason: "the spline solve failed",
         })?;
+
+    // The slope floor at every grid angle, `r′(d_k) − MIN_SLOPE·f ≥ 0`. The
+    // unconstrained solution is kept exactly when it already holds, so a fit
+    // the constraint does not touch is the plain least-squares one.
+    let mut constraint = MonotoneConstraint::default();
+    let x = if n > 0 {
+        let (grid, rows) = slope_floor_rows(n, d_max);
+        let slack = &rows * &x;
+        if slack.iter().all(|&s| s >= 0.0) {
+            x
+        } else {
+            let v_t = svd.v_t.as_ref().ok_or(RefitError::Degenerate {
+                reason: "the spline solve failed",
+            })?;
+            let solved = least_squares_with_inequalities(&svd.singular_values, v_t, &x, &rows)
+                .ok_or(RefitError::Degenerate {
+                    reason: "the monotonicity-constrained spline solve did not converge",
+                })?;
+            let angles: Vec<f64> = grid
+                .iter()
+                .zip(&solved.active)
+                .filter(|(_, &active)| active)
+                .map(|(&d, _)| incidence_angle(radial, d).to_degrees())
+                .collect();
+            if !angles.is_empty() {
+                constraint = MonotoneConstraint {
+                    active: true,
+                    active_angles: angles.len(),
+                    range_deg: Some([
+                        angles.iter().copied().fold(f64::INFINITY, f64::min),
+                        angles.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                    ]),
+                };
+            }
+            solved.x
+        }
+    } else {
+        x
+    };
     let f = x[0];
     if !(f > 0.0 && f.is_finite()) {
         return Err(RefitError::Degenerate {
@@ -1030,7 +1138,44 @@ fn fit_spline(
             reason: "a fitted coefficient is not finite",
         });
     }
-    Ok((f, coeffs))
+    Ok((f, coeffs, constraint))
+}
+
+/// The monotonicity constraint of an `n`-coefficient spline on `[0, d_max]`:
+/// the grid of radial coordinates and one row per grid point, in the fit's
+/// unknowns `x = (f, f·c₀, …, f·c_{N−1})`.
+///
+/// The radial map's slope is `r′(d) = f·(1 + Σ cᵢ·Bᵢ′(d)) = x₀ + Σ xᵢ₊₁·Bᵢ′(d)`,
+/// linear in `x`, so `r′(d) ≥ MIN_SLOPE·f` is the homogeneous row
+/// `(1 − MIN_SLOPE, B₀′(d), …, B_{N−1}′(d))·x ≥ 0`. The grid is
+/// [`SLOPE_GRID_PER_SPAN`] points per knot span, computed as
+/// `bspline_is_monotone` computes its own; its last point is `d_max`, where the
+/// slope is the end tangent the linear tail carries past the domain.
+fn slope_floor_rows(n: usize, d_max: f64) -> (Vec<f64>, DMatrix<f64>) {
+    let points = SLOPE_GRID_PER_SPAN * (n - 1);
+    let grid: Vec<f64> = (0..=points)
+        .map(|s| d_max * s as f64 / points as f64)
+        .collect();
+    let mut rows = DMatrix::<f64>::zeros(grid.len(), n + 1);
+    for (k, &d) in grid.iter().enumerate() {
+        rows[(k, 0)] = 1.0 - MIN_SLOPE;
+        let (first, _, derivatives) = basis_at(n, d_max, d);
+        for (j, derivative) in derivatives.iter().enumerate() {
+            let full = first + j;
+            if full >= 2 && full - 2 < n {
+                rows[(k, full - 1)] = *derivative;
+            }
+        }
+    }
+    (grid, rows)
+}
+
+/// The incidence angle, in radians, of a spline family's radial coordinate.
+fn incidence_angle(radial: SplineRadial, d: f64) -> f64 {
+    match radial {
+        SplineRadial::IncidenceAngle => d,
+        SplineRadial::ImagePlaneRadius => d.atan(),
+    }
 }
 
 /// Whether a parameter name is a principal-point coordinate, which the fit

@@ -807,7 +807,9 @@ impl PyEditedReconstruction {
     ///     otherwise a dict of ``coeffs_before``, ``coeffs_after``,
     ///     ``domain_before_deg``, ``domain_after_deg``, ``rms_px`` and
     ///     ``max_px`` (the refit's pixel distance from the old camera over the
-    ///     new domain); and ``outermost_observed``, the camera's outermost
+    ///     new domain) and ``monotone_constraint`` (as ``CameraIntrinsics.refit``
+    ///     reports it: where the refit held the new spline's slope at its floor);
+    ///     and ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
     ///     ``theta_deg``, ``image`` and ``xy``, or ``None``).
     ///     Raises ``ValueError`` with the reason when the adjustment is
@@ -875,6 +877,13 @@ impl PyEditedReconstruction {
                     r.set_item("domain_after_deg", refit.domain_after_deg)?;
                     r.set_item("rms_px", refit.rms_px)?;
                     r.set_item("max_px", refit.max_px)?;
+                    r.set_item(
+                        "monotone_constraint",
+                        crate::geometry::camera_intrinsics::monotone_constraint_to_py(
+                            py,
+                            &refit.monotone_constraint,
+                        )?,
+                    )?;
                     c.set_item("spline_refit", r)?;
                 }
                 None => c.set_item("spline_refit", py.None())?,
