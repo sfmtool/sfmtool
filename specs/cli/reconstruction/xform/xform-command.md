@@ -343,6 +343,25 @@ Applies bundle adjustment via pycolmap to refine camera poses and 3D point posit
 --remove-short-tracks 2 --bundle-adjust
 ```
 
+pycolmap knows neither sfmtool spline model, so a reconstruction with any camera
+of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
+adjusted by sfmtool's own reconstruction-level bundle adjustment instead
+([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
+with every camera's focal and every spline released (`opt_f` and `opt_bspline`).
+That path needs inline keypoints (an `embedded_patches` reconstruction) and a
+camera model whose focal it can release for every posed image, and stops with
+the adjustment's own refusal otherwise; a rig with one spline camera and one
+polynomial camera is refused rather than half-adjusted. It honours points at
+infinity as they are, deletes the points the solve leaves unsupported, and
+rescales patch frames with their depth, as the viewer's Bundle Adjust does. It
+prints the median residual before and after and each camera's focal change and
+what was released. A reconstruction whose cameras are all COLMAP models goes
+through pycolmap as described below, unchanged.
+
+```bash
+--camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
+```
+
 Works on both `sift_files` and `embedded_patches` reconstructions. The transform
 round-trips through COLMAP binary files, which need a 2D keypoint per
 observation: for a `sift_files` recon these are read from the workspace `.sift`

@@ -49,7 +49,7 @@ fn a_dialog_that_was_never_asked_draws_nothing_and_answers_nothing() {
 #[test]
 fn an_ordinary_frame_answers_nothing_and_leaves_the_dialog_up() {
     let mut prompt = BundleAdjustPrompt::default();
-    prompt.ask(ReconId::next(), "bull".to_string(), None);
+    prompt.ask(ReconId::next(), "bull".to_string(), None, None);
     assert!(prompt.pending.is_some());
 
     assert_eq!(frame(&mut prompt, Vec::new()), None);
@@ -59,7 +59,7 @@ fn an_ordinary_frame_answers_nothing_and_leaves_the_dialog_up() {
 #[test]
 fn escape_cancels_and_closes_the_dialog() {
     let mut prompt = BundleAdjustPrompt::default();
-    prompt.ask(ReconId::next(), "bull".to_string(), None);
+    prompt.ask(ReconId::next(), "bull".to_string(), None, None);
 
     assert_eq!(
         frame(&mut prompt, press(egui::Key::Escape)),
@@ -73,13 +73,14 @@ fn escape_cancels_and_closes_the_dialog() {
 fn enter_runs_it_with_the_focal_held_which_is_the_default() {
     let mut prompt = BundleAdjustPrompt::default();
     let id = ReconId::next();
-    prompt.ask(id, "bull".to_string(), None);
+    prompt.ask(id, "bull".to_string(), None, None);
 
     assert_eq!(
         frame(&mut prompt, press(egui::Key::Enter)),
         Some(BundleAdjustAnswer {
             recon: id,
-            release_focal: false
+            release_focal: false,
+            release_distortion: false,
         })
     );
     assert!(prompt.pending.is_none(), "the answered dialog stayed up");
@@ -89,9 +90,29 @@ fn enter_runs_it_with_the_focal_held_which_is_the_default() {
 fn a_second_ask_does_not_stack_a_second_dialog() {
     let mut prompt = BundleAdjustPrompt::default();
     let first = ReconId::next();
-    prompt.ask(first, "bull".to_string(), None);
-    prompt.ask(ReconId::next(), "other".to_string(), None);
+    prompt.ask(first, "bull".to_string(), None, None);
+    prompt.ask(ReconId::next(), "other".to_string(), None, None);
 
     let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
     assert_eq!(answer.recon, first);
+}
+
+#[test]
+fn the_distortion_is_released_only_with_the_focal() {
+    let mut prompt = BundleAdjustPrompt::default();
+    let id = ReconId::next();
+    prompt.ask(id, "kerry".to_string(), None, None);
+    // Ticked without the focal, as a stale state from an earlier frame could
+    // leave it: the answer releases neither.
+    prompt.pending.as_mut().unwrap().release_distortion = true;
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    assert!(!answer.release_focal);
+    assert!(!answer.release_distortion);
+
+    prompt.ask(id, "kerry".to_string(), None, None);
+    let pending = prompt.pending.as_mut().unwrap();
+    pending.release_focal = true;
+    pending.release_distortion = true;
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    assert!(answer.release_focal && answer.release_distortion);
 }

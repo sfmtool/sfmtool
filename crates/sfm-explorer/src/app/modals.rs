@@ -31,6 +31,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
         let options = sfmtool_core::BundleAdjustOptions {
             opt_f: answer.release_focal,
+            opt_bspline: answer.release_distortion,
             ..sfmtool_core::BundleAdjustOptions::default()
         };
         // The refusal is already an Action Log row: the start writes it

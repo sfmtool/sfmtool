@@ -2089,6 +2089,8 @@ The two bulk edits.
 // resect_camera_image { "reconstruction_label": "seoul_bull",
 //                                "camera_image": "images/IMG_0042.jpg" }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "release_focal": true }
+// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
+//                 "release_distortion": true }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -2133,13 +2135,18 @@ frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
 edge, 21 below bar, ...)"*.
 
 `bundle_adjust` is the node's own solver run over the value on screen
-([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the one decision the
-dialog collects, whether the focal of each camera the posed images use is
-released, as `release_focal`. Everything else is the core function's defaults.
+([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the two decisions the
+dialog collects: whether the focal of each camera the posed images use is
+released, as `release_focal`, and whether the radial spline of each of those
+cameras that carries one (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) is released with
+it, as `release_distortion`. Everything else is the core function's defaults.
 It needs inline keypoints and a posed image, and says which is missing when it
 refuses; `release_focal` is refused, naming the camera, when a camera the posed
-images use has a model whose focal the adjustment cannot solve. The report's
-focal clause names each released camera's focal before and after.
+images use has a model whose focal the adjustment cannot solve, and
+`release_distortion` is refused without `release_focal` and when no camera the
+posed images use carries a spline. The report's focal clause names each
+released camera's focal before and after, and the version's label says
+`focal and lens distortion released` when a spline was released.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -2880,7 +2887,7 @@ pub(crate) enum Command {
     MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    BundleAdjust { reconstruction_label: String, release_focal: bool },
+    BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
     Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },
@@ -3672,7 +3679,8 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 
-| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The one decision the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | One of the two decisions the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs `release_focal`. |
 
 ## Open questions
 

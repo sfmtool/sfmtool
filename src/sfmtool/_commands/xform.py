@@ -376,8 +376,8 @@ def xform(ctx, input_path, output_path, **kwargs):
         sfm xform in.sfmr out.sfmr --camera-model RADIAL --bundle-adjust
 
     \b
-        # Move a fisheye to the spline model, fitted over its trusted angles
-        sfm xform in.sfmr out.sfmr --camera-model SFMTOOL_FISHEYE,coeffs=8
+        # Move a fisheye to the spline model, then refine its focal and spline
+        sfm xform in.sfmr out.sfmr --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
 
     \b
         # Discover points at infinity, capping features per image

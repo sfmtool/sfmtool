@@ -204,3 +204,27 @@ def test_camera_model_option_parses_its_keys():
         parse_camera_model_params("SFMTOOL_FISHEYE,knots=4")
     with pytest.raises(click.UsageError, match="Invalid --camera-model parameter"):
         parse_camera_model_params("RADIAL,coeffs=4")
+
+
+def test_bundle_adjust_after_a_switch_to_a_spline_releases_it(
+    seoul_bull_ground_truth_sfmr, tmp_path, capsys
+):
+    """pycolmap knows neither spline model, so ``--bundle-adjust`` on a spline
+    camera runs sfmtool's own adjustment with the focal and the spline
+    released."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    output_path = tmp_path / "adjusted.sfmr"
+    apply_transforms_to_file(
+        seoul_bull_ground_truth_sfmr,
+        output_path,
+        [
+            SwitchCameraModelTransform("SFMTOOL_PINHOLE", coeff_count=4),
+            BundleAdjustTransform(),
+        ],
+    )
+    out = capsys.readouterr().out
+    assert "sfmtool; a camera has a spline model" in out
+    assert "released: focal, spline" in out
+    result = SfmrReconstruction.load(output_path)
+    assert result.cameras[0].model == "SFMTOOL_PINHOLE"

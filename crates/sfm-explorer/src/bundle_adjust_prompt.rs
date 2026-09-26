@@ -5,14 +5,15 @@
 //! context menu opens, and the gate the menu entry itself reads.
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes one decision
-//! from the user -- whether the cameras' focal lengths are released -- and that
-//! is the whole dialog: a checkbox, `Run` and `Cancel`. Everything else about
-//! the solve is the core function's defaults.
+//! from the user -- whether the cameras' focal lengths are released, and with
+//! them any spline lens distortion -- and that is the whole dialog: two
+//! checkboxes, `Run` and `Cancel`. Everything else about the solve is the core
+//! function's defaults.
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
 
-use sfmtool_core::reconstruction::bundle_adjust::focal_is_releasable;
+use sfmtool_core::reconstruction::bundle_adjust::{distortion_is_releasable, focal_is_releasable};
 use sfmtool_core::EditedReconstruction;
 
 use crate::scene::ReconId;
@@ -60,6 +61,24 @@ pub(crate) fn focal_refusal(edited: &EditedReconstruction) -> Option<String> {
     ))
 }
 
+/// Why the lens distortion cannot be released on this value, or `None` when it
+/// can. The checkbox carries this as its disabled hover text.
+///
+/// The release reaches the cameras the posed images use that carry a spline, so
+/// the checkbox is live when at least one does; the core function refuses the
+/// release when none does. A camera without one keeps its distortion.
+pub(crate) fn distortion_refusal(edited: &EditedReconstruction) -> Option<String> {
+    let table = &edited.base.image_table;
+    let any = edited
+        .posed_lenses()
+        .into_iter()
+        .any(|c| distortion_is_releasable(&table.cameras[c as usize]));
+    (!any).then(|| {
+        "No camera of this reconstruction carries a spline to release. Switch a camera to \n         SFMTOOL_FISHEYE or SFMTOOL_PINHOLE first."
+            .to_string()
+    })
+}
+
 /// What the user asked for, once they pressed `Run`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleAdjustAnswer {
@@ -67,6 +86,9 @@ pub struct BundleAdjustAnswer {
     pub recon: ReconId,
     /// Whether to release each camera's focal length.
     pub release_focal: bool,
+    /// Whether to release each camera's spline, where it carries one. Only
+    /// ever true together with `release_focal`.
+    pub release_distortion: bool,
 }
 
 /// The dialog, and what it remembers while it is up.
@@ -82,22 +104,32 @@ struct Pending {
     label: String,
     release_focal: bool,
     focal_refusal: Option<String>,
+    release_distortion: bool,
+    distortion_refusal: Option<String>,
 }
 
 impl BundleAdjustPrompt {
     /// Ask about `recon`.
     ///
     /// Idempotent while the dialog is already up, so a menu item racing itself
-    /// cannot stack two of them. The checkbox starts **clear**: a focal that
+    /// cannot stack two of them. Both checkboxes start **clear**: a lens that
     /// moves is a different claim about the capture than a pose that does, and
     /// the default should be the smaller one.
-    pub fn ask(&mut self, recon: ReconId, label: String, focal_refusal: Option<String>) {
+    pub fn ask(
+        &mut self,
+        recon: ReconId,
+        label: String,
+        focal_refusal: Option<String>,
+        distortion_refusal: Option<String>,
+    ) {
         if self.pending.is_none() {
             self.pending = Some(Pending {
                 recon,
                 label,
                 release_focal: false,
                 focal_refusal,
+                release_distortion: false,
+                distortion_refusal,
             });
         }
     }
@@ -132,6 +164,25 @@ impl BundleAdjustPrompt {
                              points, instead of holding them where they are.",
                         );
                 });
+                // The spline cannot change the scale at the centre of the image,
+                // which is the focal's job, so it is released only with the focal.
+                if !pending.release_focal {
+                    pending.release_distortion = false;
+                }
+                let distortion_why = pending.distortion_refusal.clone().or_else(|| {
+                    (!pending.release_focal).then(|| {
+                        "The lens distortion is released only together with the focal length."
+                            .to_string()
+                    })
+                });
+                ui.add_enabled_ui(distortion_why.is_none(), |ui| {
+                    ui.checkbox(&mut pending.release_distortion, "Release lens distortion")
+                        .on_disabled_hover_text(distortion_why.unwrap_or_default())
+                        .on_hover_text(
+                            "Solve the spline of each camera that carries one along with its \
+                             focal length.",
+                        );
+                });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Run").clicked() {
@@ -148,6 +199,7 @@ impl BundleAdjustPrompt {
         let answer = run.then_some(BundleAdjustAnswer {
             recon: pending.recon,
             release_focal: pending.release_focal,
+            release_distortion: pending.release_focal && pending.release_distortion,
         });
         if answer.is_some() || cancel || !still_open {
             self.pending = None;

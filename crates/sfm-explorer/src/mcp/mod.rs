@@ -280,6 +280,7 @@ pub(crate) enum Command {
     BundleAdjust {
         reconstruction_label: String,
         release_focal: bool,
+        release_distortion: bool,
     },
     /// Convert one node's observations from `sift_files` to
     /// `embedded_patches`, then render bitmaps from readable photographs
@@ -1214,7 +1215,13 @@ pub(crate) fn apply_with_window(
         Command::BundleAdjust {
             reconstruction_label,
             release_focal,
-        } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
+            release_distortion,
+        } => edit::bundle_adjust(
+            state,
+            &reconstruction_label,
+            release_focal,
+            release_distortion,
+        ),
         Command::ConvertToEmbeddedPatches {
             reconstruction_label,
         } => edit::convert_to_embedded_patches(state, &reconstruction_label),

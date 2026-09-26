@@ -50,6 +50,7 @@ pub fn bundle_adjust(
 
 pub struct BundleAdjustOptions {
     pub opt_f: bool,
+    pub opt_bspline: bool,
     pub schedule: Vec<BaSchedule>,
     pub max_iters: usize,
     pub min_track: usize,
@@ -72,11 +73,14 @@ pub struct CameraAdjustment {
     pub focal_before: f64,
     pub focal_after: f64,
     pub focal_released: bool,
+    pub distortion_released: bool,
 }
 
 pub enum BundleAdjustError {
     NoKeypoints,
     FocalNotReleasable { camera: usize, model: &'static str },
+    DistortionWithoutFocal,
+    DistortionNotReleasable,
     NoPosedImages,
     NoObservations,
     EmptySchedule,
@@ -87,6 +91,9 @@ pub enum BundleAdjustError {
 
 /// Whether the kernel's analytic focal column is exact for this camera.
 pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool;
+
+/// Whether this camera carries a spline the adjustment can release.
+pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool;
 ```
 
 ### Why it is shaped this way
@@ -114,6 +121,20 @@ when any camera in the solve is not releasable, and the error names that camera
 and its model. [`focal_is_releasable`] is public and per camera for the same
 reason, so a caller offering the release as a choice can grey the choice unless
 every camera the posed images use passes, instead of taking it and refusing.
+
+**`opt_bspline` releases a spline, and only with the focal.** The kernel's
+spline rung is exact on the two models that carry a spline, `SFMTOOL_FISHEYE` and
+`SFMTOOL_PINHOLE`, and the spline's gauge pins its value and slope on the axis,
+so it cannot correct the scale at the centre of the image, which is the focal's
+job. A spline released against a held focal could only bend the periphery
+around a scale it cannot fix, so `opt_bspline` without `opt_f` is refused
+(`DistortionWithoutFocal`). Unlike the focal, the release does not have to reach
+every camera: a camera without a spline keeps its distortion, and the report
+says per camera whether the spline was released. It is refused only when no
+camera in the solve carries one (`DistortionNotReleasable`), because then the
+caller asked for something that cannot happen anywhere.
+[`distortion_is_releasable`] is public for the same reason
+[`focal_is_releasable`] is.
 
 **The report is per camera.** Each camera in the solve has its own focal, so
 the report carries one `CameraAdjustment` per camera rather than one focal for
@@ -171,6 +192,9 @@ without solving anything:
 - A focal release when any camera the posed images use has a model the kernel's
   focal column is not exact for (`FocalNotReleasable`, naming the first such
   camera by its table index, and its model).
+- A spline release without the focal release (`DistortionWithoutFocal`), and one
+  when no camera the posed images use carries a spline, at least two
+  coefficients on a positive finite domain end (`DistortionNotReleasable`).
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -226,8 +250,10 @@ on it.
 - **Poses.** Each posed image takes the rotation and translation the solve
   ended with.
 - **The cameras.** Each camera in the solve is replaced by the camera the
-  kernel returned for it: itself at its solved focal under `opt_f`, and itself
-  unchanged otherwise. Nothing else about any lens moves.
+  kernel returned for it: itself at its solved focal under `opt_f`, with its
+  solved spline under `opt_bspline` where it carries one, and itself unchanged
+  otherwise. Nothing else about any lens moves: the principal point, and every
+  other model's distortion, stay where they are.
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
 - **The stored error.** Each point's error column becomes the RMS of that
@@ -311,6 +337,7 @@ would leave the frame carrying the gauge drift of the solve.
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `opt_f` | `false` | Release the focal length of every camera the posed images use, each its own. |
+| `opt_bspline` | `false` | Release the radial spline of every camera the posed images use that carries one, each its own; needs `opt_f`. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -322,8 +349,8 @@ here so a caller sees what it is getting.
 
 ## Python bindings
 
-`EditedReconstruction.bundle_adjust(*, opt_f=False, schedule=None,
-max_iters=60, min_track=2, min_obs=12)` returns
+`EditedReconstruction.bundle_adjust(*, opt_f=False, opt_bspline=False,
+schedule=None, max_iters=60, min_track=2, min_obs=12)` returns
 `(EditedReconstruction, report)`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
@@ -353,6 +380,11 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
 - A value whose images are taken through two cameras adjusted rather than
   refused, each image read through its own lens: the poses converge, and each
   camera's report entry counts its images and holds its focal.
+- A released spline moving toward a planted one with the focal, the residual
+  median falling by an order of magnitude, and the report marking the camera's
+  spline released; a camera without a spline beside it keeping its lens and
+  reported unreleased; the release refused without `opt_f` and on a value with
+  no spline.
 - `opt_f` over two releasable cameras finding each its own planted focal and
   moving nothing else about either lens, and refused, naming the camera and its
   model, when one of them is not releasable.
@@ -376,8 +408,8 @@ untouched -- and the no-keypoints refusal.
 
 ## Non-goals
 
-- Releasing the distortion parameters. The kernel's `opt_k1` and `opt_bspline`
-  rungs are not exposed here; a caller staging those runs the kernel directly.
+- Releasing a polynomial model's distortion. The kernel's `opt_k1` rung is not
+  exposed here; a caller staging it runs the kernel directly.
 - Deciding which points are at infinity. The representation the value carries is
   honoured for the whole solve; re-deciding it is
   [`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md).

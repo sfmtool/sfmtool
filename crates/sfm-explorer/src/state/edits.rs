@@ -1272,7 +1272,7 @@ impl AppState {
     /// Start a bundle adjustment of `id`'s current value on a worker thread.
     ///
     /// A bulk edit: every posed image's pose, every point's position and, when
-    /// the options release them, the cameras' focals move together, so the next
+    /// the options release them, the cameras' focals and splines move together, so the next
     /// version is a whole new base under the row map `RowMap::by_scan` reads off
     /// the call's input and output. The map is not decoration here -- a point
     /// the solve leaves unsupported is deleted, and the map is what carries a
@@ -1382,7 +1382,9 @@ impl AppState {
             let map = PointMap::Chain(steps);
 
             let mut version_label = format!("Bundle adjusted {label}");
-            if report.cameras.iter().any(|c| c.focal_released) {
+            if report.cameras.iter().any(|c| c.distortion_released) {
+                version_label.push_str(", focal and lens distortion released");
+            } else if report.cameras.iter().any(|c| c.focal_released) {
                 version_label.push_str(", focal released");
             }
             let focal = focal_changes(&report.cameras);

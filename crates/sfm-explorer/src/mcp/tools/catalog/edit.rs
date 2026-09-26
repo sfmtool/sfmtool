@@ -328,15 +328,27 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           report names each released camera's focal before and after.",
             kind: Write,
             schema: object(
-                &[(
-                    "release_focal",
-                    flag(
-                        "Solve each camera's focal length as well as the poses and points. \
-                         Refused when a camera the posed images use has a model whose focal the \
-                         adjustment cannot solve. Defaults to false, which holds them where \
-                         they are.",
+                &[
+                    (
+                        "release_focal",
+                        flag(
+                            "Solve each camera's focal length as well as the poses and \
+                             points. Refused when a camera the posed images use has a model \
+                             whose focal the adjustment cannot solve. Defaults to false, which \
+                             holds them where they are.",
+                        ),
                     ),
-                )],
+                    (
+                        "release_distortion",
+                        flag(
+                            "Solve the radial spline of each camera that carries one \
+                             (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE) together with its focal. \
+                             Refused without release_focal, since the spline cannot change \
+                             the scale at the centre of the image, and refused when no camera \
+                             the posed images use carries a spline. Defaults to false.",
+                        ),
+                    ),
+                ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },

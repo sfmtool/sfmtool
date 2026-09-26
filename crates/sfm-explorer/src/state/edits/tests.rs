@@ -1058,6 +1058,42 @@ fn each_released_camera_is_named_in_the_entry() {
 }
 
 #[test]
+fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
+    let (mut state, id) = two_camera_state();
+    // Two SIMPLE_PINHOLE cameras: nothing to release, and the checkbox says so.
+    let why = crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited())
+        .expect("no camera carries a spline");
+    assert!(why.contains("SFMTOOL_FISHEYE"), "{why}");
+    {
+        let recon = state.scene[0].recon_mut();
+        let (f, _) = recon.image_table.cameras[1].focal_lengths();
+        let (cx, cy) = recon.image_table.cameras[1].principal_point();
+        recon.image_table.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
+            focal_length: f,
+            principal_point_x: cx,
+            principal_point_y: cy,
+            bspline_rho_max: 1.0,
+            bspline: vec![0.0; 4],
+        };
+    }
+    assert_eq!(
+        crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited()),
+        None
+    );
+    let options = sfmtool_core::BundleAdjustOptions {
+        opt_f: true,
+        opt_bspline: true,
+        ..sfmtool_core::BundleAdjustOptions::default()
+    };
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_task();
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, focal and lens distortion released"
+    );
+}
+
+#[test]
 fn the_focal_gate_names_the_first_camera_that_cannot_release_its_focal() {
     let (mut state, _) = two_camera_state();
     {

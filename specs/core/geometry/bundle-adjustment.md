@@ -271,6 +271,12 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   focal decision therefore guards the released *map* rather than the raw `f`
   (the equivalent equidistant focal of the composite map), refitting with `f`
   frozen only when that guard trips.
+  The reconstruction-level adjustment
+  ([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md))
+  exposes this pair as `opt_f` and `opt_bspline` and refuses the spline without
+  the focal, which is how the viewer's Bundle Adjust dialog, the MCP
+  `bundle_adjust` tool and `sfm xform --bundle-adjust` on a spline camera reach
+  it.
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
   `CameraIntrinsics::ray_to_pixel_with_jacobian` for the perspective
   family (`SFMTOOL_PINHOLE` included, whose radial spline enters the

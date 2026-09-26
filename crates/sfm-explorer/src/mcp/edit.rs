@@ -365,6 +365,7 @@ pub(super) fn bundle_adjust(
     state: &mut AppState,
     label: &str,
     release_focal: bool,
+    release_distortion: bool,
 ) -> super::Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
@@ -372,6 +373,7 @@ pub(super) fn bundle_adjust(
     };
     let options = sfmtool_core::BundleAdjustOptions {
         opt_f: release_focal,
+        opt_bspline: release_distortion,
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     if let Err(message) = state.start_bundle_adjust(id, &options) {

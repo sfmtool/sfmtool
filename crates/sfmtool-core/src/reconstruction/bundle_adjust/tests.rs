@@ -527,6 +527,7 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_before: FOCAL,
                 focal_after: FOCAL,
                 focal_released: false,
+                distortion_released: false,
             },
             CameraAdjustment {
                 camera: 1,
@@ -534,6 +535,7 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_before: 620.0,
                 focal_after: 620.0,
                 focal_released: false,
+                distortion_released: false,
             },
         ]
     );
@@ -1156,4 +1158,96 @@ fn a_silent_run_reaches_no_sink_it_was_not_handed() {
     bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).expect("well posed");
 
     assert!(collector.events().is_empty(), "{:?}", collector.events());
+}
+
+/// A fisheye lens with a live spline over the fixture's narrow field: at the
+/// cloud's edge, about 14° off the axis, the spline moves a ray by a few
+/// pixels.
+fn spline_fisheye(bspline: Vec<f64>) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+            bspline_theta_max: 0.3,
+            bspline,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
+#[test]
+fn a_released_spline_moves_toward_the_lens() {
+    let planted = vec![-0.002, -0.006, -0.012, -0.02];
+    let truth = truth_through(vec![spline_fisheye(planted.clone())], |_| 0);
+    let mut source = perturb(truth.clone());
+    // The same lens with its spline flattened: the focal and the spline have to
+    // move together for the residuals to come down.
+    source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
+
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        opt_bspline: true,
+        ..BundleAdjustOptions::default()
+    };
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    let camera = &report.cameras[0];
+    assert!(camera.focal_released && camera.distortion_released);
+    assert!(
+        report.median_residual_after < 0.1 * report.median_residual_before,
+        "{report:?}"
+    );
+    let Some((solved, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+        panic!("the camera is still a spline model");
+    };
+    // The coefficient the observations reach most moved most of the way to the
+    // planted one.
+    assert!(solved[1] < -0.003, "{solved:?}");
+}
+
+#[test]
+fn a_spline_release_without_the_focal_is_refused() {
+    let truth = truth_through(vec![spline_fisheye(vec![0.0; 4])], |_| 0);
+    let options = BundleAdjustOptions {
+        opt_bspline: true,
+        ..BundleAdjustOptions::default()
+    };
+    assert_eq!(
+        bundle_adjust(&truth, &options, &Progress::none()).err(),
+        Some(BundleAdjustError::DistortionWithoutFocal)
+    );
+}
+
+#[test]
+fn a_spline_release_with_no_spline_is_refused() {
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        opt_bspline: true,
+        ..BundleAdjustOptions::default()
+    };
+    assert_eq!(
+        bundle_adjust(&truth(), &options, &Progress::none()).err(),
+        Some(BundleAdjustError::DistortionNotReleasable)
+    );
+    // An empty spline evaluates as the identity and has nothing to release.
+    assert!(!distortion_is_releasable(&spline_fisheye(Vec::new())));
+    assert!(distortion_is_releasable(&spline_fisheye(vec![0.0; 2])));
+}
+
+#[test]
+fn a_camera_without_a_spline_keeps_its_lens_beside_one_that_releases() {
+    let truth = truth_through(vec![spline_fisheye(vec![0.0; 4]), pinhole()], |i| {
+        (i % 2) as u32
+    });
+    let source = perturb(truth);
+    let options = BundleAdjustOptions {
+        opt_f: true,
+        opt_bspline: true,
+        ..BundleAdjustOptions::default()
+    };
+    let (_, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    assert!(report.cameras[0].distortion_released);
+    assert!(!report.cameras[1].distortion_released);
 }

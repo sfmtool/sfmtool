@@ -1,7 +1,13 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bundle adjustment transformation."""
+"""Bundle adjustment transformation.
+
+A reconstruction whose cameras are all COLMAP models goes through pycolmap. One
+with a camera of an sfmtool spline model (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`),
+which pycolmap does not know, goes through sfmtool's own reconstruction-level
+bundle adjustment with the focal and the spline released.
+"""
 
 import tempfile
 from pathlib import Path
@@ -9,7 +15,10 @@ from pathlib import Path
 import numpy as np
 import pycolmap
 
-from .._sfmtool.reconstruction import SfmrReconstruction
+from .._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+
+# The camera models only sfmtool's own bundle adjustment can refine.
+SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
 
 
 class BundleAdjustTransform:
@@ -26,6 +35,52 @@ class BundleAdjustTransform:
         self.refine_extra_params = refine_extra_params
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+        if any(c.model in SPLINE_MODELS for c in recon.cameras):
+            return self._apply_sfmtool(recon)
+        return self._apply_pycolmap(recon)
+
+    def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+        """Adjust through sfmtool's own solve, releasing each camera's focal and,
+        where it carries one, its spline.
+
+        The solve needs a pixel per observation (inline keypoints) and a camera
+        model whose focal it can release for every posed image; it raises
+        ``ValueError`` naming what does not hold. The principal point stays
+        where it is, as it does in every sfmtool solve.
+        """
+        print(
+            "  Running bundle adjustment (sfmtool; a camera has a spline model, "
+            "which pycolmap cannot refine)..."
+        )
+        adjusted, report = EditedReconstruction(recon).bundle_adjust(
+            opt_f=self.refine_focal_length,
+            opt_bspline=self.refine_focal_length and self.refine_extra_params,
+        )
+        print(
+            f"    {report['images']} images, {report['points']} points, "
+            f"{report['observations']} observations; median residual "
+            f"{report['median_residual_before']:.3f} -> "
+            f"{report['median_residual_after']:.3f} px"
+        )
+        if report["points_deleted"]:
+            print(f"    Deleted {report['points_deleted']} unsupported point(s)")
+        for camera in report["cameras"]:
+            released = [
+                name
+                for name, flag in (
+                    ("focal", camera["focal_released"]),
+                    ("spline", camera["distortion_released"]),
+                )
+                if flag
+            ]
+            print(
+                f"    Camera {camera['camera']} ({camera['images']} images): focal "
+                f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}; "
+                f"released: {', '.join(released) or 'none'}"
+            )
+        return adjusted.materialize()[0]
+
+    def _apply_pycolmap(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         from ..colmap.io import save_colmap_binary
 
         print("  Running bundle adjustment...")

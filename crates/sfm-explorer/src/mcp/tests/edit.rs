@@ -1366,6 +1366,22 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         Command::BundleAdjust {
             reconstruction_label: "a".to_string(),
             release_focal: true,
+            release_distortion: false,
+        }
+    );
+    assert_eq!(
+        parse(
+            "bundle_adjust",
+            json!({
+                "reconstruction_label": "a",
+                "release_focal": true,
+                "release_distortion": true
+            })
+        ),
+        Command::BundleAdjust {
+            reconstruction_label: "a".to_string(),
+            release_focal: true,
+            release_distortion: true,
         }
     );
     assert_eq!(

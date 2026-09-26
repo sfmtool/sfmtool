@@ -57,28 +57,29 @@ represent. Deciding whether that loss is acceptable for a given lens is the
 reviewer's judgment, and the viewer is where it is made: the proposal below
 exists so the reviewer can see the change, not only read its numbers.
 
-## The companion change
+## What follows the switch
 
 The switch alone changes little, since it moves pixels by under a pixel where
 there are observations. What it gives is a model that can be refined out to the
-image circle, and three steps then do that:
-
-1. **Bundle adjustment with the spline freed.** `opt_bspline` is carried up to:
-   - `BundleAdjustOptions` and `EditedReconstruction.bundle_adjust`;
-   - the Bundle adjust… dialog, as a "Release lens distortion" checkbox under
-     "Release focal length", enabled when a camera of the node has a spline;
-   - MCP `bundle_adjust` as `release_distortion`.
-
-   Without it, the viewer and xform can switch to a spline and never refine it.
-2. **Add Image to Tracks** on the images, now that tracks project past 86° to the
-   right pixel. It adds the observations the old model's inverse kept out.
-3. **Bundle adjustment again**, now with observations where the spline had none.
-
-The report's observation counts past the old trusted bound show whether step 2
+image circle: bundle adjustment with the spline released (the Bundle Adjust
+dialog's "Release lens distortion", MCP `bundle_adjust`'s `release_distortion`,
+or `sfm xform --bundle-adjust` on a spline camera), then Add Image to Tracks on
+the images, now that tracks project past 86° to the right pixel, then bundle
+adjustment again with observations where the spline had none. The proposal's
+observation counts past the old trusted bound show whether the second step
 reached the periphery. As
-[`add-image-to-tracks`](../gui/edits/add-image-to-tracks.md) established, whether
-the richer connectivity makes a better reconstruction is judged by inspection,
-not by the residual metrics alone.
+[`add-image-to-tracks`](../gui/edits/add-image-to-tracks.md) established,
+whether the richer connectivity makes a better reconstruction is judged by
+inspection, not by the residual metrics alone.
+
+The first release on tk107 shows why. `sfm xform --camera-model
+SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust` brought the median residual from
+0.298 px to 0.274 px, and moved the coefficient whose support starts at about
+86° from 0.09 to −0.48 on cam0 and from 0.25 to −0.43 on cam1. At most the 58
+and 39 observations past the old trusted bound reach that coefficient, and some of
+them are off by hundreds of pixels under either model. The two coefficients no
+observation reaches came back unchanged. Whether the periphery that fit
+produces describes the lens or those observations is judged in the viewer.
 
 ## The viewer
 

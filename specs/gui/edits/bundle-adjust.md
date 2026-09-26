@@ -66,7 +66,7 @@ behind it, not one a hand should be able to fire by accident.
 ### The dialog
 
 `Bundle Adjust...` opens a small window rather than running immediately, because
-there is one decision to take:
+there is one decision to take, how much of the lens may move:
 
 - **Release focal length**, a checkbox, clear by default. Ticked, it releases
   the focal of every camera the posed images use, each its own. A focal that
@@ -75,6 +75,16 @@ there is one decision to take:
   cameras has a model the adjustment's focal column is exact for, with a hover
   explanation naming the first camera that does not, by its table index, and its
   model.
+- **Release lens distortion**, a checkbox under it, clear by default. Ticked, it
+  releases the radial spline of every camera the posed images use that carries
+  one (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`), each its own, and leaves the
+  distortion of every other camera where it is. It is **disabled** unless at
+  least one of those cameras carries a spline, with a hover explanation saying
+  none does and naming the two models to switch a camera to first, and it is
+  disabled while **Release focal length** is clear, and cleared with it: the
+  spline cannot change the scale at the centre of the image, which is the
+  focal's job, so it is released only together with the focal
+  ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
   a window to leave lying open.
@@ -93,7 +103,8 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The checkbox is the only option the dialog sets. The schedule, the iteration
+The two checkboxes are the only options the dialog sets, as `opt_f` and
+`opt_bspline`. The schedule, the iteration
 budget and the two floors are the core function's defaults, which are the
 kernel's.
 
@@ -126,7 +137,8 @@ The version's label is
 
 `Bundle adjusted <node label>`
 
-with `, focal released` appended when the checkbox was ticked.
+with `, focal released` appended when the focal was released, or `, focal and
+lens distortion released` when a camera's spline was released too.
 
 ### The Action Log
 
@@ -175,10 +187,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   the selection following the map, the gated refusal for no inline keypoints
   pushing no version and logging a failure, a node whose images are taken
   through two cameras adjusted rather than refused, each released camera named
-  in the entry, and the focal gate naming the first camera that cannot release
-  its focal.
+  in the entry, the focal gate naming the first camera that cannot release its
+  focal, and the distortion gate closed on a node with no spline and open, with
+  the label naming the release, once a camera carries one.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (the focal held), the
-  keys that run and cancel it, an ordinary frame answering nothing, and a second
+  distortion released only with the focal, the keys that run and cancel it, an ordinary frame answering nothing, and a second
   ask not stacking a second dialog.
 - `scene_graph/tests.rs`: the context-menu entry live on an adjustable node,
   directly above `Retriangulate All Points`, reporting the node it was opened
@@ -197,8 +210,8 @@ is that a button exists.
   undone or edited over while it ran would be a second document model rather
   than a longer one, so the busy node refuses every edit until it lands
   ([../background-tasks.md](../background-tasks.md)).
-- Releasing the distortion parameters. The dialog offers the focal and nothing
-  else; a caller staging a distortion release runs the kernel offline.
+- Releasing a polynomial model's distortion. The dialog releases a spline and
+  nothing else; a caller staging a `k1` release runs the kernel offline.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.
 - Choosing the schedule, the iteration budget or the trim floors from the dialog.

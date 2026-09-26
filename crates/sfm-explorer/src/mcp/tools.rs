@@ -353,6 +353,7 @@ pub(crate) fn parse(
         "bundle_adjust" => Command::BundleAdjust {
             reconstruction_label: args.required_string("reconstruction_label")?,
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
+            release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
         },
         "convert_to_embedded_patches" => Command::ConvertToEmbeddedPatches {
             reconstruction_label: args.required_string("reconstruction_label")?,
