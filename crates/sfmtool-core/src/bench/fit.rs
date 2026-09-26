@@ -631,6 +631,11 @@ pub(super) fn fit_track(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError> {
     check_observation_views(track, images)?;
+    // A patch is square. A frame that arrives otherwise -- written before the
+    // upgrade framed square -- is squared before anything registers against
+    // it, so a fit is also the repair.
+    let squared = frame.squared();
+    let frame = &squared;
     // The `in` count is [`fit_preconditions`]'s, checked before the caller
     // spent anything on the views.
     let ins = track.in_observations();

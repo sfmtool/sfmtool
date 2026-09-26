@@ -1587,6 +1587,33 @@ fn fit_over(
     )
 }
 
+#[test]
+fn a_fit_squares_a_rectangular_frame_keeping_its_area() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let half = placement_of(&track).half_extent[0];
+    // A frame written before the upgrade framed square: twice as tall as wide,
+    // with the area of the square it should be.
+    let Stage::Track(payload) = &mut track.stage else {
+        panic!("the fixture is at the track stage")
+    };
+    payload.placement.as_mut().expect("a frame").half_extent = [half / 2.0, half * 2.0];
+
+    let (fitted, _) = fit_over(&scene, &edited, &track).expect("a fit");
+    let frame = placement_of(&fitted);
+    assert_eq!(
+        frame.half_extent[0], frame.half_extent[1],
+        "the fit squared it"
+    );
+    assert!(
+        (frame.half_extent[0] / half - 1.0).abs() < 0.05,
+        "the square keeps the area: {} against {half}",
+        frame.half_extent[0]
+    );
+}
+
 /// Put `track` into `stage` over `scene` with the default kernel parameters.
 fn stage_over(
     scene: &Scene,
@@ -2139,6 +2166,11 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
     assert!(
         (position - WORLD).norm() < 0.1,
         "the hand-placed cluster landed at {position}"
+    );
+    let frame = placement_of(&upgraded);
+    assert_eq!(
+        frame.half_extent[0], frame.half_extent[1],
+        "an upgrade frames a square patch"
     );
     // Only the track stage's measurements are on the observations now.
     assert!(upgraded
@@ -4739,6 +4771,10 @@ fn an_upgrade_of_a_bearing_comes_back_a_bearing_and_commits_as_one() {
     assert!(call.at_infinity, "the upgrade said {call}");
     let frame = placement_of(&up);
     assert_eq!(frame.w, 0.0, "an upgrade of a bearing frames a bearing");
+    assert_eq!(
+        frame.half_extent[0], frame.half_extent[1],
+        "an upgrade frames a square bearing"
+    );
     assert!(
         (frame.center.coords.norm() - 1.0).abs() < 1e-12,
         "a bearing's coordinate is a unit direction, it is {}",

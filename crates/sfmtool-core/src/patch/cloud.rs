@@ -132,6 +132,30 @@ impl OrientedPatch {
         }
     }
 
+    /// The same patch made square: both half-extents set to their geometric
+    /// mean, so the patch keeps its area, its centre, its axes and its `w`.
+    ///
+    /// A patch's two half-lengths come apart when a square in a photograph is
+    /// unprojected axis by axis through a lens that is not locally uniform: a
+    /// fisheye far off its axis packs more angle into a radial pixel than into a
+    /// tangential one. The surface is not stretched along either axis, so that
+    /// difference belongs to the projection, not to the patch.
+    ///
+    /// ```
+    /// use nalgebra::{Point3, Vector3};
+    /// use sfmtool_core::patch::cloud::OrientedPatch;
+    ///
+    /// let patch = OrientedPatch::new(Point3::origin(), Vector3::x(), Vector3::y(), [2.0, 8.0]);
+    /// assert_eq!(patch.squared().half_extent, [4.0, 4.0]);
+    /// ```
+    pub fn squared(&self) -> Self {
+        let side = (self.half_extent[0] * self.half_extent[1]).sqrt();
+        Self {
+            half_extent: [side, side],
+            ..self.clone()
+        }
+    }
+
     /// Outward normal (`u_axis × v_axis`, normalized). The frame is right-handed;
     /// see the type docs for how the raster reverses `v` (not the normal) to
     /// render un-mirrored.

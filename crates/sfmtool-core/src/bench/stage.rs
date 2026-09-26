@@ -357,6 +357,10 @@ fn upgrade(
         measurement.shape.unwrap_or(measurement.seed_shape),
         payload.radius,
     );
+    // The shape is a square in the photograph, but unprojected axis by axis
+    // through the lens it comes back with two half-lengths, which differ
+    // wherever the lens is not locally uniform (a fisheye far off its axis).
+    // A patch is square, so it takes their geometric mean.
     let framed = OrientedPatch::from_affine_shape_at_depth(
         view.camera,
         view.cam_from_world,
@@ -364,7 +368,8 @@ fn upgrade(
         shape,
         depth,
     )
-    .ok_or(StageError::NoReference)?;
+    .ok_or(StageError::NoReference)?
+    .squared();
     let frame = if classification.at_infinity {
         OrientedPatch::from_infinity_direction(
             classification.coordinate,

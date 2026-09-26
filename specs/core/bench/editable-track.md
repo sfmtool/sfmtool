@@ -876,6 +876,17 @@ has bought that with its extra freedom while one that fits clearly better has
 found a depth. That is what the margin's default is set by; the constant carries
 the argument.
 
+**A patch is square.** Its two half-extents are equal: the patch begins as a
+square in a photograph, and turning it only tilts it. A square in a photograph
+unprojected axis by axis does not always stay square, because a lens that is not
+locally uniform -- a fisheye far off its axis packs more angle into a radial pixel
+than into a tangential one -- stretches the two half-axes differently, and that
+stretch belongs to the projection, not to the surface. So wherever a frame is
+built from a shape the half-extents are set to their geometric mean
+(`OrientedPatch::squared`), which keeps the patch's area, and a fit squares the
+frame it is handed before anything registers against it, so a track framed
+otherwise before this rule is repaired by its next fit.
+
 **A fit registers against the frame the track has.** A `w = 0` patch is
 tangent to the direction sphere and a fit of one registers against *that*: no
 promotion to a provisional depth, because a frame promoted to a depth the rays
@@ -940,7 +951,8 @@ refined cluster positions: a capture that only ever stated a direction becomes a
 `w = 0` track rather than a point at a depth its rays never carried. There the
 reference observation's shape is unprojected at unit distance, where a
 fronto-parallel half-axis *is* the tangent of the angle it subtends, which is
-what an infinity patch's half-extent is.
+what an infinity patch's half-extent is. Either way the two unprojected
+half-axes are squared to their geometric mean.
 
 **A commit writes `w` as the track has it**, and nothing there re-decides: that
 was settled by the fit that wrote the frame. A bearing's row carries the unit
