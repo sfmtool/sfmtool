@@ -165,6 +165,40 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// The version label's release clause: what the solve released of each
+/// camera's lens.
+///
+/// Nothing when every camera was held, since `Bundle adjusted <node>` alone
+/// already says only poses and points moved. When every camera released the
+/// same thing, one phrase: `, focal released` over one camera, and `, focal
+/// released on every camera` over several. When the cameras differ, each is
+/// named by its table index, `, camera 0 focal and lens distortion released,
+/// camera 1 held`, because the label is the one line that says which lens
+/// moved.
+fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    let words = |c: &sfmtool_core::CameraAdjustment| match (c.focal_released, c.distortion_released)
+    {
+        (true, true) => "focal and lens distortion released",
+        (true, false) => "focal released",
+        (false, true) => "lens distortion released",
+        (false, false) => "held",
+    };
+    let Some(first) = cameras.first().map(words) else {
+        return String::new();
+    };
+    if cameras.iter().all(|c| words(c) == first) {
+        return match (first, cameras.len()) {
+            ("held", _) => String::new(),
+            (w, 1) => format!(", {w}"),
+            (w, _) => format!(", {w} on every camera"),
+        };
+    }
+    cameras
+        .iter()
+        .map(|c| format!(", camera {} {}", c.camera, words(c)))
+        .collect()
+}
+
 /// Whether a refit moved the spline's domain end, rather than keeping it.
 fn domain_moved(refit: &sfmtool_core::reconstruction::bundle_adjust::SplineRefit) -> bool {
     (refit.domain_after_deg - refit.domain_before_deg).abs() > 1e-9
@@ -1443,12 +1477,8 @@ impl AppState {
             steps.push(PointMap::Rows(scan));
             let map = PointMap::Chain(steps);
 
-            let mut version_label = format!("Bundle adjusted {label}");
-            if report.cameras.iter().any(|c| c.distortion_released) {
-                version_label.push_str(", focal and lens distortion released");
-            } else if report.cameras.iter().any(|c| c.focal_released) {
-                version_label.push_str(", focal released");
-            }
+            let mut version_label =
+                format!("Bundle adjusted {label}{}", release_clause(&report.cameras));
             if let Some(refit) = report.cameras.iter().find_map(|c| c.spline_refit.as_ref()) {
                 version_label.push_str(&spline_refit_label(refit));
             }

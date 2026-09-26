@@ -26,7 +26,7 @@ use sfmtool_core::geometry::{
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::{
-    bundle_adjust as core_bundle_adjust, BundleAdjustOptions,
+    bundle_adjust as core_bundle_adjust, BundleAdjustOptions, CameraRelease,
 };
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointMap, PointRecord, RecordObservation, RowMap,
@@ -751,10 +751,9 @@ impl PyEditedReconstruction {
 
     /// Bundle-adjust this version, and give back the answer as its successor.
     ///
-    /// Every posed image's pose, every point's position and, under ``opt_f``,
-    /// each camera's focal (and under ``opt_distortion`` each camera's k1 or radial
-    /// spline) are refined together against every observation that
-    /// carries a pixel (see
+    /// Every posed image's pose, every point's position and, where a camera's
+    /// release says so, that camera's focal and its k1 or radial spline are
+    /// refined together against every observation that carries a pixel (see
     /// ``specs/core/reconstruction/bundle-adjust.md``). The posed images may be
     /// taken through any number of cameras, each solved through its own lens.
     /// A point at infinity goes
@@ -765,20 +764,29 @@ impl PyEditedReconstruction {
     ///
     /// Args:
     ///     opt_f: Release the focal length of every camera the posed images
-    ///         use (default ``False``). Raises, naming the camera, when any of
+    ///         use (default ``False``). Raises, naming the camera, when one of
     ///         them has a model whose focal the adjustment cannot solve.
-    ///     opt_distortion: Release each camera's lens distortion where its
-    ///         model admits one: ``k1`` on ``SIMPLE_RADIAL_FISHEYE``, the
+    ///     opt_distortion: Release the lens distortion of every camera the
+    ///         posed images use: ``k1`` on ``SIMPLE_RADIAL_FISHEYE``, the
     ///         spline on ``SFMTOOL_FISHEYE`` and ``SFMTOOL_PINHOLE`` (default
-    ///         ``False``). Cameras of other models keep theirs. Needs
-    ///         ``opt_f``: neither ``k1`` nor the spline can change the scale at
-    ///         the centre, which is the focal's job. Raises when ``opt_f`` is
-    ///         off or no camera has such a model.
+    ///         ``False``). Needs ``opt_f``: neither ``k1`` nor the spline can
+    ///         change the scale at the centre, which is the focal's job. Raises,
+    ///         naming the camera, when ``opt_f`` is off or a camera's model has
+    ///         no such distortion; pass ``releases`` to release some cameras
+    ///         and hold the others.
+    ///     releases: One entry per camera in the camera table, in table order,
+    ///         each a dict ``{"focal": bool, "distortion": bool}`` (a missing
+    ///         key is ``False``). Overrides ``opt_f`` and ``opt_distortion``.
+    ///         A camera with neither is held; an entry for a camera no posed
+    ///         image uses is ignored. Every refusal ``opt_f`` and
+    ///         ``opt_distortion`` raise applies to each entry and names the
+    ///         camera; a list whose length is not the camera count raises.
     ///     spline_coeff_count: Refit every spline camera in the solve whose
-    ///         coefficient count differs to this many coefficients before the
-    ///         solve, over its whole spline domain, and start the solve from
-    ///         the refitted cameras (default ``None``, which keeps each count).
-    ///         Needs ``opt_distortion``. Raises when it is off, when no camera
+    ///         distortion is released and whose coefficient count differs to
+    ///         this many coefficients before the solve, over its whole spline
+    ///         domain, and start the solve from the refitted cameras (default
+    ///         ``None``, which keeps each count). Needs a released distortion.
+    ///         Raises when there is none, when no camera
     ///         is a spline model, for a count outside 2 to 32, and, naming the
     ///         camera, when a refit is refused.
     ///     spline_domain_deg: Move every spline camera's domain end to this
@@ -815,12 +823,13 @@ impl PyEditedReconstruction {
     ///     Raises ``ValueError`` with the reason when the adjustment is
     ///     refused.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, spline_coeff_count=None, spline_domain_deg=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, spline_coeff_count=None, spline_domain_deg=None, schedule=None, max_iters=60, min_track=2, min_obs=12))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
         opt_distortion: bool,
+        releases: Option<Vec<Bound<'_, PyDict>>>,
         spline_coeff_count: Option<usize>,
         spline_domain_deg: Option<f64>,
         schedule: Option<Vec<(f64, f64)>>,
@@ -828,9 +837,23 @@ impl PyEditedReconstruction {
         min_track: usize,
         min_obs: usize,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let value = materialised(&self.inner);
+        let releases = match releases {
+            Some(entries) => entries
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| camera_release_from_py(i, entry))
+                .collect::<PyResult<Vec<CameraRelease>>>()?,
+            None => vec![
+                CameraRelease {
+                    focal: opt_f,
+                    distortion: opt_distortion,
+                };
+                value.image_table.cameras.len()
+            ],
+        };
         let options = BundleAdjustOptions {
-            opt_f,
-            opt_distortion,
+            releases,
             spline_coeff_count,
             spline_domain_deg,
             schedule: match schedule {
@@ -847,7 +870,6 @@ impl PyEditedReconstruction {
             min_track,
             min_obs,
         };
-        let value = materialised(&self.inner);
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -978,4 +1000,30 @@ fn row_map_forward(map: &RowMap, index_bound: u32) -> Vec<i64> {
         .into_iter()
         .map(|v| v.map_or(-1, |n| n as i64))
         .collect()
+}
+
+/// One entry of ``bundle_adjust``'s ``releases``: a dict of ``focal`` and
+/// ``distortion``, each a bool and ``False`` where missing. Any other key
+/// raises, so a misspelt release is not silently a held camera.
+fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<CameraRelease> {
+    let mut release = CameraRelease::HELD;
+    for (key, value) in entry.iter() {
+        let key: String = key.extract().map_err(|_| {
+            PyValueError::new_err(format!("releases[{index}]: keys must be strings"))
+        })?;
+        let flag: bool = value.extract().map_err(|_| {
+            PyValueError::new_err(format!("releases[{index}]['{key}'] must be a bool"))
+        })?;
+        match key.as_str() {
+            "focal" => release.focal = flag,
+            "distortion" => release.distortion = flag,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "releases[{index}] has the key '{key}'; an entry takes 'focal' and \
+                     'distortion'"
+                )))
+            }
+        }
+    }
+    Ok(release)
 }

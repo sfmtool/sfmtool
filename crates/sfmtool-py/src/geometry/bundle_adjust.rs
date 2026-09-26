@@ -493,6 +493,7 @@ pub fn bundle_adjust<'py>(
             &BaCameras {
                 cameras: &cams,
                 image_camera: image_camera.as_slice().into(),
+                releases: None,
             },
             &mut quats,
             &mut trans,

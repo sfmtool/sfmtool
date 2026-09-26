@@ -5,18 +5,18 @@
 //! context menu opens, and the gate the menu entry itself reads.
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
-//! about the lens from the user -- whether the cameras' focal lengths are
-//! released, whether with them any lens distortion the adjustment can free,
-//! and whether the spline cameras are refitted to another coefficient count
-//! first -- and that is the whole dialog: two checkboxes, the coefficients
-//! row, `Run` and `Cancel`. Everything else about the solve is the core
-//! function's defaults.
+//! about the lens from the user, camera by camera -- whether each camera's
+//! focal length is released, and whether with it the lens distortion the
+//! adjustment can free -- and whether the spline cameras are refitted to
+//! another coefficient count first. That is the whole dialog: one row of two
+//! checkboxes per camera, the coefficients and domain rows, `Run` and
+//! `Cancel`. Everything else about the solve is the core function's defaults.
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
 
 use sfmtool_core::reconstruction::bundle_adjust::{
-    distortion_is_releasable, focal_is_releasable, spline_domain_deg,
+    distortion_is_releasable, focal_is_releasable, spline_domain_deg, CameraRelease,
 };
 use sfmtool_core::reconstruction::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use sfmtool_core::EditedReconstruction;
@@ -45,47 +45,74 @@ pub(crate) fn refusal(edited: &EditedReconstruction) -> Option<String> {
         .then(|| "No image of this reconstruction carries a pose.".to_string())
 }
 
-/// Why the focal cannot be released on this value, or `None` when it can. The
-/// checkbox carries this as its disabled hover text.
-///
-/// The release reaches every camera the posed images use, and the core function
-/// refuses it when any of them has a model its focal column is not exact for, so
-/// the checkbox is greyed unless every one of them passes and the reason names
-/// the first that does not.
-pub(crate) fn focal_refusal(edited: &EditedReconstruction) -> Option<String> {
-    let table = &edited.base.image_table;
-    let (index, camera) = edited
-        .posed_lenses()
-        .into_iter()
-        .map(|c| (c, &table.cameras[c as usize]))
-        .find(|(_, camera)| !focal_is_releasable(camera))?;
-    Some(format!(
-        "The adjustment's focal column is not exact for camera {index}, a {} camera, so no \
-         focal length can be released.",
-        camera.model_name()
-    ))
+/// One camera the posed images use, as its row in the dialog shows it: which
+/// camera, how many posed images it takes, and why either of its checkboxes is
+/// greyed.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CameraGate {
+    /// The camera's index in the camera table.
+    pub(crate) camera: usize,
+    /// Its model's name.
+    pub(crate) model: &'static str,
+    /// The posed images taken through it.
+    pub(crate) images: usize,
+    /// Why its focal cannot be released, or `None` when it can. The focal
+    /// checkbox carries this as its disabled hover text.
+    pub(crate) focal_refusal: Option<String>,
+    /// Why its lens distortion cannot be released, or `None` when its model
+    /// has some the adjustment can free. The distortion checkbox carries this
+    /// as its disabled hover text.
+    pub(crate) distortion_refusal: Option<String>,
+    /// Whether it is a spline model, which the coefficient and domain rows
+    /// refit.
+    pub(crate) spline: bool,
 }
 
-/// Why the lens distortion cannot be released on this value, or `None` when it
-/// can. The checkbox carries this as its disabled hover text.
+/// One [`CameraGate`] per camera the posed images use, in table order.
 ///
-/// The release reaches the cameras the posed images use whose model has
-/// distortion the adjustment can free (`k1` on `SIMPLE_RADIAL_FISHEYE`, the
-/// spline on the spline models), so the checkbox is live when at least one
-/// does; the core function refuses the release when none does. A camera of any
-/// other model keeps its distortion.
-pub(crate) fn distortion_refusal(edited: &EditedReconstruction) -> Option<String> {
+/// Each release is decided on that camera's own model, as the core function
+/// decides it, so a checkbox is greyed exactly when the core function would
+/// refuse the release it asks for, and the hover text names the camera and its
+/// model.
+pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
     let table = &edited.base.image_table;
-    let any = edited
+    let posed: Vec<u32> = table
+        .images
+        .iter()
+        .filter(|image| {
+            image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
+                && image.translation_xyz.iter().all(|c| c.is_finite())
+        })
+        .map(|image| image.camera_index)
+        .collect();
+    edited
         .posed_lenses()
         .into_iter()
-        .any(|c| distortion_is_releasable(&table.cameras[c as usize]));
-    (!any).then(|| {
-        "No camera of this reconstruction has lens distortion the adjustment can release. \
-         It releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on SFMTOOL_FISHEYE and \
-         SFMTOOL_PINHOLE; switch a camera to one of those first."
-            .to_string()
-    })
+        .map(|c| {
+            let camera = &table.cameras[c as usize];
+            let model = camera.model_name();
+            CameraGate {
+                camera: c as usize,
+                model,
+                images: posed.iter().filter(|&&k| k == c).count(),
+                focal_refusal: (!focal_is_releasable(camera)).then(|| {
+                    format!(
+                        "The adjustment's focal column is not exact for camera {c}, a {model} \
+                         camera, so its focal length cannot be released."
+                    )
+                }),
+                distortion_refusal: (!distortion_is_releasable(camera)).then(|| {
+                    format!(
+                        "Camera {c}, a {model} camera, has no lens distortion the adjustment can \
+                         release. It releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
+                         SFMTOOL_FISHEYE and SFMTOOL_PINHOLE; switch the camera to one of those \
+                         first."
+                    )
+                }),
+                spline: camera.model.radial_spline().is_some(),
+            }
+        })
+        .collect()
 }
 
 /// The distinct spline coefficient counts of the cameras the posed images use
@@ -190,15 +217,16 @@ pub(crate) fn spline_keypoint_extent(
         })
 }
 
-/// What the dialog reads off the node when it opens: why each checkbox is
-/// greyed, the spline coefficient counts and domains the node holds, and how
-/// far out its photographs reach.
+/// What the dialog reads off the node when it opens: its cameras and why each
+/// checkbox is greyed, the spline coefficient counts and domains the node
+/// holds, and how far out its photographs reach.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BundleAdjustGates {
-    /// [`focal_refusal`].
-    pub(crate) focal_refusal: Option<String>,
-    /// [`distortion_refusal`].
-    pub(crate) distortion_refusal: Option<String>,
+    /// The length of the node's camera table, which the answer's release list
+    /// is sized to.
+    pub(crate) camera_count: usize,
+    /// [`camera_gates`].
+    pub(crate) cameras: Vec<CameraGate>,
     /// [`spline_coeff_counts`].
     pub(crate) spline_coeff_counts: Vec<usize>,
     /// [`spline_domains_deg`].
@@ -213,8 +241,8 @@ impl BundleAdjustGates {
     /// are a small read (see `specs/gui/edits/bundle-adjust.md`).
     pub(crate) fn of(edited: &EditedReconstruction) -> Self {
         Self {
-            focal_refusal: focal_refusal(edited),
-            distortion_refusal: distortion_refusal(edited),
+            camera_count: edited.base.image_table.cameras.len(),
+            cameras: camera_gates(edited),
             spline_coeff_counts: spline_coeff_counts(edited),
             spline_domains_deg: spline_domains_deg(edited),
             keypoint_extent: spline_keypoint_extent(edited, true),
@@ -223,20 +251,19 @@ impl BundleAdjustGates {
 }
 
 /// What the user asked for, once they pressed `Run`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BundleAdjustAnswer {
     /// The node to adjust.
     pub recon: ReconId,
-    /// Whether to release each camera's focal length.
-    pub release_focal: bool,
-    /// Whether to release each camera's lens distortion, where its model has
-    /// one the adjustment can free. Only ever true together with
-    /// `release_focal`.
-    pub release_distortion: bool,
+    /// What each camera releases, one entry per camera in the node's camera
+    /// table: held for a camera the dialog showed no row for, and never a
+    /// release the camera's row had greyed. A distortion release only ever
+    /// comes with the focal of the same camera.
+    pub releases: Vec<CameraRelease>,
     /// The coefficient count every spline camera is refitted to before the
-    /// solve, or `None` to keep each count. Only ever set together with
-    /// `release_distortion`, and never to the one count every spline camera
-    /// already has.
+    /// solve, or `None` to keep each count. Only ever set while some spline
+    /// camera releases its distortion, and never to the one count every spline
+    /// camera already has.
     pub spline_coeff_count: Option<usize>,
     /// The incidence angle, in degrees, every spline camera's domain is moved
     /// to before the solve, or `None` to keep each domain. Set under the same
@@ -250,14 +277,21 @@ pub struct BundleAdjustPrompt {
     pending: Option<Pending>,
 }
 
+/// One camera row's two checkboxes, as the user left them.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct RowState {
+    focal: bool,
+    distortion: bool,
+}
+
 /// The question being asked: which node, what the controls say, and why each
 /// is disabled when it is.
 struct Pending {
     recon: ReconId,
     label: String,
     gates: BundleAdjustGates,
-    release_focal: bool,
-    release_distortion: bool,
+    /// One per [`BundleAdjustGates::cameras`], in its order.
+    rows: Vec<RowState>,
     /// Keep each spline camera's coefficient count, which is the default.
     keep_coeffs: bool,
     /// The count the control shows, and the one asked for once `keep_coeffs`
@@ -271,10 +305,44 @@ struct Pending {
 }
 
 impl Pending {
+    /// What camera row `j` releases: what its checkboxes say, less anything its
+    /// model cannot release, and the distortion only with the focal.
+    fn release(&self, j: usize) -> CameraRelease {
+        let gate = &self.gates.cameras[j];
+        let row = self.rows[j];
+        let focal = row.focal && gate.focal_refusal.is_none();
+        CameraRelease {
+            focal,
+            distortion: focal && row.distortion && gate.distortion_refusal.is_none(),
+        }
+    }
+
+    /// The release list the answer carries: one entry per camera in the table,
+    /// held where no row stands for it.
+    fn releases(&self) -> Vec<CameraRelease> {
+        let mut releases = vec![CameraRelease::HELD; self.gates.camera_count];
+        for (j, gate) in self.gates.cameras.iter().enumerate() {
+            if let Some(slot) = releases.get_mut(gate.camera) {
+                *slot = self.release(j);
+            }
+        }
+        releases
+    }
+
+    /// Whether some spline camera releases its distortion, which is what the
+    /// coefficient and domain rows need: a refit is only an approximation of
+    /// the old curve until the solve fits it to the observations.
+    fn spline_distortion_released(&self) -> bool {
+        self.gates
+            .cameras
+            .iter()
+            .enumerate()
+            .any(|(j, gate)| gate.spline && self.release(j).distortion)
+    }
+
     /// The domain the answer carries, under the rule the count follows.
     fn spline_domain_deg(&self) -> Option<f64> {
-        let asked = self.release_focal
-            && self.release_distortion
+        let asked = self.spline_distortion_released()
             && !self.keep_domain
             && !self.gates.spline_domains_deg.is_empty();
         let unchanged = matches!(
@@ -298,8 +366,7 @@ impl Pending {
     /// the count is not kept, and it differs from a single count every spline
     /// camera already has.
     fn spline_coeff_count(&self) -> Option<usize> {
-        let asked = self.release_focal
-            && self.release_distortion
+        let asked = self.spline_distortion_released()
             && !self.keep_coeffs
             && !self.gates.spline_coeff_counts.is_empty();
         (asked && self.gates.spline_coeff_counts != [self.coeff_count]).then_some(self.coeff_count)
@@ -310,7 +377,7 @@ impl BundleAdjustPrompt {
     /// Ask about `recon`.
     ///
     /// Idempotent while the dialog is already up, so a menu item racing itself
-    /// cannot stack two of them. Both checkboxes start **clear**: a lens that
+    /// cannot stack two of them. Every checkbox starts **clear**: a lens that
     /// moves is a different claim about the capture than a pose that does, and
     /// the default should be the smaller one. The coefficient count and the
     /// spline domain start at **keep**, showing the node's largest count and
@@ -323,12 +390,12 @@ impl BundleAdjustPrompt {
                 .copied()
                 .unwrap_or(sfmtool_core::camera::refit_intrinsics::DEFAULT_COEFF_COUNT);
             let domain_deg = gates.spline_domains_deg.last().copied().unwrap_or(90.0);
+            let rows = vec![RowState::default(); gates.cameras.len()];
             self.pending = Some(Pending {
                 recon,
                 label,
                 gates,
-                release_focal: false,
-                release_distortion: false,
+                rows,
                 keep_coeffs: true,
                 coeff_count,
                 keep_domain: true,
@@ -359,37 +426,7 @@ impl BundleAdjustPrompt {
                     pending.label
                 ));
                 ui.add_space(8.0);
-                ui.add_enabled_ui(pending.gates.focal_refusal.is_none(), |ui| {
-                    ui.checkbox(&mut pending.release_focal, "Release focal length")
-                        .on_disabled_hover_text(
-                            pending.gates.focal_refusal.clone().unwrap_or_default(),
-                        )
-                        .on_hover_text(
-                            "Solve each camera's focal length along with the poses and the \
-                             points, instead of holding them where they are.",
-                        );
-                });
-                // Neither k1 nor the spline can change the scale at the centre of
-                // the image, which is the focal's job, so the distortion is
-                // released only with the focal.
-                if !pending.release_focal {
-                    pending.release_distortion = false;
-                }
-                let distortion_why = pending.gates.distortion_refusal.clone().or_else(|| {
-                    (!pending.release_focal).then(|| {
-                        "The lens distortion is released only together with the focal length."
-                            .to_string()
-                    })
-                });
-                ui.add_enabled_ui(distortion_why.is_none(), |ui| {
-                    ui.checkbox(&mut pending.release_distortion, "Release lens distortion")
-                        .on_disabled_hover_text(distortion_why.unwrap_or_default())
-                        .on_hover_text(
-                            "Solve each camera's lens distortion along with its focal length: \
-                             k1 on SIMPLE_RADIAL_FISHEYE, the spline on SFMTOOL_FISHEYE and \
-                             SFMTOOL_PINHOLE. Cameras of other models keep theirs.",
-                        );
-                });
+                camera_rows(ui, pending);
                 spline_coeffs_row(ui, pending);
                 spline_domain_row(ui, pending);
                 ui.add_space(8.0);
@@ -407,8 +444,7 @@ impl BundleAdjustPrompt {
 
         let answer = run.then(|| BundleAdjustAnswer {
             recon: pending.recon,
-            release_focal: pending.release_focal,
-            release_distortion: pending.release_focal && pending.release_distortion,
+            releases: pending.releases(),
             spline_coeff_count: pending.spline_coeff_count(),
             spline_domain_deg: pending.spline_domain_deg(),
         });
@@ -419,11 +455,63 @@ impl BundleAdjustPrompt {
     }
 }
 
-/// The "Spline coefficients" row under the distortion checkbox: a `Keep`
+/// The camera rows: per camera the posed images use, its index, model and
+/// image count, and its "Release focal length" and "Release lens distortion"
+/// checkboxes.
+///
+/// A checkbox the camera's model cannot take is greyed, with the reason as its
+/// hover text. The distortion checkbox is also greyed while the same row's
+/// focal is clear, and cleared when the focal is: neither k1 nor the spline
+/// can change the scale at the centre of the image, which is the focal's job.
+fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
+    egui::Grid::new("bundle_adjust_cameras")
+        .num_columns(3)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            for (gate, row) in pending.gates.cameras.iter().zip(pending.rows.iter_mut()) {
+                let plural = if gate.images == 1 { "" } else { "s" };
+                ui.label(format!(
+                    "Camera {}  {}  {} image{plural}",
+                    gate.camera, gate.model, gate.images
+                ));
+                ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
+                    ui.checkbox(&mut row.focal, "Release focal length")
+                        .on_disabled_hover_text(gate.focal_refusal.clone().unwrap_or_default())
+                        .on_hover_text(
+                            "Solve this camera's focal length along with the poses and the \
+                             points, instead of holding it where it is.",
+                        );
+                });
+                if !row.focal {
+                    row.distortion = false;
+                }
+                let distortion_why = gate.distortion_refusal.clone().or_else(|| {
+                    (!row.focal || gate.focal_refusal.is_some()).then(|| {
+                        format!(
+                            "The lens distortion of camera {} is released only together with its \
+                             focal length.",
+                            gate.camera
+                        )
+                    })
+                });
+                ui.add_enabled_ui(distortion_why.is_none(), |ui| {
+                    ui.checkbox(&mut row.distortion, "Release lens distortion")
+                        .on_disabled_hover_text(distortion_why.unwrap_or_default())
+                        .on_hover_text(
+                            "Solve this camera's lens distortion along with its focal length: \
+                             k1 on SIMPLE_RADIAL_FISHEYE, the spline on SFMTOOL_FISHEYE and \
+                             SFMTOOL_PINHOLE.",
+                        );
+                });
+                ui.end_row();
+            }
+        });
+}
+
+/// The "Spline coefficients" row under the camera rows: a `Keep`
 /// checkbox, the count, and the count(s) the node's spline cameras have now.
 ///
-/// Live only while the distortion is released and a spline camera is in the
-/// solve: a new count is a refit the solve then corrects, and without the
+/// Live only while a spline camera in the solve releases its distortion: a new count is a refit the solve then corrects, and without the
 /// release it would only approximate the old curve. Editing the count clears
 /// `Keep`.
 fn spline_coeffs_row(ui: &mut egui::Ui, pending: &mut Pending) {
@@ -444,8 +532,9 @@ fn spline_coeffs_row(ui: &mut egui::Ui, pending: &mut Pending) {
             let count = ui
                 .add(egui::DragValue::new(&mut pending.coeff_count).range(range))
                 .on_hover_text(
-                    "Refit each spline camera to this many coefficients over its whole domain \
-                     before the solve; the solve then fits them to the observations.",
+                    "Refit each spline camera that releases its distortion to this many \
+                     coefficients over its whole domain before the solve; the solve then fits \
+                     them to the observations.",
                 );
             if count.changed() {
                 pending.keep_coeffs = false;
@@ -468,9 +557,9 @@ fn spline_row_refusal(pending: &Pending, what: &str) -> Option<String> {
              SFMTOOL_PINHOLE)."
                 .to_string(),
         )
-    } else if !pending.release_distortion {
+    } else if !pending.spline_distortion_released() {
         Some(format!(
-            "The {what} changes only while the lens distortion is released."
+            "The {what} changes only while a spline camera's lens distortion is released."
         ))
     } else {
         None

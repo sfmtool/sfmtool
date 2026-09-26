@@ -2109,6 +2109,10 @@ The two bulk edits.
 // bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
 //                 "release_distortion": true }
 // bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
+//                 "release_distortion": true,
+//                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
+//                               "release_distortion": false }] }
+// bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
 //                 "release_distortion": true, "spline_coeff_count": 12 }
 // bundle_adjust { "reconstruction_label": "kerry_park", "release_focal": true,
 //                 "release_distortion": true, "spline_domain_deg": 108.8 }
@@ -2156,30 +2160,43 @@ frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
 edge, 21 below bar, ...)"*.
 
 `bundle_adjust` is the node's own solver run over the value on screen
-([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the two decisions the
-dialog collects: whether the focal of each camera the posed images use is
-released, as `release_focal`, and whether the lens distortion of each of those
-cameras whose model the adjustment can free it on (`k1` on
-`SIMPLE_RADIAL_FISHEYE`, the spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`)
-is released with it, as `release_distortion`, and the coefficient count every
-spline camera is refitted to before the solve, as `spline_coeff_count` (2 to
-32; omitted keeps each count), and the incidence angle its domain is moved to in
-the same refit, as `spline_domain_deg` (omitted keeps each domain).
-`get_camera_intrinsics` reports the outermost keypoint an agent sets the domain
-from. Everything else is the core function's defaults.
+([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the decisions the
+dialog collects, camera by camera: whether each camera's focal is released, and
+whether its lens distortion (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on
+`SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it. `release_focal`
+and `release_distortion` are the defaults every camera of the node's table
+takes, and `cameras` overrides them: a list of `{ camera_intrinsics_index,
+release_focal?, release_distortion? }`, one entry per camera that differs, each
+naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
+report, and a field it leaves out taking the call's default. A camera with
+neither is held. An entry naming a camera the node does not have, or one camera
+twice, is refused before anything starts, and a camera no posed image uses is
+not in the solve, so what it is given is ignored. Then the coefficient count
+every spline camera that releases its distortion is refitted to before the
+solve, as `spline_coeff_count` (2 to 32; omitted keeps each count), and the
+incidence angle its domain is moved to in the same refit, as
+`spline_domain_deg` (omitted keeps each domain). `get_camera_intrinsics`
+reports the outermost keypoint an agent sets the domain from. Everything else
+is the core function's defaults.
+
 It needs inline keypoints and a posed image, and says which is missing when it
-refuses; `release_focal` is refused, naming the camera, when a camera the posed
-images use has a model whose focal the adjustment cannot solve, and
-`release_distortion` is refused without `release_focal` and when no camera the
-posed images use has one of those three models. The report's focal clause names
-each released camera's focal before and after and each spline refit's counts,
+refuses. Each camera's release is checked against its own model, and a release
+it cannot take is the core function's refusal naming the camera: a focal on a
+model whose focal the adjustment cannot solve, a distortion on a model with
+none of the three kinds, and a distortion without the same camera's focal. So a
+rig that mixes an `OPENCV_FISHEYE` camera with spline cameras is adjusted with
+the defaults on and a `cameras` entry holding the `OPENCV_FISHEYE`. The
+version's label says what each camera released -- `, focal and lens distortion
+released` when every camera released the same, ` on every camera` added over
+several, and `, camera 0 focal and lens distortion released, camera 1 held`
+when they differ -- and `spline refitted to N coefficients` (and `on a D°
+domain`) when a count or domain changed. The report's focal clause names each
+released camera's focal before and after and each spline refit's counts,
 largest distance from the old curve and, where its monotonicity constraint
-bound, the angles where it did, and the version's label says `focal
-and lens distortion released` when a distortion was released and `spline
-refitted to N coefficients` (and `on a D° domain`) when a count or domain
-changed. `spline_coeff_count` and `spline_domain_deg` are refused without
-`release_distortion` and when no camera is a spline model, and a domain the
-model cannot end at is refused naming the camera.
+bound, the angles where it did. `spline_coeff_count` and `spline_domain_deg`
+are refused when no spline camera releases its distortion and when no camera is
+a spline model, and a domain the model cannot end at is refused naming the
+camera.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -2921,6 +2938,7 @@ pub(crate) enum Command {
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
     BundleAdjust { reconstruction_label: String, release_focal: bool, release_distortion: bool,
+                   cameras: Vec<CameraReleaseOverride>,
                    spline_coeff_count: Option<usize>, spline_domain_deg: Option<f64> },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
@@ -3713,8 +3731,9 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 
-| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | One of the two decisions the Bundle Adjust dialog collects. |
-| `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs `release_focal`. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
+| `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
 
 ## Open questions
 

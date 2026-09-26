@@ -361,16 +361,48 @@ pub(super) fn add_camera_image_to_tracks(
 /// the GUI thread; a long one answers with a handle instead of timing out on
 /// the transport, which is what the call used to do for any reconstruction
 /// worth adjusting.
+///
+/// `defaults` is the release every camera of the node's table takes, and each
+/// of `overrides` replaces it for one camera, field by field. An override
+/// naming a camera the table does not have, or naming one camera twice, is
+/// refused before anything starts. `options` carries the rest of the request;
+/// its release list is the one built here.
 pub(super) fn bundle_adjust(
     state: &mut AppState,
     label: &str,
-    options: &sfmtool_core::BundleAdjustOptions,
+    defaults: sfmtool_core::reconstruction::bundle_adjust::CameraRelease,
+    overrides: &[super::CameraReleaseOverride],
+    mut options: sfmtool_core::BundleAdjustOptions,
 ) -> super::Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_bundle_adjust(id, options) {
+    let count = state
+        .node(id)
+        .map_or(0, |node| node.edited().base.image_table.cameras.len());
+    let mut releases = vec![defaults; count];
+    let mut named = vec![false; count];
+    for entry in overrides {
+        let c = entry.camera_intrinsics_index;
+        let Some(slot) = releases.get_mut(c) else {
+            return super::Outcome::Done(Err(ToolError::new(format!(
+                "bundle_adjust names camera_intrinsics_index {c} in cameras, and {label} has \
+                 {count} camera(s)."
+            ))));
+        };
+        if std::mem::replace(&mut named[c], true) {
+            return super::Outcome::Done(Err(ToolError::new(format!(
+                "bundle_adjust names camera_intrinsics_index {c} twice in cameras."
+            ))));
+        }
+        *slot = sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+            focal: entry.release_focal.unwrap_or(defaults.focal),
+            distortion: entry.release_distortion.unwrap_or(defaults.distortion),
+        };
+    }
+    options.releases = releases;
+    if let Err(message) = state.start_bundle_adjust(id, &options) {
         return super::Outcome::Done(Err(ToolError::new(message)));
     }
     let task = state.background_task().expect("the operation just started");

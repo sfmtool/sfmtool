@@ -335,10 +335,7 @@ fn a_released_focal_is_found_and_reported() {
     // the parameter that has to move for the residuals to come down.
     source.image_table.cameras[0] = source.image_table.cameras[0].with_focal(FOCAL * 1.06);
 
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    };
+    let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
     let camera = &report.cameras[0];
@@ -560,10 +557,7 @@ fn a_released_focal_is_found_for_each_camera() {
     let mut source = perturb(truth.clone());
     source.image_table.cameras[0] = source.image_table.cameras[0].with_focal(FOCAL * 1.05);
     source.image_table.cameras[1] = source.image_table.cameras[1].with_focal(620.0 * 0.95);
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    };
+    let options = BundleAdjustOptions::uniform(2, CameraRelease::FOCAL);
 
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
@@ -600,10 +594,7 @@ fn a_focal_release_names_the_camera_that_cannot_take_one() {
         width: IMG_W,
         height: IMG_H,
     };
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    };
+    let options = BundleAdjustOptions::uniform(2, CameraRelease::FOCAL);
 
     let err = bundle_adjust(&source, &options, &Progress::none()).err();
     assert_eq!(
@@ -638,10 +629,7 @@ fn a_camera_no_posed_image_uses_comes_back_untouched() {
     source.image_table.cameras.push(second_pinhole());
     source.image_table.images[5].camera_index = 2;
     source.image_table.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    };
+    let options = BundleAdjustOptions::uniform(3, CameraRelease::FOCAL);
 
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
@@ -665,10 +653,7 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
         width: IMG_W,
         height: IMG_H,
     };
-    let options = BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    };
+    let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
 
     assert_eq!(
         bundle_adjust(&source, &options, &Progress::none()).err(),
@@ -936,10 +921,7 @@ fn same_bits(a: &[u64], b: &[u64], what: &str) {
 /// The defaults with the focal released, so the shared camera is part of the
 /// answer the parity test compares.
 fn released() -> BundleAdjustOptions {
-    BundleAdjustOptions {
-        opt_f: true,
-        ..BundleAdjustOptions::default()
-    }
+    BundleAdjustOptions::uniform(1, CameraRelease::FOCAL)
 }
 
 #[test]
@@ -1214,11 +1196,15 @@ fn k1_of(camera: &CameraIntrinsics) -> f64 {
     }
 }
 
-/// The focal and the distortion released together.
+/// The focal and the distortion released together, on the one camera.
 fn distortion_released() -> BundleAdjustOptions {
+    BundleAdjustOptions::uniform(1, CameraRelease::FOCAL_AND_DISTORTION)
+}
+
+/// The options releasing `releases`, one per camera.
+fn releasing(releases: &[CameraRelease]) -> BundleAdjustOptions {
     BundleAdjustOptions {
-        opt_f: true,
-        opt_distortion: true,
+        releases: releases.to_vec(),
         ..BundleAdjustOptions::default()
     }
 }
@@ -1270,8 +1256,9 @@ fn a_released_k1_moves_toward_the_lens() {
 
 #[test]
 fn a_mixed_solve_releases_each_camera_its_own_distortion() {
-    // A spline camera, a k1 camera and a pinhole in one solve: the kernel
-    // frees the spline on the first and k1 on the second, and holds the third.
+    // A spline camera, a k1 camera and a pinhole in one solve: the spline is
+    // freed on the first and k1 on the second, and the third, whose model has
+    // no distortion to release, releases its focal alone.
     let planted = vec![-0.002, -0.006, -0.012, -0.02];
     let truth = truth_through(
         vec![
@@ -1284,9 +1271,13 @@ fn a_mixed_solve_releases_each_camera_its_own_distortion() {
     let mut source = perturb(truth);
     source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
     source.image_table.cameras[1] = radial_fisheye(0.0);
+    let options = releasing(&[
+        CameraRelease::FOCAL_AND_DISTORTION,
+        CameraRelease::FOCAL_AND_DISTORTION,
+        CameraRelease::FOCAL,
+    ]);
 
-    let (out, report) =
-        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
     let released: Vec<bool> = report
         .cameras
@@ -1312,14 +1303,21 @@ fn a_mixed_solve_releases_each_camera_its_own_distortion() {
 #[test]
 fn a_distortion_release_without_the_focal_is_refused() {
     for camera in [spline_fisheye(vec![0.0; 4]), radial_fisheye(0.0)] {
-        let truth = truth_through(vec![camera], |_| 0);
-        let options = BundleAdjustOptions {
-            opt_distortion: true,
-            ..BundleAdjustOptions::default()
-        };
+        let truth = truth_through(vec![pinhole(), camera], |i| (i % 2) as u32);
+        let options = releasing(&[
+            CameraRelease::FOCAL,
+            CameraRelease {
+                focal: false,
+                distortion: true,
+            },
+        ]);
         let error = bundle_adjust(&truth, &options, &Progress::none()).err();
-        assert_eq!(error, Some(BundleAdjustError::DistortionWithoutFocal));
+        assert_eq!(
+            error,
+            Some(BundleAdjustError::DistortionWithoutFocal { camera: 1 })
+        );
         let sentence = error.unwrap().to_string();
+        assert!(sentence.contains("camera 1"), "{sentence}");
         assert!(!sentence.contains('\n'), "{sentence:?}");
     }
 }
@@ -1327,8 +1325,18 @@ fn a_distortion_release_without_the_focal_is_refused() {
 #[test]
 fn a_distortion_release_with_nothing_to_release_is_refused() {
     let error = bundle_adjust(&truth(), &distortion_released(), &Progress::none()).err();
-    assert_eq!(error, Some(BundleAdjustError::DistortionNotReleasable));
+    assert_eq!(
+        error,
+        Some(BundleAdjustError::DistortionNotReleasable {
+            camera: 0,
+            model: "SIMPLE_PINHOLE",
+        })
+    );
     let sentence = error.unwrap().to_string();
+    assert!(
+        sentence.contains("camera 0, a SIMPLE_PINHOLE"),
+        "{sentence}"
+    );
     for model in [
         "SIMPLE_RADIAL_FISHEYE",
         "SFMTOOL_FISHEYE",
@@ -1350,10 +1358,166 @@ fn a_camera_without_distortion_keeps_its_lens_beside_one_that_releases() {
         (i % 2) as u32
     });
     let source = perturb(truth);
-    let (_, report) =
-        bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
-    assert!(report.cameras[0].distortion_released);
-    assert!(!report.cameras[1].distortion_released);
+    let options = releasing(&[CameraRelease::FOCAL_AND_DISTORTION, CameraRelease::HELD]);
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    assert!(report.cameras[0].focal_released && report.cameras[0].distortion_released);
+    assert!(!report.cameras[1].focal_released && !report.cameras[1].distortion_released);
+    assert_eq!(out.image_table.cameras[1], pinhole());
+}
+
+/// An `OPENCV_FISHEYE` lens, whose four coefficients act on a normalized
+/// coordinate: the adjustment can release neither its focal nor its
+/// distortion. Mild enough to be invertible over the fixture's field.
+fn opencv_fisheye() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 610.0,
+            focal_length_y: 612.0,
+            principal_point_x: IMG_W as f64 / 2.0 + 3.0,
+            principal_point_y: IMG_H as f64 / 2.0 - 2.0,
+            radial_distortion_k1: 0.01,
+            radial_distortion_k2: -0.002,
+            radial_distortion_k3: 0.0,
+            radial_distortion_k4: 0.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
+#[test]
+fn a_rig_releases_its_spline_camera_and_holds_its_opencv_fisheye() {
+    let planted = vec![-0.002, -0.006, -0.012, -0.02];
+    let truth = truth_through(
+        vec![opencv_fisheye(), spline_fisheye(planted.clone())],
+        |i| (i % 2) as u32,
+    );
+    let mut source = perturb(truth);
+    source.image_table.cameras[1] = spline_fisheye(vec![0.0; planted.len()]);
+    let options = releasing(&[CameraRelease::HELD, CameraRelease::FOCAL_AND_DISTORTION]);
+
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    assert_eq!(out.image_table.cameras[0], opencv_fisheye());
+    let held = &report.cameras[0];
+    assert_eq!(
+        (held.camera, held.focal_released, held.distortion_released),
+        (0, false, false)
+    );
+    assert_eq!(held.focal_before, held.focal_after);
+    let released = &report.cameras[1];
+    assert_eq!(
+        (
+            released.camera,
+            released.focal_released,
+            released.distortion_released
+        ),
+        (1, true, true)
+    );
+    let Some((solved, _, _)) = out.image_table.cameras[1].model.radial_spline() else {
+        panic!("camera 1 is still a spline model");
+    };
+    assert!(solved.iter().any(|&c| c != 0.0), "{solved:?}");
+    assert!(
+        report.median_residual_after < 0.2 * report.median_residual_before,
+        "{report:?}"
+    );
+
+    // Releasing the OPENCV_FISHEYE too is refused, naming it.
+    for (release, expected) in [
+        (
+            CameraRelease::FOCAL,
+            BundleAdjustError::FocalNotReleasable {
+                camera: 0,
+                model: "OPENCV_FISHEYE",
+            },
+        ),
+        (
+            CameraRelease::FOCAL_AND_DISTORTION,
+            BundleAdjustError::FocalNotReleasable {
+                camera: 0,
+                model: "OPENCV_FISHEYE",
+            },
+        ),
+    ] {
+        let options = releasing(&[release, CameraRelease::FOCAL_AND_DISTORTION]);
+        let error = bundle_adjust(&source, &options, &Progress::none()).err();
+        assert_eq!(error, Some(expected));
+        assert!(error
+            .unwrap()
+            .to_string()
+            .contains("camera 0, a OPENCV_FISHEYE"));
+    }
+}
+
+#[test]
+fn a_distortion_release_on_a_camera_without_any_names_the_camera() {
+    // The spline camera is released; the pinhole beside it has a focal to
+    // release and no distortion.
+    let truth = truth_through(vec![spline_fisheye(vec![0.0; 4]), pinhole()], |i| {
+        (i % 2) as u32
+    });
+    let options = releasing(&[
+        CameraRelease::FOCAL_AND_DISTORTION,
+        CameraRelease::FOCAL_AND_DISTORTION,
+    ]);
+    let error = bundle_adjust(&truth, &options, &Progress::none()).err();
+    assert_eq!(
+        error,
+        Some(BundleAdjustError::DistortionNotReleasable {
+            camera: 1,
+            model: "SIMPLE_PINHOLE",
+        })
+    );
+    assert!(error
+        .unwrap()
+        .to_string()
+        .starts_with("camera 1, a SIMPLE_PINHOLE"));
+}
+
+#[test]
+fn every_camera_held_still_refines_the_poses_and_the_points() {
+    let truth = two_camera_truth();
+    let source = perturb(truth.clone());
+    let (by_default, default_report) =
+        bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+            .expect("well posed");
+    let (held, held_report) = bundle_adjust(
+        &source,
+        &BundleAdjustOptions::uniform(2, CameraRelease::HELD),
+        &Progress::none(),
+    )
+    .expect("well posed");
+
+    // An empty list and an explicit all-held list are the same solve.
+    same_bits(
+        &value_bits(&by_default),
+        &value_bits(&held),
+        "empty against held",
+    );
+    assert_eq!(default_report, held_report);
+    assert!(held_report.median_residual_after < 0.2 * held_report.median_residual_before);
+    for camera in &held_report.cameras {
+        assert!(!camera.focal_released && !camera.distortion_released);
+        assert_eq!(camera.focal_before, camera.focal_after);
+    }
+    assert_eq!(held.image_table.cameras, source.image_table.cameras);
+}
+
+#[test]
+fn a_release_list_of_the_wrong_length_is_refused() {
+    let source = perturb(two_camera_truth());
+    for n in [1, 3] {
+        let options = BundleAdjustOptions::uniform(n, CameraRelease::HELD);
+        let error = bundle_adjust(&source, &options, &Progress::none()).err();
+        assert_eq!(
+            error,
+            Some(BundleAdjustError::ReleaseCount {
+                releases: n,
+                cameras: 2,
+            })
+        );
+    }
 }
 
 /// [`spline_fisheye`] on its own domain end.
@@ -1416,8 +1580,11 @@ fn a_spline_already_at_the_count_is_not_refitted() {
         ],
         |i| (i % 2) as u32,
     );
-    let (_, report) =
-        bundle_adjust(&perturb(truth), &with_coeff_count(8), &Progress::none()).expect("posed");
+    let options = BundleAdjustOptions {
+        releases: vec![CameraRelease::FOCAL_AND_DISTORTION; 2],
+        ..with_coeff_count(8)
+    };
+    let (_, report) = bundle_adjust(&perturb(truth), &options, &Progress::none()).expect("posed");
     assert_eq!(report.cameras[0].spline_refit, None);
     let refit = report.cameras[1].spline_refit.as_ref().expect("4 -> 8");
     assert_eq!((refit.coeffs_before, refit.coeffs_after), (4, 8));
@@ -1427,9 +1594,8 @@ fn a_spline_already_at_the_count_is_not_refitted() {
 fn a_new_coefficient_count_is_refused_where_it_cannot_be_made() {
     let spline = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
     let held = BundleAdjustOptions {
-        opt_f: true,
         spline_coeff_count: Some(12),
-        ..BundleAdjustOptions::default()
+        ..BundleAdjustOptions::uniform(1, CameraRelease::FOCAL)
     };
     assert_eq!(
         bundle_adjust(&spline, &held, &Progress::none()).err(),
@@ -1528,9 +1694,8 @@ fn a_new_domain_refits_the_spline_before_the_solve() {
 fn a_new_domain_is_refused_where_it_cannot_be_made() {
     let spline = truth_through(vec![spline_fisheye(eight_coefficients())], |_| 0);
     let held = BundleAdjustOptions {
-        opt_f: true,
         spline_domain_deg: Some(20.0),
-        ..BundleAdjustOptions::default()
+        ..BundleAdjustOptions::uniform(1, CameraRelease::FOCAL)
     };
     assert_eq!(
         bundle_adjust(&spline, &held, &Progress::none()).err(),

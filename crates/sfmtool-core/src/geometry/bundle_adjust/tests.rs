@@ -4663,6 +4663,7 @@ fn run_cameras(
         &BaCameras {
             cameras: cams,
             image_camera: image_camera.into(),
+            releases: None,
         },
         &mut s.quats,
         &mut s.trans,

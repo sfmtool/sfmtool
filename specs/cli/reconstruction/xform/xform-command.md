@@ -346,12 +346,12 @@ the default domain stays the far corner.
 
 ### Optimization
 
-#### `--bundle-adjust [coeffs=N,domain=DEG]`
+#### `--bundle-adjust [cameras=0+1,coeffs=N,domain=DEG]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
 The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
-parameters, and `coeffs=N` and `domain=DEG` (also `--bundle-adjust=coeffs=N`)
-apply only to the sfmtool path below.
+parameters, `cameras=` applies to both paths below, and `coeffs=N` and
+`domain=DEG` (also `--bundle-adjust=coeffs=N`) apply only to the sfmtool path.
 
 ```bash
 --remove-short-tracks 2 --bundle-adjust
@@ -361,20 +361,32 @@ pycolmap knows neither sfmtool spline model, so a reconstruction with any camera
 of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
 adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
-with every camera's focal and lens distortion released (`opt_f` and
-`opt_distortion`: the spline, and `k1` on a `SIMPLE_RADIAL_FISHEYE` camera beside
-it). That path needs inline keypoints (an `embedded_patches` reconstruction) and
-a camera model whose focal it can release for every posed image, and stops with
-the adjustment's own refusal otherwise; a rig with one spline camera and one
-`OPENCV_FISHEYE` camera is refused rather than half-adjusted. It honours points at
+with every camera's focal released, and the lens distortion released on each
+camera whose model has some the solve can release: the spline, and `k1` on a
+`SIMPLE_RADIAL_FISHEYE` camera beside it. That path needs inline keypoints (an
+`embedded_patches` reconstruction) and a camera model whose focal it can release
+for every posed image whose camera is released, and stops with the adjustment's
+own refusal, naming the camera, otherwise; a rig with one spline camera and one
+`OPENCV_FISHEYE` camera is refused bare rather than half-adjusted, and adjusts
+with `cameras=` naming the spline camera. It honours points at
 infinity as they are, deletes the points the solve leaves unsupported, and
 rescales patch frames with their depth, as the viewer's Bundle Adjust does. It
 prints the median residual before and after and each camera's focal change and
 what was released. A reconstruction whose cameras are all COLMAP models goes
 through pycolmap as described below, unchanged.
 
+`cameras=0+1` releases the lens of the named cameras (camera-table indexes,
+joined by `+`) and holds every other camera's intrinsics exactly as they are,
+while the poses and points of every image are still refined. On the sfmtool path
+each named camera releases what the bare option would release on it. On the
+pycolmap path each other camera's intrinsics are held constant in the solve,
+which otherwise runs as pycolmap's own bundle adjustment does: every registered
+image, with the gauge fixed by two camera poses; it prints which cameras were
+released and which held. An index past the camera table is a usage error.
+
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
+--bundle-adjust cameras=1
 --bundle-adjust coeffs=12
 --bundle-adjust coeffs=12,domain=108.8
 ```

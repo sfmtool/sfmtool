@@ -363,6 +363,49 @@ pub struct BaCameras<'a> {
     /// One entry per image: the index into `cameras` of the camera that took
     /// it.
     pub image_camera: Cow<'a, [u32]>,
+    /// What each camera may release, one entry per camera, or `None` for every
+    /// camera taking the solve's release flags as they are.
+    ///
+    /// An entry narrows the flags for its camera: the focal is released under
+    /// `opt_f && focal`, `k1` under `opt_k1 && distortion` and the spline under
+    /// `opt_bspline && distortion`, each still only where the camera's model
+    /// admits it. So a caller that decides the releases camera by camera passes
+    /// every flag on and states the choice here. A length other than the camera
+    /// count is a caller error, checked with the others.
+    pub releases: Option<&'a [CameraRelease]>,
+}
+
+/// What the solve may move of one camera's lens, besides the poses and points
+/// every solve moves.
+///
+/// The per-camera half of a release decision: [`BaCameras::releases`] holds one
+/// per camera, and the reconstruction-level adjustment takes its list in this
+/// type too. A camera with neither is held, which is also `Default`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CameraRelease {
+    /// Release the focal length.
+    pub focal: bool,
+    /// Release the lens distortion: `k1` on `SIMPLE_RADIAL_FISHEYE`, the radial
+    /// spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`.
+    pub distortion: bool,
+}
+
+impl CameraRelease {
+    /// Nothing released: the camera is held.
+    pub const HELD: CameraRelease = CameraRelease {
+        focal: false,
+        distortion: false,
+    };
+    /// The focal alone.
+    pub const FOCAL: CameraRelease = CameraRelease {
+        focal: true,
+        distortion: false,
+    };
+    /// The focal and the lens distortion.
+    pub const FOCAL_AND_DISTORTION: CameraRelease = CameraRelease {
+        focal: true,
+        distortion: true,
+    };
 }
 
 impl<'a> BaCameras<'a> {
@@ -372,6 +415,7 @@ impl<'a> BaCameras<'a> {
         BaCameras {
             cameras: std::slice::from_ref(camera),
             image_camera: Cow::Owned(vec![0; n_img]),
+            releases: None,
         }
     }
 
@@ -391,6 +435,13 @@ impl<'a> BaCameras<'a> {
             panic!(
                 "image_camera names camera {bad}, past the {} cameras",
                 self.cameras.len()
+            );
+        }
+        if let Some(releases) = self.releases {
+            assert_eq!(
+                releases.len(),
+                self.cameras.len(),
+                "releases and cameras length mismatch"
             );
         }
     }
@@ -713,7 +764,9 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// request to every camera, decided per camera: a camera whose model the
 /// release is not exact for keeps that parameter fixed, never a half-modeled
 /// DOF, while the others release theirs. The binding rejects such a model
-/// loudly instead. `opt_k1` and `opt_bspline` are exclusive on any one camera
+/// loudly instead. [`BaCameras::releases`] narrows the three flags camera by
+/// camera, so a solve can release one camera's lens and hold another's.
+/// `opt_k1` and `opt_bspline` are exclusive on any one camera
 /// (no model carries both parameters). Callers stage the releases — fixed →
 /// `opt_f` → `opt_f` plus the model's distortion release — so the distortion
 /// rung opens on a focal that has already settled.
@@ -792,6 +845,7 @@ pub fn bundle_adjust(
     bundle_adjust_staged(
         cameras.cameras,
         &cameras.image_camera,
+        cameras.releases,
         quats,
         trans,
         points,
@@ -2294,6 +2348,7 @@ fn solve_lm<const CAM_COLS: usize>(
 fn bundle_adjust_staged(
     cameras: &[CameraIntrinsics],
     image_camera: &[u32],
+    releases: Option<&[CameraRelease]>,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -2327,10 +2382,20 @@ fn bundle_adjust_staged(
         }
     }
 
-    // Each camera's releases, decided on its own model.
+    // Each camera's releases: the flags, narrowed by the camera's own entry
+    // where the caller gave one, then decided on its own model.
     let mut lenses: Vec<Lens<'_>> = cameras
         .iter()
-        .map(|c| Lens::new(c, opt_f, opt_k1, opt_bspline))
+        .enumerate()
+        .map(|(j, c)| {
+            let r = releases.map_or(CameraRelease::FOCAL_AND_DISTORTION, |r| r[j]);
+            Lens::new(
+                c,
+                opt_f && r.focal,
+                opt_k1 && r.distortion,
+                opt_bspline && r.distortion,
+            )
+        })
         .collect();
     let spline_cols = lenses.iter().any(|l| l.opt_bspline);
     // The camera of each observation.

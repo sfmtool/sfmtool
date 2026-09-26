@@ -62,6 +62,13 @@ pub struct BaSchedule {
 pub struct BaCameras<'a> {
     pub cameras: &'a [CameraIntrinsics], // n_cam, each with its initial focal
     pub image_camera: Cow<'a, [u32]>,    // n_img, an index into `cameras`
+    pub releases: Option<&'a [CameraRelease]>, // n_cam; None = the flags alone
+}
+
+/// What one camera may release; `Default` and `HELD` release nothing.
+pub struct CameraRelease {
+    pub focal: bool,
+    pub distortion: bool, // k1 or the spline, whichever the model carries
 }
 
 impl<'a> BaCameras<'a> {
@@ -118,6 +125,17 @@ belong in one place: an empty camera list, an `image_camera` whose length is not
 kernel's other shape checks. `image_camera` is a `Cow` so that
 `BaCameras::shared` can own the all-zero column it builds, while a caller with a
 column of its own lends it (`image_camera: column.as_slice().into()`).
+
+**Why `releases` narrows the flags rather than replacing them.** The three
+flags are the kernel's whole-solve switches, and every caller that has one
+decision for every camera keeps passing them as it always has, with `releases:
+None`. A caller that decides camera by camera -- the reconstruction-level
+adjustment, whose caller states a release per camera -- passes every flag on
+and one `CameraRelease` per camera, and camera `j` releases its focal under
+`opt_f && releases[j].focal`, its `k1` under `opt_k1 && releases[j].distortion`
+and its spline under `opt_bspline && releases[j].distortion`, each still only
+where its model admits it. A list whose length is not `n_cam` is a caller error
+and panics with the other shape checks.
 
 **Why the result returns cameras.** A caller wants each solved camera back to
 write into its own table. The result carries the whole `CameraIntrinsics` per
@@ -273,9 +291,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   frozen only when that guard trips.
   The reconstruction-level adjustment
   ([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md))
-  exposes this pair as `opt_f` and `opt_distortion`, which it passes as both
-  `opt_k1` and `opt_bspline` so each camera frees whichever of the two its
-  model has, and refuses the distortion without the focal. That is how the
+  exposes this pair per camera, as a `CameraRelease` of `focal` and
+  `distortion` for each camera, which it passes as `BaCameras::releases` with
+  every flag on, so each camera frees whichever of `k1` and the spline its model
+  has, and refuses the distortion without the focal. That is how the
   viewer's Bundle Adjust dialog, the MCP `bundle_adjust` tool and `sfm xform
   --bundle-adjust` on a spline camera reach it.
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
@@ -367,9 +386,11 @@ so it adds exact zeros there whether or not that slot is released.
 Every rule the single block follows applies to each block separately:
 
 - **Release gates, per camera.** `opt_f`, `opt_k1` and `opt_bspline` are
-  requests to every camera. A camera whose model the release is not exact for
-  keeps that parameter fixed, so a `SIMPLE_PINHOLE` and an `OPENCV_FISHEYE` in
-  one solve under `opt_f` release the pinhole's focal and hold the fisheye's.
+  requests to every camera, narrowed per camera by `BaCameras::releases` where
+  it is given. A camera whose model the release is not exact for keeps that
+  parameter fixed, so a `SIMPLE_PINHOLE` and an `OPENCV_FISHEYE` in one solve
+  under `opt_f` release the pinhole's focal and hold the fisheye's, and a camera
+  whose entry releases nothing is held whatever the flags say.
 - **Pinning.** A slot that is not released is pinned with an identity row and
   column and a zero gradient entry, and so is every slot of a camera none of
   whose images has a kept observation in the round. Such a camera is not

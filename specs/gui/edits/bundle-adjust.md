@@ -66,38 +66,43 @@ behind it, not one a hand should be able to fire by accident.
 ### The dialog
 
 `Bundle Adjust...` opens a small window rather than running immediately, because
-there is one decision to take, how much of the lens may move and in what form:
+there is one decision to take, camera by camera: how much of each lens may move,
+and in what form.
 
-- **Release focal length**, a checkbox, clear by default. Ticked, it releases
-  the focal of every camera the posed images use, each its own. A focal that
+- **One row per camera** the posed images use, in table order: `Camera 0
+  SFMTOOL_FISHEYE  24 images`, then two checkboxes, both clear by default. A
+  camera only unposed images use is not in the solve and has no row. A lens that
   moves is a different claim about the capture than a pose that does, so the
-  smaller claim is the default. It is **disabled** unless every one of those
-  cameras has a model the adjustment's focal column is exact for, with a hover
-  explanation naming the first camera that does not, by its table index, and its
-  model.
-- **Release lens distortion**, a checkbox under it, clear by default. Ticked, it
-  releases the lens distortion of every camera the posed images use whose model
-  the adjustment can free it on, each its own: `k1` on `SIMPLE_RADIAL_FISHEYE`,
-  the radial spline on `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`. Every other
-  camera keeps its distortion where it is. It is **disabled** unless at least
-  one of those cameras has such a model, with a hover explanation saying none
-  does and naming the three models to switch a camera to first, and it is
-  disabled while **Release focal length** is clear, and cleared with it: neither
-  `k1` nor the spline can change the scale at the centre of the image, which is
-  the focal's job, so the distortion is released only together with the focal
-  ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
-- **Spline coefficients**, a row under it: a **Keep** checkbox, ticked by
+  smaller claim is the default, and a camera left clear is held.
+  - **Release focal length** releases that camera's focal. It is **disabled**
+    when the camera's model is not one the adjustment's focal column is exact
+    for, with a hover explanation naming the camera by its table index and its
+    model.
+  - **Release lens distortion** releases that camera's lens distortion: `k1` on
+    `SIMPLE_RADIAL_FISHEYE`, the radial spline on `SFMTOOL_FISHEYE` and
+    `SFMTOOL_PINHOLE`. It is **disabled** when the camera's model is none of
+    those, with a hover explanation naming the camera and the three models to
+    switch it to first. It is also disabled while the same row's **Release focal
+    length** is clear, and cleared with it: neither `k1` nor the spline can
+    change the scale at the centre of the image, which is the focal's job, so a
+    camera's distortion is released only together with its own focal
+    ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
+
+  So a rig that mixes an `OPENCV_FISHEYE` camera with spline cameras releases
+  the spline cameras and holds the other, whose row is greyed.
+- **Spline coefficients**, a row under the camera rows: a **Keep** checkbox, ticked by
   default, a count from 2 to 32, and `now 8` (or `now 6, 8` when the node's
   spline cameras differ) naming the counts the spline cameras of the posed
   images have. The count starts at the largest of them. Editing the count
-  clears **Keep**. With **Keep** clear, every spline camera whose count differs
-  is refitted to the count over its whole spline domain before the solve, which
-  then fits the new coefficients to the observations; a count equal to the one
-  every spline camera already has asks for nothing. The row is **disabled**,
-  with a hover explanation, when no camera of the posed images is a spline
-  model, and while **Release lens distortion** is clear: a new coefficient
-  scheme only approximates the old curve until the solve fits it, so the core
-  function refuses the count without the release.
+  clears **Keep**. With **Keep** clear, every spline camera that releases its
+  distortion and whose count differs is refitted to the count over its whole
+  spline domain before the solve, which then fits the new coefficients to the
+  observations; a count equal to the one every spline camera already has asks
+  for nothing. The row is **disabled**, with a hover explanation, when no camera
+  of the posed images is a spline model, and while no spline camera's row
+  releases its lens distortion: a new coefficient scheme only approximates the
+  old curve until the solve fits it, so the core function refuses the count
+  without such a release.
 - **Spline domain (°)**, a row under it, built the same way: **Keep**, ticked
   by default, the domain end in degrees (1 to 180), and `now 150.1°` (or several)
   naming the domain ends the node's spline cameras have; the value starts at
@@ -136,11 +141,12 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The two checkboxes and the two spline rows are the only options the dialog
-sets, as `opt_f`, `opt_distortion`, `spline_coeff_count` and
-`spline_domain_deg`. The schedule, the iteration
-budget and the two floors are the core function's defaults, which are the
-kernel's.
+The camera rows and the two spline rows are the only options the dialog sets,
+as `releases`, `spline_coeff_count` and `spline_domain_deg`. `releases` holds
+one `CameraRelease` per camera of the node's table: each row's two checkboxes
+for its camera, less anything its model cannot take, and held for a camera with
+no row. The schedule, the iteration budget and the two floors are the core
+function's defaults, which are the kernel's.
 
 No images are decoded. The adjustment reprojects points through the poses and
 the lens the value already carries, so this edit reads nothing off disk.
@@ -171,11 +177,19 @@ The version's label is
 
 `Bundle adjusted <node label>`
 
-with `, focal released` appended when the focal was released, or `, focal and
-lens distortion released` when a camera's distortion was released too, and then
-`, spline refitted to 12 coefficients` when a spline camera's coefficient count
-or domain was changed before the solve, with ` on a 108.8° domain` when the
-domain moved.
+followed by what each camera of the solve released, read off the report:
+
+- nothing, when every camera was held;
+- one phrase when every camera released the same thing: `, focal released` or
+  `, focal and lens distortion released` over one camera, with ` on every
+  camera` appended over several;
+- otherwise each camera by its table index, `, camera 0 focal and lens
+  distortion released, camera 1 held`, because the label is the line in the
+  Edit History that says which lens moved.
+
+Then `, spline refitted to 12 coefficients` when a spline camera's coefficient
+count or domain was changed before the solve, with ` on a 108.8° domain` when
+the domain moved.
 
 ### The Action Log
 
@@ -232,17 +246,22 @@ Explorer (`sfm-explorer` lib tests, headless):
   the focal, the log entry's counts and serials, an undo putting every pose back,
   the selection following the map, the gated refusal for no inline keypoints
   pushing no version and logging a failure, a node whose images are taken
-  through two cameras adjusted rather than refused, each released camera named
-  in the entry, the focal gate naming the first camera that cannot release its
-  focal, and the distortion gate closed on a node with no spline and open, with
-  the label naming the release, once a camera is a spline model or a
-  `SIMPLE_RADIAL_FISHEYE`, and the spline counts the coefficients row shows.
-- `bundle_adjust_prompt/tests.rs`: the dialog's default (the focal held), the
-  distortion released only with the focal, the keys that run and cancel it, an
-  ordinary frame answering nothing, a second ask not stacking a second dialog,
-  and the coefficient count: kept by default and starting at the largest count,
-  asked for only when it changes some camera's count, and never without the
-  distortion release or a spline camera; the domain under the same rules; the
+  through two cameras adjusted rather than refused, one row per camera with its
+  image count, each released camera named in the entry and the label saying
+  `on every camera`, the focal gate naming the camera that cannot release its
+  focal, and the distortion gate closed on each camera with no spline and open,
+  with the label naming each camera's release, once a camera is a spline model
+  or a `SIMPLE_RADIAL_FISHEYE`, and the spline counts the coefficients row shows.
+- `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held),
+  one row per camera the posed images use, each row releasing its own camera
+  and the rest held, a release the camera's model cannot take never answered,
+  a row's distortion released only with its own focal and cleared when a drawn
+  row's focal is clear, the refusal text naming the camera, the keys that run
+  and cancel it, an ordinary frame answering nothing, a second ask not stacking
+  a second dialog, and the coefficient count: kept by default and starting at
+  the largest count, asked for only when it changes some camera's count, and
+  never without a spline camera releasing its distortion; the domain under the
+  same rules; the
   outermost keypoint's button taking the detected angle, the observed one
   without a detected, and nothing without either; and the keypoint text
   labelled by its source.

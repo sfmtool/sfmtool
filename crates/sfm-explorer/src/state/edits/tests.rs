@@ -930,10 +930,10 @@ fn a_released_focal_is_named_in_the_label_and_the_entry() {
             principal_point_y: cy,
         };
     }
-    let options = sfmtool_core::BundleAdjustOptions {
-        opt_f: true,
-        ..sfmtool_core::BundleAdjustOptions::default()
-    };
+    let options = sfmtool_core::BundleAdjustOptions::uniform(
+        1,
+        sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL,
+    );
 
     state.start_bundle_adjust(id, &options).expect("well posed");
     state.finish_background_task();
@@ -1036,21 +1036,29 @@ fn a_node_whose_images_are_taken_through_two_cameras_is_adjusted() {
 #[test]
 fn each_released_camera_is_named_in_the_entry() {
     let (mut state, id) = two_camera_state();
+    let gates = crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited());
     assert_eq!(
-        crate::bundle_adjust_prompt::focal_refusal(state.scene[0].edited()),
-        None
+        gates.iter().map(|g| g.camera).collect::<Vec<_>>(),
+        vec![0, 1]
     );
-    let options = sfmtool_core::BundleAdjustOptions {
-        opt_f: true,
-        ..sfmtool_core::BundleAdjustOptions::default()
-    };
+    assert!(gates.iter().all(|g| g.focal_refusal.is_none()));
+    // Image 2 is camera 1's, and every other image camera 0's.
+    let images = state.scene[0].recon().image_table.images.len();
+    assert_eq!(
+        gates.iter().map(|g| g.images).collect::<Vec<_>>(),
+        vec![images - 1, 1]
+    );
+    let options = sfmtool_core::BundleAdjustOptions::uniform(
+        2,
+        sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL,
+    );
 
     state.start_bundle_adjust(id, &options).expect("well posed");
     state.finish_background_task();
 
     assert_eq!(
         state.scene[0].history.current_version().label,
-        "Bundle adjusted run_a, focal released"
+        "Bundle adjusted run_a, focal released on every camera"
     );
     let last = texts(&state).last().expect("one entry").clone();
     assert!(last.contains(", camera 0 focal "), "{last}");
@@ -1060,10 +1068,12 @@ fn each_released_camera_is_named_in_the_entry() {
 #[test]
 fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
     let (mut state, id) = two_camera_state();
-    // Two SIMPLE_PINHOLE cameras: nothing to release, and the checkbox says so.
-    let why = crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited())
-        .expect("no camera carries a spline");
-    assert!(why.contains("SFMTOOL_FISHEYE"), "{why}");
+    // Two SIMPLE_PINHOLE cameras: nothing to release, and each row says so.
+    for gate in crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited()) {
+        let why = gate.distortion_refusal.expect("no camera carries a spline");
+        assert!(why.contains("SFMTOOL_FISHEYE"), "{why}");
+        assert!(why.contains(&format!("Camera {}", gate.camera)), "{why}");
+    }
     {
         let recon = state.scene[0].recon_mut();
         let (f, _) = recon.image_table.cameras[1].focal_lengths();
@@ -1076,24 +1086,27 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
             bspline: vec![0.0; 4],
         };
     }
-    assert_eq!(
-        crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited()),
-        None
-    );
+    let gates = crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited());
+    assert!(gates[0].distortion_refusal.is_some());
+    assert_eq!(gates[1].distortion_refusal, None);
+    assert!(gates[1].spline && !gates[0].spline);
     assert_eq!(
         crate::bundle_adjust_prompt::spline_coeff_counts(state.scene[0].edited()),
         vec![4]
     );
     let options = sfmtool_core::BundleAdjustOptions {
-        opt_f: true,
-        opt_distortion: true,
+        releases: vec![
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL_AND_DISTORTION,
+        ],
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
     state.finish_background_task();
     assert_eq!(
         state.scene[0].history.current_version().label,
-        "Bundle adjusted run_a, focal and lens distortion released"
+        "Bundle adjusted run_a, camera 0 focal released, camera 1 focal and lens distortion \
+         released"
     );
 }
 
@@ -1111,25 +1124,26 @@ fn the_distortion_gate_opens_on_a_simple_radial_fisheye() {
             radial_distortion_k1: 0.0,
         };
     }
-    assert_eq!(
-        crate::bundle_adjust_prompt::distortion_refusal(state.scene[0].edited()),
-        None
-    );
+    let gates = crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited());
+    assert_eq!(gates[0].distortion_refusal, None);
+    // Camera 1 held while camera 0 releases both.
     let options = sfmtool_core::BundleAdjustOptions {
-        opt_f: true,
-        opt_distortion: true,
+        releases: vec![
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease::FOCAL_AND_DISTORTION,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD,
+        ],
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
     state.finish_background_task();
     assert_eq!(
         state.scene[0].history.current_version().label,
-        "Bundle adjusted run_a, focal and lens distortion released"
+        "Bundle adjusted run_a, camera 0 focal and lens distortion released, camera 1 held"
     );
 }
 
 #[test]
-fn the_focal_gate_names_the_first_camera_that_cannot_release_its_focal() {
+fn the_focal_gate_names_the_camera_that_cannot_release_its_focal() {
     let (mut state, _) = two_camera_state();
     {
         let recon = state.scene[0].recon_mut();
@@ -1144,7 +1158,12 @@ fn the_focal_gate_names_the_first_camera_that_cannot_release_its_focal() {
     }
     let edited = state.scene[0].edited();
     assert_eq!(crate::bundle_adjust_prompt::refusal(edited), None);
-    let why = crate::bundle_adjust_prompt::focal_refusal(edited).expect("camera 1 is a PINHOLE");
+    let gates = crate::bundle_adjust_prompt::camera_gates(edited);
+    assert_eq!(gates[0].focal_refusal, None);
+    let why = gates[1]
+        .focal_refusal
+        .as_deref()
+        .expect("camera 1 is a PINHOLE");
     assert!(why.contains("camera 1, a PINHOLE camera"), "{why}");
 }
 
@@ -1155,7 +1174,9 @@ fn the_gate_and_the_focal_gate_pass_on_a_node_that_can_be_adjusted() {
     assert_eq!(crate::bundle_adjust_prompt::refusal(edited), None);
     // The demo camera is a two-focal PINHOLE, whose focal the adjustment cannot
     // release: the checkbox is greyed and says so.
-    assert!(crate::bundle_adjust_prompt::focal_refusal(edited).is_some());
+    assert!(crate::bundle_adjust_prompt::camera_gates(edited)[0]
+        .focal_refusal
+        .is_some());
 }
 
 // ── Move camera: the bulk edit that moves one pose ──────────────────────

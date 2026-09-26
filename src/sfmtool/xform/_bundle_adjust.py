@@ -8,6 +8,9 @@ with a camera of an sfmtool spline model (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`),
 which pycolmap does not know, goes through sfmtool's own reconstruction-level
 bundle adjustment with the focal and the lens distortion released (the spline,
 and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
+
+Either path releases every camera's lens by default. ``cameras=`` limits the
+release to the cameras it names and holds the rest.
 """
 
 import tempfile
@@ -33,6 +36,9 @@ class BundleAdjustTransform:
         spline_domain_deg: Refit every spline camera on a domain ending at this
             incidence angle, in degrees, before the solve, in the same refit as
             ``coeff_count`` (``--bundle-adjust domain=DEG``).
+        cameras: Camera-table indexes whose lens is released
+            (``--bundle-adjust cameras=0+1``); every other camera is held, its
+            intrinsics unchanged. ``None``, the default, releases every camera.
 
     Only a reconstruction with a spline camera takes either, which the sfmtool
     path adjusts; given for one without, ``apply`` raises ``click.UsageError``.
@@ -45,14 +51,32 @@ class BundleAdjustTransform:
         refine_extra_params: bool = True,
         coeff_count: int | None = None,
         spline_domain_deg: float | None = None,
+        cameras: list[int] | None = None,
     ):
         self.refine_focal_length = refine_focal_length
         self.refine_principal_point = refine_principal_point
         self.refine_extra_params = refine_extra_params
         self.coeff_count = coeff_count
         self.spline_domain_deg = spline_domain_deg
+        self.cameras = None if cameras is None else sorted(set(cameras))
+
+    def _released(self, recon: SfmrReconstruction) -> list[bool]:
+        """Whether each camera of the table has its lens released: all of them
+        without ``cameras=``, only the named ones with it."""
+        count = len(recon.cameras)
+        if self.cameras is None:
+            return [True] * count
+        bad = [c for c in self.cameras if not 0 <= c < count]
+        if bad:
+            raise click.UsageError(
+                f"--bundle-adjust cameras= names camera(s) {bad}, and this "
+                f"reconstruction has {count} camera(s)"
+            )
+        return [c in self.cameras for c in range(count)]
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+        # Checked before either path runs, so a bad index is refused alike.
+        self._released(recon)
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
         if self.coeff_count is not None or self.spline_domain_deg is not None:
@@ -76,9 +100,20 @@ class BundleAdjustTransform:
             "  Running bundle adjustment (sfmtool; a camera has a spline model, "
             "which pycolmap cannot refine)..."
         )
+        # Each released camera frees its focal and, where its model has any the
+        # solve can free, its lens distortion; a held camera frees neither.
+        releases = [
+            {
+                "focal": released and self.refine_focal_length,
+                "distortion": released
+                and self.refine_focal_length
+                and self.refine_extra_params
+                and camera.distortion_is_releasable,
+            }
+            for camera, released in zip(recon.cameras, self._released(recon))
+        ]
         adjusted, report = EditedReconstruction(recon).bundle_adjust(
-            opt_f=self.refine_focal_length,
-            opt_distortion=self.refine_focal_length and self.refine_extra_params,
+            releases=releases,
             spline_coeff_count=self.coeff_count,
             spline_domain_deg=self.spline_domain_deg,
         )
@@ -163,7 +198,12 @@ class BundleAdjustTransform:
             ba_config.refine_extra_params = self.refine_extra_params
 
             print(f"    Optimizing {len(reconstruction.points3D)} points...")
-            pycolmap.bundle_adjustment(reconstruction, ba_config)
+            if self.cameras is None:
+                pycolmap.bundle_adjustment(reconstruction, ba_config)
+            else:
+                self._solve_holding_cameras(
+                    reconstruction, ba_config, self._released(recon)
+                )
             reconstruction.update_point_3d_errors()
 
             refined = self._reconstruction_to_data(reconstruction, ba_input)
@@ -178,6 +218,31 @@ class BundleAdjustTransform:
             # points keep the errors the BA solve produced.
             result.recompute_infinity_point_errors()
         return result
+
+    @staticmethod
+    def _solve_holding_cameras(
+        reconstruction: pycolmap.Reconstruction,
+        options: pycolmap.BundleAdjustmentOptions,
+        released: list[bool],
+    ) -> None:
+        """What ``pycolmap.bundle_adjustment`` runs, with the intrinsics of every
+        camera ``released`` marks ``False`` held constant.
+
+        The configuration is the one COLMAP's own bundle adjustment controller
+        builds: every registered image, and the gauge fixed by two camera poses.
+        """
+        config = pycolmap.BundleAdjustmentConfig()
+        for image_id in reconstruction.reg_image_ids():
+            config.add_image(image_id)
+        config.fix_gauge(pycolmap.BundleAdjustmentGauge.TWO_CAMS_FROM_WORLD)
+        # The export numbers the cameras in table order, which is how the
+        # readback maps them to indexes too.
+        for camera_id, free in zip(sorted(reconstruction.cameras.keys()), released):
+            if not free:
+                config.set_constant_cam_intrinsics(camera_id)
+        pycolmap.create_default_bundle_adjuster(options, config, reconstruction).solve()
+        for index, free in enumerate(released):
+            print(f"    Camera {index}: {'released' if free else 'held'}")
 
     def _reconstruction_to_data(
         self,
@@ -336,4 +401,6 @@ class BundleAdjustTransform:
             params += f", coeffs={self.coeff_count}"
         if self.spline_domain_deg is not None:
             params += f", domain={self.spline_domain_deg:g}"
+        if self.cameras is not None:
+            params += ", cameras=" + "+".join(str(c) for c in self.cameras)
         return f"Bundle adjustment (refine: {opt_str}{params})"

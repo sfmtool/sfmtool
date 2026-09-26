@@ -373,6 +373,164 @@ fn with_flat_spline_cameras(state: &mut AppState) {
     }
 }
 
+/// `run_a` with its camera made a single-focal `SIMPLE_PINHOLE`, which can
+/// release its focal and has no distortion, and a copy of its original
+/// two-focal `PINHOLE` as camera 1 taking image 2, whose focal cannot be
+/// released. Two cameras through the same lens, so the observations still
+/// describe the geometry.
+fn with_two_cameras(state: &mut AppState) {
+    let recon = state.scene[0].recon_mut();
+    let original = recon.image_table.cameras[0].clone();
+    let camera = &mut recon.image_table.cameras[0];
+    let (f, _) = camera.focal_lengths();
+    let (cx, cy) = camera.principal_point();
+    camera.model = sfmtool_core::CameraModel::SimplePinhole {
+        focal_length: f,
+        principal_point_x: cx,
+        principal_point_y: cy,
+    };
+    recon.image_table.cameras.push(original);
+    recon.image_table.images[2].camera_index = 1;
+}
+
+/// The defaults reach every camera, and a `cameras` entry overrides them for
+/// the camera it names; the label says what each camera released.
+#[test]
+fn bundle_adjust_releases_each_camera_as_its_entry_says() {
+    let (mut state, mut viewer) = editable();
+    with_two_cameras(&mut state);
+    perturb(&mut state, 0.02);
+
+    // The default focal release reaches camera 1 too, whose PINHOLE model
+    // cannot take it: the core function's refusal, naming it.
+    let map = json!({ "reconstruction_label": "run_a", "release_focal": true })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        _ => panic!("bundle_adjust must defer"),
+    };
+    state.finish_background_task();
+    let Err(error) =
+        super::super::edit::background_reply(&state, &pending).expect("the operation finished")
+    else {
+        panic!("expected a refusal");
+    };
+    assert!(error.0.contains("camera 1, a PINHOLE"), "{error}");
+    assert_eq!(version_count(&state), 1);
+
+    // Held through its entry, the solve runs and releases camera 0 alone.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({
+            "reconstruction_label": "run_a",
+            "release_focal": true,
+            "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false }]
+        }),
+    );
+    let label = reply["label"].as_str().expect("a label");
+    assert_eq!(
+        label,
+        "Bundle adjusted run_a, camera 0 focal released, camera 1 held"
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(
+        report.contains(", camera 0 focal ") && !report.contains("camera 1 focal"),
+        "{report}"
+    );
+    assert_eq!(version_count(&state), 2);
+}
+
+/// An entry naming a camera the reconstruction does not have, or one camera
+/// twice, is refused before anything starts.
+#[test]
+fn bundle_adjust_refuses_a_camera_entry_it_cannot_apply() {
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "bundle_adjust",
+        json!({
+            "reconstruction_label": "run_a",
+            "cameras": [{ "camera_intrinsics_index": 5 }]
+        }),
+    );
+    assert!(
+        error.0.contains("camera_intrinsics_index 5") && error.0.contains("1 camera"),
+        "{error}"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "bundle_adjust",
+        json!({
+            "reconstruction_label": "run_a",
+            "cameras": [{ "camera_intrinsics_index": 0 }, { "camera_intrinsics_index": 0 }]
+        }),
+    );
+    assert!(error.0.contains("twice"), "{error}");
+    assert_eq!(version_count(&state), 1);
+    assert!(state.background_task().is_none());
+}
+
+/// The `cameras` entries parse to overrides whose left-out fields stay open
+/// for the defaults, and an entry with an argument it does not have is
+/// refused.
+#[test]
+fn bundle_adjust_parses_its_camera_entries() {
+    let map = json!({
+        "reconstruction_label": "a",
+        "release_focal": true,
+        "cameras": [
+            { "camera_intrinsics_index": 1, "release_distortion": true },
+            { "camera_intrinsics_index": 0, "release_focal": false, "release_distortion": false }
+        ]
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let Command::BundleAdjust { cameras, .. } =
+        tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call")
+    else {
+        panic!("not a bundle_adjust");
+    };
+    assert_eq!(
+        cameras,
+        vec![
+            super::super::CameraReleaseOverride {
+                camera_intrinsics_index: 1,
+                release_focal: None,
+                release_distortion: Some(true),
+            },
+            super::super::CameraReleaseOverride {
+                camera_intrinsics_index: 0,
+                release_focal: Some(false),
+                release_distortion: Some(false),
+            },
+        ]
+    );
+
+    for (cameras, expected) in [
+        (json!([{ "camera": 0 }]), "has no argument"),
+        (
+            json!([{ "release_focal": true }]),
+            "camera_intrinsics_index",
+        ),
+        (json!([3]), "cameras"),
+        (json!({ "camera_intrinsics_index": 0 }), "cameras"),
+    ] {
+        let map = json!({ "reconstruction_label": "a", "cameras": cameras })
+            .as_object()
+            .cloned()
+            .expect("an object");
+        let error = tools::parse("bundle_adjust", Some(&map)).expect_err("refused at the parse");
+        assert!(error.0.contains(expected), "{error}");
+    }
+}
+
 /// A coefficient count refits the spline before the solve, and the reply and
 /// the version say so.
 #[test]
@@ -1485,6 +1643,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: false,
+            cameras: Vec::new(),
             spline_coeff_count: None,
             spline_domain_deg: None,
         }
@@ -1502,6 +1661,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: true,
+            cameras: Vec::new(),
             spline_coeff_count: None,
             spline_domain_deg: None,
         }
@@ -1520,6 +1680,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: true,
+            cameras: Vec::new(),
             spline_coeff_count: Some(12),
             spline_domain_deg: None,
         }
@@ -1538,6 +1699,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: true,
+            cameras: Vec::new(),
             spline_coeff_count: None,
             spline_domain_deg: Some(108.5),
         }

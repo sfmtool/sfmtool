@@ -354,6 +354,7 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
+            cameras: args.camera_releases("cameras")?,
             spline_coeff_count: args.optional_usize("spline_coeff_count")?,
             spline_domain_deg: args.optional_f64("spline_domain_deg")?,
         },
@@ -1132,6 +1133,45 @@ impl Args<'_> {
             }
         }
         Ok(Some(shape))
+    }
+
+    /// `bundle_adjust`'s per-camera release overrides; empty when absent.
+    ///
+    /// Each element is a closed object: `camera_intrinsics_index`, required,
+    /// and `release_focal` and `release_distortion`, each optional. A field
+    /// left out stays `None`, for the call's default to fill.
+    fn camera_releases(&self, key: &str) -> Result<Vec<super::CameraReleaseOverride>, ToolError> {
+        let expected = "an array of objects, each with camera_intrinsics_index and optionally \
+                        release_focal and release_distortion";
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(Vec::new()),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                let map = element
+                    .as_object()
+                    .ok_or_else(|| self.wrong_type(key, expected, value))?;
+                let inner = Args {
+                    tool: "bundle_adjust.cameras",
+                    map,
+                };
+                inner.reject_unknown(&[
+                    "camera_intrinsics_index",
+                    "release_focal",
+                    "release_distortion",
+                ])?;
+                Ok(super::CameraReleaseOverride {
+                    camera_intrinsics_index: inner.required_usize("camera_intrinsics_index")?,
+                    release_focal: inner.optional_bool("release_focal")?,
+                    release_distortion: inner.optional_bool("release_distortion")?,
+                })
+            })
+            .collect()
     }
 
     /// The observations a split names, by their positions in the track's list.

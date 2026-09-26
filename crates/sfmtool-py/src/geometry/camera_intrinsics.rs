@@ -52,6 +52,23 @@ impl PyCameraIntrinsics {
         self.inner.model_name()
     }
 
+    /// Whether sfmtool's bundle adjustment can release this camera's focal
+    /// length: true for ``SIMPLE_PINHOLE``, ``EQUIDISTANT_FISHEYE``,
+    /// ``SIMPLE_RADIAL_FISHEYE``, ``SFMTOOL_FISHEYE`` and ``SFMTOOL_PINHOLE``.
+    #[getter]
+    fn focal_is_releasable(&self) -> bool {
+        sfmtool_core::reconstruction::bundle_adjust::focal_is_releasable(&self.inner)
+    }
+
+    /// Whether sfmtool's bundle adjustment can release this camera's lens
+    /// distortion: ``k1`` on ``SIMPLE_RADIAL_FISHEYE``, and the spline on an
+    /// ``SFMTOOL_FISHEYE`` or ``SFMTOOL_PINHOLE`` with at least two
+    /// coefficients on a positive domain.
+    #[getter]
+    fn distortion_is_releasable(&self) -> bool {
+        sfmtool_core::reconstruction::bundle_adjust::distortion_is_releasable(&self.inner)
+    }
+
     /// Image width in pixels.
     #[getter]
     fn width(&self) -> u32 {

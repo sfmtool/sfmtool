@@ -324,31 +324,65 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is still going after 200 ms replies instead with running: true and an \
                           operation_id, and the outcome is then read out of get_action_log or \
                           stopped with cancel_background_task. Needs inline keypoints. Each \
-                          camera the posed images use is solved through its own lens, and the \
-                          report names each released camera's focal before and after.",
+                          camera the posed images use is solved through its own lens, and what \
+                          each camera releases is decided camera by camera: release_focal and \
+                          release_distortion are the defaults every camera takes, and cameras \
+                          overrides them for the cameras it names. A camera with neither is held. \
+                          The label says what each camera released, and the report names each \
+                          released camera's focal before and after.",
             kind: Write,
             schema: object(
                 &[
                     (
                         "release_focal",
                         flag(
-                            "Solve each camera's focal length as well as the poses and \
-                             points. Refused when a camera the posed images use has a model \
-                             whose focal the adjustment cannot solve. Defaults to false, which \
-                             holds them where they are.",
+                            "The default for every camera: solve its focal length as well as \
+                             the poses and points. Refused, naming the camera, when a camera \
+                             the posed images use that takes it has a model whose focal the \
+                             adjustment cannot solve. Defaults to false, which holds each focal \
+                             where it is.",
                         ),
                     ),
                     (
                         "release_distortion",
                         flag(
-                            "Solve each camera's lens distortion together with its focal, \
-                             where its model has distortion the adjustment can free: k1 on \
-                             SIMPLE_RADIAL_FISHEYE, the radial spline on SFMTOOL_FISHEYE and \
-                             SFMTOOL_PINHOLE. Cameras of other models keep theirs. Refused \
-                             without release_focal, since neither k1 nor the spline can \
-                             change the scale at the centre of the image, and refused when no \
-                             camera the posed images use has such a model. Defaults to false.",
+                            "The default for every camera: solve its lens distortion together \
+                             with its focal: k1 on SIMPLE_RADIAL_FISHEYE, the radial spline on \
+                             SFMTOOL_FISHEYE and SFMTOOL_PINHOLE. Refused, naming the camera, \
+                             for a camera that takes it without its focal, since neither k1 nor \
+                             the spline can change the scale at the centre of the image, and \
+                             for a camera the posed images use whose model has no such \
+                             distortion; hold such a camera through cameras. Defaults to false.",
                         ),
+                    ),
+                    (
+                        "cameras",
+                        json!({
+                            "type": "array",
+                            "description":
+                                "Per-camera overrides of release_focal and release_distortion. \
+                                 Each entry names a camera by camera_intrinsics_index, the index \
+                                 get_camera_intrinsics and get_camera_image report, and states \
+                                 what it releases; a field left out takes the call's default. A \
+                                 camera no entry names takes the defaults. Refused for an index \
+                                 the reconstruction has no camera at, or one named twice. A \
+                                 camera no posed image uses is not in the solve, and its release \
+                                 is ignored.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "camera_intrinsics_index": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "description": "The camera's index in the reconstruction's camera table.",
+                                    },
+                                    "release_focal": flag("Solve this camera's focal length. Omit for the call's release_focal."),
+                                    "release_distortion": flag("Solve this camera's lens distortion, together with its focal. Omit for the call's release_distortion."),
+                                },
+                                "required": ["camera_intrinsics_index"],
+                                "additionalProperties": false,
+                            },
+                        }),
                     ),
                     (
                         "spline_coeff_count",
@@ -357,7 +391,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "minimum": 2,
                             "maximum": 32,
                             "description":
-                                "Refit every SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera the posed                                  images use to this many spline coefficients before the solve,                                  over its whole spline domain, and start the solve from the                                  refitted cameras; a camera already at the count is left alone.                                  Refused without release_distortion, since the new coefficients                                  only approximate the old curve until the solve fits them, and                                  when no camera is a spline model. The report names each refit                                  and its largest pixel distance from the old curve. Omit to keep                                  each count.",
+                                "Refit every SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera the posed                                  images use and that releases its distortion to this many spline coefficients before the solve,                                  over its whole spline domain, and start the solve from the                                  refitted cameras; a camera already at the count is left alone.                                  Refused unless a spline camera releases its distortion, since the new coefficients                                  only approximate the old curve until the solve fits them, and                                  when no camera is a spline model. The report names each refit                                  and its largest pixel distance from the old curve. Omit to keep                                  each count.",
                         }),
                     ),
                     (

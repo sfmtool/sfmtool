@@ -30,8 +30,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     // also where the panel caches it invalidates are dropped.
     if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
         let options = sfmtool_core::BundleAdjustOptions {
-            opt_f: answer.release_focal,
-            opt_distortion: answer.release_distortion,
+            releases: answer.releases,
             spline_coeff_count: answer.spline_coeff_count,
             spline_domain_deg: answer.spline_domain_deg,
             ..sfmtool_core::BundleAdjustOptions::default()

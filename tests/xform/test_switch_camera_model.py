@@ -338,3 +338,85 @@ def test_the_switch_report_names_the_outermost_keypoint(seoul_bull_ground_truth_
     lines = format_camera_report(entry)
     assert lines[-1].startswith("  outermost keypoint: ")
     assert lines[-1].endswith("° observed")
+
+
+def _two_camera_rig(recon, second):
+    """``recon`` with its odd images taken through ``second``, appended to the
+    camera table."""
+    indexes = np.arange(recon.image_count, dtype=np.uint32) % 2
+    return recon.clone_with_changes(
+        cameras=[recon.cameras[0], second], camera_indexes=indexes
+    )
+
+
+def test_bundle_adjust_option_takes_cameras():
+    from sfmtool.xform._arg_parser import parse_transform_args
+
+    (limited,) = parse_transform_args(["--bundle-adjust", "cameras=2+0"])
+    assert limited.cameras == [0, 2]
+    assert "cameras=0+2" in limited.description()
+    (bare,) = parse_transform_args(["--bundle-adjust"])
+    assert bare.cameras is None
+    with pytest.raises(click.UsageError, match="not a valid"):
+        parse_transform_args(["--bundle-adjust", "cameras=one"])
+
+
+def test_bundle_adjust_cameras_releases_those_and_holds_the_rest(
+    seoul_bull_ground_truth_sfmr, capsys
+):
+    """On a spline rig, ``cameras=1`` releases camera 1's focal and spline and
+    holds camera 0 exactly."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    switched, _ = recon.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
+    rig = _two_camera_rig(switched, switched.cameras[0])
+    capsys.readouterr()
+
+    result = BundleAdjustTransform(cameras=[1]).apply(rig)
+
+    out = capsys.readouterr().out
+    assert "Camera 0 (" in out and "released: none" in out
+    assert "released: focal, distortion" in out
+    assert result.cameras[0] == rig.cameras[0]
+    assert result.cameras[1] != rig.cameras[1]
+
+
+def test_bundle_adjust_cameras_holds_a_camera_the_solve_cannot_release(
+    seoul_bull_ground_truth_sfmr,
+):
+    """A rig mixing a spline camera with an ``OPENCV_FISHEYE`` one is refused
+    bare, because the solve cannot release the ``OPENCV_FISHEYE`` focal, and
+    runs with the release limited to the spline camera."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    spline, _ = recon.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
+    opencv, _ = recon.switch_camera_model("OPENCV_FISHEYE")
+    rig = _two_camera_rig(spline, opencv.cameras[0])
+
+    with pytest.raises(ValueError, match="camera 1, a OPENCV_FISHEYE"):
+        BundleAdjustTransform().apply(rig)
+    result = BundleAdjustTransform(cameras=[0]).apply(rig)
+    assert result.cameras[1] == rig.cameras[1]
+    with pytest.raises(click.UsageError, match=r"camera\(s\) \[2\]"):
+        BundleAdjustTransform(cameras=[0, 2]).apply(rig)
+
+
+def test_bundle_adjust_cameras_holds_colmap_cameras_through_pycolmap(
+    seoul_bull_ground_truth_sfmr,
+):
+    """A COLMAP-model rig goes through pycolmap, and ``cameras=0`` holds camera
+    1's intrinsics constant there."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    rig = _two_camera_rig(recon, recon.cameras[0])
+
+    result = BundleAdjustTransform(cameras=[0]).apply(rig)
+
+    held = rig.cameras[1].to_dict()["parameters"]
+    after = result.cameras[1].to_dict()["parameters"]
+    assert after == pytest.approx(held, rel=0, abs=1e-12)
+    moved = result.cameras[0].to_dict()["parameters"]
+    assert moved != pytest.approx(rig.cameras[0].to_dict()["parameters"], abs=1e-12)
