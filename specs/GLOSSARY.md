@@ -126,6 +126,16 @@ it, for what a step does to a column rather than to a point.
 | **minimal** | the smallest file that holds the whole reconstruction: no thumbnails, no patch bitmaps, no `lineage`, no recorded absolute workspace path, `tool_options` only of the operation writing it. `--minimal`, `save(minimal=True)`, `File > Save As Minimal...`, `SfmrReconstruction::to_minimal` | `slim`, `stripped`, `lite` | one word for one definition, which `sfmtool-core` holds and every writer of such a file calls |
 | **stated workspace path** | the `workspace.relative_path` a save records as the caller gives it, instead of measuring it from the output's directory to the workspace. `wspath=<path>` on `sfm xform --minimal`; the *Workspace path* field the viewer's `File > Save As Minimal...` prompts with; `workspace_path` in Rust (`SaveStamp`), Python (`save(workspace_path=…)`) and on the wire (`save_reconstruction`) | `ws_relative`, `relpath`, `workspace_rel` | one name across every surface, spelled out where there is room and abbreviated only inside the CLI's comma-separated value, where the key sits beside a path. It names the field it writes, so a reader of either spelling knows which one it is |
 
+## Camera intrinsics
+
+Fitting and replacing a camera's lens model, in `sfmtool-core`'s `camera` and
+`reconstruction` modules, the bindings, `sfm xform --camera-model` and the
+specs that describe them.
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **refit camera intrinsics** | fit a camera's intrinsics in another camera model to the intrinsics it has, over the angles where they are trusted; the pose is not involved. Module `camera::refit_intrinsics`, function `refit_camera_intrinsics`, report `CameraIntrinsicsRefit`, spec `core/camera/refit-camera-intrinsics.md`. The binding is the method `CameraIntrinsics.refit`, where the receiver already names the intrinsics | `refit_camera`, `CameraRefit` | a *camera* in this project has a pose as well as intrinsics, and `resect_images` refits the pose. `refit_camera` did not say which of the two was being fitted |
+
 ## Words with a boundary
 
 

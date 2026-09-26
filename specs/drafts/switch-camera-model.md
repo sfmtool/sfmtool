@@ -7,7 +7,7 @@ Decided in outline:
 - The switch is a fit, one core operation, reached from the Camera Intrinsics
   panel, from MCP and from `sfm xform --camera-model`. The core operation and the
   CLI are built: the lens fit is
-  [`../core/camera/refit.md`](../core/camera/refit.md), the reconstruction-level
+  [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md), the reconstruction-level
   switch is
   [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
   and the CLI is
@@ -233,4 +233,4 @@ then apply or cancel. This is the check a reviewer would make.
   that.
 
 The spline domain and the regularization weight are open questions of the fit
-itself, in [`../core/camera/refit.md`](../core/camera/refit.md).
+itself, in [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).

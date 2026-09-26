@@ -64,7 +64,7 @@ fn spline_of(camera: &CameraIntrinsics) -> (f64, f64, Vec<f64>) {
 fn equidistant_to_sfmtool_fisheye_is_exact_with_zero_coefficients() {
     let source = equidistant(130.0);
     let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
-    let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
 
     let (f, _, coeffs) = spline_of(&refit.camera);
     assert!((f - 130.0).abs() < 1e-9, "focal {f}");
@@ -79,7 +79,7 @@ fn equidistant_to_sfmtool_fisheye_is_exact_with_zero_coefficients() {
 #[test]
 fn equidistant_target_is_the_spline_with_no_coefficients() {
     let source = sfmtool_fisheye(125.0, 2.5, vec![0.0; 6]);
-    let refit = refit_camera(
+    let refit = refit_camera_intrinsics(
         &source,
         &RefitTarget::EquidistantFisheye,
         &RefitOptions::default(),
@@ -103,7 +103,7 @@ fn simple_radial_to_radial_reproduces_the_copy() {
         height: 480,
     };
     let target = RefitTarget::from_name("radial", None).unwrap();
-    let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
     match refit.camera.model {
         CameraModel::Radial {
             focal_length,
@@ -132,7 +132,7 @@ fn a_synthetic_spline_is_recovered() {
         theta_fit_deg: Some(theta_max.to_degrees()),
         spline_domain_deg: Some(theta_max.to_degrees()),
     };
-    let refit = refit_camera(&source, &target, &options).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &options).unwrap();
     let (f, domain, coeffs) = spline_of(&refit.camera);
     assert!((domain - theta_max).abs() < 1e-12);
     assert!((f - 128.0).abs() < 1e-3, "focal {f}");
@@ -146,7 +146,7 @@ fn a_synthetic_spline_is_recovered() {
 fn kerry_default_fit_stops_at_the_trusted_bound_short_of_the_fold() {
     let source = kerry_cam0();
     let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
-    let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
 
     assert_eq!(refit.theta_fit_source, ThetaFitSource::TrustedBound);
     let fold = refit.extent.source_fold_deg.expect("cam0 folds");
@@ -185,7 +185,7 @@ fn kerry_default_fit_stops_at_the_trusted_bound_short_of_the_fold() {
 fn a_colmap_target_equal_to_its_source_is_unchanged() {
     let source = kerry_cam0();
     let target = RefitTarget::from_name("OPENCV_FISHEYE", None).unwrap();
-    let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
     assert_eq!(refit.camera, source);
     assert!(refit.dropped.is_empty());
 }
@@ -198,7 +198,7 @@ fn a_polynomial_is_fitted_to_a_spline() {
         theta_fit_deg: Some(80.0),
         spline_domain_deg: None,
     };
-    let refit = refit_camera(&source, &target, &options).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &options).unwrap();
     assert_eq!(refit.camera.model_name(), "OPENCV_FISHEYE");
     assert!(refit.max_px < 0.05, "max {}", refit.max_px);
 }
@@ -207,7 +207,7 @@ fn a_polynomial_is_fitted_to_a_spline() {
 fn a_perspective_target_past_90_degrees_is_refused() {
     let source = equidistant(130.0);
     let target = RefitTarget::from_name("SFMTOOL_PINHOLE", Some(4)).unwrap();
-    let err = refit_camera(&source, &target, &RefitOptions::default()).unwrap_err();
+    let err = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap_err();
     assert!(matches!(err, RefitError::PerspectivePast90 { .. }), "{err}");
 
     // A perspective source fits it.
@@ -221,7 +221,7 @@ fn a_perspective_target_past_90_degrees_is_refused() {
         width: 270,
         height: 480,
     };
-    let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+    let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
     assert_eq!(refit.camera.model_name(), "SFMTOOL_PINHOLE");
     assert_eq!(refit.theta_fit_source, ThetaFitSource::ImageCorner);
     assert!(refit.max_px < 0.05, "max {}", refit.max_px);
@@ -234,7 +234,7 @@ fn a_fit_past_the_trusted_bound_is_refused() {
         spline_domain_deg: None,
     };
     let target = RefitTarget::from_name("SFMTOOL_FISHEYE", None).unwrap();
-    let err = refit_camera(&kerry_cam0(), &target, &options).unwrap_err();
+    let err = refit_camera_intrinsics(&kerry_cam0(), &target, &options).unwrap_err();
     match err {
         RefitError::BeyondTrustedBound {
             theta_fit_deg,
@@ -259,7 +259,7 @@ fn a_non_monotone_spline_is_refused() {
         theta_fit_deg: Some(120.0),
         spline_domain_deg: Some(2.4f64.to_degrees()),
     };
-    let err = refit_camera(&source, &target, &options).unwrap_err();
+    let err = refit_camera_intrinsics(&source, &target, &options).unwrap_err();
     assert_eq!(err, RefitError::NotMonotone);
 }
 
@@ -274,7 +274,7 @@ fn a_polynomial_trusted_short_of_the_fit_is_refused() {
         theta_fit_deg: Some(120.0),
         spline_domain_deg: None,
     };
-    let err = refit_camera(&source, &target, &options).unwrap_err();
+    let err = refit_camera_intrinsics(&source, &target, &options).unwrap_err();
     assert!(matches!(err, RefitError::TrustedBoundShort { .. }), "{err}");
 }
 

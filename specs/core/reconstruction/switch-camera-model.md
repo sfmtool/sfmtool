@@ -11,7 +11,7 @@ COLMAP polynomial model, whose inverse fails a little past 90° off the axis, to
 `SFMTOOL_FISHEYE`, whose spline and linear tail are defined out to 180°, so that
 a later bundle adjustment can refine the lens out to the image circle.
 
-The lens fit itself is [`../camera/refit.md`](../camera/refit.md). This spec is
+The lens fit itself is [`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md). This spec is
 the layer that adds the reconstruction: which observations belong to a camera,
 how the fit's largest angle is chosen from them, what is written back, and the
 before-and-after comparison.
@@ -39,7 +39,7 @@ pub struct SwitchCameraModelReport {
 pub struct CameraSwitch {
     pub camera: usize,
     pub source: CameraIntrinsics,
-    pub refit: CameraRefit,          // carries the new camera
+    pub refit: CameraIntrinsicsRefit,          // carries the new camera
     pub images: usize,
     pub observations: ObservationComparison,
 }
@@ -75,7 +75,7 @@ input is never written, so a refusal leaves nothing half-switched, and a caller
 keeps both values to compare or undo. The viewer's edit and the Python binding
 reach the same function with the same value.
 
-**The fit is separate from the switch.** [`refit_camera`](../camera/refit.md)
+**The fit is separate from the switch.** [`refit_camera_intrinsics`](../camera/refit-camera-intrinsics.md)
 takes only the lens, so a caller comparing targets or coefficient counts can fit
 many times without touching the reconstruction. This function adds only what
 needs the observations.
@@ -87,7 +87,7 @@ and the fit's own reason.
 ### Example
 
 ```rust
-use sfmtool_core::camera::refit::{RefitOptions, RefitTarget};
+use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
 use sfmtool_core::reconstruction::switch_camera_model::switch_camera_model;
 
 let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8))?;

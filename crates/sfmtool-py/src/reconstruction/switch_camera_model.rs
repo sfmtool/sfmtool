@@ -15,7 +15,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use sfmtool_core::camera::refit::{RefitOptions, RefitTarget};
+use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
 use sfmtool_core::reconstruction::edited::EditedReconstruction;
 use sfmtool_core::reconstruction::switch_camera_model::{
     switch_camera_model as core_switch, ErrorSummary, SwitchCameraModelReport,

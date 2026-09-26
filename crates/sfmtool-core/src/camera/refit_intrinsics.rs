@@ -3,7 +3,7 @@
 
 //! Fit a camera of one model to a camera of another.
 //!
-//! `specs/core/camera/refit.md` is the design. [`refit_camera`] samples rays
+//! `specs/core/camera/refit-camera-intrinsics.md` is the design. [`refit_camera_intrinsics`] samples rays
 //! over the angles where the source camera is trusted, projects each with the
 //! source, and chooses the target model's parameters so the target puts every
 //! ray as close as it can to the pixel the source gave it. The principal point
@@ -258,7 +258,7 @@ pub struct ModelExtent {
 
 /// The fitted camera and how well it matches its source.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CameraRefit {
+pub struct CameraIntrinsicsRefit {
     /// The fitted camera: the target model, the source's image size and
     /// principal point.
     pub camera: CameraIntrinsics,
@@ -432,7 +432,7 @@ impl std::error::Error for RefitError {}
 /// # Example
 ///
 /// ```
-/// use sfmtool_core::camera::refit::{refit_camera, RefitOptions, RefitTarget};
+/// use sfmtool_core::camera::refit_intrinsics::{refit_camera_intrinsics, RefitOptions, RefitTarget};
 /// use sfmtool_core::{CameraIntrinsics, CameraModel};
 ///
 /// let source = CameraIntrinsics {
@@ -445,14 +445,14 @@ impl std::error::Error for RefitError {}
 ///     height: 480,
 /// };
 /// let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
-/// let refit = refit_camera(&source, &target, &RefitOptions::default()).unwrap();
+/// let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
 /// assert!(refit.max_px < 1e-6);
 /// ```
-pub fn refit_camera(
+pub fn refit_camera_intrinsics(
     source: &CameraIntrinsics,
     target: &RefitTarget,
     options: &RefitOptions,
-) -> Result<CameraRefit, RefitError> {
+) -> Result<CameraIntrinsicsRefit, RefitError> {
     let (theta_fit_deg, theta_fit_source) = match options.theta_fit_deg {
         Some(theta) => (theta, ThetaFitSource::Given),
         None => match trustworthy_max_theta_deg(source) {
@@ -460,7 +460,7 @@ pub fn refit_camera(
             None => (image_corner_deg(source)?, ThetaFitSource::ImageCorner),
         },
     };
-    refit_camera_over(
+    refit_camera_intrinsics_over(
         source,
         target,
         theta_fit_deg,
@@ -469,16 +469,16 @@ pub fn refit_camera(
     )
 }
 
-/// [`refit_camera`] with the fit's largest angle already resolved, which is
+/// [`refit_camera_intrinsics`] with the fit's largest angle already resolved, which is
 /// what the reconstruction-level switch calls once it has read the
 /// observations' extent.
-pub(crate) fn refit_camera_over(
+pub(crate) fn refit_camera_intrinsics_over(
     source: &CameraIntrinsics,
     target: &RefitTarget,
     theta_fit_deg: f64,
     theta_fit_source: ThetaFitSource,
     spline_domain_deg: Option<f64>,
-) -> Result<CameraRefit, RefitError> {
+) -> Result<CameraIntrinsicsRefit, RefitError> {
     target.check()?;
     if !(theta_fit_deg > 0.0 && theta_fit_deg <= 180.0) {
         return Err(RefitError::ThetaFitInvalid { theta_fit_deg });
@@ -548,7 +548,7 @@ pub(crate) fn refit_camera_over(
     })?;
     let (rms_px, max_px, radial_rms_px) = samples.errors(&fitted, cx, cy);
 
-    Ok(CameraRefit {
+    Ok(CameraIntrinsicsRefit {
         dropped: dropped_terms(source, &camera),
         extent: ModelExtent {
             edge_deg: extreme_angle_deg(&camera, &EDGE_MIDPOINTS),

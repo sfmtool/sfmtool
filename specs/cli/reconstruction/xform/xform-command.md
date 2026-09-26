@@ -287,7 +287,7 @@ Replaces cameras with cameras of another model, each fitted to the one it
 replaces over the angles where that one is trusted. Poses, points, keypoints,
 patches and tracks are not changed; the stored errors of the points the switched
 cameras' images observe are recomputed. The fit and the switch are specified in
-[`../../../core/camera/refit.md`](../../../core/camera/refit.md) and
+[`../../../core/camera/refit-camera-intrinsics.md`](../../../core/camera/refit-camera-intrinsics.md) and
 [`../../../core/reconstruction/switch-camera-model.md`](../../../core/reconstruction/switch-camera-model.md);
 the transform calls `SfmrReconstruction.switch_camera_model`
 ([`xform/_switch_camera_model.py`](../../../../src/sfmtool/xform/_switch_camera_model.py)).

@@ -6,7 +6,7 @@
 //! `specs/core/reconstruction/switch-camera-model.md` is the design. The
 //! function here is pure: an [`SfmrReconstruction`] goes in, a new one and a
 //! report come out. Each chosen camera is replaced by the camera
-//! [`refit_camera`](crate::camera::refit::refit_camera) fits to it, and every
+//! [`refit_camera_intrinsics`](crate::camera::refit_intrinsics::refit_camera_intrinsics) fits to it, and every
 //! observation of an image that uses the camera is measured before and after,
 //! on the same set of observations. Poses, points, keypoints, patches and
 //! tracks are not touched; the stored per-point errors of the points those
@@ -16,9 +16,9 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::data::{observation_reprojection_error, SfmrReconstruction};
-use crate::camera::refit::{
-    image_corner_deg, refit_camera_over, CameraRefit, RefitError, RefitOptions, RefitTarget,
-    ThetaFitSource,
+use crate::camera::refit_intrinsics::{
+    image_corner_deg, refit_camera_intrinsics_over, CameraIntrinsicsRefit, RefitError,
+    RefitOptions, RefitTarget, ThetaFitSource,
 };
 use crate::camera::report::trustworthy_max_theta_deg;
 use crate::camera::CameraIntrinsics;
@@ -137,7 +137,7 @@ pub struct CameraSwitch {
     /// The camera before the switch.
     pub source: CameraIntrinsics,
     /// The fit, carrying the camera after the switch.
-    pub refit: CameraRefit,
+    pub refit: CameraIntrinsicsRefit,
     /// Posed or not, the images that use the camera.
     pub images: usize,
     /// The observation comparison.
@@ -155,7 +155,7 @@ pub struct SwitchCameraModelReport {
 /// report.
 ///
 /// Each camera is fitted independently by
-/// [`refit_camera`](crate::camera::refit::refit_camera). When
+/// [`refit_camera_intrinsics`](crate::camera::refit_intrinsics::refit_camera_intrinsics). When
 /// [`RefitOptions::theta_fit_deg`] is `None` the fit's largest angle is the
 /// source's trusted bound, or, for a source without one, the largest incidence
 /// angle among the observations of the camera's images (the far image corner
@@ -174,7 +174,7 @@ pub struct SwitchCameraModelReport {
 /// # Example
 ///
 /// ```no_run
-/// use sfmtool_core::camera::refit::{RefitOptions, RefitTarget};
+/// use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
 /// use sfmtool_core::reconstruction::switch_camera_model::switch_camera_model;
 /// # fn run(recon: &sfmtool_core::SfmrReconstruction)
 /// # -> Result<(), Box<dyn std::error::Error>> {
@@ -239,7 +239,7 @@ pub fn switch_camera_model(
         .iter()
         .map(|&row| incidence_deg(recon, row))
         .collect();
-    let mut refits: Vec<CameraRefit> = Vec::with_capacity(chosen.len());
+    let mut refits: Vec<CameraIntrinsicsRefit> = Vec::with_capacity(chosen.len());
     for &c in &chosen {
         let source = &table.cameras[c];
         let max_theta_deg = switched_rows
@@ -268,7 +268,7 @@ pub fn switch_camera_model(
                 ),
             },
         };
-        let refit = refit_camera_over(
+        let refit = refit_camera_intrinsics_over(
             source,
             target,
             theta_fit_deg,

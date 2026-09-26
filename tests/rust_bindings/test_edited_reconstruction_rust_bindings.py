@@ -380,7 +380,7 @@ class TestSwitchCameraModel:
             embedded.switch_camera_model("RADIAL", cameras=[4])
 
 
-class TestCameraRefit:
+class TestCameraIntrinsicsRefit:
     """``CameraIntrinsics.refit``: the lens-only fit."""
 
     @staticmethod

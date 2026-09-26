@@ -1,4 +1,4 @@
-# Fitting one camera model to another
+# Refitting camera intrinsics to another camera model
 
 A camera model is the function that maps a ray leaving the camera to a pixel.
 Two models from different families can describe the same lens, and a lens
@@ -19,8 +19,8 @@ The spline models themselves are specified in
 
 ## Rust API
 
-The fit lives in [refit.rs](../../../crates/sfmtool-core/src/camera/refit.rs),
-as `sfmtool_core::camera::refit`, and is bound as `CameraIntrinsics.refit`.
+The fit lives in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/camera/refit_intrinsics.rs),
+as `sfmtool_core::camera::refit_intrinsics`, and is bound as `CameraIntrinsics.refit`.
 
 ```rust
 pub enum RefitTarget {
@@ -56,7 +56,7 @@ pub struct ModelExtent {
     pub source_fold_deg: Option<f64>,
 }
 
-pub struct CameraRefit {
+pub struct CameraIntrinsicsRefit {
     pub camera: CameraIntrinsics,
     pub theta_fit_deg: f64,
     pub theta_fit_source: ThetaFitSource,
@@ -83,11 +83,11 @@ pub enum RefitError {
     Degenerate { reason: &'static str },
 }
 
-pub fn refit_camera(
+pub fn refit_camera_intrinsics(
     source: &CameraIntrinsics,
     target: &RefitTarget,
     options: &RefitOptions,
-) -> Result<CameraRefit, RefitError>;
+) -> Result<CameraIntrinsicsRefit, RefitError>;
 ```
 
 The source's trusted bound is
@@ -122,10 +122,10 @@ can match on the variant.
 ### Example
 
 ```rust
-use sfmtool_core::camera::refit::{refit_camera, RefitOptions, RefitTarget};
+use sfmtool_core::camera::refit_intrinsics::{refit_camera_intrinsics, RefitOptions, RefitTarget};
 
 let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8))?;
-let refit = refit_camera(&source, &target, &RefitOptions::default())?;
+let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default())?;
 println!(
     "f {:.2}, rms {:.3} px, radial {:.3} px over θ ≤ {:.1}°",
     refit.camera.focal_lengths().0, refit.rms_px, refit.radial_rms_px, refit.theta_fit_deg,
@@ -278,7 +278,7 @@ with the sample or coefficient count.
 | `SMOOTHING` | `1e-6` | Weight of the second-difference penalty, per data row and per coefficient. |
 | `LM_MAX_ITERS` | `200` | Iteration budget of the polynomial fit. |
 
-All are constants in [refit.rs](../../../crates/sfmtool-core/src/camera/refit.rs).
+All are constants in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/camera/refit_intrinsics.rs).
 
 ## Python bindings
 

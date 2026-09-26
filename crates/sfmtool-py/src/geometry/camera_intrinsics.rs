@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyType};
 
-use sfmtool_core::camera::refit::{refit_camera, CameraRefit, RefitOptions, RefitTarget};
+use sfmtool_core::camera::refit_intrinsics::{
+    refit_camera_intrinsics, CameraIntrinsicsRefit, RefitOptions, RefitTarget,
+};
 use sfmtool_core::CameraIntrinsics;
 use sfmtool_sfmr_format::SfmrCamera;
 
@@ -488,7 +490,7 @@ impl PyCameraIntrinsics {
     /// Rays are sampled over the angles where this camera is trusted and 64
     /// azimuths, projected with this camera, and the target's parameters chosen
     /// to put every ray as close as they can to the same pixel (see
-    /// ``specs/core/camera/refit.md``). The principal point and image size are
+    /// ``specs/core/camera/refit-camera-intrinsics.md``). The principal point and image size are
     /// copied.
     ///
     /// Args:
@@ -529,7 +531,7 @@ impl PyCameraIntrinsics {
             spline_domain_deg,
         };
         let refit = py
-            .detach(|| refit_camera(&self.inner, &target, &options))
+            .detach(|| refit_camera_intrinsics(&self.inner, &target, &options))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let report = refit_report_to_py(py, &refit)?;
         Ok((
@@ -583,11 +585,11 @@ impl PyCameraIntrinsics {
     }
 }
 
-/// A [`CameraRefit`] as the dict the Python surface reports it as, the camera
+/// A [`CameraIntrinsicsRefit`] as the dict the Python surface reports it as, the camera
 /// itself left out (the caller returns it beside the dict).
 pub(crate) fn refit_report_to_py<'py>(
     py: Python<'py>,
-    refit: &CameraRefit,
+    refit: &CameraIntrinsicsRefit,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("model", refit.camera.model_name())?;
