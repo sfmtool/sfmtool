@@ -72,8 +72,7 @@ pub(crate) struct Operation {
     ///
     /// Stated per operation because only the wrapper knows what its answer
     /// touches: an adjustment writes the reconstruction and is an `Edit`, and a
-    /// bench evaluation writes an item beside it and is a
-    /// [`Kind::Bench`].
+    /// bench fit writes an item beside it and is a [`Kind::Bench`].
     pub(crate) kind: Kind,
 }
 
@@ -148,21 +147,14 @@ impl Operation {
         kind: Kind::Edit,
     };
 
-    /// One bench track read at the stage it is in (`specs/gui/track-view.md`).
+    /// One bench track fitted: localized, re-triangulated, fused, and read back
+    /// (`specs/gui/track-view.md`).
     ///
-    /// Cancellable: the reading polls the flag on either side of the decode,
+    /// Cancellable: the fit polls the flag on either side of the decode,
     /// between its rounds, and inside the localizer between the views it
-    /// renders -- which is where a widened search spends its time -- and hands
-    /// back `EvaluateError::Cancelled` rather than a half-read track.
-    pub(crate) const BENCH_EVALUATE: Operation = Operation {
-        name: "Evaluate track",
-        cancellable: true,
-        kind: Kind::Bench,
-    };
-
-    /// One bench track fitted: localized, re-triangulated, fused, and read back.
-    /// Cancellable at the same places [`Operation::BENCH_EVALUATE`] is, the
-    /// reading it ends with included.
+    /// renders -- which is where a widened search spends its time -- and in
+    /// the reading it ends with, and hands back `FitError::Cancelled` rather
+    /// than a half-fitted track.
     pub(crate) const BENCH_FIT: Operation = Operation {
         name: "Fit track",
         cancellable: true,
@@ -265,14 +257,13 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 13] = [
+    pub(crate) const ALL: [Operation; 12] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
         Operation::PRUNE_COVERED_OBSERVATIONS,
         Operation::ADD_IMAGE_TO_TRACKS,
-        Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_SEARCH,

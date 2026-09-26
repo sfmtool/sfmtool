@@ -727,6 +727,20 @@ pub struct AppState {
     /// wakes by installing its own. `None` where there is no event loop, which
     /// is every test.
     pub(crate) wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+
+    /// The live evaluation of the tracks on every node's bench: the one
+    /// running, and the inputs each track was last evaluated for. See
+    /// [`crate::bench::live`].
+    pub(crate) bench_evaluations: crate::bench::live::Evaluations,
+
+    /// How far around each observation a bench evaluation looks for its
+    /// correlation peak, in patch-grid px: Track View's *search px* slider.
+    ///
+    /// A setting of the viewer rather than of any track, so it is kept here
+    /// for the session, pushes no version and is not undone. It is one of an
+    /// evaluation's inputs, so moving it evaluates every track again, and a
+    /// *Fit* runs at it too.
+    pub(crate) bench_search_px: f64,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -831,6 +845,8 @@ impl AppState {
             busy_notice: Default::default(),
             next_operation_id: 1,
             wake: None,
+            bench_evaluations: Default::default(),
+            bench_search_px: crate::bench::default_search_px(),
         }
     }
 

@@ -209,7 +209,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User / MCP | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |
 | Edit | — | User / MCP | `Committed track: {n} observations in {label}, replacing point {index} ({from} → {to})` -- the bench's one edit ([edits/commit-track.md](edits/commit-track.md)) |
 | Edit | — | User / MCP | the reason an edit, undo, redo or jump was refused — **failed** |
-| Bench | — | User / MCP | one row per bench step, in that step's own words: `Put point {index} on the bench as {item}`, `Turned {image} out of {item}`, `Evaluated {item}: …`, `Set {item} to the {stage} stage`, `Discarded {item} from the bench`, each with ` ({from} → {to})` ([bench.md](bench.md)) |
+| Bench | — | User / MCP | one row per bench step, in that step's own words: `Put point {index} on the bench as {item}`, `Turned {image} out of {item}`, `Fitted {item}: …`, `Set {item} to the {stage} stage`, `Discarded {item} from the bench`, each with ` ({from} → {to})` ([bench.md](bench.md)). The evaluation that follows each step writes no row: it runs on its own after every change and pushes no version ([bench.md](bench.md) § "Live evaluation") |
 | Bench | — | User / MCP | the reason a bench step was refused, and a report that came home to a bench its item had left — **failed** |
 | Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
 | Selection | `image` | User / MCP | `Selected image {name} in {label}` |

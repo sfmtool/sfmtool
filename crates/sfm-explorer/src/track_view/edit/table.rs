@@ -218,7 +218,7 @@ impl TrackEdit {
             .get(observation)
             .copied()
             .unwrap_or(row.verdict);
-        let cells = measurements(row, stage);
+        let cells = measurements(row, stage, &self.evaluation);
         let name = recon
             .image_table
             .images
@@ -454,6 +454,13 @@ impl TrackEdit {
             })
         });
         text(cols.name, &shown, weak);
+        // While an evaluation of new inputs is on its way the numbers are the
+        // last evaluation's, and they are greyed so that they do not read as
+        // the numbers of the track as it now stands.
+        let number_color = match self.evaluation {
+            crate::bench::live::Evaluation::Evaluating => weak,
+            _ => text_color,
+        };
         for (x, cell) in [
             cols.zncc,
             cols.shift,
@@ -465,7 +472,7 @@ impl TrackEdit {
         .into_iter()
         .zip(cells.iter())
         {
-            text(x, cell, text_color);
+            text(x, cell, number_color);
         }
         // The status cell is a sentence rather than a number at the track
         // stage, so it is elided to its column the way the image name is.

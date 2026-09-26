@@ -175,7 +175,7 @@ write, and one writes a file.
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold sliders are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
-| `evaluate_bench_track` | write | Read every observation where it sits, moving nothing, on a worker thread |
+| `set_bench_search_px` | write | Set how far around each observation the bench's evaluation looks, which evaluates every track again at it; the viewer's setting, so no version |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
@@ -2305,10 +2305,10 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Six operations run on a worker**: this one,
+**Five operations run on a worker**: this one,
 `convert_to_embedded_patches`, `retriangulate_all_points`, and the bench's
-`evaluate_bench_track`, `fit_bench_track` and `set_bench_track_stage`, which
-answer through the same two-level reply. Every other edit is still synchronous on the GUI thread,
+`fit_bench_track` and `set_bench_track_stage`, which answer through the same
+two-level reply. Every other edit is still synchronous on the GUI thread,
 and a reconstruction large enough to take more than the apply timeout will still
 time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
@@ -2497,11 +2497,11 @@ the rule and what it costs.
 **A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
 IMG_0042@142,198: the track is at the cluster stage; upgrade it before
 committing"*, *"Cannot set that verdict: image 4 already has observation 1 in;
-turn it out first"*, *"Nothing on the bench is called bull-nose."* The three
+turn it out first"*, *"Nothing on the bench is called bull-nose."* The two
 steps that read photographs refuse **inline** for everything the track alone
 decides -- *"Cannot fit IMG_0042@142,198: 1 observations are in, and the track
 stage needs two or more"* -- rather than starting a task that would decode a
-dozen images before saying so ([bench.md](bench.md) § "The three steps that read
+dozen images before saying so ([bench.md](bench.md) § "The two steps that read
 photographs").
 
 **`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
@@ -2525,15 +2525,28 @@ are each member's stage and reason in the order tried. Nothing is pushed then.
 It answers in two levels like the other steps that run on a worker, and a
 handle's `get_background_task` reports `Create track at pixel`.
 
-**Reading and fitting are two tools.** `evaluate_bench_track` measures every
-observation where it sits and moves nothing -- no keypoint, no position, no
-frame -- and drops nothing: a row it could not read carries a `reason` sentence
-in place of a score, which is what an agent looking at a suspect track needs.
-`fit_bench_track` is the step that moves it, and it ends by reading its own
-result, so `get_bench_track` after a fit answers in the reading's terms. Both
-take `search_px`, how far from each observation's own pixel the correlation peak
-is looked for. A fit of a track-stage track with fewer than two `in`
-observations is refused where a reading of the same track is not.
+**Evaluation is live, and fitting is a tool.** There is no call that evaluates a
+track: every track on a bench is evaluated as soon as it is put there and again
+after every change to its inputs -- a step on it, an undo or redo, a document
+edit under it such as a bundle adjustment, or the search radius -- on a worker
+of its own that pushes no version and writes no row ([bench.md](bench.md) §
+"Live evaluation"). An evaluation measures every observation where it sits and
+moves nothing -- no keypoint, no position, no frame -- and drops nothing: a row
+it could not read carries a `reason` sentence in place of a score, which is what
+an agent looking at a suspect track needs. `get_bench` and `get_bench_track`
+carry each track's `evaluation`, whose `state` says which numbers they are
+returning: `current` when they are the evaluation of the track as it stands,
+`evaluating` when an evaluation of the current inputs is running or waits to
+start (`running` says which) and the numbers are the previous evaluation's,
+`refused` or `failed` with the `reason`. An agent that has just made a step
+reads again until `state` is `current`. `set_bench_search_px` sets how far from
+each observation's own pixel the correlation peak is looked for, for every
+track at once; it is the viewer's setting, as Track View's *search px* slider
+is, so it pushes no version, and the reply is the radius. `fit_bench_track` is
+the step that moves a track, and it ends by evaluating its own result. It takes
+its own `search_px`, defaulting to the viewer's. A fit of a track-stage track
+with fewer than two `in` observations is refused where an evaluation of the
+same track is not.
 
 **A fit's sentence names the representation the rays earned.** Finite or at
 infinity is the decision a fit makes over a distant track
@@ -3593,10 +3606,15 @@ where a test hands no host over.
   rename answers with the new label and the old one then names nothing; each
   refusal is the bench's own sentence and pushes no version; and the two steps
   that read photographs defer to a worker, land their version, and are what
-  `get_background_task` reports afterwards, with the measurements reaching the
-  wire under the observation indexes they were computed for. A stage change
-  states its stage **once**; an evaluation on a node with nothing decoded still
-  defers, and past the reply window answers with the handle; a step the **track**
+  `get_background_task` reports afterwards, with the reads reporting
+  `evaluation.state` as `evaluating` until the evaluation that follows lands and
+  `current` after it, and the measurements reaching the wire under the
+  observation indexes they were computed for. `set_bench_search_px` answers with
+  the radius, pushes no version and makes the track `evaluating` at it, a
+  radius that is not positive is refused, and `evaluate_bench_track` is not a
+  tool. A stage change states its stage **once**; a fit on a node with nothing
+  decoded still defers, and past the reply window answers with the handle; a
+  step the **track**
   rules out refuses inline in the step's own sentence, starting no task and
   pushing no version; and the point a commit replaced is reachable by the very
   index `get_scene` reports as the selection, which is above that node's point

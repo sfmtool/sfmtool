@@ -65,6 +65,7 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
                 "active": active == Some(entry.label.as_str()),
                 "stage": track.stage_kind().to_string(),
                 "origin": origin(track),
+                "evaluation": evaluation(state, id, &entry.label),
                 "counts": {
                     "observations": track.observations.len(),
                     "in": kept,
@@ -172,8 +173,29 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
             "out": out,
         },
         "stage_data": stage_data(track),
+        "evaluation": evaluation(state, id, &item),
         "observations": observations,
     }))
+}
+
+/// Where a track's live evaluation stands, as the two reads report it: the
+/// state, the refusal or failure sentence where there is one, and the radius
+/// the evaluation reads at.
+///
+/// `evaluating` is the answer while an evaluation of the current inputs is
+/// running or waits to start, and `running` says which of the two; the numbers
+/// beside it are then the previous evaluation's, and a read after the worker
+/// lands says `current`.
+fn evaluation(state: &AppState, id: ReconId, item: &str) -> Value {
+    let evaluation = state
+        .bench_evaluation(id, item)
+        .unwrap_or(crate::bench::live::Evaluation::Evaluating);
+    json!({
+        "state": evaluation.name(),
+        "reason": evaluation.reason(),
+        "running": state.bench_evaluation_running(id, item),
+        "search_px": state.bench_search_px(),
+    })
 }
 
 // ── The steps ───────────────────────────────────────────────────────────
@@ -869,23 +891,16 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
     })
 }
 
-/// `evaluate_bench_track`: every observation read at the stage the track is in,
-/// on a worker thread, with nothing moved.
-pub(super) fn evaluate_bench_track(
-    state: &mut AppState,
-    label: &str,
-    named: Option<&str>,
-    search_px: Option<f64>,
-) -> Outcome {
-    let (id, item) = match target(state, label, named) {
-        Ok(target) => target,
-        Err(error) => return Outcome::Done(Err(error)),
-    };
-    let since = state.action_log.revision();
-    match state.start_bench_evaluate(id, &item, search_px) {
-        Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
-    }
+/// `set_bench_search_px`: the radius every bench track is evaluated at.
+///
+/// Not a step on any node: the radius is the viewer's, as the slider's
+/// position is, so it pushes no version and writes no Action Log row, and the
+/// reply is the radius read back.
+pub(super) fn set_bench_search_px(state: &mut AppState, search_px: f64) -> JsonReply {
+    state
+        .set_bench_search_px(search_px)
+        .map_err(ToolError::new)?;
+    Ok(json!({ "search_px": state.bench_search_px() }))
 }
 
 /// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
@@ -1102,7 +1117,7 @@ pub(super) fn observation_place(
     let pixel = crate::bench::observation_pixel(row).ok_or_else(|| {
         ToolError::new(format!(
             "Observation {observation} of {item} has no place in its image yet -- nothing has \
-             measured it and it carries no seed. evaluate_bench_track measures it."
+             measured it and it carries no seed. sight_bench_observation places it."
         ))
     })?;
     Ok((

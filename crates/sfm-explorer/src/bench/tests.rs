@@ -227,24 +227,23 @@ fn putting_a_point_on_twice_activates_the_track_it_already_made() {
 // ── Undo, redo and the document edit between two bench steps ────────────
 
 #[test]
-fn a_verdict_a_stage_change_and_an_evaluation_are_three_versions_undo_retraces_them() {
+fn a_verdict_and_a_stage_change_are_two_versions_and_the_evaluations_after_them_none() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
     let before = versions(&state, id);
 
     state
         .set_bench_verdict(id, &label, 1, Verdict::Out)
         .expect("observation 1 exists");
+    state.settle_bench_evaluation();
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a frame downgrades");
     state.finish_background_task();
-    state
-        .start_bench_evaluate(id, &label, None)
-        .expect("a cluster evaluates over its seeds");
-    state.finish_background_task();
+    state.settle_bench_evaluation();
 
-    assert_eq!(versions(&state, id) - before, 3);
+    assert_eq!(versions(&state, id) - before, 2);
     let measured = state
         .bench_track(id, &label)
         .expect("still on the bench")
@@ -264,17 +263,6 @@ fn a_verdict_a_stage_change_and_an_evaluation_are_three_versions_undo_retraces_t
     );
 
     // Back out, one step at a time, and the bench is what it was at each.
-    state.undo(id).expect("the evaluation");
-    assert!(
-        state
-            .bench_track(id, &label)
-            .expect("on the bench")
-            .observations[0]
-            .cluster
-            .as_ref()
-            .is_some_and(|m| m.zncc.is_none()),
-        "the undo kept the evaluation's measurements"
-    );
     state.undo(id).expect("the stage change");
     assert_eq!(
         state
@@ -304,7 +292,6 @@ fn a_verdict_a_stage_change_and_an_evaluation_are_three_versions_undo_retraces_t
         Verdict::Out
     );
     state.redo(id).expect("the stage change");
-    state.redo(id).expect("the evaluation");
     assert_eq!(
         state
             .bench_track(id, &label)
@@ -637,7 +624,7 @@ fn a_photometric_step_decodes_on_the_worker() {
     let before = versions(&state, id);
 
     state
-        .start_bench_evaluate(id, &label, None)
+        .start_bench_fit(id, &label, None)
         .expect("the task started");
     assert!(
         state.background_task().is_some(),
@@ -648,7 +635,7 @@ fn a_photometric_step_decodes_on_the_worker() {
     assert_eq!(
         versions(&state, id),
         before,
-        "a refused evaluation pushed a version"
+        "a refused fit pushed a version"
     );
     let rows = rows(&state);
     assert_eq!(rows.len(), 1, "{rows:?}");
@@ -672,13 +659,13 @@ fn a_report_lands_on_the_item_it_measured() {
     let item = label.clone();
     state
         .start_background_task(
-            Operation::BENCH_EVALUATE,
+            Operation::BENCH_FIT,
             id,
             Box::new(move |_| Finished::BenchTrack {
                 label: item,
                 track: Box::new(measured),
-                version_label: "Evaluated a track".to_string(),
-                text: "Evaluated a track".to_string(),
+                version_label: "Fitted a track".to_string(),
+                text: "Fitted a track".to_string(),
             }),
         )
         .expect("nothing else is running");
@@ -707,13 +694,13 @@ fn a_report_for_an_item_that_is_gone_is_discarded_with_one_row() {
 
     state
         .start_background_task(
-            Operation::BENCH_EVALUATE,
+            Operation::BENCH_FIT,
             id,
             Box::new(move |_| Finished::BenchTrack {
                 label: "nothing-is-called-this".to_string(),
                 track: Box::new(measured),
-                version_label: "Evaluated a track".to_string(),
-                text: "Evaluated a track".to_string(),
+                version_label: "Fitted a track".to_string(),
+                text: "Fitted a track".to_string(),
             }),
         )
         .expect("nothing else is running");

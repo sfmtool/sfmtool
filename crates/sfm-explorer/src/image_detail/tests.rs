@@ -546,7 +546,7 @@ use super::{BenchMenu, START_CLUSTER_LABEL};
 
 /// A node busy with a task refuses every step on it, and the entries say so in
 /// that refusal's own words.
-const BUSY: &str = "bull is busy: Evaluate track is still running.";
+const BUSY: &str = "bull is busy: Fit track is still running.";
 
 /// A track on the bench. The menu's rules read whether there is one and
 /// nothing about what is in it, so an empty one says everything they can.

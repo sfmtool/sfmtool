@@ -171,6 +171,12 @@ impl App {
             // next frame has something new to draw.
             self.egui_ctx.request_repaint();
         }
+        // The bench's live evaluation lands here too, before the drain, so an
+        // agent's read in this frame gets the values the worker just brought
+        // back (`specs/gui/bench.md` § "Live evaluation").
+        if self.state.drive_bench_evaluation() {
+            self.egui_ctx.request_repaint();
+        }
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 
@@ -241,6 +247,14 @@ impl App {
             self.run_egui_pass(&window, &mut egui_winit_state, &phase)
         };
         self.egui_winit_state = Some(egui_winit_state);
+
+        // After the pass, which is where this frame's steps were applied: a
+        // step that changed an input to a bench track's evaluation starts the
+        // evaluation of the new inputs in the same frame. The tool calls
+        // drained above are covered by this call as well.
+        if self.state.drive_bench_evaluation() {
+            self.egui_ctx.request_repaint();
+        }
 
         // A refusal the person at the window just walked into brings the
         // Action Log forward, so the sentence saying why is on the screen

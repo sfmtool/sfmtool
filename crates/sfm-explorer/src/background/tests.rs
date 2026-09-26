@@ -519,13 +519,12 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
-        // The three steps that read photographs, over the bench fixture: a
-        // point on the bench and a textured photograph cached for every image.
-        "Evaluate track" | "Fit track" | "Set track stage" => {
+        // The two steps that read photographs, over the bench fixture: a point
+        // on the bench and a textured photograph cached for every image.
+        "Fit track" | "Set track stage" => {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
-                "Evaluate track" => state.bench_evaluate_job(id, &label, None),
                 "Fit track" => state.bench_fit_job(id, &label, None),
                 _ => state.bench_stage_job(id, &label, StageKind::Cluster),
             }

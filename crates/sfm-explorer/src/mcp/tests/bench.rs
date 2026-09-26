@@ -1749,10 +1749,11 @@ fn the_bench_refuses_in_its_own_words() {
     assert!(state.bench_track(state.scene[0].id, &item).is_some());
 }
 
-/// The three steps that read photographs go to a worker and report through the
-/// same two-level reply `bundle_adjust` uses.
+/// The two steps that read photographs go to a worker and report through the
+/// same two-level reply `bundle_adjust` uses, and the evaluation that follows
+/// each is on the wire under `evaluation`.
 #[test]
-fn evaluate_fit_and_set_stage_run_as_background_tasks() {
+fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
 
@@ -1779,35 +1780,34 @@ fn evaluate_fit_and_set_stage_run_as_background_tasks() {
         json!("cluster")
     );
 
-    let evaluated = worked(
-        &mut state,
-        &mut viewer,
-        "evaluate_bench_track",
-        json!({ "reconstruction_label": "run_a", "track": item }),
-    );
-    assert!(
-        evaluated["report"]
-            .as_str()
-            .expect("a report")
-            .starts_with(&format!("Evaluated {item}")),
-        "{evaluated}"
-    );
-
     // The operation is the one an agent polls for, under the name the panel
     // shows it as.
     let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
     assert_eq!(task["running"], json!(false), "{task}");
-    assert_eq!(task["operation"], json!("Evaluate track"), "{task}");
+    assert_eq!(task["operation"], json!("Set track stage"), "{task}");
     assert_eq!(task["reconstruction_label"], json!("run_a"), "{task}");
 
-    // And the measurements are on the wire, under the observation indexes they
-    // were computed for.
+    // The stage change is a change of inputs, so the track reads as being
+    // evaluated until the evaluation of the cluster lands.
     let track = call(
         &mut state,
         &mut viewer,
         "get_bench_track",
         json!({ "reconstruction_label": "run_a" }),
     );
+    assert_eq!(track["evaluation"]["state"], json!("evaluating"), "{track}");
+    state.settle_bench_evaluation();
+
+    // And then the measurements are on the wire, under the observation indexes
+    // they were computed for.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(track["evaluation"]["state"], json!("current"), "{track}");
+    assert_eq!(track["evaluation"]["running"], json!(false), "{track}");
     assert!(
         track["observations"][0]["cluster"]["zncc"].is_number(),
         "the evaluation measured nothing: {track}"
@@ -1886,13 +1886,7 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
         .as_u64()
         .expect("an add names the index it took") as usize;
 
-    let evaluated = worked(
-        &mut state,
-        &mut viewer,
-        "evaluate_bench_track",
-        json!({ "reconstruction_label": "run_a", "track": item }),
-    );
-    assert!(evaluated["report"].is_string(), "{evaluated}");
+    state.settle_bench_evaluation();
 
     let track = call(
         &mut state,
@@ -2083,28 +2077,28 @@ fn the_stage_report_states_the_stage_once() {
     assert!(last.2.starts_with(report), "{last:?} against {report}");
 }
 
-/// The two steps that read photographs decode **on the worker**: a node whose
+/// The steps that read photographs decode **on the worker**: a node whose
 /// photographs are neither decoded nor readable starts the task all the same,
 /// and the reply is the handle the frame hands back once the window has passed.
 #[test]
-fn a_slow_evaluate_answers_with_a_handle_naming_it() {
+fn a_slow_fit_answers_with_a_handle_naming_it() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
-    // Nothing decoded: the evaluation has every photograph to read, which is
-    // the work that must not happen before the deferral.
+    // Nothing decoded: the fit has every photograph to read, which is the work
+    // that must not happen before the deferral.
     state.full_res_cache.clear();
 
     let arguments = json!({ "reconstruction_label": "run_a" })
         .as_object()
         .cloned()
         .expect("an object");
-    let command = tools::parse("evaluate_bench_track", Some(&arguments)).expect("a valid call");
+    let command = tools::parse("fit_bench_track", Some(&arguments)).expect("a valid call");
     let pending = match agent(&mut state, &mut viewer, command) {
         Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
-        _ => panic!("evaluate must defer to a worker"),
+        _ => panic!("a fit must defer to a worker"),
     };
-    assert_eq!(pending.operation_name, "Evaluate track");
+    assert_eq!(pending.operation_name, "Fit track");
 
     // Past the window with the operation still the one running -- nothing has
     // drained its reports -- which is the handle case.
@@ -2119,7 +2113,7 @@ fn a_slow_evaluate_answers_with_a_handle_naming_it() {
         _ => panic!("a handle is JSON"),
     };
     assert_eq!(reply["running"], json!(true), "{reply}");
-    assert_eq!(reply["operation"], json!("Evaluate track"), "{reply}");
+    assert_eq!(reply["operation"], json!("Fit track"), "{reply}");
     assert_eq!(reply["operation_id"], json!(operation_id), "{reply}");
     assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
 
@@ -2127,9 +2121,79 @@ fn a_slow_evaluate_answers_with_a_handle_naming_it() {
     // gesture's: the step began either way.
     state.finish_background_task();
     match super::super::edit::background_reply(&state, &past).expect("the operation finished") {
-        Err(e) => assert!(e.0.contains(&format!("Cannot evaluate {item}")), "{e}"),
+        Err(e) => assert!(e.0.contains(&format!("Cannot fit {item}")), "{e}"),
         Ok(_) => panic!("the fixture's photographs are not on disk"),
     }
+}
+
+// ── Live evaluation ─────────────────────────────────────────────────────
+
+/// There is no call that evaluates a track: a track is evaluated as soon as it
+/// is on the bench and again after every change, and both reads say whether the
+/// numbers they return are the evaluation of the track as it stands.
+#[test]
+fn the_reads_say_whether_the_numbers_are_current_and_the_radius_is_an_input() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    assert!(
+        tools::parse("evaluate_bench_track", None).is_err(),
+        "the evaluate tool is still on the wire"
+    );
+
+    let read = |state: &mut AppState, viewer: &mut Viewer3D| {
+        call(
+            state,
+            viewer,
+            "get_bench_track",
+            json!({ "reconstruction_label": "run_a", "track": item }),
+        )["evaluation"]
+            .clone()
+    };
+    let evaluation = read(&mut state, &mut viewer);
+    assert_eq!(evaluation["state"], json!("evaluating"), "{evaluation}");
+    assert_eq!(
+        evaluation["search_px"],
+        json!(crate::bench::default_search_px())
+    );
+    assert!(evaluation["reason"].is_null(), "{evaluation}");
+
+    state.settle_bench_evaluation();
+    assert_eq!(read(&mut state, &mut viewer)["state"], json!("current"));
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        bench["items"][0]["evaluation"]["state"],
+        json!("current"),
+        "{bench}"
+    );
+
+    // The radius is the viewer's: no version, and every track reads again.
+    let before = version_count(&state);
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_search_px",
+        json!({ "search_px": 7.5 }),
+    );
+    assert_eq!(set["search_px"], json!(7.5), "{set}");
+    assert_eq!(version_count(&state), before, "the radius pushed a version");
+    let evaluation = read(&mut state, &mut viewer);
+    assert_eq!(evaluation["state"], json!("evaluating"), "{evaluation}");
+    assert_eq!(evaluation["search_px"], json!(7.5), "{evaluation}");
+    state.settle_bench_evaluation();
+    assert_eq!(read(&mut state, &mut viewer)["state"], json!("current"));
+
+    let refusal = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_search_px",
+        json!({ "search_px": -1.0 }),
+    );
+    assert!(refusal.0.contains("positive"), "{refusal}");
 }
 
 // ── Create Track Here ───────────────────────────────────────────────────

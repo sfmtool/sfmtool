@@ -31,6 +31,7 @@ use sfmtool_core::bench::{
 };
 use sfmtool_core::SfmrReconstruction;
 
+use crate::bench::live::Evaluation;
 use crate::scene::{ImageRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -53,12 +54,12 @@ pub struct TrackEditResponse {
     pub discard: Option<String>,
     /// *Rename* was committed: the item, and the label it should take.
     pub rename: Option<(String, String)>,
-    /// *Evaluate*, carrying the search radius the control stands at: the
-    /// reading moves nothing, so the one thing it needs from the panel is how
-    /// far around each observation to look.
-    pub evaluate: Option<f64>,
-    /// *Fit*, carrying the same search radius for the reading it ends with.
-    pub fit: Option<f64>,
+    /// *Fit*, which runs at the radius the live evaluation reads at.
+    pub fit: bool,
+    /// The *search px* slider was released, or a value typed into it was
+    /// committed: the radius the bench's evaluation should read at. Set only
+    /// when it differs from the viewer's own.
+    pub search_px: Option<f64>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// A threshold slider was released, or a value typed into one was
@@ -171,12 +172,19 @@ pub struct TrackEdit {
     /// refusal is asked every frame, in front of this, because that one is free
     /// and does move.
     build_refusal: Option<(ReconId, Option<String>)>,
-    /// How far around each observation the next reading looks for its
-    /// correlation peak, in patch-grid px. Panel state beside the sliders, and
-    /// what *Evaluate* and *Fit* carry: it is an input to the measurement
-    /// rather than a bar the painting judges by, so moving it repaints nothing
-    /// and changes no number until the next reading runs.
+    /// Where the *search px* slider stands, in patch-grid px.
+    ///
+    /// The viewer's own radius ([`AppState::bench_search_px`]), copied on
+    /// every frame the slider is not being dragged, as the threshold sliders
+    /// copy the track's bars. A release hands the new radius to the dock, and
+    /// every track is then evaluated again at it.
     search_px: f64,
+    /// Whether the *search px* slider was being dragged on the last frame.
+    searching: bool,
+    /// Where the active track's evaluation stood when this frame drew it:
+    /// what the status at the head of the toolbar says, and how the rows print
+    /// their numbers.
+    evaluation: Evaluation,
     /// Whether a dot drag in Image Detail at the track stage moves the patch,
     /// every sighting following (`true`, the default), or that one sighting's
     /// keypoint alone (`false`). The *Lock* checkbox.
@@ -215,6 +223,8 @@ impl TrackEdit {
             rows: Vec::new(),
             build_refusal: None,
             search_px: crate::bench::default_search_px(),
+            searching: false,
+            evaluation: Evaluation::Evaluating,
             lock: true,
             scroll_offset_y: None,
         }
@@ -236,6 +246,12 @@ impl TrackEdit {
     #[cfg(test)]
     pub(crate) fn search_px(&self) -> f64 {
         self.search_px
+    }
+
+    /// Where the active track's evaluation stood when the panel last drew it.
+    #[cfg(test)]
+    pub(crate) fn evaluation(&self) -> &Evaluation {
+        &self.evaluation
     }
 
     /// Whether the *Lock* box is ticked: a track-stage dot drag in Image Detail
@@ -327,6 +343,12 @@ impl TrackEdit {
             self.selection_of = Some((id, label.clone()));
         }
         self.reseat_thresholds(track);
+        if !self.searching {
+            self.search_px = state.bench_search_px();
+        }
+        self.evaluation = state
+            .bench_evaluation(id, &label)
+            .unwrap_or(Evaluation::Evaluating);
         self.repaint_if_stale(&label, track);
         self.recheck_commit_if_stale(&label, track, node);
         self.retile_if_stale(&label, track);
@@ -343,6 +365,7 @@ impl TrackEdit {
         // frame's value from the next frame on, which is the frame the dock
         // has applied it by.
         response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
+        response.search_px = self.show_search_px(ui, state.bench_search_px());
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
@@ -367,15 +390,7 @@ impl TrackEdit {
                 StageKind::Track => (StageKind::Cluster, "Stage: track \u{2192} cluster"),
             };
             let refusals = photometric_refusals(busy.as_deref(), track, next);
-            if entry(
-                ui,
-                "Evaluate",
-                refusals.evaluate,
-                "Measure every observation where it sits, moving nothing: no gate \
-                 drops a row, and a row that cannot be read says why",
-            ) {
-                response.evaluate = Some(self.search_px);
-            }
+            show_evaluation(ui, &self.evaluation);
             if entry(
                 ui,
                 "Fit",
@@ -383,7 +398,7 @@ impl TrackEdit {
                 "Localize every sighting against the patch, re-triangulate the \
                  in ones and re-fuse: this one moves the track",
             ) {
-                response.fit = Some(self.search_px);
+                response.fit = true;
             }
             if entry(
                 ui,
@@ -530,23 +545,39 @@ impl TrackEdit {
                 // changes the value with no drag at all.
                 released |= r.drag_stopped() || (r.changed() && !r.dragged());
             }
-            // Not a threshold: this one is an input to the next reading rather
-            // than a bar the painting judges by, which is why it stands apart
-            // and why moving it repaints nothing.
-            ui.separator();
-            ui.add(
-                egui::Slider::new(&mut self.search_px, 1.0..=24.0)
-                    .text("search px")
-                    .max_decimals(1),
-            )
-            .on_hover_text(
-                "How far around each observation Evaluate looks for the correlation \
-                 peak, in patch-grid px",
-            );
         });
         self.sliding = sliding;
         (released && !sliding && self.thresholds != track.thresholds)
             .then(|| self.thresholds.clone())
+    }
+
+    /// The *search px* slider: how far around each observation the evaluation
+    /// looks for its correlation peak. Its release, or a typed value's commit,
+    /// hands back the radius to set; `None` on every other frame, and on a
+    /// release that left it at `current`.
+    ///
+    /// Not a threshold: it is an input to the evaluation rather than a bar the
+    /// painting judges by, which is why it stands on a row of its own, and it
+    /// applies to every track rather than to the active one. Never greyed by a
+    /// busy node, because setting it is no step on the node: the evaluations
+    /// it asks for wait until the node is free.
+    fn show_search_px(&mut self, ui: &mut egui::Ui, current: f64) -> Option<f64> {
+        let r = ui
+            .add(
+                egui::Slider::new(&mut self.search_px, 1.0..=24.0)
+                    .text(SEARCH_PX_LABEL)
+                    .max_decimals(1)
+                    .update_while_editing(false),
+            )
+            .on_hover_text(
+                "How far around each observation the evaluation looks for the correlation \
+                 peak, in patch-grid px. Every track is evaluated again at it when it is \
+                 released",
+            );
+        self.searching = r.dragged();
+        let released = r.drag_stopped() || (r.changed() && !r.dragged());
+        (released && !self.searching && self.search_px.to_bits() != current.to_bits())
+            .then_some(self.search_px)
     }
 
     /// Put the sliders where the active track's own bars are, unless a slider
@@ -692,6 +723,51 @@ pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
 /// because it reads poses and photographs, and requires no descriptor index.
 pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
 
+/// The *search px* slider's label, in one constant so the tests aim at the
+/// label drawn.
+pub(crate) const SEARCH_PX_LABEL: &str = "search px";
+
+/// What the toolbar says while an evaluation of the active track's current
+/// inputs is running or waiting to start, and what each row's status cell says
+/// then.
+pub(crate) const EVALUATING_LABEL: &str = "Evaluating\u{2026}";
+
+/// What the toolbar says once the numbers are the evaluation of the track as
+/// it stands.
+pub(crate) const EVALUATED_LABEL: &str = "Evaluated";
+
+/// The status cell of a row whose track has no evaluation of its current
+/// inputs and gets none until a step changes them.
+pub(crate) const NOT_EVALUATED: &str = "not evaluated";
+
+/// Where the active track's evaluation stands, at the head of the toolbar.
+///
+/// There is no *Evaluate* button: every change to an input of the evaluation
+/// evaluates the track again (`specs/gui/bench.md` § "Live evaluation"), so
+/// what the panel owes the person is which state the numbers below are in. A
+/// track that cannot be evaluated, or whose evaluation failed, says why in the
+/// sentence the refusal or the failure carries.
+fn show_evaluation(ui: &mut egui::Ui, evaluation: &Evaluation) {
+    match evaluation {
+        Evaluation::Current => {
+            ui.weak(EVALUATED_LABEL).on_hover_text(
+                "The numbers below are the evaluation of the track as it stands. Every \
+                 change to it is evaluated again as it is made",
+            );
+        }
+        Evaluation::Evaluating => {
+            ui.spinner();
+            ui.weak(EVALUATING_LABEL).on_hover_text(
+                "The track has changed since its numbers were measured, and it is being \
+                 evaluated again. The greyed numbers below are the last evaluation's",
+            );
+        }
+        Evaluation::Refused(why) | Evaluation::Failed(why) => {
+            ui.colored_label(ui.visuals().warn_fg_color, why.as_str());
+        }
+    }
+}
+
 /// The header: what the active track is, and what the last evaluation of it
 /// made of it.
 fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
@@ -756,23 +832,20 @@ fn split_refusal(panel: &TrackEdit, track: &EditableTrack) -> Option<String> {
     }
 }
 
-/// What each of the three photometric entries is greyed with, or `None` where
+/// What each of the two photometric entries is greyed with, or `None` where
 /// the step can run.
 pub(super) struct PhotometricRefusals {
-    /// *Evaluate*.
-    pub(super) evaluate: Option<String>,
     /// *Fit*.
     pub(super) fit: Option<String>,
     /// The *Stage* toggle, for the stage it would move to.
     pub(super) stage: Option<String>,
 }
 
-/// The sentence each of the three photometric entries is greyed with.
+/// The sentence each of the two photometric entries is greyed with.
 ///
 /// The busy refusal first, and then core's **own** half of that step's
 /// validation -- the half that reads no photograph
-/// ([`sfmtool_core::bench::evaluate_preconditions`],
-/// [`sfmtool_core::bench::fit_preconditions`],
+/// ([`sfmtool_core::bench::fit_preconditions`],
 /// [`sfmtool_core::bench::set_stage_preconditions`]). Asking them here is what
 /// keeps a button that cannot work from starting a task whose only act would be
 /// to decode a dozen photographs and fail for a reason the track already knew,
@@ -787,11 +860,6 @@ pub(super) fn photometric_refusals(
 ) -> PhotometricRefusals {
     let refused = |why: Option<String>| busy.map(str::to_string).or(why);
     PhotometricRefusals {
-        evaluate: refused(
-            sfmtool_core::bench::evaluate_preconditions(track)
-                .err()
-                .map(|why| why.to_string()),
-        ),
         fit: refused(
             sfmtool_core::bench::fit_preconditions(track)
                 .err()
@@ -842,7 +910,35 @@ fn provenance_text(provenance: Provenance) -> String {
 /// large offsets beside a column of zero shifts, and one number could not say
 /// that. The cluster stage has one of them -- the drift from its seed -- and
 /// prints `-` for the other.
-fn measurements(observation: &Observation, stage: StageKind) -> [String; 7] {
+///
+/// The cells follow where the track's evaluation stands. Current, they are the
+/// numbers the track carries. While an evaluation of new inputs is on its way
+/// the numbers are the last evaluation's, which the table greys, and the status
+/// cell says the row is being evaluated. A track that has no evaluation of its
+/// inputs and will not get one prints no number at all.
+fn measurements(
+    observation: &Observation,
+    stage: StageKind,
+    evaluation: &Evaluation,
+) -> [String; 7] {
+    match evaluation {
+        Evaluation::Current => measured(observation, stage),
+        Evaluation::Evaluating => {
+            let mut cells = measured(observation, stage);
+            cells[6] = EVALUATING_LABEL.to_string();
+            cells
+        }
+        Evaluation::Refused(_) | Evaluation::Failed(_) => {
+            let mut cells: [String; 7] = Default::default();
+            cells[..6].fill("-".to_string());
+            cells[6] = NOT_EVALUATED.to_string();
+            cells
+        }
+    }
+}
+
+/// The cells of [`measurements`] for the numbers the track carries.
+fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
     let number = |value: Option<f64>, digits: usize| match value {
         Some(v) if v.is_finite() => format!("{v:.digits$}"),
         Some(_) => "NaN".to_string(),

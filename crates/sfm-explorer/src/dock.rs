@@ -318,6 +318,12 @@ impl TabContext<'_> {
             let outcome = self.state.rename_bench_item(id, label, to);
             refuse(self.state, outcome);
         }
+        // The radius is the viewer's rather than a track's, so it applies
+        // whichever track is active; moving it evaluates every track again.
+        if let Some(search_px) = response.search_px {
+            let outcome = self.state.set_bench_search_px(search_px);
+            refuse(self.state, outcome);
+        }
         // Everything below acts on the active track, which is what a bench
         // panel's gesture means when it names no item.
         let active = self
@@ -350,14 +356,11 @@ impl TabContext<'_> {
             let outcome = self.state.duplicate_bench_item(id, &label).map(|_| ());
             refuse(self.state, outcome);
         }
-        if let Some(search_px) = response.evaluate {
-            let outcome = self.state.start_bench_evaluate(id, &label, Some(search_px));
-            // A refusal to begin is logged by the starter, in the words its
-            // own gate uses; there is nothing to say twice.
-            let _ = outcome;
-        }
-        if let Some(search_px) = response.fit {
-            let _ = self.state.start_bench_fit(id, &label, Some(search_px));
+        if response.fit {
+            // At the radius the live evaluation reads at. A refusal to begin
+            // is logged by the starter, in the words its own gate uses; there
+            // is nothing to say twice.
+            let _ = self.state.start_bench_fit(id, &label, None);
         }
         if let Some(stage) = response.set_stage {
             let _ = self.state.start_bench_stage(id, &label, stage);

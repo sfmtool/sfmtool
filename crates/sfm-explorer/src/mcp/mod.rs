@@ -473,21 +473,17 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
     },
-    /// Read every observation at the stage the track is in, on a worker,
-    /// moving nothing.
-    EvaluateBenchTrack {
-        reconstruction_label: String,
-        track: Option<String>,
-        /// How far around each observation the correlation peak is looked for,
-        /// in patch-grid px, or `None` for the reading own default.
-        search_px: Option<f64>,
+    /// Set the radius every bench track is evaluated at, in patch-grid px.
+    SetBenchSearchPx {
+        search_px: f64,
     },
     /// Fit the track at the stage it is in, on a worker: the step that moves
     /// it, and which ends by reading its own result.
     FitBenchTrack {
         reconstruction_label: String,
         track: Option<String>,
-        /// The search radius the reading a fit ends with runs at.
+        /// The search radius the fit runs at, or `None` for the one the live
+        /// evaluation reads at.
         search_px: Option<f64>,
     },
     /// Move the track between its two representations, on a worker.
@@ -1476,11 +1472,9 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             track.as_deref(),
         )),
-        Command::EvaluateBenchTrack {
-            reconstruction_label,
-            track,
-            search_px,
-        } => bench::evaluate_bench_track(state, &reconstruction_label, track.as_deref(), search_px),
+        Command::SetBenchSearchPx { search_px } => {
+            done(bench::set_bench_search_px(state, search_px))
+        }
         Command::FitBenchTrack {
             reconstruction_label,
             track,

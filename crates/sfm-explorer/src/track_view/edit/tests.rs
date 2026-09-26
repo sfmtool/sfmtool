@@ -433,10 +433,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a frame downgrades");
     state.finish_background_task();
-    state
-        .start_bench_evaluate(id, &label, None)
-        .expect("a cluster evaluates over its seeds");
-    state.finish_background_task();
+    state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
@@ -466,10 +463,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
             },
         )
         .expect("a pixel on the sensor");
-    state
-        .start_bench_evaluate(id, &label, None)
-        .expect("a framed track reads");
-    state.finish_background_task();
+    state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
@@ -484,35 +478,113 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
     );
 }
 
-/// Reading and moving are two gestures, so the toolbar offers two buttons, and
-/// the search radius they carry is a control of its own beside the threshold
-/// sliders -- an input to the next reading rather than a bar the painting
-/// judges by.
+/// Evaluation is live, so there is no *Evaluate* button: the toolbar offers
+/// *Fit*, which moves the track, and says where the evaluation of the track as
+/// it stands is. The search radius is a control of its own beside the
+/// threshold sliders -- an input to the evaluation rather than a bar the
+/// painting judges by.
 #[test]
-fn the_toolbar_offers_the_reading_and_the_fit_with_a_search_radius() {
-    let (state, _, _, mut panel, ctx) = on_the_bench();
+fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
+    let (mut state, _, _, mut panel, ctx) = on_the_bench();
     assert_eq!(
         panel.search_px(),
         crate::bench::default_search_px(),
-        "the control starts where core's own reading does"
+        "the control starts where core's own evaluation does"
     );
 
-    let texts = crate::test_support::painted_texts(
-        &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
-            ..Default::default()
-        },
-        |ui| {
-            panel.show(ui, &state);
-        },
-    );
-    for label in ["Evaluate", "Fit", "search px"] {
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    for label in ["Fit", super::SEARCH_PX_LABEL, super::EVALUATING_LABEL] {
         assert!(
             texts.iter().any(|t| t == label),
             "{label} is not in the toolbar: {texts:?}"
         );
     }
+    assert!(
+        !texts.iter().any(|t| t == "Evaluate"),
+        "the Evaluate button is still drawn: {texts:?}"
+    );
+
+    state.settle_bench_evaluation();
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(
+        texts.iter().any(|t| t == super::EVALUATED_LABEL),
+        "an evaluated track does not say so: {texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t == super::EVALUATING_LABEL));
+}
+
+/// While an evaluation of the track's current inputs is on its way the rows do
+/// not present the last evaluation's numbers as the track's: each status cell
+/// says the row is being evaluated, until the evaluation lands.
+#[test]
+fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    assert_eq!(
+        panel.evaluation(),
+        &crate::bench::live::Evaluation::Evaluating
+    );
+    assert!(
+        panel
+            .rows()
+            .iter()
+            .all(|row| row.cells[6] == super::EVALUATING_LABEL),
+        "{:?}",
+        panel.rows()
+    );
+
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.evaluation(), &crate::bench::live::Evaluation::Current);
+    assert!(
+        panel
+            .rows()
+            .iter()
+            .all(|row| row.cells[6] != super::EVALUATING_LABEL),
+        "{:?}",
+        panel.rows()
+    );
+
+    // A step on the track puts every row back to evaluating.
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel
+            .rows()
+            .iter()
+            .all(|row| row.cells[6] == super::EVALUATING_LABEL),
+        "{:?}",
+        panel.rows()
+    );
+}
+
+/// A track that cannot be evaluated says why where the *Evaluate* button's
+/// refusal used to be, and its rows print no numbers at all.
+#[test]
+fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
+    let (mut state, id) = state();
+    let (bench, _) = sfmtool_core::bench::Bench::new().put(
+        "bearing",
+        sfmtool_core::bench::BenchItem::Track(std::sync::Arc::new(frameless_bearing_track())),
+    );
+    let index = state.node_index(id).expect("loaded");
+    state.scene[index]
+        .history
+        .push_bench(std::sync::Arc::new(bench), "Put a bearing on the bench");
+    let mut panel = TrackEdit::new();
+    let ctx = egui::Context::default();
+
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    let why = match panel.evaluation() {
+        crate::bench::live::Evaluation::Refused(why) => why.clone(),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(why.starts_with("Cannot evaluate bearing"), "{why}");
+    assert!(
+        texts.contains(&why),
+        "the reason is not drawn: {texts:?}"
+    );
 }
 
 /// Edit mode draws the active item and nothing else on the bench: no row of
@@ -1397,13 +1469,14 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
             ..TrackMeasurement::default()
         }),
     };
-    let cells = super::measurements(&walked, StageKind::Track);
+    let current = crate::bench::live::Evaluation::Current;
+    let cells = super::measurements(&walked, StageKind::Track, &current);
     assert_eq!(cells[6], "walked 19 px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
     scored.track.as_mut().expect("a track slot").walked_zncc = Some(0.873);
     assert_eq!(
-        super::measurements(&scored, StageKind::Track)[6],
+        super::measurements(&scored, StageKind::Track, &current)[6],
         "walked 19 px (ZNCC 0.873 there), kept at seed"
     );
 
@@ -1411,7 +1484,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     let mut moved = walked.clone();
     moved.track.as_mut().expect("a track slot").walked_px = None;
     assert_eq!(
-        super::measurements(&moved, StageKind::Track)[6],
+        super::measurements(&moved, StageKind::Track, &current)[6],
         "localized"
     );
 }
@@ -1448,19 +1521,15 @@ fn a_bearing_with_no_patch_still_reads_as_a_bearing() {
     assert!(!said.contains("Position ("), "{said}");
 }
 
-/// *Evaluate* and the *Stage* toggle are greyed by what the track is missing,
-/// the way *Fit* already was: all three ask core's own half of their step's
-/// validation, so a button that cannot work is not offered and the sentence a
-/// person reads is the one the step would have refused with.
+/// *Fit* and the *Stage* toggle are greyed by what the track is missing: both
+/// ask core's own half of their step's validation, so a button that cannot work
+/// is not offered and the sentence a person reads is the one the step would
+/// have refused with.
 #[test]
 fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     let track = frameless_bearing_track();
     let refusals = super::photometric_refusals(None, &track, StageKind::Cluster);
-    for (what, refusal) in [
-        ("Evaluate", &refusals.evaluate),
-        ("Fit", &refusals.fit),
-        ("Stage", &refusals.stage),
-    ] {
+    for (what, refusal) in [("Fit", &refusals.fit), ("Stage", &refusals.stage)] {
         let why = refusal
             .as_deref()
             .unwrap_or_else(|| panic!("{what} should be greyed on a track with no patch"));
@@ -1470,7 +1539,7 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
         );
     }
 
-    // And a whole track offers all three.
+    // And a whole track offers both.
     let (state, id) = state();
     let mut state = state;
     let label = state
@@ -1478,13 +1547,11 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
         .expect("a live point");
     let whole = state.bench_track(id, &label).expect("on the bench");
     let refusals = super::photometric_refusals(None, whole, StageKind::Cluster);
-    assert!(refusals.evaluate.is_none(), "{:?}", refusals.evaluate);
     assert!(refusals.fit.is_none(), "{:?}", refusals.fit);
     assert!(refusals.stage.is_none(), "{:?}", refusals.stage);
 
     // Busy wins over everything, as it did before.
     let refusals = super::photometric_refusals(Some("Busy."), whole, StageKind::Cluster);
-    assert_eq!(refusals.evaluate.as_deref(), Some("Busy."));
     assert_eq!(refusals.fit.as_deref(), Some("Busy."));
     assert_eq!(refusals.stage.as_deref(), Some("Busy."));
 }

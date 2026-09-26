@@ -480,6 +480,20 @@ impl History {
         )
     }
 
+    /// Put `bench` in place of the bench at the cursor, pushing no version.
+    ///
+    /// Only for the bench's live evaluation ([`crate::bench::live`]), which
+    /// writes an evaluation into a track's measurement slots and changes none
+    /// of the inputs that evaluation was computed from. Pushing that as a
+    /// version would put a step in the history per edit that Undo would have
+    /// to walk back over, and each would restore numbers that no longer match
+    /// the track's inputs. The version keeps its serial, its label and its
+    /// budget count; the replaced track is the same size as the one it
+    /// replaces.
+    pub(crate) fn replace_current_bench(&mut self, bench: Arc<Bench>) {
+        self.versions[self.cursor].bench = bench;
+    }
+
     /// Append a version that states the display transform and nothing else.
     ///
     /// A **reframe**. The document half is untouched, so the version shares its

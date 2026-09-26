@@ -11,7 +11,8 @@ Track View is the one panel of the SfM Explorer where both happen. With its
 **Edit** box clear it shows the selected point's committed track and changes
 nothing. With the box ticked it shows the one track the viewer is editing, which
 is held beside the reconstruction on the **bench** until it is committed,
-together with the controls that measure it, fit it and commit it.
+together with the controls that fit it and commit it, and the measurements that
+are kept current as it changes.
 
 The panel has an explicit mode so that it always says which of the two things is
 on screen, and it does not list the bench: the Scene tree already lists each
@@ -29,8 +30,8 @@ viewer), [`../core/bench/bench.md`](../core/bench/bench.md) and
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the value
 edit mode shows and every step it calls), [`panel-layout.md`](panel-layout.md)
 (its tab and its home), [`goto-point.md`](goto-point.md) (the dialog both modes
-reach), [`background-tasks.md`](background-tasks.md) (where Evaluate, Fit, the
-stage change, both searches and the index build run), and
+reach), [`background-tasks.md`](background-tasks.md) (where Fit, the stage
+change, both searches and the index build run), and
 [`sift-index.md`](sift-index.md) (the `.kdf` a search queries).
 
 ---
@@ -101,8 +102,8 @@ pub struct PointTrackViewResponse {
 pub struct TrackEditResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
-    pub evaluate: Option<f64>,       // the search radius the control stands at
-    pub fit: Option<f64>,            // the same, for the reading a fit ends with
+    pub fit: bool,                   // at the radius the evaluation reads at
+    pub search_px: Option<f64>,      // the search px slider released
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // a threshold slider released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -561,19 +562,32 @@ changes the header's first word, which is how a person sees that it crossed.
 
 #### The toolbar
 
-Two rows. The first acts on the active track: *Evaluate*, *Fit*, the *Stage*
-toggle (which names the stage it would move to), *Split off
-N rows*, *Duplicate*, *Commit* and *Discard*. The second is the *Lock* box and
-*Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed
-with a hover text naming what is missing, and the refusal is the core step's own
-sentence asked of the very track the button would act on, so the button and the
-step cannot disagree. *Commit* asks the core commit; *Evaluate*, *Fit* and the
-*Stage* toggle ask `evaluate_preconditions`, `fit_preconditions` and
-`set_stage_preconditions`, the halves of those steps' validation that read no
-photograph. A track with no patch therefore greys all three with *"this track
-has no patch yet; fit it first"* rather than offering buttons whose only act
-would be to decode a dozen images and fail. The commit refusal is cached against
-the track's `Arc` and the node's version, since asking it builds a point record.
+Two rows. The first opens with where the active track's evaluation stands, and
+then acts on the track: *Fit*, the *Stage* toggle (which names the stage it
+would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
+second is the *Lock* box and *Rename*, which opens a field in place and commits
+on Enter. Each entry is enabled, or greyed with a hover text naming what is
+missing, and the refusal is the core step's own sentence asked of the very
+track the button would act on, so the button and the step cannot disagree.
+*Commit* asks the core commit; *Fit* and the *Stage* toggle ask
+`fit_preconditions` and `set_stage_preconditions`, the halves of those steps'
+validation that read no photograph. A track with no patch therefore greys both
+with *"this track has no patch yet; fit it first"* rather than offering buttons
+whose only act would be to decode a dozen images and fail. The commit refusal is
+cached against the track's `Arc` and the node's version, since asking it builds
+a point record.
+
+**There is no *Evaluate* button, because evaluation is live.** Every change to
+an input of the evaluation evaluates the track again on a worker, and a track
+put on the bench is evaluated first ([`bench.md`](bench.md) § "Live
+evaluation"). What the panel owes the person is which state the numbers below
+are in, and the head of the toolbar says it: *Evaluated* when they are the
+evaluation of the track as it stands; a spinner and *Evaluating…* while an
+evaluation of the current inputs is running or waiting to start; and, when core's
+`evaluate_preconditions` refuses the track or the evaluation failed, that
+sentence in the warning colour -- *"Cannot evaluate bull-nose: the track carries
+no patch frame to read against; upgrade it from the cluster stage to build
+one"* -- in place of any state.
 
 **Commit leaves the point it wrote selected.** The write is
 [`edits/commit-track.md`](edits/commit-track.md)'s; the panel's part is that the
@@ -595,15 +609,15 @@ point, so its header reads *new*. Ctrl+D (Cmd+D on macOS) does the same from
 anywhere in the window while a track is active on the selected node's bench;
 with none active the key is left alone.
 
-**Evaluate and Fit are two buttons because they are two questions.** *Evaluate*
-measures every observation where it sits and **moves nothing**, so a person
-asking whether a track is right gets an answer that does not change the thing
-asked about, and no kernel's gate drops a row. *Fit* moves it: localize,
-re-triangulate, re-fuse, and read the result back, which is why the numbers
-after a fit are the numbers *Evaluate* would report. *Fit* greys with
-`fit_preconditions`' sentence for a track stage with fewer than two `in`
-observations, while *Evaluate* stays available for it, because one sighting is
-something to report.
+**Evaluating and fitting are two things because they are two questions.** The
+evaluation measures every observation where it sits and **moves nothing**, so a
+person asking whether a track is right gets an answer that does not change the
+thing asked about, and no kernel's gate drops a row; that is why it can run on
+its own after every change. *Fit* moves the track: localize, re-triangulate,
+re-fuse, and read the result back, and it stays a button because it replaces
+what the person placed. *Fit* greys with `fit_preconditions`' sentence for a
+track stage with fewer than two `in` observations, while the evaluation still
+runs for it, because one sighting is something to report.
 
 ***Lock* says what Image Detail's handles do at the track stage.** Ticked, which
 is how the panel starts, dragging a sighting's dot there slides the patch and
@@ -671,11 +685,17 @@ no slider is being dragged, so whatever moved them -- a release here,
 item made active -- the sliders follow. Only during a drag do they hold a value
 the track does not.
 
-**Beside them, one control that is not a threshold**: *search px*, how far from
-each observation's own pixel the next reading looks for its correlation peak,
-in patch-grid px, starting at `EvaluateOptions::default`'s radius. Moving it
-repaints nothing and changes no number until *Evaluate* or *Fit* runs, and both
-carry it, so a fit's numbers and a reading's are measured in one window.
+**Below them, one control that is not a threshold**: *search px*, how far from
+each observation's own pixel the evaluation looks for its correlation peak, in
+patch-grid px, starting at `EvaluateOptions::default`'s radius. It is an input
+to the evaluation rather than a bar the painting judges by, so it repaints
+nothing; it is the viewer's rather than a track's (`AppState::bench_search_px`),
+so it pushes no version and Undo does not reverse it. Like a threshold slider it
+applies when it is let go or a typed value is committed, and then every track is
+evaluated again at the new radius. A *Fit* runs at it too, so a fit's numbers
+and the evaluation's are measured in one window. It is not greyed by a busy
+node: setting it is no step, and the evaluations it asks for wait until the
+node is free.
 
 #### The observation table
 
@@ -692,11 +712,19 @@ area.
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
 | σ_pos | the tile's localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `walked 19 px (ZNCC 0.873 there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 px (ZNCC 0.873 there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which says the difference
 between a number a round produced and a round that has not been run.
+
+**The cells follow where the evaluation stands.** While an evaluation of the
+track's current inputs is on its way, the numbers are the previous
+evaluation's: they are drawn greyed and every Status cell reads *Evaluating…*,
+so a number is never presented as the track's when it was measured on inputs
+the track has left. When the track cannot be evaluated or its evaluation
+failed, every number cell reads `-` and every Status cell `not evaluated`, and
+the toolbar says why.
 
 **The two distances are two columns because they are two questions.** *Seed sh.*
 is the sighting's own evidence, where the correlation would rather sit, and is
@@ -705,7 +733,7 @@ point: a mis-triangulated track shows a column of large offsets beside a column
 of near-zero shifts, the picture that says the position is wrong and the
 sightings are not.
 
-**The Status cell names the refusal.** A reading drops nothing, so a row without
+**The Status cell names the refusal.** An evaluation drops nothing, so a row without
 a ZNCC has one of core's `Unmeasured` reasons behind it, and the cell prints that
 sentence (`it sits off the photograph`, `its ray grazes the patch`, `its seed
 sits 2,483 px from the projection, beyond the 64 px bound`) elided to its
@@ -714,7 +742,7 @@ wanted to carry further than the `max shift px` bar kept its seed
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), which a person reading `localized`
 would get wrong, so the walk comes first among a scored row's answers. The
-row's own *ZNCC* cell beside it is the reading's, taken with the sighting at its
+row's own *ZNCC* cell beside it is the evaluation's, taken with the sighting at its
 seed, so the two numbers a person weighs the walk by sit on one row.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
@@ -729,8 +757,8 @@ cluster stage's units"), on the template's resolution once one has been cut. A
 row with nothing to render draws an empty frame of the same size, so the columns
 beside it never shift.
 
-**Where the observation sits is one rule** at either stage: the keypoint a
-reading wrote, else the refined cluster position, else the seed it was proposed
+**Where the observation sits is one rule** at either stage: the track-stage
+keypoint, else the refined cluster position, else the seed it was proposed
 at (`crate::bench::observation_site`, which the marks, the reveal and the wire
 read too). A candidate a search has just added carries only that seed, and its
 tile is cut around it, so nothing has to be evaluated for a fresh row to show its
@@ -905,7 +933,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Edit mode**,
   [edit/tests.rs](../../crates/sfm-explorer/src/track_view/edit/tests.rs), with
   what the table drew recorded unconditionally so the assertions read the table
-  the app draws: nothing drawn with nothing active; **no item tabs**, the labels
+  the app draws: nothing drawn with nothing active; **no *Evaluate* button**,
+  the toolbar reading *Evaluating…* until the evaluation of a track just put on
+  the bench lands and *Evaluated* after it; every Status cell reading
+  *Evaluating…* until then and again after a verdict; a frameless bearing on the
+  bench showing core's refusal sentence where the state would be; **no item tabs**, the labels
   of two other items on the bench appearing nowhere in what the frame painted; a
   row per observation in index order; a verdict under the same observation index,
   pinned; the painting matching what applying the bars produces and leaving a

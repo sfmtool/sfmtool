@@ -297,10 +297,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "commit_bench_track",
             json!({ "reconstruction_label": "alpha" }),
         ),
-        (
-            "evaluate_bench_track",
-            json!({ "reconstruction_label": "alpha" }),
-        ),
+        ("set_bench_search_px", json!({ "search_px": 8.0 })),
         (
             "fit_bench_track",
             json!({ "reconstruction_label": "alpha" }),

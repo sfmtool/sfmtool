@@ -25,8 +25,8 @@ track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the two Bench groups are
-children of), [`background-tasks.md`](background-tasks.md) (where a reading and a fit
-run),
+children of), [`background-tasks.md`](background-tasks.md) (where a fit and a
+stage change run),
 [`action-log.md`](action-log.md) (the row each step writes),
 [`mcp-server.md`](mcp-server.md) (the surface § "The wire" is a family of), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
@@ -201,11 +201,9 @@ impl AppState {
     /// all -- a point that already holds the track is not written again.
     pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
         -> Result<Committed, String>;
-    /// Read the track where it sits, moving nothing. `search_px` is how far
-    /// around each observation the correlation peak is looked for.
-    pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str,
-                                       search_px: Option<f64>) -> Result<(), String>;
     /// Move it: localize, re-triangulate, re-fuse, then read the result back.
+    /// `search_px` is how far around each observation the correlation peak is
+    /// looked for; `None` is the radius the live evaluation reads at.
     pub(crate) fn start_bench_fit(&mut self, id: ReconId, label: &str,
                                   search_px: Option<f64>) -> Result<(), String>;
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
@@ -218,6 +216,24 @@ impl AppState {
     /// Why that search cannot run, or `None`: what greys the row's menu entry.
     pub(crate) fn bench_search_refusal(&self, id: ReconId, label: &str,
                                        observation: usize) -> Option<String>;
+}
+
+// The live evaluation, in
+// [bench/live.rs](../../crates/sfm-explorer/src/bench/live.rs)
+// (§ "Live evaluation").
+impl AppState {
+    /// Where the evaluation of one track stands: `Current`, `Evaluating`,
+    /// `Refused(why)` or `Failed(why)`. `None` when there is no such track.
+    pub(crate) fn bench_evaluation(&self, id: ReconId, item: &str) -> Option<Evaluation>;
+    /// Whether an evaluation of that track's current inputs is on a worker now.
+    pub(crate) fn bench_evaluation_running(&self, id: ReconId, item: &str) -> bool;
+    /// The radius every evaluation reads at, and its setter: Track View's
+    /// *search px* slider and the wire's `set_bench_search_px`.
+    pub(crate) fn bench_search_px(&self) -> f64;
+    pub(crate) fn set_bench_search_px(&mut self, search_px: f64) -> Result<(), String>;
+    /// Once per frame: land a finished evaluation, cancel one whose inputs
+    /// have moved on, start the next. True when the next frame has to draw.
+    pub(crate) fn drive_bench_evaluation(&mut self) -> bool;
 }
 
 // The index the search queries, in
@@ -298,20 +314,25 @@ commit wrote" is not a question the value can be asked once the version has
 landed -- a replacement takes a **new** index and deletes the one it replaced,
 and a creation takes whatever index the overlay had free.
 
-**The three steps that read photographs return as soon as the worker is running.**
+**The steps that read photographs return as soon as the worker is running.**
 They are `start_`-prefixed for that reason, and what they answer is whether the
 operation could *begin*. The report lands frames or seconds later, through the
 background machinery. What they refuse in the call is everything the track alone
-decides (§ "The three steps that read photographs").
+decides (§ "The two steps that read photographs").
+
+**Nothing asks for an evaluation.** It is not a step: the viewer keeps every
+track's measurements the evaluation of the track as it stands, and the one call
+a frame makes for it, `drive_bench_evaluation`, takes no item (§ "Live
+evaluation").
 
 ### Example
 
 ```rust
 let label = state.put_point_on_bench(PointRef::new(id, 1207))?;   // one version
-state.set_bench_verdict(id, &label, 3, Verdict::Out)?;            // one version
-state.start_bench_evaluate(id, &label, None)?;                    // a task: measures, moves nothing
+state.drive_bench_evaluation();                                   // the next frame: evaluates it
+state.set_bench_verdict(id, &label, 3, Verdict::Out)?;            // one version, evaluated again
 state.start_bench_fit(id, &label, None)?;                         // a task: moves it, then measures
-// ... the report lands, which is one more version ...
+// ... the report lands, which is one more version, and is evaluated again ...
 state.commit_bench_track(id, &label)?;                            // one version, both halves
 ```
 
@@ -325,9 +346,10 @@ pays for, applied to one more field.
 
 - **Undo and redo walk the pair.** The Edit menu's Undo, its shortcuts and the
   Edit History panel's jump move one cursor over one list, and whichever half a
-  step changed comes back. A verdict, an evaluation, a stage change, a commit
-  and then a deletion of some other point are five versions in one order, and
-  undo retraces them in that order.
+  step changed comes back. A verdict, a stage change, a commit and then a
+  deletion of some other point are four versions in one order, and undo
+  retraces them in that order. The evaluations between them are none: they
+  fill measurement slots in the version they were computed for.
 - **Truncation is one rule.** A new step after an undo discards the redo tail,
   whichever half the discarded versions had changed.
 - **Dirty is about the document half.** A version is dirty when its document
@@ -391,7 +413,6 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
 | Accept a walk | `Accepted the walk of observation 3 of pt3d_a1b2c3d4_1207: moved 11.2 px to (1050.8, 1702.4) in IMG_0042.jpg` |
-| Evaluate | `Evaluated IMG_0042@142,198: measured 4 of 5 observations at (x, y, z)` |
 | Fit | `Fitted IMG_0042@142,198: finite at (x, y, z): condition number 82 under the 10000 bar, rms 0.1 px finite against 48.3 px as a bearing, rays up to 15.204 deg apart` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
@@ -455,11 +476,75 @@ over any of these restores the activation the version held.
 
 ---
 
-## The three steps that read photographs
+## Live evaluation
 
-A reading, a fit and a stage change run as **background tasks**
-([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
-track` and `Set track stage`, beside `Geometry search`, which reads
+**Every track on a bench is kept evaluated.** The measurements a track shows --
+in Track View's table, in the Image Detail bench layer and on the wire -- are
+the evaluation of its current inputs, or an evaluation of those inputs is
+running or about to start. There is no *Evaluate* button and no tool for it: a
+track put on the bench is evaluated first, and every change to an input of the
+evaluation evaluates it again. The code is
+[bench/live.rs](../../crates/sfm-explorer/src/bench/live.rs).
+
+**The inputs are what the evaluation job captures**, and the freshness test
+holds the same three things:
+
+| Input | What changes it | How the change is seen |
+|---|---|---|
+| The track value: observations, their seeds and keypoints, verdicts, pins, the stage and its patch frame, position and template | every bench step on the track -- a put, an add, a verdict, a patch or sighting edit, *Accept walk*, the thresholds (their painting moves verdicts), a fit, a stage change, a search, a split, a duplicate -- and an undo, redo or jump that lands on another version of it | the track is a new `Arc` |
+| The document half of the version: the poses and camera intrinsics the kernels project with | every document edit under the track -- a bundle adjustment, a resection, a refit or switch of the camera model, a commit -- and an undo, redo or jump across one | the version's `document_serial` moves |
+| The search radius | Track View's *search px* slider, the wire's `set_bench_search_px` | `AppState::bench_search_px` moves |
+
+So no step has to remember to ask for an evaluation, and none does. The track's
+label is part of the key too, so a renamed item is evaluated under its new
+name. The thresholds are not an input on their own: the evaluation reads with
+its gates off, and the bars reach it only through the verdicts they paint.
+
+**One evaluation runs at a time, and a stale one is cancelled.** Once per frame,
+after the frame's steps, `drive_bench_evaluation` lands a finished evaluation,
+and then either cancels the running one when its inputs are no longer the
+track's, or, when nothing is running, starts the next track whose evaluation is
+`Evaluating`: the active track of each bench first, then the rest in bench
+order, in scene order. It does not start the next until a cancelled one has
+reported back, so a slider drag that moves an input on every frame has at most
+one worker behind it rather than a queue. It also waits while a background task
+holds the node, since that task's answer replaces the inputs it would read.
+
+**An answer is installed only if its inputs are still the track's.** An
+evaluation that lands after a step has moved the track on -- cancelled, or
+measured before it saw the flag -- is dropped, and the track reads `Evaluating`
+until the evaluation of its new inputs lands. A result that matches is written
+into the version at the cursor in place (`History::replace_current_bench`):
+**no version is pushed and no Action Log row is written.** An evaluation fills
+measurement slots and moves nothing a person put there, so a version per
+evaluation would put a step in the history for every edit that Undo would then
+have to walk back over, each restoring numbers that no longer matched the
+inputs beside them. The version keeps its serial and its label.
+
+**The node is not locked by it.** Every step stays available while an
+evaluation runs, and taking one is what cancels it. It is not a background task
+either: it does not appear in the Background panel, is not what
+`get_background_task` reports, and does not refuse another operation.
+
+**Four states**, which Track View's toolbar shows and the wire reports under
+`evaluation`:
+
+- `Current` -- the numbers are the evaluation of the track as it stands.
+- `Evaluating` -- the inputs have changed since, and an evaluation of the
+  current ones is running or starts on the next frame. The numbers are the
+  previous evaluation's, and are presented as that.
+- `Refused(why)` -- core's `evaluate_preconditions` refuses the track as it
+  stands, a track-stage track with no patch frame, in the sentence `Cannot
+  evaluate {item}: …`. Nothing runs until a step changes that.
+- `Failed(why)` -- the evaluation of the current inputs failed, for instance
+  because a photograph could not be read. It is not retried until an input
+  changes.
+
+## The two steps that read photographs
+
+A fit and a stage change run as **background tasks**
+([`background-tasks.md`](background-tasks.md)), under `Fit track` and `Set
+track stage`, beside `Geometry search`, which reads
 photographs too, `Search descriptors`, which reads a `.kdf` and a capture's
 `.sift` files rather than photographs, and `Build index files`, which reads
 the `.sift` files and then the photographs ([`index-files.md`](index-files.md)),
@@ -467,7 +552,7 @@ and `Create track at pixel`, which reads the photographs and the index files
 (§ "Create Track Here").
 All of them are
 **cancellable**: the kernels they run take the `Progress` for their phases and
-poll its flag as well -- between the reading's rounds, between the views the
+poll its flag as well -- between the fit's rounds, between the views the
 localizer or the geometry selector renders, in front of the forest query and
 between the candidates for the descriptor search, between the candidates the
 geometry search appends, and in every phase of the index-files build
@@ -475,8 +560,9 @@ geometry search appends, and in every phase of the index-files build
 cancellation, pushing no version. The declaration is held to that by the background tests,
 which cancel each one over a fixture that can really run it.
 
-**The three are one family, and the geometry search is beside them rather than
-in it.** What names them is the split validation below: each publishes the half
+**The two and the live evaluation are one family, and the geometry search is
+beside them rather than in it.** What names them is the split validation below:
+each publishes the half
 of its own refusal that reads no photograph, so a caller can refuse in front of
 the decode. The geometry search reads photographs and cancels the same way, but
 its refusals are the panel's and the wire's
@@ -489,9 +575,11 @@ publishes the half of each step's own validation that reads no photograph --
 `bench::evaluate_preconditions`, `bench::fit_preconditions` and
 `bench::set_stage_preconditions`
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)) -- and
-`start_bench_evaluate`, `start_bench_fit` and `start_bench_stage` ask it before
-they build a job. So a track being fitted with fewer than two `in` observations
-(which a *reading* of the same track permits), or one being taken down to the
+`start_bench_fit` and `start_bench_stage` ask theirs before they build a job,
+as the live evaluation asks `evaluate_preconditions` before it starts one
+(§ "Live evaluation"). So a track being fitted with fewer than two `in`
+observations (which an *evaluation* of the same track permits), or one being
+taken down to the
 cluster stage with no frame or no position, is a refusal of the **gesture**: a
 sentence in the caller's own hand, no task, no version. The step itself calls
 the same function first, so the two answers cannot drift. What is left for the
@@ -718,7 +806,7 @@ create_bench_cluster."*
 // shape_bench_observation    { "reconstruction_label": "bull", "observation": 3,
 //                              "shape": [[7.1, -0.4], [0.4, 7.1]] }
 // apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
-// evaluate_bench_track         { "reconstruction_label": "bull" }
+// set_bench_search_px          { "search_px": 8.0 }   // the viewer's, every track
 // fit_bench_track           { "reconstruction_label": "bull" }
 // set_bench_track_stage        { "reconstruction_label": "bull", "stage": "track" }
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
@@ -743,12 +831,17 @@ which a bench holding items can be. It is **one flat list** in the
 bench's own order, with the stage on each item, rather than the tree's two
 groups: a reader that wants them apart has the field to do it with, and a
 grouping on the wire would be the panel's layout rather than the bench's own
-state. `get_bench_track` is
+state. Both carry each track's `evaluation`: its `state` (`current`, `evaluating`,
+`refused` or `failed`, § "Live evaluation"), the `reason` sentence where it is
+refused or failed, `running` for whether an evaluation of the current inputs is
+on a worker now rather than waiting to start, and the `search_px` it reads at.
+An agent that has just made a step reads `evaluating` and the previous numbers,
+and reads again until it says `current`. `get_bench_track` is
 Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at the track stage, the two distances
 (`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to` and `walked_zncc` for a row the last fit
-refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the reading could
+refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the evaluation could
 not score, the `reason` sentence in place of a ZNCC. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:
@@ -757,7 +850,7 @@ that read `position` off a `w = 0` track would be holding a place one unit from
 the world origin. **An observation is
 addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
-a verdict or an evaluation still names the same observation. The template's
+a verdict or a fit still names the same observation. The template's
 samples and the consensus bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
 
@@ -872,7 +965,7 @@ and answers as one.
 adjustment does: with the version they pushed when they finish inside the reply
 window, and with `running: true` and an `operation_id` to poll
 `get_background_task` with when they do not. The deferral is taken before a
-single photograph has been read (§ "The three steps that read photographs"), so
+single photograph has been read (§ "The two steps that read photographs"), so
 the window is measured against the operation rather than spent on the decode in
 front of it. A step that finds nothing to do starts no task and answers with the
 version the node stands at, and a step the **track** rules out starts no task
@@ -964,8 +1057,8 @@ point's exact projection and a photograph cached for every image:
   a pixel, then a candidate added at one in the same image -- are one version and
   one `Bench` row each, the second sighting joining as a candidate, and an undo
   walks them back one at a time;
-- a verdict, a stage change and a reading are three versions, undo retraces
-  them in order and redo replays them;
+- a verdict and a stage change are two versions and the evaluations after them
+  none, undo retraces them in order and redo replays them;
 - a document edit between two bench steps is a version in its place, and undoing
   it leaves the bench alone;
 - a commit replaces its origin point, the selection lands on what it wrote from
@@ -995,6 +1088,19 @@ point's exact projection and a photograph cached for every image:
   the rays earned and on what residuals, while its **Action Log row** carries the
   whole report, counts and all: the two are different lengths on purpose, and a
   label that stopped at the item would hide the step's real outcome.
+
+The live evaluation is tested in
+[bench/live/tests.rs](../../crates/sfm-explorer/src/bench/live/tests.rs), over
+the same fixture: a track put on the bench reads `Evaluating`, the next drive
+starts its evaluation, and once it lands the track is `Current` and measured,
+with no version pushed and no row written; a verdict makes it `Evaluating` again
+and the next drive evaluates it; an answer for inputs a step has moved on from
+is not installed, the drive after the step cancels it without starting a second
+evaluation beside it, and the track is `Current` only once the evaluation of the
+new inputs lands; an undo, a document edit under the track and a change of the
+search radius each make it `Evaluating`; a track-stage track with no frame is
+`Refused` with core's sentence and starts nothing; and nothing starts while a
+background task holds the node.
 
 The deactivation is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds one version
 labelled as above with the item still on the bench, an undo bringing edit mode back, and a
@@ -1053,14 +1159,17 @@ plane, as they do every operation that says it is cancellable.
 The wire is tested in
 [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs), over the same
 fixture with a label on the node, for what the boundary owes: each tool being
-the `AppState` call the panel makes, an observation index surviving the steps
+the `AppState` call the panel makes, the reads reporting `evaluation.state` as
+`evaluating` until the evaluation lands and `current` after it,
+`set_bench_search_px` pushing no version and making a track `evaluating` at the
+new radius, an observation index surviving the steps
 that follow it, a refusal arriving as the step's own sentence, and the two
 photometric steps deferring to a worker and landing their version
 ([mcp-server.md](mcp-server.md) § "Testing"). Two of its cases are about what a
 reply says rather than what a step does: a create on a node whose default index
 is there but not yet open reports the **create's** sentence and not the open's,
 and an observation added at a pixel a long way from the point's projection comes
-back from a reading with the reason on its row, the rows that could be read
+back from its evaluation with the reason on its row, the rows that could be read
 still read. `create_track_at_pixel` is tested over the viewer's plane: it answers
 with the commit's version, the item, the member and the point, which `get_point`
 takes back by id; a pixel every member refuses is a tool error whose lines are

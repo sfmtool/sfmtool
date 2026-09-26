@@ -284,7 +284,7 @@ The operation and its files have one set of names on the wire
 ([mcp-server.md](mcp-server.md)):
 
 - `build_index_files` `{ reconstruction_label }` starts the build on a worker
-  and answers as `evaluate_bench_track` does.
+  and answers as `fit_bench_track` does.
 - `open_index_files` `{ reconstruction_label, sift_index_path?,
   cluster_patches_path? }` opens the files by the rule above.
 - `close_index_files` `{ reconstruction_label }` lets go of both.

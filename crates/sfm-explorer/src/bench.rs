@@ -8,8 +8,9 @@
 //! `sfmtool_core::bench` -- a value and pure functions, with no history in them (`specs/core/bench/bench.md`).
 //! What this module adds is the three
 //! things a window needs: the version each step is pushed as, the Action Log
-//! row it writes, and, for the two steps that read photographs, the background
-//! task they run in.
+//! row it writes, and, for the steps that read photographs, the background
+//! task they run in. The evaluation that keeps every track's measurements
+//! current is not a step and pushes no version; it is [`live`].
 //!
 //! Every method here has the same five moves, which is the shape
 //! [`crate::state::edits`] set for a point edit:
@@ -50,6 +51,7 @@ use crate::state::edits::version_before;
 use crate::state::AppState;
 
 pub(crate) mod geometry;
+pub(crate) mod live;
 pub(crate) mod track_at_pixel;
 
 #[cfg(test)]
@@ -265,21 +267,21 @@ pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
     bench.active_label(sfmtool_core::bench::ItemKind::Track)
 }
 
-/// The reading options a bench step runs with: core's own, with the caller's
-/// search radius where one was named.
+/// The reading options a bench step runs with: core's own, at `search_px`.
 ///
-/// The panel's *Search* control and the wire's `search_px` argument both land
-/// here, and a fit passes the same value through to the reading it ends with,
-/// so every number on screen was measured in one window.
-fn evaluate_options(search_px: Option<f64>) -> EvaluateOptions {
-    let mut options = EvaluateOptions::default();
-    if let Some(search_px) = search_px {
-        options.search_px = search_px;
+/// The live evaluation reads at [`AppState::bench_search_px`], which Track
+/// View's *search px* slider and the wire's `set_bench_search_px` set, and a
+/// fit passes its radius through to the reading it ends with, so every number
+/// on screen was measured in one window.
+fn evaluate_options(search_px: f64) -> EvaluateOptions {
+    EvaluateOptions {
+        search_px,
+        ..EvaluateOptions::default()
     }
-    options
 }
 
-/// The default the panel's *Search* control starts at, which is core's own.
+/// The radius the viewer's bench evaluation starts the session at, which is
+/// core's own default.
 pub(crate) fn default_search_px() -> f64 {
     EvaluateOptions::default().search_px
 }
@@ -1120,12 +1122,15 @@ impl AppState {
         })
     }
 
-    /// Read the track called `label` at the stage it is in, on a worker thread.
+    /// Fit the track called `label` at the stage it is in, on a worker thread.
     ///
-    /// A reading moves nothing: the position, the frame and every keypoint come
-    /// back as they were, and what the version carries is what each observation
-    /// now says about itself. `search_px` is how far from each observation the
-    /// correlation peak is looked for; `None` takes the reading's own default.
+    /// The step that **moves** the track: at the track stage it localizes every
+    /// sighting against the patch, re-triangulates the `in` ones, re-centres
+    /// the frame and fuses the consensus, and then reads the result back so the
+    /// numbers it leaves behind are the ones an evaluation reports.
+    /// `search_px` is how far from each observation the correlation peak is
+    /// looked for; `None` takes [`AppState::bench_search_px`], the radius the
+    /// live evaluation reads at.
     ///
     /// The photographs the kernels read are decoded **on that worker**: the
     /// file reads and the pyramid builds are seconds of work, and a step that
@@ -1135,53 +1140,14 @@ impl AppState {
     /// shared clone of the pyramid the node's own cache already holds for each
     /// photograph, and a path for each one it does not -- with a clone of the
     /// value at the cursor and a clone of the track, so the worker holds no
-    /// reference into the scene. A photograph the cache has costs neither side
-    /// anything: the pyramid was built when it was decoded.
-    ///
-    /// **What the track alone decides is decided here**, through
-    /// [`sfmtool_core::bench::evaluate_preconditions`], which is the half of
-    /// the step's own validation that reads no photograph. So a track with
-    /// nothing to register against is refused in the caller's own hand -- a
-    /// menu that greys, a status line, a tool error -- rather than starting a
-    /// task whose only act is to decode a dozen images and then fail.
-    pub(crate) fn start_bench_evaluate(
-        &mut self,
-        id: ReconId,
-        label: &str,
-        search_px: Option<f64>,
-    ) -> Result<(), String> {
-        let outcome = self.begin_bench_evaluate(id, label, search_px);
-        if let Err(message) = &outcome {
-            self.action_log.fail(Kind::Bench, message.clone());
-        }
-        outcome
-    }
-
-    /// The evaluation up to the moment the worker has it, so that everything
-    /// this can refuse is refused before a photograph is read.
-    fn begin_bench_evaluate(
-        &mut self,
-        id: ReconId,
-        label: &str,
-        search_px: Option<f64>,
-    ) -> Result<(), String> {
-        let (_, _, track) = self.bench_step_target(id, label)?;
-        bench::evaluate_preconditions(&track)
-            .map_err(|e| format!("Cannot evaluate {label}: {e}"))?;
-        let job = self.bench_evaluate_job(id, label, search_px)?;
-        self.start_background_task(Operation::BENCH_EVALUATE, id, job)
-    }
-
-    /// Fit the track called `label` at the stage it is in, on a worker thread.
-    ///
-    /// The step that **moves** the track: at the track stage it localizes every
-    /// sighting against the patch, re-triangulates the `in` ones, re-centres
-    /// the frame and fuses the consensus, and then reads the result back so the
-    /// numbers it leaves behind are the ones *Evaluate* would report.
+    /// reference into the scene.
     ///
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::fit_preconditions`], which carries the two-`in`
-    /// rule a reading does not have.
+    /// rule a reading does not have. So a track that cannot be fitted is
+    /// refused in the caller's own hand -- a greyed button, a status line, a
+    /// tool error -- rather than starting a task whose only act is to decode a
+    /// dozen images and then fail.
     pub(crate) fn start_bench_fit(
         &mut self,
         id: ReconId,
@@ -1552,18 +1518,21 @@ impl AppState {
         }
     }
 
-    /// The evaluation itself, as a function of the `Progress` it reports
-    /// through.
+    /// The evaluation itself, as a function of the `Progress` it polls its
+    /// cancellation through: what [`crate::bench::live`] runs on its worker.
     ///
-    /// Reachable from the crate's tests as well as from the step, so the test
-    /// that holds [`Operation::BENCH_EVALUATE`]'s cancellable declaration to
-    /// its claim runs the real work rather than a stand-in for it.
+    /// Everything it captures is an input of the evaluation, which is what
+    /// [`crate::bench::live`]'s `Inputs` holds to say whether a track's
+    /// measurements are current: the track, the value at the cursor (its
+    /// poses and camera intrinsics), and `search_px`. The photographs are
+    /// decoded on the worker, from the node's cached pyramids where it has
+    /// them.
     pub(crate) fn bench_evaluate_job(
         &mut self,
         id: ReconId,
         label: &str,
-        search_px: Option<f64>,
-    ) -> Result<Job, String> {
+        search_px: f64,
+    ) -> Result<live::EvaluationJob, String> {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
         let options = evaluate_options(search_px);
@@ -1573,37 +1542,36 @@ impl AppState {
             // answered the moment it returns rather than after the kernels have
             // run as well.
             if progress.is_cancelled() {
-                return Finished::Cancelled;
+                return live::Measured::Cancelled;
             }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
-                Err(e) => return Finished::Failed(format!("Cannot evaluate {label}: {e}")),
+                Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
             };
             if progress.is_cancelled() {
-                return Finished::Cancelled;
+                return live::Measured::Cancelled;
             }
             let views = decoded.views();
             match bench::evaluate(&track, &edited, &views, &options, progress) {
-                Err(sfmtool_core::bench::EvaluateError::Cancelled) => Finished::Cancelled,
-                Err(e) => Finished::Failed(format!("Cannot evaluate {label}: {e}")),
-                Ok((measured, report)) => Finished::BenchTrack {
-                    version_label: format!("Evaluated {label}"),
-                    text: format!("Evaluated {label}: {report}"),
-                    label,
-                    track: Box::new(measured),
-                },
+                Err(sfmtool_core::bench::EvaluateError::Cancelled) => live::Measured::Cancelled,
+                Err(e) => live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
+                Ok((measured, _)) => live::Measured::Track(Box::new(measured)),
             }
         }))
     }
 
     /// The fit itself, as a function of the `Progress` it reports through.
-    /// Crate-visible for the reason [`AppState::bench_evaluate_job`] is.
+    ///
+    /// Reachable from the crate's tests as well as from the step, so the test
+    /// that holds [`Operation::BENCH_FIT`]'s cancellable declaration to its
+    /// claim runs the real work rather than a stand-in for it.
     pub(crate) fn bench_fit_job(
         &mut self,
         id: ReconId,
         label: &str,
         search_px: Option<f64>,
     ) -> Result<Job, String> {
+        let search_px = search_px.unwrap_or(self.bench_search_px);
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
         let options = FitOptions {

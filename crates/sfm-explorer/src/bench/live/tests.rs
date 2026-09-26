@@ -1,0 +1,286 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The live evaluation: a track put on the bench is evaluated first, every
+//! change to an input of the evaluation evaluates it again, and an answer that
+//! comes back for inputs the track has moved on from is never shown as current.
+//!
+//! Over the bench fixture of [`crate::bench::tests`]: a point with three
+//! observations and a textured photograph cached for every image, so the
+//! evaluation runs its real kernels.
+
+use std::sync::Arc;
+
+use sfmtool_core::bench::{BenchItem, Stage, Verdict};
+
+use crate::background::{Finished, Operation};
+use crate::bench::live::Evaluation;
+use crate::bench::tests::{put_on_bench, state};
+use crate::scene::{PointRef, ReconId};
+use crate::state::AppState;
+
+/// How many versions the node holds.
+fn versions(state: &AppState, id: ReconId) -> usize {
+    state.node(id).expect("loaded").history.versions().len()
+}
+
+/// The track called `label`, as the node's bench holds it now.
+fn track(state: &AppState, id: ReconId, label: &str) -> Arc<sfmtool_core::bench::EditableTrack> {
+    Arc::clone(state.bench_track(id, label).expect("on the bench"))
+}
+
+#[test]
+fn a_track_put_on_the_bench_is_evaluated_first_with_no_version_and_no_row() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let before = versions(&state, id);
+    state.action_log.clear();
+
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "a track that has just arrived has no evaluation of its inputs"
+    );
+    let arrived = track(&state, id, &label);
+    state.drive_bench_evaluation();
+    assert!(
+        state.bench_evaluation_running(id, &label),
+        "the frame after the track arrived did not start its evaluation"
+    );
+
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    let measured = track(&state, id, &label);
+    assert!(
+        !Arc::ptr_eq(&arrived, &measured),
+        "the evaluation installed nothing"
+    );
+    assert!(
+        measured
+            .observations
+            .iter()
+            .any(|o| o.track.as_ref().is_some_and(|m| m.seed_shift_px.is_some())),
+        "the evaluation measured nothing"
+    );
+    assert_eq!(
+        versions(&state, id),
+        before,
+        "the evaluation pushed a version"
+    );
+    assert_eq!(
+        state.action_log.entries().count(),
+        0,
+        "the evaluation wrote an Action Log row"
+    );
+}
+
+#[test]
+fn a_step_that_changes_an_input_starts_a_new_evaluation() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "a verdict is an input of the evaluation"
+    );
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(id, &label));
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    assert_eq!(
+        track(&state, id, &label).observations[1].verdict,
+        Verdict::Out,
+        "the evaluation moved a verdict"
+    );
+}
+
+#[test]
+fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.drive_bench_evaluation();
+    let read = state
+        .running_evaluation_track()
+        .expect("the evaluation started");
+
+    // A step lands while the worker is reading the track as it was.
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    let edited = track(&state, id, &label);
+    assert!(!Arc::ptr_eq(&read, &edited));
+
+    // The next frame asks the stale evaluation to stop and starts nothing
+    // beside it: one worker at a time, however many steps land.
+    state.drive_bench_evaluation();
+    assert!(
+        Arc::ptr_eq(
+            &state
+                .running_evaluation_track()
+                .expect("still running until it answers"),
+            &read
+        ),
+        "a second evaluation started beside the stale one"
+    );
+    assert!(!state.bench_evaluation_running(id, &label));
+
+    // Whatever it answers -- cancelled, or measured before it saw the flag --
+    // is dropped, and the track stays as the step left it.
+    state.land_running_evaluation();
+    assert!(
+        Arc::ptr_eq(&track(&state, id, &label), &edited),
+        "the stale answer was installed over the step"
+    );
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    assert_eq!(
+        track(&state, id, &label).observations[1].verdict,
+        Verdict::Out
+    );
+}
+
+#[test]
+fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    state.settle_bench_evaluation();
+    // A cursor move and a document edit let go of the node's decoded
+    // photographs, which the viewer reads again from disk; the fixture's are
+    // only in memory, so they are put back after each.
+    let photographs = state.full_res_cache.clone();
+
+    // Undo lands on another version of the track.
+    state.undo(id).expect("the verdict");
+    state.full_res_cache = photographs.clone();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "undo is a change of inputs"
+    );
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+
+    // A document edit leaves the track alone and moves the reconstruction the
+    // track is read against.
+    let other = (0..state.scene[0].edited().point_count())
+        .find(|&p| p != 2)
+        .expect("the fixture has more than one point");
+    state
+        .delete_point(PointRef::new(id, other))
+        .expect("a live point");
+    state.full_res_cache = photographs;
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "the reconstruction under the track is an input"
+    );
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+
+    // The radius is the viewer's, and every track reads at it.
+    state.set_bench_search_px(9.0).expect("a positive radius");
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "the search radius is an input"
+    );
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    assert!(state.set_bench_search_px(0.0).is_err());
+    assert!(state.set_bench_search_px(f64::NAN).is_err());
+}
+
+#[test]
+fn a_track_that_cannot_be_evaluated_says_why_and_starts_nothing() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let mut frameless = (*track(&state, id, &label)).clone();
+    match &mut frameless.stage {
+        Stage::Track(payload) => payload.placement = None,
+        Stage::Cluster(_) => panic!("a point goes on the bench at the track stage"),
+    }
+    let history = &mut state.scene[0].history;
+    let bench = history
+        .current_bench()
+        .replace(&label, BenchItem::Track(Arc::new(frameless)))
+        .expect("on the bench");
+    history.push_bench(Arc::new(bench), "Dropped the frame");
+
+    let evaluation = state.bench_evaluation(id, &label).expect("a track");
+    match &evaluation {
+        Evaluation::Refused(why) => {
+            assert!(
+                why.starts_with(&format!("Cannot evaluate {label}")),
+                "{why}"
+            )
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    state.drive_bench_evaluation();
+    assert!(
+        state.running_evaluation_track().is_none(),
+        "a refused track started an evaluation"
+    );
+}
+
+#[test]
+fn an_evaluation_waits_while_an_operation_holds_the_node() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(|_| Finished::NoChange("Nothing to fit".to_string())),
+        )
+        .expect("nothing else is running");
+
+    state.drive_bench_evaluation();
+    assert!(
+        state.running_evaluation_track().is_none(),
+        "an evaluation started under an operation whose answer replaces its inputs"
+    );
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+
+    state.finish_background_task();
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(id, &label));
+}

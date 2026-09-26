@@ -14,15 +14,17 @@ one, on one node (or, for an open, on none), with an id of its own. One task
 runs at a time. The twelve operations are `Open`, which reads files and makes
 them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
 `Convert to embedded patches`, `Retriangulate all points` and `Prune covered
-observations`; and the seven the bench runs, `Evaluate track`, `Fit track`, `Set
-track stage`, `Search descriptors`, `Geometry search`, `Build index files` and
-`Create track at pixel`
-([bench.md](bench.md)). Every one of them is **cancellable**. The open polls the
+observations`; `Add image to tracks`; and the six the bench runs, `Fit track`,
+`Set track stage`, `Search descriptors`, `Geometry search`, `Build index files`
+and `Create track at pixel`
+([bench.md](bench.md)). Every one of them is **cancellable**. The bench's live
+evaluation is not one of them: it locks no node, writes no row and is not what
+the Background panel shows ([bench.md](bench.md) § "Live evaluation"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it fuses, and a
 cancelled open appends no node. The bench steps
 that read photographs poll the flag on either side of the decode and inside the
-kernels -- between the reading's rounds and between the views the localizer or
+kernels -- between the fit's rounds and between the views the localizer or
 geometry selector renders, which is where their widened searches spend their
 time. The descriptor search polls in front of the forest query and between the
 candidates it found; the geometry search polls around reference construction,
@@ -441,7 +443,7 @@ bar equally. Both poll for cancellation, which the job turns into
 
 The bench's photometric steps fill in the phases and poll the same flag. A
 cancelled one ends as a cancellation rather than a failure of the kernel --
-`EvaluateError::Cancelled`, `FitError::Cancelled`, `SearchError::Cancelled`,
+`FitError::Cancelled`, `StageError::Fit(FitError::Cancelled)`, `SearchError::Cancelled`,
 `GeometrySearchError::Cancelled` -- and the job turns each into
 `Finished::Cancelled`, so the row says the operation stopped and no version is
 pushed. Geometry search reports `decode images`, `build reference`, `score

@@ -11,8 +11,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Start a cluster-stage track on the bench from a place in one camera \
                           image, and make it the active track. A cluster is a set of image \
                           patches that register onto one template, with no geometry behind them: \
-                          it wants more observations and an evaluation, and set_bench_track_stage \
-                          \"track\" is what triangulates it. Seed it with a pixel (and a \
+                          it wants more observations, and set_bench_track_stage \"track\" is \
+                          what triangulates it. It is evaluated on a worker as soon as it is \
+                          on the bench, and again after every change. Seed it with a pixel (and a \
                           radius_px or an affine shape for the patch), or with a .sift feature, \
                           which carries its own position and shape. The reply names the item the \
                           rest of the bench tools take.",
@@ -572,29 +573,29 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "evaluate_bench_track",
-            description: "Read every observation of a bench track at the stage the track is in \
-                          and MOVE NOTHING — the position, the frame and every keypoint come \
-                          back as they were. It is the refinement against the template at the \
-                          cluster stage, and at the track stage one round of the localizer at \
-                          the pixels the observations already sit at: each gets its \
-                          leave-one-out ZNCC, seed_shift_px (how far the correlation peak sits \
-                          from the observation), projection_offset_px (how far the observation \
-                          sits from the point's projection — the number that says the point is \
-                          off, not the sighting), the reprojection error, the ray angle and its \
-                          tile localizability. No gate drops a row: an observation that cannot \
-                          be read carries a reason sentence instead of a score. Read the \
-                          numbers back with get_bench_track. It runs on a worker thread, so a \
-                          reading still going after 200 ms replies with running: true and an \
-                          operation_id to poll with get_background_task instead of the version \
-                          it pushed. Needs the photographs, which are decoded on demand.",
+            name: "set_bench_search_px",
+            description: "Set how far around each observation the bench's evaluation looks for \
+                          the correlation peak, in patch-grid px: Track View's search px slider. \
+                          It is the viewer's setting rather than a track's, so it pushes no \
+                          version and undo does not reverse it; every track on every bench is \
+                          evaluated again at the new radius. There is no call that evaluates a \
+                          track: every change to a track, to the reconstruction under it or to \
+                          this radius evaluates it again on a worker, and get_bench_track \
+                          reports under evaluation whether the numbers it returns are current \
+                          or an evaluation of the current inputs is still running.",
             kind: Write,
             schema: object(
-                &[
-                    ("track", bench_track_schema()),
-                    ("search_px", search_px_schema()),
-                ],
-                &[("reconstruction_label", edited_label_schema())],
+                &[],
+                &[(
+                    "search_px",
+                    json!({
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description":
+                            "The radius, in patch-grid px. A wider window finds a feature the \
+                             sighting sits further from, and says so in seed_shift_px.",
+                    }),
+                )],
             ),
         },
         ToolSpec {
@@ -606,10 +607,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           stage it is the refinement, which is what a reading is too. Nothing \
                           is dropped by a gate: a sighting that does not belong is turned out \
                           with set_bench_track_verdict or by the thresholds, not deleted from \
-                          the evidence. The fit ends by evaluating its own result, so the \
-                          numbers it leaves behind are the ones evaluate_bench_track reports. \
-                          Refused for a track stage with fewer than two in observations, which \
-                          a reading permits. Answers as evaluate_bench_track does.",
+                          the evidence. The fit ends by evaluating its own result, and the \
+                          track is then evaluated again at the viewer's search radius like \
+                          after any other change. Refused for a track stage with fewer than two \
+                          in observations, which an evaluation permits. It runs on a worker \
+                          thread, so a fit still going after 200 ms replies with running: true \
+                          and an operation_id to poll with get_background_task instead of the \
+                          version it pushed. Needs the photographs, which are decoded on \
+                          demand.",
             kind: Write,
             schema: object(
                 &[
@@ -626,7 +631,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           each keypoint against it, which is what a commit needs; \"cluster\" \
                           drops the geometry and leaves the patches registering onto one \
                           template, which is what questioning a wrong position looks like. Runs \
-                          on a worker thread and answers as evaluate_bench_track does. Setting \
+                          on a worker thread and answers as fit_bench_track does. Setting \
                           the stage a track is already at changes nothing.",
             kind: Write,
             schema: object(
@@ -654,12 +659,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           on a single affine warp with at least min_inliers of them is found. That \
                           warp applied to the observation's own pixel and shape is the seed the \
                           new candidate takes, so it arrives where and at the size the warp says \
-                          the patch is — evaluate_bench_track is what then scores it. An image the \
+                          the patch is — the evaluation that follows is what scores it. An image the \
                           track already has an observation in is left alone whatever its verdict, \
                           and so is the searched image itself. Needs a CURRENT SIFT index: \
                           build_index_files or open_index_files first, and get_bench reports \
                           its state under index_files.sift_index. Runs on a worker thread and \
-                          answers as evaluate_bench_track does.",
+                          answers as fit_bench_track does.",
             kind: Write,
             schema: object(
                 &[
@@ -708,13 +713,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           bar, so apply_bench_track_thresholds moves what the next search \
                           admits. A candidate arrives at the patch's own projection, with the \
                           projected patch shape and sweep provenance, carrying no verdict and \
-                          no measurement — evaluate_bench_track is what then scores it. An \
+                          no measurement — the evaluation that follows is what scores it. An \
                           image the track already has an observation in is left alone whatever \
                           its verdict, so repeating the search changes nothing. Needs the TRACK \
                           stage and a fitted patch; a cluster-stage track has no geometry to \
                           project and is refused. It reads no SIFT index, unlike \
                           search_bench_track_descriptors. Runs on a worker thread and answers \
-                          as evaluate_bench_track does.",
+                          as fit_bench_track does.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -785,7 +790,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is there. Refused when the reconstruction has never been saved, and \
                           when no .sift file of the node can be found. It reads every \
                           descriptor and photograph of the capture, so it runs on a worker \
-                          thread and answers as evaluate_bench_track does.",
+                          thread and answers as fit_bench_track does.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },

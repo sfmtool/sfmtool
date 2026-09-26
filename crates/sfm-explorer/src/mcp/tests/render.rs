@@ -767,8 +767,9 @@ fn a_stage_change_the_track_rules_out_is_refused_before_the_worker() {
 }
 
 /// The same for a fit of a track-stage track with nothing to register against
-/// -- and, beside it, the reading of that very track, which is **not** refused:
-/// one sighting is something to report, and only moving it needs a consensus.
+/// -- and, beside it, the evaluation of that very track, which is **not**
+/// refused: one sighting is something to report, and only moving it needs a
+/// consensus.
 #[test]
 fn a_fit_the_track_rules_out_is_refused_before_the_worker() {
     let (mut state, mut viewer) = benchable();
@@ -792,18 +793,17 @@ fn a_fit_the_track_rules_out_is_refused_before_the_worker() {
     );
     assert_eq!(version_count(&state), before, "a refusal pushed a version");
 
-    let read = worked(
+    state.settle_bench_evaluation();
+    let read = call(
         &mut state,
         &mut viewer,
-        "evaluate_bench_track",
+        "get_bench_track",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert!(
-        read["report"]
-            .as_str()
-            .expect("a report")
-            .starts_with(&format!("Evaluated {item}")),
-        "a reading of one sighting is a measurement, not a refusal: {read}"
+    assert_eq!(
+        read["evaluation"]["state"],
+        json!("current"),
+        "an evaluation of one sighting is a measurement, not a refusal: {read}"
     );
 }
 

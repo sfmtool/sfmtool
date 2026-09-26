@@ -624,7 +624,10 @@ the frame, the bitmap, every keypoint and every verdict exactly as they were.
 result**, so the numbers a fit leaves behind are a reading's numbers and the two
 steps can never give two accounts of one track. A person asking "is this track
 right?" and a person saying "make it right" are asking different questions, and
-a single step that measured by refitting could only ever answer the second.
+a single step that measured by refitting could only ever answer the second. It
+is also what lets a caller run `evaluate` on its own after every change to a
+track, which the viewer does ([`../../gui/bench.md`](../../gui/bench.md) §
+"Live evaluation"): a reading that moves nothing needs nobody to ask for it.
 
 **Each photometric step publishes its photograph-free refusals.** A caller that
 runs `evaluate`, `fit` or `set_stage` somewhere expensive -- on a worker, after
@@ -714,8 +717,8 @@ println!("{}", commit_report.label("bull"));
 An observation names one image of the reconstruction and one place in it.
 Observations are **appended and never renumbered**, so an index into the list is
 stable for the life of the track: an agent holding an index after a verdict
-still holds the same observation, and an evaluation that finishes after the
-track has moved on still lands on the observations it measured.
+still holds the same observation, and a measurement is keyed by the index of
+the observation it was taken of.
 
 **Provenance** is where the sighting came from, and it is shown rather than
 used, with exactly one exception: a commit deletes the points that `Point`
@@ -1490,7 +1493,7 @@ converted from the negative-determinant patch-frame convention into the
 positive-determinant cluster/SIFT convention and divided by the cluster radius,
 exactly as a track-to-cluster stage change seeds an observation. The row is a
 `candidate` with `Provenance::Sweep`, carries no measurement, and the next
-Evaluate or Fit judges it. An image the track already names is reported and
+evaluation or fit judges it. An image the track already names is reported and
 left byte-for-byte alone, including an `out` verdict or a pin; the source image
 and all other reference images are excluded by the selector itself. Repeating
 the same search is therefore idempotent.
