@@ -14,7 +14,7 @@ use super::data::{observation_reprojection_error, SfmrReconstruction};
 use super::triangulation::triangulate_track;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::resect_images::scene_scale;
-use crate::numeric::median_in_place;
+use crate::numeric::{median_in_place, quantile_of_sorted};
 use crate::{RotQuaternion, Se3Transform};
 
 /// Why a camera could not be moved. Every variant names what did not hold,
@@ -391,18 +391,6 @@ pub fn pose_of(recon: &SfmrReconstruction, image: usize) -> Se3Transform {
         row.camera_center().coords,
         1.0,
     )
-}
-
-/// Linear-interpolated quantile of an ascending, non-empty slice.
-///
-/// The convention `numpy.quantile` takes, so a number printed beside a median
-/// means what a reader checking it in a notebook would get.
-fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
-    let position = q * (sorted.len() - 1) as f64;
-    let low = position.floor() as usize;
-    let high = position.ceil() as usize;
-    let t = position - low as f64;
-    sorted[low] * (1.0 - t) + sorted[high] * t
 }
 
 /// The RMS of point `p`'s own reprojection residuals at `recon`'s geometry, or

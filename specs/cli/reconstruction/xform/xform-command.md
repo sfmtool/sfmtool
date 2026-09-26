@@ -281,28 +281,55 @@ sfm xform in.sfmr out.sfmr --find-points-at-infinity 0.1,200,2 --max-features 20
 
 ### Camera Model
 
-#### `--camera-model <NAME>`
+#### `--camera-model <MODEL>[,coeffs=<N>,fit_to=<DEG>,spline_domain=<DEG>,cameras=<I>+<J>...]`
 
-Converts every camera in the reconstruction to a different COLMAP camera model. The
-target name is case-insensitive and must be one of the models registered in
-`_CAMERA_PARAM_NAMES` (e.g. `SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`,
-`OPENCV`, `OPENCV_FISHEYE`, ...). Each camera is converted independently, so a
-reconstruction with mixed source models is fine; image width and height are preserved.
-Parameter handling:
+Replaces cameras with cameras of another model, each fitted to the one it
+replaces over the angles where that one is trusted. Poses, points, keypoints,
+patches and tracks are not changed; the stored errors of the points the switched
+cameras' images observe are recomputed. The fit and the switch are specified in
+[`../../../core/camera/refit.md`](../../../core/camera/refit.md) and
+[`../../../core/reconstruction/switch-camera-model.md`](../../../core/reconstruction/switch-camera-model.md);
+the transform calls `SfmrReconstruction.switch_camera_model`
+([`xform/_switch_camera_model.py`](../../../../src/sfmtool/xform/_switch_camera_model.py)).
 
-- Parameters whose names are identical in source and target are carried over as-is.
-- Parameters that exist only in the target model are initialized to zero.
-- Parameters that exist only in the source model are dropped.
-- When the focal-length representation differs: a single `focal_length` becomes split
-  `focal_length_x = focal_length_y` and vice versa; collapsing split → single averages
-  `fx` and `fy` and prints a warning if they differ by more than a small relative tolerance.
-- If every camera already uses the target model, all parameter names match and values
-  are carried over unchanged (the operation is effectively a no-op, but is still logged).
+The first comma-separated field is the model, case-insensitive: any COLMAP lens
+model in `_CAMERA_PARAM_NAMES` (`SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`,
+`RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, ...), `EQUIDISTANT_FISHEYE`,
+`SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE`. The two spline models are targets here
+and nowhere else: they are still never a `solve` or `match` camera model, which
+is why `_CAMERA_PARAM_NAMES` leaves them out. `EQUIRECTANGULAR` is not a target.
+The other fields are `key=value`:
 
-The typical use is to widen the parameter set right before bundle adjustment — e.g.
-upgrading `SIMPLE_RADIAL` to `RADIAL` so bundle adjustment has a `k2` term to refine.
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `coeffs` | `8` | Spline coefficients, for `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE` only. |
+| `fit_to` | the camera's trusted bound, else its observations' largest incidence angle | The largest incidence angle, in degrees, the fit samples. A value past the trusted bound is refused. |
+| `spline_domain` | the far image corner | Where a spline target's domain ends, as an incidence angle in degrees. |
+| `cameras` | every camera | Camera-table indexes to switch, separated by `+`. |
+
+A target that contains the source's model fits to the copied parameters: the
+same focal and coefficients, the new terms at zero, so `SIMPLE_RADIAL` to
+`RADIAL` gives `k2 = 0`. A switch across radial coordinates (a polynomial fisheye
+to a spline, a fisheye to a perspective model below 90°) gives the target's best
+fit to the same lens. A perspective target is refused for a camera with
+observations at 90° or more; a spline fit that is not monotone and a fitted
+polynomial fisheye whose trusted bound falls short of the fit are refused too.
+A refusal stops the command, names the camera, the rule and the value, and
+writes nothing. The observations' pixels come from the inline keypoints, or
+from the `.sift` files for a `sift_files` reconstruction without them.
+
+For each switched camera the transform prints the source and target models, the
+fitted parameters, the fit (its largest angle and where it came from, rms,
+radial rms and max pixel error, the spline domain), each term the target cannot
+represent (for example `fx/fy aspect 0.9978 dropped (single focal)`), the extent
+(the new model's edge and corner angles, the source's trusted bound and fold),
+and the observation comparison over one fixed set: median, 90th percentile and
+maximum error before and after, how many changed by more than a pixel, and the
+same for the observations past the source's trusted bound.
 
 ```bash
+--camera-model SFMTOOL_FISHEYE,coeffs=8
+--camera-model SFMTOOL_FISHEYE,coeffs=8,fit_to=80,cameras=0
 --camera-model RADIAL
 ```
 

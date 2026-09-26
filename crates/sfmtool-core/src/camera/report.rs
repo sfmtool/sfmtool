@@ -597,22 +597,76 @@ fn polynomial_fisheye_limit(cam: &CameraIntrinsics) -> f64 {
         if r <= previous {
             // The map turned over inside this step. Ternary-search the bracket
             // for the peak, which is unimodal across it by construction.
-            let (mut lo, mut hi) = ((last_good - TRUST_SCAN_STEP_DEG).max(0.0), theta);
-            for _ in 0..TRUST_REFINE_STEPS {
-                let third = (hi - lo) / 3.0;
-                let (a, b) = (lo + third, hi - third);
-                if radius(a).unwrap_or(0.0) < radius(b).unwrap_or(0.0) {
-                    lo = a;
-                } else {
-                    hi = b;
-                }
-            }
-            return 0.5 * (lo + hi);
+            return peak_in_bracket(&radius, (last_good - TRUST_SCAN_STEP_DEG).max(0.0), theta);
         }
         previous = r;
         last_good = theta;
     }
     last_good
+}
+
+/// The incidence angle, in degrees, at which the model's forward map stops
+/// increasing, or `None` when it increases over every angle the sweep reaches.
+///
+/// [`trustworthy_max_theta_deg`] answers where a model stops being believable,
+/// which is the fold or the start of the inverse's wide-angle blend, whichever
+/// comes first. This answers the narrower question of where the forward map
+/// itself turns over, past which the ring of the image beyond the peak radius
+/// has no ray at all under the model. On the `kerry_park` rig's first
+/// `OPENCV_FISHEYE` that is about 101.6°, well past its trusted bound of about
+/// 86°.
+///
+/// Only the four bounded polynomial fisheye models can fold; every other model
+/// is `None`, as is a camera with no live distortion. The sweep is the one
+/// [`trustworthy_max_theta_deg`] runs, without the blend test, so the same
+/// caveat applies: a fold narrower than half a degree would be stepped over.
+pub fn forward_fold_deg(cam: &CameraIntrinsics) -> Option<f64> {
+    if !cam.has_distortion() {
+        return None;
+    }
+    if !matches!(
+        cam.model,
+        CameraModel::OpenCVFisheye { .. }
+            | CameraModel::RadialFisheye { .. }
+            | CameraModel::ThinPrismFisheye { .. }
+            | CameraModel::RadTanThinPrismFisheye { .. }
+    ) {
+        return None;
+    }
+    let radius = |theta_deg: f64| max_distorted_radius(cam, theta_deg);
+    let steps = (TRUST_SCAN_MAX_DEG / TRUST_SCAN_STEP_DEG) as usize;
+    let mut previous = 0.0_f64;
+    let mut last_good = 0.0_f64;
+    for i in 1..=steps {
+        let theta = i as f64 * TRUST_SCAN_STEP_DEG;
+        let r = radius(theta)?;
+        if r <= previous {
+            return Some(peak_in_bracket(
+                &radius,
+                (last_good - TRUST_SCAN_STEP_DEG).max(0.0),
+                theta,
+            ));
+        }
+        previous = r;
+        last_good = theta;
+    }
+    None
+}
+
+/// Ternary search of `[lo, hi]` for the peak of `radius`, which is unimodal
+/// across a bracket the sweep found by construction.
+fn peak_in_bracket(radius: &dyn Fn(f64) -> Option<f64>, lo: f64, hi: f64) -> f64 {
+    let (mut lo, mut hi) = (lo, hi);
+    for _ in 0..TRUST_REFINE_STEPS {
+        let third = (hi - lo) / 3.0;
+        let (a, b) = (lo + third, hi - third);
+        if radius(a).unwrap_or(0.0) < radius(b).unwrap_or(0.0) {
+            lo = a;
+        } else {
+            hi = b;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 /// The largest **distorted** radius, in normalized image-plane units, that the

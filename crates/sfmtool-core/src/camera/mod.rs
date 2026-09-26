@@ -11,6 +11,7 @@ pub mod epipolar;
 pub mod frustum;
 pub mod intrinsics;
 pub mod rectification;
+pub mod refit;
 pub mod remap;
 pub mod report;
 pub mod viewport;

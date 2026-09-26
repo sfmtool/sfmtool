@@ -3583,7 +3583,9 @@ would be an edit like the others under this model, but it has real work behind
 it (a partial-parameter merge against `CameraModel`, and the re-upload of every
 frustum, distorted mesh and image quad built from the lens that changed), and it
 should land as its own change, with an edit spec beside the rest in
-[edits/](edits/README.md).
+[edits/](edits/README.md). Two tools that switch a camera to another model, as a
+proposal an agent can inspect before applying it, are proposed in
+[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
 
 ### Loose images, and the names held for them
 

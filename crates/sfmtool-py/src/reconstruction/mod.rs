@@ -14,6 +14,7 @@ pub mod clone;
 pub mod edited;
 pub mod range_expr;
 pub mod sfmr_reconstruction;
+pub mod switch_camera_model;
 pub mod triangulate_points;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

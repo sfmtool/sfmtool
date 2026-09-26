@@ -1,0 +1,339 @@
+# Fitting one camera model to another
+
+A camera model is the function that maps a ray leaving the camera to a pixel.
+Two models from different families can describe the same lens, and a lens
+calibrated in one family sometimes has to be moved to another: a fisheye first
+solved with a COLMAP polynomial, whose inverse fails a little past 90° off the
+axis, is better described by the spline model `SFMTOOL_FISHEYE`, which is
+defined out to 180°. This spec describes the fit that does the move. Given a
+source camera and a target model, it samples rays over the angles where the
+source is trusted, projects each with the source, and chooses the target's
+parameters so the target puts every ray as close as it can to the same pixel. It
+reports how close that is, and names what the target cannot represent.
+
+The fit knows only the lens. Switching the cameras of a reconstruction, which
+adds the observations and compares their reprojection errors before and after,
+is [`../reconstruction/switch-camera-model.md`](../reconstruction/switch-camera-model.md).
+The spline models themselves are specified in
+[`../../formats/sfmtool-camera-models.md`](../../formats/sfmtool-camera-models.md).
+
+## Rust API
+
+The fit lives in [refit.rs](../../../crates/sfmtool-core/src/camera/refit.rs),
+as `sfmtool_core::camera::refit`, and is bound as `CameraIntrinsics.refit`.
+
+```rust
+pub enum RefitTarget {
+    SfmtoolFisheye { coeff_count: usize },
+    SfmtoolPinhole { coeff_count: usize },
+    EquidistantFisheye,
+    Colmap(&'static str),
+}
+
+impl RefitTarget {
+    pub fn from_name(model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError>;
+    pub fn model_name(&self) -> &'static str;
+    pub fn coeff_count(&self) -> Option<usize>;
+    pub fn is_perspective(&self) -> bool;
+}
+
+pub struct RefitOptions {
+    pub theta_fit_deg: Option<f64>,     // None: trusted bound, else far image corner
+    pub spline_domain_deg: Option<f64>, // None: far image corner
+}
+
+pub enum ThetaFitSource { TrustedBound, Observations, ImageCorner, Given }
+
+pub enum DroppedTerm {
+    FocalAspect { fy_over_fx: f64 },
+    Parameter { name: String, value: f64 },
+}
+
+pub struct ModelExtent {
+    pub edge_deg: f64,
+    pub corner_deg: f64,
+    pub source_trusted_deg: Option<f64>,
+    pub source_fold_deg: Option<f64>,
+}
+
+pub struct CameraRefit {
+    pub camera: CameraIntrinsics,
+    pub theta_fit_deg: f64,
+    pub theta_fit_source: ThetaFitSource,
+    pub spline_domain_deg: Option<f64>,
+    pub rms_px: f64,
+    pub max_px: f64,
+    pub radial_rms_px: f64,
+    pub dropped: Vec<DroppedTerm>,
+    pub extent: ModelExtent,
+}
+
+pub enum RefitError {
+    UnknownTarget { model: String },
+    CoeffCount { model: &'static str, count: usize },
+    CoeffCountNotApplicable { model: &'static str },
+    ThetaFitInvalid { theta_fit_deg: f64 },
+    BeyondTrustedBound { theta_fit_deg: f64, trusted_deg: f64 },
+    PerspectivePast90 { theta_fit_deg: f64 },
+    ObservationsPast90 { max_theta_deg: f64 },
+    SourceCannotProject { theta_deg: f64 },
+    SplineDomainInvalid { spline_domain_deg: f64 },
+    NotMonotone,
+    TrustedBoundShort { trusted_deg: f64, theta_fit_deg: f64 },
+    Degenerate { reason: &'static str },
+}
+
+pub fn refit_camera(
+    source: &CameraIntrinsics,
+    target: &RefitTarget,
+    options: &RefitOptions,
+) -> Result<CameraRefit, RefitError>;
+```
+
+The source's trusted bound is
+[`trustworthy_max_theta_deg`](../../../crates/sfmtool-core/src/camera/report.rs),
+and `ModelExtent::source_fold_deg` is `forward_fold_deg` in the same module: the
+angle at which a polynomial fisheye's forward map stops increasing.
+
+### Why it is shaped this way
+
+**The target is an enum, not a model name.** The two spline models need a
+coefficient count and every other model must not have one, and the spline fits
+and the polynomial fits are different solvers. `RefitTarget::from_name` is the
+one place a name becomes a target, so the viewer, MCP and the CLI refuse the
+same names with the same sentences.
+
+**Angles are in degrees.** The trusted bound, the fold and every report angle
+are in degrees already, and so is every place a person types one. A spline
+target's domain end is also given as an incidence angle, whichever radial
+coordinate the model stores it in: `SFMTOOL_PINHOLE` stores `tan θ`, and a
+caller should not have to know that to say "end the spline at 70°".
+
+**The report names what could not be represented.** A single-focal target fitted
+to a lens with `fx ≠ fy` has an irreducible error that grows with the radius and
+varies with the azimuth. Without the `dropped` list and the separate
+`radial_rms_px`, a reader would see a large overall rms and could not tell a bad
+fit from a lost aspect.
+
+**Refusals are values.** Every refusal names the rule and the value it measured,
+so a caller can print it as the one sentence a menu or a CLI needs, and a test
+can match on the variant.
+
+### Example
+
+```rust
+use sfmtool_core::camera::refit::{refit_camera, RefitOptions, RefitTarget};
+
+let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8))?;
+let refit = refit_camera(&source, &target, &RefitOptions::default())?;
+println!(
+    "f {:.2}, rms {:.3} px, radial {:.3} px over θ ≤ {:.1}°",
+    refit.camera.focal_lengths().0, refit.rms_px, refit.radial_rms_px, refit.theta_fit_deg,
+);
+for term in &refit.dropped {
+    println!("{term}"); // "fx/fy aspect 0.9978 dropped (single focal)"
+}
+```
+
+## Theory
+
+### The samples
+
+The fit samples 96 incidence angles evenly over `(0, θ_fit]` and 64 azimuths at
+each, in the canonical camera frame, where the camera looks along `−Z`: the ray
+at `(θ, φ)` is `(sin θ cos φ, sin θ sin φ, −cos θ)`. Each ray is projected with
+the source. A source that has no pixel for a ray inside the domain is refused
+(`SourceCannotProject`), since there is nothing to fit to there.
+
+The **principal point is copied**, not fitted. Bundle adjustment never frees it,
+and a fit that moved it would move every keypoint's ray for a reason the data
+did not give. The image size is copied too.
+
+### The fit's largest angle
+
+`θ_fit` defaults to the source's trusted bound: the angle past which a
+polynomial fisheye folds or its inverse blends toward the identity ray. For a
+model with no trusted bound (the perspective models, the spline models, the
+exact fisheye maps), the lens-only default is the incidence angle of the far
+image corner under the source, capped at 180°. The reconstruction-level switch
+uses the observations' extent instead; see its spec.
+
+A caller may give a smaller `θ_fit`, never a larger one than the trusted bound
+(`BeyondTrustedBound`). A fit that followed the source past its bound would copy
+the fold into the new model: on the `kerry_park` rig's first lens the
+polynomial's radius flattens between 95° and 102°, and a spline fitted there
+flattens with it.
+
+### Spline targets: one linear solve
+
+For `SFMTOOL_FISHEYE` the model's pixel is
+
+```
+(u, v) = (cx, cy) + f·(d + Σ cᵢ·Bᵢ(d))·û
+```
+
+with `d = θ`, `û` the unit image direction of the ray, and `Bᵢ` the fixed basis
+on `[0, d_max]` (carried along its end tangent past `d_max`, exactly as the
+model's linear tail is). That is linear in `x = (f, f·c₀, …, f·c_{N−1})`, so one
+least-squares solve over the samples' two pixel coordinates gives the focal and
+the coefficients together, with no starting point and no iteration.
+`SFMTOOL_PINHOLE` is the same fit with `d = tan θ`. `EQUIDISTANT_FISHEYE` is the
+fit with no coefficients (`N = 0`), which the zero-spline identity makes the
+same model.
+
+`û` and `d` come from projecting the ray through the family's base model at
+focal 1 and principal point at the origin, so the sign conventions of the
+optical frame are the model code's and are not restated here.
+
+**The domain end is chosen once.** `d_max` is placed where the format spec asks:
+at the far image corner, estimated as the corner's pixel radius over the
+source's focal on the axis (`√(fx·fy)`), which is where every model family
+agrees with its base. For the `kerry_park` fisheyes (480 × 480, f ≈ 129.6) that
+is about 150°. A caller may give it instead (`spline_domain_deg`).
+
+**The span past `θ_fit` is regularized.** Coefficients whose support lies past
+the last sample have no data, and the solve would be rank-deficient. So one row
+per interior coefficient penalizes the second difference `f·(c_{i−1} − 2cᵢ +
+c_{i+1})`, and `δ` continues past `θ_fit` as the smoothest curve that meets the
+data. The penalty's weight is small (see [Parameters](#parameters)): on a source
+the target represents exactly it moves the fit by well under a thousandth of a
+pixel.
+
+**The result is checked, not repaired.** A fitted spline that fails
+`bspline_is_monotone` over its whole domain and its linear tail is refused
+(`NotMonotone`). The continuation of a lens that is flattening at `θ_fit` can
+turn over past it; the `kerry_park` first lens does, with `d_max` at 110°. A
+monotone spline is the model's construction invariant, so a caller changes
+`θ_fit`, the domain or the coefficient count rather than receiving a camera
+with no inverse.
+
+### Polynomial targets: a small nonlinear fit
+
+For the COLMAP models the pixel is not linear in the parameters, so the samples
+are fitted by Levenberg–Marquardt over every parameter but the principal point.
+The start copies the source's parameters by name, the focal translated between
+one value and two (the mean of `fx` and `fy`, or the single focal into both).
+When that start cannot project every sample, which happens when a coefficient
+with the same name means something different in the two models, the distortion
+starts from zero instead. The Jacobian is a central difference of the target
+model's own projection.
+
+A target that contains the source's model starts at zero error and stays there,
+so `SIMPLE_RADIAL` to `RADIAL` gives the source's focal and `k1` with `k2 = 0`.
+
+A fitted polynomial fisheye is checked the way the viewer checks one: its own
+trusted bound must reach `θ_fit`, or the fit is refused (`TrustedBoundShort`).
+Past 90° of distorted angle the fisheye polynomials' inverse blends toward the
+identity ray, so a polynomial fitted to a near-equidistant lens out to 120° is
+trusted only to about 90°.
+
+### Perspective targets
+
+A perspective model (`SFMTOOL_PINHOLE`, `PINHOLE`, `SIMPLE_PINHOLE`,
+`SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `FULL_OPENCV`) has no pixel for a ray at 90°
+or more, so it is refused when `θ_fit` reaches 90° (`PerspectivePast90`).
+
+### What the report measures
+
+- **`rms_px` and `max_px`**: the pixel distance between the source's and the
+  fitted camera's pixel over all samples.
+- **`radial_rms_px`**: at each sampled angle, the difference between the two
+  cameras' radii averaged over the azimuths, then the rms over the angles. This
+  is the error of the radial profile alone. A lost focal aspect shows in
+  `rms_px` and not here.
+- **`dropped`**: a focal aspect `fy / fx` when the source has two focals and the
+  target one, and every non-zero tangential or thin-prism parameter the target
+  has no parameter of the same name for. Radial terms are never listed: a
+  target with a different radial parameterization represents them by fitting.
+- **`extent`**: the largest incidence angle the fitted camera gives the midpoints
+  of the image edges and the image corners, and the source's trusted bound and
+  fold.
+
+On the `kerry_park` first lens (`OPENCV_FISHEYE`, `fx` 129.718, `fy` 129.430),
+an eight-coefficient `SFMTOOL_FISHEYE` fitted over its trusted bound of about
+84.5° has f ≈ 129.52, radial rms ≈ 0.013 px, rms ≈ 0.13 px and max ≈ 0.29 px,
+and drops the aspect 0.9978.
+
+## Implementation notes
+
+**The spline solve is an SVD of the design matrix**, not of the normal
+equations. The normal equations square the condition number, and an exact
+source (an `EQUIDISTANT_FISHEYE` fitted as `SFMTOOL_FISHEYE`) then comes back
+with coefficients of 1e-11 instead of zero to rounding. The matrix is
+`2·96·64 + (N − 2)` rows by `N + 1` columns, a few milliseconds to decompose.
+
+**The penalty weight scales with the data.** Each penalty row's squared weight
+is `SMOOTHING · rows / N`, so the penalty's share of the solve does not change
+with the sample or coefficient count.
+
+## Parameters
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `coeff_count` | `DEFAULT_COEFF_COUNT`, `8` | Spline coefficients for a spline target named without a count; `0` or `2..=MAX_COEFF_COUNT` (`32`). |
+| `theta_fit_deg` | trusted bound, else far image corner | The largest incidence angle sampled. |
+| `spline_domain_deg` | far image corner, `r_corner / √(fx·fy)` | Where a spline target's domain ends. |
+| `THETA_SAMPLES` | `96` | Incidence angles sampled over `(0, θ_fit]`. |
+| `AZIMUTHS` | `64` | Azimuths sampled at each angle. |
+| `SMOOTHING` | `1e-6` | Weight of the second-difference penalty, per data row and per coefficient. |
+| `LM_MAX_ITERS` | `200` | Iteration budget of the polynomial fit. |
+
+All are constants in [refit.rs](../../../crates/sfmtool-core/src/camera/refit.rs).
+
+## Python bindings
+
+`CameraIntrinsics.refit(target, *, coeff_count=None, theta_fit_deg=None,
+spline_domain_deg=None)` returns `(CameraIntrinsics, report)`. The report is a
+dict: `model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
+`"observations"`, `"image_corner"` or `"given"`), `spline_domain_deg` (`None` for
+a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
+sentence per term) and `extent` (`edge_deg`, `corner_deg`, `source_trusted_deg`,
+`source_fold_deg`). A refusal is a `ValueError` carrying the error's sentence.
+
+```python
+camera, report = source.refit("SFMTOOL_FISHEYE", coeff_count=8)
+print(report["rms_px"], report["radial_rms_px"], report["dropped"])
+```
+
+## Testing
+
+[refit/tests.rs](../../../crates/sfmtool-core/src/camera/refit/tests.rs):
+
+- `EQUIDISTANT_FISHEYE` to `SFMTOOL_FISHEYE` fits to zero error with zero
+  coefficients, and `EQUIDISTANT_FISHEYE` as a target is the spline fit with
+  none.
+- `SIMPLE_RADIAL` to `RADIAL` reproduces the copy; a COLMAP target equal to its
+  source comes back unchanged.
+- A synthetic `SFMTOOL_FISHEYE` fitted back on its own domain recovers its
+  focal and coefficients.
+- The `kerry_park` first lens: the default `θ_fit` is its trusted bound, short
+  of its fold at about 101.6°; the fitted spline is monotone, its domain ends
+  near 150°, and the aspect is reported as dropped.
+- A polynomial fitted to a spline over 80°.
+- Refusals: a perspective target past 90°; a fit past the trusted bound; a
+  non-monotone spline; a polynomial trusted short of the fit; target names and
+  coefficient counts.
+
+`forward_fold_deg` is tested in
+[report/tests.rs](../../../crates/sfmtool-core/src/camera/report/tests.rs). The
+bindings are tested in
+`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`.
+
+## Non-goals
+
+- Fitting the principal point. Nothing in the toolkit frees it, and the fit
+  keeps that.
+- An aspect for the spline models. They have one focal, and a lens whose `fx`
+  and `fy` really differ loses the difference; the report says so.
+- Choosing `d_max` from the image circle of a circular fisheye. Nothing detects
+  the circle, so the far corner is used, which spends part of the knot span on
+  black pixels past the circle.
+
+## Open questions
+
+- **The regularization weight** past `θ_fit`, and whether a smooth continuation
+  or the linear tail starting at `θ_fit` serves a later bundle adjustment better.
+- **The spline domain for a circular fisheye**: the corner (about 150° on
+  `kerry_park`) or the image circle (about 108°), which would give the observed
+  field more knots but, on the `kerry_park` first lens, makes the fit's
+  continuation turn over.

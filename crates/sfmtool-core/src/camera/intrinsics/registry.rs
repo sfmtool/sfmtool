@@ -156,6 +156,23 @@ macro_rules! camera_models {
             }
         }
 
+        /// A fixed-arity model looked up by its model-name string: the name as
+        /// the registry holds it and its parameter names in declaration order,
+        /// or `None` for a name that is not a fixed-arity model (a custom model
+        /// included).
+        ///
+        /// The one way to ask what a model would carry before there is a camera
+        /// of it, which a caller building a camera of a named model from another
+        /// camera's parameters needs.
+        pub(crate) fn fixed_arity_model_by_name(
+            model: &str,
+        ) -> Option<(&'static str, &'static [&'static str])> {
+            match model {
+                $( $fx_name => Some(($fx_name, &[$( stringify!($field) ),+])), )+
+                _ => None,
+            }
+        }
+
         /// Deserialize a fixed-arity model, reading each field by its own name.
         ///
         /// A name that is not registered is [`CameraIntrinsicsError::UnknownModel`];

@@ -252,9 +252,9 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     "--camera-model",
     multiple=True,
     help=(
-        "Switch every camera to a different COLMAP model "
-        "(e.g., 'RADIAL' to add a k2 term for bundle adjustment to refine). "
-        "Shared parameters carry over; new ones initialize to zero."
+        "Fit a camera of another model to each camera over the angles where it "
+        "is trusted: MODEL[,coeffs=N,fit_to=DEG,spline_domain=DEG,cameras=0+1] "
+        "(e.g., 'SFMTOOL_FISHEYE,coeffs=8' or 'RADIAL'). Prints a per-camera report."
     ),
 )
 @click.option(
@@ -319,7 +319,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Camera model:
-      --camera-model NAME                 Switch every camera's model (e.g. RADIAL)
+      --camera-model MODEL[,KEY=VAL...]   Fit another model to each camera (e.g. SFMTOOL_FISHEYE,coeffs=8)
 
     \b
     Optimization:
@@ -374,6 +374,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Upgrade SIMPLE_RADIAL → RADIAL to refine k2 during bundle adjustment
         sfm xform in.sfmr out.sfmr --camera-model RADIAL --bundle-adjust
+
+    \b
+        # Move a fisheye to the spline model, fitted over its trusted angles
+        sfm xform in.sfmr out.sfmr --camera-model SFMTOOL_FISHEYE,coeffs=8
 
     \b
         # Discover points at infinity, capping features per image

@@ -1380,6 +1380,9 @@ Layers checkbox is matched by name, and phase 3 renames it to
 - **Editing intrinsics.** The viewer is a viewer. Refining a camera is
   `sfm xform bundle-adjust`'s job, and a panel that let you type a focal length
   would immediately raise the question of what it means for the loaded file.
+  Switching a camera to another model as a fit, shown here as a proposal
+  before it is applied, is proposed in
+  [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
 - **Comparing two cameras side by side.** Real for rig work (how do the two
   kerry_park fisheyes differ?), but it needs a second selection and a diff
   presentation, and it is a poor reason to complicate the first version.

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyType};
 
+use sfmtool_core::camera::refit::{refit_camera, CameraRefit, RefitOptions, RefitTarget};
 use sfmtool_core::CameraIntrinsics;
 use sfmtool_sfmr_format::SfmrCamera;
 
@@ -482,6 +483,63 @@ impl PyCameraIntrinsics {
         Ok(PyCameraIntrinsics { inner })
     }
 
+    /// Fit a camera of another model to this one.
+    ///
+    /// Rays are sampled over the angles where this camera is trusted and 64
+    /// azimuths, projected with this camera, and the target's parameters chosen
+    /// to put every ray as close as they can to the same pixel (see
+    /// ``specs/core/camera/refit.md``). The principal point and image size are
+    /// copied.
+    ///
+    /// Args:
+    ///     target: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
+    ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
+    ///         model.
+    ///     coeff_count: Spline coefficients for the two spline models (default
+    ///         8). Refused for any other model.
+    ///     theta_fit_deg: The largest incidence angle sampled. Default: this
+    ///         camera's trusted bound, or its far image corner for a model with
+    ///         none. A value past the trusted bound is refused.
+    ///     spline_domain_deg: Where a spline target's domain ends, as an
+    ///         incidence angle. Default: the far image corner.
+    ///
+    /// Returns:
+    ///     ``(CameraIntrinsics, report)``. The report carries ``model``,
+    ///     ``theta_fit_deg``, ``theta_fit_source`` (``"trusted_bound"``,
+    ///     ``"observations"``, ``"image_corner"`` or ``"given"``),
+    ///     ``spline_domain_deg`` (``None`` for a non-spline target),
+    ///     ``rms_px``, ``max_px``, ``radial_rms_px``, ``dropped`` (one
+    ///     sentence per term the target cannot represent) and ``extent``:
+    ///     ``edge_deg``, ``corner_deg``, ``source_trusted_deg`` and
+    ///     ``source_fold_deg``. Raises ``ValueError`` naming the rule and the
+    ///     value when the fit is refused.
+    #[pyo3(signature = (target, *, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
+    fn refit<'py>(
+        &self,
+        py: Python<'py>,
+        target: &str,
+        coeff_count: Option<usize>,
+        theta_fit_deg: Option<f64>,
+        spline_domain_deg: Option<f64>,
+    ) -> PyResult<(PyCameraIntrinsics, Bound<'py, PyDict>)> {
+        let target = RefitTarget::from_name(target, coeff_count)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let options = RefitOptions {
+            theta_fit_deg,
+            spline_domain_deg,
+        };
+        let refit = py
+            .detach(|| refit_camera(&self.inner, &target, &options))
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let report = refit_report_to_py(py, &refit)?;
+        Ok((
+            PyCameraIntrinsics {
+                inner: refit.camera,
+            },
+            report,
+        ))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "CameraIntrinsics(model={}, width={}, height={})",
@@ -523,4 +581,29 @@ impl PyCameraIntrinsics {
             ),
         ))
     }
+}
+
+/// A [`CameraRefit`] as the dict the Python surface reports it as, the camera
+/// itself left out (the caller returns it beside the dict).
+pub(crate) fn refit_report_to_py<'py>(
+    py: Python<'py>,
+    refit: &CameraRefit,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("model", refit.camera.model_name())?;
+    d.set_item("theta_fit_deg", refit.theta_fit_deg)?;
+    d.set_item("theta_fit_source", refit.theta_fit_source.as_str())?;
+    d.set_item("spline_domain_deg", refit.spline_domain_deg)?;
+    d.set_item("rms_px", refit.rms_px)?;
+    d.set_item("max_px", refit.max_px)?;
+    d.set_item("radial_rms_px", refit.radial_rms_px)?;
+    let dropped: Vec<String> = refit.dropped.iter().map(|t| t.to_string()).collect();
+    d.set_item("dropped", dropped)?;
+    let extent = PyDict::new(py);
+    extent.set_item("edge_deg", refit.extent.edge_deg)?;
+    extent.set_item("corner_deg", refit.extent.corner_deg)?;
+    extent.set_item("source_trusted_deg", refit.extent.source_trusted_deg)?;
+    extent.set_item("source_fold_deg", refit.extent.source_fold_deg)?;
+    d.set_item("extent", extent)?;
+    Ok(d)
 }

@@ -20,6 +20,8 @@ use super::distortion::bspline::bspline_is_inactive;
 
 mod registry;
 
+pub(crate) use registry::fixed_arity_model_by_name;
+
 /// Re-exported so a test corpus outside this module — `camera::report`'s, in
 /// particular — can assert its own completeness against the registry without
 /// the private `registry` module being widened for it.

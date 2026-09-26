@@ -317,6 +317,94 @@ class TestBundleAdjust:
             EditedReconstruction(base).bundle_adjust()
 
 
+class TestSwitchCameraModel:
+    """The bulk edit that replaces cameras with ones of another model."""
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_ground_truth_sfmr):
+        return EditedReconstruction(
+            SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        )
+
+    def test_the_camera_changes_and_nothing_else_moves(self, embedded):
+        before = embedded.materialize()[0]
+
+        after, report = embedded.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=4)
+
+        value = after.materialize()[0]
+        assert value.cameras[0].model == "SFMTOOL_PINHOLE"
+        np.testing.assert_array_equal(value.positions, before.positions)
+        np.testing.assert_array_equal(value.translations, before.translations)
+        np.testing.assert_array_equal(value.keypoints_xy, before.keypoints_xy)
+        # This object is untouched, and the value that came back is a new base.
+        assert embedded.materialize()[0].cameras[0].model == "SIMPLE_RADIAL"
+        assert after.deleted_count == 0
+
+        (entry,) = report["cameras"]
+        assert entry["camera"] == 0
+        assert entry["source"].model == "SIMPLE_RADIAL"
+        assert entry["target"] == value.cameras[0]
+        fit = entry["fit"]
+        assert fit["model"] == "SFMTOOL_PINHOLE"
+        # A perspective source has no trusted bound: the fit reaches the
+        # observations' extent.
+        assert fit["theta_fit_source"] == "observations"
+        assert fit["max_px"] < 0.1
+        obs = entry["observations"]
+        assert obs["observations"] + obs["unmeasured"] == before.observation_count
+        assert obs["trusted_deg"] is None
+        assert obs["after"]["median_px"] == pytest.approx(
+            obs["before"]["median_px"], abs=0.05
+        )
+
+    def test_a_refusal_names_the_camera(self, embedded):
+        with pytest.raises(ValueError, match="camera 0: .*90°"):
+            embedded.switch_camera_model("SFMTOOL_PINHOLE", theta_fit_deg=95.0)
+        with pytest.raises(ValueError, match="does not exist"):
+            embedded.switch_camera_model("RADIAL", cameras=[4])
+
+
+class TestCameraRefit:
+    """``CameraIntrinsics.refit``: the lens-only fit."""
+
+    @staticmethod
+    def kerry_cam0():
+        from sfmtool._sfmtool.geometry import CameraIntrinsics
+
+        return CameraIntrinsics(
+            "OPENCV_FISHEYE",
+            480,
+            480,
+            {
+                "focal_length_x": 129.718,
+                "focal_length_y": 129.430,
+                "principal_point_x": 240.0,
+                "principal_point_y": 240.0,
+                "radial_distortion_k1": 0.02865,
+                "radial_distortion_k2": -0.00228,
+                "radial_distortion_k3": 0.00902,
+                "radial_distortion_k4": -0.00355,
+            },
+        )
+
+    def test_a_fisheye_moves_to_the_spline(self):
+        camera, report = self.kerry_cam0().refit("SFMTOOL_FISHEYE", coeff_count=8)
+        assert camera.model == "SFMTOOL_FISHEYE"
+        assert camera.principal_point == (240.0, 240.0)
+        assert camera.focal_lengths[0] == pytest.approx(129.56, abs=0.1)
+        assert report["theta_fit_source"] == "trusted_bound"
+        assert report["theta_fit_deg"] < report["extent"]["source_fold_deg"]
+        assert report["radial_rms_px"] < 0.05
+        assert report["dropped"] == ["fx/fy aspect 0.9978 dropped (single focal)"]
+        assert report["spline_domain_deg"] == pytest.approx(150.0, abs=1.0)
+
+    def test_refusals_are_value_errors(self):
+        with pytest.raises(ValueError, match="trusted bound"):
+            self.kerry_cam0().refit("SFMTOOL_FISHEYE", theta_fit_deg=100.0)
+        with pytest.raises(ValueError, match="not a model a camera can be refitted"):
+            self.kerry_cam0().refit("EQUIRECTANGULAR")
+
+
 class TestMoveCamera:
     """The bulk edit: one image put at a pose, and its tracks settled around it."""
 

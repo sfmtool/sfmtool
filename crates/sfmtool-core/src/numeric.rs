@@ -129,6 +129,20 @@ pub fn median(values: &[f64]) -> f64 {
     median_in_place(&mut scratch)
 }
 
+/// Linear-interpolated quantile of an ascending, non-empty slice.
+///
+/// The convention `numpy.quantile` takes, so a number printed beside a median
+/// means what a reader checking it in a notebook would get. Crate-level
+/// because two edits report a 90th percentile beside a median: Move Camera and
+/// the camera-model switch.
+pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
+    let position = q * (sorted.len() - 1) as f64;
+    let low = position.floor() as usize;
+    let high = position.ceil() as usize;
+    let t = position - low as f64;
+    sorted[low] * (1.0 - t) + sorted[high] * t
+}
+
 /// SplitMix64 step: advance `state` and return the mixed output.
 ///
 /// The deterministic RANSAC samplers seed one of these per kernel, so the exact

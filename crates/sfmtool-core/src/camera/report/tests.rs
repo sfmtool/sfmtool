@@ -1241,3 +1241,35 @@ fn angle_between_deg_is_the_radian_form_in_degrees() {
         epsilon = 1e-15
     );
 }
+
+// -----------------------------------------------------------------------
+// forward_fold_deg
+// -----------------------------------------------------------------------
+
+/// Only a polynomial fisheye can turn over, and one that does turns over at the
+/// peak of its own radius: just inside the fold the radius still rises, just
+/// outside it falls.
+#[test]
+fn forward_fold_is_the_peak_of_the_radius() {
+    for cam in &undistorted_cameras(F_FISH_WIDE) {
+        assert_eq!(forward_fold_deg(cam), None, "{}", cam.model_name());
+    }
+    // The `kerry_park` rig's first lens, whose polynomial peaks near 101.6°.
+    let cam = cam(CameraModel::OpenCVFisheye {
+        focal_length_x: 129.718,
+        focal_length_y: 129.430,
+        principal_point_x: CX,
+        principal_point_y: CY,
+        radial_distortion_k1: 0.02865,
+        radial_distortion_k2: -0.00228,
+        radial_distortion_k3: 0.00902,
+        radial_distortion_k4: -0.00355,
+    });
+    let fold = forward_fold_deg(&cam).expect("this lens folds");
+    assert!((fold - 101.6).abs() < 0.5, "fold at {fold}°");
+    let radius = |theta_deg: f64| max_distorted_radius(&cam, theta_deg).unwrap();
+    assert!(radius(fold - 1.0) < radius(fold));
+    assert!(radius(fold + 1.0) < radius(fold));
+    // The blend starts before the fold, so the trusted bound is the smaller.
+    assert!(trustworthy_max_theta_deg(&cam).unwrap() < fold);
+}
