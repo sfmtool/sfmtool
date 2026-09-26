@@ -51,7 +51,7 @@ fn gates(observed_deg: Option<f64>, detected_deg: Option<f64>) -> RefitSplineGat
     };
     RefitSplineGates {
         camera: 1,
-        model: "SFMTOOL_FISHEYE",
+        camera_model: "SFMTOOL_FISHEYE",
         coeff_count: 8,
         domain_deg: 150.0,
         keypoint_extent: KeypointExtent {
@@ -113,7 +113,7 @@ fn the_answer_is_a_switch_of_the_camera_to_its_own_model() {
     );
     let request = answer.request();
     assert_eq!(request.camera, 1);
-    assert_eq!(request.model, None, "the camera's own model");
+    assert_eq!(request.camera_model, None, "the camera's own model");
     assert_eq!(request.coeff_count, Some(10));
     assert_eq!(request.spline_domain_deg, Some(108.0));
     assert_eq!(request.theta_fit_deg, None, "a refit over the whole domain");

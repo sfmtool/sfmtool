@@ -497,21 +497,21 @@ fn a_spline_refit_is_refused_where_it_cannot_be_made() {
     assert_eq!(
         refit_spline(&kerry_cam0(), 8, None).err(),
         Some(RefitError::NotSplineSource {
-            model: "OPENCV_FISHEYE"
+            camera_model: "OPENCV_FISHEYE"
         })
     );
     let source = kerry_spline(8);
     assert_eq!(
         refit_spline(&source, 1, None).err(),
         Some(RefitError::CoeffCount {
-            model: "SFMTOOL_FISHEYE",
+            camera_model: "SFMTOOL_FISHEYE",
             count: 1
         })
     );
     assert_eq!(
         refit_spline(&source, MAX_COEFF_COUNT + 1, None).err(),
         Some(RefitError::CoeffCount {
-            model: "SFMTOOL_FISHEYE",
+            camera_model: "SFMTOOL_FISHEYE",
             count: MAX_COEFF_COUNT + 1
         })
     );

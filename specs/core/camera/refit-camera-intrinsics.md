@@ -31,7 +31,7 @@ pub enum RefitTarget {
 }
 
 impl RefitTarget {
-    pub fn from_name(model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError>;
+    pub fn from_name(camera_model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError>;
     pub fn model_name(&self) -> &'static str;
     pub fn coeff_count(&self) -> Option<usize>;              // as stated
     pub fn coeff_count_for(&self, source: &CameraIntrinsics) -> Option<usize>;
@@ -80,9 +80,9 @@ pub struct CameraIntrinsicsRefit {
 }
 
 pub enum RefitError {
-    UnknownTarget { model: String },
-    CoeffCount { model: &'static str, count: usize },
-    CoeffCountNotApplicable { model: &'static str },
+    UnknownTarget { camera_model: String },
+    CoeffCount { camera_model: &'static str, count: usize },
+    CoeffCountNotApplicable { camera_model: &'static str },
     ThetaFitInvalid { theta_fit_deg: f64 },
     BeyondTrustedBound { theta_fit_deg: f64, trusted_deg: f64 },
     PerspectivePast90 { theta_fit_deg: f64 },
@@ -91,7 +91,7 @@ pub enum RefitError {
     SplineDomainInvalid { spline_domain_deg: f64 },
     NotMonotone,
     TrustedBoundShort { trusted_deg: f64, theta_fit_deg: f64 },
-    NotSplineSource { model: &'static str },
+    NotSplineSource { camera_model: &'static str },
     Degenerate { reason: &'static str },
 }
 
@@ -424,9 +424,9 @@ All are constants in [refit_intrinsics.rs](../../../crates/sfmtool-core/src/came
 
 ## Python bindings
 
-`CameraIntrinsics.refit(target, *, coeff_count=None, theta_fit_deg=None,
+`CameraIntrinsics.refit(camera_model, *, coeff_count=None, theta_fit_deg=None,
 spline_domain_deg=None)` returns `(CameraIntrinsics, report)`. The report is a
-dict: `model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
+dict: `camera_model`, `theta_fit_deg`, `theta_fit_source` (`"trusted_bound"`,
 `"observations"`, `"image_corner"`, `"given"` or `"spline_domain"`), `spline_domain_deg` (`None` for
 a non-spline target), `rms_px`, `max_px`, `radial_rms_px`, `dropped` (one
 sentence per term) and `extent` (`edge_deg`, `corner_deg`, `source_trusted_deg`,

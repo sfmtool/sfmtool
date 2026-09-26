@@ -552,7 +552,7 @@ fn switch_camera_model_parses_its_request() {
     let map = json!({
         "reconstruction_label": "a",
         "camera_intrinsics_index": 0,
-        "model": "SFMTOOL_FISHEYE",
+        "camera_model": "SFMTOOL_FISHEYE",
         "coeff_count": 10,
         "spline_domain_deg": 108.0,
         "theta_fit_deg": 80.0
@@ -566,7 +566,7 @@ fn switch_camera_model_parses_its_request() {
             reconstruction_label: "a".to_string(),
             request: crate::state::edits::SwitchCameraModelRequest {
                 camera: 0,
-                model: Some("SFMTOOL_FISHEYE".to_string()),
+                camera_model: Some("SFMTOOL_FISHEYE".to_string()),
                 coeff_count: Some(10),
                 spline_domain_deg: Some(108.0),
                 theta_fit_deg: Some(80.0),
@@ -606,8 +606,8 @@ fn switch_camera_model_refits_a_spline_with_its_own_count_and_domain_by_default(
     assert_eq!(reply["changed"], true);
     let fit = &reply["fit"];
     assert_eq!(fit["theta_fit_source"], "spline_domain");
-    assert_eq!(fit["model_before"], "SFMTOOL_PINHOLE");
-    assert_eq!(fit["model_after"], "SFMTOOL_PINHOLE");
+    assert_eq!(fit["camera_model_before"], "SFMTOOL_PINHOLE");
+    assert_eq!(fit["camera_model_after"], "SFMTOOL_PINHOLE");
     assert!(fit["rms_px"].as_f64().is_some_and(|r| r >= 0.0), "{fit}");
     assert!(fit["monotone_constraint"]["active"].is_boolean(), "{fit}");
     let report = reply["report"].as_str().expect("a report");
@@ -658,7 +658,7 @@ fn switch_camera_model_switches_to_a_named_model() {
         json!({
             "reconstruction_label": "run_a",
             "camera_intrinsics_index": 0,
-            "model": "sfmtool_pinhole"
+            "camera_model": "sfmtool_pinhole"
         }),
     );
     assert_eq!(

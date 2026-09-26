@@ -90,7 +90,7 @@ pub(crate) struct RefitSplineGates {
     /// The camera's index in the node's camera table.
     pub(crate) camera: usize,
     /// Its model's name.
-    pub(crate) model: &'static str,
+    pub(crate) camera_model: &'static str,
     /// Its spline's coefficient count now.
     pub(crate) coeff_count: usize,
     /// Where its spline's domain ends now, as an incidence angle in degrees.
@@ -120,7 +120,7 @@ impl RefitSplineGates {
             .expect("the refusal above covers a camera with no spline");
         Ok(Self {
             camera,
-            model: intrinsics.model_name(),
+            camera_model: intrinsics.model_name(),
             coeff_count: bspline.len(),
             domain_deg: spline_domain_deg(intrinsics).unwrap_or(f64::NAN),
             keypoint_extent: KeypointExtent::of(edited, camera, true),
@@ -147,7 +147,7 @@ impl RefitSplineAnswer {
     pub(crate) fn request(&self) -> crate::state::edits::SwitchCameraModelRequest {
         crate::state::edits::SwitchCameraModelRequest {
             camera: self.camera,
-            model: None,
+            camera_model: None,
             coeff_count: Some(self.coeff_count),
             spline_domain_deg: self.spline_domain_deg,
             theta_fit_deg: None,
@@ -231,7 +231,7 @@ impl RefitSplinePrompt {
             .show(ctx, |ui| {
                 ui.label(format!(
                     "Refit the spline of camera {} of {}, a {}, over its whole domain.",
-                    pending.gates.camera, pending.label, pending.gates.model
+                    pending.gates.camera, pending.label, pending.gates.camera_model
                 ));
                 ui.add_space(8.0);
                 coeffs_row(ui, pending);
@@ -281,7 +281,7 @@ fn coeffs_row(ui: &mut egui::Ui, pending: &mut Pending) {
 /// button takes the detected keypoint, and where no `.sift` file could be read
 /// the observed one, which the text labels as observed.
 fn domain_row(ui: &mut egui::Ui, pending: &mut Pending) {
-    let max = if pending.gates.model == "SFMTOOL_PINHOLE" {
+    let max = if pending.gates.camera_model == "SFMTOOL_PINHOLE" {
         89.9
     } else {
         180.0

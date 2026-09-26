@@ -131,7 +131,7 @@ pub enum BundleAdjustError {
         /// The camera's index in the reconstruction's camera table.
         camera: usize,
         /// Its model's name.
-        model: &'static str,
+        camera_model: &'static str,
     },
     /// A camera in the solve was asked to release its distortion without its
     /// focal.
@@ -145,7 +145,7 @@ pub enum BundleAdjustError {
         /// The camera's index in the reconstruction's camera table.
         camera: usize,
         /// Its model's name.
-        model: &'static str,
+        camera_model: &'static str,
     },
     /// No image of the reconstruction carries a usable pose.
     NoPosedImages,
@@ -182,9 +182,12 @@ impl std::fmt::Display for BundleAdjustError {
                 "the release list has {releases} entries and the reconstruction has \
                  {cameras} camera(s); give one entry per camera, or none to hold them all"
             ),
-            BundleAdjustError::FocalNotReleasable { camera, model } => write!(
+            BundleAdjustError::FocalNotReleasable {
+                camera,
+                camera_model,
+            } => write!(
                 f,
-                "the focal cannot be released on camera {camera}, a {model}; the \
+                "the focal cannot be released on camera {camera}, a {camera_model}; the \
                  adjustment's focal column is exact for SIMPLE_PINHOLE, \
                  EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and \
                  SFMTOOL_PINHOLE"
@@ -195,9 +198,12 @@ impl std::fmt::Display for BundleAdjustError {
                  focal length, because neither k1 nor the spline can change the scale at the \
                  centre of the image"
             ),
-            BundleAdjustError::DistortionNotReleasable { camera, model } => write!(
+            BundleAdjustError::DistortionNotReleasable {
+                camera,
+                camera_model,
+            } => write!(
                 f,
-                "camera {camera}, a {model}, has no lens distortion the adjustment can \
+                "camera {camera}, a {camera_model}, has no lens distortion the adjustment can \
                  release; it releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
                  SFMTOOL_FISHEYE and SFMTOOL_PINHOLE"
             ),
@@ -418,13 +424,13 @@ pub fn bundle_adjust(
         if release.focal && !focal_is_releasable(camera) {
             return Err(BundleAdjustError::FocalNotReleasable {
                 camera: camera_index,
-                model: camera.model_name(),
+                camera_model: camera.model_name(),
             });
         }
         if release.distortion && !distortion_is_releasable(camera) {
             return Err(BundleAdjustError::DistortionNotReleasable {
                 camera: camera_index,
-                model: camera.model_name(),
+                camera_model: camera.model_name(),
             });
         }
     }

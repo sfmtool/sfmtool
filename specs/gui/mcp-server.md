@@ -294,7 +294,7 @@ attribute that identifies* an entity is named for both:
 
 | Field | Holds |
 |-------|-------|
-| `camera_intrinsics` | intrinsics details, such as the model and sensor size in an image reply |
+| `camera_intrinsics` | intrinsics details, such as the `camera_model` and sensor size in an image reply |
 | `camera_intrinsics_index` | the intrinsics handle in image rows, image and intrinsics replies, selection blocks, and tool arguments |
 | `reconstruction_label` | just the label, identifying which reconstruction |
 | `revision` | the Action Log's clock, on the log and on each entry |
@@ -369,6 +369,18 @@ works, and an edit that landed on whatever was last clicked would be an edit the
 agent had no way to check it had asked for. So the family that changes data says
 which data, every time, and a call that names a label nothing answers to is
 refused listing what is loaded rather than falling back to a default.
+
+#### `camera_model`, never a bare `model`
+
+A camera model named anywhere on the wire is `camera_model`: the
+`switch_camera_model` argument, the `camera_model` field of
+`get_camera_intrinsics` and of a `camera_intrinsics` detail block, and the
+`camera_model_before` / `camera_model_after` of a switch's `fit`. A reply
+object can hold a camera and something else at once, and an argument list
+always does, so a bare `model` leaves the reader to work out which model it
+is. The catalog test asserts that no tool takes an argument named `model`.
+The one place the bare word stays is a serialized camera, such as the `.sfmr`
+camera JSON, where the object is itself the camera ([../GLOSSARY.md](../GLOSSARY.md)).
 
 #### Where the GUI has no word, the code's word wins
 
@@ -553,7 +565,7 @@ one at the cursor, and this block reports it.
 { "reconstruction_label": "seoul_bull", "index": 3,
   "name": "images/IMG_0042.jpg",
   "camera_intrinsics_index": 0,
-  "camera_intrinsics": { "model": "OPENCV",
+  "camera_intrinsics": { "camera_model": "OPENCV",
                          "width": 270, "height": 480 },
   "quaternion_wxyz": [0.98, 0.01, -0.17, 0.04],
   "translation_xyz": [0.10, -1.88, 0.51],
@@ -564,7 +576,7 @@ one at the cursor, and this block reports it.
 // get_camera_intrinsics { "reconstruction_label": "seoul_bull",
 //                         "camera_intrinsics_index": 0 }
 { "reconstruction_label": "seoul_bull", "camera_intrinsics_index": 0,
-  "model": "OPENCV", "width": 270, "height": 480,
+  "camera_model": "OPENCV", "width": 270, "height": 480,
   "params": { "focal_length_x": 402.1, "focal_length_y": 402.1,
               "principal_point_x": 135.0, "principal_point_y": 240.0,
               "radial_distortion_k1": -0.031, "radial_distortion_k2": 0.004,
@@ -2137,7 +2149,8 @@ the wire: its four entries are the tools `resect_camera_image`,
 
 ```jsonc
 // switch_camera_model { "reconstruction_label": "kerry_park",
-//                       "camera_intrinsics_index": 0, "model": "SFMTOOL_FISHEYE",
+//                       "camera_intrinsics_index": 0,
+//                       "camera_model": "SFMTOOL_FISHEYE",
 //                       "coeff_count": 8 }
 // switch_camera_model { "reconstruction_label": "kerry_park",
 //                       "camera_intrinsics_index": 0, "coeff_count": 12,
@@ -2155,7 +2168,7 @@ model.
 
 - `camera_intrinsics_index` names the camera, as `get_camera_intrinsics` takes
   it.
-- `model` is the target, case-insensitive. Omitted, it is the camera's own
+- `camera_model` is the target, case-insensitive. Omitted, it is the camera's own
   model, and for an `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` camera the switch is
   then a **refit of its spline**: fitted over the whole new domain and kept
   monotone.
@@ -2170,8 +2183,8 @@ model.
   angle alone.
 
 The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
-`fit` object beside it: `camera_intrinsics_index`, `model_before`,
-`model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
+`fit` object beside it: `camera_intrinsics_index`, `camera_model_before`,
+`camera_model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
 refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
 distance from the old over the fit), `monotone_constraint` (`active`,
 `active_angles`, `range_deg`), and `observations` with
@@ -3773,7 +3786,7 @@ Other candidates, in rough order of value:
 | `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
 | `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
-| `switch_camera_model` `model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
+| `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
 | `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
 | `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |
 

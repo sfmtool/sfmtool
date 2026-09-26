@@ -575,6 +575,13 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
                 "{}: {property:?} is a word that names two things",
                 spec.name
             );
+            // Off a camera, a bare `model` could be any model; the wire says
+            // which (specs/GLOSSARY.md, `camera_model`).
+            assert!(
+                property != "model",
+                "{}: a camera model argument is camera_model",
+                spec.name
+            );
             // A panel argument carries a *name*, so it says so — the same rule
             // that makes the reconstruction argument `reconstruction_label`.
             assert!(

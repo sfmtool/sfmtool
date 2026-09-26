@@ -212,7 +212,7 @@ the lens from the population.
 
 ## Python bindings
 
-`EditedReconstruction.switch_camera_model(target, *, cameras=None,
+`EditedReconstruction.switch_camera_model(camera_model, *, cameras=None,
 coeff_count=None, theta_fit_deg=None, spline_domain_deg=None)` returns
 `(EditedReconstruction, report)`, a new base with no overlay; `cameras=None`
 switches every camera. `SfmrReconstruction.switch_camera_model` takes the same

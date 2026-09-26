@@ -115,13 +115,13 @@ fn report_to_py<'py>(py: Python<'py>, r: &SwitchCameraModelReport) -> PyResult<B
 fn run(
     py: Python<'_>,
     value: &SfmrReconstruction,
-    target: &str,
+    camera_model: &str,
     cameras: Option<Vec<usize>>,
     coeff_count: Option<usize>,
     theta_fit_deg: Option<f64>,
     spline_domain_deg: Option<f64>,
 ) -> PyResult<(SfmrReconstruction, Py<PyDict>)> {
-    let target = RefitTarget::from_name(target, coeff_count)
+    let target = RefitTarget::from_name(camera_model, coeff_count)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let options = RefitOptions {
         theta_fit_deg,
@@ -139,7 +139,7 @@ impl PyEditedReconstruction {
     /// Switch cameras of this version to another camera model, and give back
     /// the answer as its successor.
     ///
-    /// Each camera is replaced by a camera of ``target`` fitted to it over the
+    /// Each camera is replaced by a camera of ``camera_model`` fitted to it over the
     /// angles where it is trusted (see
     /// ``specs/core/reconstruction/switch-camera-model.md``). Poses, points,
     /// keypoints, patches and tracks are unchanged; the stored errors of the
@@ -148,7 +148,7 @@ impl PyEditedReconstruction {
     /// overlay, and this object is not changed.
     ///
     /// Args:
-    ///     target: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
+    ///     camera_model: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
     ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
     ///         model.
     ///     cameras: Camera-table indexes to switch (default: every camera).
@@ -189,11 +189,11 @@ impl PyEditedReconstruction {
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
-    #[pyo3(signature = (target, *, cameras=None, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
+    #[pyo3(signature = (camera_model, *, cameras=None, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
     fn switch_camera_model(
         &self,
         py: Python<'_>,
-        target: &str,
+        camera_model: &str,
         cameras: Option<Vec<usize>>,
         coeff_count: Option<usize>,
         theta_fit_deg: Option<f64>,
@@ -203,7 +203,7 @@ impl PyEditedReconstruction {
         let (next, report) = run(
             py,
             &value,
-            target,
+            camera_model,
             cameras,
             coeff_count,
             theta_fit_deg,
@@ -225,11 +225,11 @@ impl PySfmrReconstruction {
     /// The same call as ``EditedReconstruction.switch_camera_model``, on a
     /// plain reconstruction, for ``sfm xform --camera-model``. Returns
     /// ``(SfmrReconstruction, report)``; this object is not changed.
-    #[pyo3(signature = (target, *, cameras=None, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
+    #[pyo3(signature = (camera_model, *, cameras=None, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
     fn switch_camera_model(
         &self,
         py: Python<'_>,
-        target: &str,
+        camera_model: &str,
         cameras: Option<Vec<usize>>,
         coeff_count: Option<usize>,
         theta_fit_deg: Option<f64>,
@@ -238,7 +238,7 @@ impl PySfmrReconstruction {
         let (next, report) = run(
             py,
             &self.inner,
-            target,
+            camera_model,
             cameras,
             coeff_count,
             theta_fit_deg,

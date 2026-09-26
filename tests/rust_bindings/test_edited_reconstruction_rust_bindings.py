@@ -345,7 +345,7 @@ class TestSwitchCameraModel:
         assert entry["source"].model == "SIMPLE_RADIAL"
         assert entry["target"] == value.cameras[0]
         fit = entry["fit"]
-        assert fit["model"] == "SFMTOOL_PINHOLE"
+        assert fit["camera_model"] == "SFMTOOL_PINHOLE"
         # A perspective source has no trusted bound: the fit reaches the
         # observations' extent.
         assert fit["theta_fit_source"] == "observations"

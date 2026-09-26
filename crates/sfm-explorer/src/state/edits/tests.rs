@@ -2162,7 +2162,7 @@ fn the_refit_dialog_reads_its_fields_off_a_spline_camera_and_refuses_the_rest() 
     let edited = state.scene[0].edited();
     let gates = crate::refit_spline_prompt::RefitSplineGates::of(edited, 1).expect("a spline");
     assert_eq!(
-        (gates.camera, gates.model, gates.coeff_count),
+        (gates.camera, gates.camera_model, gates.coeff_count),
         (1, "SFMTOOL_PINHOLE", 4)
     );
     assert!(

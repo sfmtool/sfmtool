@@ -99,9 +99,9 @@ pub struct CameraAdjustment {
 pub enum BundleAdjustError {
     NoKeypoints,
     ReleaseCount { releases: usize, cameras: usize },
-    FocalNotReleasable { camera: usize, model: &'static str },
+    FocalNotReleasable { camera: usize, camera_model: &'static str },
     DistortionWithoutFocal { camera: usize },
-    DistortionNotReleasable { camera: usize, model: &'static str },
+    DistortionNotReleasable { camera: usize, camera_model: &'static str },
     NoPosedImages,
     NoObservations,
     EmptySchedule,

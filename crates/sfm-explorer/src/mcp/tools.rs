@@ -360,7 +360,7 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             request: crate::state::edits::SwitchCameraModelRequest {
                 camera: args.required_usize("camera_intrinsics_index")?,
-                model: args.optional_string("model")?,
+                camera_model: args.optional_string("camera_model")?,
                 coeff_count: args.optional_usize("coeff_count")?,
                 spline_domain_deg: args.optional_f64("spline_domain_deg")?,
                 theta_fit_deg: args.optional_f64("theta_fit_deg")?,

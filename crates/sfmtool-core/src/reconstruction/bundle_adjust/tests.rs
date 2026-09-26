@@ -599,7 +599,7 @@ fn a_focal_release_names_the_camera_that_cannot_take_one() {
         err,
         Some(BundleAdjustError::FocalNotReleasable {
             camera: 1,
-            model: "PINHOLE",
+            camera_model: "PINHOLE",
         })
     );
     assert!(err.unwrap().to_string().contains("camera 1, a PINHOLE"));
@@ -657,7 +657,7 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
         bundle_adjust(&source, &options, &Progress::none()).err(),
         Some(BundleAdjustError::FocalNotReleasable {
             camera: 0,
-            model: "PINHOLE",
+            camera_model: "PINHOLE",
         })
     );
     // Without the release it runs: the model is only a problem for the focal.
@@ -1327,7 +1327,7 @@ fn a_distortion_release_with_nothing_to_release_is_refused() {
         error,
         Some(BundleAdjustError::DistortionNotReleasable {
             camera: 0,
-            model: "SIMPLE_PINHOLE",
+            camera_model: "SIMPLE_PINHOLE",
         })
     );
     let sentence = error.unwrap().to_string();
@@ -1427,14 +1427,14 @@ fn a_rig_releases_its_spline_camera_and_holds_its_opencv_fisheye() {
             CameraRelease::FOCAL,
             BundleAdjustError::FocalNotReleasable {
                 camera: 0,
-                model: "OPENCV_FISHEYE",
+                camera_model: "OPENCV_FISHEYE",
             },
         ),
         (
             CameraRelease::FOCAL_AND_DISTORTION,
             BundleAdjustError::FocalNotReleasable {
                 camera: 0,
-                model: "OPENCV_FISHEYE",
+                camera_model: "OPENCV_FISHEYE",
             },
         ),
     ] {
@@ -1464,7 +1464,7 @@ fn a_distortion_release_on_a_camera_without_any_names_the_camera() {
         error,
         Some(BundleAdjustError::DistortionNotReleasable {
             camera: 1,
-            model: "SIMPLE_PINHOLE",
+            camera_model: "SIMPLE_PINHOLE",
         })
     );
     assert!(error

@@ -511,7 +511,7 @@ impl PyCameraIntrinsics {
     /// copied.
     ///
     /// Args:
-    ///     target: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
+    ///     camera_model: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
     ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
     ///         model.
     ///     coeff_count: Spline coefficients for the two spline models.
@@ -524,7 +524,7 @@ impl PyCameraIntrinsics {
     ///         incidence angle. Default: the far image corner.
     ///
     /// Returns:
-    ///     ``(CameraIntrinsics, report)``. The report carries ``model``,
+    ///     ``(CameraIntrinsics, report)``. The report carries ``camera_model``,
     ///     ``theta_fit_deg``, ``theta_fit_source`` (``"trusted_bound"``,
     ///     ``"observations"``, ``"image_corner"`` or ``"given"``),
     ///     ``spline_domain_deg`` (``None`` for a non-spline target),
@@ -536,16 +536,16 @@ impl PyCameraIntrinsics {
     ///     angles where the fit held the lens's slope at its floor to keep it
     ///     invertible, departing from this camera there, or ``None``). Raises
     ///     ``ValueError`` naming the rule and the value when the fit is refused.
-    #[pyo3(signature = (target, *, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
+    #[pyo3(signature = (camera_model, *, coeff_count=None, theta_fit_deg=None, spline_domain_deg=None))]
     fn refit<'py>(
         &self,
         py: Python<'py>,
-        target: &str,
+        camera_model: &str,
         coeff_count: Option<usize>,
         theta_fit_deg: Option<f64>,
         spline_domain_deg: Option<f64>,
     ) -> PyResult<(PyCameraIntrinsics, Bound<'py, PyDict>)> {
-        let target = RefitTarget::from_name(target, coeff_count)
+        let target = RefitTarget::from_name(camera_model, coeff_count)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let options = RefitOptions {
             theta_fit_deg,
@@ -613,7 +613,7 @@ pub(crate) fn refit_report_to_py<'py>(
     refit: &CameraIntrinsicsRefit,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("model", refit.camera.model_name())?;
+    d.set_item("camera_model", refit.camera.model_name())?;
     d.set_item("theta_fit_deg", refit.theta_fit_deg)?;
     d.set_item("theta_fit_source", refit.theta_fit_source.as_str())?;
     d.set_item("spline_domain_deg", refit.spline_domain_deg)?;

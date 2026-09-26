@@ -91,7 +91,7 @@ monotone. The viewer adds the invocation, the version and the history entry, in
 | Field | Default |
 |-------|---------|
 | `camera` | required: the camera's index in the node's table |
-| `model` | the camera's own model |
+| `camera_model` | the camera's own model |
 | `coeff_count` | the camera's own count when the target is its own spline model, else the core default, 8 |
 | `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner |
 | `theta_fit_deg` | the core default; given, even a refit is an ordinary fit over that angle |

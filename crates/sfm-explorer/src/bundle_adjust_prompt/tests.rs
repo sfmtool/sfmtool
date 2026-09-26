@@ -77,22 +77,22 @@ fn escape_cancels_and_closes_the_dialog() {
     assert!(prompt.pending.is_none(), "escape left the dialog up");
 }
 
-/// One camera row's gate: camera `camera`, `model`, with the refusals its
-/// model gives.
-fn gate(camera: usize, model: &'static str) -> CameraGate {
-    let spline = matches!(model, "SFMTOOL_FISHEYE" | "SFMTOOL_PINHOLE");
+/// One camera row's gate: camera `camera`, `camera_model`, with the refusals
+/// its model gives.
+fn gate(camera: usize, camera_model: &'static str) -> CameraGate {
+    let spline = matches!(camera_model, "SFMTOOL_FISHEYE" | "SFMTOOL_PINHOLE");
     let focal = matches!(
-        model,
+        camera_model,
         "SIMPLE_PINHOLE"
             | "EQUIDISTANT_FISHEYE"
             | "SIMPLE_RADIAL_FISHEYE"
             | "SFMTOOL_FISHEYE"
             | "SFMTOOL_PINHOLE"
     );
-    let distortion = spline || model == "SIMPLE_RADIAL_FISHEYE";
+    let distortion = spline || camera_model == "SIMPLE_RADIAL_FISHEYE";
     CameraGate {
         camera,
-        model,
+        camera_model,
         images: 3,
         focal_refusal: (!focal).then(|| format!("camera {camera} cannot release its focal")),
         distortion_refusal: (!distortion)

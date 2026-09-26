@@ -419,7 +419,7 @@ pub(super) fn bundle_adjust(
 /// as the node's next version.
 ///
 /// The step the Camera Intrinsics panel's `Refit spline…` takes, with any
-/// target model: an omitted `model` is the camera's own, which for a spline
+/// target model: an omitted `camera_model` is the camera's own, which for a spline
 /// camera makes the switch a refit of its spline, keeping its count and its
 /// domain end unless they are named. Beside the version the reply carries
 /// `fit`, the numbers the Action Log sentence is written from: the fit's
@@ -443,8 +443,8 @@ pub(super) fn switch_camera_model(
     let o = &entry.observations;
     let fit = json!({
         "camera_intrinsics_index": entry.camera,
-        "model_before": entry.source.model_name(),
-        "model_after": refit.camera.model_name(),
+        "camera_model_before": entry.source.model_name(),
+        "camera_model_after": refit.camera.model_name(),
         "theta_fit_deg": refit.theta_fit_deg,
         "theta_fit_source": refit.theta_fit_source.as_str(),
         "spline_domain_deg": refit.spline_domain_deg,

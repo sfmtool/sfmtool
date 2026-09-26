@@ -65,7 +65,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "get_camera_intrinsics",
-            description: "One camera intrinsics record — the lens: model, sensor size, every \
+            description: "One camera intrinsics record — the lens: camera_model, sensor size, every \
                           stored parameter by name, and the camera images that use it. The \
                           parameters are a name-to-value map in the model's own declaration \
                           order, which is the order `sfm inspect` prints. outermost_keypoint \

@@ -35,7 +35,7 @@ pub(crate) struct SwitchCameraModelRequest {
     /// The camera's index in the node's camera table.
     pub(crate) camera: usize,
     /// The target model's name, or `None` for the camera's own model.
-    pub(crate) model: Option<String>,
+    pub(crate) camera_model: Option<String>,
     /// The spline coefficient count, or `None` for the camera's own count when
     /// the target is its own spline model, and the core default otherwise.
     pub(crate) coeff_count: Option<usize>,
@@ -194,17 +194,17 @@ impl AppState {
                 cameras.len()
             )));
         };
-        let model = request
-            .model
+        let camera_model = request
+            .camera_model
             .clone()
             .unwrap_or_else(|| camera.model_name().to_string());
-        let refit = is_spline_refit(camera, &model);
+        let refit = is_spline_refit(camera, &camera_model);
         let coeff_count = match (request.coeff_count, refit) {
             (Some(n), _) => Some(n),
             (None, true) => camera.model.radial_spline().map(|(b, _, _)| b.len()),
             (None, false) => None,
         };
-        let target = RefitTarget::from_name(&model, coeff_count)
+        let target = RefitTarget::from_name(&camera_model, coeff_count)
             .map_err(|e| refuse(format!("camera {c}: {e}")))?;
         let options = RefitOptions {
             theta_fit_deg: request.theta_fit_deg,

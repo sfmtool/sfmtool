@@ -262,8 +262,8 @@ pub(super) fn camera_image_row(
     })
 }
 
-/// A camera intrinsics record as a name to value map, plus the model and
-/// sensor size.
+/// A camera intrinsics record as a name to value map, plus the camera model
+/// and sensor size.
 ///
 /// The parameters are a map rather than the model's positional vector, and in
 /// [`sfmtool_core::CameraIntrinsics::parameters`] declaration order: a
@@ -278,7 +278,7 @@ pub(super) fn camera_intrinsics(camera: &sfmtool_core::CameraIntrinsics) -> Valu
         .map(|(name, value)| (name.into_owned(), json!(value)))
         .collect();
     json!({
-        "model": camera.model.model_name(),
+        "camera_model": camera.model.model_name(),
         "width": camera.width,
         "height": camera.height,
         "params": params,

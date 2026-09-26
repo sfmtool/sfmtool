@@ -394,8 +394,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and install the answer as the reconstruction's next version. The new \
                           model is fitted to the old one where the old one is trusted; poses, \
                           points, keypoints and tracks do not move, and the stored errors of \
-                          the points the camera's images observe are recomputed. With model \
-                          omitted the target is the camera's own model, which for an \
+                          the points the camera's images observe are recomputed. With \
+                          camera_model omitted the target is the camera's own model, which for an \
                           SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is a refit of its spline \
                           to another coefficient count or domain end: fitted over the whole \
                           new domain and kept monotone, the domain end kept exactly unless \
@@ -411,7 +411,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(
                 &[
                     (
-                        "model",
+                        "camera_model",
                         json!({
                             "type": "string",
                             "description":

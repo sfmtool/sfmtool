@@ -53,7 +53,7 @@ pub(crate) struct CameraGate {
     /// The camera's index in the camera table.
     pub(crate) camera: usize,
     /// Its model's name.
-    pub(crate) model: &'static str,
+    pub(crate) camera_model: &'static str,
     /// The posed images taken through it.
     pub(crate) images: usize,
     /// Why its focal cannot be released, or `None` when it can. The focal
@@ -87,21 +87,21 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
         .into_iter()
         .map(|c| {
             let camera = &table.cameras[c as usize];
-            let model = camera.model_name();
+            let camera_model = camera.model_name();
             CameraGate {
                 camera: c as usize,
-                model,
+                camera_model,
                 images: posed.iter().filter(|&&k| k == c).count(),
                 focal_refusal: (!focal_is_releasable(camera)).then(|| {
                     format!(
-                        "The adjustment's focal column is not exact for camera {c}, a {model} \
-                         camera, so its focal length cannot be released."
+                        "The adjustment's focal column is not exact for camera {c}, a \
+                         {camera_model} camera, so its focal length cannot be released."
                     )
                 }),
                 distortion_refusal: (!distortion_is_releasable(camera)).then(|| {
                     format!(
-                        "Camera {c}, a {model} camera, has no lens distortion the adjustment can \
-                         release. It releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
+                        "Camera {c}, a {camera_model} camera, has no lens distortion the \
+                         adjustment can release. It releases k1 on SIMPLE_RADIAL_FISHEYE and the spline on \
                          SFMTOOL_FISHEYE and SFMTOOL_PINHOLE; switch the camera to one of those \
                          first."
                     )
@@ -276,7 +276,7 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                 let plural = if gate.images == 1 { "" } else { "s" };
                 ui.label(format!(
                     "Camera {}  {}  {} image{plural}",
-                    gate.camera, gate.model, gate.images
+                    gate.camera, gate.camera_model, gate.images
                 ));
                 ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
                     ui.checkbox(&mut row.focal, "Release focal length")

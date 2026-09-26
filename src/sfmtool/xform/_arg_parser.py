@@ -376,13 +376,13 @@ _CAMERA_MODEL_KEYS: dict[str, Callable[[str], object]] = {
 
 def parse_camera_model_params(param: str) -> SwitchCameraModelTransform:
     """Parse ``MODEL[,coeffs=N,fit_to=DEG,spline_domain=DEG,cameras=0+1]``."""
-    model, _, rest = param.partition(",")
-    if not model.strip():
+    camera_model, _, rest = param.partition(",")
+    if not camera_model.strip():
         raise click.UsageError("--camera-model needs a model name first")
     kwargs = _parse_kv_params(rest, "--camera-model", _CAMERA_MODEL_KEYS)
     try:
         return SwitchCameraModelTransform(
-            model,
+            camera_model,
             coeff_count=kwargs.get("coeffs"),
             theta_fit_deg=kwargs.get("fit_to"),
             spline_domain_deg=kwargs.get("spline_domain"),

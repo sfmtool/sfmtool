@@ -365,7 +365,7 @@ pub(super) fn get_camera_image(
         "name": image.name,
         "camera_intrinsics_index": image.camera_index as usize,
         "camera_intrinsics": {
-            "model": camera.model.model_name(),
+            "camera_model": camera.model.model_name(),
             "width": camera.width,
             "height": camera.height,
         },

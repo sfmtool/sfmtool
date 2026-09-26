@@ -120,21 +120,29 @@ impl RefitTarget {
     /// resolved against each source by [`RefitTarget::coeff_count_for`], and
     /// is refused for every other model rather than ignored. `EQUIRECTANGULAR` is not a lens model and is refused as a
     /// target, as is any name the registry does not know.
-    pub fn from_name(model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError> {
-        let upper = model.trim().to_ascii_uppercase();
+    pub fn from_name(camera_model: &str, coeff_count: Option<usize>) -> Result<Self, RefitError> {
+        let upper = camera_model.trim().to_ascii_uppercase();
         let target = match upper.as_str() {
             "SFMTOOL_FISHEYE" => RefitTarget::SfmtoolFisheye { coeff_count },
             "SFMTOOL_PINHOLE" => RefitTarget::SfmtoolPinhole { coeff_count },
             "EQUIDISTANT_FISHEYE" => RefitTarget::EquidistantFisheye,
-            "EQUIRECTANGULAR" => return Err(RefitError::UnknownTarget { model: upper }),
+            "EQUIRECTANGULAR" => {
+                return Err(RefitError::UnknownTarget {
+                    camera_model: upper,
+                })
+            }
             other => match fixed_arity_model_by_name(other) {
                 Some((name, _)) => RefitTarget::Colmap(name),
-                None => return Err(RefitError::UnknownTarget { model: upper }),
+                None => {
+                    return Err(RefitError::UnknownTarget {
+                        camera_model: upper,
+                    })
+                }
             },
         };
         if coeff_count.is_some() && target.spline_radial().is_none() {
             return Err(RefitError::CoeffCountNotApplicable {
-                model: target.model_name(),
+                camera_model: target.model_name(),
             });
         }
         target.check()?;
@@ -215,7 +223,7 @@ impl RefitTarget {
         if let Some(n) = self.coeff_count() {
             if n == 1 || n > MAX_COEFF_COUNT {
                 return Err(RefitError::CoeffCount {
-                    model: self.model_name(),
+                    camera_model: self.model_name(),
                     count: n,
                 });
             }
@@ -225,7 +233,7 @@ impl RefitTarget {
                 || fixed_arity_model_by_name(name).is_none()
             {
                 return Err(RefitError::UnknownTarget {
-                    model: name.to_string(),
+                    camera_model: name.to_string(),
                 });
             }
         }
@@ -380,19 +388,19 @@ pub enum RefitError {
     /// The target model is not one a camera can be refitted to.
     UnknownTarget {
         /// The name as given, upper-cased.
-        model: String,
+        camera_model: String,
     },
     /// A spline target with a coefficient count the model does not allow.
     CoeffCount {
         /// The target model.
-        model: &'static str,
+        camera_model: &'static str,
         /// The count asked for.
         count: usize,
     },
     /// A coefficient count given for a model without a spline.
     CoeffCountNotApplicable {
         /// The target model.
-        model: &'static str,
+        camera_model: &'static str,
     },
     /// The fit's largest angle is not a positive angle of at most 180°.
     ThetaFitInvalid {
@@ -441,7 +449,7 @@ pub enum RefitError {
     /// [`refit_spline`] was handed a camera with no spline.
     NotSplineSource {
         /// The source's model.
-        model: &'static str,
+        camera_model: &'static str,
     },
     /// The samples do not determine the target's parameters.
     Degenerate {
@@ -453,19 +461,22 @@ pub enum RefitError {
 impl fmt::Display for RefitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RefitError::UnknownTarget { model } => write!(
+            RefitError::UnknownTarget { camera_model } => write!(
                 f,
-                "'{model}' is not a model a camera can be refitted to; the targets are \
+                "'{camera_model}' is not a model a camera can be refitted to; the targets are \
                  SFMTOOL_FISHEYE, SFMTOOL_PINHOLE, EQUIDISTANT_FISHEYE and the COLMAP lens models"
             ),
-            RefitError::CoeffCount { model, count } => write!(
+            RefitError::CoeffCount {
+                camera_model,
+                count,
+            } => write!(
                 f,
-                "{model} takes 0 or 2 to {MAX_COEFF_COUNT} spline coefficients, not {count}"
+                "{camera_model} takes 0 or 2 to {MAX_COEFF_COUNT} spline coefficients, not {count}"
             ),
-            RefitError::CoeffCountNotApplicable { model } => write!(
+            RefitError::CoeffCountNotApplicable { camera_model } => write!(
                 f,
                 "a coefficient count applies only to SFMTOOL_FISHEYE and SFMTOOL_PINHOLE, \
-                 not to {model}"
+                 not to {camera_model}"
             ),
             RefitError::ThetaFitInvalid { theta_fit_deg } => write!(
                 f,
@@ -511,9 +522,9 @@ impl fmt::Display for RefitError {
                 "the fitted polynomial is trusted only to {trusted_deg:.2}°, short of the fit's \
                  largest angle {theta_fit_deg:.2}°"
             ),
-            RefitError::NotSplineSource { model } => write!(
+            RefitError::NotSplineSource { camera_model } => write!(
                 f,
-                "a {model} camera has no spline; only SFMTOOL_FISHEYE and SFMTOOL_PINHOLE carry one"
+                "a {camera_model} camera has no spline; only SFMTOOL_FISHEYE and SFMTOOL_PINHOLE carry one"
             ),
             RefitError::Degenerate { reason } => write!(f, "the fit is degenerate: {reason}"),
         }
@@ -696,7 +707,7 @@ pub fn refit_spline(
 ) -> Result<CameraIntrinsicsRefit, RefitError> {
     let Some((_, source_d_max, radial)) = source.model.radial_spline() else {
         return Err(RefitError::NotSplineSource {
-            model: source.model_name(),
+            camera_model: source.model_name(),
         });
     };
     let target = match radial {
@@ -1257,15 +1268,15 @@ fn copied_parameters(source: &CameraIntrinsics, names: &[&str]) -> BTreeMap<Stri
         .collect()
 }
 
-/// A camera of `model` with `parameters`, or `None` where the registry refuses
+/// A camera of `camera_model` with `parameters`, or `None` where the registry refuses
 /// them.
 fn build_camera(
     source: &CameraIntrinsics,
-    model: &str,
+    camera_model: &str,
     parameters: BTreeMap<String, f64>,
 ) -> Option<CameraIntrinsics> {
     CameraIntrinsics::try_from(&SfmrCamera {
-        model: model.to_string(),
+        model: camera_model.to_string(),
         width: source.width,
         height: source.height,
         parameters,
@@ -1300,11 +1311,11 @@ fn residuals(samples: &Samples, camera: &CameraIntrinsics) -> Option<Vec<f64>> {
 /// in step.
 fn fit_colmap(
     source: &CameraIntrinsics,
-    model: &'static str,
+    camera_model: &'static str,
     samples: &Samples,
 ) -> Result<CameraIntrinsics, RefitError> {
-    let (_, names) = fixed_arity_model_by_name(model).ok_or(RefitError::UnknownTarget {
-        model: model.to_string(),
+    let (_, names) = fixed_arity_model_by_name(camera_model).ok_or(RefitError::UnknownTarget {
+        camera_model: camera_model.to_string(),
     })?;
     let mut start = copied_parameters(source, names);
     let free: Vec<&str> = names
@@ -1317,7 +1328,7 @@ fn fit_colmap(
         for (name, v) in free.iter().zip(values) {
             parameters.insert(name.to_string(), *v);
         }
-        build_camera(source, model, parameters)
+        build_camera(source, camera_model, parameters)
     };
 
     let evaluate = |values: &[f64], template: &BTreeMap<String, f64>| {
