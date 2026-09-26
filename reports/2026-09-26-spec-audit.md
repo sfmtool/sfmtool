@@ -18,7 +18,7 @@ Eleven more were read regardless of the draw:
 
 - **Code changed materially since the 2026-09-05 audit:**
   - `specs/core/bench/editable-track.md`, because `crates/sfmtool-core/src/bench/` had heavy churn.
-  - `specs/gui/viewport-navigation.md`, because of Maintain Z-up on this branch, plus #610 and #613.
+  - `specs/gui/viewport-navigation.md`, because of Maintain Z-up (#614), plus #610 and #613.
 - **Defaults check hits:**
   - `specs/core/analysis/cluster-census.md`
   - `specs/core/features/track-cluster-matching.md`
@@ -463,16 +463,16 @@ most of the per-sentence findings.
 **Unclear / incorrect / suspicious:** The screenshot may predate the current UI.
 
 ### specs/core/bench/editable-track.md
-**Summary:** The signatures, thresholds, option defaults, classifier and geometry search match the code. #550 (steps folded into `translate_patch`/`resize_patch`) and the later search additions left stale text behind.
+**Summary:** The signatures, thresholds, option defaults, classifier and geometry search match the code. #550 (steps folded into `translate_patch`/`resize_patch`) and the later search additions left stale text behind. Line numbers are against `main` after #615, which added the walk-acceptance fields and `BENCH_MAX_SHIFT_PX` (8 px); the spec documents both consistently with the code.
 **Implementing code:** `sfmtool-core/src/bench/{track,steps,evaluate,fit,classify,stage,search,geometry_search,commit}.rs`; `sfmtool-py/src/bench.rs`.
 **Inconsistencies:**
-  - The API block's `enum Unmeasured` (:101-108) lacks `SeedTooFar`. The code has it at `track.rs:183`, and the spec's own prose uses it.
-  - :1373-1375 and :2059-2068 describe "world-point forms", which were removed in #550. The test header at `tests.rs:3142` is stale too.
-  - :2070 "The **offset** is tested" uses the old name.
-  - :1379-1381 say descriptor search is "the only one that proposes several at a time". `search_geometry` and `build_track_at_pixel` do too.
-  - :1711 refers to `§ "The split"`, which does not exist. It should be "Splitting".
+  - The API block's `enum Unmeasured` (:103-110) lacks `SeedTooFar`. The code has it at `track.rs:183`, and the spec's own prose uses it.
+  - :1397-1399 and :2088-2097 describe "world-point forms", which were removed in #550. The test header at `tests.rs:3142` is stale too.
+  - :2099 "The **offset** is tested" uses the old name.
+  - :1403-1405 say descriptor search is "the only one that proposes several at a time". `search_geometry` and `build_track_at_pixel` do too.
+  - :1734-1735 refers to `§ "The split"`, which does not exist. It should be "Splitting".
   - `GeometrySearchOptions` is not in the API block.
-  - :1834 names `DEFAULT_NOISE_FLOOR_PX`. `FitOptions::default` reads `DEFAULT_CLASSIFY_*` (same values).
+  - :1862 names `DEFAULT_NOISE_FLOOR_PX`. `FitOptions::default` reads `DEFAULT_CLASSIFY_*` (same values).
   - `track-at-pixel.md` is not linked.
   - The `create_track` keywords `version=` and `label=` are not documented.
 **Third copies:** These code comments should shrink to a contract plus a link:
@@ -482,9 +482,9 @@ most of the per-sentence findings.
 
   For `RESIDUAL_MARGIN` (`classify.rs:62-82`), shrink the *spec* copy instead, since the spec says the constant carries the argument.
 **Shape:**
-  - The Testing section (:2001-2212) retells each claim at length, and that is where the staleness came from. Replace it with a list of property statements per test module.
-  - **Stale non-goal:** "Editing the patch's frame or normal by hand" (:2227). `tilt_patch`, `spin_patch` and friends do exactly that.
-  - **Residue:** :887 "…repaired by its next fit", :1877 "used to be refusals".
+  - The Testing section (:2030-2246) retells each claim at length, and that is where the staleness came from. Replace it with a list of property statements per test module.
+  - **Stale non-goal:** "Editing the patch's frame or normal by hand" (:2260). `tilt_patch`, `spin_patch` and friends do exactly that.
+  - **Residue:** :895 "…repaired by its next fit", :1906 "used to be refusals".
   - **Mannered prose:**
     - "parting company" → "differ".
     - "have the last word" → "decide".
@@ -494,7 +494,7 @@ most of the per-sentence findings.
 **Summary:** The new Maintain Z-up material (`righting.rs`, `right_toward_z_up`, the turn-offs on Q/E and MCP `set_view`) and turn-toward-target (`TURN_INTO_FRACTION` 0.5) match the code. The insertion split the Dolly/Fly section, and several older numbers no longer match.
 **Implementing code:** `sfm-explorer/src/viewer_3d/{mod.rs,righting.rs,camera.rs,input.rs,hud.rs}`, `mcp/view.rs:184-190`, `scene_renderer/gpu_types.rs`, `shaders/target_indicator.wgsl`, `platform/windows.rs`.
 **Inconsistencies:**
-  - **Structure (this branch):** :412-435 now sit under `### Maintain Z-up`, but they are about fly mode and tilt: the tilt-drag open question, the fly-key drag, mode locking and "This complements orbit navigation". The Non-goal link to `#tilt--roll` at :782 no longer points at them.
+  - **Structure (from #614):** :412-435 now sit under `### Maintain Z-up`, but they are about fly mode and tilt: the tilt-drag open question, the fly-key drag, mode locking and "This complements orbit navigation". The Non-goal link to `#tilt--roll` at :782 no longer points at them.
   - **Zoom to Fit** (:449-452) says `max(sx,sy)`, a vertical FOV and a ≥1.0 clamp. The code (`camera.rs:278-286`) computes a per-axis distance with hfov and vfov and has no clamp. The code is right.
   - **Indicator size:** :761 says 3.0; the code has `DEFAULT_TARGET_SIZE_MULTIPLIER = 0.3`. **Opacity:** :766 says 50%→10%; the shader and the spec's table say 20%→5%.
   - **Fog:** :570 describes it in "world-space depth". The shader uses a reversed-Z NDC difference. :768 says the default is "tunable, experiment"; it is 10.0.
@@ -515,7 +515,7 @@ most of the per-sentence findings.
   - **Mannered prose:**
     - "without ever losing your bearings" → "while keeping track of where the camera is".
     - "lantern illumination" → "illumination that falls off with distance from the target".
-**Recommendation:** update spec. **Fix the misplaced section in this branch before it merges**, since the Maintain Z-up change caused it.
+**Recommendation:** update spec. **Fix the misplaced section first**; the Maintain Z-up change (#614) caused it.
 **Unclear / incorrect / suspicious:** The Windows DirectManipulation section (:792-1017) is a third of the file and might be better as its own `gui/` spec.
 
 ### specs/core/analysis/cluster-census.md
@@ -783,7 +783,7 @@ most of the per-sentence findings.
    - The global-threshold parameter table in `track-cluster-matching.md` lists knobs that exist only in an experiment.
 
    Delete these, or move them into drafts.
-5. **This branch:** the Maintain Z-up insertion split the fly and tilt paragraphs in `viewport-navigation.md` (:412-435). Fix that before merging, together with the zoom-to-fit formula and the indicator size and opacity numbers, which disagree with the code.
+5. **Viewport navigation:** the Maintain Z-up insertion (#614) split the fly and tilt paragraphs in `viewport-navigation.md` (:412-435). Fix that, together with the zoom-to-fit formula and the indicator size and opacity numbers, which disagree with the code.
 
 The opening-paragraph replacements (check 4 and the per-spec sections) should
 land **one spec per PR**. Each one is a claim about the code, and a reviewer
