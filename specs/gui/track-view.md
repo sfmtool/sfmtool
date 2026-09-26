@@ -496,8 +496,18 @@ pyramid, until the reconstruction is closed.
   (never zooms) to centre it when its current view is not showing it
   ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Revealing a
   feature named by another panel").
-- **Double-click a row**: enter camera view for that image, as a double-click on
-  a frustum or a thumbnail does.
+- **Double-click a row**: enter camera view for that image, and turn the view
+  until the row's feature is inside the middle 1/2 of the viewport on both axes
+  (`Viewer3D::look_through_toward_feature`), in one animated transition. A
+  double-click on a frustum or a thumbnail enters camera view the same way but
+  names no feature, and looking straight through the camera can leave the
+  feature near the edge of a photograph wider than the viewport, or off it; the
+  row names an observation, so the view it opens shows where it is. The turn
+  starts from the view the other double-clicks land on (the camera's own pose,
+  or when already in camera view the relative orientation a switch keeps), is
+  level with that view's up, and uses the ray the lens model maps the feature's
+  pixel from. A feature already inside the middle 1/2 turns nothing. The result
+  is camera view looked around in, as a free look leaves it.
 - **Hover a row**: set the cross-panel hover, which brightens the frustum and
   outlines the thumbnail. The body produces no point hover, since every row is
   about the one selected point, so owning the pointer clears it.
@@ -721,8 +731,10 @@ has measured.
 - **Click a row**: select its image and **reveal** the observation, at the pixel
   the Image Detail bench layer draws its mark at, and take the row into the split
   selection; Ctrl-click or Shift-click extends the selection.
-- **Double-click a row**: enter camera view for its image, as a view-mode row's
-  double-click does. The rows of both modes are observations of one track in one
+- **Double-click a row**: enter camera view for its image, turned toward the
+  row's observation at the pixel the bench layer draws its mark at, as a
+  view-mode row's double-click does. An observation nothing has placed yet has
+  no pixel, and its double-click enters camera view without the turn. The rows of both modes are observations of one track in one
   table position, and a gesture that worked in one mode and did nothing in the
   other would be a trap.
 - **Click the verdict control**: cycle the verdict. The row rect is registered
@@ -858,8 +870,9 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   [view/tests.rs](../../crates/sfm-explorer/src/track_view/view/tests.rs):
   preparing one row per observation and re-preparing on a selection change; the
   extents; the name column; the max pair angle; per-row hover; a row click
-  selecting and revealing, a double-click entering camera view; the Go to Point
-  way in from the empty state and the header; the pointer ownership; the cached
+  selecting and revealing, a double-click entering camera view with the
+  feature; the Go to Point way in from the empty state and the header; the
+  pointer ownership; the cached
   thumbnails; the patch column's presence, its tiles rendered once per image and
   anchored on the observation's keypoint, with the geometric frame where there is
   no keypoint; a deleted or out-of-range index taking the empty state.
@@ -876,10 +889,10 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   another item; the Status cell's reading sentence and its `walked` form; the
   header's `Bearing (...)` and `Position (` lines; the row menu's search entries
   and their remedies; a row click reporting the image and the pixel, and a
-  double-click asking for camera view; *Lock* starting ticked, a click clearing
-  it and a second ticking it again with no version pushed and no gesture
-  reported, and the box drawn greyed at the cluster stage, where a click leaves
-  it as it was.
+  double-click asking for camera view with the pixel; *Lock* starting ticked, a
+  click clearing it and a second ticking it again with no version pushed and no
+  gesture reported, and the box drawn greyed at the cluster stage, where a click
+  leaves it as it was.
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a

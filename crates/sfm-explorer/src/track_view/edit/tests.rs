@@ -601,7 +601,8 @@ fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
 }
 
 /// A double-click on a row enters camera view for its image, as a view-mode
-/// row's does: the rows of both modes are observations of one track.
+/// row's does: the rows of both modes are observations of one track. The
+/// row's observation goes with it, for the view to turn toward.
 #[test]
 fn double_clicking_a_row_asks_for_camera_view() {
     let (state, _id, _label, mut panel, ctx) = on_the_bench();
@@ -627,6 +628,10 @@ fn double_clicking_a_row_asks_for_camera_view() {
     let response = run_frame_with(&mut panel, &ctx, &state, events);
     assert_eq!(response.request_camera_view, Some(1));
     assert_eq!(response.select_image, Some(1));
+    assert!(
+        response.reveal_feature.is_some(),
+        "the double-click did not say where the observation is"
+    );
 }
 
 /// *Lock* starts ticked, which is the dot moving the whole patch, and toggling

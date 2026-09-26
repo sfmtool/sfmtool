@@ -589,6 +589,90 @@ fn turning_toward_a_bearing_keeps_camera_view() {
     );
 }
 
+/// A 16:9 viewer, and the demo reconstruction's node, for looking through one
+/// of its cameras.
+fn through_a_demo_camera() -> (Viewer3D, SceneNode, crate::scene::ImageRef) {
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1600, 900];
+    let node = SceneNode::demo(SfmrReconstruction::demo(64));
+    let image = crate::scene::ImageRef::new(node.id, 0);
+    (viewer, node, image)
+}
+
+/// The world bearing of `pixel` in `image`, as the lens model maps it.
+fn feature_bearing(
+    node: &SceneNode,
+    image: crate::scene::ImageRef,
+    pixel: [f32; 2],
+) -> Vector3<f64> {
+    let recon = node.recon();
+    let photo = &recon.image_table.images[image.index()];
+    let lens = &recon.image_table.cameras[photo.camera_index as usize];
+    let ray = lens.pixel_to_ray(f64::from(pixel[0]), f64::from(pixel[1]));
+    let (world_pose, _) = super::transformed_pose(photo, node.transform());
+    world_pose.inverse() * Vector3::new(ray[0], ray[1], ray[2])
+}
+
+/// Where `bearing` lands under the end state of the transition in flight.
+fn landing_ndc(viewer: &Viewer3D, bearing: Vector3<f64>) -> [f64; 2] {
+    let transition = viewer.target_transition.as_ref().expect("a transition");
+    let aspect = 1600.0 / 900.0;
+    let tan_y = (super::camera::vertical_fov(transition.end_fov, aspect) / 2.0).tan();
+    super::ndc_of(transition.end_orientation, bearing, tan_y, aspect)
+        .expect("the feature is in front of the end state")
+}
+
+/// A Track View row's double-click looks through the row's camera and turns
+/// the view until the row's feature is inside the middle 1/2. A feature at the
+/// corner of the photograph is near the viewport's edge when looked straight
+/// through, so the view turns, level with the photograph's up, and the result
+/// is still camera view on that image.
+#[test]
+fn looking_through_toward_a_corner_feature_turns_it_into_the_middle() {
+    let (mut viewer, node, image) = through_a_demo_camera();
+    let straight = viewer.compute_camera_view(image, &node);
+    let lens = &node.recon().image_table.cameras[0];
+    let pixel = [lens.width as f32 * 0.02, lens.height as f32 * 0.02];
+    let bearing = feature_bearing(&node, image, pixel);
+    let mut log = crate::action_log::ActionLog::default();
+
+    viewer.look_through_toward_feature(image, &node, pixel, 0.0, &mut log);
+    let transition = viewer.target_transition.as_ref().unwrap();
+    assert!(
+        transition.end_orientation.angle_to(&straight.orientation) > 1e-3,
+        "the view did not turn"
+    );
+    assert_eq!(transition.end_position, straight.position);
+    assert_eq!(transition.end_fov, straight.fov);
+    assert_eq!(
+        transition.pending_camera_view.as_ref().map(|v| v.image),
+        Some(image),
+        "the turn did not end in camera view"
+    );
+    let right = transition.end_orientation.inverse() * Vector3::x();
+    assert!(
+        right.dot(&straight.world_up).abs() < 1e-9,
+        "the turn rolled"
+    );
+    let ndc = landing_ndc(&viewer, bearing);
+    assert!(ndc.iter().all(|a| a.abs() <= 0.5), "landed at {ndc:?}");
+}
+
+/// A feature at the principal point is already in the middle when looked
+/// straight through, so the view lands on the camera's own pose, as a
+/// double-click elsewhere does.
+#[test]
+fn looking_through_toward_a_central_feature_is_looking_straight_through() {
+    let (mut viewer, node, image) = through_a_demo_camera();
+    let straight = viewer.compute_camera_view(image, &node);
+    let (cx, cy) = node.recon().image_table.cameras[0].principal_point();
+    let mut log = crate::action_log::ActionLog::default();
+
+    viewer.look_through_toward_feature(image, &node, [cx as f32, cy as f32], 0.0, &mut log);
+    let transition = viewer.target_transition.as_ref().unwrap();
+    assert!(transition.end_orientation.angle_to(&straight.orientation) < 1e-12);
+}
+
 /// `count` primary press/release pairs at one place, in one frame: what egui
 /// counts as a single click, a double-click, and so on.
 fn primary_clicks(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, count: usize) {

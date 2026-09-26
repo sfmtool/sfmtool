@@ -49,18 +49,10 @@ impl Default for ViewportCamera {
 }
 
 impl ViewportCamera {
-    /// Returns the vertical FOV for the given aspect ratio.
-    ///
-    /// `self.fov` is the FOV of the shorter viewport dimension. In landscape
-    /// (aspect >= 1) that's vertical, so this returns `self.fov` directly.
-    /// In portrait (aspect < 1) `self.fov` is horizontal, and the vertical
-    /// FOV is wider: `atan(tan(fov/2) / aspect) * 2`.
+    /// Returns the vertical FOV for the given aspect ratio: [`vertical_fov`]
+    /// of `self.fov`, the FOV of the shorter viewport dimension.
     pub fn vertical_fov(&self, aspect: f64) -> f64 {
-        if aspect >= 1.0 {
-            self.fov
-        } else {
-            ((self.fov / 2.0).tan() / aspect).atan() * 2.0
-        }
+        vertical_fov(self.fov, aspect)
     }
 
     /// Returns the camera position in world space.
@@ -516,6 +508,23 @@ impl ViewportCamera {
         // View space to world space
         self.camera
             .camera_to_world(&Point3::new(view_x, view_y, view_z))
+    }
+}
+
+/// The vertical field of view that a `fov` in the min-dimension convention of
+/// [`ViewportCamera`] gives a viewport of `aspect`.
+///
+/// `fov` is the field of view of the shorter viewport dimension. In landscape
+/// (aspect >= 1) that's vertical, so it is returned directly. In portrait
+/// (aspect < 1) it is horizontal, and the vertical field of view is wider:
+/// `atan(tan(fov/2) / aspect) * 2`. A function of the value rather than a
+/// method, so a camera view's field of view can be read before the viewport
+/// takes it.
+pub(crate) fn vertical_fov(fov: f64, aspect: f64) -> f64 {
+    if aspect >= 1.0 {
+        fov
+    } else {
+        ((fov / 2.0).tan() / aspect).atan() * 2.0
     }
 }
 

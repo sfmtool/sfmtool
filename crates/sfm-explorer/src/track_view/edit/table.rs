@@ -360,8 +360,10 @@ impl TrackEdit {
         }
         // Camera view for the row's image, as a view-mode row's double-click
         // enters it: the rows of both modes are observations of one track.
+        // The observation goes with it, so the view turns to show it.
         if row_response.double_clicked() {
             response.request_camera_view = Some(image.index());
+            response.reveal_feature = crate::bench::observation_pixel(row);
         }
 
         let x0 = rect.min.x;

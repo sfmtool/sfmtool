@@ -396,9 +396,10 @@ impl TabContext<'_> {
             self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
         }
         // After the steps, because ending a held camera move needs the state
-        // mutably, as it does for a view-mode row.
+        // mutably, as it does for a view-mode row. The row's observation comes
+        // with it, so the view turns to show where that observation is.
         if let Some(image) = response.request_camera_view {
-            self.look_through(ui, ImageRef::new(id, image));
+            self.look_through_toward(ui, ImageRef::new(id, image), response.reveal_feature);
         }
     }
 
@@ -527,6 +528,16 @@ impl TabContext<'_> {
     /// than at each of the panels that can take that step. See
     /// [`crate::camera_lock`].
     fn look_through(&mut self, ui: &egui::Ui, image: ImageRef) {
+        self.look_through_toward(ui, image, None);
+    }
+
+    /// Look through `image` as [`Self::look_through`] does, and when `feature`
+    /// names a pixel in it, turn the view until that feature is in the middle
+    /// of the viewport ([`Viewer3D::look_through_toward_feature`]).
+    ///
+    /// Track View's rows ask with the feature, since a row names an
+    /// observation; every other panel names only an image and asks without.
+    fn look_through_toward(&mut self, ui: &egui::Ui, image: ImageRef, feature: Option<[f32; 2]>) {
         if let Some(moved) = crate::camera_lock::exit_implicitly(self.viewer_3d, self.state) {
             self.forget_recon(moved);
         }
@@ -534,7 +545,15 @@ impl TabContext<'_> {
             return;
         };
         let current_time = ui.input(|i| i.time);
-        if self.viewer_3d.camera_view.is_some() {
+        if let Some(pixel) = feature {
+            self.viewer_3d.look_through_toward_feature(
+                image,
+                node,
+                pixel,
+                current_time,
+                &mut self.state.action_log,
+            );
+        } else if self.viewer_3d.camera_view.is_some() {
             self.viewer_3d.animated_switch_camera_view(
                 image,
                 node,
@@ -918,7 +937,7 @@ impl TabContext<'_> {
             .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
         let requested_view = track_response
             .request_camera_view
-            .map(|img_idx| ImageRef::new(id, img_idx));
+            .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
         if track_response.has_pointer {
             // Track View owns hover state when it has the pointer.
             self.state.hovered_image = track_response.hovered_image.map(|i| ImageRef::new(id, i));
@@ -938,9 +957,10 @@ impl TabContext<'_> {
                 None => self.state.select_image(Some(image)),
             }
         }
-        // Last, because ending a held camera move needs the state mutably.
-        if let Some(image) = requested_view {
-            self.look_through(ui, image);
+        // Last, because ending a held camera move needs the state mutably. The
+        // row's feature comes with the image, so the view turns to show it.
+        if let Some((image, feature)) = requested_view {
+            self.look_through_toward(ui, image, feature);
         }
     }
 

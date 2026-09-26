@@ -66,6 +66,80 @@ fn within(ndc: [f64; 2], fraction: f64) -> bool {
     ndc[0].abs() <= fraction && ndc[1].abs() <= fraction
 }
 
+/// Where a point on `bearing` from the camera lands in a viewport under
+/// `orientation`, in normalized device coordinates (`[-1, 1]` on each axis,
+/// `+y` up), or `None` when the bearing does not point in front of the camera.
+/// `tan_y` is the tangent of half the vertical field of view.
+///
+/// A bearing rather than a point, so that a finite point (its offset from the
+/// camera), a point at infinity (its direction) and a feature (the ray through
+/// its pixel) are asked the same question: where a point lands depends only on
+/// its direction from the camera.
+fn ndc_of(
+    orientation: UnitQuaternion<f64>,
+    bearing: Vector3<f64>,
+    tan_y: f64,
+    aspect: f64,
+) -> Option<[f64; 2]> {
+    let in_camera = orientation * bearing;
+    let depth = -in_camera.z;
+    if depth <= 1e-10 {
+        return None;
+    }
+    Some([
+        in_camera.x / (depth * tan_y * aspect),
+        in_camera.y / (depth * tan_y),
+    ])
+}
+
+/// The orientation, level with `up`, that a camera at `start` turns to in place
+/// to bring what lies on `bearing` inside the middle `fraction` of the viewport
+/// on both axes, turning little more than that needs.
+///
+/// Each step aims the bearing at the nearest place inside that region by the
+/// shortest-arc rotation, then levels the camera again, which moves it a
+/// little; the steps repeat until it is inside. The levelling can leave one
+/// axis a little way inside the edge rather than on it. A bearing behind the
+/// camera is looked along directly, since no nearest place in the region is
+/// defined for it.
+///
+/// A free function of the start state rather than a method on the viewport,
+/// because a camera view can be framed before the viewport is there: the turn
+/// that brings a feature into a photograph's view starts from that
+/// photograph's pose and lens.
+fn orientation_bringing_into(
+    start: UnitQuaternion<f64>,
+    up: Vector3<f64>,
+    bearing: Vector3<f64>,
+    tan_y: f64,
+    aspect: f64,
+    fraction: f64,
+) -> UnitQuaternion<f64> {
+    let mut orientation = start;
+    for _ in 0..TURN_STEPS {
+        let Some(ndc) = ndc_of(orientation, bearing, tan_y, aspect) else {
+            return Camera::orientation_from_forward(bearing.normalize(), up);
+        };
+        if within(ndc, fraction) {
+            break;
+        }
+        // Aim a little inside the edge, so that the levelling does not leave
+        // the bearing just outside it.
+        let edge = fraction * (1.0 - 1e-3);
+        let aim = Vector3::new(
+            ndc[0].clamp(-edge, edge) * tan_y * aspect,
+            ndc[1].clamp(-edge, edge) * tan_y,
+            -1.0,
+        );
+        let Some(turn) = UnitQuaternion::rotation_between(&(orientation * bearing), &aim) else {
+            break;
+        };
+        let forward = (turn * orientation).inverse() * Vector3::new(0.0, 0.0, -1.0);
+        orientation = Camera::orientation_from_forward(forward, up);
+    }
+    orientation
+}
+
 /// Animated camera transition for smooth navigation.
 ///
 /// Interpolates camera state over ~200ms using slerp (orientation) + lerp
@@ -991,74 +1065,35 @@ impl Viewer3D {
     }
 
     /// Where a point on `bearing` from the camera lands in the viewport under
-    /// `orientation`, in normalized device coordinates (`[-1, 1]` on each axis,
-    /// `+y` up), or `None` when the bearing does not point in front of the
-    /// camera.
-    ///
-    /// A bearing rather than a point, so that a finite point (its offset from
-    /// the camera) and a point at infinity (its direction) are asked the same
-    /// question: where a point lands depends only on its direction from the
-    /// camera.
+    /// `orientation`, with the viewport's own field of view: [`ndc_of`] for
+    /// the lens on screen now.
     fn viewport_ndc(
         &self,
         orientation: UnitQuaternion<f64>,
         bearing: Vector3<f64>,
         aspect: f64,
     ) -> Option<[f64; 2]> {
-        let in_camera = orientation * bearing;
-        let depth = -in_camera.z;
-        if depth <= 1e-10 {
-            return None;
-        }
         let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
-        Some([
-            in_camera.x / (depth * tan_y * aspect),
-            in_camera.y / (depth * tan_y),
-        ])
+        ndc_of(orientation, bearing, tan_y, aspect)
     }
 
-    /// The orientation, level with `world_up`, that the camera turns to in
-    /// place to bring what lies on `bearing` inside the middle `fraction` of
-    /// the viewport on both axes, turning little more than that needs.
-    ///
-    /// Each step aims the bearing at the nearest place inside that region by
-    /// the shortest-arc rotation, then levels the camera again, which moves it
-    /// a little; the steps repeat until it is inside. The levelling can leave
-    /// one axis a little way inside the edge rather than on it. A bearing
-    /// behind the camera is looked along directly, since no nearest place in
-    /// the region is defined for it.
+    /// [`orientation_bringing_into`] from the camera's orientation and up as
+    /// they are now, through the viewport's own field of view.
     fn orientation_bringing_into(
         &self,
         bearing: Vector3<f64>,
         aspect: f64,
         fraction: f64,
     ) -> UnitQuaternion<f64> {
-        let up = self.camera.world_up;
         let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
-        let mut orientation = self.camera.camera.orientation;
-        for _ in 0..TURN_STEPS {
-            let Some(ndc) = self.viewport_ndc(orientation, bearing, aspect) else {
-                return Camera::orientation_from_forward(bearing.normalize(), up);
-            };
-            if within(ndc, fraction) {
-                break;
-            }
-            // Aim a little inside the edge, so that the levelling does not
-            // leave the bearing just outside it.
-            let edge = fraction * (1.0 - 1e-3);
-            let aim = Vector3::new(
-                ndc[0].clamp(-edge, edge) * tan_y * aspect,
-                ndc[1].clamp(-edge, edge) * tan_y,
-                -1.0,
-            );
-            let Some(turn) = UnitQuaternion::rotation_between(&(orientation * bearing), &aim)
-            else {
-                break;
-            };
-            let forward = (turn * orientation).inverse() * Vector3::new(0.0, 0.0, -1.0);
-            orientation = Camera::orientation_from_forward(forward, up);
-        }
-        orientation
+        orientation_bringing_into(
+            self.camera.camera.orientation,
+            self.camera.world_up,
+            bearing,
+            tan_y,
+            aspect,
+            fraction,
+        )
     }
 
     /// Starts a smooth animated transition to the given camera end state.
@@ -1342,6 +1377,89 @@ impl Viewer3D {
             self.camera.fov,
             state.world_up,
             Some(state.camera_view),
+            false,
+            current_time,
+        );
+    }
+
+    /// Look through `image_ref` and turn the view until the feature at `pixel`
+    /// in that photograph is inside the middle [`TURN_INTO_FRACTION`] of the
+    /// viewport, with one animated transition.
+    ///
+    /// What a double-click on a Track View row does, in either mode. The row
+    /// names an observation rather than a whole image, so the view it opens
+    /// shows where that observation is: looking straight through the camera
+    /// can leave the feature near the edge of a photograph wider than the
+    /// viewport, or off it. Other double-clicks on an image (a frustum, a
+    /// thumbnail, a Scene tree row) name no feature and keep
+    /// [`Self::enter_camera_view`] and [`Self::animated_switch_camera_view`].
+    ///
+    /// The view the turn starts from is the one those two land on: the
+    /// camera's own pose when entering camera view, and the relative
+    /// orientation kept when switching between cameras. The turn is level with
+    /// that view's up and uses its field of view, and the feature's bearing is
+    /// the ray the lens model maps its pixel from
+    /// (`CameraIntrinsics::pixel_to_ray`), put through the camera's world pose.
+    /// A feature already inside the middle 1/2 turns nothing, and the result is
+    /// a camera view looked around in, as a free look leaves one.
+    pub(crate) fn look_through_toward_feature(
+        &mut self,
+        image_ref: ImageRef,
+        node: &SceneNode,
+        pixel: [f32; 2],
+        current_time: f64,
+        log: &mut ActionLog,
+    ) {
+        let (position, orientation, distance, fov, world_up, camera_view) =
+            match self.compute_switch_camera_view(image_ref, node) {
+                Some(s) => (
+                    s.position,
+                    s.orientation,
+                    s.distance,
+                    self.camera.fov,
+                    s.world_up,
+                    s.camera_view,
+                ),
+                None => {
+                    let e = self.compute_camera_view(image_ref, node);
+                    (
+                        e.position,
+                        e.orientation,
+                        e.distance,
+                        e.fov,
+                        e.world_up,
+                        e.camera_view,
+                    )
+                }
+            };
+
+        let reconstruction = node.recon();
+        let image = &reconstruction.image_table.images[image_ref.index()];
+        let lens = &reconstruction.image_table.cameras[image.camera_index as usize];
+        let ray = lens.pixel_to_ray(f64::from(pixel[0]), f64::from(pixel[1]));
+        let (world_pose, _) = transformed_pose(image, node.transform());
+        let bearing = world_pose.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
+
+        let aspect = self.panel_aspect().unwrap_or(16.0 / 9.0);
+        let tan_y = (camera::vertical_fov(fov, aspect) / 2.0).tan();
+        let orientation = orientation_bringing_into(
+            orientation,
+            world_up,
+            bearing,
+            tan_y,
+            aspect,
+            TURN_INTO_FRACTION,
+        );
+
+        record_camera_view(log, image_ref, node);
+        self.camera_view = None;
+        self.start_transition(
+            position,
+            orientation,
+            distance,
+            fov,
+            world_up,
+            Some(camera_view),
             false,
             current_time,
         );
