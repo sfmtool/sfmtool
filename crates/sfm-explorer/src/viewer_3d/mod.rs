@@ -159,6 +159,7 @@ struct EnterCameraViewState {
 ///
 /// Stores the SfM camera's world-from-camera rotation so the background mesh
 /// can be rendered with the correct relative rotation during free-look navigation.
+#[derive(Clone)]
 pub struct CameraViewMode {
     /// The image being viewed through (stable across selection changes). A ref
     /// rather than an index: the background image and the hidden-frustum test
@@ -894,16 +895,64 @@ impl Viewer3D {
             return false;
         }
         let aspect = self.panel_aspect().unwrap_or(16.0 / 9.0);
+        let bearing = point - self.camera.camera.position;
         let orientation = self.camera.camera.orientation;
         let in_middle = self
-            .viewport_ndc(orientation, point, aspect)
+            .viewport_ndc(orientation, bearing, aspect)
             .is_some_and(|ndc| within(ndc, PAN_ONLY_FRACTION));
         let orientation = if in_middle {
             orientation
         } else {
-            self.orientation_bringing_into(point, aspect, TURN_INTO_FRACTION)
+            self.orientation_bringing_into(bearing, aspect, TURN_INTO_FRACTION)
         };
         self.pan_target_onto(point, orientation, current_time)
+    }
+
+    /// Turn the camera in place until `direction`, a point at infinity's
+    /// bearing in the shared world space, is inside the middle
+    /// [`TURN_INTO_FRACTION`] of the viewport on both axes, with the animated
+    /// transition the other target moves use.
+    ///
+    /// What a double-click on a point at infinity does, in the viewport and in
+    /// Image Detail alike. A point at infinity is a direction rather than a
+    /// place, so there is no target to put on it and no pan that changes where
+    /// it is drawn: the camera turns, level with `world_up`, by about as little
+    /// as brings the bearing into the middle, and the position and orbit
+    /// distance stay. A turn in place is a free look, so camera view is kept,
+    /// as nodal pan keeps it.
+    ///
+    /// Returns whether a transition was started: not when the bearing is
+    /// already inside the middle, and not when a camera is in hand, for the
+    /// reason [`Self::move_target_to`] gives.
+    pub(crate) fn turn_toward_bearing(
+        &mut self,
+        direction: Vector3<f64>,
+        current_time: f64,
+    ) -> bool {
+        if self.camera_lock.is_some() {
+            return false;
+        }
+        let aspect = self.panel_aspect().unwrap_or(16.0 / 9.0);
+        let orientation = self.camera.camera.orientation;
+        if self
+            .viewport_ndc(orientation, direction, aspect)
+            .is_some_and(|ndc| within(ndc, TURN_INTO_FRACTION))
+        {
+            return false;
+        }
+        let end_orientation = self.orientation_bringing_into(direction, aspect, TURN_INTO_FRACTION);
+        let world_up = self.camera.world_up;
+        self.start_transition(
+            self.camera.camera.position,
+            end_orientation,
+            self.camera.camera.target_distance,
+            self.camera.fov,
+            world_up,
+            self.camera_view.clone(),
+            false,
+            current_time,
+        );
+        true
     }
 
     /// Start the transition that ends with `orientation` and with the orbit
@@ -941,16 +990,22 @@ impl Viewer3D {
         true
     }
 
-    /// Where `point` lands in the viewport under `orientation` from the current
-    /// position, in normalized device coordinates (`[-1, 1]` on each axis,
-    /// `+y` up), or `None` when it is not in front of the camera.
+    /// Where a point on `bearing` from the camera lands in the viewport under
+    /// `orientation`, in normalized device coordinates (`[-1, 1]` on each axis,
+    /// `+y` up), or `None` when the bearing does not point in front of the
+    /// camera.
+    ///
+    /// A bearing rather than a point, so that a finite point (its offset from
+    /// the camera) and a point at infinity (its direction) are asked the same
+    /// question: where a point lands depends only on its direction from the
+    /// camera.
     fn viewport_ndc(
         &self,
         orientation: UnitQuaternion<f64>,
-        point: Point3<f64>,
+        bearing: Vector3<f64>,
         aspect: f64,
     ) -> Option<[f64; 2]> {
-        let in_camera = orientation * (point - self.camera.camera.position);
+        let in_camera = orientation * bearing;
         let depth = -in_camera.z;
         if depth <= 1e-10 {
             return None;
@@ -963,41 +1018,41 @@ impl Viewer3D {
     }
 
     /// The orientation, level with `world_up`, that the camera turns to in
-    /// place to bring `point` inside the middle `fraction` of the viewport on
-    /// both axes, turning little more than that needs.
+    /// place to bring what lies on `bearing` inside the middle `fraction` of
+    /// the viewport on both axes, turning little more than that needs.
     ///
-    /// Each step aims the point at the nearest place inside that region by the
-    /// shortest-arc rotation, then levels the camera again, which moves the
-    /// point a little; the steps repeat until it is inside. The levelling can
-    /// leave one axis a little way inside the edge rather than on it. A point behind the
-    /// camera is looked at directly, since no nearest place in the region is
-    /// defined for it.
+    /// Each step aims the bearing at the nearest place inside that region by
+    /// the shortest-arc rotation, then levels the camera again, which moves it
+    /// a little; the steps repeat until it is inside. The levelling can leave
+    /// one axis a little way inside the edge rather than on it. A bearing
+    /// behind the camera is looked along directly, since no nearest place in
+    /// the region is defined for it.
     fn orientation_bringing_into(
         &self,
-        point: Point3<f64>,
+        bearing: Vector3<f64>,
         aspect: f64,
         fraction: f64,
     ) -> UnitQuaternion<f64> {
         let up = self.camera.world_up;
-        let offset = point - self.camera.camera.position;
         let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
         let mut orientation = self.camera.camera.orientation;
         for _ in 0..TURN_STEPS {
-            let Some(ndc) = self.viewport_ndc(orientation, point, aspect) else {
-                return Camera::orientation_from_forward(offset.normalize(), up);
+            let Some(ndc) = self.viewport_ndc(orientation, bearing, aspect) else {
+                return Camera::orientation_from_forward(bearing.normalize(), up);
             };
             if within(ndc, fraction) {
                 break;
             }
             // Aim a little inside the edge, so that the levelling does not
-            // leave the point just outside it.
+            // leave the bearing just outside it.
             let edge = fraction * (1.0 - 1e-3);
             let aim = Vector3::new(
                 ndc[0].clamp(-edge, edge) * tan_y * aspect,
                 ndc[1].clamp(-edge, edge) * tan_y,
                 -1.0,
             );
-            let Some(turn) = UnitQuaternion::rotation_between(&(orientation * offset), &aim) else {
+            let Some(turn) = UnitQuaternion::rotation_between(&(orientation * bearing), &aim)
+            else {
                 break;
             };
             let forward = (turn * orientation).inverse() * Vector3::new(0.0, 0.0, -1.0);

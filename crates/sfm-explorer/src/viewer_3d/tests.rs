@@ -423,7 +423,11 @@ fn landing(viewer: &mut Viewer3D, point: Point3<f64>) -> ([f64; 2], Point3<f64>)
     viewer.camera.camera.target_distance = transition.end_distance;
     viewer.camera.world_up = transition.end_world_up;
     let ndc = viewer
-        .viewport_ndc(transition.end_orientation, point, 1600.0 / 900.0)
+        .viewport_ndc(
+            transition.end_orientation,
+            point - transition.end_position,
+            1600.0 / 900.0,
+        )
         .expect("the point is in front of the end state");
     (ndc, viewer.camera.camera.target())
 }
@@ -461,7 +465,7 @@ fn a_point_near_the_edge_is_turned_to_before_the_pan() {
     let end_orientation = viewer.target_transition.as_ref().unwrap().end_orientation;
     assert!(end_orientation.angle_to(&orientation) > 1e-3, "no turn");
     let turned = viewer
-        .viewport_ndc(end_orientation, point, 1600.0 / 900.0)
+        .viewport_ndc(end_orientation, point - start, 1600.0 / 900.0)
         .unwrap();
     // Inside the middle 1/2, and not turned much further than that: levelling
     // the camera after the aim can carry one axis a little way inside the
@@ -505,6 +509,84 @@ fn a_point_behind_the_camera_is_turned_to() {
         "landed at {ndc:?}"
     );
     assert!((target - point).norm() < 1e-9);
+}
+
+/// A double-click on a point at infinity whose bearing is outside the middle
+/// 1/2 of the viewport turns the camera in place, level, until the bearing is
+/// inside it. The position and the orbit distance stay: there is no place to
+/// put the target on.
+#[test]
+fn a_bearing_outside_the_middle_half_is_turned_to_in_place() {
+    let (mut viewer, point) = looking_along_y([0.9, -0.8], 8.0);
+    let start = viewer.camera.camera.clone();
+    let bearing = (point - start.position).normalize();
+
+    assert!(viewer.turn_toward_bearing(bearing, 0.0));
+    let transition = viewer.target_transition.as_ref().unwrap();
+    assert_eq!(transition.end_position, start.position);
+    assert_eq!(transition.end_distance, start.target_distance);
+    let turned = viewer
+        .viewport_ndc(transition.end_orientation, bearing, 1600.0 / 900.0)
+        .unwrap();
+    assert!(
+        turned.iter().all(|a| a.abs() <= 0.5 && a.abs() > 0.4),
+        "turned to {turned:?}"
+    );
+    assert!(
+        turned.iter().any(|a| a.abs() > 0.49),
+        "turned to {turned:?}"
+    );
+    let right = transition.end_orientation.inverse() * Vector3::x();
+    assert!(right.dot(&Vector3::z()).abs() < 1e-12, "the turn rolled");
+}
+
+/// A bearing already inside the middle 1/2 is where the turn would bring it,
+/// so the double-click leaves the view alone.
+#[test]
+fn a_bearing_in_the_middle_half_is_left_where_it_is() {
+    let (mut viewer, point) = looking_along_y([0.4, 0.3], 8.0);
+    let bearing = point - viewer.camera.camera.position;
+
+    assert!(!viewer.turn_toward_bearing(bearing, 0.0));
+    assert!(viewer.target_transition.is_none());
+}
+
+/// A bearing behind the camera is turned to and looked along.
+#[test]
+fn a_bearing_behind_the_camera_is_looked_along() {
+    let (mut viewer, _) = looking_along_y([0.0, 0.0], 8.0);
+    let bearing = Vector3::new(1.0, -2.0, 0.5);
+
+    assert!(viewer.turn_toward_bearing(bearing, 0.0));
+    let transition = viewer.target_transition.as_ref().unwrap();
+    let ndc = viewer
+        .viewport_ndc(transition.end_orientation, bearing, 1600.0 / 900.0)
+        .unwrap();
+    assert!(
+        ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
+        "turned to {ndc:?}"
+    );
+}
+
+/// A turn in place is a free look, so camera view is kept through it, as nodal
+/// pan keeps it: the transition hands the same view back when it completes.
+#[test]
+fn turning_toward_a_bearing_keeps_camera_view() {
+    let (mut viewer, point) = looking_along_y([0.95, 0.0], 8.0);
+    let image = crate::scene::ImageRef::new(ReconId::from_raw(7), 3);
+    viewer.camera_view = Some(super::CameraViewMode {
+        image,
+        r_world_from_cam: viewer.camera.camera.orientation.inverse(),
+    });
+
+    assert!(viewer.turn_toward_bearing(point - viewer.camera.camera.position, 0.0));
+    assert_eq!(viewer.camera_view.as_ref().map(|v| v.image), Some(image));
+    let transition = viewer.target_transition.as_ref().unwrap();
+    assert_eq!(
+        transition.pending_camera_view.as_ref().map(|v| v.image),
+        Some(image),
+        "the turn left camera view"
+    );
 }
 
 /// `count` primary press/release pairs at one place, in one frame: what egui

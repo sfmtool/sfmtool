@@ -56,7 +56,7 @@ during Zoom to Fit to center on the point cloud.
 | Set target | Alt + Click | Set target to the point under the cursor (depth pick) |
 | Enter camera view | Double-click frustum | Select frustum and enter camera view mode (see [camera-views.md](camera-views.md)) |
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
-| Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point (see [The point context menu](#the-point-context-menu)) |
+| Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point, or turn toward a point at infinity (see [The point context menu](#the-point-context-menu)) |
 
 ### The point context menu
 
@@ -119,9 +119,23 @@ direction, and the orbit distance becomes the point's depth. The point moves to
 the centre of the viewport at the size it was drawn, over the same ~200ms eased
 transition and target flash as Alt + Click. Being a pan, it leaves camera view.
 It moves nothing when a camera is in hand (the motion would move the held
-camera, which the double-click does not ask for), for a point at infinity (whose
-stored coordinates are a direction), for a point behind the camera, or with Alt
-held, where the Alt + Click depth pick has already set the target.
+camera, which the double-click does not ask for), for a point behind the camera,
+or with Alt held, where the Alt + Click depth pick has already set the target.
+
+**A double-click on a point at infinity turns the camera toward its bearing**
+(`Viewer3D::turn_toward_bearing`). Its stored coordinates are a direction rather
+than a place, so there is no target to put on it and no pan that changes where
+it is drawn. The camera turns in place, level with the world's up, by about as
+little as brings the bearing inside the middle 1/2 of the viewport on both axes,
+over the same ~200ms transition; the position and the orbit distance stay, and
+there is no target flash, since the target has not landed on anything. A bearing
+already inside the middle 1/2 is left where it is, and one behind the camera is
+looked along. A turn in place is a free look, so camera view is kept, as nodal
+pan keeps it. The bearing is the stored direction put through the node's
+rotation alone, as the renderer draws it at `w = 0`. Image Detail's double-click
+on a feature whose point is at infinity does the same
+([multi-panel-image-browser.md](multi-panel-image-browser.md)). Nothing turns
+while a camera is in hand.
 
 ### Trackpad Controls
 

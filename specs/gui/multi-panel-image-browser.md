@@ -1040,8 +1040,11 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   made with that orientation; the two are one transition. The panel reports the
   point with `ImageDetail::take_target_point` and `app.rs` applies it after the
   frame, since the 3D viewport is not the panel's to move. It moves nothing while
-  a camera is held for Move Camera, or for a point at infinity, and it leaves
-  camera view.
+  a camera is held for Move Camera, and it leaves camera view. A point at
+  infinity has no place for the target, so for one the camera instead turns in
+  place toward its bearing until the bearing is inside the middle 1/2, keeping
+  camera view (`Viewer3D::turn_toward_bearing`), as a double-click on it in the
+  viewport does ([viewport-navigation.md](viewport-navigation.md)).
 - **Fit is the `Z` key**, with the pointer over the panel, and the wire's
   `set_image_detail_view { fit }` ([mcp-server.md](mcp-server.md)).
 - **A left click with Control and Shift held is `Create Track Here`** at the

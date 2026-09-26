@@ -936,11 +936,18 @@ impl App {
                 }
                 // A double-click on a tracked feature also moves the 3D
                 // viewport's target onto the point, turning to it first when
-                // it is far from the middle of the viewport.
+                // it is far from the middle of the viewport; a point at
+                // infinity is turned toward.
                 if let Some(point) = image_detail.take_target_point() {
-                    if let Some(position) = point_world_position(app_state, point) {
-                        let current_time = ui.input(|i| i.time);
-                        viewer_3d.turn_and_move_target_to(position, current_time);
+                    let current_time = ui.input(|i| i.time);
+                    match world_point(app_state, point) {
+                        Some(WorldPoint::At(position)) => {
+                            viewer_3d.turn_and_move_target_to(position, current_time);
+                        }
+                        Some(WorldPoint::Toward(direction)) => {
+                            viewer_3d.turn_toward_bearing(direction, current_time);
+                        }
+                        None => {}
                     }
                 }
                 if let Some((image, pixel)) = image_detail.take_cluster_start() {
@@ -1061,11 +1068,17 @@ impl App {
                     let is_double = self.viewer_3d.pending_click_is_double;
                     apply_point_click(&mut self.state, point, is_double);
                     // An Alt double-click has already set the target from the
-                    // depth pick above; the pan is the plain double-click's.
+                    // depth pick above; the move is the plain double-click's.
                     if is_double && !self.viewer_3d.pending_click_is_alt {
-                        if let Some(position) = point_world_position(&self.state, point) {
-                            let current_time = self.egui_ctx.input(|i| i.time);
-                            self.viewer_3d.move_target_to(position, current_time);
+                        let current_time = self.egui_ctx.input(|i| i.time);
+                        match world_point(&self.state, point) {
+                            Some(WorldPoint::At(position)) => {
+                                self.viewer_3d.move_target_to(position, current_time);
+                            }
+                            Some(WorldPoint::Toward(direction)) => {
+                                self.viewer_3d.turn_toward_bearing(direction, current_time);
+                            }
+                            None => {}
                         }
                     }
                 }
@@ -1145,20 +1158,36 @@ fn apply_point_click(
     }
 }
 
-/// Where `point` is drawn, in the shared world space: its position in the
-/// version on screen put through its node's transform.
+/// Where a point is drawn in the shared world space, which for a point at
+/// infinity is a direction rather than a place.
+enum WorldPoint {
+    /// A finite point's position.
+    At(nalgebra::Point3<f64>),
+    /// A point at infinity's bearing.
+    Toward(nalgebra::Vector3<f64>),
+}
+
+/// Where `point` is drawn, in the shared world space: its value in the version
+/// on screen put through its node's transform. A position takes the whole
+/// transform; a bearing takes only the rotation, as the renderer's `w = 0`
+/// draws it, since a direction has no place to translate and scaling does not
+/// change it.
 ///
-/// `None` for a point at infinity, whose stored coordinates are a direction
-/// rather than a place, and for a point the version no longer holds.
-fn point_world_position(
+/// `None` for a point the version no longer holds.
+fn world_point(
     state: &crate::state::AppState,
     point: crate::scene::PointRef,
-) -> Option<nalgebra::Point3<f64>> {
+) -> Option<WorldPoint> {
     let node = crate::scene::node_by_id(&state.scene, point.recon)?;
     let edited = node.edited();
     let view = edited.point(point.point)?;
     let stored = view.point();
-    (!stored.is_at_infinity()).then(|| node.transform().apply_to_point(&stored.position))
+    let transform = node.transform();
+    Some(if stored.is_at_infinity() {
+        WorldPoint::Toward(transform.rotation.as_nalgebra() * stored.position.coords)
+    } else {
+        WorldPoint::At(transform.apply_to_point(&stored.position))
+    })
 }
 
 /// Whether `point` names a point the version on screen still holds.
