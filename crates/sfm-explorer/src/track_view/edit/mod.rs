@@ -17,7 +17,7 @@
 //! `&AppState` while it draws, and a step needs it mutably.
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
-//! the panel owns is the slider positions, the *Lock* box Image Detail reads a
+//! the panel owns is the slider positions during a drag, the *Lock* box Image Detail reads a
 //! dot drag by, the row selection a split reads, the tiles it has rendered,
 //! and the painting the sliders produce. The last two are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the painting is
@@ -45,7 +45,8 @@ pub(crate) use table::RowSummary;
 /// What one frame of the panel asks the dock to do.
 ///
 /// Every field is one gesture, and at most one of them is set on a frame: the
-/// entries that push a version are buttons, and a button is clicked once.
+/// entries that push a version are buttons and slider releases, and each is
+/// made once.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TrackEditResponse {
     /// The toolbar's *Discard*.
@@ -60,8 +61,13 @@ pub struct TrackEditResponse {
     pub fit: Option<f64>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
-    /// *Apply thresholds*, carrying the bars the sliders stand at.
+    /// A threshold slider was released, or a value typed into one was
+    /// committed: the bars the four sliders stand at, for the active track.
+    /// Set only when they differ from the track's own.
     pub apply_thresholds: Option<Thresholds>,
+    /// A kept-at-seed row's *Accept walk*, carrying the observation: put its
+    /// sighting where the last fit's walk would have taken it.
+    pub accept_walk: Option<usize>,
     /// *Split off selected rows*, carrying the rows.
     pub split: Option<Vec<usize>>,
     /// *Duplicate*: put a copy of the active track on the bench beside it.
@@ -98,20 +104,19 @@ pub struct TrackEditResponse {
 
 /// Track View's edit-mode state.
 pub struct TrackEdit {
-    /// Where the threshold sliders stand. Panel state: a slider proposes and
-    /// *Apply thresholds* is what makes the proposal verdicts, so moving one
-    /// pushes no version and closing the panel keeps where they were left.
+    /// Where the threshold sliders stand.
     ///
-    /// Seeded from the **active track's own bars**, not from the defaults: the
-    /// track carries the bars it was last applied, and sliders that said
-    /// something else would paint the table by a rule the track does not hold
-    /// and hand that rule to the next press of the button.
+    /// The **active track's own bars**, copied from it on every frame no slider
+    /// is being dragged, so an undo, a redo, a step over the wire or a change
+    /// of active item moves the sliders with it. Only during a drag does this
+    /// hold a value the track does not: the drag repaints the table live, and
+    /// its release applies the bars to the track as one version. The panel
+    /// therefore never holds bars a *Fit* would not use.
     thresholds: Thresholds,
-    /// The item and the track's own bars [`TrackEdit::thresholds`] was seeded
-    /// from, so the seeding happens again when the active track changes or when
-    /// a step moves that track's bars -- and not while the person is dragging a
-    /// slider, which moves the panel's copy and leaves the track's alone.
-    seeded_from: Option<(ReconId, String, Thresholds)>,
+    /// Whether a threshold slider was being dragged on the last frame, which is
+    /// what keeps [`TrackEdit::thresholds`] from being reset to the track's bars
+    /// in the middle of the drag.
+    sliding: bool,
     /// The verdicts the sliders propose for the active track, one per
     /// observation, which is what the rows are painted by.
     painted: Vec<Verdict>,
@@ -197,7 +202,7 @@ impl TrackEdit {
     pub fn new() -> Self {
         Self {
             thresholds: Thresholds::default(),
-            seeded_from: None,
+            sliding: false,
             painted: Vec::new(),
             painted_for: None,
             commit_refusal: None,
@@ -283,7 +288,7 @@ impl TrackEdit {
         self.painted_for = None;
         self.commit_refusal_for = None;
         self.build_refusal = None;
-        self.seeded_from = None;
+        self.sliding = false;
         self.painted.clear();
         self.rows.clear();
     }
@@ -321,7 +326,7 @@ impl TrackEdit {
             self.selected_rows.clear();
             self.selection_of = Some((id, label.clone()));
         }
-        self.reseat_thresholds(id, &label, track);
+        self.reseat_thresholds(track);
         self.repaint_if_stale(&label, track);
         self.recheck_commit_if_stale(&label, track, node);
         self.retile_if_stale(&label, track);
@@ -334,7 +339,10 @@ impl TrackEdit {
 
         show_header(ui, &label, track);
         self.show_toolbar(ui, state, node, &label, track, &mut response);
-        self.show_thresholds(ui);
+        // A release applies what the drag left the sliders at. Painted by this
+        // frame's value from the next frame on, which is the frame the dock
+        // has applied it by.
+        response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
@@ -384,14 +392,6 @@ impl TrackEdit {
                 "Move the track between its two representations",
             ) {
                 response.set_stage = Some(next);
-            }
-            if entry(
-                ui,
-                "Apply thresholds",
-                busy.clone(),
-                "Turn the painting into verdicts, leaving the pinned ones alone",
-            ) {
-                response.apply_thresholds = Some(self.thresholds.clone());
             }
             let split_refusal = busy.clone().or_else(|| split_refusal(self, track));
             if entry(
@@ -484,34 +484,52 @@ impl TrackEdit {
         }
     }
 
-    /// The threshold sliders, which paint the table live and change nothing
-    /// until *Apply thresholds* is pressed.
-    fn show_thresholds(&mut self, ui: &mut egui::Ui) {
+    /// The threshold sliders, which apply to the active track: a drag paints
+    /// the table live, and its release (or a typed value's commit) hands back
+    /// the bars to apply as one version. `None` on every other frame, and on a
+    /// release that left the bars where the track has them.
+    ///
+    /// Greyed while the node is busy, with the busy sentence: a release there
+    /// would be refused, and a slider that snapped back after a drag would say
+    /// less than one that could not be dragged.
+    fn show_thresholds(
+        &mut self,
+        ui: &mut egui::Ui,
+        busy: Option<String>,
+        track: &EditableTrack,
+    ) -> Option<Thresholds> {
+        let enabled = busy.is_none();
+        let mut sliding = false;
+        let mut released = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("Thresholds");
-            ui.add(
-                egui::Slider::new(&mut self.thresholds.min_zncc, 0.0..=1.0)
-                    .text("min ZNCC")
-                    .max_decimals(2),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.thresholds.max_shift_px, 0.0..=20.0)
-                    .text("max shift px")
-                    .max_decimals(2),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.thresholds.max_keypoint_uncertainty, 0.0..=2.0)
-                    .text("max \u{3c3}_pos")
-                    .max_decimals(2),
-            );
-            // The fourth bar of `Thresholds`, which view selection scores a
-            // candidate by as a fraction of the track's own self-agreement: a
-            // bar with no slider is a bar only the wire can move.
-            ui.add(
-                egui::Slider::new(&mut self.thresholds.min_relative_zncc, 0.0..=1.0)
-                    .text("min relative ZNCC")
-                    .max_decimals(2),
-            );
+            let bars = &mut self.thresholds;
+            let sliders = [
+                egui::Slider::new(&mut bars.min_zncc, 0.0..=1.0).text(MIN_ZNCC_LABEL),
+                egui::Slider::new(&mut bars.max_shift_px, 0.0..=20.0).text(MAX_SHIFT_LABEL),
+                egui::Slider::new(&mut bars.max_keypoint_uncertainty, 0.0..=2.0)
+                    .text("max \u{3c3}_pos"),
+                // The fourth bar of `Thresholds`, which view selection scores a
+                // candidate by as a fraction of the track's own self-agreement:
+                // a bar with no slider is a bar only the wire can move.
+                egui::Slider::new(&mut bars.min_relative_zncc, 0.0..=1.0).text("min relative ZNCC"),
+            ];
+            for slider in sliders {
+                // A typed value lands when the field is left, not per
+                // keystroke, so typing "0.9" is one version and not three.
+                let slider = slider.max_decimals(2).update_while_editing(false);
+                let r = ui.add_enabled(enabled, slider);
+                let r = match &busy {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r.on_hover_text(
+                        "Applies to the track when released: one version, which Undo reverses",
+                    ),
+                };
+                sliding |= r.dragged();
+                // A drag ends in its release; a typed value or an arrow key
+                // changes the value with no drag at all.
+                released |= r.drag_stopped() || (r.changed() && !r.dragged());
+            }
             // Not a threshold: this one is an input to the next reading rather
             // than a bar the painting judges by, which is why it stands apart
             // and why moving it repaints nothing.
@@ -526,30 +544,29 @@ impl TrackEdit {
                  peak, in patch-grid px",
             );
         });
+        self.sliding = sliding;
+        (released && !sliding && self.thresholds != track.thresholds)
+            .then(|| self.thresholds.clone())
     }
 
-    /// Put the sliders where the active track's own bars are, when the track
-    /// they were seeded from is no longer the one being shown or its bars have
-    /// moved under them.
+    /// Put the sliders where the active track's own bars are, unless a slider
+    /// is being dragged.
     ///
-    /// A slider drag moves [`TrackEdit::thresholds`] and not the track's, so
-    /// the key below is unchanged and the drag survives; a step that sets the
-    /// track's bars -- *Apply thresholds* here, `apply_bench_track_thresholds`
-    /// over the wire, an undo of either -- moves them, and the sliders follow.
-    fn reseat_thresholds(&mut self, id: ReconId, label: &str, track: &EditableTrack) {
-        let key = (id, label.to_string(), track.thresholds.clone());
-        if self.seeded_from.as_ref() == Some(&key) {
-            return;
+    /// Every frame, rather than when something is seen to change: the sliders
+    /// show the track's bars and nothing else, so whatever moved them -- a
+    /// slider's release here, `apply_bench_track_thresholds` over the wire, an
+    /// undo or redo of either, another item made active -- the sliders follow.
+    fn reseat_thresholds(&mut self, track: &EditableTrack) {
+        if !self.sliding {
+            self.thresholds = track.thresholds.clone();
         }
-        self.thresholds = track.thresholds.clone();
-        self.seeded_from = Some(key);
     }
 
     /// Recompute the painting when the track or the bars have moved.
     ///
     /// The painting **is** what applying the thresholds would do, computed by
-    /// the same core function the button calls, so a row can never be painted
-    /// one way and painted another when the button is pressed. A pinned verdict
+    /// the same core function a slider's release applies, so a row can never be
+    /// painted one way and turned another when the slider is let go. A pinned verdict
     /// comes back unchanged from that call, which is what leaves it alone.
     fn repaint_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
         let key = (
@@ -646,6 +663,18 @@ impl TrackEdit {
         self.tiles_for = Some(key);
     }
 }
+
+/// The minimum-ZNCC slider's label, in one constant so the tests aim at the
+/// label drawn.
+pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC";
+
+/// The maximum-shift slider's label: the bar the painting judges a seed shift
+/// by and the bound on how far a fit may move a sighting.
+pub(crate) const MAX_SHIFT_LABEL: &str = "max shift px";
+
+/// A kept-at-seed row's menu entry, which puts the sighting where the fit's
+/// walk would have taken it.
+pub(crate) const ACCEPT_WALK_LABEL: &str = "Accept walk";
 
 /// The edit-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.
@@ -851,10 +880,17 @@ fn measurements(observation: &Observation, stage: StageKind) -> [String; 7] {
                 // it says the sighting did *not* move where the correlation
                 // wanted it, which is the one thing about the row a person
                 // reading "localized" would get wrong.
+                // With the ZNCC the walk would have bought where the fit
+                // scored one, beside the row's own ZNCC read at the seed: the
+                // two numbers a person accepting the walk or not decides by.
                 match m {
                     Some(m) if m.walked_px.is_some() => format!(
-                        "walked {:.0} px, kept at seed",
-                        m.walked_px.expect("just matched")
+                        "walked {:.0} px{}, kept at seed",
+                        m.walked_px.expect("just matched"),
+                        match m.walked_zncc {
+                            Some(z) if z.is_finite() => format!(" (ZNCC {z:.3} there)"),
+                            _ => String::new(),
+                        }
                     ),
                     Some(m) if m.zncc.is_some() => "localized".to_string(),
                     Some(m) => match m.reason {

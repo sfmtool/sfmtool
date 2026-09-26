@@ -338,6 +338,10 @@ impl TabContext<'_> {
             let outcome = self.state.apply_bench_thresholds(id, &label, thresholds);
             refuse(self.state, outcome);
         }
+        if let Some(observation) = response.accept_walk {
+            let outcome = self.state.accept_bench_walk(id, &label, observation);
+            refuse(self.state, outcome);
+        }
         if let Some(rows) = response.split.as_ref() {
             let outcome = self.state.split_bench_track(id, &label, rows).map(|_| ());
             refuse(self.state, outcome);

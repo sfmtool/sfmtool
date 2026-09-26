@@ -104,7 +104,8 @@ pub struct TrackEditResponse {
     pub evaluate: Option<f64>,       // the search radius the control stands at
     pub fit: Option<f64>,            // the same, for the reading a fit ends with
     pub set_stage: Option<StageKind>,
-    pub apply_thresholds: Option<Thresholds>,
+    pub apply_thresholds: Option<Thresholds>, // a threshold slider released
+    pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
     pub split: Option<Vec<usize>>,
     pub duplicate: bool,
     pub commit: bool,
@@ -561,7 +562,7 @@ changes the header's first word, which is how a person sees that it crossed.
 #### The toolbar
 
 Two rows. The first acts on the active track: *Evaluate*, *Fit*, the *Stage*
-toggle (which names the stage it would move to), *Apply thresholds*, *Split off
+toggle (which names the stage it would move to), *Split off
 N rows*, *Duplicate*, *Commit* and *Discard*. The second is the *Lock* box and
 *Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed
 with a hover text naming what is missing, and the refusal is the core step's own
@@ -641,21 +642,34 @@ Four sliders, one per bar of `Thresholds`: minimum ZNCC, maximum shift, maximum
 keypoint uncertainty and minimum relative ZNCC, so no bar is one only the wire
 can move. The first three are the bars the painting reads; the fourth is the
 fraction of the track's own self-agreement a sweep candidate is scored by.
-Moving a slider repaints the table and changes nothing about the track; *Apply
-thresholds* turns the painting into verdicts in one version carrying both.
+`max shift px` is also the bound on how far a *Fit* may move a sighting
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+fit's walk is bounded by the person's bar"), 8 px on a new track.
+
+**A slider applies to the active track when it is let go.** Dragging one
+repaints the table live; releasing it sets the track's bars to where the four
+sliders stand and turns the painting into verdicts, one version carrying both,
+with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
+it. A typed value is the same gesture, applied when the field is left rather
+than per keystroke, and an arrow key on a focused slider is one step each. No
+intermediate drag position pushes a version, and a release that leaves the bars
+where the track has them pushes nothing. There is no separate *Apply* button:
+a slider that painted the table while the track kept its old bar would let a
+*Fit* run on a bar the person had already moved away from. The sliders are
+greyed with the busy sentence while the node is busy, since a release there
+would be refused.
 
 **The painting is `apply_thresholds` run over a copy**, the core step itself
 with the sliders' bars, so a row can never be painted one way and turned the
-other way when the button is pressed, and a pinned verdict comes back unchanged.
-It is recomputed when the track's `Arc` or the bars move, and not per frame,
-because a copy of a track carries its consensus bitmap.
+other way when the slider is released, and a pinned verdict comes back
+unchanged. It is recomputed when the track's `Arc` or the bars move, and not per
+frame, because a copy of a track carries its consensus bitmap.
 
-**The sliders stand where the active track's own bars are**, seeded when the
-active item changes and again whenever a step moves that track's bars (*Apply
-thresholds*, `apply_bench_track_thresholds` over the wire, an undo of either). A
-drag in progress is not re-seeded, since it moves the panel's copy and leaves the
-track's alone. Sliders showing anything else would paint by a rule the track
-does not hold and hand it to the next press.
+**The sliders show the active track's own bars**, copied from it on every frame
+no slider is being dragged, so whatever moved them -- a release here,
+`apply_bench_track_thresholds` over the wire, an undo or redo of either, another
+item made active -- the sliders follow. Only during a drag do they hold a value
+the track does not.
 
 **Beside them, one control that is not a threshold**: *search px*, how far from
 each observation's own pixel the next reading looks for its correlation peak,
@@ -678,7 +692,7 @@ area.
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
 | σ_pos | the tile's localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `walked 19 px, kept at seed` where the last fit refused to move it, `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 px (ZNCC 0.873 there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which says the difference
@@ -699,7 +713,9 @@ column. **It also names the walk a fit refused**: a sighting the fit's kernels
 wanted to carry further than the `max shift px` bar kept its seed
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), which a person reading `localized`
-would get wrong, so the walk comes first among a scored row's answers.
+would get wrong, so the walk comes first among a scored row's answers. The
+row's own *ZNCC* cell beside it is the reading's, taken with the sighting at its
+seed, so the two numbers a person weighs the walk by sit on one row.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
@@ -757,6 +773,16 @@ has measured.
   geometry to project, and needs no index. Both searches run as cancellable
   background tasks, push one version labelled by their report sentence and write
   one `Bench` row.
+- **Accept walk**, in the same menu on a track-stage row the last fit kept at
+  its seed and on no other row: put the sighting where the fit's walk would have
+  taken it (`walked_to`). Its hover text gives the distance, the pixel, and the
+  ZNCC at the seed and at the walked peak. The step is core's
+  `sight_observation` at that pixel (`AppState::accept_bench_walk`), so the
+  observation is pinned and the measurements read at the seed are dropped, the
+  walk's among them; one version, labelled `Accepted the walk of observation 3
+  of pt3d_a1b2c3d4_1207: moved 11.2 px to (1050.8, 1702.4) in IMG_0042.jpg`,
+  and one `Bench` row. Greyed with the busy sentence while the node is busy. The
+  wire's form is `sight_bench_observation` with `walked_to` as its pixel.
 
 A row is also selected from **outside** the panel: a click on a mark of Image
 Detail's bench layer or on an observation circle of the 3D viewer's selects that
@@ -884,9 +910,16 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   row per observation in index order; a verdict under the same observation index,
   pinned; the painting matching what applying the bars produces and leaving a
   pinned verdict; the cells following the stage; every row's tile at both stages,
-  and a fresh candidate's cut around its seed; the sliders keeping where they
-  were left, following the track's bars when a step moves them and re-seating on
-  another item; the Status cell's reading sentence and its `walked` form; the
+  and a fresh candidate's cut around its seed; the sliders showing the track's
+  bars outside a drag, following them when a step, an undo or a redo moves them,
+  and re-seating on another item; a drag of *max shift px* pushing exactly one
+  version and one row on its release, with the track's bar where it was let go
+  and an undo taking bar and slider back; no *Apply thresholds* button drawn; a
+  fit after a release to a zero bar keeping sightings at their seeds, *Accept
+  walk* absent from a row before that and offered on exactly the kept rows
+  after, reporting the observation, and accepting it moving the keypoint to the
+  walked pixel, pinned, in one version; the Status cell's reading sentence and
+  its `walked` form with and without the walked ZNCC; the
   header's `Bearing (...)` and `Position (` lines; the row menu's search entries
   and their remedies; a row click reporting the image and the pixel, and a
   double-click asking for camera view with the pixel; *Lock* starting ticked, a

@@ -277,6 +277,22 @@ pub struct TrackMeasurement {
     /// statement is about what a fit did rather than about what the photographs
     /// show.
     pub walked_px: Option<f64>,
+    /// Where the last fit's kernels would have put this sighting, in source-image
+    /// px, when [`Self::walked_px`] says the fit refused it: the refined keypoint
+    /// the bar turned away.
+    ///
+    /// Kept so the refusal can be overruled. A person who looks at the two
+    /// places and finds the walked one right accepts it by putting the sighting
+    /// there with [`sight_observation`](super::steps::sight_observation), which
+    /// pins it and drops this measurement like any hand placement. Set and
+    /// cleared with [`Self::walked_px`], and only by a fit.
+    pub walked_to: Option<[f64; 2]>,
+    /// The leave-one-out ZNCC the fit's localizer scored at [`Self::walked_to`]
+    /// against the round's consensus, when it scored one: the agreement the walk
+    /// would have bought, to set beside [`Self::zncc`], which the reading after
+    /// the fit took with the sighting kept at its seed. Set and cleared with
+    /// [`Self::walked_px`].
+    pub walked_zncc: Option<f64>,
     /// Why there is no ZNCC, when there is none: an evaluation that could not
     /// read an observation says which of its refusals it was rather than
     /// leaving the row blank.
@@ -506,9 +522,12 @@ pub struct Origin {
 
 /// The bars the threshold painting judges an observation against.
 ///
-/// The defaults are read from the kernels' own parameter types rather than
-/// written out again, so the bench and the batch pass start from the same bar
-/// and moving one is the person choosing to differ.
+/// Three of the defaults are read from the kernels' own parameter types rather
+/// than written out again, so the bench and the batch pass start from the same
+/// bar and moving one is the person choosing to differ. `max_shift_px` is the
+/// bench's own, [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
+/// fit may move a sighting, and the cluster refinement's 3 px turned away walks
+/// a person wanted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
@@ -522,6 +541,10 @@ pub struct Thresholds {
     /// judged on [`TrackMeasurement::projection_offset_px`], which is a verdict
     /// on the point rather than on the sighting: a mis-triangulated point would
     /// otherwise turn out every observation of the track that would fix it.
+    ///
+    /// At the track stage it is also the bound on a fit's walk: a sighting the
+    /// fit's kernels would move further than this from where it sat keeps its
+    /// place ([`TrackMeasurement::walked_px`]).
     pub max_shift_px: f64,
     /// The largest tile localizability sigma_pos an observation may have, in
     /// grid px.
@@ -531,12 +554,20 @@ pub struct Thresholds {
     pub min_relative_zncc: f64,
 }
 
+/// The bench's default [`Thresholds::max_shift_px`], in source-image px.
+///
+/// Separate from the cluster refinement's own `max_shift_px` (3 px), which
+/// stays the batch pass's bar. On the bench the same number bounds how far a
+/// fit may move a sighting from where the person put it, and 3 px kept
+/// sightings at their seeds that a person moving a patch by hand wanted moved.
+pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
+
 impl Default for Thresholds {
     fn default() -> Self {
         let cluster = ClusterRefineParams::default();
         Self {
             min_zncc: cluster.min_zncc,
-            max_shift_px: cluster.max_shift_px,
+            max_shift_px: BENCH_MAX_SHIFT_PX,
             max_keypoint_uncertainty: KeypointLocalizeParams::default()
                 .max_member_keypoint_uncertainty,
             min_relative_zncc: ViewSelectParams::default().min_relative_zncc,

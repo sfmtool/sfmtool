@@ -159,8 +159,14 @@ impl AppState {
         pub(crate) pixel: Option<[f64; 2]>,
         pub(crate) clamped_from: Option<[f64; 2]>,
     }
+    /// Set the track's bars and paint their verdicts, as one version: Track
+    /// View's threshold slider released, or `apply_bench_track_thresholds`.
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
                                          thresholds: &Thresholds) -> Result<(), String>;
+    /// Track View's *Accept walk*: put a sighting the last fit kept at its seed
+    /// at its `walked_to`, through `sight_observation`. One version.
+    pub(crate) fn accept_bench_walk(&mut self, id: ReconId, label: &str,
+                                    observation: usize) -> Result<(), String>;
     pub(crate) fn split_bench_track(&mut self, id: ReconId, label: &str,
                                     observations: &[usize]) -> Result<String, String>;
     pub(crate) fn activate_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
@@ -384,6 +390,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Turn the patch | `Rotated pt3d_a1b2c3d4_1207 by 12.3 degrees` |
 | Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
+| Accept a walk | `Accepted the walk of observation 3 of pt3d_a1b2c3d4_1207: moved 11.2 px to (1050.8, 1702.4) in IMG_0042.jpg` |
 | Evaluate | `Evaluated IMG_0042@142,198: measured 4 of 5 observations at (x, y, z)` |
 | Fit | `Fitted IMG_0042@142,198: finite at (x, y, z): condition number 82 under the 10000 bar, rms 0.1 px finite against 48.3 px as a bearing, rays up to 15.204 deg apart` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
@@ -740,8 +747,8 @@ state. `get_bench_track` is
 Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at the track stage, the two distances
-(`seed_shift_px` and `projection_offset_px`), `walked_px` for a row the last fit
-refused to move, and, for a row the reading could
+(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to` and `walked_zncc` for a row the last fit
+refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the reading could
 not score, the `reason` sentence in place of a ZNCC. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:

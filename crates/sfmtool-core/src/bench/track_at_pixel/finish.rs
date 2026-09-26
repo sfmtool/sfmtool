@@ -236,10 +236,12 @@ pub(super) fn seed_cluster(
 ) -> Result<EditableTrack, String> {
     let seed = ClusterSeed::from_pixel(image, ctx.image_stem(image), pixel, radius_px);
     let (bench, report) = create_cluster(&Bench::new(), &seed).map_err(|e| e.to_string())?;
-    let track = bench
+    let mut track = (**bench
         .track(&report.label)
-        .expect("the cluster was just put on the bench");
-    set_verdict(track, 0, Verdict::In)
+        .expect("the cluster was just put on the bench"))
+    .clone();
+    track.thresholds = ctx.thresholds.clone();
+    set_verdict(&track, 0, Verdict::In)
         .map(|(t, _)| t)
         .map_err(|e| e.to_string())
 }

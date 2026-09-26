@@ -707,9 +707,9 @@ impl AppState {
     /// Set the track's bars to `thresholds` and paint the proposed verdicts
     /// onto its unpinned observations.
     ///
-    /// One version for the two, because they are one gesture: the sliders are
-    /// the panel's until the button is pressed, and what the button applies is
-    /// the painting those slider positions produce.
+    /// One version for the two, because they are one gesture: a threshold
+    /// slider's release in Track View, or one `apply_bench_track_thresholds`
+    /// call, and what it applies is the painting those bars produce.
     pub(crate) fn apply_bench_thresholds(
         &mut self,
         id: ReconId,
@@ -734,6 +734,60 @@ impl AppState {
         let text = format!(
             "Applied the thresholds to {label}: {} in, {} out, {} pinned, {} unmeasured",
             report.turned_in, report.turned_out, report.pinned, report.unmeasured
+        );
+        self.push_bench_step(index, bench, text);
+        Ok(())
+    }
+
+    /// Accept the walk the last fit refused for one sighting: put it at the
+    /// pixel the fit's kernels would have taken it to
+    /// ([`sfmtool_core::bench::TrackMeasurement::walked_to`]).
+    ///
+    /// The core step is `sight_observation`, so the sighting is pinned and the
+    /// measurements read at the seed are dropped exactly as they are for a
+    /// sighting placed by hand; the wire does the same by calling
+    /// `sight_bench_observation` with that pixel. One version, labelled as the
+    /// acceptance it is.
+    pub(crate) fn accept_bench_walk(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<(), String> {
+        let (index, bench, track) = self.bench_step_target(id, label)?;
+        let row = track
+            .observations
+            .get(observation)
+            .ok_or_else(|| format!("{label} has no observation {observation}."))?;
+        let walked = row
+            .track
+            .as_ref()
+            .filter(|_| track.stage_kind() == StageKind::Track);
+        let Some((to, px)) = walked.and_then(|m| Some((m.walked_to?, m.walked_px))) else {
+            return Err(format!(
+                "Cannot accept a walk for observation {observation} of {label}: the last \
+                 fit did not keep it at its seed."
+            ));
+        };
+        let (next, report) =
+            bench::sight_observation(&track, self.scene[index].edited(), observation, to)
+                .map_err(|e| format!("Cannot accept that walk: {e}"))?;
+        let name = self.image_name(ImageRef::new(id, row.image as usize));
+        if !report.changed {
+            self.no_effect(format!(
+                "Accepted the walk of observation {observation} of {label}: no effect, it \
+                 already sits there"
+            ));
+            return Ok(());
+        }
+        let bench = install(&bench, label, next)?;
+        let text = format!(
+            "Accepted the walk of observation {observation} of {label}: moved {:.1} px to \
+             ({:.1}, {:.1}) in {name}{}",
+            report.moved_px.or(px).unwrap_or(f64::NAN),
+            report.pixel[0],
+            report.pixel[1],
+            clamp_note(report.clamped_from, report.pixel)
         );
         self.push_bench_step(index, bench, text);
         Ok(())

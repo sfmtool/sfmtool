@@ -292,7 +292,12 @@ impl std::fmt::Display for FitReport {
 /// that jumped onto a similar detail elsewhere would otherwise hand the
 /// re-triangulation a place the person never pointed at. Such a row says so in
 /// [`TrackMeasurement::walked_px`](super::track::TrackMeasurement::walked_px)
-/// and still casts its ray from the seed.
+/// and still casts its ray from the seed. The pixel the walk would have reached
+/// and the ZNCC the localizer scored there are kept beside it
+/// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to),
+/// [`TrackMeasurement::walked_zncc`](super::track::TrackMeasurement::walked_zncc)),
+/// so a person can accept the walk with
+/// [`sight_observation`](super::steps::sight_observation).
 ///
 /// **At the cluster stage** a fit is the refinement, which is also what a
 /// reading is: a cluster has no geometry behind it to move, so the one kernel
@@ -682,12 +687,18 @@ pub(super) fn fit_track(
         let mut measurement = next.observations[i].track.clone().unwrap_or_default();
         let seed = seed_of(&track.observations[i]);
         measurement.walked_px = None;
+        measurement.walked_to = None;
+        measurement.walked_zncc = None;
         measurement.keypoint = match fits.get(&i) {
             Some(fit) => {
                 let walked = seed.map(|s| (fit.keypoint[0] - s[0]).hypot(fit.keypoint[1] - s[1]));
                 match (walked, seed) {
                     (Some(walked), Some(seed)) if walked.is_finite() && walked > bound => {
+                        // Where the walk would have gone and what it scored
+                        // there, so a person can overrule the bar.
                         measurement.walked_px = Some(walked);
+                        measurement.walked_to = Some(fit.keypoint);
+                        measurement.walked_zncc = fit.zncc;
                         kept_at_seed += 1;
                         Some([seed[0] as f32, seed[1] as f32])
                     }
@@ -772,6 +783,9 @@ pub(super) fn fit_track(
 struct Fit {
     /// Where the sub-pixel stage left the keypoint, in source-image px.
     keypoint: [f64; 2],
+    /// The localizer's leave-one-out ZNCC for this view against the round's
+    /// consensus, at the peak it registered to, when it scored one.
+    zncc: Option<f64>,
 }
 
 /// Localize and refine one round's observations against `frame`, and record
@@ -844,7 +858,12 @@ fn fit_round(
         };
         let at = refined.views.iter().position(|&v| v == image);
         let keypoint = at.map_or(localized.keypoints[slot], |k| refined.keypoints[k]);
-        fits.insert(i, Fit { keypoint });
+        let zncc = localized
+            .loo_zncc
+            .get(slot)
+            .copied()
+            .filter(|z| z.is_finite());
+        fits.insert(i, Fit { keypoint, zncc });
     }
     Ok(())
 }

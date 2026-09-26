@@ -85,8 +85,9 @@ impl ColumnLayout {
         let angle = error + 54.0;
         let status = angle + 54.0;
         // The status cell holds a sentence at the track stage -- the reason a
-        // row was not read -- so it is given room for one and elided to it.
-        let from = status + 190.0;
+        // row was not read, or the walk a fit refused and what it scored -- so
+        // it is given room for one and elided to it.
+        let from = status + 270.0;
         Self {
             verdict,
             tile,
@@ -347,6 +348,27 @@ impl TrackEdit {
                     ui.close();
                 }
             }
+            // A sighting the last fit kept at its seed can be taken where the
+            // walk would have put it. Offered on those rows alone: the entry
+            // is the overruling of one refusal, and a row with no refusal has
+            // nothing to overrule.
+            let walk = (stage == StageKind::Track)
+                .then(|| accepted_walk(row))
+                .flatten();
+            if let Some(walk) = walk {
+                let button = egui::Button::new(super::ACCEPT_WALK_LABEL);
+                let clicked = match state.busy_refusal(id) {
+                    None => ui.add(button).on_hover_text(walk).clicked(),
+                    Some(why) => {
+                        ui.add_enabled(false, button).on_disabled_hover_text(why);
+                        false
+                    }
+                };
+                if clicked {
+                    response.accept_walk = Some(observation);
+                    ui.close();
+                }
+            }
         });
 
         if row_response.clicked() {
@@ -488,6 +510,31 @@ impl TrackEdit {
             }
         }
     }
+}
+
+/// What *Accept walk* would do to `row`, as its hover text, or `None` for a row
+/// the last fit did not keep at its seed.
+///
+/// The numbers a person decides by: how far, to where, and the ZNCC at each
+/// end -- the row's own, which the reading after the fit took at the seed, and
+/// the one the fit's localizer scored at the walked peak.
+pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<String> {
+    let m = row.track.as_ref()?;
+    let to = m.walked_to?;
+    let zncc = |value: Option<f64>| match value {
+        Some(v) if v.is_finite() => format!("{v:.3}"),
+        _ => "not scored".to_string(),
+    };
+    Some(format!(
+        "Move this sighting {:.1} px to ({:.1}, {:.1}), where the last fit's walk \
+         would have put it. ZNCC {} at the seed, {} at the walked peak. Pins it, \
+         as a hand placement does.",
+        m.walked_px.unwrap_or(f64::NAN),
+        to[0],
+        to[1],
+        zncc(m.zncc),
+        zncc(m.walked_zncc),
+    ))
 }
 
 /// The header row, at the same offsets the rows draw at, drawn once above the

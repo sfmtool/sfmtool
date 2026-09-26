@@ -4747,9 +4747,51 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         held.zncc.is_some(),
         "a sighting kept at its seed is still read there"
     );
+    // The pixel the walk would have reached is kept, and it is the place the
+    // correlation wanted: back near the truth the sighting was moved off.
+    let to = held.walked_to.expect("the row says where the peak sat");
+    let back = (to[0] - f64::from(truth[0])).hypot(to[1] - f64::from(truth[1]));
+    assert!(
+        back < 1.0,
+        "the walk would have ended {back} px from the truth"
+    );
+    let from_seed = (to[0] - f64::from(moved[0])).hypot(to[1] - f64::from(moved[1]));
+    assert!(
+        (from_seed - walked).abs() < 1e-9,
+        "walked_px is the distance to walked_to: {from_seed} vs {walked}"
+    );
+    let scored = held.walked_zncc.expect("the localizer scored the peak");
+    assert!(scored.is_finite(), "{scored}");
     // The other sighting was inside the bar, so it moved and carries no flag.
     let other = fitted.observations[1].track.as_ref().expect("a track slot");
     assert_eq!(other.walked_px, None);
+    assert_eq!(other.walked_to, None);
+    assert_eq!(other.walked_zncc, None);
+
+    // Accepting the walk is putting the sighting there by hand: the keypoint
+    // lands on the walked pixel, the verdict is pinned, and the measurements
+    // read at the seed, the walk's among them, are dropped.
+    let (accepted, report) =
+        sight_observation(&fitted, &edited, 0, to).expect("a pixel on the photograph");
+    assert!(report.changed);
+    let placed = &accepted.observations[0];
+    assert!(placed.pinned);
+    let m = placed.track.as_ref().expect("a track slot");
+    assert_eq!(m.keypoint, Some([to[0] as f32, to[1] as f32]));
+    assert_eq!(m.walked_px, None);
+    assert_eq!(m.walked_to, None);
+    assert_eq!(m.walked_zncc, None);
+}
+
+#[test]
+fn the_bench_s_shift_bar_defaults_wider_than_the_cluster_refinement_s() {
+    assert_eq!(Thresholds::default().max_shift_px, 8.0);
+    assert_eq!(Thresholds::default().max_shift_px, BENCH_MAX_SHIFT_PX);
+    // The kernel keeps its own bar: the batch pass is not moved by the bench.
+    assert_eq!(ClusterRefineParams::default().max_shift_px, 3.0);
+    // And the other three bars are still read from the kernels.
+    let cluster = ClusterRefineParams::default();
+    assert_eq!(Thresholds::default().min_zncc, cluster.min_zncc);
 }
 
 #[test]

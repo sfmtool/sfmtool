@@ -41,7 +41,8 @@ use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::classify::ClassificationReason;
-use super::track::EditableTrack;
+use super::track::{EditableTrack, Thresholds};
+use crate::patch::cluster_refine::ClusterRefineParams;
 
 pub use neighbourhood::{
     ClusterMember, MatchesClusters, MatchesClustersError, NearbyCluster, NearbyObservation,
@@ -381,6 +382,13 @@ pub struct TrackAtPixelOptions {
     pub sweep: SweepOptions,
     /// The constellation member's own options.
     pub constellation: ConstellationOptions,
+    /// The bars every track the cascade builds carries: what its thresholds
+    /// paint the verdicts by and, at the track stage, how far a fit may move a
+    /// sighting. The bench defaults, except `max_shift_px`, which stays at the
+    /// cluster refinement's 3 px rather than the bench's
+    /// [`BENCH_MAX_SHIFT_PX`](super::track::BENCH_MAX_SHIFT_PX): the cascade's
+    /// other parameters were chosen by the harness against that bar.
+    pub thresholds: Thresholds,
 }
 
 impl Default for TrackAtPixelOptions {
@@ -397,6 +405,10 @@ impl Default for TrackAtPixelOptions {
             transfer: TransferOptions::default(),
             sweep: SweepOptions::default(),
             constellation: ConstellationOptions::default(),
+            thresholds: Thresholds {
+                max_shift_px: ClusterRefineParams::default().max_shift_px,
+                ..Thresholds::default()
+            },
         }
     }
 }
@@ -795,6 +807,7 @@ pub fn build_track_at_pixel(
         cameras: views.iter().map(ViewCamera::new).collect(),
         observations: ObservationIndex::new(edited),
         sources,
+        thresholds: options.thresholds.clone(),
     };
     let mut refusals = Vec::new();
     for &member in &options.members {
@@ -855,6 +868,8 @@ struct Ctx<'a> {
     cameras: Vec<ViewCamera<'a>>,
     observations: ObservationIndex<'a>,
     sources: &'a TrackAtPixelSources<'a>,
+    /// The bars every track the cascade builds starts with.
+    thresholds: Thresholds,
 }
 
 impl Ctx<'_> {

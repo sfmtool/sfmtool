@@ -252,7 +252,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           list, which is \
                           stable for the life of the track — observations are appended and never \
                           renumbered, so an index read here still names the same observation \
-                          after a verdict or an evaluation.",
+                          after a verdict or an evaluation. A track-stage observation the last \
+                          fit kept at its seed carries walked_px (how far the fit wanted to move \
+                          it), walked_to (the pixel it would have reached) and walked_zncc (the \
+                          ZNCC scored there, beside the row's own zncc read at the seed); \
+                          sight_bench_observation with walked_to as the pixel accepts the walk.",
             kind: Read,
             schema: object(
                 &[("track", bench_track_schema())],

@@ -693,29 +693,29 @@ fn the_lock_is_greyed_at_the_cluster_stage() {
     assert!(panel.lock(), "a greyed box took the click");
 }
 
+/// Outside a drag the sliders hold no value of their own: whatever the panel
+/// had is replaced by the track's bars on the next frame.
 #[test]
-fn the_sliders_keep_where_they_were_left() {
-    let (state, _) = state();
-    let mut panel = TrackEdit::new();
-    assert_eq!(panel.thresholds(), &Thresholds::default());
+fn the_sliders_show_the_active_track_s_bars_outside_a_drag() {
+    let (state, id, label, mut panel, ctx) = on_the_bench();
     panel.thresholds.min_zncc = 0.5;
-    let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
-    assert_eq!(panel.thresholds().min_zncc, 0.5);
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_eq!(panel.thresholds(), &track.thresholds);
 }
 
 /// The sliders show the **active track's** bars, whoever moved them: a step
 /// taken over the wire moves the track's, and the panel that paints the rows by
 /// them has to be showing the same numbers or it proposes a rule the track does
-/// not hold.
+/// not hold. An undo moves them back.
 #[test]
 fn the_sliders_follow_the_active_track_s_own_thresholds() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // Dragged somewhere of the person's own first: what a step on the track
-    // replaces is exactly that.
-    panel.thresholds.min_zncc = 0.5;
-    run_frame(&mut panel, &ctx, &state);
-    assert_eq!(panel.thresholds().min_zncc, 0.5, "a drag did not survive");
+    let before = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .thresholds
+        .clone();
 
     let bars = Thresholds {
         min_zncc: 0.94,
@@ -740,6 +740,225 @@ fn the_sliders_follow_the_active_track_s_own_thresholds() {
             .map(|o| o.verdict)
             .collect::<Vec<_>>()
     );
+
+    state.undo(id).expect("the thresholds step undoes");
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(
+        panel.thresholds(),
+        &before,
+        "an undo moves the sliders back"
+    );
+    state.redo(id).expect("and redoes");
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds().min_zncc, 0.94, "a redo moves them again");
+}
+
+/// The pointer events of one drag, as one list per frame: hover, press, two
+/// moves and the release. egui resolves a press against the rects the previous
+/// frame registered, so each event gets a frame of its own.
+fn drag_frames(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let mid = from + (to - from) * 0.5;
+    vec![
+        vec![egui::Event::PointerMoved(from)],
+        vec![button(from, true)],
+        vec![egui::Event::PointerMoved(mid)],
+        vec![egui::Event::PointerMoved(to)],
+        vec![button(to, false)],
+        vec![],
+    ]
+}
+
+/// Drag the *max shift px* slider from `from_frac` to `to_frac` of its rail,
+/// applying each frame's response the way the dock does, and hand back every
+/// frame's response.
+///
+/// The rail is found from the slider's own label: egui lays a slider out as
+/// the rail, its value box and then the label, so the rail ends a value box
+/// and two gaps left of the label.
+fn drag_max_shift(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    id: ReconId,
+    label: &str,
+    from_frac: f32,
+    to_frac: f32,
+) -> Vec<TrackEditResponse> {
+    let texts = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
+        panel.show(ui, state);
+    });
+    let named = texts
+        .iter()
+        .find(|t| t.text == super::MAX_SHIFT_LABEL)
+        .expect("the max shift slider is drawn")
+        .rect;
+    let spacing = egui::Spacing::default();
+    let rail_right = named.left() - 2.0 * spacing.item_spacing.x - spacing.interact_size.x - 4.0;
+    let rail_left = rail_right - spacing.slider_width;
+    let at = |frac: f32| egui::pos2(rail_left + frac * spacing.slider_width, named.center().y);
+    let mut responses = Vec::new();
+    for events in drag_frames(at(from_frac), at(to_frac)) {
+        let response = run_frame_with(panel, ctx, state, events);
+        if let Some(bars) = response.apply_thresholds.as_ref() {
+            state
+                .apply_bench_thresholds(id, label, bars)
+                .expect("on the bench");
+        }
+        responses.push(response);
+    }
+    responses
+}
+
+fn versions(state: &AppState, id: ReconId) -> usize {
+    state.node(id).expect("loaded").history.versions().len()
+}
+
+/// A slider applies on its release: the drag's frames push nothing, the
+/// release pushes exactly one version with one Action Log row, and the
+/// track's bar is where the slider was let go.
+#[test]
+fn releasing_a_threshold_slider_applies_it_as_one_version() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    let before = versions(&state, id);
+    let bar = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .thresholds
+        .max_shift_px;
+    assert_eq!(bar, sfmtool_core::bench::BENCH_MAX_SHIFT_PX);
+    state.action_log.clear();
+
+    let responses = drag_max_shift(&mut panel, &ctx, &mut state, id, &label, 0.3, 0.8);
+    let applied: Vec<&Thresholds> = responses
+        .iter()
+        .filter_map(|r| r.apply_thresholds.as_ref())
+        .collect();
+    assert_eq!(applied.len(), 1, "one release, one application");
+    assert_eq!(versions(&state, id), before + 1, "one version for the drag");
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_ne!(track.thresholds.max_shift_px, bar, "the drag moved the bar");
+    assert_eq!(&track.thresholds, applied[0]);
+    let rows: Vec<String> = state.action_log.entries().map(|e| e.text.clone()).collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].starts_with("Applied the thresholds to"), "{rows:?}");
+
+    // The panel shows the track's bar after the release.
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds(), &track.thresholds);
+
+    // And an undo takes the bar and the slider back together.
+    state.undo(id).expect("undoes");
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds().max_shift_px, bar);
+}
+
+/// There is no button left to forget to press: the sliders are the whole
+/// gesture.
+#[test]
+fn there_is_no_apply_thresholds_button() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(
+        !texts.iter().any(|t| t == "Apply thresholds"),
+        "the button is gone: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == super::MAX_SHIFT_LABEL),
+        "{texts:?}"
+    );
+}
+
+/// The bar a slider was let go at is the bar the next *Fit* bounds its walk
+/// by, and a kept-at-seed row then offers *Accept walk*, which moves the
+/// keypoint to the walked pixel as one version.
+#[test]
+fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    // A bar of zero: any move at all is a walk past it.
+    drag_max_shift(&mut panel, &ctx, &mut state, id, &label, 0.5, -0.5);
+    assert_eq!(
+        state
+            .bench_track(id, &label)
+            .expect("on the bench")
+            .thresholds
+            .max_shift_px,
+        0.0
+    );
+
+    // Before the fit no row has a walk to accept.
+    let menu = row_menu(&mut panel, &ctx, &state);
+    assert!(
+        !menu.iter().any(|t| t == super::ACCEPT_WALK_LABEL),
+        "{menu:?}"
+    );
+
+    state
+        .start_bench_fit(id, &label, None)
+        .expect("a framed track with three sightings fits");
+    state.finish_background_task();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let walked: Vec<usize> = (0..track.observations.len())
+        .filter(|&i| {
+            track.observations[i]
+                .track
+                .as_ref()
+                .is_some_and(|m| m.walked_to.is_some())
+        })
+        .collect();
+    assert!(
+        !walked.is_empty(),
+        "a zero bar keeps every moved sighting at its seed"
+    );
+
+    // Each kept-at-seed row offers the entry; the others do not.
+    for (index, observation) in track.observations.iter().enumerate() {
+        let offered = super::table::accepted_walk(observation).is_some();
+        assert_eq!(offered, walked.contains(&index), "row {index}");
+    }
+    // A fresh panel, so the menu opened above is not lying over the rows.
+    let (mut panel, ctx) = settled(&state);
+    let first = walked[0];
+    let image = track.observations[first].image as usize;
+    let y = row_y(&mut panel, &ctx, &state, image);
+    let at = egui::pos2(400.0, y);
+    open_row_menu(&mut panel, &ctx, &state, at);
+    let texts = painted(
+        &mut panel,
+        &ctx,
+        &state,
+        vec![egui::Event::PointerMoved(at)],
+    );
+    assert!(
+        texts.iter().any(|t| t == super::ACCEPT_WALK_LABEL),
+        "{texts:?}"
+    );
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::ACCEPT_WALK_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert_eq!(response.accept_walk, Some(first));
+
+    let to = track.observations[first]
+        .track
+        .as_ref()
+        .and_then(|m| m.walked_to)
+        .expect("a walked pixel");
+    let before = versions(&state, id);
+    state
+        .accept_bench_walk(id, &label, first)
+        .expect("a walk to accept");
+    assert_eq!(versions(&state, id), before + 1);
+    let accepted = state.bench_track(id, &label).expect("on the bench");
+    let row = &accepted.observations[first];
+    assert!(row.pinned, "an accepted walk is a hand placement");
+    let m = row.track.as_ref().expect("a track slot");
+    assert_eq!(m.keypoint, Some([to[0] as f32, to[1] as f32]));
+    assert_eq!(m.walked_to, None, "the walk is spent");
+    assert!(super::table::accepted_walk(row).is_none());
 }
 
 /// A second track has its own bars, so making it active moves the sliders.
@@ -1180,6 +1399,13 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     };
     let cells = super::measurements(&walked, StageKind::Track);
     assert_eq!(cells[6], "walked 19 px, kept at seed");
+    // With the ZNCC the fit scored at the walked peak, where it scored one.
+    let mut scored = walked.clone();
+    scored.track.as_mut().expect("a track slot").walked_zncc = Some(0.873);
+    assert_eq!(
+        super::measurements(&scored, StageKind::Track)[6],
+        "walked 19 px (ZNCC 0.873 there), kept at seed"
+    );
 
     // The same row without the flag is the ordinary scored row.
     let mut moved = walked.clone();

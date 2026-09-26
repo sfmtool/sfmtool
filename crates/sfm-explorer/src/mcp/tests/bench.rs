@@ -1411,6 +1411,88 @@ fn apply_bench_track_thresholds_moves_the_bars_it_names() {
     assert_eq!(after["thresholds"]["min_zncc"], json!(0.42), "{after}");
 }
 
+/// A sighting the fit kept at its seed says on the wire where the walk would
+/// have taken it and what it scored there, and `sight_bench_observation` with
+/// that pixel accepts it.
+#[test]
+fn a_refused_walk_is_on_the_wire_and_sighting_its_pixel_accepts_it() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let fresh = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        fresh["thresholds"]["max_shift_px"],
+        json!(sfmtool_core::bench::BENCH_MAX_SHIFT_PX),
+        "{fresh}"
+    );
+    // A bar of zero: any move at all is a walk past it.
+    call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "max_shift_px": 0.0 }),
+    );
+    worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let observations = track["observations"].as_array().expect("observations");
+    let (index, walked) = observations
+        .iter()
+        .enumerate()
+        .find(|(_, o)| !o["track"]["walked_to"].is_null())
+        .unwrap_or_else(|| panic!("no walk was refused: {track}"));
+    let measured = &walked["track"];
+    let to = measured["walked_to"].as_array().expect("a pixel");
+    assert_eq!(to.len(), 2, "{measured}");
+    let to = [
+        to[0].as_f64().expect("a number"),
+        to[1].as_f64().expect("a number"),
+    ];
+    assert!(measured["walked_px"].is_number(), "{measured}");
+    assert!(
+        measured["walked_zncc"].is_number() || measured["walked_zncc"].is_null(),
+        "{measured}"
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "sight_bench_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": index,
+            "pixel": to,
+        }),
+    );
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let row = &after["observations"][index];
+    assert_eq!(row["pinned"], json!(true), "{row}");
+    assert!(row["track"]["walked_to"].is_null(), "{row}");
+    let keypoint = row["track"]["keypoint"].as_array().expect("a keypoint");
+    for (axis, want) in to.iter().enumerate() {
+        let got = keypoint[axis].as_f64().expect("a number");
+        assert!((got - want).abs() < 1e-3, "{row}");
+    }
+}
+
 /// A commit answers with the version it pushed and the sentence it recorded,
 /// and an undo takes it back -- the bench steps being versions of the node like
 /// any other, which is why there is no bench undo.

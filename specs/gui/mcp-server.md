@@ -172,7 +172,7 @@ write, and one writes a file.
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
 | `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
-| `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose |
+| `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold sliders are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `evaluate_bench_track` | write | Read every observation where it sits, moving nothing, on a worker thread |
@@ -2544,7 +2544,13 @@ every row of a `sift_files` value -- publishes the bearing it is. Under one name
 unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
-the peak sat.
+the peak sat, with `walked_to`, the pixel the walk would have reached, and
+`walked_zncc`, the ZNCC the localizer scored there (null where it scored none).
+The bound is the track's `max_shift_px`, 8 px by default on the bench. **A refused
+walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
+`pixel`: that is Track View's *Accept walk*, and like any placed sighting it pins
+the observation and drops the measurements read at the seed. No tool of its own
+carries it, because what it writes is exactly what that tool writes.
 
 **Eight of the thirty-one are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
@@ -3567,7 +3573,11 @@ where a test hands no host over.
   refused naming the file; a point put on the bench is an item `get_bench`
   lists, active, at the track stage, seated on that point; a split answers with
   the label the half that came off took and that half is at the cluster stage; a
-  thresholds call moves the bars it names and leaves the rest; a commit answers
+  thresholds call moves the bars it names and leaves the rest; a track put on
+  the bench carries the 8 px shift bar, and with that bar at zero a fit leaves
+  a sighting whose `track` block carries `walked_px`, a two-number `walked_to`
+  and a `walked_zncc`, and `sight_bench_observation` at `walked_to` pins it with
+  its keypoint there and the walk fields gone; a commit answers
   with a version, writes one `Edit` row as `Mcp`, and `undo` takes it back,
   while a second commit of the same track answers `changed: false` at the cursor
   it was already at, naming that same point and pushing no version; a

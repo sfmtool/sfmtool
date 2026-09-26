@@ -184,12 +184,19 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("ray_angle_deg", m.ray_angle_deg),
             ("localizability", m.localizability),
             // Present exactly when the last fit refused the walk and left this
-            // sighting at its seed; the number is how far the peak sat.
+            // sighting at its seed; the number is how far the peak sat, and
+            // `walked_zncc` what the localizer scored there.
             ("walked_px", m.walked_px),
+            ("walked_zncc", m.walked_zncc),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
             }
+        }
+        // The pixel that walk would have reached: `sight_observation` there
+        // accepts it.
+        if let Some(to) = m.walked_to {
+            t.set_item("walked_to", PyArray1::from_vec(py, to.to_vec()))?;
         }
         // Present exactly when there is no score, and the sentence is the one
         // the panel shows in its Status cell.

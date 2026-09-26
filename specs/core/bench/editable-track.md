@@ -95,6 +95,8 @@ pub struct TrackMeasurement {
     pub ray_angle_deg: Option<f64>,
     pub localizability: Option<f64>,
     pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
+    pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
+    pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
     pub reason: Option<Unmeasured>,          // present exactly when zncc is not
 }
 
@@ -131,6 +133,8 @@ pub struct Thresholds {
     pub max_keypoint_uncertainty: f64,
     pub min_relative_zncc: f64,
 }
+// The bench's own default shift bar, wider than the cluster refinement's 3 px.
+pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
 
 // Putting one on the bench.
 pub fn create_track(
@@ -667,7 +671,10 @@ and a script that just read the files.
 `FitOptions` carry what the kernels are allowed to do; the track's `Thresholds`
 are what the *painting* judges the result against. Keeping them apart is what
 makes a slider a question about verdicts rather than about numbers: moving one
-repaints, and it cannot change what was measured.
+repaints, and it cannot change what was measured. The one bar a fit reads is
+`max_shift_px`, and it reads it as a bound on where the fit may put a sighting,
+never as a gate on what the kernels see (§ "The fit's walk is bounded by the
+person's bar").
 
 **Neither step lets a kernel drop a sighting.** Both default their localizer to
 `open_localizer`: the four per-view gates
@@ -996,6 +1003,23 @@ invented depth. The reading that follows scores the row where it sits, like any
 other. Only a fit sets and clears the flag; an evaluation leaves it alone,
 because the statement is about what a fit did rather than about what the
 photographs show.
+
+**The refusal can be overruled, so the fit keeps what it refused.** Beside
+`walked_px` the row carries `walked_to`, the refined keypoint the bound turned
+away, and `walked_zncc`, the leave-one-out ZNCC the localizer scored at that
+peak against the round's consensus (absent when it scored none). Set beside the
+row's own `zncc`, which the reading after the fit took at the seed, the two say
+whether the walk found the same detail better or a different detail. A person
+who judges the walked place right **accepts the walk** by putting the sighting
+there with `sight_observation(track, edited, i, walked_to)`: that is a hand
+placement like any other, so the sighting is pinned and its measurement,
+the three walk fields among it, is dropped. There is no separate step for it,
+because what it writes is exactly what that step writes.
+
+The bar is the track's own `max_shift_px`, the same bar the painting judges a
+seed shift by. Its bench default, 8 px, is wider than the cluster refinement's
+3 px for this reason: a person who moves a patch by hand and fits expects the
+sightings to follow further than the batch pass's drift bound allows.
 ## The steps
 
 ### Putting a point on the bench
@@ -1803,14 +1827,18 @@ nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 
 ## Parameters
 
-The thresholds default to the kernels' own bars, read from those kernels'
-parameter types rather than written out again, so the bench and the batch pass
-start from the same bar and moving one is the person choosing to differ.
+Three of the thresholds default to the kernels' own bars, read from those
+kernels' parameter types rather than written out again, so the bench and the
+batch pass start from the same bar and moving one is the person choosing to
+differ. `max_shift_px` is the bench's own, `BENCH_MAX_SHIFT_PX`, because on the
+bench it is also the bound on a fit's walk (§ "The fit's walk is bounded by the
+person's bar"). A track keeps the bars it was made with: one created under an
+earlier default carries that default until someone moves it.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `min_zncc` | `0.85` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. From `ClusterRefineParams::default`. |
-| `max_shift_px` | `3.0` | How far the correlation peak may sit from where the observation sits: the drift from its seed at the cluster stage, `seed_shift_px` at the track stage, both in source-image px. From `ClusterRefineParams::default`. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
+| `max_shift_px` | `8.0` | How far the correlation peak may sit from where the observation sits: the drift from its seed at the cluster stage, `seed_shift_px` at the track stage, both in source-image px; and at the track stage how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, not `ClusterRefineParams::default`'s 3 px, which stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
 | `max_keypoint_uncertainty` | `0.35` | The largest tile localizability an observation may have, in grid px. From `KeypointLocalizeParams::default`'s `max_member_keypoint_uncertainty`. |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
 
@@ -1927,8 +1955,9 @@ stage; `placed`, `kept_at_seed`, `at_infinity` with `position` or `direction`,
 a fit; and
 `from`, `to`, `changed`, the upgrade's `fit` report and the downgrade's
 `reference` for a stage change. An observation's `"track"` dict carries
-`reason`, the sentence, exactly when it carries no `zncc`, and `walked_px`
-exactly when the last fit refused to walk that sighting and kept its seed.
+`reason`, the sentence, exactly when it carries no `zncc`, and `walked_px` and
+`walked_to` (with `walked_zncc` where the localizer scored the peak) exactly
+when the last fit refused to walk that sighting and kept its seed.
 
 **The coordinate crosses under the name of whichever it is**, in the reports and
 on the track: `EditableTrack.at_infinity` says which, `position` is the world
@@ -2158,7 +2187,11 @@ that see the point stand close to it, a bearing placed at the point looks within
 back looks within 1% of its old size, and with nothing to measure in the extents
 fall back to the observing distance and then to the numbers they had; a
 sighting moved four pixels off with the bar at two keeps its seed, carries
-`walked_px` and is still scored there while the other seven move; a bearing taken
+`walked_px`, a `walked_to` within a pixel of where it was moved from and a
+`walked_zncc`, and is still scored there while the other seven move, and
+`sight_observation` at `walked_to` puts its keypoint there, pinned, with the
+walk fields gone; the bench's `max_shift_px` defaults to 8 while the cluster
+refinement's stays 3; a bearing taken
 down to the cluster stage and back up comes back a bearing at the size it was and
 commits as a `w = 0` row with a unit direction, a zero normal and a zero normal
 confidence, counted in the materialised value's `infinity_point_count`; and a

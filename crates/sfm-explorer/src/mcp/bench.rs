@@ -1336,8 +1336,12 @@ fn track_measurement(observation: &Observation) -> Value {
         "ray_angle_deg": finite(measured.ray_angle_deg),
         "localizability": finite(measured.localizability),
         // Present only when the last fit refused the walk and left this sighting
-        // at its seed; the number is how far the correlation peak sat.
+        // at its seed: how far the correlation peak sat, the pixel it sat at
+        // and the ZNCC the localizer scored there. Accepting the walk is
+        // `sight_bench_observation` with `walked_to` as its pixel.
         "walked_px": finite(measured.walked_px),
+        "walked_to": measured.walked_to,
+        "walked_zncc": finite(measured.walked_zncc),
         "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }

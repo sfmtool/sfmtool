@@ -273,10 +273,13 @@ class TestTheEditableTrack:
     def test_the_thresholds_default_to_the_kernels_own_bars(
         self, edited, long_track_point
     ):
+        # Three bars are the kernels' own; the shift bar is the bench's 8 px,
+        # wider than the cluster refinement's 3 px because on the bench it also
+        # bounds how far a fit may move a sighting.
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.thresholds == {
             "min_zncc": 0.85,
-            "max_shift_px": 3.0,
+            "max_shift_px": 8.0,
             "max_keypoint_uncertainty": 0.35,
             "min_relative_zncc": 0.7,
         }

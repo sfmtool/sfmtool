@@ -253,7 +253,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           whole patch instead (translate_bench_patch), because there the patch is \
                           the thing every sighting is a view of. The Lock is the panel's own \
                           setting and the wire has no copy of it: which of the two tools you call \
-                          is the choice it makes.",
+                          is the choice it makes. This is also how a walk the last fit refused \
+                          is accepted: an observation whose track block carries walked_to (in \
+                          get_bench_track) is put there by passing walked_to as the pixel, which \
+                          is what Track View's Accept walk does.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -481,7 +484,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           they propose, and an observation ruled on by hand is left alone. A bar \
                           the call does not name stays where the track has it. The reply's report \
                           says how many were turned in, turned out, left pinned and left \
-                          unmeasured.",
+                          unmeasured. Track View's threshold sliders are this step: releasing \
+                          one applies the four bars as one version.",
             kind: Write,
             schema: object(
                 &[
@@ -496,8 +500,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     (
                         "max_shift_px",
                         threshold_schema(
-                            "How far an observation may sit from its seed (cluster stage) or \
-                             from the patch's projection (track stage), in source-image px.",
+                            "How far the correlation peak may sit from where the observation \
+                             sits, in source-image px: the refinement's drift from the seed at \
+                             the cluster stage, seed_shift_px at the track stage. At the track \
+                             stage it is also how far fit_bench_track may move a sighting; one \
+                             it would move further keeps its place and reports walked_px and \
+                             walked_to. The bench's default is 8.",
                         ),
                     ),
                     (
