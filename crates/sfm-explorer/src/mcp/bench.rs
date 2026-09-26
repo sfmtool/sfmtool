@@ -51,7 +51,7 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let bench = state
         .bench(id)
-        .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let active = crate::bench::active_track_label(bench);
     let items: Vec<Value> = bench
         .entries()
@@ -132,7 +132,7 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
     let (id, item) = target(state, label, named)?;
     let bench = state
         .bench(id)
-        .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let track = bench
         .track(&item)
         .ok_or_else(|| no_such_item(bench, &item))?;
@@ -778,7 +778,7 @@ pub(super) fn apply_bench_track_thresholds(
     let bars = {
         let bench = state
             .bench(id)
-            .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+            .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
         let track = bench
             .track(&item)
             .ok_or_else(|| no_such_item(bench, &item))?;
@@ -1076,7 +1076,7 @@ pub(super) fn observation_place(
 ) -> Result<(crate::scene::ImageRef, [f32; 2]), ToolError> {
     let bench = state
         .bench(label_of_node)
-        .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let item = match named {
         Some(item) => item.to_string(),
         None => crate::bench::active_track_label(bench)

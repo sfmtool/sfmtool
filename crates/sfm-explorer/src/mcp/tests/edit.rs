@@ -970,6 +970,95 @@ fn a_serial_that_is_not_a_version_of_the_node_is_refused() {
     assert!(error.0.contains("get_history"), "{error}");
 }
 
+/// Every refusal of a cursor move, on the wire and in the log: the error is the
+/// state's sentence, and the one failed row carries it under the tool's name.
+///
+/// The one sentence that is the wire's own is a serial the node never minted,
+/// because the wire receives a string the state never sees: it is quoted as it
+/// arrived, and the refusal names the read that lists the spellings it takes.
+#[test]
+fn the_cursor_moves_refuse_on_the_wire_in_the_states_words() {
+    let (mut state, mut viewer) = editable();
+    state.action_log.clear();
+    let label = json!({ "reconstruction_label": "run_a" });
+    let undo = refused_call(&mut state, &mut viewer, "undo", label.clone());
+    assert_eq!(undo.0, "Nothing to undo in run_a.");
+    let redo = refused_call(&mut state, &mut viewer, "redo", label.clone());
+    assert_eq!(redo.0, "Nothing to redo in run_a.");
+
+    for point in [3, 4] {
+        call(
+            &mut state,
+            &mut viewer,
+            "delete_point",
+            json!({ "reconstruction_label": "run_a", "point": point }),
+        );
+    }
+    let here = state.scene[0].history.current_version().serial.to_string();
+    let first = state.scene[0].history.versions()[0].serial.to_string();
+    let jump = |serial: &str| json!({ "reconstruction_label": "run_a", "serial": serial });
+    let already = refused_call(&mut state, &mut viewer, "jump_to_version", jump(&here));
+    assert_eq!(already.0, format!("{here} is already what run_a shows."));
+    let unknown = refused_call(&mut state, &mut viewer, "jump_to_version", jump("v99999"));
+    assert_eq!(
+        unknown.0,
+        "\"v99999\" is not a version of run_a; get_history lists its versions, spelled as \
+         \"v12\"."
+    );
+    state.scene[0].history.versions_mut_for_test()[1].value = None;
+    let released = refused_call(&mut state, &mut viewer, "jump_to_version", jump(&first));
+    let released_text = format!(
+        "Cannot go to {first}: its value, or one on the way to it, was released to keep run_a \
+         inside the history budget."
+    );
+    assert_eq!(released.0, released_text);
+
+    let failed: Vec<String> = failures(&state).into_iter().map(|row| row.2).collect();
+    assert_eq!(
+        failed,
+        [
+            "undo failed: Nothing to undo in run_a.".to_string(),
+            "redo failed: Nothing to redo in run_a.".to_string(),
+            format!("jump_to_version failed: {here} is already what run_a shows."),
+            format!("jump_to_version failed: {}", unknown.0),
+            format!("jump_to_version failed: {released_text}"),
+        ]
+    );
+    assert!(failures(&state).iter().all(|row| row.0 == Actor::Mcp));
+}
+
+/// A node with an operation running on it refuses all three moves with the
+/// sentence every other edit of it gets, and the cursor stays.
+#[test]
+fn the_cursor_moves_refuse_a_busy_node_on_the_wire() {
+    let (mut state, mut viewer) = editable();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    let first = state.scene[0].history.versions()[0].serial.to_string();
+    let open = running_operation(&mut state, |_| {});
+    let busy = "run_a is busy: Bundle adjust is still running.";
+
+    for (tool, arguments) in [
+        ("undo", json!({ "reconstruction_label": "run_a" })),
+        ("redo", json!({ "reconstruction_label": "run_a" })),
+        (
+            "jump_to_version",
+            json!({ "reconstruction_label": "run_a", "serial": first }),
+        ),
+    ] {
+        let error = refused_call(&mut state, &mut viewer, tool, arguments);
+        assert_eq!(error.0, busy, "{tool}");
+    }
+    assert_eq!(state.scene[0].history.cursor(), 1, "a refusal moved");
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}
+
 /// `get_history` is the Edit History panel's reading of the same list: every
 /// version in order, the cursor, the version on disk, and the released rows.
 #[test]

@@ -48,7 +48,7 @@ use crate::document::{PointMap, VersionSerial};
 use crate::progress::Collector;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
-use super::{AppState, PYRAMID_LEVELS};
+use super::{AppState, NOT_LOADED, PYRAMID_LEVELS};
 
 /// The patch-frame normal the viewer's `sift_files` → `embedded_patches`
 /// conversion seeds each point with: the mean of its point-to-camera
@@ -474,14 +474,7 @@ impl AppState {
 
     /// Delete one point, named by ref.
     pub(crate) fn delete_point(&mut self, point: PointRef) -> Result<(), String> {
-        if let Some(why) = self.busy_refusal(point.recon) {
-            return Err(why);
-        }
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == point.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let index = self.editable_node_index(point.recon)?;
         let node = &mut self.scene[index];
         let mut next = node.history.current().clone();
         next.delete_point(point.point)
@@ -585,14 +578,7 @@ impl AppState {
         point: PointRef,
         collector: &Collector,
     ) -> Result<String, String> {
-        if let Some(why) = self.busy_refusal(point.recon) {
-            return Err(why);
-        }
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == point.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let index = self.editable_node_index(point.recon)?;
         let label = self.scene[index].label.clone();
         let refuse = |why: String| format!("Cannot retriangulate point {}: {why}", point.point);
         if let Some(why) = retriangulate_refusal(&self.scene[index], None) {
@@ -668,7 +654,7 @@ impl AppState {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| NOT_LOADED.to_string())?;
         // The gate is the menu entry's own, so the entry and the edit cannot
         // disagree about when the retriangulation can run.
         if let Some(why) = self.retriangulate_refusal(id) {
@@ -773,7 +759,7 @@ impl AppState {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| NOT_LOADED.to_string())?;
         // The gate is the menu entry's own, so the entry and the edit cannot
         // disagree about when the prune can run.
         if let Some(why) = self.prune_covered_refusal(id) {
@@ -861,14 +847,7 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
-        if let Some(why) = self.busy_refusal(image.recon) {
-            return Err(why);
-        }
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == image.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let index = self.editable_node_index(image.recon)?;
         let removed = image.image;
         let node = &self.scene[index];
         let edited = node.history.current();
@@ -1022,11 +1001,7 @@ impl AppState {
         image: usize,
         collector: &Collector,
     ) -> Result<String, String> {
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == source)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let index = self.node_index(source)?;
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
             .recon()
@@ -1182,11 +1157,7 @@ impl AppState {
         world_from_camera: &sfmtool_core::Se3Transform,
         collector: &Collector,
     ) -> Result<String, String> {
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == image.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let index = self.node_index(image.recon)?;
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
             .recon()
@@ -1321,12 +1292,7 @@ impl AppState {
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
     ) -> Result<Job, String> {
-        if let Some(why) = self.busy_refusal(id) {
-            return Err(why);
-        }
-        let node = self
-            .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let node = &self.scene[self.editable_node_index(id)?];
         let label = node.label.clone();
         // The gate is the menu entry's own, so the entry and the edit cannot
         // disagree about when the adjustment can run.
@@ -1461,7 +1427,7 @@ impl AppState {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| NOT_LOADED.to_string())?;
         if let Some(why) = self.convert_to_embedded_patches_refusal(id) {
             return Err(format!(
                 "Convert to embedded patches of {label} refused: {why}"
@@ -1544,90 +1510,26 @@ impl AppState {
     ///
     /// The entry carries the three stages a cursor move has (the step itself,
     /// the selection following it, and the image caches the version it left
-    /// behind was holding), and is recorded from the instant below, so the row
-    /// says what the move cost rather than what writing the row cost.
+    /// behind was holding); [`AppState::move_cursor`] says how they are timed.
     pub(crate) fn undo(&mut self, id: ReconId) -> Result<(), String> {
-        let started = Instant::now();
-        let collector = Collector::new(self.action_log.detailed_timing());
-        if let Some(why) = self.busy_refusal(id) {
-            return Err(why);
-        }
-        let Some(index) = self.scene.iter().position(|n| n.id == id) else {
-            return Err("That reconstruction is no longer loaded.".to_string());
-        };
-        // Read before the step: it names the photograph in the version the
-        // cursor is leaving, and what it is for is finding that photograph
-        // again in the one it lands on.
-        let carried = self.selected_image_name(id);
-        let step = collector.phase("undo");
-        let node = &mut self.scene[index];
-        let undone_label = node.history.current_version().label.clone();
-        let stepped = {
-            let _phase = step.phase("history step");
-            node.history.undo()
-        };
-        let Some((undone, now)) = stepped else {
-            return Err(format!("Nothing to undo in {}.", node.label));
-        };
-        {
-            let _phase = step.phase("selection follow");
-            self.follow_selection_backward(id, undone);
-            self.follow_image_selection(id, carried.as_deref());
-        }
-        {
-            let _phase = step.phase("forget images");
-            self.forget_images_of(id);
-        }
-        drop(step);
-        self.action_log.record_done(
-            Kind::Edit,
-            started,
-            version_step_text(&format!("Undo: {undone_label}"), undone, now),
-            collector.take(),
-        );
-        Ok(())
+        self.move_cursor(id, CursorMove::Undo, |node| {
+            if !node.history.can_undo() {
+                return Err(format!("Nothing to undo in {}.", node.label));
+            }
+            Ok(node.history.cursor() - 1)
+        })
     }
 
     /// Step `id`'s cursor forward one version.
     ///
     /// The same three stages [`AppState::undo`] reports, under `redo`.
     pub(crate) fn redo(&mut self, id: ReconId) -> Result<(), String> {
-        let started = Instant::now();
-        let collector = Collector::new(self.action_log.detailed_timing());
-        if let Some(why) = self.busy_refusal(id) {
-            return Err(why);
-        }
-        let Some(index) = self.scene.iter().position(|n| n.id == id) else {
-            return Err("That reconstruction is no longer loaded.".to_string());
-        };
-        let carried = self.selected_image_name(id);
-        let step = collector.phase("redo");
-        let node = &mut self.scene[index];
-        let stepped = {
-            let _phase = step.phase("history step");
-            node.history.redo()
-        };
-        let Some((from, redone)) = stepped else {
-            return Err(format!("Nothing to redo in {}.", node.label));
-        };
-        let redone_label = node.history.current_version().label.clone();
-        {
-            let _phase = step.phase("selection follow");
-            self.follow_selection_forward(id);
-            self.follow_image_selection(id, carried.as_deref());
-        }
-        {
-            let _phase = step.phase("forget images");
-            self.forget_images_of(id);
-        }
-        drop(step);
-        self.action_log.record_done(
-            Kind::Edit,
-            started,
-            version_step_text(&format!("Redo: {redone_label}"), from, redone),
-            collector.take(),
-        );
-        Ok(())
+        self.move_cursor(id, CursorMove::Redo, |node| {
+            if !node.history.can_redo() {
+                return Err(format!("Nothing to redo in {}.", node.label));
+            }
+            Ok(node.history.cursor() + 1)
+        })
     }
 
     /// Move `id`'s cursor straight to the version with serial `serial`.
@@ -1648,35 +1550,74 @@ impl AppState {
         id: ReconId,
         serial: VersionSerial,
     ) -> Result<(), String> {
-        let started = Instant::now();
-        let collector = Collector::new(self.action_log.detailed_timing());
+        self.move_cursor(id, CursorMove::GoTo, |node| {
+            let Some(target) = node.history.position_of(serial) else {
+                return Err(format!("{serial} is not a version of {}.", node.label));
+            };
+            let cursor = node.history.cursor();
+            if target == cursor {
+                return Err(format!("{serial} is already what {} shows.", node.label));
+            }
+            let span = target.min(cursor)..=target.max(cursor);
+            if node.history.versions()[span]
+                .iter()
+                .any(|v| v.value.is_none())
+            {
+                return Err(format!(
+                    "Cannot go to {serial}: its value, or one on the way to it, was released to keep {} inside the history budget.",
+                    node.label
+                ));
+            }
+            Ok(target)
+        })
+    }
+
+    /// Where `id` sits in the scene, for an operation about to change it: the
+    /// node's busy refusal first, then [`NOT_LOADED`].
+    ///
+    /// Busy comes first because it is the reason that will still be true a
+    /// moment later, and it is the order [`convert_refusal`] and
+    /// [`retriangulate_refusal`] ask in.
+    fn editable_node_index(&self, id: ReconId) -> Result<usize, String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
         }
-        let Some(index) = self.scene.iter().position(|n| n.id == id) else {
-            return Err("That reconstruction is no longer loaded.".to_string());
-        };
-        let node = &self.scene[index];
-        let Some(target) = node.history.position_of(serial) else {
-            return Err(format!("{serial} is not a version of {}.", node.label));
-        };
-        let cursor = node.history.cursor();
-        if target == cursor {
-            return Err(format!("{serial} is already what {} shows.", node.label));
-        }
-        let from = node.history.current_version().serial;
-        let span = target.min(cursor)..=target.max(cursor);
-        if node.history.versions()[span]
-            .iter()
-            .any(|v| v.value.is_none())
-        {
-            return Err(format!(
-                "Cannot go to {serial}: its value, or one on the way to it, was released to keep {} inside the history budget.",
-                node.label
-            ));
-        }
+        self.node_index(id)
+    }
+
+    /// The one walk behind undo, redo and a jump: refuse, or move `id`'s cursor
+    /// to the position `target` names one version at a time, and write the
+    /// move's one Action Log entry.
+    ///
+    /// `target` is the move's own gate, asked of the node once it is known to
+    /// be free and loaded; its `Err` is the refusal the caller hands back, and
+    /// nothing is logged here for it. It answers a position other than the
+    /// cursor whose span holds no released value, which is what lets the walk
+    /// take every step it starts.
+    ///
+    /// The entry is recorded from the instant the move was asked for, so the
+    /// row says what the move cost rather than what writing the row cost. Under
+    /// the move's own phase, `history step` and `selection follow` run once per
+    /// step and `forget images` once at the end, so an undo or a redo reports
+    /// each once and a jump folds each of the first two into one row carrying
+    /// the number of steps.
+    fn move_cursor(
+        &mut self,
+        id: ReconId,
+        kind: CursorMove,
+        target: impl FnOnce(&crate::scene::SceneNode) -> Result<usize, String>,
+    ) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
+        let index = self.editable_node_index(id)?;
+        let target = target(&self.scene[index])?;
+        let left = self.scene[index].history.current_version();
+        let (from, left_label) = (left.serial, left.label.clone());
+        // Read before the walk: it names the photograph in the version the
+        // cursor is leaving, and what it is for is finding that photograph
+        // again in the one it lands on.
         let carried = self.selected_image_name(id);
-        let step = collector.phase("go to");
+        let step = collector.phase(kind.phase());
         while self.scene[index].history.cursor() != target {
             let node = &mut self.scene[index];
             let stepping_back = target < node.history.cursor();
@@ -1694,14 +1635,13 @@ impl AppState {
                 self.follow_selection_forward(id);
             }
             // Per step rather than once at the end, so the stage's row counts
-            // the steps like every other stage's. The name is the one the jump
+            // the steps like every other stage's. The name is the one the move
             // started from at each of them, so what decides is the version the
             // walk comes to rest on.
             self.follow_image_selection(id, carried.as_deref());
         }
-        let node = &self.scene[index];
-        let label = node.history.current_version().label.clone();
-        let to = node.history.current_version().serial;
+        let landed = self.scene[index].history.current_version();
+        let (to, text) = (landed.serial, kind.text(&left_label, &landed.label));
         {
             let _phase = step.phase("forget images");
             self.forget_images_of(id);
@@ -1710,7 +1650,7 @@ impl AppState {
         self.action_log.record_done(
             Kind::Edit,
             started,
-            version_step_text(&format!("Go to: {label}"), from, to),
+            version_step_text(&text, from, to),
             collector.take(),
         );
         Ok(())
@@ -1766,9 +1706,7 @@ impl AppState {
         id: ReconId,
         needed: &[usize],
     ) -> Result<ViewSources, String> {
-        let node = self
-            .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let node = self.node(id).ok_or_else(|| NOT_LOADED.to_string())?;
         let recon = node.recon();
         let mut cameras = Vec::with_capacity(recon.image_count());
         let mut poses = Vec::with_capacity(recon.image_count());
@@ -1881,6 +1819,37 @@ impl AppState {
         let image = ImageRef::new(id, index);
         self.selected_image = Some(image);
         self.selected_camera = self.camera_of(image);
+    }
+}
+
+/// Which of the three cursor moves [`AppState::move_cursor`] is walking, for
+/// the name of its phase and the words of its Action Log entry.
+#[derive(Clone, Copy)]
+enum CursorMove {
+    Undo,
+    Redo,
+    GoTo,
+}
+
+impl CursorMove {
+    /// The name of the phase the move's stages nest under.
+    fn phase(self) -> &'static str {
+        match self {
+            CursorMove::Undo => "undo",
+            CursorMove::Redo => "redo",
+            CursorMove::GoTo => "go to",
+        }
+    }
+
+    /// The entry's text before its serials. An undo names the version it
+    /// left, so the log says what was undone rather than what is now showing;
+    /// a redo and a jump name the version they landed on.
+    fn text(self, left: &str, landed: &str) -> String {
+        match self {
+            CursorMove::Undo => format!("Undo: {left}"),
+            CursorMove::Redo => format!("Redo: {landed}"),
+            CursorMove::GoTo => format!("Go to: {landed}"),
+        }
     }
 }
 

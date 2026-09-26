@@ -1263,6 +1263,18 @@ impl AppState {
         node_by_id(&self.scene, id)
     }
 
+    /// Where `id` sits in [`AppState::scene`], or [`NOT_LOADED`] when it has
+    /// been closed since the id was taken.
+    ///
+    /// The index rather than the node, for the operations that go on to borrow
+    /// the node mutably or to read other fields of the state beside it.
+    pub(crate) fn node_index(&self, id: ReconId) -> Result<usize, String> {
+        self.scene
+            .iter()
+            .position(|n| n.id == id)
+            .ok_or_else(|| NOT_LOADED.to_string())
+    }
+
     /// The scene and the log at once.
     ///
     /// A split borrow, for the two callers that write a node's display state
@@ -1441,6 +1453,10 @@ pub fn ensure_sift_cached<'a>(
 /// depths would be two pictures of one surface.
 pub(crate) const PYRAMID_LEVELS: usize =
     sfmtool_core::patch::display_bitmaps::DISPLAY_PYRAMID_LEVELS;
+
+/// The refusal every operation gives when the node it was asked about was
+/// closed after its id was taken, whichever surface asked.
+pub(crate) const NOT_LOADED: &str = "That reconstruction is no longer loaded.";
 
 /// Get the cached full-resolution image for an image index, decoding from disk
 /// if needed.

@@ -601,7 +601,7 @@ fn moved(
 pub(super) fn version_reply(state: &AppState, id: ReconId, report: Option<String>) -> JsonReply {
     let node = state
         .node(id)
-        .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let version = node.history.current_version();
     let mut reply = json!({
         "reconstruction_label": node.label,

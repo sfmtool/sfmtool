@@ -1928,8 +1928,21 @@ made no version to report on; the reply names the one it landed on.
 
 The ends are refusals in the state's own words: *"Nothing to undo in
 `seoul_bull`."*, *"Nothing to redo in `seoul_bull`."*, *"`v6` is already what
-`seoul_bull` shows."* A serial the node never minted is refused here, naming
-`get_history`, before the state is asked.
+`seoul_bull` shows."*, and for a jump past a released value *"Cannot go to `v2`:
+its value, or one on the way to it, was released to keep `seoul_bull` inside the
+history budget."* A node with an operation running on it refuses all three with
+the sentence every other edit of it gets (*"`seoul_bull` is busy: Bundle adjust is
+still running."*). The three share one gate and one walk
+(`AppState::move_cursor` in
+[state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs)), so these are
+the same sentences the Edit menu and the Edit History panel log; the wire's
+failed row wraps them as `undo failed: …`, as it does any refusal the state did
+not log itself.
+
+A serial the node never minted is the one refusal that is the wire's own. It is
+refused here, before the state is asked, because the wire receives a string the
+state never sees: the reply quotes it as it arrived and names `get_history`,
+which lists the spellings the tool takes.
 
 **A camera view follows the version.** A cursor move can change the pose of the
 very camera the viewport is looking through, so a move that landed re-snaps
@@ -3364,6 +3377,11 @@ where a test hands no host over.
   a jump by serial, with no `report` on any of them; the ends refuse in the
   state's words (*"Nothing to undo in `run_a`."*), and a serial the node never
   minted is refused naming `get_history`.
+- **Every refusal of a cursor move is pinned word for word**, on the wire and in
+  the failed row it leaves: both ends, the cursor's own version, a serial the
+  node never minted, and a jump past a released value; a busy node refuses
+  `undo`, `redo` and `jump_to_version` alike with the busy sentence and leaves
+  the cursor where it was.
 - **A cursor move re-snaps a camera view onto the version it landed on**: with
   the viewport looking through an image the wire has moved, `undo`, `redo` and a
   jump by serial each leave it standing at the pose that version holds, to

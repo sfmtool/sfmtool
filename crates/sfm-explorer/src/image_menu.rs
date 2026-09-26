@@ -194,7 +194,7 @@ impl AppState {
     /// refuse with.
     pub(crate) fn resect_image_refusal(&self, image: ImageRef) -> Option<String> {
         let Some(menu) = self.image_menu(image.recon) else {
-            return Some("That reconstruction is no longer loaded.".to_string());
+            return Some(crate::state::NOT_LOADED.to_string());
         };
         menu.resect_refusal(image.index()).map(str::to_string)
     }

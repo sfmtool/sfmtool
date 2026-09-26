@@ -318,7 +318,7 @@ impl AppState {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string());
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string());
         let outcome = label.and_then(|label| {
             let text = if is_identity(&transform) {
                 format!("Reset transform of {label}")
@@ -370,7 +370,7 @@ impl AppState {
         }
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let refuse =
             |why: String| format!("Cannot reframe {} on its active patch: {why}", node.label);
         let bench = node.history.current_bench();
@@ -418,7 +418,7 @@ impl AppState {
             .scene
             .iter_mut()
             .find(|n| n.id == id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let serial = node.history.push_transform(transform, text.clone());
         let parent = version_before(node, serial);
         self.action_log
@@ -435,7 +435,7 @@ impl AppState {
             return Some(why);
         }
         let Some(node) = self.node(id) else {
-            return Some("That reconstruction is no longer loaded.".to_string());
+            return Some(crate::state::NOT_LOADED.to_string());
         };
         (!node.has_transform()).then(|| {
             format!(

@@ -608,7 +608,7 @@ impl AppState {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         self.start_task(operation, Some(id), label, job)
     }
 

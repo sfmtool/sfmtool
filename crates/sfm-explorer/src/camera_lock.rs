@@ -125,7 +125,7 @@ pub(crate) fn enter(viewer: &mut Viewer3D, state: &mut AppState) -> Result<(), S
         .image;
     let node = state
         .node(image.recon)
-        .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
     let edited = node.history.current();
     let recon = node.recon();
     let stored = sfmtool_core::reconstruction::move_camera::pose_of(recon, image.index());
@@ -245,7 +245,7 @@ pub(crate) fn commit(
         return Err("No camera is being moved.".to_string());
     };
     let Some(node) = state.node(lock.image.recon) else {
-        return Err("That reconstruction is no longer loaded.".to_string());
+        return Err(crate::state::NOT_LOADED.to_string());
     };
     let pending = pending_pose(viewer, node);
     if in_dead_band(&lock, &pending) {

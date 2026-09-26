@@ -321,6 +321,13 @@ a version whose base renumbered the image table, so the caches keyed by an image
 index are dropped, exactly as an undo drops them, and the image selection is
 found again by name in the version the walk comes to rest on.
 
+**Undo and redo are the same walk, one step long.** All three moves go through
+one private `AppState::move_cursor`, which takes the move's own gate (a closure
+that answers the target position or the refusal) and does the rest: the busy
+refusal and the not-loaded refusal before the gate, then the walk, the selection
+follow, the cache drop and the one log entry. So the three cannot come to differ
+in the stages they report or in the order they refuse in.
+
 ## The Action Log
 
 Every edit, undo and redo writes one `Edit` entry naming the node, what was done
@@ -383,7 +390,12 @@ returning to the version it came from, the selection arriving at the same index
 a run of undos leaves it at across a point edit and a renumbering, one log entry
 naming the two serials, and the refusals -- a released version, a version behind
 a released one, the cursor's own version, and a serial belonging to another
-node -- each leaving the cursor and the log untouched.
+node -- each leaving the cursor and the log untouched. The three moves share one
+walk, so the same file pins what they share: each one's exact log sentence, the
+stage rows under `undo`, `redo` and `go to` (a jump in either direction counting
+its steps), every refusal word for word with none of them writing an entry, and
+a node closed since its id was taken refusing all three with the one
+not-loaded sentence.
 
 `crates/sfm-explorer/src/display_transform/tests.rs` covers the framing on the
 timeline: an undo of a reframe returning the transform before it, two undos

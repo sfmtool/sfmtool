@@ -513,6 +513,139 @@ fn a_jump_to_where_the_cursor_already_is_or_to_no_version_is_refused() {
     assert!(state.jump_to_version(id, other).is_err());
 }
 
+/// A jump forward is the same walk as a jump back, so its breakdown has the
+/// same rows, each counting the steps.
+#[test]
+fn a_jump_forward_folds_the_same_rows_as_a_jump_back() {
+    let mut state = state();
+    let id = node(&state);
+    for point in [1usize, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point))
+            .expect("a live point");
+    }
+    let first = serial_at(&state, 1);
+    let last = serial_at(&state, 3);
+    state.jump_to_version(id, first).expect("a live version");
+
+    state.jump_to_version(id, last).expect("a live version");
+
+    assert_eq!(
+        phase_rows(&newest(&state).detail),
+        [
+            ("go to", 0, 1),
+            ("history step", 1, 2),
+            ("selection follow", 1, 2),
+            ("forget images", 1, 1),
+        ],
+        "{:?}",
+        newest(&state).detail,
+    );
+    assert_timed_from_the_work(&mut state.action_log);
+}
+
+/// The whole sentence each move writes: an undo names the version it left,
+/// a redo and a jump the version they landed on, and every one of them the two
+/// serials in the order the cursor passed them.
+#[test]
+fn the_three_cursor_moves_write_their_exact_sentences() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 5))
+        .expect("a live point");
+    let (loaded, edited) = (serial_at(&state, 0), serial_at(&state, 1));
+    let loaded_label = state.scene[0].history.versions()[0].label.clone();
+    let edited_label = state.scene[0].history.versions()[1].label.clone();
+    state.action_log.clear();
+
+    state.undo(id).expect("one edit to undo");
+    state.redo(id).expect("a redo tail");
+    state.jump_to_version(id, loaded).expect("a live version");
+
+    assert_eq!(
+        texts(&state),
+        [
+            format!("Undo: {edited_label} ({edited} → {loaded})"),
+            format!("Redo: {edited_label} ({loaded} → {edited})"),
+            format!("Go to: {loaded_label} ({edited} → {loaded})"),
+        ]
+    );
+}
+
+/// Every refusal of a cursor move, in the words the Edit menu, the Edit History
+/// panel and the wire all pass on. None of them moves the cursor, and none of
+/// them writes an entry: the caller logs the refusal, once.
+#[test]
+fn the_cursor_moves_refuse_in_the_states_words_and_log_nothing() {
+    let mut state = state();
+    let id = node(&state);
+    state.action_log.clear();
+    assert_eq!(state.undo(id), Err("Nothing to undo in demo.".to_string()));
+    assert_eq!(state.redo(id), Err("Nothing to redo in demo.".to_string()));
+
+    for point in [1usize, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point))
+            .expect("a live point");
+    }
+    state.action_log.clear();
+    assert_eq!(state.redo(id), Err("Nothing to redo in demo.".to_string()));
+
+    let here = serial_at(&state, 3);
+    assert_eq!(
+        state.jump_to_version(id, here),
+        Err(format!("{here} is already what demo shows."))
+    );
+
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
+    let other = state.scene[1].history.current_version().serial;
+    state.action_log.clear();
+    assert_eq!(
+        state.jump_to_version(id, other),
+        Err(format!("{other} is not a version of demo."))
+    );
+
+    // A released version refuses the jump onto it and past it, and the undo
+    // that would step onto it.
+    let released = serial_at(&state, 2);
+    let earliest = serial_at(&state, 0);
+    state.scene[0].history.versions_mut_for_test()[2].value = None;
+    for target in [released, earliest] {
+        assert_eq!(
+            state.jump_to_version(id, target),
+            Err(format!(
+                "Cannot go to {target}: its value, or one on the way to it, was released to \
+                 keep demo inside the history budget."
+            ))
+        );
+    }
+    assert_eq!(state.undo(id), Err("Nothing to undo in demo.".to_string()));
+
+    assert_eq!(state.scene[0].history.cursor(), 3, "a refusal moved");
+    assert_eq!(texts(&state), Vec::<String>::new());
+}
+
+/// A node closed since its id was taken refuses all three moves with the one
+/// sentence every operation gives a node that is gone.
+#[test]
+fn the_cursor_moves_refuse_a_node_that_is_gone() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 1))
+        .expect("a live point");
+    let serial = serial_at(&state, 0);
+    state.close_node(id).expect("nothing is running");
+    state.action_log.clear();
+
+    let gone = Err("That reconstruction is no longer loaded.".to_string());
+    assert_eq!(state.undo(id), gone);
+    assert_eq!(state.redo(id), gone);
+    assert_eq!(state.jump_to_version(id, serial), gone);
+    assert_eq!(texts(&state), Vec::<String>::new());
+}
+
 // ── The embedded_patches fixtures ────────────────────────────────────────
 
 /// A demo node whose value is `embedded_patches`. No images behind it, so a

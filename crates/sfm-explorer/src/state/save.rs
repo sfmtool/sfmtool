@@ -105,7 +105,7 @@ impl AppState {
     pub fn save_node(&mut self, id: ReconId) -> Result<(), String> {
         let path = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?
             .path
             .clone()
             .ok_or_else(|| {
@@ -173,7 +173,7 @@ impl AppState {
             }
             let node = self
                 .node(id)
-                .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+                .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
             let version = node.history.current_version();
             let edited = node.history.current();
             let materialised;
@@ -226,7 +226,7 @@ impl AppState {
     /// workspace path for a save that is going to be refused.
     pub fn minimal_copy_refusal(&self, id: ReconId, path: &Path) -> Option<String> {
         let Some(node) = self.node(id) else {
-            return Some("That reconstruction is no longer loaded.".to_string());
+            return Some(crate::state::NOT_LOADED.to_string());
         };
         if node.path.as_deref().is_some_and(|own| same_file(own, path)) {
             return Some(format!(
@@ -315,7 +315,7 @@ impl AppState {
             .scene
             .iter()
             .position(|n| n.id == id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
 
         // A released value is not a value: there is nothing at the cursor to
         // write, and the budget only ever releases what the cursor is not on, so

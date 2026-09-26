@@ -167,7 +167,7 @@ impl AppState {
         }
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let own = sift_index::index_path(node);
         let keep = self.sift_index_state(id) == IndexFileState::Current
             && self.cluster_patches_state(id) != IndexFileState::Current;
@@ -221,7 +221,7 @@ impl AppState {
     ) -> Result<(), String> {
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let label = node.label.clone();
         let named_index = sift_index.is_some();
         let named_patches = cluster_patches.is_some();
@@ -274,7 +274,7 @@ impl AppState {
     pub(crate) fn close_index_files(&mut self, id: ReconId) -> Result<(), String> {
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let label = node.label.clone();
         let paths: Vec<String> = [
             self.sift_index(id)

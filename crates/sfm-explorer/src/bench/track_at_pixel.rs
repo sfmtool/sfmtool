@@ -160,7 +160,7 @@ impl AppState {
             return Some(why);
         }
         let Some(node) = self.node(image.recon) else {
-            return Some("That reconstruction is no longer loaded.".to_string());
+            return Some(crate::state::NOT_LOADED.to_string());
         };
         let recon = node.recon();
         if image.index() >= recon.image_table.images.len() {
@@ -257,7 +257,7 @@ impl AppState {
 
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let recon = node.recon();
         let image_names: Vec<String> = recon
             .image_table

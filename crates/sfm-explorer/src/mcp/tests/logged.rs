@@ -755,6 +755,74 @@ fn the_breakdown_carries_the_stages_at_their_depths() {
     assert_the_panel_agrees(&state, &row);
 }
 
+/// The stages of a breakdown row as `(name, depth, runs)`, with `runs` 1 where
+/// the wire leaves it out.
+fn stages_of(row: &Value) -> Vec<(String, u64, u64)> {
+    row["detail"]
+        .as_array()
+        .expect("a detail array")
+        .iter()
+        .map(|event| {
+            assert_eq!(event["kind"], "phase", "{event}");
+            (
+                event["name"].as_str().expect("a name").to_string(),
+                event["depth"].as_u64().expect("a depth"),
+                event["runs"].as_u64().unwrap_or(1),
+            )
+        })
+        .collect()
+}
+
+/// A redo and a jump name the same stages at the same depths an undo does,
+/// under their own names, and a jump over two versions counts two steps.
+#[test]
+fn a_redo_and_a_jump_carry_the_undo_s_stages_under_their_own_names() {
+    let (mut state, mut viewer) = editable();
+    let first = state.scene[0].history.current_version().serial.to_string();
+    for point in [3, 4] {
+        call(
+            &mut state,
+            &mut viewer,
+            "delete_point",
+            json!({ "reconstruction_label": "run_a", "point": point }),
+        );
+    }
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "redo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "jump_to_version",
+        json!({ "reconstruction_label": "run_a", "serial": first }),
+    );
+
+    let reply = ok(&mut state, &mut viewer, action_log_detail(0));
+    let stages = |name: &str, steps: u64| {
+        vec![
+            (name.to_string(), 0, 1),
+            ("history step".to_string(), 1, steps),
+            ("selection follow".to_string(), 1, steps),
+            ("forget images".to_string(), 1, 1),
+        ]
+    };
+    let redo = row_starting(&reply, "Redo:");
+    assert_eq!(stages_of(&redo), stages("redo", 1), "{redo}");
+    assert_the_panel_agrees(&state, &redo);
+    let jump = row_starting(&reply, "Go to:");
+    assert_eq!(stages_of(&jump), stages("go to", 2), "{jump}");
+    assert_the_panel_agrees(&state, &jump);
+}
+
 /// `elsewhere` is what makes the breakdown add up, so it arrives with the cost
 /// it closes the account of and not before.
 #[test]

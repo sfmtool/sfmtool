@@ -100,7 +100,7 @@ impl AppState {
     /// ([`crate::image_menu::ImageMenu::add_to_tracks_refusal`]).
     pub(crate) fn add_image_to_tracks_refusal(&self, image: ImageRef) -> Option<String> {
         let Some(menu) = self.image_menu(image.recon) else {
-            return Some("That reconstruction is no longer loaded.".to_string());
+            return Some(crate::state::NOT_LOADED.to_string());
         };
         menu.add_to_tracks_refusal(image.index())
             .map(str::to_string)
@@ -137,7 +137,7 @@ impl AppState {
         let id = image.recon;
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let label = node.label.clone();
         let name = node
             .recon()

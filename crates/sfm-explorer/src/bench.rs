@@ -1459,7 +1459,7 @@ impl AppState {
             scene, sift_cache, ..
         } = self;
         let node = crate::scene::node_by_id(scene, image.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         // The whole file: a constellation is taken from a radius of the image
         // rather than from the first few features, so a prefix would silently
         // search a different patch.
@@ -1694,7 +1694,7 @@ impl AppState {
         }
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let track = node
             .history
             .current_bench()
@@ -1842,7 +1842,7 @@ impl AppState {
             scene, sift_cache, ..
         } = self;
         let node = crate::scene::node_by_id(scene, image.recon)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let cached = crate::state::ensure_sift_cached(
             sift_cache,
             node.recon(),
@@ -1865,14 +1865,6 @@ impl AppState {
                 [f64::from(shape[1][0]), f64::from(shape[1][1])],
             ],
         ))
-    }
-
-    /// Where `id` sits in the scene.
-    fn node_index(&self, id: ReconId) -> Result<usize, String> {
-        self.scene
-            .iter()
-            .position(|n| n.id == id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())
     }
 }
 

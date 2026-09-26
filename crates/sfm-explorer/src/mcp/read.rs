@@ -451,7 +451,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
 
     let node = state
         .node(recon_id)
-        .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let recon = node.recon();
     // The point and its track come through the overlay, so an agent is told
     // what the panels show; the images and cameras are the base's.

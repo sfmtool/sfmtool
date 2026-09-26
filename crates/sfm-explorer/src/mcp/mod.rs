@@ -1700,7 +1700,7 @@ pub(super) fn resolve_camera_image(
 ) -> Result<ImageRef, ToolError> {
     let node = state
         .node(reconstruction)
-        .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let index = match selector {
         CameraImageSel::Index(index) => {
             if *index >= node.recon().image_table.images.len() {
@@ -1738,7 +1738,7 @@ pub(super) fn resolve_camera_intrinsics(
 ) -> Result<CameraRef, ToolError> {
     let node = state
         .node(reconstruction)
-        .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
+        .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     if index >= node.recon().image_table.cameras.len() {
         return Err(ToolError::new(format!(
             "{} has {} camera intrinsics records — index {index} is out of range.",

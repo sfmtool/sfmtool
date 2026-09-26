@@ -48,6 +48,8 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 ## Rust: viewer and core
 
 **Consolidate history cursor steps and node lookup**
+> _Status (2026-09-25): Done — undo, redo and `jump_to_version` are gates over one private `AppState::move_cursor` walk; `editable_node_index` (busy, then not loaded) serves the edits in `state/edits.rs`, `AppState::node_index` moved out of `bench.rs`, and every "no longer loaded" refusal reads `state::NOT_LOADED`, which also converges the MCP resolvers' "The reconstruction …" variant. Phases, log text and refusals are pinned at all three moves, on the state and on the wire._
+
 - Location: `crates/sfm-explorer/src/state/edits.rs` (1,843 lines; `undo`, `redo`, and `jump_to_version` begin at 1446, 1491, 1543).
 - Problem: The three operations still repeat the progress phases and Action Log tail. Repeated `busy_refusal` plus scene-node lookup remains in the same file; refusal wording still varies at the MCP boundary. The version transition sentence itself was shared after the previous report.
 - Proposed fix: One private cursor-step helper and a shared node lookup/refusal constant. Assert the progress breakdown and wire text at all three call sites.

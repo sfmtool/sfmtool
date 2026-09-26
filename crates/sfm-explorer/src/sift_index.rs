@@ -244,7 +244,7 @@ impl AppState {
     ) -> Result<PathBuf, String> {
         let node = self
             .node(id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let forest = LazyKdForestU8::open(&path, LazyKdForestOptions::default())
             .map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
         let stale = staleness(&forest, node.recon(), &path);
