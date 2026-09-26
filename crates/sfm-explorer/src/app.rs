@@ -934,6 +934,15 @@ impl App {
                 if let Some(request) = image_detail.take_point_gesture() {
                     app_state.apply_point_gesture(request);
                 }
+                // A double-click on a tracked feature also moves the 3D
+                // viewport's target onto the point, turning to it first when
+                // it is far from the middle of the viewport.
+                if let Some(point) = image_detail.take_target_point() {
+                    if let Some(position) = point_world_position(app_state, point) {
+                        let current_time = ui.input(|i| i.time);
+                        viewer_3d.turn_and_move_target_to(position, current_time);
+                    }
+                }
                 if let Some((image, pixel)) = image_detail.take_cluster_start() {
                     app_state.start_cluster_here(image, pixel);
                 }

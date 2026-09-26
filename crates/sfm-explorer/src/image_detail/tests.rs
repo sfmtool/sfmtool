@@ -909,6 +909,11 @@ fn a_control_shift_double_click_is_neither_edit_on_bench_nor_a_zoom() {
         None,
         "Edit on Bench was staged"
     );
+    assert_eq!(
+        detail.take_target_point(),
+        None,
+        "the chord moved the 3D view"
+    );
     assert_eq!(detail.zoom, 1.0, "the chord zoomed");
 }
 
@@ -1068,7 +1073,8 @@ fn pixel_under(detail: &ImageDetail, image: &ImageU8, at: egui::Pos2) -> egui::V
 
 /// Double-clicking a feature that observes a point is Edit on Bench: the panel
 /// leaves behind the same request the viewport's menu entry reports, and the
-/// view does not move.
+/// view does not move. It also names the point for the 3D viewport to move its
+/// target onto.
 #[test]
 fn double_clicking_a_feature_asks_for_its_point_on_the_bench() {
     let (node, sift) = gesture_fixture();
@@ -1096,6 +1102,11 @@ fn double_clicking_a_feature_asks_for_its_point_on_the_bench() {
     // One request, taken once: the frame drains it, and nothing is left for a
     // second bench item.
     assert_eq!(detail.take_point_gesture(), None);
+    assert_eq!(
+        detail.take_target_point(),
+        Some(crate::scene::PointRef::new(node.id, point as usize)),
+    );
+    assert_eq!(detail.take_target_point(), None);
 }
 
 /// A single click on the same feature selects it and asks for nothing: the
@@ -1117,6 +1128,7 @@ fn a_single_click_on_a_feature_asks_for_nothing() {
     click_frames(&mut detail, &node, &sift, &image, at, 1);
 
     assert_eq!(detail.take_point_gesture(), None);
+    assert_eq!(detail.take_target_point(), None);
     assert_eq!(detail.zoom, 1.0, "a single click zoomed");
 }
 

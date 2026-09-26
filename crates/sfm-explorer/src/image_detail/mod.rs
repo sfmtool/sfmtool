@@ -119,6 +119,11 @@ pub struct ImageDetail {
     /// frame swaps the dock out of the state while a tab body draws. See
     /// [`ImageDetail::take_point_gesture`].
     point_gesture: Option<PointGesture>,
+    /// The point a double-click on a tracked feature named, for `app.rs` to
+    /// move the 3D viewport's orbit target onto after the frame. The `Edit on
+    /// Bench` entry does not set it: only the double-click moves the viewport,
+    /// as in the viewport itself. See [`ImageDetail::take_target_point`].
+    target_point: Option<PointRef>,
     /// *Start cluster on the bench here*, at the image and pixel the menu was
     /// opened on, drained by `app.rs` after the frame for the same reason: it
     /// raises Track View on the cluster. See [`ImageDetail::take_cluster_start`].
@@ -225,6 +230,7 @@ impl ImageDetail {
             last_display_size: None,
             bench_drag: None,
             point_gesture: None,
+            target_point: None,
             cluster_start: None,
         }
     }
@@ -236,6 +242,14 @@ impl ImageDetail {
     /// the raise would land on the placeholder dock and be thrown away with it.
     pub(crate) fn take_point_gesture(&mut self) -> Option<PointGesture> {
         self.point_gesture.take()
+    }
+
+    /// Take the point the last frame's double-click on a tracked feature
+    /// named, if any. Drained by `app.rs` with
+    /// [`ImageDetail::take_point_gesture`], since the 3D viewport is not this
+    /// panel's to move.
+    pub(crate) fn take_target_point(&mut self) -> Option<PointRef> {
+        self.target_point.take()
     }
 
     /// Take the *Start cluster on the bench here* the last frame chose, if
@@ -780,6 +794,9 @@ impl ImageDetail {
         // request `app.rs` applies once the dock is back in the state.
         if let Some(point) = response.edit_on_bench {
             self.point_gesture = Some(PointGesture::EditOnBench(PointRef::new(recon_id, point)));
+        }
+        if let Some(point) = double_click_point {
+            self.target_point = Some(PointRef::new(recon_id, point));
         }
         // The other one: a cluster started here raises Track View on it.
         if let (Some(pixel), Some(image)) = (response.start_bench_cluster, selected_image) {

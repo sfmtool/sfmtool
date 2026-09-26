@@ -1027,6 +1027,21 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   click's own, so a double-click stages the point a single click there would
   have selected. Two double-clicks are a doubling of the magnification, and √2
   is what puts the steps on the round zooms a reader thinks in.
+- **A double-click on a tracked feature also moves the 3D viewport's orbit
+  target onto its point** (`Viewer3D::turn_and_move_target_to`), over the
+  viewport's ~200ms eased transition; the `Edit on Bench` entry does not. The
+  point can be anywhere in the scene, so the move may turn the camera. A point
+  already inside the middle 2/3 of the 3D viewport on both axes is panned to as
+  a double-click on it in the viewport does ([viewport-navigation.md](viewport-navigation.md)):
+  orientation kept, the camera moved across the view direction, the orbit
+  distance set to the point's depth. Any other point, including one behind the
+  camera, first has the camera turn in place, level with the world's up, by
+  about as little as brings the point inside the middle 1/2, and the pan is then
+  made with that orientation; the two are one transition. The panel reports the
+  point with `ImageDetail::take_target_point` and `app.rs` applies it after the
+  frame, since the 3D viewport is not the panel's to move. It moves nothing while
+  a camera is held for Move Camera, or for a point at infinity, and it leaves
+  camera view.
 - **Fit is the `Z` key**, with the pointer over the panel, and the wire's
   `set_image_detail_view { fit }` ([mcp-server.md](mcp-server.md)).
 - **A left click with Control and Shift held is `Create Track Here`** at the

@@ -46,6 +46,26 @@ const TARGET_ROTATION_SPEED: f64 = std::f64::consts::PI / 6.0; // 30 deg/sec
 /// Duration of animated camera transitions in seconds.
 const CAMERA_TRANSITION_DURATION: f64 = 0.2;
 
+/// The middle of the viewport, as a fraction of each axis, that a point must
+/// already be inside for [`Viewer3D::turn_and_move_target_to`] to move to it by
+/// a pan alone.
+const PAN_ONLY_FRACTION: f64 = 2.0 / 3.0;
+
+/// The middle of the viewport, as a fraction of each axis, that
+/// [`Viewer3D::turn_and_move_target_to`] turns the camera to bring a point
+/// inside before panning to it.
+const TURN_INTO_FRACTION: f64 = 0.5;
+
+/// How many aim-and-level steps the turn takes at most. Each step's error is a
+/// small fraction of the last one's, so a handful is enough.
+const TURN_STEPS: usize = 16;
+
+/// Whether normalized device coordinates `ndc` are inside the middle
+/// `fraction` of the viewport on both axes.
+fn within(ndc: [f64; 2], fraction: f64) -> bool {
+    ndc[0].abs() <= fraction && ndc[1].abs() <= fraction
+}
+
 /// Animated camera transition for smooth navigation.
 ///
 /// Interpolates camera state over ~200ms using slerp (orientation) + lerp
@@ -847,8 +867,59 @@ impl Viewer3D {
         if self.camera_lock.is_some() {
             return false;
         }
+        self.pan_target_onto(point, self.camera.camera.orientation, current_time)
+    }
+
+    /// Move the orbit target onto `point`, turning the camera first when the
+    /// point is far from the middle of the viewport, with one animated
+    /// transition to the end state.
+    ///
+    /// A point already inside the middle [`PAN_ONLY_FRACTION`] of the viewport
+    /// on both axes is moved to as [`Self::move_target_to`] moves to it. Any
+    /// other point, including one behind the camera, first has the camera turn
+    /// in place until the point is inside the middle [`TURN_INTO_FRACTION`],
+    /// and the pan is then made with that orientation. What a double-click on a
+    /// tracked feature in Image Detail does: the point may be anywhere in the
+    /// scene, and a pan alone across a large angle would carry the camera far
+    /// from where it was.
+    ///
+    /// Returns whether a transition was started; not when a camera is in hand,
+    /// for the reason [`Self::move_target_to`] gives.
+    pub(crate) fn turn_and_move_target_to(
+        &mut self,
+        point: Point3<f64>,
+        current_time: f64,
+    ) -> bool {
+        if self.camera_lock.is_some() {
+            return false;
+        }
+        let aspect = self.panel_aspect().unwrap_or(16.0 / 9.0);
+        let orientation = self.camera.camera.orientation;
+        let in_middle = self
+            .viewport_ndc(orientation, point, aspect)
+            .is_some_and(|ndc| within(ndc, PAN_ONLY_FRACTION));
+        let orientation = if in_middle {
+            orientation
+        } else {
+            self.orientation_bringing_into(point, aspect, TURN_INTO_FRACTION)
+        };
+        self.pan_target_onto(point, orientation, current_time)
+    }
+
+    /// Start the transition that ends with `orientation` and with the orbit
+    /// target on `point`, reached by a pan from the current position: the
+    /// camera moves by the component of its offset to `point` that is
+    /// perpendicular to the end view direction, and the orbit distance becomes
+    /// the rest. Returns false, starting nothing, when `point` is not in front
+    /// of the camera under `orientation`.
+    fn pan_target_onto(
+        &mut self,
+        point: Point3<f64>,
+        orientation: UnitQuaternion<f64>,
+        current_time: f64,
+    ) -> bool {
         let position = self.camera.camera.position;
-        let forward = self.camera.camera.forward();
+        let forward = orientation.inverse() * Vector3::new(0.0, 0.0, -1.0);
         let offset = point - position;
         let depth = offset.dot(&forward);
         if depth <= 1e-10 {
@@ -859,7 +930,7 @@ impl Viewer3D {
         self.leave_camera_view();
         self.start_transition(
             end_position,
-            self.camera.camera.orientation,
+            orientation,
             depth,
             self.camera.fov,
             self.camera.world_up,
@@ -868,6 +939,71 @@ impl Viewer3D {
             current_time,
         );
         true
+    }
+
+    /// Where `point` lands in the viewport under `orientation` from the current
+    /// position, in normalized device coordinates (`[-1, 1]` on each axis,
+    /// `+y` up), or `None` when it is not in front of the camera.
+    fn viewport_ndc(
+        &self,
+        orientation: UnitQuaternion<f64>,
+        point: Point3<f64>,
+        aspect: f64,
+    ) -> Option<[f64; 2]> {
+        let in_camera = orientation * (point - self.camera.camera.position);
+        let depth = -in_camera.z;
+        if depth <= 1e-10 {
+            return None;
+        }
+        let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
+        Some([
+            in_camera.x / (depth * tan_y * aspect),
+            in_camera.y / (depth * tan_y),
+        ])
+    }
+
+    /// The orientation, level with `world_up`, that the camera turns to in
+    /// place to bring `point` inside the middle `fraction` of the viewport on
+    /// both axes, turning little more than that needs.
+    ///
+    /// Each step aims the point at the nearest place inside that region by the
+    /// shortest-arc rotation, then levels the camera again, which moves the
+    /// point a little; the steps repeat until it is inside. The levelling can
+    /// leave one axis a little way inside the edge rather than on it. A point behind the
+    /// camera is looked at directly, since no nearest place in the region is
+    /// defined for it.
+    fn orientation_bringing_into(
+        &self,
+        point: Point3<f64>,
+        aspect: f64,
+        fraction: f64,
+    ) -> UnitQuaternion<f64> {
+        let up = self.camera.world_up;
+        let offset = point - self.camera.camera.position;
+        let tan_y = (self.camera.vertical_fov(aspect) / 2.0).tan();
+        let mut orientation = self.camera.camera.orientation;
+        for _ in 0..TURN_STEPS {
+            let Some(ndc) = self.viewport_ndc(orientation, point, aspect) else {
+                return Camera::orientation_from_forward(offset.normalize(), up);
+            };
+            if within(ndc, fraction) {
+                break;
+            }
+            // Aim a little inside the edge, so that the levelling does not
+            // leave the point just outside it.
+            let edge = fraction * (1.0 - 1e-3);
+            let aim = Vector3::new(
+                ndc[0].clamp(-edge, edge) * tan_y * aspect,
+                ndc[1].clamp(-edge, edge) * tan_y,
+                -1.0,
+            );
+            let Some(turn) = UnitQuaternion::rotation_between(&(orientation * offset), &aim) else {
+                break;
+            };
+            let forward = (turn * orientation).inverse() * Vector3::new(0.0, 0.0, -1.0);
+            orientation = Camera::orientation_from_forward(forward, up);
+        }
+        orientation
     }
 
     /// Starts a smooth animated transition to the given camera end state.

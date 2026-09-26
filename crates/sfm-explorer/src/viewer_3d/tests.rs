@@ -394,6 +394,119 @@ fn moving_the_target_to_a_point_behind_the_camera_does_nothing() {
     assert!(viewer.target_transition.is_none());
 }
 
+/// A viewer 10 units down −Y from the origin, looking at it with Z up, in a
+/// 16:9 viewport, and the world point at `ndc` in that viewport at `depth`.
+fn looking_along_y(ndc: [f64; 2], depth: f64) -> (Viewer3D, Point3<f64>) {
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1600, 900];
+    let aspect = 1600.0 / 900.0;
+    let eye = Point3::new(0.0, -10.0, 0.0);
+    viewer.camera.world_up = Vector3::z();
+    viewer.camera.camera = Camera::look_at(eye, Point3::origin(), Vector3::z());
+    let tan_y = (viewer.camera.vertical_fov(aspect) / 2.0).tan();
+    let point = eye
+        + Vector3::y() * depth
+        + Vector3::x() * (ndc[0] * depth * tan_y * aspect)
+        + Vector3::z() * (ndc[1] * depth * tan_y);
+    (viewer, point)
+}
+
+/// The end state of the transition in flight: where the point lands in the
+/// viewport under it, and its target.
+fn landing(viewer: &mut Viewer3D, point: Point3<f64>) -> ([f64; 2], Point3<f64>) {
+    let transition = viewer
+        .target_transition
+        .take()
+        .expect("a transition in flight");
+    viewer.camera.camera.position = transition.end_position;
+    viewer.camera.camera.orientation = transition.end_orientation;
+    viewer.camera.camera.target_distance = transition.end_distance;
+    viewer.camera.world_up = transition.end_world_up;
+    let ndc = viewer
+        .viewport_ndc(transition.end_orientation, point, 1600.0 / 900.0)
+        .expect("the point is in front of the end state");
+    (ndc, viewer.camera.camera.target())
+}
+
+/// Image Detail's double-click on a feature whose point is already inside the
+/// middle 2/3 of the viewport moves as the viewport's own double-click does:
+/// a pan, with no turn.
+#[test]
+fn a_point_in_the_middle_two_thirds_is_panned_to_without_turning() {
+    let (mut viewer, point) = looking_along_y([0.6, -0.6], 8.0);
+    let orientation = viewer.camera.camera.orientation;
+
+    assert!(viewer.turn_and_move_target_to(point, 0.0));
+    let transition = viewer.target_transition.as_ref().unwrap();
+    assert!(transition.end_orientation.angle_to(&orientation) < 1e-12);
+    let (ndc, target) = landing(&mut viewer, point);
+    assert!(
+        ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
+        "landed at {ndc:?}"
+    );
+    assert!((target - point).norm() < 1e-9);
+}
+
+/// A point outside the middle 2/3 turns the camera first, as little as brings
+/// it inside the middle 1/2, and then pans onto it. The turn is judged from
+/// the camera's position before the pan, where the point sits on the edge of
+/// that region; the camera stays level.
+#[test]
+fn a_point_near_the_edge_is_turned_to_before_the_pan() {
+    let (mut viewer, point) = looking_along_y([0.9, 0.8], 8.0);
+    let start = viewer.camera.camera.position;
+    let orientation = viewer.camera.camera.orientation;
+
+    assert!(viewer.turn_and_move_target_to(point, 0.0));
+    let end_orientation = viewer.target_transition.as_ref().unwrap().end_orientation;
+    assert!(end_orientation.angle_to(&orientation) > 1e-3, "no turn");
+    let turned = viewer
+        .viewport_ndc(end_orientation, point, 1600.0 / 900.0)
+        .unwrap();
+    // Inside the middle 1/2, and not turned much further than that: levelling
+    // the camera after the aim can carry one axis a little way inside the
+    // edge, but the point stays on the edge on the other.
+    assert!(
+        turned.iter().all(|a| a.abs() <= 0.5 && a.abs() > 0.4),
+        "turned to {turned:?}"
+    );
+    assert!(
+        turned.iter().any(|a| a.abs() > 0.49),
+        "turned to {turned:?}"
+    );
+    // Level: the end right axis is perpendicular to the world's up.
+    let right = end_orientation.inverse() * Vector3::x();
+    assert!(right.dot(&Vector3::z()).abs() < 1e-12);
+
+    viewer.camera.camera.position = start;
+    let (ndc, target) = landing(&mut viewer, point);
+    assert!(
+        ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
+        "landed at {ndc:?}"
+    );
+    assert!((target - point).norm() < 1e-9);
+}
+
+/// A point behind the camera is turned to and looked at directly, where the
+/// viewport's own double-click, a pan alone, can do nothing.
+#[test]
+fn a_point_behind_the_camera_is_turned_to() {
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1600, 900];
+    viewer.camera.world_up = Vector3::z();
+    viewer.camera.camera =
+        Camera::look_at(Point3::new(0.0, -10.0, 0.0), Point3::origin(), Vector3::z());
+    let point = Point3::new(3.0, -15.0, 1.0);
+
+    assert!(viewer.turn_and_move_target_to(point, 0.0));
+    let (ndc, target) = landing(&mut viewer, point);
+    assert!(
+        ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
+        "landed at {ndc:?}"
+    );
+    assert!((target - point).norm() < 1e-9);
+}
+
 /// `count` primary press/release pairs at one place, in one frame: what egui
 /// counts as a single click, a double-click, and so on.
 fn primary_clicks(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, count: usize) {
