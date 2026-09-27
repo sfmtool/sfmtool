@@ -276,7 +276,11 @@ patch centre's projection until a fit localizes them.
    keypoint is within `max_query_offset_px` of the pixel; at least
    `min_in_views` views are `in`; their median ZNCC is at least
    `min_zncc_median`; and no `in` view's keypoint sits more than
-   `max_projection_offset_px` from the point's projection.
+   `max_projection_offset_px` from the point's projection. The `Final` record
+   carries the median ZNCC the gate judged and, beside it, the median middle
+   ZNCC over the same views (`zncc_middle_median`,
+   [`editable-track.md`](editable-track.md) § "The middle ZNCC"), which no gate
+   reads.
 6. **Bitmap.** The track that passed is given its consensus bitmap and colour
    where it stands, by the fuse a fit ends with, which moves nothing. The last
    anchor dropped the bitmap the fits before it had fused, because it slid the

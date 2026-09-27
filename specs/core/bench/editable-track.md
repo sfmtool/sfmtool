@@ -89,6 +89,7 @@ impl Observation {
 pub struct TrackMeasurement {
     pub keypoint: Option<[f32; 2]>,
     pub zncc: Option<f64>,
+    pub zncc_middle: Option<f64>,            // the same samples over the middle square
     pub seed_shift_px: Option<f64>,          // the peak's move from the sighting
     pub projection_offset_px: Option<f64>,   // the sighting's distance from the point
     pub reprojection_error: Option<f64>,
@@ -97,6 +98,7 @@ pub struct TrackMeasurement {
     pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
+    pub walked_zncc_middle: Option<f64>,     // and its middle reading
     pub reason: Option<Unmeasured>,          // present exactly when zncc is not
 }
 
@@ -129,12 +131,16 @@ pub struct Origin { pub version: u64, pub point: u32 }
 
 pub struct Thresholds {
     pub min_zncc: f64,
+    pub min_zncc_middle: f64,                // 0 turns it off
     pub max_shift_px: f64,
     pub max_keypoint_uncertainty: f64,
     pub min_relative_zncc: f64,
 }
-// The bench's own default shift bar, wider than the cluster refinement's 3 px.
+// The bench's own default bars: the shift bar wider than the cluster
+// refinement's 3 px, the ZNCC bars below its 0.85.
 pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
+pub const BENCH_MIN_ZNCC: f64 = 0.7;
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 
 // Putting one on the bench.
 pub fn create_track(
@@ -759,8 +765,8 @@ spells `duplicate_image`.
 **The cluster stage** is a `.matches` cluster with its cluster-patches section,
 in memory: a **reference** observation, a **radius**, a template cut around the
 reference, and per observation a seed (a position and a 2x2 affine shape in that
-image's pixels), the refined absolute position and shape, the achieved ZNCC, the
-shift from the seed, the observation's own tile localizability and a status in
+image's pixels), the refined absolute position and shape, the achieved ZNCC and
+its middle reading (`zncc_middle`, § "The middle ZNCC"), the shift from the seed, the observation's own tile localizability and a status in
 the `member_status` legend. No pose, no position, no normal. It is what a track
 is when it starts from a pixel or from a search hit. The template is `Option`
 because cutting it reads the reference's pixels: a track carries one once an
@@ -771,7 +777,7 @@ reconstruction yet: a position, a flag saying whether that position is a place o
 a bearing, an
 [`OrientedPatch`](../../../crates/sfmtool-core/src/patch/cloud.rs) frame, a
 consensus bitmap and a colour, and per observation a keypoint with its
-leave-one-out ZNCC, its reprojection error, its ray angle and its tile
+leave-one-out ZNCC and that ZNCC's middle reading, its reprojection error, its ray angle and its tile
 localizability. It is what a track is when put on the bench from a committed
 point.
 
@@ -1033,6 +1039,45 @@ The bar is the track's own `max_shift_px`, the same bar the painting judges a
 seed shift by. Its bench default, 8 px, is wider than the cluster refinement's
 3 px for this reason: a person who moves a patch by hand and fits expects the
 sightings to follow further than the batch pass's drift bound allows.
+
+### The middle ZNCC
+
+Every ZNCC a stage measures between two patch bitmaps comes with a second
+reading of the same samples, `zncc_middle`, taken over only the middle of the
+patch: the centred square half the grid's width, the rows and columns `R/4 ..
+R - R/4` (the middle `12 x 12` of a `24 x 24` grid). Each channel is
+mean-removed and normalized over that square alone, with the same window
+weights, so the number is the ZNCC the two bitmaps would have given had the
+patch been only its middle.
+
+It exists because a whole-patch ZNCC can be high for reasons that have nothing
+to do with the pixel at the patch's centre. A small near object, such as a
+birdhouse on a pole, has a patch that is mostly the distant houses behind it. A
+pixel at a depth edge has half its patch on the far surface. A facade whose
+railings repeat along the epipolar line agrees with a copy of itself one
+repeat away. In each case the whole patch matches and the middle does not.
+Reading the pair shows whether an agreement is carried by the pixel's own
+neighbourhood or by its surroundings.
+
+No second render is made. At the cluster stage the refinement reads the
+member's samples once more at the map its winning evaluation used and
+correlates them with the reference's own samples (`ClusterRefineResult::
+member_zncc_middle`). At the track stage the localizer reads the core at the
+integer peak its search reported, from the tile it already cached, against the
+same leave-one-out template (`KeypointLocalization::loo_zncc_middle`). The fit
+keeps the walked peak's middle reading as `walked_zncc_middle`, beside
+`walked_zncc`.
+
+The whole-patch `zncc` keeps its meaning and its bar. The middle reading has a
+bar of its own, `min_zncc_middle`, which defaults to `BENCH_MIN_ZNCC_MIDDLE`
+(0.7) and is off at `0`. It sits no higher than the whole-patch bar: the middle
+covers a quarter of the samples, so on a correct sighting it scatters more and
+reads a little lower than the whole, and a higher middle bar would turn out
+correct sightings the whole bar keeps. `zncc_middle` is `None` wherever `zncc` is, where the
+reference's or consensus's middle is flat, and on a track read back from a
+committed point before it is evaluated, because `.sfmr` stores the whole-patch
+score alone. A row with no middle reading clears the middle bar, the way a row
+with no localizability clears `max_keypoint_uncertainty`.
 ## The steps
 
 ### Putting a point on the bench
@@ -1562,6 +1607,7 @@ reading. What lands in each slot is:
 | Slot | What it says |
 |------|--------------|
 | `zncc` | The leave-one-out agreement at the peak, within `search_px` of where the sighting is. With `seed_shift_px` near zero it is the agreement at the keypoint itself. |
+| `zncc_middle` | The same samples at the same peak against the same consensus, read over the middle square of the tile only (§ "The middle ZNCC"). |
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in source-image px. The **sighting's** own evidence, and what `max_shift_px` paints on. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. |
@@ -1843,17 +1889,24 @@ nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 
 ## Parameters
 
-Three of the thresholds default to the kernels' own bars, read from those
+Two of the thresholds default to the kernels' own bars, read from those
 kernels' parameter types rather than written out again, so the bench and the
 batch pass start from the same bar and moving one is the person choosing to
-differ. `max_shift_px` is the bench's own, `BENCH_MAX_SHIFT_PX`, because on the
-bench it is also the bound on a fit's walk (§ "The fit's walk is bounded by the
-person's bar"). A track keeps the bars it was made with: one created under an
+differ. The other three are the bench's own. `max_shift_px` is
+`BENCH_MAX_SHIFT_PX`, because on the bench it is also the bound on a fit's walk
+(§ "The fit's walk is bounded by the person's bar"). `min_zncc` is
+`BENCH_MIN_ZNCC`, below the cluster refinement's `0.85`, because the one bar
+judges both stages and the track stage's leave-one-out ZNCC, scored against a
+consensus the sighting is left out of, reads lower on a correct sighting than
+the refinement's score after it has fitted a whole affine warp; the batch pass
+keeps its `0.85`. `min_zncc_middle` is `BENCH_MIN_ZNCC_MIDDLE` (§ "The middle
+ZNCC"). A track keeps the bars it was made with: one created under an
 earlier default carries that default until someone moves it.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `min_zncc` | `0.85` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. From `ClusterRefineParams::default`. |
+| `min_zncc` | `0.7` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
+| `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `max_shift_px` | `8.0` | How far the correlation peak may sit from where the observation sits: the drift from its seed at the cluster stage, `seed_shift_px` at the track stage, both in source-image px; and at the track stage how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, not `ClusterRefineParams::default`'s 3 px, which stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
 | `max_keypoint_uncertainty` | `0.35` | The largest tile localizability an observation may have, in grid px. From `KeypointLocalizeParams::default`'s `max_member_keypoint_uncertainty`. |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
@@ -1972,8 +2025,10 @@ a fit; and
 `from`, `to`, `changed`, the upgrade's `fit` report and the downgrade's
 `reference` for a stage change. An observation's `"track"` dict carries
 `reason`, the sentence, exactly when it carries no `zncc`, and `walked_px` and
-`walked_to` (with `walked_zncc` where the localizer scored the peak) exactly
-when the last fit refused to walk that sighting and kept its seed.
+`walked_to` (with `walked_zncc` and `walked_zncc_middle` where the localizer
+scored the peak) exactly when the last fit refused to walk that sighting and
+kept its seed. Both stages' dicts carry `zncc_middle` where there is one, and
+`thresholds` and `apply_thresholds` carry `min_zncc_middle`.
 
 **The coordinate crosses under the name of whichever it is**, in the reports and
 on the track: `EditableTrack.at_infinity` says which, `position` is the world

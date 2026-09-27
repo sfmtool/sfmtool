@@ -700,6 +700,7 @@ pub(crate) struct IntrinsicsChange {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ThresholdChange {
     pub(crate) min_zncc: Option<f64>,
+    pub(crate) min_zncc_middle: Option<f64>,
     pub(crate) max_shift_px: Option<f64>,
     pub(crate) max_keypoint_uncertainty: Option<f64>,
     pub(crate) min_relative_zncc: Option<f64>,
@@ -714,6 +715,9 @@ impl ThresholdChange {
         let mut next = thresholds.clone();
         if let Some(value) = self.min_zncc {
             next.min_zncc = value;
+        }
+        if let Some(value) = self.min_zncc_middle {
+            next.min_zncc_middle = value;
         }
         if let Some(value) = self.max_shift_px {
             next.max_shift_px = value;

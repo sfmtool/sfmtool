@@ -168,6 +168,15 @@ fn run_recovery_case(
         result.member_zncc[other],
         result.member_shift_px[other],
     );
+    // The recovered warp agrees in the middle of the patch as well, and the
+    // reference against itself reads 1 there.
+    assert!(
+        result.member_zncc_middle[other] > 0.9,
+        "middle zncc {} (whole {})",
+        result.member_zncc_middle[other],
+        result.member_zncc[other],
+    );
+    assert_eq!(result.member_zncc_middle[ref_k as usize], 1.0);
 
     // Ground truth in the refined direction (reference → other image).
     let (w_true, t_w) = if ref_k == 0 {

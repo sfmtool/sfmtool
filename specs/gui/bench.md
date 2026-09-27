@@ -684,7 +684,8 @@ reconstruction that stores a bitmap per point as on one that does not.
 first is a bench step: the track put on the bench under the label a cluster
 started at that pixel would take (`IMG_0042@142,198`), made active, one `Bench`
 row whose sentence names the pixel, the member that built it, its `in` count and
-median ZNCC, and any members that refused before it. The second is
+median ZNCC with the median middle ZNCC beside it (`median ZNCC 93% / 71%`),
+and any members that refused before it. The second is
 `commit_bench_track`, the step Track View's *Commit* takes, so its version, its
 `Edit` row, the selection of the written point and the item left seated on it
 are that step's own. The operation's row is written first and the commit's
@@ -860,8 +861,11 @@ An agent that has just made a step reads `evaluating` and the previous numbers,
 and reads again until it says `current`. `get_bench_track` is
 Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
-measurements where they exist -- at the track stage, the two distances
-(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to` and `walked_zncc` for a row the last fit
+measurements where they exist -- at both stages `zncc_middle` beside `zncc`
+(the same samples read over the middle square of the patch, § "The middle
+ZNCC" of [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), at the track stage
+the two distances
+(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc` and `walked_zncc_middle` for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the evaluation could
 not score, the `reason` sentence in place of a ZNCC. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the

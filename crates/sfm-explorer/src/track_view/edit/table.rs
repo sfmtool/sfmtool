@@ -78,7 +78,9 @@ impl ColumnLayout {
         let image = tile + TILE_SIZE + 8.0;
         let name = image + 34.0;
         let zncc = name + 130.0;
-        let shift = zncc + 54.0;
+        // Room for the whole-patch and the middle reading in percent,
+        // `92 / 61`, and for the `ZNCC (%)` heading.
+        let shift = zncc + 64.0;
         let offset = shift + 62.0;
         let sigma = offset + 62.0;
         let error = sigma + 56.0;
@@ -104,23 +106,70 @@ impl ColumnLayout {
         }
     }
 
-    /// The header's cells, each at the offset its column is drawn at.
-    pub(super) fn headers(&self) -> [(f32, &'static str); 11] {
+    /// The header's cells, each at the offset its column is drawn at, with the
+    /// hover text that says what the column holds.
+    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 11] {
         [
-            (self.verdict, "Verdict"),
-            (self.image, "Img"),
-            (self.name, "Name"),
-            (self.zncc, "ZNCC"),
-            (self.shift, "Seed sh."),
-            (self.offset, "Proj. off"),
-            (self.sigma, "\u{3c3}_pos"),
-            (self.error, "Error"),
-            (self.angle, "Angle"),
-            (self.status, "Status"),
-            (self.from, "From"),
+            (self.verdict, "Verdict", VERDICT_TIP),
+            (
+                self.image,
+                "Img",
+                "The image's index in the reconstruction.",
+            ),
+            (self.name, "Name", "The image's file name."),
+            (self.zncc, "ZNCC (%)", ZNCC_TIP),
+            (self.shift, "Seed sh.", SEED_SHIFT_TIP),
+            (self.offset, "Proj. off", PROJECTION_OFFSET_TIP),
+            (self.sigma, "\u{3c3}_pos", SIGMA_POS_TIP),
+            (self.error, "Error", ERROR_TIP),
+            (self.angle, "Angle", ANGLE_TIP),
+            (self.status, "Status", STATUS_TIP),
+            (self.from, "From", FROM_TIP),
         ]
     }
 }
+
+const VERDICT_TIP: &str = "Whether the observation belongs to the track: in, out or \
+    candidate. Click a row's control to cycle it; a dot marks a verdict set by hand, which the \
+    thresholds leave alone. The tile beside it is the patch as this photograph sees it.";
+
+/// The ZNCC heading's hover text, in one constant so the tests aim at the text
+/// shown.
+pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in percent: how \
+    closely this photograph's view of the patch matches, once differences in brightness and \
+    contrast are removed. 100 is an exact match and 0 is no relation.\n\n\
+    The first number is over the whole patch. The second is over its middle only, the centred \
+    square half the patch's width, read from the same samples. A high first number with a low \
+    second one means the match comes from the patch's surroundings rather than from the \
+    pixel's own neighbourhood.\n\n\
+    At the cluster stage the match is against the reference's template. At the track stage it \
+    is against the consensus of the other observations, with this one left out.";
+
+const SEED_SHIFT_TIP: &str = "How far the correlation peak sits from where the observation \
+    sits, in source-image pixels: the observation's own evidence. The max shift px bar judges it.";
+
+const PROJECTION_OFFSET_TIP: &str = "How far the observation sits from where the track's \
+    point projects into this image, in pixels. Large offsets on every row beside small seed \
+    shifts say the point is off, not the sightings. Track stage only.";
+
+const SIGMA_POS_TIP: &str = "How precisely this observation's own tile pins a position, as \
+    the positional uncertainty in patch-grid pixels. Lower is better; a flat tile or a single \
+    straight edge scores high. The max \u{3c3}_pos bar judges it.";
+
+const ERROR_TIP: &str = "The reprojection error against the triangulated position, in \
+    pixels. Track stage only.";
+
+const ANGLE_TIP: &str = "The reprojection error as an angle, in degrees: between the \
+    observation's ray and the direction from its camera to the point. Comparable across lenses \
+    and depths. Track stage only.";
+
+const STATUS_TIP: &str = "What the last evaluation or fit said about the row. At the \
+    cluster stage, the refinement's verdict on the member. At the track stage, localized, a \
+    walk the fit refused, or why the row could not be read.";
+
+const FROM_TIP: &str = "Where the observation came from: the point the track was read \
+    from, a detected feature, a descriptor search, a sweep, a pixel placed by hand, or another \
+    point.";
 
 /// The verdict the control cycles to from `current`: in, out, candidate, round
 /// again.
@@ -528,8 +577,8 @@ impl TrackEdit {
 pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<String> {
     let m = row.track.as_ref()?;
     let to = m.walked_to?;
-    let zncc = |value: Option<f64>| match value {
-        Some(v) if v.is_finite() => format!("{v:.3}"),
+    let zncc = |value: Option<f64>, middle: Option<f64>| match value {
+        Some(v) if v.is_finite() => super::zncc_sentence(Some(v), middle),
         _ => "not scored".to_string(),
     };
     Some(format!(
@@ -539,8 +588,8 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
         m.walked_px.unwrap_or(f64::NAN),
         to[0],
         to[1],
-        zncc(m.zncc),
-        zncc(m.walked_zncc),
+        zncc(m.zncc, m.zncc_middle),
+        zncc(m.walked_zncc, m.walked_zncc_middle),
     ))
 }
 
@@ -550,16 +599,28 @@ fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
     let available = ui.available_rect_before_wrap();
     let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), 20.0));
     ui.allocate_rect(rect, egui::Sense::hover());
-    let painter = ui.painter();
     let font = egui::TextStyle::Small.resolve(ui.style());
     let color = ui.visuals().weak_text_color();
-    for (x, label) in cols.headers() {
-        painter.text(
+    let headers = cols.headers();
+    for (k, &(x, label, tip)) in headers.iter().enumerate() {
+        ui.painter().text(
             egui::pos2(rect.min.x + x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
             font.clone(),
             color,
         );
+        // The heading's hover region runs to where the next one starts, so the
+        // whole width of its column answers, not only the word.
+        let end = headers
+            .get(k + 1)
+            .map_or(rect.max.x, |&(next, _, _)| rect.min.x + next);
+        let cell = egui::Rect::from_x_y_ranges(rect.min.x + x..=end, rect.y_range());
+        ui.interact(
+            cell,
+            ui.id().with(("track_view_heading", k)),
+            egui::Sense::hover(),
+        )
+        .on_hover_text(tip);
     }
 }

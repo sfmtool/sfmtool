@@ -46,6 +46,23 @@ pub(super) fn median_zncc(track: &EditableTrack) -> f64 {
     }
 }
 
+/// The median middle ZNCC over the `in` observations that carry one, or `NaN`
+/// when none does: the figure to set beside [`median_zncc`], which the gates
+/// judge.
+pub(super) fn median_zncc_middle(track: &EditableTrack) -> f64 {
+    let mut z: Vec<f64> = track
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+        .filter_map(|o| o.track.as_ref()?.zncc_middle)
+        .collect();
+    if z.is_empty() {
+        f64::NAN
+    } else {
+        median_in_place(&mut z)
+    }
+}
+
 /// How many observations are `in`.
 pub(super) fn in_count(track: &EditableTrack) -> usize {
     track.verdict_counts().0
@@ -440,10 +457,12 @@ fn gate(
     let offset = query_offset(&track, q, pixel);
     let n_in = in_count(&track);
     let zncc = median_zncc(&track);
+    let zncc_middle = median_zncc_middle(&track);
     let mut record = |worst: Option<f64>| {
         stages.push(StageRecord::Final {
             in_views: n_in,
             zncc_median: zncc,
+            zncc_middle_median: zncc_middle,
             query_offset_px: offset,
             max_projection_offset_px: worst,
         })

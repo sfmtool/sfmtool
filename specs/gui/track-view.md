@@ -652,16 +652,21 @@ belongs to. A change of active item clears it.
 
 #### The thresholds
 
-Four sliders, one per bar of `Thresholds`: minimum ZNCC, maximum shift, maximum
-keypoint uncertainty and minimum relative ZNCC, so no bar is one only the wire
-can move. The first three are the bars the painting reads; the fourth is the
-fraction of the track's own self-agreement a sweep candidate is scored by.
+Five sliders, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
+maximum shift, maximum keypoint uncertainty and minimum relative ZNCC, so no bar
+is one only the wire can move. The first four are the bars the painting reads;
+the fifth is the fraction of the track's own self-agreement a sweep candidate is
+scored by. The three ZNCC sliders read and take percent in whole steps, as the
+table's ZNCC column reads, so *min ZNCC (%)* and *min middle ZNCC (%)* both show
+70 on a new track while the track and the wire hold 0.7; a typed value may end
+in `%`. A middle bar of 0 turns it off, and a row with no middle reading clears
+it.
 `max shift px` is also the bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), 8 px on a new track.
 
 **A slider applies to the active track when it is let go.** Dragging one
-repaints the table live; releasing it sets the track's bars to where the four
+repaints the table live; releasing it sets the track's bars to where the five
 sliders stand and turns the painting into verdicts, one version carrying both,
 with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
 it. A typed value is the same gesture, applied when the field is left rather
@@ -700,23 +705,46 @@ node is free.
 #### The observation table
 
 One row per observation, in index order, with the headings above the scroll
-area.
+area. Each heading has hover text over the width of its column saying what the
+column holds; the *ZNCC (%)* heading's says what a ZNCC is, that the first
+number is over the whole patch and the second over its middle half, and what
+the two apart mean.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Verdict | a three-state control, clicked to cycle `in` / `out` / `candidate`; a dot marks a verdict set by hand | same |
 | Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp |
 | Img, Name | as view mode | as view mode |
-| ZNCC | against the reference template | leave-one-out against the consensus, at the correlation peak within *search px* of the observation |
+| ZNCC (%) | against the reference template, then the middle ZNCC: `92 / 61` | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, then the middle ZNCC: `92 / 61` |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
 | σ_pos | the tile's localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `walked 19 px (ZNCC 0.873 there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which says the difference
 between a number a round produced and a round that has not been run.
+
+**The ZNCC cell holds two readings of the same samples.** The first is the
+whole-patch ZNCC, the number the bars and the painting judge. The second is the
+middle ZNCC: the same samples, at the same peak and against the same reference,
+correlated over only the centred square half the grid's width (the middle
+`12 x 12` of a `24 x 24` grid). A whole-patch ZNCC can be high because of the
+parts of the patch away from its centre: a small near object whose patch is
+mostly the background behind it, a pixel at a depth edge, a texture that
+repeats along the epipolar line. The middle reading is low in each of those
+cases, so the pair shows whether a match is carried by the pixel's own
+neighbourhood or by its surroundings. Both print in percent, `92` for a ZNCC
+of `0.92`, which says the same two digits in two fewer characters and keeps
+the pair within one column; the heading `ZNCC (%)` carries the unit, and a
+sentence that quotes a pair, such as the walk's Status cell, writes it on each
+number (`87% / 41%`). The bars and the wire keep ZNCC on its own `0 .. 1`
+scale. A row with
+a ZNCC and no middle reading prints `-` for the second, as on a track read back
+from a committed point before its first evaluation, since `.sfmr` stores the
+whole-patch score alone. The table has no column sort, so nothing is ordered by
+either reading.
 
 **The cells follow where the evaluation stands.** While an evaluation of the
 track's current inputs is on its way, the numbers are the previous
@@ -804,7 +832,7 @@ has measured.
 - **Accept walk**, in the same menu on a track-stage row the last fit kept at
   its seed and on no other row: put the sighting where the fit's walk would have
   taken it (`walked_to`). Its hover text gives the distance, the pixel, and the
-  ZNCC at the seed and at the walked peak. The step is core's
+  ZNCC pair (whole, then middle) at the seed and at the walked peak. The step is core's
   `sight_observation` at that pixel (`AppState::accept_bench_walk`), so the
   observation is pinned and the measurements read at the seed are dropped, the
   walk's among them; one version, labelled `Accepted the walk of observation 3
@@ -951,7 +979,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   walk* absent from a row before that and offered on exactly the kept rows
   after, reporting the observation, and accepting it moving the keypoint to the
   walked pixel, pinned, in one version; the Status cell's reading sentence and
-  its `walked` form with and without the walked ZNCC; the
+  its `walked` form with and without the walked ZNCC; the ZNCC cell's
+  `whole / middle` percent form at both stages, and `-` for a missing middle; the
   header's `Bearing (...)` and `Position (` lines; the row menu's search entries
   and their remedies; a row click reporting the image and the pixel, and a
   double-click asking for camera view with the pixel; *Lock* starting ticked, a

@@ -1523,3 +1523,125 @@ fn all_none_keypoints_match_no_keypoints() {
     assert_eq!(baseline.photoconsistency, anchored.photoconsistency);
     assert_eq!(baseline.valid_view_count, anchored.valid_view_count);
 }
+
+// ---- The middle ZNCC -----------------------------------------------------------
+
+#[test]
+fn the_middle_is_the_centred_square_half_the_grid_s_width() {
+    use super::support::middle_span;
+    assert_eq!(middle_span(24), 6..18);
+    assert_eq!(middle_span(20), 5..15);
+    // An odd grid keeps the middle symmetric about the centre.
+    assert_eq!(middle_span(17), 4..13);
+    let support = build_support(PatchWindow::Uniform, 24);
+    assert_eq!(support.middle(24).len(), 12 * 12);
+}
+
+/// Two `R×R` single-channel grids, from `f(row, col)`, laid out over the uniform
+/// support.
+fn grid(r: usize, f: impl Fn(usize, usize) -> f32) -> Vec<f32> {
+    (0..r * r).map(|p| f(p / r, p % r)).collect()
+}
+
+fn mean_over(values: &[f32], at: &[usize]) -> f32 {
+    at.iter().map(|&k| values[k]).sum::<f32>() / at.len() as f32
+}
+
+#[test]
+fn the_middle_zncc_equals_the_whole_when_the_outside_is_uniform() {
+    let r = 24;
+    let support = build_support(PatchWindow::Uniform, r as u32);
+    let middle = support.middle(r as u32);
+    let everything: Vec<usize> = (0..r * r).collect();
+    let texture =
+        |row: usize, col: usize| (row as f32 * 0.9).sin() * 40.0 + (col as f32 * 1.3).cos() * 30.0;
+    let noise = |row: usize, col: usize| ((row * 7 + col * 13) % 11) as f32 - 5.0;
+    let mut a = grid(r, |row, col| 100.0 + texture(row, col));
+    let mut b = grid(r, |row, col| {
+        50.0 + 2.0 * texture(row, col) + 3.0 * noise(row, col)
+    });
+    // Outside the middle each grid holds its own middle's mean, so the outside
+    // adds nothing to either mean or either norm.
+    let (fill_a, fill_b) = (mean_over(&a, &middle), mean_over(&b, &middle));
+    for k in 0..r * r {
+        if !middle.contains(&k) {
+            a[k] = fill_a;
+            b[k] = fill_b;
+        }
+    }
+    let n = r * r;
+    let whole = windowed_zncc_at(&a, &b, 1, n, &support.weights, &everything);
+    let mid = windowed_zncc_at(&a, &b, 1, n, &support.weights, &middle);
+    assert!(whole < 0.999, "the noise keeps it off 1: {whole}");
+    assert_relative_eq!(whole, mid, epsilon = 1e-6);
+}
+
+#[test]
+fn the_middle_zncc_falls_when_only_the_outside_matches() {
+    let r = 24;
+    let support = build_support(PatchWindow::Uniform, r as u32);
+    let middle = support.middle(r as u32);
+    let everything: Vec<usize> = (0..r * r).collect();
+    let n = r * r;
+    let shared =
+        |row: usize, col: usize| (row as f32 * 0.7).sin() * 40.0 + (col as f32 * 0.5).cos() * 35.0;
+    let own_a = |row: usize, col: usize| (row as f32 * 2.1 + col as f32 * 0.3).sin() * 40.0;
+    let own_b = |row: usize, col: usize| (col as f32 * 1.7 - row as f32 * 0.4).cos() * 40.0;
+    let span = 6..18;
+    let inside = |row: usize, col: usize| span.contains(&row) && span.contains(&col);
+    let a = grid(r, |row, col| {
+        128.0
+            + if inside(row, col) {
+                own_a(row, col)
+            } else {
+                shared(row, col)
+            }
+    });
+    let b = grid(r, |row, col| {
+        128.0
+            + if inside(row, col) {
+                own_b(row, col)
+            } else {
+                shared(row, col)
+            }
+    });
+    let whole = windowed_zncc_at(&a, &b, 1, n, &support.weights, &everything);
+    let mid = windowed_zncc_at(&a, &b, 1, n, &support.weights, &middle);
+    assert!(whole > 0.5, "the shared outside carries the whole: {whole}");
+    assert!(mid.abs() < 0.3, "the middles do not agree: {mid}");
+}
+
+#[test]
+fn the_middle_zncc_follows_the_whole_patch_flat_channel_conventions() {
+    let r = 8;
+    let support = build_support(PatchWindow::Uniform, r as u32);
+    let middle = support.middle(r as u32);
+    let n = r * r;
+    let textured = grid(r, |row, col| (row * 3 + col * 5 % 7) as f32);
+    let flat = vec![7.0f32; n];
+    // A flat sample channel scores 0; a flat reference is left out, and a
+    // reference with no textured channel has no reading.
+    let two_channels = |x: &[f32], y: &[f32]| [x, y].concat();
+    let sample = two_channels(&textured, &flat);
+    let reference = two_channels(&textured, &textured);
+    assert_relative_eq!(
+        windowed_zncc_at(&sample, &reference, 2, n, &support.weights, &middle),
+        0.5,
+        epsilon = 1e-9
+    );
+    let reference = two_channels(&textured, &flat);
+    assert_relative_eq!(
+        windowed_zncc_at(
+            &textured.repeat(2),
+            &reference,
+            2,
+            n,
+            &support.weights,
+            &middle
+        ),
+        1.0,
+        epsilon = 1e-9
+    );
+    assert!(windowed_zncc_at(&textured, &flat, 1, n, &support.weights, &middle).is_nan());
+    assert!(windowed_zncc_at(&textured, &textured, 1, n, &support.weights, &[]).is_nan());
+}

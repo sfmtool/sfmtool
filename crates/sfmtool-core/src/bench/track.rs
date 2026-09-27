@@ -115,6 +115,13 @@ pub struct ClusterMeasurement {
     pub shape: Option<[[f64; 2]; 2]>,
     /// The windowed ZNCC the refinement achieved against the template.
     pub zncc: Option<f64>,
+    /// The **middle ZNCC** beside [`Self::zncc`]: the same samples at the
+    /// refinement's final map, correlated against the template over only the
+    /// middle square of the grid (the rows and columns `R/4 .. R - R/4`, the
+    /// middle `12 × 12` of a `24 × 24` grid). A high `zncc` that the middle does
+    /// not share is carried by the parts of the patch away from its centre.
+    /// `None` wherever `zncc` is, and where the template's middle is flat.
+    pub zncc_middle: Option<f64>,
     /// How far the refinement moved off the seed, in source-image px.
     pub shift_px: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in template-grid
@@ -134,6 +141,7 @@ impl ClusterMeasurement {
             position: None,
             shape: None,
             zncc: None,
+            zncc_middle: None,
             shift_px: None,
             localizability: None,
             status: None,
@@ -242,6 +250,16 @@ pub struct TrackMeasurement {
     /// observation's own keypoint. With [`Self::seed_shift_px`] near zero it is
     /// the agreement at the keypoint itself.
     pub zncc: Option<f64>,
+    /// The **middle ZNCC** beside [`Self::zncc`]: the same samples at the same
+    /// correlation peak against the same consensus, read over only the middle
+    /// square of the tile (the rows and columns `R/4 .. R - R/4`, the middle
+    /// `12 × 12` of a `24 × 24` tile). A high `zncc` that the middle does not
+    /// share is carried by the parts of the tile away from the keypoint: a
+    /// small near object in front of a textured background, a pixel at a depth
+    /// edge, a texture that repeats along the epipolar line. `None` wherever
+    /// `zncc` is, where the consensus's middle is flat, and on a track read
+    /// back from a committed point, which stores the whole-tile score alone.
+    pub zncc_middle: Option<f64>,
     /// How far that correlation peak sits from the observation's own keypoint,
     /// in source-image px: the observation's own evidence, and what
     /// [`Thresholds::max_shift_px`] paints on.
@@ -293,6 +311,9 @@ pub struct TrackMeasurement {
     /// the fit took with the sighting kept at its seed. Set and cleared with
     /// [`Self::walked_px`].
     pub walked_zncc: Option<f64>,
+    /// The middle ZNCC beside [`Self::walked_zncc`], read the way
+    /// [`Self::zncc_middle`] is. Set and cleared with [`Self::walked_px`].
+    pub walked_zncc_middle: Option<f64>,
     /// Why there is no ZNCC, when there is none: an evaluation that could not
     /// read an observation says which of its refusals it was rather than
     /// leaving the row blank.
@@ -522,17 +543,31 @@ pub struct Origin {
 
 /// The bars the threshold painting judges an observation against.
 ///
-/// Three of the defaults are read from the kernels' own parameter types rather
+/// Two of the defaults are read from the kernels' own parameter types rather
 /// than written out again, so the bench and the batch pass start from the same
-/// bar and moving one is the person choosing to differ. `max_shift_px` is the
-/// bench's own, [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
+/// bar and moving one is the person choosing to differ. The other three are the
+/// bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
 /// fit may move a sighting, and the cluster refinement's 3 px turned away walks
-/// a person wanted.
+/// a person wanted. [`BENCH_MIN_ZNCC`] and [`BENCH_MIN_ZNCC_MIDDLE`]: the
+/// cluster refinement's `0.85` judges the score it reached by fitting a whole
+/// affine warp, and the track stage's leave-one-out score runs lower on correct
+/// sightings, so that bar turned out sightings a person would keep.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
     /// cluster stage, the leave-one-out ZNCC at the track stage.
     pub min_zncc: f64,
+    /// The middle ZNCC an observation has to reach: [`ClusterMeasurement::zncc_middle`]
+    /// at the cluster stage and [`TrackMeasurement::zncc_middle`] at the track
+    /// stage. It turns out a sighting whose whole-patch agreement is carried
+    /// by the patch's surroundings rather than its middle.
+    ///
+    /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`]. An
+    /// observation with no middle reading, because its middle is flat or it
+    /// was read back from a committed point, has nothing to judge and clears
+    /// the bar, as a row with no localizability clears
+    /// [`Self::max_keypoint_uncertainty`].
+    pub min_zncc_middle: f64,
     /// How far the correlation peak may sit from where the observation sits, in
     /// source-image px: [`ClusterMeasurement::shift_px`] at the cluster stage
     /// and [`TrackMeasurement::seed_shift_px`] at the track stage.
@@ -562,11 +597,31 @@ pub struct Thresholds {
 /// sightings at their seeds that a person moving a patch by hand wanted moved.
 pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
 
+/// The bench's default [`Thresholds::min_zncc`].
+///
+/// Below the cluster refinement's own `min_zncc` (0.85), which stays the batch
+/// pass's bar. The bench judges both stages by the one bar, and the track
+/// stage's leave-one-out ZNCC, scored against a consensus the sighting is left
+/// out of, reads lower on a correct sighting than the refinement's score does
+/// after it has fitted a whole affine warp.
+pub const BENCH_MIN_ZNCC: f64 = 0.7;
+
+/// The bench's default [`Thresholds::min_zncc_middle`].
+///
+/// No higher than [`BENCH_MIN_ZNCC`]: the middle reading covers a quarter of
+/// the samples, so on a correct sighting it scatters more and reads a little
+/// lower than the whole-patch one, and a middle bar above the whole bar would
+/// turn out correct sightings the whole bar keeps.
+pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
+
+// The middle bar sits no higher than the whole bar, for the reason above.
+const _: () = assert!(BENCH_MIN_ZNCC_MIDDLE <= BENCH_MIN_ZNCC);
+
 impl Default for Thresholds {
     fn default() -> Self {
-        let cluster = ClusterRefineParams::default();
         Self {
-            min_zncc: cluster.min_zncc,
+            min_zncc: BENCH_MIN_ZNCC,
+            min_zncc_middle: BENCH_MIN_ZNCC_MIDDLE,
             max_shift_px: BENCH_MAX_SHIFT_PX,
             max_keypoint_uncertainty: KeypointLocalizeParams::default()
                 .max_member_keypoint_uncertainty,

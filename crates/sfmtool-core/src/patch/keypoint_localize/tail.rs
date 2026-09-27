@@ -5,9 +5,9 @@
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
-    below_absolute_floor, extract_core, member_is_localizable, prof, project, render_context,
-    shifted_center, ContextTile, KeypointLocalization, KeypointLocalizeParams, LocalizeError,
-    SearchStrategy, ViewState,
+    below_absolute_floor, extract_core, member_is_localizable, middle_zncc, prof, project,
+    render_context, shifted_center, ContextTile, KeypointLocalization, KeypointLocalizeParams,
+    LocalizeError, SearchStrategy, ViewState,
 };
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
@@ -198,6 +198,7 @@ pub(super) fn register_tail(
     // The tail cache is centred on the view's seed, so the `(0, 0)` shift reads
     // its core at `margin`.
     let tail_c0 = geom.margin as usize;
+    let middle = support.middle(geom.resolution);
     prof::count(&prof::N_RENDER, tail.len() as u64);
     // Parallel to `tail`: whether the view cleared the member localizability
     // gate. A view that did not is never searched and never kept, whatever it
@@ -236,6 +237,7 @@ pub(super) fn register_tail(
         if !ok {
             prof::count(&prof::N_DROP_UNLOCALIZABLE, 1);
             st.loo = f64::NAN;
+            st.loo_middle = f64::NAN;
             continue;
         }
         // Score in the channel space this tail tile actually has (see the
@@ -249,6 +251,7 @@ pub(super) fn register_tail(
         if sub_kept == 0 {
             // No channel the template scores on survives in this view.
             st.loo = f64::NAN;
+            st.loo_middle = f64::NAN;
             continue;
         }
         prof::count(&prof::N_SEARCH, 1);
@@ -282,9 +285,23 @@ pub(super) fn register_tail(
                 st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-geom.search_steps, geom.search_steps);
                 st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
                 st.loo = sh.peak;
+                st.loo_middle = middle_zncc(
+                    &cache,
+                    support,
+                    &middle,
+                    r,
+                    (tail_c0 as i64 + sh.iy) as usize,
+                    (tail_c0 as i64 + sh.ix) as usize,
+                    sub_mask,
+                    sub_kept,
+                    &search.tmpl,
+                );
             }
             // No scorable window: the view's core is out of frame at its seed.
-            None => st.loo = f64::NAN,
+            None => {
+                st.loo = f64::NAN;
+                st.loo_middle = f64::NAN;
+            }
         }
     }
 
@@ -412,6 +429,7 @@ pub(super) fn finalize(
         out.offsets_px
             .push((kx - st.proj[0]).hypot(ky - st.proj[1]));
         out.loo_zncc.push(st.loo);
+        out.loo_zncc_middle.push(st.loo_middle);
         out.is_basis.push(st.is_basis);
     }
     out

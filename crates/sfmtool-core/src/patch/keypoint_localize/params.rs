@@ -211,6 +211,14 @@ pub struct KeypointLocalization {
     /// ever scored — e.g. a lone input view, or a view kept by the early
     /// "fewer than two views remain" exit before any consensus was built.
     pub loo_zncc: Vec<f64>,
+    /// Per kept view, the middle ZNCC beside [`loo_zncc`](Self::loo_zncc): the
+    /// same samples at the same integer peak against the same template, read
+    /// over only the middle square of the grid, the rows and columns `R/4 ..
+    /// R - R/4`. Parallel to [`views`](Self::views). A whole-core reading that
+    /// the middle does not share is carried by the parts of the tile away from
+    /// the keypoint. `NaN` wherever `loo_zncc` is, and where the template's
+    /// middle carries no texture.
+    pub loo_zncc_middle: Vec<f64>,
     /// Congealing rounds actually executed (`<= max_iters`; `0` when the input
     /// had fewer than two views and the loop never ran). Diagnostic: lets tests
     /// and callers observe the `convergence_px` early exit directly.

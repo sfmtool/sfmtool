@@ -267,10 +267,20 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           list, which is \
                           stable for the life of the track — observations are appended and never \
                           renumbered, so an index read here still names the same observation \
-                          after a verdict or a fit. A track-stage observation the last \
+                          after a verdict or a fit. Both the cluster and the track block carry \
+                          zncc_middle beside zncc: the same samples correlated over only the \
+                          middle square of the patch, half its width (the middle 12 x 12 of a \
+                          24 x 24 grid). A high zncc with a low zncc_middle is an agreement \
+                          carried by the parts of the patch away from the pixel, such as a \
+                          background behind a small near object, the far side of a depth edge, \
+                          or a texture that repeats along the epipolar line. zncc_middle is null \
+                          where zncc is, where the middle is flat, and on a track read back \
+                          from a committed point before it is evaluated. A track-stage \
+                          observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
-                          it), walked_to (the pixel it would have reached) and walked_zncc (the \
-                          ZNCC scored there, beside the row's own zncc read at the seed); \
+                          it), walked_to (the pixel it would have reached), walked_zncc (the \
+                          ZNCC scored there, beside the row's own zncc read at the seed) and \
+                          walked_zncc_middle (the middle reading there); \
                           sight_bench_observation with walked_to as the pixel accepts the walk.",
             kind: Read,
             schema: object(

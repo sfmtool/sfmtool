@@ -60,6 +60,7 @@ pub struct ClusterRefineResult {
     pub member_positions: Array2<f64>,        // (M, 2) = p
     pub member_affine_shapes: Array3<f64>,    // (M, 2, 2) = S
     pub member_zncc: Vec<f32>,                // (M,), NaN if not evaluated
+    pub member_zncc_middle: Vec<f32>,         // (M,), the same over the middle square
     pub member_shift_px: Vec<f32>,            // (M,), NaN if not evaluated
 }
 
@@ -268,6 +269,21 @@ ZNCC routinely exceeds the *ground-truth* warp's own — the score gates match
 validity, never warp correctness. Consumers re-gate on the stored signals, which
 is why rejected members keep their measured ZNCC and shift.
 
+**The middle ZNCC.** Beside each member's ZNCC the result carries
+`member_zncc_middle`: the member's support samples at the final map, the one the
+winning evaluation used, correlated against the reference template's own raw
+samples over only the middle of the grid, the centred square half its width
+(rows and columns `R/4 .. R - R/4`). Each channel is mean-removed and normalized
+over that square alone, under the same window weights and the same channel
+pairing as the whole-patch score. It costs one more pass over the tile the
+refinement already built for that map, and no gate reads it. A match the middle
+does not share is carried by the parts of the patch away from its centre: the
+background behind a small near object, the far side of a depth edge, or a
+texture that repeats along the epipolar line. The reference reads `1` against
+itself unless its middle is flat, and every member reads `NaN` where the
+reference's middle is flat or where the member was not evaluated. The
+`.matches` cluster-patches section does not store it.
+
 Finally, at most one member per image survives: among provisionally kept members
 sharing an image the highest ZNCC wins, ties to the lowest member index, and the
 rest become `DuplicateImage` — as does any member sharing the reference's own
@@ -460,7 +476,8 @@ under `py.detach`.
 The returned dict is member-parallel: `reference_members` `(C,)` uint32
 (`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,
 `member_positions` `(M, 2)` float64, `member_affine_shapes` `(M, 2, 2)`
-float64, `member_zncc` `(M,)` float32, `member_shift_px` `(M,)` float32, and
+float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
+`member_shift_px` `(M,)` float32, and
 `member_consistency_residual` `(M,)` float32 — the warp-consistency signal,
 computed inside the same call.
 

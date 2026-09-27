@@ -620,6 +620,10 @@ pub enum StageRecord {
         in_views: usize,
         /// The median ZNCC over them.
         zncc_median: f64,
+        /// The median middle ZNCC over them (`TrackMeasurement::zncc_middle`),
+        /// `NaN` when none carries one. Shown beside `zncc_median`; no gate
+        /// reads it.
+        zncc_middle_median: f64,
         /// How far the queried sighting's keypoint sits from the pixel, in px.
         query_offset_px: Option<f64>,
         /// The largest projection offset over the `in` views, in px, once the

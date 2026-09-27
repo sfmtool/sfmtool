@@ -784,6 +784,43 @@ fn the_painting_proposes_verdicts_from_the_stored_measurements() {
     assert!(painted.observations.iter().all(|o| !o.pinned));
 }
 
+/// The middle-ZNCC bar turns out a row whose middle disagrees, is off at `0`,
+/// and has nothing to judge on a row with no middle reading.
+#[test]
+fn the_painting_judges_the_middle_zncc_against_its_own_bar() {
+    let mut track = scored_track([0.95, 0.96]);
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a slot")
+        .zncc_middle = Some(0.9);
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a slot")
+        .zncc_middle = Some(0.3);
+    track.thresholds.min_zncc_middle = 0.0;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.verdict_counts().0, 2, "a bar of 0 is off");
+
+    track.thresholds.min_zncc_middle = 0.6;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[0].verdict, Verdict::In);
+    assert_eq!(
+        painted.observations[1].verdict,
+        Verdict::Out,
+        "a whole-patch match the middle does not share is turned out"
+    );
+
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a slot")
+        .zncc_middle = None;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[1].verdict, Verdict::In);
+}
+
 #[test]
 fn the_painting_leaves_a_pinned_verdict_alone() {
     let track = scored_track([0.95, 0.40]);
@@ -4802,9 +4839,14 @@ fn the_bench_s_shift_bar_defaults_wider_than_the_cluster_refinement_s() {
     assert_eq!(Thresholds::default().max_shift_px, BENCH_MAX_SHIFT_PX);
     // The kernel keeps its own bar: the batch pass is not moved by the bench.
     assert_eq!(ClusterRefineParams::default().max_shift_px, 3.0);
-    // And the other three bars are still read from the kernels.
-    let cluster = ClusterRefineParams::default();
-    assert_eq!(Thresholds::default().min_zncc, cluster.min_zncc);
+}
+
+#[test]
+fn the_bench_s_zncc_bars_default_below_the_cluster_refinement_s() {
+    assert_eq!(Thresholds::default().min_zncc, BENCH_MIN_ZNCC);
+    assert_eq!(Thresholds::default().min_zncc_middle, BENCH_MIN_ZNCC_MIDDLE);
+    // The kernel keeps its own bar: the batch pass is not moved by the bench.
+    assert_eq!(ClusterRefineParams::default().min_zncc, 0.85);
 }
 
 #[test]

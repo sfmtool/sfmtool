@@ -275,10 +275,11 @@ class TestTheEditableTrack:
     ):
         # Three bars are the kernels' own; the shift bar is the bench's 8 px,
         # wider than the cluster refinement's 3 px because on the bench it also
-        # bounds how far a fit may move a sighting.
+        # bounds how far a fit may move a sighting. The middle-ZNCC bar is off.
         _, track = create_track(Bench(), edited, long_track_point)
         assert track.thresholds == {
-            "min_zncc": 0.85,
+            "min_zncc": 0.7,
+            "min_zncc_middle": 0.7,
             "max_shift_px": 8.0,
             "max_keypoint_uncertainty": 0.35,
             "min_relative_zncc": 0.7,

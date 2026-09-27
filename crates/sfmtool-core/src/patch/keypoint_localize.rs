@@ -49,7 +49,7 @@ use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::localizability::{patch_localizability, SIGMA_NOISE};
 use crate::patch::normal_refine::{
-    build_support, znormalize_into_kept, ProjectedImage, Sampler, Support,
+    build_support, windowed_zncc_at, znormalize_into_kept, ProjectedImage, Sampler, Support,
 };
 use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper and
@@ -633,6 +633,51 @@ fn template_zncc(core: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
     s / channels as f64
 }
 
+/// The ZNCC of `tile`'s core at window offset `(oy, ox)` against the unit
+/// template `tmpl`, over the grid's middle square only.
+///
+/// The whole-core ZNCC a search reports at its integer peak is read from the
+/// same cached samples, so this is that reading narrowed to `middle` (the
+/// support positions [`Support::middle`] names), with no second render. `tmpl`
+/// is compacted over the channels `keep_mask` keeps, with `√w` folded in;
+/// dividing the fold back out leaves each channel an affine image of the
+/// consensus, which is all a ZNCC needs of it. `kept` is how many of its rows
+/// take part. `NaN` when the core leaves the frame or the template's middle is
+/// flat.
+#[allow(clippy::too_many_arguments)]
+fn middle_zncc(
+    tile: &ContextTile,
+    support: &Support,
+    middle: &[usize],
+    resolution: usize,
+    oy: usize,
+    ox: usize,
+    keep_mask: &[bool],
+    kept: usize,
+    tmpl: &[f32],
+) -> f64 {
+    let n = support.pixels.len();
+    let mut raw = vec![0f32; tile.channels * n];
+    if !extract_core(tile, support, resolution, oy, ox, &mut raw) {
+        return f64::NAN;
+    }
+    let mut sample = vec![0f32; kept * n];
+    let mut reference = vec![0f32; kept * n];
+    let kept_channels = keep_mask
+        .iter()
+        .enumerate()
+        .filter(|&(_, &keep)| keep)
+        .map(|(c, _)| c)
+        .take(kept);
+    for (kc, c) in kept_channels.enumerate() {
+        sample[kc * n..][..n].copy_from_slice(&raw[c * n..][..n]);
+        for (k, &sw) in support.sqrt_weights.iter().enumerate() {
+            reference[kc * n + k] = tmpl[kc * n + k] / sw;
+        }
+    }
+    windowed_zncc_at(&sample, &reference, kept, n, &support.weights, middle)
+}
+
 /// Sub-sample peak offset in `[-1, 1]` from a 3-point parabola (scores at `-1`,
 /// `0`, `+1` around an integer maximum).
 fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
@@ -678,6 +723,11 @@ struct ViewState {
     /// The latest leave-one-out ZNCC (peak from the round's search); `NaN` until
     /// a round scores it.
     loo: f64,
+    /// The same reading over the middle of the core only: the samples [`Self::loo`]
+    /// was scored on, at the same integer peak and against the same template,
+    /// restricted to the grid's middle square (see [`middle_zncc`]). `NaN`
+    /// wherever `loo` is, and where the template's middle is flat.
+    loo_middle: f64,
 }
 
 impl ViewState {
@@ -909,6 +959,8 @@ pub fn try_localize_patch_keypoints_with_basis(
 
     // Window support over the R_s×R_s core.
     let support = build_support(params.window, resolution);
+    // The support positions a middle ZNCC is read over.
+    let middle = support.middle(resolution);
 
     // Dedup the view set order-preserving (a point can carry two observations in
     // one image; refining it twice double-weights that view in the consensus).
@@ -989,6 +1041,7 @@ pub fn try_localize_patch_keypoints_with_basis(
             residual: [off[0] - off[0].round(), off[1] - off[1].round()],
             proj: [proj.0, proj.1],
             loo: f64::NAN,
+            loo_middle: f64::NAN,
         });
     }
 
@@ -1168,6 +1221,7 @@ pub fn try_localize_patch_keypoints_with_basis(
         let nv = live.len();
         prof::TEMPLATE_GRAM.time(|| build_loo_gram(&xs, nv, kept_ch * n, &mut loo));
         let mut shifts: Vec<Option<ShiftResult>> = vec![None; nv];
+        let mut middles: Vec<f64> = vec![f64::NAN; nv];
         for (v, &si) in live.iter().enumerate() {
             // Build the other views' robust consensus template (the
             // leave-one-out reference for view v) from the shared Gram.
@@ -1214,6 +1268,21 @@ pub fn try_localize_patch_keypoints_with_basis(
                     base_x,
                 ),
             });
+            // The middle of the same reading: the peak's samples against the
+            // same template, while `search.tmpl` still holds it.
+            if let Some(sh) = shifts[v] {
+                middles[v] = middle_zncc(
+                    &caches[si],
+                    &support,
+                    &middle,
+                    r,
+                    (base_y as i64 + sh.iy) as usize,
+                    (base_x as i64 + sh.ix) as usize,
+                    &keep_mask,
+                    kept_ch,
+                    &search.tmpl,
+                );
+            }
         }
 
         // Accumulate onto the (still full) `states`. The integer argmax moves the
@@ -1238,13 +1307,17 @@ pub fn try_localize_patch_keypoints_with_basis(
                     st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-search_steps, search_steps);
                     st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
                     st.loo = sh.peak;
+                    st.loo_middle = middles[v];
                     let now = st.offset_steps();
                     shift_sum += (now[0] - prev[0]).hypot(now[1] - prev[1]);
                 }
                 // No scorable window this round: leave `iacc`/`residual` in place and
                 // mark the LOO unknown (matches the pre-cache None handling). The
                 // position did not move, so it contributes 0 to the round's shift.
-                None => st.loo = f64::NAN,
+                None => {
+                    st.loo = f64::NAN;
+                    st.loo_middle = f64::NAN;
+                }
             }
         }
 

@@ -1980,6 +1980,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         track["observations"][0]["cluster"]["zncc"].is_number(),
         "the evaluation measured nothing: {track}"
     );
+    // The middle reading sits beside it, from the same samples.
+    let middle = track["observations"][0]["cluster"]["zncc_middle"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no cluster zncc_middle on the wire: {track}"));
+    assert!((-1.0..=1.0).contains(&middle), "{track}");
 
     // The fit is its own step, under its own operation name, and it ends by
     // reading its result: the track stage's two distances are both on the wire
@@ -2014,7 +2019,12 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         json!({ "reconstruction_label": "run_a" }),
     );
     let measured = &track["observations"][0]["track"];
-    for column in ["seed_shift_px", "projection_offset_px"] {
+    for column in [
+        "zncc",
+        "zncc_middle",
+        "seed_shift_px",
+        "projection_offset_px",
+    ] {
         assert!(
             measured[column].is_number(),
             "{column} is not on the wire: {track}"

@@ -490,7 +490,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the call does not name stays where the track has it. The reply's report \
                           says how many were turned in, turned out, left pinned and left \
                           unmeasured. Track View's threshold sliders are this step: releasing \
-                          one applies the four bars as one version.",
+                          one applies the five bars as one version.",
             kind: Write,
             schema: object(
                 &[
@@ -499,7 +499,17 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "min_zncc",
                         threshold_schema(
                             "The ZNCC an observation has to reach: the achieved template ZNCC at \
-                             the cluster stage, the leave-one-out ZNCC at the track stage.",
+                             the cluster stage, the leave-one-out ZNCC at the track stage. The \
+                             bench's default is 0.7.",
+                        ),
+                    ),
+                    (
+                        "min_zncc_middle",
+                        threshold_schema(
+                            "The zncc_middle an observation has to reach: the same samples as \
+                             its zncc, read over only the middle square of the patch. The \
+                             bench's default is 0.7, and 0 turns the bar off. An observation \
+                             with no zncc_middle clears it.",
                         ),
                     ),
                     (

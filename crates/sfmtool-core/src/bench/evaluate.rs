@@ -628,6 +628,7 @@ pub(super) fn evaluate_cluster(
             ]
         });
         measurement.zncc = finite(f64::from(result.member_zncc[k]));
+        measurement.zncc_middle = finite(f64::from(result.member_zncc_middle[k]));
         measurement.shift_px = finite(f64::from(result.member_shift_px[k]));
         measurement.status = Some(status);
         if fitted {
@@ -872,6 +873,8 @@ pub(super) fn plan_rounds(
 struct Reading {
     /// The leave-one-out ZNCC at the correlation peak.
     zncc: f64,
+    /// The same reading over the middle of the tile.
+    zncc_middle: f64,
     /// How far that peak sits from the observation's own keypoint, in
     /// source-image px.
     seed_shift_px: f64,
@@ -947,6 +950,9 @@ fn evaluate_track(
             let mut measurement = observation.track.clone().unwrap_or_default();
             let reading = readings.get(&i);
             measurement.zncc = reading.and_then(|r| finite(r.zncc));
+            measurement.zncc_middle = measurement
+                .zncc
+                .and(reading.and_then(|r| finite(r.zncc_middle)));
             measurement.seed_shift_px = reading.and_then(|r| finite(r.seed_shift_px));
             measurement.reason = match measurement.zncc {
                 Some(_) => None,
@@ -1082,6 +1088,7 @@ fn read_round(
             i,
             Reading {
                 zncc,
+                zncc_middle: localized.loo_zncc_middle[slot],
                 seed_shift_px: shift,
             },
         );

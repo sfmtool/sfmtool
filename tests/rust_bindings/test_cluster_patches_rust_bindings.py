@@ -67,6 +67,7 @@ class TestRefineClusterPatches:
             "member_positions",
             "member_affine_shapes",
             "member_zncc",
+            "member_zncc_middle",
             "member_shift_px",
             "member_consistency_residual",
         }

@@ -2597,7 +2597,18 @@ unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat, with `walked_to`, the pixel the walk would have reached, and
-`walked_zncc`, the ZNCC the localizer scored there (null where it scored none).
+`walked_zncc`, the ZNCC the localizer scored there (null where it scored none),
+with `walked_zncc_middle` beside it. **Both the `cluster` and the `track` block
+carry `zncc_middle` beside `zncc`**: the same samples correlated over only the
+middle square of the patch, half its width, so a high `zncc` with a low
+`zncc_middle` is an agreement carried by the patch's surroundings rather than
+by the pixel's own neighbourhood (see
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+middle ZNCC"). It is null where `zncc` is, where the middle is flat, and on a
+track read back from a committed point before its first evaluation. The
+`thresholds` block and `apply_bench_track_thresholds` carry the matching bar,
+`min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
+off at `0`.
 The bound is the track's `max_shift_px`, 8 px by default on the bench. **A refused
 walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 `pixel`: that is Track View's *Accept walk*, and like any placed sighting it pins

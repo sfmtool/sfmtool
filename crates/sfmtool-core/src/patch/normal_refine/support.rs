@@ -10,7 +10,7 @@ use nalgebra::Vector3;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize;
 
-use super::params::{PatchWindow, ProjectedImage};
+use super::params::{PatchWindow, ProjectedImage, FLAT_NORM_SQ_EPS};
 
 /// Per-pixel window weight over the `R×R` patch grid, in row-major order.
 pub(in crate::patch) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
@@ -71,6 +71,94 @@ pub(in crate::patch) fn build_support(window: PatchWindow, resolution: u32) -> S
         weights,
         sqrt_weights,
         total_weight,
+    }
+}
+
+/// The middle of an `R×R` patch grid: the rows, and the columns, `R/4 .. R -
+/// R/4`. That is the centred square half the grid's width, the middle `12×12`
+/// of a `24×24` grid. It stays symmetric about the grid's centre, so an odd `R`
+/// gets the odd side `R - 2·⌊R/4⌋`.
+pub(in crate::patch) fn middle_span(resolution: u32) -> std::ops::Range<usize> {
+    let r = resolution as usize;
+    r / 4..r - r / 4
+}
+
+impl Support {
+    /// The positions in `pixels` that fall inside the grid's [`middle_span`]
+    /// square, in order: the subset a middle ZNCC is read over.
+    pub(in crate::patch) fn middle(&self, resolution: u32) -> Vec<usize> {
+        let r = resolution as usize;
+        let span = middle_span(resolution);
+        self.pixels
+            .iter()
+            .enumerate()
+            .filter(|&(_, &p)| span.contains(&(p / r)) && span.contains(&(p % r)))
+            .map(|(k, _)| k)
+            .collect()
+    }
+}
+
+/// The channel-averaged windowed ZNCC of two sample sets over a subset `at` of
+/// their support positions.
+///
+/// `sample` and `reference` are planar `[c · n + k]` over the same `n` support
+/// pixels and `channels` channels, and `weights` are the support's window
+/// weights. Each channel is mean-removed and normalized over `at` alone, so the
+/// answer is the ZNCC the two would give had the patch been only that subset.
+/// A per-channel affine rescaling of either input leaves it unchanged, so a
+/// caller may pass a z-normalized template divided back by `√w`.
+///
+/// The conventions are the whole-patch ones. A channel flat in `sample`
+/// (windowed norm² below [`FLAT_NORM_SQ_EPS`]) contributes `0`, and a channel
+/// flat in `reference` is left out of the average. `NaN` when no channel of
+/// `reference` carries texture over `at`, or `at` is empty.
+pub(in crate::patch) fn windowed_zncc_at(
+    sample: &[f32],
+    reference: &[f32],
+    channels: usize,
+    n: usize,
+    weights: &[f64],
+    at: &[usize],
+) -> f64 {
+    let total: f64 = at.iter().map(|&k| weights[k]).sum();
+    if at.is_empty() || total <= 0.0 {
+        return f64::NAN;
+    }
+    let moments = |col: &[f32]| {
+        let mean = at
+            .iter()
+            .map(|&k| weights[k] * f64::from(col[k]))
+            .sum::<f64>()
+            / total;
+        let norm_sq = at
+            .iter()
+            .map(|&k| weights[k] * (f64::from(col[k]) - mean).powi(2))
+            .sum::<f64>();
+        (mean, norm_sq)
+    };
+    let (mut sum, mut scored) = (0.0, 0usize);
+    for c in 0..channels {
+        let a = &sample[c * n..][..n];
+        let b = &reference[c * n..][..n];
+        let (mean_b, norm_b) = moments(b);
+        if norm_b < FLAT_NORM_SQ_EPS {
+            continue;
+        }
+        scored += 1;
+        let (mean_a, norm_a) = moments(a);
+        if norm_a < FLAT_NORM_SQ_EPS {
+            continue;
+        }
+        let cross: f64 = at
+            .iter()
+            .map(|&k| weights[k] * (f64::from(a[k]) - mean_a) * (f64::from(b[k]) - mean_b))
+            .sum();
+        sum += cross / (norm_a * norm_b).sqrt();
+    }
+    if scored == 0 {
+        f64::NAN
+    } else {
+        sum / scored as f64
     }
 }
 

@@ -508,12 +508,14 @@ fn stages_into(py: Python<'_>, d: &Bound<'_, PyDict>, stages: &[StageRecord]) ->
             StageRecord::Final {
                 in_views,
                 zncc_median,
+                zncc_middle_median,
                 query_offset_px,
                 max_projection_offset_px,
             } => {
                 let e = PyDict::new(py);
                 e.set_item("in", in_views)?;
                 e.set_item("zncc_median", zncc_median)?;
+                e.set_item("zncc_middle_median", zncc_middle_median)?;
                 e.set_item("query_offset_px", query_offset_px)?;
                 if let Some(worst) = max_projection_offset_px {
                     e.set_item("max_projection_offset_px", worst)?;

@@ -519,19 +519,25 @@ impl TrackEdit {
         ui.horizontal_wrapped(|ui| {
             ui.label("Thresholds");
             let bars = &mut self.thresholds;
+            // The ZNCC bars read in percent, as the table's ZNCC column does;
+            // the track stores them on the 0 to 1 scale.
             let sliders = [
-                egui::Slider::new(&mut bars.min_zncc, 0.0..=1.0).text(MIN_ZNCC_LABEL),
+                percent(egui::Slider::new(&mut bars.min_zncc, 0.0..=1.0)).text(MIN_ZNCC_LABEL),
+                // The bar on the middle reading; 0 turns it off.
+                percent(egui::Slider::new(&mut bars.min_zncc_middle, 0.0..=1.0))
+                    .text(MIN_ZNCC_MIDDLE_LABEL),
                 egui::Slider::new(&mut bars.max_shift_px, 0.0..=20.0).text(MAX_SHIFT_LABEL),
                 egui::Slider::new(&mut bars.max_keypoint_uncertainty, 0.0..=2.0)
                     .text("max \u{3c3}_pos"),
                 // The fourth bar of `Thresholds`, which view selection scores a
                 // candidate by as a fraction of the track's own self-agreement:
                 // a bar with no slider is a bar only the wire can move.
-                egui::Slider::new(&mut bars.min_relative_zncc, 0.0..=1.0).text("min relative ZNCC"),
+                percent(egui::Slider::new(&mut bars.min_relative_zncc, 0.0..=1.0))
+                    .text(MIN_RELATIVE_ZNCC_LABEL),
             ];
             for slider in sliders {
                 // A typed value lands when the field is left, not per
-                // keystroke, so typing "0.9" is one version and not three.
+                // keystroke, so typing "90" is one version and not two.
                 let slider = slider.max_decimals(2).update_while_editing(false);
                 let r = ui.add_enabled(enabled, slider);
                 let r = match &busy {
@@ -695,9 +701,71 @@ impl TrackEdit {
     }
 }
 
+/// A patch ZNCC as a table cell prints it, in percent under a `ZNCC (%)`
+/// heading: the whole-patch reading, then the middle one (`92 / 61`).
+///
+/// The middle ZNCC is the same samples read over the middle square of the
+/// patch only, so the pair says whether an agreement is carried by the
+/// pixel's own neighbourhood or by its surroundings. Percent carries the same
+/// two digits as `0.92` in two fewer characters, which keeps the pair narrow
+/// enough for one column. `-` stands for a reading that is not there: no
+/// whole-patch ZNCC at all, or no middle one beside it, as on a track read
+/// back from a committed point. A reading that was taken and came out
+/// non-finite prints `NaN`.
+pub(crate) fn zncc_text(whole: Option<f64>, middle: Option<f64>) -> String {
+    zncc_pair(whole, middle, "")
+}
+
+/// [`zncc_text`] for a sentence, which has no heading to carry the unit, so
+/// each number carries it (`92% / 61%`).
+pub(crate) fn zncc_sentence(whole: Option<f64>, middle: Option<f64>) -> String {
+    zncc_pair(whole, middle, "%")
+}
+
+fn zncc_pair(whole: Option<f64>, middle: Option<f64>, unit: &str) -> String {
+    let number = |value: f64| {
+        if value.is_finite() {
+            format!("{:.0}{unit}", 100.0 * value)
+        } else {
+            "NaN".to_string()
+        }
+    };
+    match whole {
+        None => "-".to_string(),
+        Some(whole) => format!(
+            "{} / {}",
+            number(whole),
+            middle.map_or_else(|| "-".to_string(), number)
+        ),
+    }
+}
+
 /// The minimum-ZNCC slider's label, in one constant so the tests aim at the
 /// label drawn.
-pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC";
+pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC (%)";
+
+/// The minimum-middle-ZNCC slider's label.
+pub(crate) const MIN_ZNCC_MIDDLE_LABEL: &str = "min middle ZNCC (%)";
+
+/// The minimum-relative-ZNCC slider's label.
+pub(crate) const MIN_RELATIVE_ZNCC_LABEL: &str = "min relative ZNCC (%)";
+
+/// A slider over a `0 ..= 1` bar that shows and takes the value in percent, in
+/// whole steps: `70` for a stored `0.7`. A typed value may carry a trailing
+/// `%`.
+fn percent(slider: egui::Slider<'_>) -> egui::Slider<'_> {
+    slider
+        .step_by(0.01)
+        .custom_formatter(|value, _| format!("{:.0}", 100.0 * value))
+        .custom_parser(parse_percent)
+}
+
+/// A typed percent as the `0 ..= 1` value it stands for, or `None` when it is
+/// not a number.
+fn parse_percent(text: &str) -> Option<f64> {
+    let number = text.trim().trim_end_matches('%').trim();
+    number.parse::<f64>().ok().map(|v| v / 100.0)
+}
 
 /// The maximum-shift slider's label: the bar the painting judges a seed shift
 /// by and the bound on how far a fit may move a sighting.
@@ -948,7 +1016,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
         StageKind::Cluster => {
             let m = observation.cluster.as_ref();
             [
-                number(m.and_then(|m| m.zncc), 3),
+                zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 number(m.and_then(|m| m.shift_px), 2),
                 "-".to_string(),
                 number(m.and_then(|m| m.localizability), 3),
@@ -961,7 +1029,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
         StageKind::Track => {
             let m = observation.track.as_ref();
             [
-                number(m.and_then(|m| m.zncc), 3),
+                zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 number(m.and_then(|m| m.seed_shift_px), 2),
                 number(m.and_then(|m| m.projection_offset_px), 2),
                 number(m.and_then(|m| m.localizability), 3),
@@ -984,7 +1052,10 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
                         "walked {:.0} px{}, kept at seed",
                         m.walked_px.expect("just matched"),
                         match m.walked_zncc {
-                            Some(z) if z.is_finite() => format!(" (ZNCC {z:.3} there)"),
+                            Some(z) if z.is_finite() => format!(
+                                " (ZNCC {} there)",
+                                zncc_sentence(Some(z), m.walked_zncc_middle)
+                            ),
                             _ => String::new(),
                         }
                     ),

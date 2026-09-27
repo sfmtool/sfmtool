@@ -693,6 +693,7 @@ pub(super) fn fit_track(
         measurement.walked_px = None;
         measurement.walked_to = None;
         measurement.walked_zncc = None;
+        measurement.walked_zncc_middle = None;
         measurement.keypoint = match fits.get(&i) {
             Some(fit) => {
                 let walked = seed.map(|s| (fit.keypoint[0] - s[0]).hypot(fit.keypoint[1] - s[1]));
@@ -703,6 +704,7 @@ pub(super) fn fit_track(
                         measurement.walked_px = Some(walked);
                         measurement.walked_to = Some(fit.keypoint);
                         measurement.walked_zncc = fit.zncc;
+                        measurement.walked_zncc_middle = fit.zncc_middle;
                         kept_at_seed += 1;
                         Some([seed[0] as f32, seed[1] as f32])
                     }
@@ -790,6 +792,8 @@ struct Fit {
     /// The localizer's leave-one-out ZNCC for this view against the round's
     /// consensus, at the peak it registered to, when it scored one.
     zncc: Option<f64>,
+    /// The same reading over the middle of the tile, when there is one.
+    zncc_middle: Option<f64>,
 }
 
 /// Localize and refine one round's observations against `frame`, and record
@@ -867,7 +871,19 @@ fn fit_round(
             .get(slot)
             .copied()
             .filter(|z| z.is_finite());
-        fits.insert(i, Fit { keypoint, zncc });
+        let zncc_middle = localized
+            .loo_zncc_middle
+            .get(slot)
+            .copied()
+            .filter(|z| zncc.is_some() && z.is_finite());
+        fits.insert(
+            i,
+            Fit {
+                keypoint,
+                zncc,
+                zncc_middle,
+            },
+        );
     }
     Ok(())
 }

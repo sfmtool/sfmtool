@@ -160,6 +160,9 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         if let Some(v) = m.zncc {
             c.set_item("zncc", v)?;
         }
+        if let Some(v) = m.zncc_middle {
+            c.set_item("zncc_middle", v)?;
+        }
         if let Some(v) = m.shift_px {
             c.set_item("shift_px", v)?;
         }
@@ -178,6 +181,8 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         }
         for (key, value) in [
             ("zncc", m.zncc),
+            // The same samples read over the middle of the tile only.
+            ("zncc_middle", m.zncc_middle),
             ("seed_shift_px", m.seed_shift_px),
             ("projection_offset_px", m.projection_offset_px),
             ("reprojection_error", m.reprojection_error),
@@ -188,6 +193,7 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             // `walked_zncc` what the localizer scored there.
             ("walked_px", m.walked_px),
             ("walked_zncc", m.walked_zncc),
+            ("walked_zncc_middle", m.walked_zncc_middle),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
@@ -356,6 +362,7 @@ impl PyEditableTrack {
         let t = &self.inner.thresholds;
         let d = PyDict::new(py);
         d.set_item("min_zncc", t.min_zncc)?;
+        d.set_item("min_zncc_middle", t.min_zncc_middle)?;
         d.set_item("max_shift_px", t.max_shift_px)?;
         d.set_item("max_keypoint_uncertainty", t.max_keypoint_uncertainty)?;
         d.set_item("min_relative_zncc", t.min_relative_zncc)?;
@@ -1065,7 +1072,7 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 #[pyfunction]
 #[pyo3(signature = (
     track, *, min_zncc = None, max_shift_px = None, max_keypoint_uncertainty = None,
-    min_relative_zncc = None
+    min_relative_zncc = None, min_zncc_middle = None
 ))]
 fn apply_thresholds(
     py: Python<'_>,
@@ -1074,6 +1081,7 @@ fn apply_thresholds(
     max_shift_px: Option<f64>,
     max_keypoint_uncertainty: Option<f64>,
     min_relative_zncc: Option<f64>,
+    min_zncc_middle: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let mut seeded = (*track.inner).clone();
     let t = &mut seeded.thresholds;
@@ -1082,6 +1090,7 @@ fn apply_thresholds(
         (&mut t.max_shift_px, max_shift_px),
         (&mut t.max_keypoint_uncertainty, max_keypoint_uncertainty),
         (&mut t.min_relative_zncc, min_relative_zncc),
+        (&mut t.min_zncc_middle, min_zncc_middle),
     ] {
         if let Some(value) = value {
             *slot = value;

@@ -1239,6 +1239,7 @@ fn origin(track: &EditableTrack) -> Value {
 fn thresholds(bars: &Thresholds) -> Value {
     json!({
         "min_zncc": bars.min_zncc,
+        "min_zncc_middle": bars.min_zncc_middle,
         "max_shift_px": bars.max_shift_px,
         "max_keypoint_uncertainty": bars.max_keypoint_uncertainty,
         "min_relative_zncc": bars.min_relative_zncc,
@@ -1326,6 +1327,8 @@ fn cluster_measurement(observation: &Observation) -> Value {
         "pixel": measured.position,
         "shape": measured.shape,
         "zncc": finite(measured.zncc),
+        // The same samples read over the middle of the patch only.
+        "zncc_middle": finite(measured.zncc_middle),
         "shift_px": finite(measured.shift_px),
         "localizability": finite(measured.localizability),
         "status": measured.status.map(|status| format!("{status:?}")),
@@ -1348,6 +1351,8 @@ fn track_measurement(observation: &Observation) -> Value {
     json!({
         "keypoint": measured.keypoint,
         "zncc": finite(measured.zncc),
+        // The same samples read over the middle of the tile only.
+        "zncc_middle": finite(measured.zncc_middle),
         "seed_shift_px": finite(measured.seed_shift_px),
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
@@ -1360,6 +1365,7 @@ fn track_measurement(observation: &Observation) -> Value {
         "walked_px": finite(measured.walked_px),
         "walked_to": measured.walked_to,
         "walked_zncc": finite(measured.walked_zncc),
+        "walked_zncc_middle": finite(measured.walked_zncc_middle),
         "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }

@@ -229,6 +229,11 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the shared median of the `in` observations' leave-one-out ZNCCs,          negative infinity when none has one",
     ),
     (
+        "sfmtool-core/src/bench/track_at_pixel/finish.rs",
+        "median_zncc_middle",
+        "delegates: the shared median of the `in` observations' middle ZNCCs, NaN when none has one",
+    ),
+    (
         "sfmtool-core/src/spherical/photometric_ransac.rs",
         "per_pixel_median",
         "delegates: the shared median per pixel over an f64 scratch",

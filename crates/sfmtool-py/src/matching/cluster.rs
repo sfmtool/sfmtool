@@ -415,7 +415,9 @@ pub fn clusters_to_pair_matches(
 ///     ``S = W·S_ref``; the reference member's own row is ``S_ref``, and
 ///     ``W = S·S_ref**-1`` recovers the reference->member warp). Both are
 ///     all-zero for a member the cascade never fitted -- ``member_status``
-///     says which. ``member_zncc`` (M,) float32,
+///     says which. ``member_zncc`` (M,) float32, ``member_zncc_middle``
+///     (M,) float32 (the same samples read over only the middle square of the
+///     grid, half its width; not stored in the ``.matches`` section),
 ///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more
@@ -567,6 +569,10 @@ pub fn refine_cluster_patches<'py>(
         result.member_affine_shapes.into_pyarray(py),
     )?;
     dict.set_item("member_zncc", result.member_zncc.into_pyarray(py))?;
+    dict.set_item(
+        "member_zncc_middle",
+        result.member_zncc_middle.into_pyarray(py),
+    )?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     Ok(dict)

@@ -19,7 +19,7 @@
 
 use super::prof;
 use crate::camera::remap::{ImageU8, ImageU8Pyramid};
-use crate::patch::normal_refine::{Support, FLAT_NORM_SQ_EPS};
+use crate::patch::normal_refine::{windowed_zncc_at, Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
 
 /// An integer pixel rectangle in level coordinates, half-open (`[x0, x1) ×
@@ -253,6 +253,11 @@ pub(super) struct SupportTables {
     pub(super) w32: Vec<f32>,
     /// `Σ w` over the real support (f64, the windowed-mean denominator).
     pub(super) total_weight: f64,
+    /// Window weights (f64), unpadded: the middle ZNCC's weights.
+    pub(super) weights: Vec<f64>,
+    /// The support positions inside the grid's middle square
+    /// ([`Support::middle`]).
+    pub(super) middle: Vec<usize>,
 }
 
 impl SupportTables {
@@ -279,6 +284,8 @@ impl SupportTables {
             rows,
             w32,
             total_weight: support.total_weight,
+            weights: support.weights.clone(),
+            middle: support.middle(resolution),
         }
     }
 }
@@ -299,6 +306,10 @@ pub(super) struct TemplateKernel {
     pub(super) kern: Vec<f32>,
     /// `Σ kern` per channel (f64).
     pub(super) kern_sums: Vec<f64>,
+    /// The reference's raw support samples for the surviving channels, planar
+    /// `channels × n`: what [`eval_zncc_middle`] correlates a member against
+    /// over the middle of the grid.
+    pub(super) samples: Vec<f32>,
 }
 
 /// The three per-channel accumulator sums of one fused pass, reduced to f64.
@@ -422,6 +433,71 @@ pub(super) fn eval_zncc_scalar(
         score += combine_channel(sums, tables.total_weight, tmpl.kern_sums[tc]);
     }
     Some(score / tmpl.channels as f64)
+}
+
+/// The middle ZNCC of the member at `map`: its support samples against the
+/// template's, over the middle square of the grid only
+/// ([`SupportTables::middle`]).
+///
+/// The samples are the ones [`eval_zncc_scalar`] reads at the same map, with
+/// the same taps and the same channel pairing, so at the refinement's final
+/// map this is the whole-patch reading narrowed to the middle. A member
+/// channel the image lacks reads as flat and contributes `0`, as it does to
+/// the whole-patch reading. `NaN` when a sample leaves the tile or the
+/// template's middle is flat.
+pub(super) fn eval_zncc_middle(
+    map: &AffineCoreMap,
+    tile: &LevelTile,
+    tables: &SupportTables,
+    tmpl: &TemplateKernel,
+) -> f64 {
+    let a = &map.a;
+    let al = [
+        a[0] as f32,
+        a[1] as f32,
+        (a[2] - 0.5 - tile.x0 as f64) as f32,
+        a[3] as f32,
+        a[4] as f32,
+        (a[5] - 0.5 - tile.y0 as f64) as f32,
+    ];
+    let n = tables.n;
+    let (tw, th) = (tile.w as i64, tile.h as i64);
+    let mut sample = vec![0f32; tmpl.channels * n];
+    for (tc, &src_c) in tmpl.src_channels.iter().enumerate() {
+        if src_c >= tile.channels {
+            continue;
+        }
+        let plane = tile.plane(src_c);
+        for k in 0..n {
+            let gx = al[0] * tables.cols[k] + al[1] * tables.rows[k] + al[2];
+            let gy = al[3] * tables.cols[k] + al[4] * tables.rows[k] + al[5];
+            if !gx.is_finite() || !gy.is_finite() {
+                return f64::NAN;
+            }
+            let x0 = gx.floor();
+            let y0 = gy.floor();
+            let ix = x0 as i64;
+            let iy = y0 as i64;
+            if ix < 0 || iy < 0 || ix + 1 >= tw || iy + 1 >= th {
+                return f64::NAN;
+            }
+            let fx = gx - x0;
+            let fy = gy - y0;
+            let base = iy as usize * tile.w + ix as usize;
+            sample[tc * n + k] = (1.0 - fx) * (1.0 - fy) * plane[base]
+                + fx * (1.0 - fy) * plane[base + 1]
+                + (1.0 - fx) * fy * plane[base + tile.w]
+                + fx * fy * plane[base + tile.w + 1];
+        }
+    }
+    windowed_zncc_at(
+        &sample,
+        &tmpl.samples,
+        tmpl.channels,
+        n,
+        &tables.weights,
+        &tables.middle,
+    )
 }
 
 /// Channel-count ceiling of the AVX2 kernel's fixed pointer tables; templates

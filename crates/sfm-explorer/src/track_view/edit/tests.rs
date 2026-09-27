@@ -438,6 +438,11 @@ fn the_cells_follow_the_stage_the_track_is_in() {
 
     let rows = panel.rows();
     assert_ne!(rows[0].cells[0], "-", "the ZNCC column is unmeasured");
+    let (whole, middle) = rows[0].cells[0]
+        .split_once(" / ")
+        .expect("the ZNCC cell shows the whole and the middle reading");
+    assert!(whole.parse::<f64>().is_ok(), "{whole}");
+    assert!(middle.parse::<f64>().is_ok(), "{middle}");
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
     assert_eq!(rows[0].cells[4], "-", "a cluster has no reprojection error");
     assert_eq!(rows[0].cells[5], "-", "a cluster has no ray angle");
@@ -1093,7 +1098,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
     // above that viewport is one that cannot scroll out of it. The name cell
     // is the row text furthest from any widget, so it is the one asked.
     let name = find("image_000.jpg");
-    for (_, heading) in super::table::ColumnLayout::new().headers() {
+    for (_, heading, _) in super::table::ColumnLayout::new().headers() {
         let painted = find(heading);
         assert!(
             painted.clip != name.clip,
@@ -1106,6 +1111,21 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
             name.clip,
         );
     }
+}
+
+/// Every heading says what its column holds, and the ZNCC heading says what
+/// its two numbers are.
+#[test]
+fn every_heading_carries_hover_text() {
+    for (_, heading, tip) in super::table::ColumnLayout::new().headers() {
+        assert!(!tip.is_empty(), "the {heading:?} heading has no hover text");
+    }
+    let tip = super::table::ZNCC_TIP;
+    assert!(
+        tip.contains("whole patch") && tip.contains("middle"),
+        "{tip}"
+    );
+    assert!(tip.contains("percent"), "{tip}");
 }
 
 #[test]
@@ -1475,10 +1495,12 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     assert_eq!(cells[6], "walked 19 px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
-    scored.track.as_mut().expect("a track slot").walked_zncc = Some(0.873);
+    let slot = scored.track.as_mut().expect("a track slot");
+    slot.walked_zncc = Some(0.873);
+    slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[6],
-        "walked 19 px (ZNCC 0.873 there), kept at seed"
+        "walked 19 px (ZNCC 87% / 41% there), kept at seed"
     );
 
     // The same row without the flag is the ordinary scored row.
@@ -1488,6 +1510,71 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
         super::measurements(&moved, StageKind::Track, &current)[6],
         "localized"
     );
+}
+
+/// The ZNCC cell prints the whole-patch reading, then the middle one, at both
+/// stages; a row with no middle reading beside its ZNCC says so with `-`.
+#[test]
+fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
+    use sfmtool_core::bench::{ClusterMeasurement, Observation, Provenance, TrackMeasurement};
+
+    let current = crate::bench::live::Evaluation::Current;
+    let mut cluster = ClusterMeasurement::from_seed([10.0, 12.0], [[1.0, 0.0], [0.0, 1.0]]);
+    cluster.zncc = Some(0.923);
+    cluster.zncc_middle = Some(0.614);
+    let mut row = Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: Some(cluster),
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            zncc: Some(0.95),
+            zncc_middle: Some(0.2),
+            ..TrackMeasurement::default()
+        }),
+    };
+    assert_eq!(
+        super::measurements(&row, StageKind::Cluster, &current)[0],
+        "92 / 61"
+    );
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[0],
+        "95 / 20"
+    );
+    // A committed track read back carries the stored ZNCC and no middle.
+    row.track.as_mut().expect("a track slot").zncc_middle = None;
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[0],
+        "95 / -"
+    );
+    row.track.as_mut().expect("a track slot").zncc = None;
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[0],
+        "-"
+    );
+}
+
+#[test]
+fn a_typed_percent_is_read_as_the_fraction_it_stands_for() {
+    use super::parse_percent;
+    assert_eq!(parse_percent("70"), Some(0.7));
+    assert_eq!(parse_percent(" 85 % "), Some(0.85));
+    assert_eq!(parse_percent("abc"), None);
+}
+
+#[test]
+fn zncc_text_formats_both_readings() {
+    use super::zncc_sentence;
+    use super::zncc_text;
+    assert_eq!(zncc_text(Some(0.918), Some(0.607)), "92 / 61");
+    assert_eq!(zncc_text(Some(0.5), None), "50 / -");
+    assert_eq!(zncc_text(Some(f64::NAN), Some(0.3)), "NaN / 30");
+    assert_eq!(zncc_text(Some(-0.35), Some(1.0)), "-35 / 100");
+    assert_eq!(zncc_text(None, Some(0.3)), "-");
+    assert_eq!(zncc_sentence(Some(0.918), Some(0.607)), "92% / 61%");
+    assert_eq!(zncc_sentence(Some(0.918), None), "92% / -");
 }
 
 /// A track-stage track standing on a bearing with **no patch**: the payload a

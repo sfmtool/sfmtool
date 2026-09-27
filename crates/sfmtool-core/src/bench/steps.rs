@@ -2373,18 +2373,23 @@ fn proposed_verdict(
     stage: StageKind,
     thresholds: &Thresholds,
 ) -> Option<Verdict> {
-    let (zncc, shift, localizability) = match stage {
+    let (zncc, middle, shift, localizability) = match stage {
         StageKind::Cluster => {
             let m = observation.cluster.as_ref()?;
-            (m.zncc?, m.shift_px, m.localizability)
+            (m.zncc?, m.zncc_middle, m.shift_px, m.localizability)
         }
         StageKind::Track => {
             let m = observation.track.as_ref()?;
-            (m.zncc?, m.seed_shift_px, m.localizability)
+            (m.zncc?, m.zncc_middle, m.seed_shift_px, m.localizability)
         }
     };
+    // The middle bar is off at `0`, and a row with no middle reading has
+    // nothing for it to judge.
+    let middle_passes = thresholds.min_zncc_middle <= 0.0
+        || middle.is_none_or(|z| !z.is_nan() && z >= thresholds.min_zncc_middle);
     let passes = !zncc.is_nan()
         && zncc >= thresholds.min_zncc
+        && middle_passes
         && shift.is_none_or(|s| !s.is_nan() && s <= thresholds.max_shift_px)
         && localizability.is_none_or(|s| !s.is_nan() && s <= thresholds.max_keypoint_uncertainty);
     Some(if passes { Verdict::In } else { Verdict::Out })

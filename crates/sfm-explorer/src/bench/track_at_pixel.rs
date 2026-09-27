@@ -137,15 +137,16 @@ fn refusal_line(refusal: &MemberRefusal) -> String {
     )
 }
 
-/// The in count and the median ZNCC the final gates judged, when the member
-/// got that far.
-fn final_reading(stages: &[StageRecord]) -> Option<(usize, f64)> {
+/// The in count, the median ZNCC the final gates judged and the median middle
+/// ZNCC beside it, when the member got that far.
+fn final_reading(stages: &[StageRecord]) -> Option<(usize, f64, f64)> {
     stages.iter().rev().find_map(|stage| match stage {
         StageRecord::Final {
             in_views,
             zncc_median,
+            zncc_middle_median,
             ..
-        } => Some((*in_views, *zncc_median)),
+        } => Some((*in_views, *zncc_median, *zncc_middle_median)),
         _ => None,
     })
 }
@@ -411,9 +412,11 @@ impl AppState {
                 let (next, item) = bench.put(&base, BenchItem::Track(Arc::new(track)));
                 let version_label = format!("Created {item} at {at} with the {member} member");
                 let mut text = version_label.clone();
-                if let Some((in_views, zncc)) = final_reading(&report.stages) {
+                if let Some((in_views, zncc, middle)) = final_reading(&report.stages) {
+                    let middle = Some(middle).filter(|m| m.is_finite());
                     text.push_str(&format!(
-                        ": {in_views} observations in, median ZNCC {zncc:.2}"
+                        ": {in_views} observations in, median ZNCC {}",
+                        crate::track_view::edit::zncc_sentence(Some(zncc), middle)
                     ));
                 }
                 if !report.refusals.is_empty() {

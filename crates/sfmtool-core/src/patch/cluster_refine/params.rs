@@ -160,6 +160,13 @@ pub struct ClusterRefineResult {
     /// `(M,)` achieved windowed ZNCC vs the reference (`NaN` if not
     /// evaluated).
     pub member_zncc: Vec<f32>,
+    /// `(M,)` the middle ZNCC beside [`Self::member_zncc`]: the member's
+    /// samples at the same final map against the reference's, read over only
+    /// the middle square of the grid, the rows and columns `R/4 .. R - R/4`.
+    /// A whole-patch agreement the middle does not share is carried by the
+    /// parts of the patch away from its centre. `NaN` if not evaluated, or
+    /// where the reference's middle is flat.
+    pub member_zncc_middle: Vec<f32>,
     /// `(M,)` translation drift from the SIFT seed, source-image pixels
     /// (`NaN` if not evaluated).
     pub member_shift_px: Vec<f32>,

@@ -231,6 +231,60 @@ fn aligned_views_keep_all_and_barely_shift() {
     for &z in &res.loo_zncc {
         assert!(z > 0.8, "aligned views should co-register, LOO {z}");
     }
+    // The middle agrees as well as the whole does.
+    assert_eq!(res.loo_zncc_middle.len(), res.views.len());
+    for &z in &res.loo_zncc_middle {
+        assert!(z > 0.8, "aligned views agree in the middle too, {z}");
+    }
+}
+
+/// `texture` everywhere but the middle of the patch (`|x|, |y| < HALF_EXTENT /
+/// 2`, the middle square of the grid), where each view sees a pattern of its
+/// own.
+fn texture_with_own_middle(x: f64, y: f64, k: f64) -> f64 {
+    let m = HALF_EXTENT / 2.0;
+    if x.abs() < m && y.abs() < m {
+        127.5 + 70.0 * (x * (19.0 + 11.0 * k) + k).sin() * (y * (29.0 - 7.0 * k) - k).cos()
+    } else {
+        texture(x, y)
+    }
+}
+fn own_middle_0(x: f64, y: f64) -> f64 {
+    texture_with_own_middle(x, y, 0.0)
+}
+fn own_middle_1(x: f64, y: f64) -> f64 {
+    texture_with_own_middle(x, y, 1.0)
+}
+fn own_middle_2(x: f64, y: f64) -> f64 {
+    texture_with_own_middle(x, y, 2.0)
+}
+fn own_middle_3(x: f64, y: f64) -> f64 {
+    texture_with_own_middle(x, y, 3.0)
+}
+
+/// Views that agree only outside the middle of the patch: the middle ZNCC,
+/// read from the same samples, says so where the whole-patch one does not.
+#[test]
+fn the_middle_zncc_sees_an_agreement_carried_by_the_surroundings() {
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let texs: Vec<fn(f64, f64) -> f64> =
+        vec![own_middle_0, own_middle_1, own_middle_2, own_middle_3];
+    let scene = Scene::new(&centers, &[[0.0; 2]; 4], &texs);
+    let views = scene.views();
+    let res = localize_patch_keypoints(&plane_patch(), &views, &[0, 1, 2, 3], None, &gates_off());
+
+    assert_eq!(res.views.len(), 4, "the gates are off");
+    for (k, (&whole, &middle)) in res.loo_zncc.iter().zip(&res.loo_zncc_middle).enumerate() {
+        assert!(
+            middle < 0.4 && middle < whole - 0.2,
+            "view {k}: whole {whole}, middle {middle}"
+        );
+    }
 }
 
 #[test]

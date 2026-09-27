@@ -88,7 +88,7 @@ pub use steps::{
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,
     Provenance, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Unmeasured, Verdict,
-    BENCH_MAX_SHIFT_PX,
+    BENCH_MAX_SHIFT_PX, BENCH_MIN_ZNCC, BENCH_MIN_ZNCC_MIDDLE,
 };
 pub use track_at_pixel::{
     build_track_at_pixel, CandidateKind, CandidateRecord, CascadeMember, ClusterMember,

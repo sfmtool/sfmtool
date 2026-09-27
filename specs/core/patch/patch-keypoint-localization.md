@@ -205,8 +205,22 @@ The algorithm returns:
   two views, since the absolute gates are not undone by the two-view floor;
 - per kept view, its **refined keypoint** (`project_i(X_p) + δ_j` in the format's
   terms) and **quality signals** — its offset from the point's projection
-  (`acc[v]` mapped to source-image px) and the final leave-one-out ZNCC against
-  the other views' consensus.
+  (`acc[v]` mapped to source-image px), the final leave-one-out ZNCC against
+  the other views' consensus (`loo_zncc`), and beside it the **middle ZNCC**
+  (`loo_zncc_middle`).
+
+The middle ZNCC is the same reading narrowed to the middle of the core: the
+view's samples at the integer peak the round's search reported, read from the
+cached context tile, against the same leave-one-out template, with each channel
+mean-removed and normalized over only the centred square half the grid's width
+(rows and columns `R/4 .. R - R/4`) under the same window weights. The template
+is held z-normalized with `√w` folded in; dividing the fold back out leaves an
+affine image of the consensus, which a ZNCC is blind to. Nothing is rendered
+again. A whole-core agreement the middle does not share is carried by the parts
+of the tile away from the keypoint: a background behind a small near object, the
+far side of a depth edge, or a texture repeating along the epipolar line. No
+gate reads it. It is `NaN` wherever `loo_zncc` is and where the template's middle
+is flat.
 
 ## Implementation
 
@@ -251,7 +265,7 @@ half-vectors).
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
 min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
 min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
-`{point_index, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
+`{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, is_basis}`. Each round renders a
 **context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
 shift search slides without re-warping), z-normalizes the cores into a shared
 compacted channel space (a channel flat in any view is dropped, as in normal
