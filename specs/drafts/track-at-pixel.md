@@ -305,6 +305,9 @@ Once a track stands, the last four share one finish:
   photometric normal refinement and a plane through the congealed depths of
   subpatches tiling the patch were each tried and did not frame tracks better.
   How to choose a normal and a size that hold the sightings is open.
+  [surface-co-solve.md](surface-co-solve.md) proposes solving depth and
+  normal together over a small neighbourhood of fitted patches around the
+  pixel, with the cases and prototypes to measure it by.
 - **How far the queried sighting may move.** The queried keypoint is not held
   on the pixel, and the position bar is what keeps the track on the spot. Whether
   the operation should also bound the keypoint's move in pixels, and at what
