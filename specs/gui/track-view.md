@@ -68,11 +68,6 @@ impl TrackView {
         scroll_input: &ScrollInput,
     ) -> TrackViewResponse;
     pub(crate) fn forget_recon(&mut self, id: ReconId);
-    /// Select one edit-mode row from outside the panel: what a click on a mark
-    /// of either bench layer reports through.
-    pub(crate) fn select_row(&mut self, id: ReconId, label: &str, observation: usize);
-    /// The one edit-mode row selected on `label`'s track, when exactly one is.
-    pub(crate) fn selected_row(&self, id: ReconId, label: &str) -> Option<usize>;
     /// Whether edit mode's *Lock* box is ticked: what the dock hands Image
     /// Detail, whose track-stage dot slides the patch when it is and moves one
     /// sighting's keypoint when it is not.
@@ -645,10 +640,16 @@ the next session's first drag an edit of one sighting that nobody asked for.
 The wire has no copy of it: an agent says which it means by calling
 `translate_bench_patch` or `sight_bench_observation`.
 
-**The row selection is panel state, not a version.** It is what *Split off N
-rows* reads and nothing else; a split names its observations explicitly, because
-`out` says a sighting does not belong here and cannot say which of two tracks it
-belongs to. A change of active item clears it.
+**The row selection is the bench's selected observations**, held in the state
+rather than in the panel ([bench.md](bench.md) § "The selected observations"),
+so a click on a mark in either bench layer and the wire's
+`select_bench_observations` set the rows the panel highlights, and
+`get_bench_track` reports the rows a person clicked. A row click reports itself
+as `TrackEditResponse::pick_row` and the dock applies it through
+`AppState::pick_bench_observation`. It is not a version: undo, redo, a jump and
+a change of active item clear it. *Split off N rows* takes it; a split names its
+observations explicitly, because `out` says a sighting does not belong here and
+cannot say which of two tracks it belongs to.
 
 #### The thresholds
 

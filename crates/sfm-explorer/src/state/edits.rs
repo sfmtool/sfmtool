@@ -1676,6 +1676,10 @@ impl AppState {
             // walk comes to rest on.
             self.follow_image_selection(id, carried.as_deref());
         }
+        // The selected observations are indexes into a track as the version
+        // left held it, and the version landed on may hold another list under
+        // the same label.
+        self.clear_bench_rows(id);
         let landed = self.scene[index].history.current_version();
         let (to, text) = (landed.serial, kind.text(&left_label, &landed.label));
         {

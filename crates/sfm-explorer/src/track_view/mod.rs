@@ -87,23 +87,6 @@ impl TrackView {
         &self.edit
     }
 
-    /// Select one observation row of the edited track from outside the panel.
-    /// See [`TrackEdit::select_row`].
-    pub(crate) fn select_row(
-        &mut self,
-        id: crate::scene::ReconId,
-        label: &str,
-        observation: usize,
-    ) {
-        self.edit.select_row(id, label, observation);
-    }
-
-    /// The one observation row selected on `label`'s track of `id`, when
-    /// exactly one is. See [`TrackEdit::selected_row`].
-    pub(crate) fn selected_row(&self, id: crate::scene::ReconId, label: &str) -> Option<usize> {
-        self.edit.selected_row(id, label)
-    }
-
     /// Whether edit mode's *Lock* box is ticked, which Image Detail reads a
     /// track-stage dot drag by. See [`TrackEdit::lock`].
     pub(crate) fn lock(&self) -> bool {

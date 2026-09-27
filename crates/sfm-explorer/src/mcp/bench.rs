@@ -163,6 +163,8 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
         "item": item,
         "kind": "track",
         "active": crate::bench::active_track_label(bench) == Some(item.as_str()),
+        // Track View's highlighted rows. Only the active track has any.
+        "selected_observations": state.selected_bench_observations(id, &item),
         "stage": stage.to_string(),
         "origin": origin(track),
         "thresholds": thresholds(&track.thresholds),
@@ -837,6 +839,29 @@ pub(super) fn split_bench_track(
     let mut reply = with_item(reply, &made);
     insert(&mut reply, "split_from", json!(item));
     Ok(reply)
+}
+
+/// `select_bench_observations`: Track View's row selection, replaced.
+///
+/// Not a step: it pushes no version, so the reply is the track and the
+/// observations now selected rather than a version. The selection is the
+/// bench's (`AppState::bench_rows`), so the panel highlights the rows this sets
+/// and a split from the panel takes them.
+pub(super) fn select_bench_observations(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observations: &[usize],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    state
+        .select_bench_observations(id, &item, observations)
+        .map_err(ToolError::new)?;
+    Ok(json!({
+        "reconstruction_label": node_label(state, id),
+        "item": item,
+        "selected_observations": state.selected_bench_observations(id, &item),
+    }))
 }
 
 /// `commit_bench_track`: the track written into the node's reconstruction.

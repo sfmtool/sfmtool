@@ -8,18 +8,23 @@
 //! `Viewer3D::jump_to_camera_view`), so the agent's framing is the framing a
 //! human gets from the same request.
 //!
-//! **The animated transition is skipped throughout.** `Viewer3D` eases the
-//! camera over roughly 200 ms, and an agent that sets the view and screenshots
-//! straight afterward would photograph the middle of the ease. MCP view
-//! commands jump, and cancel any ease already running so a change the human
-//! started does not slide over the top of the one the agent asked for.
+//! **A view change jumps unless the call asks to animate.** `Viewer3D` eases
+//! the camera over roughly 200 ms, and an agent that sets the view and
+//! screenshots straight afterward would photograph the middle of the ease, so
+//! by default every form lands its end state at once. With `animate` the form
+//! still lands its end state first, by the same code, and
+//! `Viewer3D::ease_from` then puts the camera back and eases to it: the
+//! animated and the instant call end in one place, and a person watching the
+//! window sees where the view went. Either way a call cancels any ease already
+//! running, so a change the human started does not slide over the top of the
+//! one the agent asked for.
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde_json::json;
 
 use super::{
-    render, resolve_camera_image, resolve_reconstruction, JsonReply, Placement, ToolError,
-    ViewCommand,
+    render, resolve_camera_image, resolve_point, resolve_reconstruction, JsonReply, Placement,
+    ToolError, ViewCommand,
 };
 use crate::action_log::Kind;
 use crate::state::AppState;
@@ -36,8 +41,10 @@ pub(super) fn set_view(
     state: &mut AppState,
     viewer: &mut Viewer3D,
     view: ViewCommand,
+    animate: bool,
 ) -> JsonReply {
     viewer.cancel_transition();
+    let from = viewer.pose();
     // The run beside the text: an agent animating a path through `place`, or
     // walking the field of view, is one line, while a framing or a
     // look-through is a deliberate act that keeps its own.
@@ -70,6 +77,23 @@ pub(super) fn set_view(
             viewer.camera_view = None;
             (None, "Left camera view".to_string())
         }
+        ViewCommand::Point(query) => (None, centre_on_point(state, viewer, &query)?),
+        ViewCommand::BenchObservation {
+            reconstruction_label,
+            track,
+            observation,
+        } => {
+            let id = resolve_reconstruction(state, reconstruction_label.as_deref())?;
+            let (image, pixel) =
+                super::bench::observation_place(state, id, track.as_deref(), observation)?;
+            let node = state.node(id).expect("just resolved");
+            let name = node.recon().image_table.images[image.index()].name.clone();
+            viewer.jump_through_toward_feature(image, node, pixel);
+            (
+                None,
+                format!("Looking through {name} toward bench observation {observation}"),
+            )
+        }
         ViewCommand::Place(placement) => (Some("camera"), place(viewer, placement)?),
         ViewCommand::Fov { fov_short_axis_deg } => {
             set_fov(viewer, Some(fov_short_axis_deg))?;
@@ -87,7 +111,57 @@ pub(super) fn set_view(
         Some(run) => state.action_log.record_run(Kind::View, run, what),
         None => state.action_log.record(Kind::View, what),
     }
-    Ok(json!({ "view": render::view(state, viewer) }))
+    // The reply is the view the call ends at, read before an ease puts the
+    // camera back where it started.
+    let reply = json!({ "view": render::view(state, viewer) });
+    if animate {
+        viewer.ease_from(from);
+    }
+    Ok(reply)
+}
+
+/// Put `query`'s point in the middle of the view, by the gesture a double-click
+/// on a tracked feature in Image Detail makes: the camera turns first when the
+/// point is far from the middle, then moves sideways onto it
+/// (`Viewer3D::turn_and_move_target_to`). A point at infinity is turned toward
+/// (`Viewer3D::turn_toward_bearing`).
+///
+/// The gesture's own method starts its transition and this lands it at once,
+/// so the end state is computed by one piece of code for the human and the
+/// agent alike.
+fn centre_on_point(
+    state: &AppState,
+    viewer: &mut Viewer3D,
+    query: &crate::goto_point::PointQuery,
+) -> Result<String, ToolError> {
+    let point = resolve_point(state, query)?;
+    let id = state
+        .node(point.recon)
+        .map(|node| crate::scene::point_id(node, point.index()))
+        .unwrap_or_else(|| format!("#{}", point.index()));
+    let text = match crate::scene::world_point(&state.scene, point) {
+        Some(crate::scene::WorldPoint::At(position)) => {
+            if !viewer.turn_and_move_target_to(position, 0.0) {
+                return Err(ToolError::new(format!(
+                    "Point {id} cannot be brought to the middle of the view from here."
+                )));
+            }
+            format!("Centred on point {id}")
+        }
+        Some(crate::scene::WorldPoint::Toward(direction)) => {
+            // A bearing already in the middle starts no turn, which is the
+            // answer too: it is where the call asked for it to be.
+            viewer.turn_toward_bearing(direction, 0.0);
+            format!("Turned toward point {id}, which is at infinity")
+        }
+        None => {
+            return Err(ToolError::new(format!(
+                "Point {id} is not in the version on screen."
+            )))
+        }
+    };
+    viewer.finish_transition();
+    Ok(text)
 }
 
 /// Place the explicit camera from the pieces one call carried, preserving

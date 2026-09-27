@@ -356,3 +356,114 @@ fn a_degenerate_forward_is_refused() {
     );
     assert!(error.0.contains("roll is undefined"), "{error}");
 }
+
+// ── set_view: a point ───────────────────────────────────────────────────
+
+/// `point` puts the point at the orbit target, as the Image Detail
+/// double-click on a tracked feature does, and leaves camera view.
+#[test]
+fn a_point_is_brought_to_the_middle_of_the_view() {
+    let (mut state, mut viewer) = two_reconstructions();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "look_through": { "camera_image": "images/A_003.jpg" } }),
+    );
+    let alpha = state.scene[0].id;
+    let Some(crate::scene::WorldPoint::At(position)) =
+        crate::scene::world_point(&state.scene, PointRef::new(alpha, 5))
+    else {
+        panic!("point 5 is a finite point");
+    };
+
+    let out = call(&mut state, &mut viewer, "set_view", json!({ "point": 5 }));
+    let (_, target, _) = placement_of(&out["view"]);
+    for (axis, (actual, expected)) in target.iter().zip(position.iter()).enumerate() {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "target axis {axis} was {actual} not {expected}"
+        );
+    }
+    assert_eq!(out["view"]["looking_through"], Value::Null);
+    assert!(
+        state.selected_point.is_none(),
+        "the call moves no selection"
+    );
+}
+
+/// `point` keeps the field of view and is one form among the others.
+#[test]
+fn a_point_refuses_a_field_of_view_and_a_second_form() {
+    for arguments in [
+        json!({ "point": 5, "fov_short_axis_deg": 40.0 }),
+        json!({ "point": 5, "fit": null }),
+        json!({ "point": 5, "bench_observation": { "observation": 0 } }),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let error = tools::parse("set_view", Some(&map)).expect_err("refused");
+        assert!(
+            error.0.contains("fov_short_axis_deg") || error.0.contains("exclusive"),
+            "{error}"
+        );
+    }
+}
+
+// ── set_view: animate ───────────────────────────────────────────────────
+
+/// With `animate` the reply is the view the call ends at, while the camera is
+/// back where it started, easing toward that view; landing the ease puts it
+/// exactly where the reply said.
+#[test]
+fn an_animated_view_replies_with_where_it_ends_and_eases_there() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = a_placed_view(&mut state, &mut viewer);
+    let out = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "target": [1.0, 2.0, 3.0], "animate": true }),
+    );
+    let (_, target, _) = placement_of(&out["view"]);
+    assert_close(target, [1.0, 2.0, 3.0], "the reply's target");
+
+    let (start, _, _) = placement_of(&before);
+    let now = viewer.camera.camera.position;
+    assert_close([now.x, now.y, now.z], start, "the camera before the ease");
+
+    viewer.finish_transition();
+    let (end, _, _) = placement_of(&out["view"]);
+    let now = viewer.camera.camera.position;
+    assert_close([now.x, now.y, now.z], end, "the camera after the ease");
+}
+
+/// An animated look-through enters camera view at the end of the ease, as the
+/// double-click does, not at its start.
+#[test]
+fn an_animated_look_through_enters_camera_view_when_the_ease_lands() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let out = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "look_through": { "camera_image": "images/A_003.jpg" }, "animate": true }),
+    );
+    assert_eq!(out["view"]["looking_through"]["camera_image_index"], 3);
+    assert!(viewer.camera_view.is_none(), "camera view before the ease");
+    viewer.finish_transition();
+    assert_eq!(
+        viewer.camera_view.as_ref().map(|view| view.image.index()),
+        Some(3)
+    );
+}
+
+/// Leaving camera view moves nothing, so asking to animate it is refused.
+#[test]
+fn animating_an_exit_from_camera_view_is_refused() {
+    let map = json!({ "exit_camera_view": true, "animate": true })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let error = tools::parse("set_view", Some(&map)).expect_err("refused");
+    assert!(error.0.contains("no move to animate"), "{error}");
+}

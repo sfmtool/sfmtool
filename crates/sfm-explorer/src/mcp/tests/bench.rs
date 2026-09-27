@@ -2501,3 +2501,218 @@ fn create_track_at_pixel_refuses_with_every_members_stage() {
     );
     assert!(state.background_task().is_none());
 }
+
+// ── The selected observations ───────────────────────────────────────────
+
+/// The selected observations of the named track, as `get_bench_track` reports
+/// them.
+#[track_caller]
+fn selected(state: &mut AppState, viewer: &mut Viewer3D, track: &str) -> Value {
+    call(
+        state,
+        viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": track }),
+    )["selected_observations"]
+        .clone()
+}
+
+/// A selection is replaced whole, sorted and without repeats, reads back
+/// through `get_bench_track`, writes a `Selection` row and pushes no version;
+/// an empty list clears it.
+#[test]
+fn select_bench_observations_replaces_the_selection_and_reads_back() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
+    let serial = state.scene[0].history.current_version().serial;
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "observations": [2, 0, 2] }),
+    );
+    assert_eq!(reply["item"], json!(item), "{reply}");
+    assert_eq!(reply["selected_observations"], json!([0, 2]), "{reply}");
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([0, 2]));
+    assert_eq!(state.scene[0].history.current_version().serial, serial);
+    let rows: Vec<&str> = state
+        .action_log
+        .entries()
+        .filter(|entry| entry.kind == Kind::Selection)
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert_eq!(rows, [format!("Selected observations 0, 2 of {item}")]);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "observations": [] }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
+}
+
+/// A step on the active track keeps the selection, an undo clears it, and a
+/// rename carries it to the new label.
+#[test]
+fn the_selection_survives_a_step_and_is_cleared_by_an_undo() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let select = |state: &mut AppState, viewer: &mut Viewer3D| {
+        call(
+            state,
+            viewer,
+            "select_bench_observations",
+            json!({ "reconstruction_label": "run_a", "observations": [1] }),
+        );
+    };
+    select(&mut state, &mut viewer);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([1]));
+
+    call(
+        &mut state,
+        &mut viewer,
+        "rename_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item, "label": "nose" }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, "nose"), json!([1]));
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
+}
+
+/// Another item made active takes the selection with it, and coming back to
+/// the first item does not bring it back.
+#[test]
+fn a_change_of_active_item_clears_the_selection() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "observations": [0, 1] }),
+    );
+    let copy = call(
+        &mut state,
+        &mut viewer,
+        "duplicate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    )["item"]
+        .as_str()
+        .expect("the copy")
+        .to_string();
+    assert_eq!(selected(&mut state, &mut viewer, &copy), json!([]));
+    call(
+        &mut state,
+        &mut viewer,
+        "activate_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
+}
+
+/// A split renumbers the observations left behind, so it clears the selection
+/// it was made from.
+#[test]
+fn a_split_clears_the_selection() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "observations": [0] }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "split_bench_track",
+        json!({ "reconstruction_label": "run_a", "observations": [0] }),
+    );
+    assert!(state.bench_rows.is_none());
+    call(
+        &mut state,
+        &mut viewer,
+        "activate_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
+    );
+    assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
+}
+
+/// Only the active track has selected observations, and an index past the end
+/// of the list names nothing; both are refused and change nothing.
+#[test]
+fn a_selection_on_another_track_or_past_the_end_is_refused() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "observations": [0, 9] }),
+    );
+    assert!(error.0.contains("there is no observation 9"), "{error}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "duplicate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "track": item, "observations": [0] }),
+    );
+    assert!(error.0.contains("is not the active track"), "{error}");
+    assert!(state.bench_rows.is_none());
+}
+
+// ── set_view's bench_observation ────────────────────────────────────────
+
+/// The 3D view looks through the observation's own camera image, as the Track
+/// View row's double-click does.
+#[test]
+fn set_view_looks_through_a_bench_observation() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let image = track["observations"][1]["camera_image"].clone();
+
+    let out = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "bench_observation": { "reconstruction_label": "run_a", "observation": 1 } }),
+    );
+    assert_eq!(out["view"]["looking_through"]["camera_image_index"], image);
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "bench_observation": { "reconstruction_label": "run_a", "observation": 40 } }),
+    );
+    assert!(error.0.contains("there is no observation 40"), "{error}");
+}

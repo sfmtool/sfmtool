@@ -557,6 +557,37 @@ pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
         .collect()
 }
 
+/// Where a point is drawn in the shared world space, which for a point at
+/// infinity is a direction rather than a place.
+pub(crate) enum WorldPoint {
+    /// A finite point's position.
+    At(nalgebra::Point3<f64>),
+    /// A point at infinity's bearing.
+    Toward(nalgebra::Vector3<f64>),
+}
+
+/// Where `point` is drawn, in the shared world space: its value in the version
+/// on screen put through its node's transform. A position takes the whole
+/// transform; a bearing takes only the rotation, as the renderer's `w = 0`
+/// draws it, since a direction has no place to translate and scaling does not
+/// change it.
+///
+/// What the double-click gestures that move the 3D viewport onto a point aim
+/// at, and the wire's `set_view` `point` form with them. `None` for a point the
+/// version no longer holds.
+pub(crate) fn world_point(scene: &[SceneNode], point: PointRef) -> Option<WorldPoint> {
+    let node = node_by_id(scene, point.recon)?;
+    let edited = node.edited();
+    let view = edited.point(point.point)?;
+    let stored = view.point();
+    let transform = node.transform();
+    Some(if stored.is_at_infinity() {
+        WorldPoint::Toward(transform.rotation.as_nalgebra() * stored.position.coords)
+    } else {
+        WorldPoint::At(transform.apply_to_point(&stored.position))
+    })
+}
+
 /// The centres of the node's images taken through camera `index`, in the
 /// **shared world space** — the camera-row counterpart of [`world_points`].
 ///

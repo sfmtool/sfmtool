@@ -954,11 +954,11 @@ impl App {
                 // infinity is turned toward.
                 if let Some(point) = image_detail.take_target_point() {
                     let current_time = ui.input(|i| i.time);
-                    match world_point(app_state, point) {
-                        Some(WorldPoint::At(position)) => {
+                    match crate::scene::world_point(&app_state.scene, point) {
+                        Some(crate::scene::WorldPoint::At(position)) => {
                             viewer_3d.turn_and_move_target_to(position, current_time);
                         }
-                        Some(WorldPoint::Toward(direction)) => {
+                        Some(crate::scene::WorldPoint::Toward(direction)) => {
                             viewer_3d.turn_toward_bearing(direction, current_time);
                         }
                         None => {}
@@ -1085,11 +1085,11 @@ impl App {
                     // depth pick above; the move is the plain double-click's.
                     if is_double && !self.viewer_3d.pending_click_is_alt {
                         let current_time = self.egui_ctx.input(|i| i.time);
-                        match world_point(&self.state, point) {
-                            Some(WorldPoint::At(position)) => {
+                        match crate::scene::world_point(&self.state.scene, point) {
+                            Some(crate::scene::WorldPoint::At(position)) => {
                                 self.viewer_3d.move_target_to(position, current_time);
                             }
-                            Some(WorldPoint::Toward(direction)) => {
+                            Some(crate::scene::WorldPoint::Toward(direction)) => {
                                 self.viewer_3d.turn_toward_bearing(direction, current_time);
                             }
                             None => {}
@@ -1170,38 +1170,6 @@ fn apply_point_click(
     } else {
         state.select_point(point);
     }
-}
-
-/// Where a point is drawn in the shared world space, which for a point at
-/// infinity is a direction rather than a place.
-enum WorldPoint {
-    /// A finite point's position.
-    At(nalgebra::Point3<f64>),
-    /// A point at infinity's bearing.
-    Toward(nalgebra::Vector3<f64>),
-}
-
-/// Where `point` is drawn, in the shared world space: its value in the version
-/// on screen put through its node's transform. A position takes the whole
-/// transform; a bearing takes only the rotation, as the renderer's `w = 0`
-/// draws it, since a direction has no place to translate and scaling does not
-/// change it.
-///
-/// `None` for a point the version no longer holds.
-fn world_point(
-    state: &crate::state::AppState,
-    point: crate::scene::PointRef,
-) -> Option<WorldPoint> {
-    let node = crate::scene::node_by_id(&state.scene, point.recon)?;
-    let edited = node.edited();
-    let view = edited.point(point.point)?;
-    let stored = view.point();
-    let transform = node.transform();
-    Some(if stored.is_at_infinity() {
-        WorldPoint::Toward(transform.rotation.as_nalgebra() * stored.position.coords)
-    } else {
-        WorldPoint::At(transform.apply_to_point(&stored.position))
-    })
 }
 
 /// Whether `point` names a point the version on screen still holds.

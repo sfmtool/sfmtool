@@ -431,6 +431,39 @@ fn set_view_schema() -> Value {
                 "type": "boolean",
                 "description": "Leave camera view, keeping the camera where it is.",
             },
+            "point": {
+                "description":
+                    "Put a 3D point at the middle of the view, as double-clicking a tracked \
+                     feature in Image Detail does: the camera turns first when the point is far \
+                     from the middle, then moves sideways until the orbit target is on it, so \
+                     the point keeps its size on screen. Leaves camera view. A point at infinity has \
+                     no place to pan to, so the camera turns toward it instead and stays where \
+                     it is. A bare index into the selected reconstruction, or a full \
+                     pt3d_<hash>_<index> id. Moves no selection.",
+                "anyOf": [
+                    { "type": "integer", "minimum": 0 },
+                    { "type": "string" },
+                ],
+            },
+            "bench_observation": {
+                "type": "object",
+                "description":
+                    "Look through the camera image of one observation of a bench track, turned \
+                     until the observation is in the middle of the view, as double-clicking its \
+                     Track View row does. set_image_detail_view's bench_observation is the same \
+                     request in the Image Detail panel.",
+                "properties": {
+                    "reconstruction_label": reconstruction_label_schema(),
+                    "track": bench_track_schema(),
+                    "observation": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Its position in get_bench_track's observations list.",
+                    },
+                },
+                "required": ["observation"],
+                "additionalProperties": false,
+            },
             "position": vec3_schema(
                 "Camera position in world coordinates. On its own it moves the camera and \
                  carries the target along, keeping the orientation.",
@@ -469,6 +502,16 @@ fn set_view_schema() -> Value {
                 "Navigation up, which carries the roll, for the exact form. Elsewhere the roll \
                  is up.",
             ),
+            "animate": {
+                "type": "boolean",
+                "description":
+                    "True to ease into the view over about 200 ms, as the viewer's own \
+                     double-clicks and Z do, so a person watching can follow where the view \
+                     went. False or omitted, the view jumps there. The reply is the view the \
+                     call ends at either way, but a screenshot taken during the ease shows the \
+                     camera partway there. Any form but exit_camera_view, which does not move \
+                     the camera.",
+            },
             "fov_short_axis_deg": {
                 "type": "number",
                 "minimum": 5,

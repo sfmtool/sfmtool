@@ -205,10 +205,8 @@ impl TabContext<'_> {
             let bench = self.state.bench(id)?;
             let label = crate::bench::active_track_label(bench)?.to_string();
             let track = bench.track(&label).cloned()?;
-            // The row Track View has selected, which the figure draws larger:
-            // read here because the panel is a sibling field of the state the
-            // viewport borrows.
-            let selected = self.track_view.selected_row(id, &label);
+            // The one selected observation, which the figure draws larger.
+            let selected = self.state.selected_bench_observation(id, &label);
             Some((label, track, selected))
         });
         // Fetched only after `show_hud` has handed back its `&mut
@@ -298,7 +296,8 @@ impl TabContext<'_> {
                 }
             }
             BenchGesture::SelectRow(observation) => {
-                self.track_view.select_row(id, label, observation);
+                self.state
+                    .pick_bench_observation(id, label, observation, false);
             }
         }
     }
@@ -363,6 +362,10 @@ impl TabContext<'_> {
         if let Some(observation) = response.accept_walk {
             let outcome = self.state.accept_bench_walk(id, &label, observation);
             refuse(self.state, outcome);
+        }
+        if let Some((observation, extend)) = response.pick_row {
+            self.state
+                .pick_bench_observation(id, &label, observation, extend);
         }
         if let Some(rows) = response.split.as_ref() {
             let outcome = self.state.split_bench_track(id, &label, rows).map(|_| ());
@@ -827,7 +830,8 @@ impl TabContext<'_> {
             // there: the mark and the row are one observation.
             if let Some(observation) = detail_response.select_bench_row {
                 if let Some(label) = &bench_label {
-                    self.track_view.select_row(id, label, observation);
+                    self.state
+                        .pick_bench_observation(id, label, observation, false);
                 }
             }
             if detail_response.has_pointer {

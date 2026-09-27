@@ -18,11 +18,14 @@
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
 //! the panel owns is the slider positions during a drag, the *Lock* box Image Detail reads a
-//! dot drag by, the row selection a split reads, the tiles it has rendered,
-//! and the painting the sliders produce. The last two are cached against the
+//! dot drag by, the tiles it has rendered, and the painting the sliders
+//! produce. The last two are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the painting is
 //! `apply_thresholds` run over a copy (and a copy of a track carries its
 //! consensus bitmap) and a tile is a warp of a full-resolution photograph.
+//! The row selection is not the panel's: it is the bench's, in
+//! `AppState::bench_rows`, and a row click reports through
+//! [`TrackEditResponse::pick_row`].
 
 use std::collections::HashMap;
 
@@ -71,6 +74,10 @@ pub struct TrackEditResponse {
     pub accept_walk: Option<usize>,
     /// *Split off selected rows*, carrying the rows.
     pub split: Option<Vec<usize>>,
+    /// A row was clicked: the observation, and whether Ctrl or Shift was held
+    /// to extend the selection rather than replace it. Applied through
+    /// `AppState::pick_bench_observation`.
+    pub pick_row: Option<(usize, bool)>,
     /// *Duplicate*: put a copy of the active track on the bench beside it.
     pub duplicate: bool,
     /// *Commit*.
@@ -137,13 +144,9 @@ pub struct TrackEdit {
     /// The item, the track's `Arc` and the version [`TrackEdit::commit_refusal`]
     /// was asked at.
     commit_refusal_for: Option<(String, usize, u64)>,
-    /// The rows the user has selected, by observation index, ascending. Panel
-    /// state rather than a version: it is what *Split off selected rows* reads,
-    /// and nothing else.
-    selected_rows: Vec<usize>,
-    /// Which item those rows belong to, so a change of the active item clears
-    /// them rather than applying them to another track's observations.
-    selection_of: Option<(ReconId, String)>,
+    /// The node and the item the panel last drew, which the row menus and the
+    /// tiles are read against.
+    showing: Option<(ReconId, String)>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
     /// The rendered tile of each observation, by observation index.
@@ -215,8 +218,7 @@ impl TrackEdit {
             painted_for: None,
             commit_refusal: None,
             commit_refusal_for: None,
-            selected_rows: Vec::new(),
-            selection_of: None,
+            showing: None,
             renaming: None,
             tiles: HashMap::new(),
             tiles_for: None,
@@ -265,41 +267,12 @@ impl TrackEdit {
         self.lock
     }
 
-    /// Select one observation row from outside the panel.
-    ///
-    /// What the Image Detail panel's bench layer reports a click on a mark
-    /// through: a mark there and a row here are one observation, so clicking
-    /// either is the one gesture. It replaces the selection rather than
-    /// extending it, which is what a plain click on a row does.
-    pub(crate) fn select_row(&mut self, id: ReconId, label: &str, observation: usize) {
-        self.selection_of = Some((id, label.to_string()));
-        self.selected_rows = vec![observation];
-    }
-
-    /// The one observation row selected on `label`'s track of `id`, when
-    /// exactly one is.
-    ///
-    /// What the 3D viewer's bench layer draws larger, so a row picked here can
-    /// be found out in the world and a mark picked there can be seen to be this
-    /// row. A multi-row selection names no single mark, so it names none.
-    pub(crate) fn selected_row(&self, id: ReconId, label: &str) -> Option<usize> {
-        let (of, item) = self.selection_of.as_ref()?;
-        if *of != id || item != label {
-            return None;
-        }
-        match self.selected_rows.as_slice() {
-            [one] => Some(*one),
-            _ => None,
-        }
-    }
-
     /// Drop everything cached for a reconstruction that has left the scene.
     pub fn forget_recon(&mut self, id: ReconId) {
         self.tiles.clear();
         self.tiles_for = None;
-        if self.selection_of.as_ref().is_some_and(|(of, _)| *of == id) {
-            self.selected_rows.clear();
-            self.selection_of = None;
+        if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
+            self.showing = None;
         }
         self.painted_for = None;
         self.commit_refusal_for = None;
@@ -330,18 +303,12 @@ impl TrackEdit {
         let active = crate::bench::active_track_label(bench).map(str::to_string);
         let Some(label) = active else {
             self.rows.clear();
-            self.selected_rows.clear();
-            self.selection_of = None;
+            self.showing = None;
             return response;
         };
         let track = bench.track(&label).expect("the active label names a track");
 
-        // A change of item takes the row selection with it: the rows are
-        // observation indexes, and another track's observations are not these.
-        if self.selection_of.as_ref() != Some(&(id, label.clone())) {
-            self.selected_rows.clear();
-            self.selection_of = Some((id, label.clone()));
-        }
+        self.showing = Some((id, label.clone()));
         self.reseat_thresholds(track);
         if !self.searching {
             self.search_px = state.bench_search_px();
@@ -408,14 +375,15 @@ impl TrackEdit {
             ) {
                 response.set_stage = Some(next);
             }
-            let split_refusal = busy.clone().or_else(|| split_refusal(self, track));
+            let selected = state.selected_bench_observations(id, label);
+            let split_refusal = busy.clone().or_else(|| split_refusal(selected, track));
             if entry(
                 ui,
-                &format!("Split off {} rows", self.selected_rows.len()),
+                &format!("Split off {} rows", selected.len()),
                 split_refusal,
                 "Move the selected rows onto a second track beside this one",
             ) {
-                response.split = Some(self.selected_rows.clone());
+                response.split = Some(selected.to_vec());
             }
             if entry(
                 ui,
@@ -661,7 +629,7 @@ impl TrackEdit {
         if let Some(cached) = self.tiles.get(&observation) {
             return cached.as_ref().map(|texture| texture.id());
         }
-        let id = self.selection_of.as_ref().map(|(id, _)| *id)?;
+        let id = self.showing.as_ref().map(|(id, _)| *id)?;
         let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
         let tile = state
             .full_res_cache
@@ -822,8 +790,8 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.
-fn split_refusal(panel: &TrackEdit, track: &EditableTrack) -> Option<String> {
-    match panel.selected_rows.len() {
+fn split_refusal(selected: &[usize], track: &EditableTrack) -> Option<String> {
+    match selected.len() {
         0 => Some("No rows are selected: click a row, or Ctrl-click several.".to_string()),
         n if n == track.observations.len() => {
             Some("Every row is selected, which would leave one track rather than two.".to_string())

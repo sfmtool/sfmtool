@@ -240,6 +240,34 @@ impl AppState {
     pub(crate) fn drive_bench_evaluation(&mut self) -> bool;
 }
 
+// The selected observations, held in `AppState::bench_rows`
+// (§ "The selected observations").
+pub(crate) struct BenchRows {
+    pub(crate) recon: ReconId,
+    pub(crate) label: String,
+    /// Ascending, without repeats.
+    pub(crate) observations: Vec<usize>,
+}
+
+impl AppState {
+    /// Empty unless `label` is the active track and the selection was made on it.
+    pub(crate) fn selected_bench_observations(&self, id: ReconId, label: &str) -> &[usize];
+    /// The one selected observation, when exactly one is: what the 3D viewer's
+    /// bench figure draws larger.
+    pub(crate) fn selected_bench_observation(&self, id: ReconId, label: &str)
+        -> Option<usize>;
+    /// Replace the selection; an empty list clears it. Refused for a track that
+    /// is not active and for an index past the end of the list.
+    pub(crate) fn select_bench_observations(&mut self, id: ReconId, label: &str,
+                                            observations: &[usize]) -> Result<(), String>;
+    /// A click on one observation: alone, or with `extend` added to or taken out
+    /// of the selection. A refusal is a failed row.
+    pub(crate) fn pick_bench_observation(&mut self, id: ReconId, label: &str,
+                                         observation: usize, extend: bool);
+    /// What a move of the cursor does.
+    pub(crate) fn clear_bench_rows(&mut self, id: ReconId);
+}
+
 // The index the search queries, in
 // [sift_index.rs](../../crates/sfm-explorer/src/sift_index.rs), and the
 // index files it is one of, in
@@ -477,6 +505,49 @@ editing: no effect, no track is active`. Discarding the active item leaves
 nothing active rather than handing the activation to a neighbour, so Track View
 returns to view mode instead of switching to an item nobody asked for. An undo
 over any of these restores the activation the version held.
+
+---
+
+## The selected observations
+
+The bench carries a selection of the active track's observations: the rows
+highlighted in Track View's edit mode. *Split off N rows* takes them, and when
+exactly one is selected the 3D viewer's bench figure draws its mark larger
+([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)). It is held in
+`AppState::bench_rows` as a `BenchRows`, which names the node and the track's
+label beside the observation indexes, so every gesture that reads or sets it
+reads or sets one value:
+
+- a click on a Track View row selects that observation alone, and a Ctrl-click
+  or Shift-click adds it or takes it out (`pick_bench_observation`);
+- a click on a mark in Image Detail's bench layer or on the 3D viewer's bench
+  figure selects that observation alone, since the mark and the row are one
+  observation;
+- the wire's `select_bench_observations` replaces the whole set, and
+  `get_bench_track` reports it as `selected_observations` (§ "The wire").
+
+**Selecting is not a step.** It pushes no version, and a change writes one
+Action Log row of kind `Selection` -- `Selected observations 0, 2 of bull-nose`
+-- folded into the row before it when that was also a change of the selected
+observations, so a run of Ctrl-clicks reads as one line.
+
+**Only the active track has selected observations.** The indexes mean
+something only against one track's list, and Track View shows only the active
+track, so a selection on any other track is refused. What clears it:
+
+- **a move of the cursor**: undo, redo or a jump. The version landed on may
+  hold another list of observations under the same label, and an undo does not
+  bring back a selection, because a selection is not in a version;
+- **a step that leaves another item active, or none**: an activation, a
+  deactivation, a discard, a duplicate, a create or a commit that activates
+  something else. Coming back to the track later does not bring the selection
+  back;
+- **a split**, which renumbers the observations left on the track;
+- **closing the node**.
+
+A rename carries the selection to the new label, since the observations are the
+same ones. Every other step on the active track keeps it, because those steps
+append observations or change them in place and never renumber the list.
 
 ---
 
@@ -753,7 +824,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through thirty-one MCP tools
+An agent gets the same bench a human does, through thirty-two MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -830,6 +901,7 @@ create_bench_cluster."*
 // set_bench_search_px          { "search_px": 8.0 }   // the viewer's, every track
 // fit_bench_track           { "reconstruction_label": "bull" }
 // set_bench_track_stage        { "reconstruction_label": "bull", "stage": "track" }
+// select_bench_observations    { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // commit_bench_track           { "reconstruction_label": "bull" }
 //
@@ -872,7 +944,10 @@ the world origin. It carries the patch too, as `placement` -- centre, unit
 axes, outward `normal` and `half_extent`, or `null` before one is fitted -- in
 the block `get_point` reports a committed point's patch in, so an agent can
 read the normal it would `tilt_bench_patch` from and compare it with the point
-the track was committed over. **An observation is
+the track was committed over. It also carries `selected_observations`, the rows selected in Track View
+(§ "The selected observations"), which `select_bench_observations` replaces:
+an agent reads the rows a person picked out, and picks out rows for a person to
+look at. The list is empty on a track that is not active. **An observation is
 addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or a fit still names the same observation. The template's
@@ -1226,5 +1301,5 @@ refused in the call with no task.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The thirty-one tools for the steps that exist
+  proposed in the same draft. The thirty-two tools for the steps that exist
   are § "The wire".

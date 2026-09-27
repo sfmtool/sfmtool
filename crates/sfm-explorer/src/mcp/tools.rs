@@ -512,6 +512,11 @@ pub(crate) fn parse(
             track: args.optional_string("track")?,
             observations: args.observations("observations")?,
         },
+        "select_bench_observations" => Command::SelectBenchObservations {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            observations: args.observations("observations")?,
+        },
         "commit_bench_track" => Command::CommitBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
@@ -634,28 +639,52 @@ fn parse_seed(args: &Args) -> Result<crate::bench::Seed, ToolError> {
     })
 }
 
-/// `set_view`'s five forms, told apart by which field is present.
+/// `set_view`: one of its seven forms, and whether to ease into it.
+///
+/// `animate` applies to every form that moves the camera, which is every form
+/// but `exit_camera_view`: leaving camera view keeps the camera where it is, so
+/// there is nothing to ease, and a flag that did nothing would leave the agent
+/// believing it had asked for something.
+fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
+    let animate = args.optional_bool("animate")?.unwrap_or(false);
+    let view = parse_view_command(args)?;
+    if animate && view == ViewCommand::ExitCameraView {
+        return Err(args.error(
+            "was given animate with exit_camera_view, which leaves the camera where it is — \
+             there is no move to animate.",
+        ));
+    }
+    Ok(Command::SetView { view, animate })
+}
+
+/// `set_view`'s seven forms, told apart by which field is present.
 ///
 /// The forms are exclusive and the check is up front, because they are
 /// *intents* rather than representations: a call carrying both `fit` and
 /// `position` has no answer, and guessing one would move the camera somewhere
 /// the agent did not ask for. The explicit camera is one form however many of
 /// its pieces a call carries, so any of them puts the call in it.
-fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
+fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
     let present = |key: &str| args.map.contains_key(key);
     let explicit: Vec<&str> = PLACEMENT_KEYS
         .into_iter()
         .filter(|key| present(key))
         .collect();
-    let forms: Vec<&str> = ["fit", "look_through", "exit_camera_view"]
-        .into_iter()
-        .filter(|key| present(key))
-        .chain(explicit.first().copied())
-        .collect();
+    let forms: Vec<&str> = [
+        "fit",
+        "look_through",
+        "exit_camera_view",
+        "point",
+        "bench_observation",
+    ]
+    .into_iter()
+    .filter(|key| present(key))
+    .chain(explicit.first().copied())
+    .collect();
     if forms.len() > 1 {
         return Err(args.error(format!(
-            "was given {} at once — fit, look_through, exit_camera_view and the explicit camera \
-             are exclusive, one per call.",
+            "was given {} at once — fit, look_through, exit_camera_view, point, \
+             bench_observation and the explicit camera are exclusive, one per call.",
             forms.join(" and ")
         )));
     }
@@ -663,10 +692,8 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
     let fov = args.optional_f64("fov_short_axis_deg")?;
 
     if present("fit") {
-        return Ok(Command::SetView {
-            view: ViewCommand::Fit {
-                reconstruction_label: args.optional_string("fit")?,
-            },
+        return Ok(ViewCommand::Fit {
+            reconstruction_label: args.optional_string("fit")?,
         });
     }
     if let Some(look_through) = args.map.get("look_through") {
@@ -678,11 +705,35 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
             map,
         };
         inner.reject_unknown_nested()?;
-        return Ok(Command::SetView {
-            view: ViewCommand::LookThrough {
-                reconstruction_label: inner.optional_string("reconstruction_label")?,
-                camera_image: inner.camera_image("camera_image")?,
-            },
+        return Ok(ViewCommand::LookThrough {
+            reconstruction_label: inner.optional_string("reconstruction_label")?,
+            camera_image: inner.camera_image("camera_image")?,
+        });
+    }
+    if present("point") || present("bench_observation") {
+        // Both keep the field of view, so a width sent beside either would be
+        // silently dropped.
+        if fov.is_some() {
+            return Err(args.error(
+                "was given fov_short_axis_deg with a form that keeps the field of view — send \
+                 it in a call of its own.",
+            ));
+        }
+        if present("point") {
+            return Ok(ViewCommand::Point(args.point("point")?));
+        }
+        let map = args.map["bench_observation"].as_object().ok_or_else(|| {
+            args.error("wants bench_observation to be an object naming an observation.")
+        })?;
+        let inner = Args {
+            tool: "set_view.bench_observation",
+            map,
+        };
+        inner.reject_unknown_nested()?;
+        return Ok(ViewCommand::BenchObservation {
+            reconstruction_label: inner.optional_string("reconstruction_label")?,
+            track: inner.optional_string("track")?,
+            observation: inner.required_usize("observation")?,
         });
     }
     if present("exit_camera_view") {
@@ -691,23 +742,17 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
                 "reads exit_camera_view: false as no request at all — omit it, or pass true.",
             ));
         }
-        return Ok(Command::SetView {
-            view: ViewCommand::ExitCameraView,
-        });
+        return Ok(ViewCommand::ExitCameraView);
     }
     if !explicit.is_empty() {
-        return Ok(Command::SetView {
-            view: ViewCommand::Place(parse_placement(args, fov)?),
-        });
+        return Ok(ViewCommand::Place(parse_placement(args, fov)?));
     }
     match fov {
-        Some(fov_short_axis_deg) => Ok(Command::SetView {
-            view: ViewCommand::Fov { fov_short_axis_deg },
-        }),
+        Some(fov_short_axis_deg) => Ok(ViewCommand::Fov { fov_short_axis_deg }),
         None => Err(args.error(
-            "was given nothing to do — pass fit, look_through, exit_camera_view, a piece of the \
-             explicit camera (position, target, forward, target_distance or orientation_wxyz), \
-             or fov_short_axis_deg alone.",
+            "was given nothing to do — pass fit, look_through, exit_camera_view, point, \
+             bench_observation, a piece of the explicit camera (position, target, forward, \
+             target_distance or orientation_wxyz), or fov_short_axis_deg alone.",
         )),
     }
 }

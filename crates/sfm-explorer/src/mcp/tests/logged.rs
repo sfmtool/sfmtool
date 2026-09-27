@@ -76,6 +76,7 @@ fn each_mutating_command_records_one_entry_as_the_agent() {
             view: super::super::ViewCommand::Fit {
                 reconstruction_label: None,
             },
+            animate: false,
         },
         Command::CloseReconstruction {
             target: super::super::CloseTarget::One("beta".into()),

@@ -141,6 +141,17 @@ fn orientation_bringing_into(
     orientation
 }
 
+/// The viewport camera's whole state, as [`Viewer3D::pose`] reads it and
+/// [`Viewer3D::ease_from`] eases away from.
+pub(crate) struct ViewPose {
+    position: Point3<f64>,
+    orientation: UnitQuaternion<f64>,
+    distance: f64,
+    fov: f64,
+    world_up: Vector3<f64>,
+    camera_view: Option<CameraViewMode>,
+}
+
 /// Animated camera transition for smooth navigation.
 ///
 /// Interpolates camera state over ~200ms using slerp (orientation) + lerp
@@ -157,7 +168,11 @@ struct CameraTransition {
     end_fov: f64,
     start_world_up: Vector3<f64>,
     end_world_up: Vector3<f64>,
-    start_time: f64,
+    /// When the ease began, on egui's clock. `None` for one started outside a
+    /// frame, by the wire, which has no clock to read: the next frame that
+    /// animates it stamps its own time here, so the ease runs its whole length
+    /// however long the window sat idle before that frame.
+    start_time: Option<f64>,
     /// Camera view mode to activate when the transition completes.
     pending_camera_view: Option<CameraViewMode>,
     /// Whether to trigger a target flash on completion.
@@ -167,7 +182,7 @@ struct CameraTransition {
 impl CameraTransition {
     /// Returns the interpolation progress with smoothstep easing, or None if complete.
     fn progress(&self, current_time: f64) -> Option<f64> {
-        let elapsed = current_time - self.start_time;
+        let elapsed = current_time - self.start_time.unwrap_or(current_time);
         if elapsed >= CAMERA_TRANSITION_DURATION {
             return None; // transition complete
         }
@@ -867,6 +882,9 @@ impl Viewer3D {
 
     /// Animates the camera transition (smooth movement for orbit target, zoom, camera view).
     fn animate_transition(&mut self, ui: &egui::Ui, current_time: f64) {
+        if let Some(transition) = self.target_transition.as_mut() {
+            transition.start_time.get_or_insert(current_time);
+        }
         if let Some(ref transition) = self.target_transition {
             if let Some(t) = transition.progress(current_time) {
                 self.camera.camera.position = transition.start_position
@@ -892,15 +910,96 @@ impl Viewer3D {
             .is_some_and(|t| t.progress(current_time).is_none())
         {
             let transition = self.target_transition.take().unwrap();
-            self.camera.camera.position = transition.end_position;
-            self.camera.camera.orientation = transition.end_orientation;
-            self.camera.camera.target_distance = transition.end_distance;
-            self.camera.fov = transition.end_fov;
-            self.camera.world_up = transition.end_world_up;
-            self.camera_view = transition.pending_camera_view;
-            if transition.flash_on_complete {
+            let flash = transition.flash_on_complete;
+            self.land_transition(transition);
+            if flash {
                 self.target_flash_start = Some(current_time);
             }
+        }
+    }
+
+    /// Assign a transition's end state to the camera.
+    fn land_transition(&mut self, transition: CameraTransition) {
+        self.camera.camera.position = transition.end_position;
+        self.camera.camera.orientation = transition.end_orientation;
+        self.camera.camera.target_distance = transition.end_distance;
+        self.camera.fov = transition.end_fov;
+        self.camera.world_up = transition.end_world_up;
+        self.camera_view = transition.pending_camera_view;
+    }
+
+    /// Where the viewport camera stands now: what [`Self::ease_from`] eases
+    /// away from.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn pose(&self) -> ViewPose {
+        ViewPose {
+            position: self.camera.camera.position,
+            orientation: self.camera.camera.orientation,
+            distance: self.camera.camera.target_distance,
+            fov: self.camera.fov,
+            world_up: self.camera.world_up,
+            camera_view: self.camera_view.clone(),
+        }
+    }
+
+    /// Put the camera back at `from` and ease from there to where it stands
+    /// now, with the transition the gestures use.
+    ///
+    /// What the wire's `set_view` does when asked to animate: the form has
+    /// already put the camera at its end state, by the same code that answers
+    /// it instantly, so the animated and the instant call end in one place.
+    /// The ease starts on the next frame the viewer draws.
+    ///
+    /// A camera view being entered or left is dropped for the length of the
+    /// ease and taken up at its end, as [`Self::enter_camera_view`] does. One
+    /// that holds on both ends of the ease, looking through the same image, is
+    /// kept throughout, so a turn or a change of field of view inside camera
+    /// view does not leave it for 200 ms.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn ease_from(&mut self, from: ViewPose) {
+        let end = self.pose();
+        let same_view = match (&from.camera_view, &end.camera_view) {
+            (Some(a), Some(b)) => a.image == b.image,
+            _ => false,
+        };
+        self.camera.camera.position = from.position;
+        self.camera.camera.orientation = from.orientation;
+        self.camera.camera.target_distance = from.distance;
+        self.camera.fov = from.fov;
+        self.camera.world_up = from.world_up;
+        self.camera_view = if same_view {
+            end.camera_view.clone()
+        } else {
+            None
+        };
+        self.target_transition = Some(CameraTransition {
+            start_position: from.position,
+            end_position: end.position,
+            start_orientation: from.orientation,
+            end_orientation: end.orientation,
+            start_distance: from.distance,
+            end_distance: end.distance,
+            start_fov: from.fov,
+            end_fov: end.fov,
+            start_world_up: from.world_up,
+            end_world_up: end.world_up,
+            start_time: None,
+            pending_camera_view: end.camera_view,
+            flash_on_complete: false,
+        });
+    }
+
+    /// Land the transition in progress at once, where it would have ended, with
+    /// no ease and no flash of the target indicator.
+    ///
+    /// What the MCP surface's `set_view` does after a gesture's own method has
+    /// started one, so the agent's view is the gesture's end state computed by
+    /// the gesture's own code, and a screenshot taken straight afterward shows
+    /// it. Nothing happens when no transition is running.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn finish_transition(&mut self) {
+        if let Some(transition) = self.target_transition.take() {
+            self.land_transition(transition);
         }
     }
 
@@ -1147,7 +1246,7 @@ impl Viewer3D {
             end_fov,
             start_world_up: self.camera.world_up,
             end_world_up,
-            start_time: current_time,
+            start_time: Some(current_time),
             pending_camera_view,
             flash_on_complete,
         });
@@ -1476,6 +1575,54 @@ impl Viewer3D {
         current_time: f64,
         log: &mut ActionLog,
     ) {
+        let end = self.feature_view(image_ref, node, pixel);
+        record_camera_view(log, image_ref, node);
+        self.camera_view = None;
+        self.start_transition(
+            end.position,
+            end.orientation,
+            end.distance,
+            end.fov,
+            end.world_up,
+            Some(end.camera_view),
+            false,
+            current_time,
+        );
+    }
+
+    /// Look through `image_ref` turned toward the feature at `pixel`
+    /// **immediately**, with no animated transition.
+    ///
+    /// Same end state as [`Self::look_through_toward_feature`], assigned
+    /// rather than eased toward, for the reason [`Self::jump_to_camera_view`]
+    /// gives: what the MCP surface's `set_view` `bench_observation` form uses.
+    /// It records nothing, so the call's own Action Log row is the only one.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn jump_through_toward_feature(
+        &mut self,
+        image_ref: ImageRef,
+        node: &SceneNode,
+        pixel: [f32; 2],
+    ) {
+        let end = self.feature_view(image_ref, node, pixel);
+        self.cancel_transition();
+        self.camera.camera.position = end.position;
+        self.camera.camera.orientation = end.orientation;
+        self.camera.camera.target_distance = end.distance;
+        self.camera.world_up = end.world_up;
+        self.camera.fov = end.fov;
+        self.camera_view = Some(end.camera_view);
+    }
+
+    /// The camera state that looking through `image_ref` turned toward the
+    /// feature at `pixel` lands on, shared by the animated and the immediate
+    /// entry so the two cannot disagree on where the view ends up.
+    fn feature_view(
+        &self,
+        image_ref: ImageRef,
+        node: &SceneNode,
+        pixel: [f32; 2],
+    ) -> EnterCameraViewState {
         let (position, orientation, distance, fov, world_up, camera_view) =
             match self.compute_switch_camera_view(image_ref, node) {
                 Some(s) => (
@@ -1517,18 +1664,14 @@ impl Viewer3D {
             TURN_INTO_FRACTION,
         );
 
-        record_camera_view(log, image_ref, node);
-        self.camera_view = None;
-        self.start_transition(
+        EnterCameraViewState {
             position,
             orientation,
             distance,
-            fov,
             world_up,
-            Some(camera_view),
-            false,
-            current_time,
-        );
+            fov,
+            camera_view,
+        }
     }
 
     /// Updates target indicator state for GPU rendering.

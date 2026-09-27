@@ -424,6 +424,8 @@ impl AppState {
                 let node = &mut self.scene[index];
                 let serial = node.history.push_bench(Arc::new(next), version_label);
                 let parent = crate::state::edits::version_before(node, serial);
+                let id = node.id;
+                self.settle_bench_rows(id);
                 let placeholder = CreatedTrack::NotCommitted {
                     item: item.clone(),
                     member,

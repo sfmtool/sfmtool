@@ -247,7 +247,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "One track on the bench, as its Track View table: the stage and its \
                           data (at the track stage, the patch placement in get_point's shape, \
                           whose normal is the one tilt_bench_patch takes), the point \
-                          it came from, the thresholds, and every observation with what put it \
+                          it came from, the thresholds, the observations selected in Track \
+                          View (selected_observations, which select_bench_observations sets; \
+                          empty on a track that is not active), and every observation with what put it \
                           there, the verdict on it, where it sits and whatever each stage has \
                           measured about it. The measurements are kept evaluated: every change \
                           to the track, to the reconstruction under it or to the search radius \

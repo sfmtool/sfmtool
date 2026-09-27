@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Seventy-nine tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-three
+Eighty tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-four
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -134,7 +134,7 @@ write, and one writes a file.
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
-| `set_view` | write | Frame the scene, look through a camera image, or set the viewport camera outright |
+| `set_view` | write | Frame the scene, look through a camera image, bring a point or a bench observation to the middle of the view, or set the viewport camera outright |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
@@ -174,6 +174,7 @@ write, and one writes a file.
 | `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold sliders are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
+| `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `set_bench_search_px` | write | Set how far around each observation the bench's evaluation looks, which evaluates every track again at it; the viewer's setting, so no version |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
@@ -187,7 +188,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-three writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1184,6 +1185,15 @@ camera view and so keeps the lock.
 { "look_through": { "reconstruction_label": "seoul_bull", "camera_image": 3 } }
 { "exit_camera_view": true }
 
+// any form but exit_camera_view may ease there rather than jump
+{ "look_through": { "camera_image": 3 }, "animate": true }
+
+// a 3D point in the middle of the view, as Image Detail's double-click on it
+{ "point": "pt3d_a1b2c3d4_1207" }                // or a bare index
+// one bench observation, as Track View's double-click on its row
+{ "bench_observation": { "reconstruction_label": "seoul_bull",
+                         "track": "bull-nose", "observation": 3 } }
+
 // look-at form: intuitive, and enough to determine the camera
 { "position": [2, -3, 1], "target": [0, 0, 0], "up": [0, 0, 1] }
 
@@ -1234,6 +1244,28 @@ the orientation is being derived (`forward`, or the look-at pair). Every form
 refuses the arguments it does not read -- an argument silently ignored leaves
 the agent believing it asked for something it did not.
 
+**`point` and `bench_observation` are the two double-clicks that aim the 3D
+view at something.** `point` is what a double-click on a tracked feature in
+Image Detail does to the viewport (`Viewer3D::turn_and_move_target_to`): the
+camera turns in place first when the point is outside the middle two-thirds of
+the view, then moves sideways until the orbit target is on the point, so the
+point keeps its size on screen, and camera view is left. A point at infinity has no
+place to move to, so the camera turns toward its bearing and stays where it is
+(`Viewer3D::turn_toward_bearing`). The point is aimed at where it is drawn --
+its position put through its node's transform (`scene::world_point`) -- and it
+is not selected, for the reason `set_image_detail_view`'s `point` moves no
+selection. `bench_observation` is what a double-click on a Track View row does
+(`Viewer3D::look_through_toward_feature`): look through the observation's
+camera image, turned until the observation is in the middle of the view. Where
+the observation sits is `bench::observation_site`'s, the rule
+`set_image_detail_view`'s `bench_observation` aims by, and `track` omitted is
+the active track. Each gesture's own code computes where the view ends: `point`
+starts the gesture's transition and lands it at once
+(`Viewer3D::finish_transition`), and `bench_observation` assigns the same end
+state its animated entry eases toward (`Viewer3D::jump_through_toward_feature`).
+Neither changes the field of view, so a `fov_short_axis_deg` beside either is
+refused.
+
 `fit` and `look_through` go through the same paths the keyboard and
 double-click use (`ViewportCamera::zoom_to_fit` over `scene::world_points`,
 `Viewer3D::jump_to_camera_view`), so the agent's framing is the framing a human
@@ -1244,11 +1276,21 @@ the end of its animated transition: framing is a statement about the free
 camera, and a fit that left the render looking through a camera image would
 frame nothing the caller can see.
 
-**The animated transition is skipped for MCP-driven view changes.** `Viewer3D`
-eases the camera over roughly 200 ms; an agent that sets the view and screenshots
-immediately would photograph the middle of the ease. MCP view commands jump, and
-cancel any ease already running, so a change the human started does not slide
-over the top of the one the agent asked for. `Viewer3D::jump_to_camera_view` is
+**A view change jumps unless the call sets `animate`.** `Viewer3D` eases the
+camera over roughly 200 ms; an agent that sets the view and screenshots
+immediately would photograph the middle of the ease, so by default every form
+lands at once. An agent working beside a person can pass `"animate": true` to
+any form but `exit_camera_view`, which moves nothing: the view then eases there
+as the viewer's own double-clicks and Z do, so the person can follow where it
+went. The form computes its end state exactly as the instant call does, and
+`Viewer3D::ease_from` puts the camera back where it was and eases to that
+state, entering or leaving camera view at the end of the ease; a camera view
+that holds at both ends, on the same image, is kept throughout. The reply is
+the view the call ends at either way. The ease starts on the next frame the
+viewer draws rather than at the call, because an idle window draws no frames
+and an ease timed from the last one would already be over. Every call cancels
+any ease already running, so a change the human started does not slide over
+the top of the one the agent asked for. `Viewer3D::jump_to_camera_view` is
 `enter_camera_view`'s end state assigned rather than eased toward; the two share
 one derivation (`compute_camera_view`) so they cannot drift apart on where a
 camera looks from.
@@ -2448,12 +2490,16 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-one tools that read and work the **bench** beside a node
+Thirty-two tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
 Detail menu entry makes -- so an agent's verdict, split or commit is a version
 in the history the human is looking at, undoable by either of them.
+`select_bench_observations` is the exception: it sets Track View's selected
+rows, which are bench state but not a version, so it pushes none, and
+`get_bench_track` reads them back as `selected_observations`
+([bench.md](bench.md) § "The selected observations").
 
 They are documented in [bench.md](bench.md) § "The wire", which is where the
 bench's own vocabulary is: what an item is, what a stage is, and what a verdict
@@ -2604,7 +2650,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-one are the patch a track is**, and they are the
+**Eight of the thirty-two are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -2704,7 +2750,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the thirty-one are about the index files**, the node's SIFT index and
+**Four of the thirty-two are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -3654,6 +3700,23 @@ where a test hands no host over.
   finite one comes back the other way round; and a fit of that track reports the
   classification in its sentence and, on the demo's forty-five-degree camera arc,
   promotes it, which `stage_data` then says.
+- **The selected observations are the bench's, and do not outlive their
+  track**: `select_bench_observations` replaces the set sorted and without
+  repeats, `get_bench_track` reads it back, it writes one `Selection` row and
+  no version, and an empty list clears it; a verdict keeps it, a rename carries
+  it to the new label, and an undo clears it; a duplicate, and an activation of
+  the first item after it, leave none; a split clears it; and a selection on a
+  track that is not active, or past the end of the list, is refused.
+- **`set_view` aims at a point and at a bench observation**: `point` puts the
+  point's world position at the orbit target, leaves camera view and moves no
+  selection, and is refused beside `fov_short_axis_deg` or a second form;
+  `bench_observation` looks through the camera image the observation is in,
+  and an index past the end of the list is refused.
+- **`animate` eases to where the instant call lands**: the reply is the end
+  view while the camera still stands at the start, and landing the ease puts
+  it at the reply's view; an animated look-through enters camera view when the
+  ease lands rather than when it starts; and `animate` beside
+  `exit_camera_view` is refused.
 - **`content_hash` is the hash the version's point ids carry**: an edit that
   creates a point moves it, the created point's id is built from the eight
   digits it reports, and an undo takes it back to where it was.
@@ -3678,7 +3741,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is seventy-nine tools**, fifteen of them reads and one of them
+- **The catalog is eighty tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

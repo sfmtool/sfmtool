@@ -741,6 +741,15 @@ pub struct AppState {
     /// evaluation's inputs, so moving it evaluates every track again, and a
     /// *Fit* runs at it too.
     pub(crate) bench_search_px: f64,
+
+    /// Which observations of the active bench track are selected: Track
+    /// View's highlighted rows, which *Split off N rows* reads and the 3D
+    /// viewer's bench figure draws larger when there is exactly one.
+    ///
+    /// Part of the bench, but not of a version: selecting pushes none and an
+    /// undo does not restore it. Undo, redo and a jump clear it instead, as
+    /// does a change of active item. See [`crate::bench::BenchRows`].
+    pub(crate) bench_rows: Option<crate::bench::BenchRows>,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -847,6 +856,7 @@ impl AppState {
             wake: None,
             bench_evaluations: Default::default(),
             bench_search_px: crate::bench::default_search_px(),
+            bench_rows: None,
         }
     }
 
@@ -942,6 +952,7 @@ impl AppState {
         self.image_detail_view_layout = None;
         self.hovered_image = None;
         self.hovered_point = None;
+        self.bench_rows = None;
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
@@ -972,6 +983,7 @@ impl AppState {
         }
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
+        self.bench_rows = self.bench_rows.take().filter(|rows| rows.recon != id);
     }
 
     /// Take the panel's own reading of the view it drew, with the dock rectangle

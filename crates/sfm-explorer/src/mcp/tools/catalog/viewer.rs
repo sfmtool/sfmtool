@@ -465,17 +465,21 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "set_view",
             description: "Move the 3D viewport camera — the tool to call immediately before \
-                          screenshot. Five forms, exactly one per call: frame everything or one \
+                          screenshot. Seven forms, exactly one per call: frame everything or one \
                           reconstruction (fit), look through a camera image (look_through), leave \
-                          camera view (exit_camera_view), place the explicit camera, or set \
+                          camera view (exit_camera_view), put a 3D point in the middle of the \
+                          view (point), look through one bench observation's camera image \
+                          toward it (bench_observation), place the explicit camera, or set \
                           fov_short_axis_deg alone. The explicit camera takes its pieces one at a \
                           time and preserves what a call does not carry: position with target is \
                           the look-at form and orientation_wxyz with target_distance restores a \
                           view read from get_scene, while target alone re-centres the view, \
                           forward alone orbits the camera around what it is looking at, and \
                           target_distance alone dollies. fov_short_axis_deg may ride along with \
-                          any of them. View changes jump rather than animating, so a screenshot \
-                          taken straight afterward shows the new view.",
+                          any of them. By default a view change jumps, so a screenshot taken \
+                          straight afterward shows the new view. With animate: true it eases \
+                          there as the viewer's own gestures do, which helps a person watching \
+                          the window follow the move; wait for the ease before a screenshot.",
             kind: Write,
             schema: set_view_schema(),
         },

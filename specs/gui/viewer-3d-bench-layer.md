@@ -102,8 +102,8 @@ half-length states the whole of its size.
   whose ray cannot meet the plane in front of its own camera, draws no mark at
   all and leaves a gap in the list rather than a mark that means nothing.
 
-The circle of the observation Track View has selected is drawn 1.6 times the
-others'. That is the one thing the figure says about the selection, and it is
+When exactly one observation is selected ([bench.md](bench.md) § "The
+selected observations"), its circle is drawn 1.6 times the others'. That is the one thing the figure says about the selection, and it is
 the other half of the click that sets it: a row picked in the panel can be found
 out in the world, and a mark picked in the world can be seen to be that row.
 

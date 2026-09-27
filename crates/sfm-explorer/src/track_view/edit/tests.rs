@@ -651,10 +651,11 @@ fn edit_mode_draws_the_active_item_and_no_item_tabs() {
 /// A row is an *observation*, so clicking one names both an image and a place
 /// in it: the response carries the pixel the Image Detail panel's bench layer
 /// draws that observation's mark at, so the two cannot disagree about where the
-/// view should land.
+/// view should land. It also picks the observation out, which the panel reports
+/// rather than holds: the selection is the bench's.
 #[test]
 fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
-    let (state, id, label, mut panel, ctx) = on_the_bench();
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let expected = crate::bench::observation_pixel(&track.observations[1])
         .expect("a track from a committed point carries its keypoints");
@@ -669,6 +670,15 @@ fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
         response.request_camera_view, None,
         "a single click asked for camera view"
     );
+    assert_eq!(response.pick_row, Some((1, false)));
+
+    let (observation, extend) = response.pick_row.expect("a pick");
+    state.pick_bench_observation(id, &label, observation, extend);
+    assert_eq!(state.selected_bench_observations(id, &label), [1]);
+    state.pick_bench_observation(id, &label, 0, true);
+    assert_eq!(state.selected_bench_observations(id, &label), [0, 1]);
+    state.pick_bench_observation(id, &label, 1, true);
+    assert_eq!(state.selected_bench_observations(id, &label), [0]);
 }
 
 /// A double-click on a row enters camera view for its image, as a view-mode

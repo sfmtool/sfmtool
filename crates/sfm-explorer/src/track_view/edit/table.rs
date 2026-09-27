@@ -163,6 +163,12 @@ impl TrackEdit {
             .hovered_image
             .filter(|i| i.recon == id)
             .map(ImageRef::index);
+        let label = self
+            .showing
+            .as_ref()
+            .map(|(_, label)| label.clone())
+            .unwrap_or_default();
+        let selected = state.selected_bench_observations(id, &label);
         self.rows.clear();
 
         // Above the scroll area, not inside it: at the bottom of a long track
@@ -187,6 +193,7 @@ impl TrackEdit {
                     observation,
                     stage,
                     hovered,
+                    selected,
                     &cols,
                     response,
                 );
@@ -208,6 +215,7 @@ impl TrackEdit {
         observation: usize,
         stage: StageKind,
         hovered: Option<usize>,
+        selected: &[usize],
         cols: &ColumnLayout,
         response: &mut TrackEditResponse,
     ) {
@@ -242,7 +250,7 @@ impl TrackEdit {
         };
         ui.painter()
             .rect_filled(rect, 0.0, paint.gamma_multiply(0.7));
-        if self.selected_rows.contains(&observation) {
+        if selected.contains(&observation) {
             ui.painter()
                 .rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.45));
         }
@@ -262,7 +270,7 @@ impl TrackEdit {
         // than here. Registered on the row's rect, so a right-click anywhere in
         // it opens the menu for that observation.
         let label = self
-            .selection_of
+            .showing
             .as_ref()
             .map(|(_, label)| label.clone())
             .unwrap_or_default();
@@ -378,7 +386,7 @@ impl TrackEdit {
             // layer draws the mark at.
             response.reveal_feature = crate::bench::observation_pixel(row);
             let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
-            self.toggle_row(observation, extend);
+            response.pick_row = Some((observation, extend));
         }
         // Camera view for the row's image, as a view-mode row's double-click
         // enters it: the rows of both modes are observations of one track.
@@ -496,26 +504,6 @@ impl TrackEdit {
             cells,
             tile: tile.is_some(),
         });
-    }
-
-    /// Add or remove one row from the selection a split reads.
-    ///
-    /// A plain click selects that row alone; Ctrl or Shift extends, which is
-    /// what picking out the observations of the other surface takes.
-    fn toggle_row(&mut self, observation: usize, extend: bool) {
-        if !extend {
-            self.selected_rows = vec![observation];
-            return;
-        }
-        match self.selected_rows.iter().position(|&r| r == observation) {
-            Some(at) => {
-                self.selected_rows.remove(at);
-            }
-            None => {
-                self.selected_rows.push(observation);
-                self.selected_rows.sort_unstable();
-            }
-        }
     }
 }
 

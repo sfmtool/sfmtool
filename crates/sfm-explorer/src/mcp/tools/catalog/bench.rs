@@ -558,6 +558,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "select_bench_observations",
+            description: "Replace the selected observations of the active bench track: Track \
+                          View's highlighted rows, which its Split off N rows button takes and, \
+                          when there is exactly one, the 3D viewer draws larger. An empty list \
+                          clears them. get_bench_track reports them as selected_observations, \
+                          including the ones a person clicked. Only the active track has \
+                          selected observations, so naming another track is refused. Pushes no \
+                          version; an undo, a redo or a change of active item clears them.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "observations",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "integer", "minimum": 0 },
+                            "description":
+                                "Which observations to select, by their positions in \
+                                 get_bench_track's list. Empty to clear the selection.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "commit_bench_track",
             description: "Write a bench track into the reconstruction as one version: its in \
                           observations become the track of a point, over the point it came from \

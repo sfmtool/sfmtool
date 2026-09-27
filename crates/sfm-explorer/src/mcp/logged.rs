@@ -95,6 +95,7 @@ impl Command {
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
             Command::SplitBenchTrack { .. } => "split_bench_track",
+            Command::SelectBenchObservations { .. } => "select_bench_observations",
             Command::CommitBenchTrack { .. } => "commit_bench_track",
             Command::SetBenchSearchPx { .. } => "set_bench_search_px",
             Command::FitBenchTrack { .. } => "fit_bench_track",
@@ -347,6 +348,7 @@ impl Command {
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }
             | Command::SelectPoint { .. }
+            | Command::SelectBenchObservations { .. }
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. }
             | Command::SetSolo { .. }

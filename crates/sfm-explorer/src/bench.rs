@@ -327,7 +327,174 @@ pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
     Some([site.pixel[0] as f32, site.pixel[1] as f32])
 }
 
+/// Which observations of one bench track are selected: Track View's
+/// highlighted rows, held in [`AppState::bench_rows`].
+///
+/// Kept in the state rather than in the panel so that everything that reads or
+/// sets the rows reads or sets one value. The panel's row clicks, a click on a
+/// mark in either bench layer and the wire's `select_bench_observations` all
+/// write it; *Split off N rows*, the 3D figure's enlarged mark and
+/// `get_bench_track`'s `selected_observations` all read it.
+///
+/// It names the track it belongs to, and it counts only while that track is
+/// the node's active one: the rows are observation indexes, and another
+/// track's observations are not these. [`AppState::push_bench_step`] clears it
+/// when a step leaves another item active, a rename carries it to the new
+/// label, and a move of the cursor clears it, since the version it lands on
+/// may hold a different list of observations under the same label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BenchRows {
+    /// The node whose bench holds the track.
+    pub(crate) recon: ReconId,
+    /// The track's label.
+    pub(crate) label: String,
+    /// The selected observations, by position in the track's list, ascending
+    /// and without repeats.
+    pub(crate) observations: Vec<usize>,
+}
+
 impl AppState {
+    /// The selected observations of the track called `label` on `id`'s bench,
+    /// ascending. Empty unless that track is the active one and the selection
+    /// was made on it.
+    pub(crate) fn selected_bench_observations(&self, id: ReconId, label: &str) -> &[usize] {
+        let Some(rows) = &self.bench_rows else {
+            return &[];
+        };
+        let active = self.bench(id).and_then(|bench| active_track_label(bench));
+        if rows.recon != id || rows.label != label || active != Some(label) {
+            return &[];
+        }
+        &rows.observations
+    }
+
+    /// The one selected observation of `label`'s track on `id`'s bench, when
+    /// exactly one is selected.
+    ///
+    /// What the 3D viewer's bench figure draws larger, so a row picked in Track
+    /// View can be found in the world and a mark picked there can be seen to be
+    /// that row. A selection of several rows names no single mark.
+    pub(crate) fn selected_bench_observation(&self, id: ReconId, label: &str) -> Option<usize> {
+        match self.selected_bench_observations(id, label) {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    /// Make `observations` the selected observations of the active track
+    /// `label` on `id`'s bench, replacing whatever was selected. An empty list
+    /// clears the selection.
+    ///
+    /// Refused for a track that is not the active one, since the selection is
+    /// Track View's and Track View shows only the active track, and for an
+    /// index past the end of the list. A change writes one `Selection` row,
+    /// folded into the one before it when that was also a change of these rows,
+    /// so a run of Ctrl-clicks reads as one line.
+    pub(crate) fn select_bench_observations(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observations: &[usize],
+    ) -> Result<(), String> {
+        let bench = self.bench(id).ok_or(crate::state::NOT_LOADED)?;
+        let track = bench
+            .track(label)
+            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+        if active_track_label(bench) != Some(label) {
+            return Err(format!(
+                "{label} is not the active track, and only the active track has selected \
+                 observations. Activate it first."
+            ));
+        }
+        let count = track.observations.len();
+        if let Some(&past) = observations.iter().find(|&&i| i >= count) {
+            return Err(format!(
+                "{label} has {count} observations; there is no observation {past}."
+            ));
+        }
+        let mut chosen = observations.to_vec();
+        chosen.sort_unstable();
+        chosen.dedup();
+        if self.selected_bench_observations(id, label) == chosen.as_slice() {
+            return Ok(());
+        }
+        let text = match chosen.as_slice() {
+            [] => format!("Cleared the selected observations of {label}"),
+            [one] => format!("Selected observation {one} of {label}"),
+            many => {
+                let list: Vec<String> = many.iter().map(usize::to_string).collect();
+                format!("Selected observations {} of {label}", list.join(", "))
+            }
+        };
+        self.bench_rows = Some(BenchRows {
+            recon: id,
+            label: label.to_string(),
+            observations: chosen,
+        });
+        self.action_log
+            .record_run(Kind::Selection, "bench observations", text);
+        Ok(())
+    }
+
+    /// A click on one observation of the active track `label`: with `extend`
+    /// clear, that observation alone; with it set (Ctrl or Shift held), that
+    /// observation added to the selection, or taken out of it when it was in.
+    ///
+    /// What a Track View row click and a click on a mark of either bench layer
+    /// do. A refusal is written to the Action Log, since a click has no caller
+    /// to hand it back to.
+    pub(crate) fn pick_bench_observation(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+        extend: bool,
+    ) {
+        let mut chosen = if extend {
+            self.selected_bench_observations(id, label).to_vec()
+        } else {
+            Vec::new()
+        };
+        match chosen.iter().position(|&r| r == observation) {
+            Some(at) if extend => {
+                chosen.remove(at);
+            }
+            _ => chosen.push(observation),
+        }
+        if let Err(why) = self.select_bench_observations(id, label, &chosen) {
+            self.action_log.fail(Kind::Selection, why);
+        }
+    }
+
+    /// Drop the selected observations when the active item of `id`'s bench is
+    /// no longer the track they were selected on: after a step that activated
+    /// another item, discarded or split this one, or put a new one on.
+    fn settle_bench_rows(&mut self, id: ReconId) {
+        let Some(rows) = &self.bench_rows else {
+            return;
+        };
+        if rows.recon != id {
+            return;
+        }
+        let active = self.bench(id).and_then(|bench| active_track_label(bench));
+        if active != Some(rows.label.as_str()) {
+            self.bench_rows = None;
+        }
+    }
+
+    /// Drop the selected observations of `id`'s bench: what a move of the
+    /// cursor does, since the version it lands on may hold another list of
+    /// observations under the same label.
+    pub(crate) fn clear_bench_rows(&mut self, id: ReconId) {
+        if self
+            .bench_rows
+            .as_ref()
+            .is_some_and(|rows| rows.recon == id)
+        {
+            self.bench_rows = None;
+        }
+    }
+
     /// The bench beside `id`, at that node's cursor.
     pub(crate) fn bench(&self, id: ReconId) -> Option<&Arc<Bench>> {
         Some(self.node(id)?.history.current_bench())
@@ -857,6 +1024,9 @@ impl AppState {
             "Split {} observations off {label} as {}",
             report.moved, report.label
         );
+        // The observations left behind are renumbered, so the selected indexes
+        // would name other observations of this track.
+        self.clear_bench_rows(id);
         self.push_bench_step(index, next, text);
         Ok(report.label)
     }
@@ -1022,6 +1192,15 @@ impl AppState {
             .rename(label, to)
             .map_err(|e| format!("Cannot rename that item: {e}"))?;
         let text = format!("Renamed {label} to {to} on the bench");
+        // The selected observations are the same observations under the new
+        // label.
+        if let Some(rows) = self
+            .bench_rows
+            .as_mut()
+            .filter(|rows| rows.recon == id && rows.label == label)
+        {
+            rows.label = to.to_string();
+        }
         self.push_bench_step(index, next, text);
         Ok(())
     }
@@ -1128,6 +1307,7 @@ impl AppState {
         let parent = version_before(node, serial);
         self.action_log
             .record(Kind::Edit, version_step_text(&text, parent, serial));
+        self.settle_bench_rows(id);
         // After the row the edit wrote, because that is the order the two
         // happened in: the point the selection moves to is a row of the version
         // the line above just announced.
@@ -1802,12 +1982,17 @@ impl AppState {
     }
 
     /// Push one bench step as the node's next version and write its row.
+    ///
+    /// The selected observations go with the step when it leaves another item
+    /// active ([`Self::settle_bench_rows`]).
     fn push_bench_step(&mut self, index: usize, bench: Bench, text: String) {
         let node = &mut self.scene[index];
+        let id = node.id;
         let serial = node.history.push_bench(Arc::new(bench), text.clone());
         let parent = version_before(node, serial);
         self.action_log
             .record(Kind::Bench, version_step_text(&text, parent, serial));
+        self.settle_bench_rows(id);
     }
 
     /// The node, its bench and the track a step on one item acts on.

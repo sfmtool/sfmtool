@@ -206,6 +206,9 @@ pub(crate) enum Command {
     },
     SetView {
         view: ViewCommand,
+        /// Ease into the view over the viewer's usual transition rather than
+        /// jumping there.
+        animate: bool,
     },
     GetWindowLayout,
     SetWindowLayout {
@@ -473,6 +476,14 @@ pub(crate) enum Command {
     /// Move the named observations onto a second track beside this one.
     SplitBenchTrack {
         reconstruction_label: String,
+        track: Option<String>,
+        observations: Vec<usize>,
+    },
+    /// Replace the selected observations of the active track: Track View's
+    /// highlighted rows. An empty list clears them.
+    SelectBenchObservations {
+        reconstruction_label: String,
+        /// `None` is the active track; a named one must be it.
         track: Option<String>,
         observations: Vec<usize>,
     },
@@ -808,6 +819,19 @@ pub(crate) enum ViewCommand {
     },
     /// Leave camera-view mode, keeping the camera where it is.
     ExitCameraView,
+    /// Bring a 3D point to the middle of the viewport, turning first when it
+    /// is far from the middle: a double-click on a tracked feature in Image
+    /// Detail. A point at infinity is turned toward.
+    Point(crate::goto_point::PointQuery),
+    /// Look through the camera image of one observation of a bench track,
+    /// turned toward it: a double-click on a Track View row.
+    BenchObservation {
+        reconstruction_label: Option<String>,
+        /// `None` is the active track.
+        track: Option<String>,
+        /// Its position in `get_bench_track`'s list.
+        observation: usize,
+    },
     /// The explicit camera, in whatever pieces the call carried.
     Place(Placement),
     /// The field of view alone.
@@ -1149,7 +1173,7 @@ pub(crate) fn apply_with_window(
         Command::SetImageDetailView { request } => display::set_view(state, &request),
         Command::GetTimingDetail => done(display::get_timing_detail(state)),
         Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
-        Command::SetView { view } => done(view::set_view(state, viewer, view)),
+        Command::SetView { view, animate } => done(view::set_view(state, viewer, view, animate)),
         Command::GetWindowLayout => done(layout::get_window_layout(state, host)),
         Command::SetWindowLayout { document } => {
             done(layout::set_window_layout(state, host, &document))
@@ -1478,6 +1502,16 @@ pub(crate) fn apply_with_window(
             track,
             observations,
         } => done(bench::split_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            &observations,
+        )),
+        Command::SelectBenchObservations {
+            reconstruction_label,
+            track,
+            observations,
+        } => done(bench::select_bench_observations(
             state,
             &reconstruction_label,
             track.as_deref(),
@@ -1932,7 +1966,7 @@ pub(crate) fn apply_as_agent(
             // hand, exactly as `,` and `.` are: the lock ends first, as a
             // commit when it has been moved. A field-of-view change keeps
             // camera view and so keeps the lock, as the zoom controls do.
-            if matches!(command, Command::SetView { view: ref v } if !matches!(v, ViewCommand::Fov { .. }))
+            if matches!(command, Command::SetView { view: ref v, .. } if !matches!(v, ViewCommand::Fov { .. }))
             {
                 stale.extend(crate::camera_lock::exit_implicitly(viewer, state));
             }
