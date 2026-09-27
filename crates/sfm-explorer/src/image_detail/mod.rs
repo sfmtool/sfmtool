@@ -26,7 +26,9 @@ mod view;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
 pub(crate) use overlay::{BenchMenu, START_CLUSTER_LABEL};
-pub(crate) use view::{look_at, Look, ViewGeometry};
+#[cfg(feature = "mcp")]
+pub(crate) use view::look_at;
+pub(crate) use view::{Look, ViewGeometry};
 
 use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};

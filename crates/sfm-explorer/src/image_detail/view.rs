@@ -83,6 +83,7 @@ impl ViewGeometry {
     /// where it landed wants to see. What is always true is that the centre of
     /// this rectangle is the image pixel at the centre of the panel, which is
     /// what a [`Look`] aims.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn visible_rect(&self) -> [f32; 4] {
         let scale = self.scale();
         let display = self.display_size();
@@ -105,7 +106,7 @@ impl ViewGeometry {
 /// Where a caller is asking the panel to look.
 ///
 /// One enum rather than a bag of optional fields for the reason
-/// [`crate::mcp::ViewCommand`] is one: these are different questions, and a
+/// `crate::mcp::ViewCommand` is one: these are different questions, and a
 /// request carrying two of them would have no answer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Look {
@@ -116,6 +117,7 @@ pub(crate) enum Look {
         pixel: [f32; 2],
     },
     /// Put `pixel` at the centre of the panel, at `zoom` where one is named.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Pixel {
         /// Where, in the image's own pixels.
         pixel: [f32; 2],
@@ -124,8 +126,10 @@ pub(crate) enum Look {
         zoom: Option<f32>,
     },
     /// Fit `[x0, y0, x1, y1]`, in image pixels, to the panel.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Rect([f32; 4]),
     /// The whole image: zoom 1, centred.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Fit,
 }
 

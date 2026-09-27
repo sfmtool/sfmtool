@@ -61,6 +61,22 @@ impl Tab {
     }
 }
 
+/// The body rectangle of `panel`, in logical points, or `None` when the panel
+/// is not docked or has not been laid out.
+///
+/// `LeafNode::viewport` is the tab *body*, below the tab bar. `Rect::NOTHING`
+/// is what a leaf carries until the dock has drawn it once, and it is not a
+/// rectangle anything can be measured against, so it reads as `None`.
+pub(crate) fn panel_body_points(
+    dock: &egui_dock::DockState<Tab>,
+    panel: Tab,
+) -> Option<egui::Rect> {
+    let path = dock.find_tab(&panel)?;
+    let leaf = dock.leaf(path.node_path()).ok()?;
+    let rect = leaf.viewport;
+    (rect.is_finite() && rect.is_positive()).then_some(rect)
+}
+
 /// Holds mutable references to all state needed to render any tab.
 pub(crate) struct TabContext<'a> {
     pub state: &'a mut AppState,

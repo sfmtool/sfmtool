@@ -138,6 +138,7 @@ pub(crate) enum PatchEdit {
         pixel: [f64; 2],
     },
     /// Give one cluster-stage sighting this affine shape outright.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Shape {
         /// The observation, by its position in the track's list.
         observation: usize,

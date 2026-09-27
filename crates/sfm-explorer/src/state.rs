@@ -722,7 +722,7 @@ pub struct AppState {
     /// How a worker tells the event loop there is something to look at.
     ///
     /// A closure rather than the `winit` proxy itself, for the reason
-    /// [`crate::mcp`]'s wake is one: the state, and everything reachable from
+    /// `crate::mcp`'s wake is one: the state, and everything reachable from
     /// it, then depends on no windowing type and a headless test can watch the
     /// wakes by installing its own. `None` where there is no event loop, which
     /// is every test.
@@ -982,7 +982,7 @@ impl AppState {
     /// of, and how recent it is -- cannot come apart.
     pub(crate) fn publish_image_detail_view(&mut self, view: ViewGeometry) {
         self.image_detail_view_layout =
-            crate::mcp::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail);
+            crate::dock::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail);
         self.image_detail_view = Some(view);
         self.image_detail_view_serial = self.image_detail_view_serial.wrapping_add(1);
     }
@@ -998,10 +998,11 @@ impl AppState {
     /// Equal rectangles mean the panel is laid out where it was when it last
     /// published; anything else, a re-split, a resize, a panel not docked at all,
     /// means the reading is about a panel that is gone.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn image_detail_view_is_current(&self) -> bool {
         self.image_detail_view.is_some()
             && self.image_detail_view_layout
-                == crate::mcp::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail)
+                == crate::dock::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail)
     }
 
     /// Select a reconstruction directly.

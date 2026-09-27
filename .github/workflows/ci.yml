@@ -237,6 +237,23 @@ jobs:
           -s "python=3.14.*"
           -- cargo check --workspace --locked
 
+      # The viewer with its `mcp` feature dropped, which no workspace build
+      # compiles: sfmtool-py depends on sfm-explorer with default features, so
+      # the check above always has `mcp` on, and code that names `crate::mcp`
+      # outside the feature gate passes there. `cargo check` does no codegen, and
+      # following the workspace check it reuses the registry downloads and every
+      # artifact whose features resolve the same. What it redoes are the crates
+      # whose features differ once sfmtool-py and the MCP stack are out of the
+      # graph: about 130 of the workspace check's 420 units, mostly proc macros
+      # and their dependents, for roughly 60% of that step's time. This job runs
+      # beside the far longer test jobs, so that does not lengthen the run.
+      - name: Cargo check sfm-explorer without mcp at MSRV
+        run: >
+          pixi exec
+          -s "rust==${{ steps.msrv.outputs.version }}.*"
+          -s "python=3.14.*"
+          -- cargo check -p sfm-explorer --no-default-features --locked
+
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
   # the slower instrumented build once, on Linux. Windows and macOS still run

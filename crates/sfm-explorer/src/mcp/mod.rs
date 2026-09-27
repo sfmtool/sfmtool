@@ -64,7 +64,6 @@ mod tests;
 pub(crate) use server::serve;
 
 use logged::{query_text, screenshot_size};
-pub(crate) use panel_rect::panel_body_points;
 use panel_rect::panel_crop;
 
 /// One entry of `bundle_adjust`'s `cameras` list: what one camera releases,

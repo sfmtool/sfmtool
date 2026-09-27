@@ -9,22 +9,11 @@
 // crop to is the dock's own: `LeafNode::viewport` is the tab *body*, below the
 // tab bar, in logical points. The functions here are pure over
 // `(&DockState<Tab>, f32)`, which is what puts the arithmetic under headless
-// test rather than only on a machine with a window.
+// test rather than only on a machine with a window. The rectangle itself is
+// `crate::dock::panel_body_points`, which the Image Detail panel's published
+// view is also checked against.
 
-/// The body rectangle of `panel`, in logical points, or `None` when the panel
-/// is not docked or has not been laid out.
-///
-/// `Rect::NOTHING` is what a leaf carries until the dock has drawn it once, and
-/// it is not a rectangle to crop to — a picture of it would be empty.
-pub(crate) fn panel_body_points(
-    dock: &egui_dock::DockState<crate::dock::Tab>,
-    panel: crate::dock::Tab,
-) -> Option<egui::Rect> {
-    let path = dock.find_tab(&panel)?;
-    let leaf = dock.leaf(path.node_path()).ok()?;
-    let rect = leaf.viewport;
-    (rect.is_finite() && rect.is_positive()).then_some(rect)
-}
+use crate::dock::panel_body_points;
 
 /// The size a panel's body comes back at, in physical pixels.
 pub(super) fn panel_body_size(

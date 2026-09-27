@@ -673,6 +673,7 @@ pub fn hash_prefix(node: &SceneNode) -> String {
 /// base alone, so the base's hash says nothing about the edit, while the hash
 /// the edit minted its points under is a function of the base **and** of what
 /// was added to it.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub fn version_hash_prefix(node: &SceneNode) -> String {
     let serial = node.history.current_version().serial;
     node.history

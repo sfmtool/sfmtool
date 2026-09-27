@@ -101,6 +101,7 @@ pub(crate) enum Evaluation {
 
 impl Evaluation {
     /// The word the wire and the panel use for the state.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Evaluation::Current => "current",
@@ -111,6 +112,7 @@ impl Evaluation {
     }
 
     /// The sentence a refusal or a failure carries.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn reason(&self) -> Option<&str> {
         match self {
             Evaluation::Refused(why) | Evaluation::Failed(why) => Some(why),
@@ -166,6 +168,7 @@ impl AppState {
     /// Whether an evaluation of `item`'s current inputs is on a worker right
     /// now, as against waiting for the node or for another track's evaluation
     /// to finish.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn bench_evaluation_running(&self, id: ReconId, item: &str) -> bool {
         let Some(running) = self.bench_evaluations.running.as_ref() else {
             return false;

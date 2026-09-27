@@ -458,6 +458,7 @@ pub(crate) enum IndexFilesEnd {
 /// clears.
 pub(crate) struct FinishedTask {
     /// Which operation this is about.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) id: u64,
     /// What it was, by the name the panel and the refusals call it.
     pub(crate) operation: Operation,
@@ -465,10 +466,12 @@ pub(crate) struct FinishedTask {
     pub(crate) label: String,
     /// The first node an open made, which is what `open_reconstruction`
     /// answers with once it lands. `None` for every other operation.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) opened: Option<ReconId>,
     /// What a *Create Track Here* left behind: the point it committed, the
     /// commit's refusal, or every member's refusal. What `create_track_at_pixel`
     /// answers with once it lands. `None` for every other operation.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) created_track: Option<crate::bench::track_at_pixel::CreatedTrack>,
     /// What the whole operation cost, measured from the instant it started.
     ///
@@ -483,6 +486,7 @@ pub(crate) struct FinishedTask {
     pub(crate) detail: Vec<Detail>,
     /// The Action Log sentence it wrote, or the refusal or cancellation that
     /// ended it.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) outcome: Result<String, String>,
 }
 
@@ -507,6 +511,7 @@ pub(crate) type BusyNotice = Arc<Mutex<Option<Busy>>>;
 
 /// What is running, or `None`. Poisoned or not, because a stale sentence in an
 /// error message is a smaller failure than a panic inside one.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) fn busy(notice: &BusyNotice) -> Option<Busy> {
     notice
         .lock()

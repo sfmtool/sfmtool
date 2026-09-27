@@ -159,6 +159,7 @@ pub(crate) enum Seed {
     /// A pixel with the affine shape read at it: the detector's canonical
     /// keypoint frame mapped onto this image's pixels, which is the convention
     /// [`sfmtool_core::bench::ClusterMeasurement::seed_shape`] states.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Affine {
         /// Where, in source-image px.
         pixel: [f64; 2],
@@ -166,6 +167,7 @@ pub(crate) enum Seed {
         shape: [[f64; 2]; 2],
     },
     /// A `.sift` feature of the image, by its index in that file.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     Feature {
         /// The feature's index in its image's `.sift` file.
         feature: u32,

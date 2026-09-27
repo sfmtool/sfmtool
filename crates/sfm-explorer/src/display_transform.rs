@@ -99,6 +99,7 @@ impl PatchReframe {
     }
 
     /// The wire's spelling: the menu label, snake-cased.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Self::SetToOrigin => "set_to_origin",
@@ -109,6 +110,7 @@ impl PatchReframe {
     }
 
     /// The entry a wire spelling names, or `None` for one that names none.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn from_wire_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|mode| mode.wire_name() == name)
     }

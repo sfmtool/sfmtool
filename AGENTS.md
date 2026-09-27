@@ -332,7 +332,10 @@ backlog and keep them honest as findings get addressed:
   user's own rustc
   and we publish wheels for Linux and Windows only. The `msrv` job in `ci.yml`
   builds against that floor; it reads the version out of `Cargo.toml`, so raise
-  the MSRV there and nowhere else. The floor is deliberately kept one release
+  the MSRV there and nowhere else. The same job also checks `sfm-explorer`
+  with `--no-default-features`, the only build that compiles the viewer
+  without its `mcp` feature, since `sfmtool-py` turns it on for every
+  workspace build. The floor is deliberately kept one release
   behind the dev toolchain rather than pinned to whatever the dependency tree
   needs today, so a routine dependency bump does not immediately force an MSRV
   bump with it. Bumping a dependency can raise the floor silently —
