@@ -4690,6 +4690,33 @@ fn a_point_turned_bearing_and_back_keeps_its_size() {
     }
 }
 
+/// A point the fit moves along its rays, to a third of the distance, keeps the
+/// size it looked in the images that see it, rather than its world size, which
+/// would look three times as large from there.
+#[test]
+fn a_point_moved_in_depth_keeps_its_size_in_the_images_that_see_it() {
+    let scene = spread_scene();
+    let views = scene.views();
+    let near = spread_point();
+    let far = Point3::from(near.coords * 3.0);
+    let finite = OrientedPatch::from_center_normal(far, -Vector3::z(), Vector3::y(), [0.15, 0.15]);
+
+    let placed = super::fit::placed_frame(&finite, near, false, &views, &NEAR_IN_VIEWS);
+
+    assert_eq!(placed.w, 1.0);
+    assert_eq!(placed.center, near);
+    assert_eq!(placed.u_axis, finite.u_axis, "the axes are kept");
+    assert_eq!(placed.v_axis, finite.v_axis, "the axes are kept");
+    for i in NEAR_IN_VIEWS {
+        let was = looks_px(&scene, i, &finite);
+        let is = looks_px(&scene, i, &placed);
+        assert!(
+            (is / was - 1.0).abs() < 0.03,
+            "image {i}: the patch looked {was:.2} px and looks {is:.2} px after the move"
+        );
+    }
+}
+
 /// With no `in` image to measure in, the extents fall back to the observing
 /// cameras' distance, and with none of those either they are carried over.
 #[test]

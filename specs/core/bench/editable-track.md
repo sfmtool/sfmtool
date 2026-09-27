@@ -919,7 +919,7 @@ the fit is the classification's, applied to the frame the fit ran against:
 | bearing | bearing | the refined direction, the tangent frame re-pinned on it, at the angular half-extents it had |
 | bearing | place | the axes are kept, and the half-extents become the world ones that keep the patch the size it looked as a bearing in the images of the `in` observations |
 | place | bearing | the frame is re-expressed as the tangent one, and the half-extents become the angular ones that keep the patch the size it looked as a point in the images of the `in` observations |
-| place | place | the centre moves and nothing else does |
+| place | place | the centre moves, the axes are kept, and the half-extents are scaled to keep the patch the size it looked in the images of the `in` observations, which a fit that moves the point in depth would otherwise change |
 
 All four keep the patch the size it looked in the photographs the track is
 seen in, so the next round registers the square the person has been looking at.

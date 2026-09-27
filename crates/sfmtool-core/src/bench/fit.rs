@@ -560,7 +560,10 @@ fn scaled_extent(half_extent: [f64; 2], by: f64) -> [f64; 2] {
 ///   best keep the size the point's patch had in those images, by the same
 ///   criterion. One criterion for both directions is what makes a round trip
 ///   keep the size.
-/// - **Point to point.** The centre moves and nothing else does.
+/// - **Point to point.** The centre moves and the frame keeps its axes, with
+///   the world half-extents scaled to keep the size the patch looked in those
+///   images. A fit that moves the point along its rays, from 170 units out to
+///   50, would otherwise grow the patch more than threefold in every image.
 ///
 /// The sizes are those in the `in` observations' images because the patch in
 /// those images is what the person judges and what the next round registers.
@@ -614,13 +617,20 @@ pub(super) fn placed_frame(
                 ..trial
             }
         }
-        (false, false) => OrientedPatch {
-            center: coordinate,
-            u_axis: frame.u_axis,
-            v_axis: frame.v_axis,
-            half_extent: frame.half_extent,
-            w: 1.0,
-        },
+        (false, false) => {
+            let trial = OrientedPatch {
+                center: coordinate,
+                u_axis: frame.u_axis,
+                v_axis: frame.v_axis,
+                half_extent: frame.half_extent,
+                w: 1.0,
+            };
+            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            OrientedPatch {
+                half_extent: scaled_extent(trial.half_extent, k),
+                ..trial
+            }
+        }
     }
 }
 
