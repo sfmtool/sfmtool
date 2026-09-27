@@ -370,6 +370,9 @@ pub fn fit(
 /// Fuse the consensus bitmap of a track-stage track where it stands, and move
 /// nothing.
 ///
+/// "In place" is the patch's: the bitmap is fused over the placement the track
+/// already has. The track itself is not changed; the fused track is returned.
+///
 /// The fuse a [`fit`] ends its geometry with, for a track whose last step moved
 /// the patch and so left no bitmap: `build_track_at_pixel` ends on a slide of
 /// the patch onto the queried pixel, and fuses with this before it returns, and
@@ -382,7 +385,7 @@ pub fn fit(
 /// A cluster, a track with no placement, and one with fewer than two `in`
 /// sightings that carry a keypoint come back unchanged, since there is no
 /// consensus to fuse.
-pub fn fuse_where_it_stands(
+pub fn fuse_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],

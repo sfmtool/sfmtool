@@ -1531,7 +1531,7 @@ impl AppState {
     /// them.
     ///
     /// A track-stage track with a placement and no consensus bitmap also gets
-    /// its bitmap fused where it stands (`bench::fuse_where_it_stands`), which
+    /// its bitmap fused where it stands (`bench::fuse_bitmap_in_place`), which
     /// moves nothing either. So a tilt, a resize, a spin or a move of the
     /// patch, each of which drops the bitmap, gets it back from the
     /// photographs as the patch now lies, without waiting for a fit.
@@ -1582,7 +1582,7 @@ impl AppState {
                 return live::Measured::Cancelled;
             }
             let fused =
-                bench::fuse_where_it_stands(&measured, &edited, &views, &FitOptions::default());
+                bench::fuse_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
             live::Measured::Track(Box::new(fused))
         }))
     }

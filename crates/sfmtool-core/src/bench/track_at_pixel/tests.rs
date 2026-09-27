@@ -529,7 +529,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         "the colour is not the tile's centre"
     );
 
-    let again = crate::bench::fit::fuse_where_it_stands(
+    let again = crate::bench::fit::fuse_bitmap_in_place(
         &track,
         &edited,
         &views,

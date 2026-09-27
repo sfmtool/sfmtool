@@ -524,13 +524,13 @@ inputs beside them. The version keeps its serial and its label.
 **A track-stage track with no bitmap gets one fused.** A patch step -- a move,
 a resize, a spin or a tilt -- drops the consensus bitmap, because it was fused
 over the square as it stood. When the evaluation reads a track-stage track that
-has a placement and no bitmap, it also runs core's `fuse_where_it_stands` on
+has a placement and no bitmap, it also runs core's `fuse_bitmap_in_place` on
 the photographs it has already decoded. That renders the `in` sightings through
 the patch as it now lies, at their keypoints, and writes the bitmap and the
 colour at its centre, moving nothing. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
-the measurements, in place, under the same rule. A track with fewer than two
+the measurements, under the same rule: no version and no Action Log row. A track with fewer than two
 `in` sightings that carry a keypoint has nothing to fuse, and stays without one.
 
 **The node is not locked by it.** Every step stays available while an
