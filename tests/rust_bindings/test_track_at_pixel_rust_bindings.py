@@ -125,6 +125,46 @@ def test_an_unknown_member_is_refused_by_name(
         )
 
 
+def test_options_override_a_parameter_by_section_and_field(
+    embedded,  # noqa: F811
+    images,  # noqa: F811
+    sources,
+    long_track_point,  # noqa: F811
+):
+    record = EditedReconstruction(embedded).point(long_track_point)
+    image = int(record["image_indexes"][0])
+    pixel = tuple(float(v) for v in record["keypoints_xy"][0])
+    with pytest.raises(bench.TrackAtPixelError) as caught:
+        bench.build_track_at_pixel(
+            held_out(embedded, long_track_point),
+            images,
+            sources,
+            image,
+            pixel,
+            options={"finish.min_in_views": 1000},
+        )
+    # The same query passes at the default bar (see the first test); with the
+    # bar raised, the members that reach the gate refuse there, naming it.
+    reasons = [r["reason"] for r in caught.value.diagnostics["refusals"]]
+    assert any("(bar 1000)" in r for r in reasons)
+
+
+def test_an_unknown_option_is_refused_by_name(
+    embedded,  # noqa: F811
+    images,  # noqa: F811
+    sources,
+):
+    with pytest.raises(ValueError, match='unknown option "finish.no_such_field"'):
+        bench.build_track_at_pixel(
+            EditedReconstruction(embedded),
+            images,
+            sources,
+            0,
+            (10.0, 10.0),
+            options={"finish.no_such_field": 1},
+        )
+
+
 def test_the_sources_need_one_keypoint_pair_per_image(
     embedded,  # noqa: F811
     descriptor_index,  # noqa: F811

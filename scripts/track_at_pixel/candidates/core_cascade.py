@@ -24,6 +24,9 @@ from api import TrackAtPixelError, TrackAtPixelResult
 DEFAULTS = {
     # The members to try, in order; None is all four in the cascade's order.
     "members": None,
+    # Overrides of the cascade's parameters, keyed "<section>.<field>" (see
+    # the binding's ``options``), e.g. {"finish.min_in_views": 2}.
+    "core_options": None,
 }
 
 
@@ -52,6 +55,7 @@ def build_track(ctx, image: int, pixel, options: dict | None = None):
             int(image),
             (float(pixel[0]), float(pixel[1])),
             members=opts["members"],
+            options=opts["core_options"],
         )
     except B.TrackAtPixelError as e:
         raise TrackAtPixelError(e.stage, e.reason, e.diagnostics) from None

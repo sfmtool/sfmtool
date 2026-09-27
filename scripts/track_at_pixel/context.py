@@ -70,13 +70,28 @@ class Camera:
         """Distance in front of the camera along its axis (cameras look down -Z)."""
         return -float(self.to_camera(xyz, w)[2])
 
+    @property
+    def wide_angle(self) -> bool:
+        """Whether the lens maps rays by angle (fisheye, equirectangular), and so
+        can see past 90 degrees off its axis."""
+        model = str(self.intrinsics.model).upper()
+        return "FISHEYE" in model or "EQUIRECT" in model
+
     def project(self, xyz: np.ndarray, w: float = 1.0) -> np.ndarray | None:
-        """Pixel of a world point (or bearing at ``w = 0``); ``None`` behind the camera."""
+        """Pixel of a world point (or bearing at ``w = 0``); ``None`` where the lens
+        cannot see it.
+
+        A perspective lens sees only what is in front of its image plane. A
+        fisheye can see past 90 degrees off its axis, so for a wide-angle lens
+        the ray goes to the model whatever its side, and whether the pixel
+        lands in the photograph is the caller's test, as it is for any lens.
+        """
         p = self.to_camera(xyz, w)
-        if -p[2] <= 1e-12:
+        norm = np.linalg.norm(p)
+        if norm == 0 or (-p[2] <= 1e-12 and not self.wide_angle):
             return None
-        ray = p / np.linalg.norm(p)
-        return np.asarray(self.intrinsics.ray_to_pixel(ray.tolist()), float)
+        px = np.asarray(self.intrinsics.ray_to_pixel((p / norm).tolist()), float)
+        return px if np.all(np.isfinite(px)) else None
 
     def ray(self, pixel) -> np.ndarray:
         """World-frame unit ray through a pixel."""

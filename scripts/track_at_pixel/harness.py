@@ -166,6 +166,23 @@ def summarize(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def storable(ds: DatasetContext, track):
+    """The track with every ``in`` keypoint outside its photograph turned ``out``.
+
+    A ``.sfmr`` refuses to load a keypoint outside its image, and a fit can
+    leave a sighting a fraction of a pixel past the edge. Only the copy written
+    to the pass's file changes; the row was scored on the track as returned.
+    """
+    for i, o in enumerate(track.observations):
+        kp = o.get("track", {}).get("keypoint")
+        if o["verdict"] != "in" or kp is None:
+            continue
+        intr = ds.cameras[int(o["image"])].intrinsics
+        if not (0 <= kp[0] < intr.width and 0 <= kp[1] < intr.height):
+            track, _ = bench.set_verdict(track, i, "out")
+    return track
+
+
 def save_tracks(
     built, out: Path, prepared, candidate: str, options: dict, pass_name: str
 ) -> Path:
@@ -289,8 +306,11 @@ def main(argv=None) -> int:
     rows = []
     # Every returned track, committed into the ground truth's cameras with none
     # of its points, so each pass's file loads beside the ground truth in the
-    # viewer.
-    built = {p: EditedReconstruction(ds.empty_recon) for p in passes}
+    # viewer. The file stores no bitmap column: a ground truth that stores a
+    # bitmap per point would otherwise refuse every track a candidate returns
+    # without one (any patch step after the last fit drops it).
+    base = ds.empty_recon.clone_with_changes(patch_bitmaps=None)
+    built = {p: EditedReconstruction(base) for p in passes}
     with open(out / "rows.jsonl", "w") as sink:
         for pass_name in passes:
             for pi, point in enumerate(points):
@@ -318,7 +338,7 @@ def main(argv=None) -> int:
                         try:
                             built[pass_name], committed = bench.commit(
                                 built[pass_name],
-                                result.track,
+                                storable(ds, result.track),
                                 node=f"tracks-{pass_name}.sfmr",
                             )
                             row["output_point"] = committed["point"]

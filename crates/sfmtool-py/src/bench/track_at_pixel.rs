@@ -117,6 +117,70 @@ impl PyTrackAtPixelSources {
     }
 }
 
+/// Set one `"<section>.<field>"` parameter of `options` from a Python value.
+fn set_option(
+    options: &mut TrackAtPixelOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    macro_rules! fields {
+        ($($name:literal => $place:expr),* $(,)?) => {
+            match key {
+                $($name => { $place = value.extract()?; })*
+                _ => return Err(PyValueError::new_err(format!("unknown option {key:?}"))),
+            }
+        };
+    }
+    let f = &mut options.finish;
+    let c = &mut options.clusters;
+    let t = &mut options.transfer;
+    let s = &mut options.sweep;
+    let k = &mut options.constellation;
+    fields! {
+        "finish.anchor_refits" => f.anchor_refits,
+        "finish.normal_prior" => f.normal_prior,
+        "finish.normal_prior_radius_px" => f.normal_prior_radius_px,
+        "finish.normal_prior_k" => f.normal_prior_k,
+        "finish.normal_prior_tolerance" => f.normal_prior_tolerance,
+        "finish.geometry_search" => f.geometry_search,
+        "finish.clean" => f.clean,
+        "finish.clean_max_shift_px" => f.clean_max_shift_px,
+        "finish.clean_max_projection_px" => f.clean_max_projection_px,
+        "finish.clean_rounds" => f.clean_rounds,
+        "finish.min_in_views" => f.min_in_views,
+        "finish.min_zncc_median" => f.min_zncc_median,
+        "finish.max_query_offset_px" => f.max_query_offset_px,
+        "finish.max_projection_offset_px" => f.max_projection_offset_px,
+        "clusters.search_radius_px" => c.search_radius_px,
+        "clusters.max_offset_in_scales" => c.max_offset_in_scales,
+        "clusters.max_clusters" => c.max_clusters,
+        "clusters.radius_in_scales" => c.radius_in_scales,
+        "clusters.min_radius_px" => c.min_radius_px,
+        "clusters.max_radius_px" => c.max_radius_px,
+        "transfer.neighbour_radius_px" => t.neighbour_radius_px,
+        "transfer.max_neighbours" => t.max_neighbours,
+        "transfer.depth_mode_gap" => t.depth_mode_gap,
+        "transfer.min_pairs" => t.min_pairs,
+        "transfer.max_residual_px" => t.max_residual_px,
+        "transfer.default_radius_px" => t.default_radius_px,
+        "sweep.prior_radius_px" => s.prior_radius_px,
+        "sweep.prior_k" => s.prior_k,
+        "sweep.default_radius_px" => s.default_radius_px,
+        "sweep.depth_mode_gap" => s.depth_mode_gap,
+        "sweep.min_mode_size" => s.min_mode_size,
+        "sweep.seed_views" => s.seed_views,
+        "sweep.max_view_angle_deg" => s.max_view_angle_deg,
+        "constellation.prior_radius_px" => k.prior_radius_px,
+        "constellation.prior_k" => k.prior_k,
+        "constellation.default_radius_px" => k.default_radius_px,
+        "constellation.constellation_target" => k.constellation_target,
+        "constellation.min_inliers" => k.min_inliers,
+        "constellation.lateral_searches" => k.lateral_searches,
+        "constellation.normal_prior" => k.normal_prior,
+    }
+    Ok(())
+}
+
 /// Build a track-stage track centred on ``pixel`` in ``image``, or say why none
 /// could be built.
 ///
@@ -137,6 +201,11 @@ impl PyTrackAtPixelSources {
 ///     pixel: ``(x, y)`` in that image.
 ///     members: The members to try, in order; the default is all four in the
 ///         order above.
+///     options: Overrides of the cascade's parameters, keyed
+///         ``"<section>.<field>"`` with the section one of ``finish``,
+///         ``clusters``, ``transfer``, ``sweep`` or ``constellation`` and the
+///         field named as in the Rust options struct, e.g.
+///         ``{"finish.min_in_views": 2}``. An unknown key is an error.
 ///
 /// Returns:
 ///     ``(EditableTrack, report)``. The track is evaluated and its observation
@@ -150,7 +219,8 @@ impl PyTrackAtPixelSources {
 ///         ``diagnostics``. ``stage`` is ``"cascade"`` when every member
 ///         refused, and ``diagnostics["refusals"]`` then holds each one.
 #[pyfunction]
-#[pyo3(signature = (edited, images, sources, image, pixel, *, members = None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (edited, images, sources, image, pixel, *, members = None, options = None))]
 pub(super) fn build_track_at_pixel(
     py: Python<'_>,
     edited: &PyEditedReconstruction,
@@ -159,8 +229,16 @@ pub(super) fn build_track_at_pixel(
     image: u32,
     pixel: [f64; 2],
     members: Option<Vec<String>>,
+    options: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let overrides = options;
     let mut options = TrackAtPixelOptions::default();
+    if let Some(overrides) = overrides {
+        for (key, value) in overrides.iter() {
+            let key: String = key.extract()?;
+            set_option(&mut options, &key, &value)?;
+        }
+    }
     if let Some(members) = members {
         options.members = members
             .iter()

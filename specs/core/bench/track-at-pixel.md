@@ -371,7 +371,7 @@ decides which side; the harness found one such query in 1277.
   pair of `(N, 2)` and `(N, 2, 2)` float32 arrays per image, `matches` a
   cluster-patches `MatchesFile`. `edited` supplies the image names the file's
   images are matched to.
-- `build_track_at_pixel(edited, images, sources, image, pixel, *, members=None)`
+- `build_track_at_pixel(edited, images, sources, image, pixel, *, members=None, options=None)`
   takes `images` as `evaluate` does (a list of arrays or an `ImagePyramidSet`)
   and returns `(EditableTrack, report)`. The report dict carries `member`,
   `query_observation`, `refusals` (each `member`, `stage`, `reason` and
@@ -380,6 +380,11 @@ decides which side; the harness found one such query in 1277.
   `radius_px`, `search_radius_px`, `constellation`, `lateral`, `cluster`,
   `upgrade`, `prior_tilt`, `anchor`, `normal_prior`, `geometry_search`,
   `clean`, `final`). `members` names the members to try, in order.
+  `options` overrides parameters of `TrackAtPixelOptions` by name, keyed
+  `"<section>.<field>"` with the section `finish`, `clusters`, `transfer`,
+  `sweep` or `constellation` and the field as the Rust struct names it (for
+  example `{"finish.min_in_views": 2}`); an unknown key is a `ValueError`. It
+  exists so the harness can measure other parameters without a rebuild.
 - A refusal raises `bench.TrackAtPixelError`, a `ValueError` with `stage`,
   `reason` and `diagnostics` (`{"refusals": [...]}` when every member refused).
 
