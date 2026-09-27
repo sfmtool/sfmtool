@@ -254,7 +254,7 @@ fn a_track_built_at_a_pixel_is_put_on_the_bench_and_committed() {
     let rows_before = state.action_log.len();
 
     state
-        .start_create_track_at_pixel(image, textured_pixel())
+        .start_create_track_at_pixel(image, textured_pixel(), None)
         .expect("a posed image of an embedded_patches node");
     assert_eq!(
         state.background_task().map(|task| task.operation.name),
@@ -358,7 +358,7 @@ fn a_refused_run_commits_nothing_and_logs_each_member() {
     let bench_before = Arc::clone(state.node(id).expect("loaded").history.current_bench());
 
     state
-        .start_create_track_at_pixel(image, lonely)
+        .start_create_track_at_pixel(image, lonely, None)
         .expect("the run starts; the cascade is what refuses");
     state.finish_background_task();
 
@@ -446,7 +446,7 @@ fn create_track_here_is_greyed_where_it_cannot_run() {
     // task.
     let rows_before = state.action_log.len();
     assert!(state
-        .start_create_track_at_pixel(image, [-5.0, 10.0])
+        .start_create_track_at_pixel(image, [-5.0, 10.0], None)
         .is_err());
     assert!(state.background_task().is_none());
     let rows = rows_after(&state, rows_before);
@@ -458,7 +458,7 @@ fn create_track_here_is_greyed_where_it_cannot_run() {
 
     // A busy node refuses every step on it.
     state
-        .start_create_track_at_pixel(image, textured_pixel())
+        .start_create_track_at_pixel(image, textured_pixel(), None)
         .expect("starts");
     let why = state.create_track_here_refusal(image).expect("busy");
     assert!(why.contains("is busy"), "{why}");

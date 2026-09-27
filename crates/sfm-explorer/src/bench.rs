@@ -341,13 +341,19 @@ impl AppState {
     /// Put the point `point` names on its node's bench as a track-stage
     /// editable track, and make it the active one.
     ///
-    /// The label is the point's portable id
-    /// ([`crate::point_ids::mint`]), which is what a log row naming the item
-    /// has to carry to be worth reading, and which core cannot mint because it
-    /// sees one value rather than the node's version graph. Putting on a point
-    /// a track already came from activates that track instead of putting a
-    /// second one on: the person asked to work on that point, and there it is.
-    pub(crate) fn put_point_on_bench(&mut self, point: PointRef) -> Result<String, String> {
+    /// The label is `label` when the caller names one, and otherwise the
+    /// point's portable id ([`crate::point_ids::mint`]), which is what a log
+    /// row naming the item has to carry to be worth reading, and which core
+    /// cannot mint because it sees one value rather than the node's version
+    /// graph. Either way a label another item holds takes core's `" (n)"`
+    /// suffix. Putting on a point a track already came from activates that
+    /// track instead of putting a second one on, under the label it already
+    /// has: the person asked to work on that point, and there it is.
+    pub(crate) fn put_point_on_bench(
+        &mut self,
+        point: PointRef,
+        label: Option<&str>,
+    ) -> Result<String, String> {
         if let Some(why) = self.busy_refusal(point.recon) {
             return Err(why);
         }
@@ -371,7 +377,10 @@ impl AppState {
             return Ok(label);
         }
 
-        let label = crate::scene::point_id(node, point.index());
+        let label = match label {
+            Some(label) => label.to_string(),
+            None => crate::scene::point_id(node, point.index()),
+        };
         let options = CreateTrackOptions {
             version: serial.as_u64(),
             label: Some(label),
@@ -391,10 +400,15 @@ impl AppState {
     /// opened, and a seed that names no shape takes the node's own default
     /// patch radius for that image, so a cluster starts at the scale the
     /// reconstruction already works at there.
+    ///
+    /// The label is `label` when the caller names one, and otherwise the one
+    /// [`ClusterSeed::label`] mints from the image and the seed; either way a
+    /// label another item holds takes core's `" (n)"` suffix.
     pub(crate) fn start_bench_cluster(
         &mut self,
         image: ImageRef,
         seed: &Seed,
+        label: Option<&str>,
     ) -> Result<Seeded, String> {
         if let Some(why) = self.busy_refusal(image.recon) {
             return Err(why);
@@ -423,6 +437,7 @@ impl AppState {
             pixel: seeded.pixel,
             shape,
             feature: seeded.feature,
+            label: label.map(str::to_string),
         };
         let bench = Arc::clone(node.history.current_bench());
         let (next, report) = bench::create_cluster(&bench, &seed)
@@ -905,7 +920,7 @@ impl AppState {
             .selected_point
             .filter(|point| point.recon == id)
             .ok_or_else(crate::track_view::nothing_to_edit)?;
-        self.put_point_on_bench(point).map(|_| ())
+        self.put_point_on_bench(point, None).map(|_| ())
     }
 
     /// *Start cluster on the bench here*, chosen in the Image Detail panel at
@@ -922,7 +937,7 @@ impl AppState {
             pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
             radius_px: Some(f64::from(radius)),
         };
-        match self.start_bench_cluster(image, &seed) {
+        match self.start_bench_cluster(image, &seed, None) {
             Ok(_) => self.show_panel(crate::dock::Tab::TrackView),
             Err(why) => self.action_log.fail(Kind::Bench, why),
         }

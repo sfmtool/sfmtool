@@ -2861,6 +2861,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
                 pixel: seed,
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;

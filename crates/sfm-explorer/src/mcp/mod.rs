@@ -330,11 +330,17 @@ pub(crate) enum Command {
         reconstruction_label: String,
         camera_image: CameraImageSel,
         seed: crate::bench::Seed,
+        /// The label to put the item on the bench under, before the `" (n)"`
+        /// suffix a taken label gets; `None` mints one.
+        label: Option<String>,
     },
     /// Put a point of the reconstruction on the bench as a track-stage track.
     CreateBenchTrack {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
+        /// The label to put the item on the bench under, before the `" (n)"`
+        /// suffix a taken label gets; `None` mints one.
+        label: Option<String>,
     },
     /// Build a track at a pixel of one camera image, put it on the bench and
     /// commit it, on a worker: Image Detail's *Create Track Here*.
@@ -343,6 +349,9 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
         /// Where, in that image's own pixels.
         pixel: [f64; 2],
+        /// The label to put the item on the bench under, before the `" (n)"`
+        /// suffix a taken label gets; `None` mints one.
+        label: Option<String>,
     },
     ActivateBenchItem {
         reconstruction_label: String,
@@ -1273,25 +1282,36 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             camera_image,
             seed,
+            label,
         } => done(bench::create_bench_cluster(
             state,
             &reconstruction_label,
             &camera_image,
             &seed,
+            label.as_deref(),
         )),
         Command::CreateBenchTrack {
             reconstruction_label,
             point,
+            label,
         } => done(bench::create_bench_track(
             state,
             &reconstruction_label,
             &point,
+            label.as_deref(),
         )),
         Command::CreateTrackAtPixel {
             reconstruction_label,
             camera_image,
             pixel,
-        } => bench::create_track_at_pixel(state, &reconstruction_label, &camera_image, pixel),
+            label,
+        } => bench::create_track_at_pixel(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            pixel,
+            label.as_deref(),
+        ),
         Command::ActivateBenchItem {
             reconstruction_label,
             item,

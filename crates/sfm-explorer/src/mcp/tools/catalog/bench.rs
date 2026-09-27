@@ -19,7 +19,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           rest of the bench tools take.",
             kind: Write,
             schema: object(
-                &seed_properties(),
+                &[seed_properties(), vec![("label", new_item_label_schema())]].concat(),
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     ("camera_image", camera_image_schema()),
@@ -35,10 +35,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           in the 3D viewport and on a feature's menu in Image Detail, and what \
                           double-clicking either of them does. Putting on a point a track \
                           already came from activates that track rather than putting a second \
-                          one on. The reply names the item.",
+                          one on, and that track keeps the label it has whatever label says. \
+                          The reply names the item.",
             kind: Write,
             schema: object(
-                &[],
+                &[("label", new_item_label_schema())],
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     ("point", point_schema()),
@@ -70,7 +71,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           operation_id to poll with get_background_task.",
             kind: Write,
             schema: object(
-                &[],
+                &[("label", new_item_label_schema())],
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     ("camera_image", camera_image_schema()),

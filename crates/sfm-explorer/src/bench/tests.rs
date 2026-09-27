@@ -94,7 +94,7 @@ fn pixel_seed(pixel: [f64; 2], radius_px: Option<f64>) -> crate::bench::Seed {
 /// Put [`POINT`] on the bench and give back the label it took.
 pub(crate) fn put_on_bench(state: &mut AppState, id: ReconId) -> String {
     state
-        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point")
 }
 
@@ -117,7 +117,11 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
     let first_address = item_address(&state, id, 0);
 
     let second = state
-        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
         .expect("a pixel on the sensor")
         .label;
     assert_eq!(bench(&state, id).len(), 2);
@@ -170,7 +174,11 @@ fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
     let before = versions(&state, id);
 
     let label = state
-        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
         .expect("a pixel on the sensor")
         .label;
     state
@@ -210,7 +218,11 @@ fn putting_a_point_on_twice_activates_the_track_it_already_made() {
     let (mut state, id) = state();
     let first = put_on_bench(&mut state, id);
     state
-        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
         .expect("a pixel on the sensor");
     let before = versions(&state, id);
 

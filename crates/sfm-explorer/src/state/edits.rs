@@ -563,7 +563,7 @@ impl AppState {
                 // box lives inside the panel and so has nothing to raise;
                 // this one is reached from the viewport, and a track staged
                 // into a panel nobody can see is a gesture with no answer.
-                match self.put_point_on_bench(point) {
+                match self.put_point_on_bench(point, None) {
                     Ok(_) => self.show_panel(crate::dock::Tab::TrackView),
                     Err(why) => self.action_log.fail(Kind::Bench, why),
                 }

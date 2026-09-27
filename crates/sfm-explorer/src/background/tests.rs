@@ -590,6 +590,7 @@ fn real_task(operation: Operation) -> RealTask {
                 .create_track_at_pixel_job(
                     crate::scene::ImageRef::new(id, 0),
                     crate::bench::track_at_pixel::tests::textured_pixel(),
+                    None,
                 )
                 .expect("the fixture is a posed embedded_patches node");
             RealTask {

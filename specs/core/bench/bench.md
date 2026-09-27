@@ -155,8 +155,11 @@ takes, so a reader who knows one knows the other. A label is stable until
 renamed, and **a discarded item's label is free to be minted again**, because it
 names nothing then: the minting reads the bench as it stands and nothing else.
 
-The label is the caller's to give, through `CreateTrackOptions::label`, and the
-viewer gives the point's portable id: that id names the content a point is a
+A caller can name the label instead, through `CreateTrackOptions::label` for a
+track and `ClusterSeed::label` for a cluster; the name it gives is a base like
+any minted one, so a taken label still takes the collision suffix. For a track
+put on from a point, the viewer gives the point's portable id unless its caller
+named a label: that id names the content a point is a
 row of and the version graph that content sits in, and core has neither. What
 core does when a caller names none is fall back to what it can see: the first
 eight hex digits of the base's own content hash and the point's index there for

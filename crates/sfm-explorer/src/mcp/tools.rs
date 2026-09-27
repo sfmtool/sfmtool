@@ -403,10 +403,12 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             camera_image: args.camera_image("camera_image")?,
             seed: parse_seed(&args)?,
+            label: args.new_item_label("label")?,
         },
         "create_bench_track" => Command::CreateBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,
             point: args.point("point")?,
+            label: args.new_item_label("label")?,
         },
         "create_track_at_pixel" => Command::CreateTrackAtPixel {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -414,6 +416,7 @@ pub(crate) fn parse(
             pixel: args
                 .optional_numbers::<2>("pixel")?
                 .ok_or_else(|| args.error("needs pixel."))?,
+            label: args.new_item_label("label")?,
         },
         "activate_bench_item" => Command::ActivateBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
@@ -904,6 +907,19 @@ impl Args<'_> {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(s)) => Ok(Some(s.clone())),
             Some(other) => Err(self.wrong_type(key, "a string", other)),
+        }
+    }
+
+    /// The label a create tool is asked to put its item on the bench under,
+    /// or `None` when the call names none. A label of nothing but whitespace
+    /// is refused here, as `rename_bench_item` refuses one, rather than left
+    /// to name an item nobody could read.
+    fn new_item_label(&self, key: &str) -> Result<Option<String>, ToolError> {
+        match self.optional_string(key)? {
+            Some(label) if label.trim().is_empty() => Err(self.error(format!(
+                "wants {key} to be something other than whitespace."
+            ))),
+            label => Ok(label),
         }
     }
 

@@ -2521,6 +2521,19 @@ stage needs two or more"* -- rather than starting a task that would decode a
 dozen images before saying so ([bench.md](bench.md) § "The two steps that read
 photographs").
 
+**A create names its item in the same call.** `create_bench_cluster`,
+`create_bench_track` and `create_track_at_pixel` take an optional `label`, the
+label the item goes on the bench under, so an agent that wants its own names
+needs no `rename_bench_item` afterwards, and the create stays one version and
+one Action Log row. A label another item holds takes the first free ` (2)`,
+` (3)`, ... suffix, the rule a minted label follows
+([core/bench/bench.md](../core/bench/bench.md) § "Labels"). A rename onto a
+taken label is refused instead, because a rename that took a different name
+would leave the caller holding a label that names another item; a create's
+reply always carries the label the item took, in `item`, so there is nothing to
+misread. A label of nothing but whitespace is refused in the call. A `create_bench_track` on a point already on the bench activates that
+track under the label it has, whatever `label` says.
+
 **`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
 `camera_image` and a `pixel` and runs `AppState::start_create_track_at_pixel`,
 the call the panel's menu entry and its Control+Shift click make: the

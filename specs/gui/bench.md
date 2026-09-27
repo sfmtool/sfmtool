@@ -129,11 +129,14 @@ impl AppState {
     pub(crate) fn bench_track(&self, id: ReconId, label: &str)
         -> Option<&Arc<EditableTrack>>;
 
-    pub(crate) fn put_point_on_bench(&mut self, point: PointRef) -> Result<String, String>;
+    /// `label` names the item, before the collision suffix; `None` mints one.
+    /// The gestures pass `None`, and the wire passes the call's `label`.
+    pub(crate) fn put_point_on_bench(&mut self, point: PointRef, label: Option<&str>)
+        -> Result<String, String>;
     /// The pixel is brought inside the photograph before anything is seeded, and
     /// the answer says where the observation went and what was asked for.
-    pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, seed: &Seed)
-        -> Result<Seeded, String>;
+    pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, seed: &Seed,
+                                      label: Option<&str>) -> Result<Seeded, String>;
     pub(crate) fn add_bench_observation(&mut self, label: &str, image: ImageRef,
                                         seed: &Seed) -> Result<Seeded, String>;
 
@@ -186,7 +189,8 @@ impl AppState {
     /// worker, then put on the bench, active, and committed. A refusal in
     /// front of the worker is one failed row and no task.
     pub(crate) fn start_create_track_at_pixel(&mut self, image: ImageRef,
-                                              pixel: [f64; 2]) -> Result<(), String>;
+                                              pixel: [f64; 2], label: Option<&str>)
+        -> Result<(), String>;
     /// Why that cannot run on this image, or `None`: what greys the entry.
     pub(crate) fn create_track_here_refusal(&self, image: ImageRef) -> Option<String>;
     /// Discarding the active item leaves nothing active.
@@ -328,7 +332,7 @@ evaluation").
 ### Example
 
 ```rust
-let label = state.put_point_on_bench(PointRef::new(id, 1207))?;   // one version
+let label = state.put_point_on_bench(PointRef::new(id, 1207), None)?; // one version
 state.drive_bench_evaluation();                                   // the next frame: evaluates it
 state.set_bench_verdict(id, &label, 3, Verdict::Out)?;            // one version, evaluated again
 state.start_bench_fit(id, &label, None)?;                         // a task: moves it, then measures
@@ -772,6 +776,11 @@ create_bench_cluster."*
 //                        "pixel": [142.0, 197.5], "affine": [[7.1, -0.4], [0.4, 7.1]] }
 // create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4, "feature": 847 }
 // create_bench_track   { "reconstruction_label": "bull", "point": 1207 }
+//
+// Each create takes an optional label, so an item needs no rename after it. A
+// label another item holds takes the collision suffix: "bull-nose (2)".
+// create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4,
+//                        "feature": 847, "label": "bull-nose" }
 //
 // Create Track Here: built at the pixel, put on the bench and committed.
 // create_track_at_pixel { "reconstruction_label": "bull", "camera_image": 4,

@@ -68,6 +68,7 @@ fn a_cluster_stage_item_uploads_nothing() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a cluster started at a pixel of image 0");
     let track = (**state.bench_track(id, &seeded.label).expect("the item")).clone();

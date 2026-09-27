@@ -201,18 +201,19 @@ fn evaluation(state: &AppState, id: ReconId, item: &str) -> Value {
 // ── The steps ───────────────────────────────────────────────────────────
 
 /// `create_bench_cluster`: a cluster-stage track from a place in one camera
-/// image, made the active one.
+/// image, made the active one, under `named` when the call gives a label.
 pub(super) fn create_bench_cluster(
     state: &mut AppState,
     label: &str,
     selector: &CameraImageSel,
     seed: &Seed,
+    named: Option<&str>,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let image = resolve_camera_image(state, id, selector)?;
     let mut made: Option<crate::bench::Seeded> = None;
     let reply = edit::edited(state, id, |state| {
-        state.start_bench_cluster(image, seed).map(|seeded| {
+        state.start_bench_cluster(image, seed, named).map(|seeded| {
             made = Some(seeded);
         })
     })?;
@@ -227,17 +228,18 @@ pub(super) fn create_bench_cluster(
 ///
 /// Putting on a point a track already came from activates that track rather
 /// than putting a second one on, which is the step's own rule; the reply names
-/// the item either way.
+/// the item either way, and that track keeps its label whatever `named` says.
 pub(super) fn create_bench_track(
     state: &mut AppState,
     label: &str,
     query: &crate::goto_point::PointQuery,
+    named: Option<&str>,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let point = resolve_point_in(state, id, query)?;
     let mut made = String::new();
     let reply = edit::edited(state, id, |state| {
-        state.put_point_on_bench(point).map(|label| {
+        state.put_point_on_bench(point, named).map(|label| {
             made = label;
         })
     })?;
@@ -257,6 +259,7 @@ pub(super) fn create_track_at_pixel(
     label: &str,
     selector: &CameraImageSel,
     pixel: [f64; 2],
+    named: Option<&str>,
 ) -> Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
@@ -266,7 +269,7 @@ pub(super) fn create_track_at_pixel(
         Ok(image) => image,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_create_track_at_pixel(image, pixel) {
+    if let Err(message) = state.start_create_track_at_pixel(image, pixel, named) {
         return Outcome::Done(Err(ToolError::new(message)));
     }
     let task = state

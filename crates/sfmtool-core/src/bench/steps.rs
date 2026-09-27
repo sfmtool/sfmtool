@@ -280,6 +280,10 @@ pub struct ClusterSeed {
     pub shape: [[f64; 2]; 2],
     /// The `.sift` feature this seed is, when it is one.
     pub feature: Option<u32>,
+    /// The label to put the cluster on the bench under, before the collision
+    /// suffix. `None` mints one from the image stem and the pixel or feature
+    /// ([`Self::label`]).
+    pub label: Option<String>,
 }
 
 impl ClusterSeed {
@@ -316,6 +320,7 @@ impl ClusterSeed {
             pixel,
             shape: Self::shape_from_radius_px(radius_px),
             feature: None,
+            label: None,
         }
     }
 
@@ -333,12 +338,18 @@ impl ClusterSeed {
             pixel,
             shape,
             feature: Some(feature),
+            label: None,
         }
     }
 
-    /// The label this seed mints: the image stem and the pixel for a hand-placed
-    /// seed, the image stem and the feature index for a detected one.
+    /// The label this seed puts its cluster on the bench under, before the
+    /// collision suffix: the caller's own when it named one, otherwise the image
+    /// stem and the pixel for a hand-placed seed, and the image stem and the
+    /// feature index for a detected one.
     pub fn label(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         match self.feature {
             Some(feature) => format!("{}#{feature}", self.image_stem),
             None => format!(

@@ -1753,6 +1753,91 @@ fn rename_activate_and_discard_answer_with_the_item_they_acted_on() {
     assert_eq!(bench["active"]["track"], Value::Null, "{bench}");
 }
 
+/// A create call that names a label puts its item on the bench under it, in
+/// the one version the create pushes; a label another item holds takes the
+/// first free `" (n)"` suffix, and the reply names the label it took.
+#[test]
+fn a_create_names_its_item_and_a_taken_label_takes_a_suffix() {
+    let (mut state, mut viewer) = benchable();
+    let cluster = |label: &str| {
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+            "label": label,
+        })
+    };
+
+    let before = version_count(&state);
+    let first = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        cluster("nose"),
+    );
+    assert_eq!(first["item"], json!("nose"), "{first}");
+    assert_eq!(
+        version_count(&state),
+        before + 1,
+        "one version for the create"
+    );
+
+    let second = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        cluster("nose"),
+    );
+    assert_eq!(second["item"], json!("nose (2)"), "{second}");
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": BENCH_POINT, "label": "nose" }),
+    );
+    assert_eq!(track["item"], json!("nose (3)"), "{track}");
+
+    // The point is on the bench already, so the call activates that track
+    // under the label it has.
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": BENCH_POINT, "label": "horn" }),
+    );
+    assert_eq!(again["item"], json!("nose (3)"), "{again}");
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let labels: Vec<&str> = bench["items"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|item| item["item"].as_str().expect("a label"))
+        .collect();
+    assert_eq!(labels, ["nose", "nose (2)", "nose (3)"], "{bench}");
+
+    let versions = version_count(&state);
+    let blank = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        cluster("  "),
+    );
+    assert!(blank.0.contains("other than whitespace"), "{blank}");
+    assert_eq!(
+        version_count(&state),
+        versions,
+        "a refusal pushed a version"
+    );
+}
+
 /// Every refusal is the bench's own sentence and pushes no version.
 #[test]
 fn the_bench_refuses_in_its_own_words() {
@@ -2339,6 +2424,27 @@ fn create_track_at_pixel_commits_a_point_and_names_it() {
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(bench["active"]["track"], json!(item), "{bench}");
+}
+
+/// A label named in the call is the label the built track goes on the bench
+/// under, and the commit's reply names it.
+#[test]
+fn create_track_at_pixel_puts_the_track_on_the_bench_under_the_label_it_is_given() {
+    let (mut state, mut viewer) = plane_benchable();
+    let pixel = crate::bench::track_at_pixel::tests::textured_pixel();
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "create_track_at_pixel",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": pixel,
+            "label": "plane corner",
+        }),
+    );
+    assert_eq!(reply["item"], json!("plane corner"), "{reply}");
+    assert_eq!(reply["changed"], json!(true), "{reply}");
 }
 
 /// Every member refusing is a tool error carrying the row's sentence and then

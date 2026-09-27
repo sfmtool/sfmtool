@@ -460,6 +460,19 @@ fn a_rename_frees_the_old_label() {
 }
 
 #[test]
+fn a_seed_that_names_a_label_is_put_on_under_it_with_the_collision_suffix() {
+    let seed = ClusterSeed {
+        label: Some("bull-nose".to_string()),
+        ..pixel_seed(42, [142.0, 197.5])
+    };
+    let (bench, first) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
+    assert_eq!(first.label, "bull-nose");
+    let (bench, second) = create_cluster(&bench, &seed).expect("a usable seed");
+    assert_eq!(second.label, "bull-nose (2)");
+    assert_eq!(bench.active_label(ItemKind::Track), Some("bull-nose (2)"));
+}
+
+#[test]
 fn a_rename_onto_a_taken_label_is_refused() {
     let (bench, first) =
         create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");

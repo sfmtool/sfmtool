@@ -254,7 +254,7 @@ pub(crate) fn write_sift(
 pub(crate) fn searchable(dir: &Path) -> (AppState, ReconId, String) {
     let (mut state, id) = state_in(dir);
     let label = state
-        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point");
     let center = {
         let track = state.bench_track(id, &label).expect("just put on");

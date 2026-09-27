@@ -91,6 +91,9 @@ pub(crate) struct TrackAtPixelRun {
     /// The image's name without its extension, which the label is minted
     /// from.
     pub(crate) image_stem: String,
+    /// The label the caller named for the track, before the collision
+    /// suffix, or `None` to mint one from the image stem and the pixel.
+    pub(crate) label: Option<String>,
     /// What the node's index files lacked when the run started, or `None` when
     /// both were current.
     pub(crate) index_note: Option<String>,
@@ -187,11 +190,12 @@ impl AppState {
         let pixel = [f64::from(pixel[0]), f64::from(pixel[1])];
         // The refusal is already the log row `start_create_track_at_pixel`
         // writes, so there is nothing more to say here.
-        let _ = self.start_create_track_at_pixel(image, pixel);
+        let _ = self.start_create_track_at_pixel(image, pixel, None);
     }
 
     /// Build a track at `pixel` of `image` on a worker, then put it on the
-    /// node's bench and commit it when the worker comes home.
+    /// node's bench under `label` (or a label minted from the image and the
+    /// pixel) and commit it when the worker comes home.
     ///
     /// What returns here is whether the run could **begin**. A refusal in
     /// front of the worker is one failed `Bench` row and no task; the run's own
@@ -200,9 +204,10 @@ impl AppState {
         &mut self,
         image: ImageRef,
         pixel: [f64; 2],
+        label: Option<&str>,
     ) -> Result<(), String> {
         let outcome = self
-            .create_track_at_pixel_job(image, pixel)
+            .create_track_at_pixel_job(image, pixel, label)
             .and_then(|job| {
                 self.start_background_task(Operation::CREATE_TRACK_AT_PIXEL, image.recon, job)
             });
@@ -226,6 +231,7 @@ impl AppState {
         &mut self,
         image: ImageRef,
         pixel: [f64; 2],
+        label: Option<&str>,
     ) -> Result<Job, String> {
         if let Some(why) = self.create_track_here_refusal(image) {
             return Err(why);
@@ -285,6 +291,7 @@ impl AppState {
             pixel,
             image_name,
             image_stem,
+            label: label.map(str::to_string),
             index_note,
             forest,
             sift_files,
@@ -370,6 +377,7 @@ impl AppState {
             pixel,
             image_name,
             image_stem,
+            label,
             index_note,
             result,
         } = run;
@@ -394,9 +402,11 @@ impl AppState {
             }
             Ok((track, report)) => {
                 let member = report.member.name();
-                // The label a cluster started at the same pixel would take,
-                // so a person who knows one knows the other.
-                let base = ClusterSeed::from_pixel(image, image_stem, pixel, 1.0).label();
+                // The caller's label, or the one a cluster started at the same
+                // pixel would take, so a person who knows one knows the other.
+                let base = label.unwrap_or_else(|| {
+                    ClusterSeed::from_pixel(image, image_stem, pixel, 1.0).label()
+                });
                 let bench = Arc::clone(self.scene[index].history.current_bench());
                 let (next, item) = bench.put(&base, BenchItem::Track(Arc::new(track)));
                 let version_label = format!("Created {item} at {at} with the {member} member");
@@ -467,6 +477,7 @@ struct Plan {
     pixel: [f64; 2],
     image_name: String,
     image_stem: String,
+    label: Option<String>,
     index_note: Option<String>,
     /// The SIFT index, when it is current.
     forest: Option<Arc<LazyKdForestU8>>,
@@ -568,6 +579,7 @@ fn run(
         pixel: plan.pixel,
         image_name: plan.image_name,
         image_stem: plan.image_stem,
+        label: plan.label,
         index_note: plan.index_note,
         result,
     }))

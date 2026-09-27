@@ -208,7 +208,7 @@ fn menu_entry_pos(
 fn on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
     let (mut state, id) = state();
     let label = state
-        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point");
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
@@ -591,7 +591,7 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
 fn edit_mode_draws_the_active_item_and_no_item_tabs() {
     let (mut state, id) = state();
     let first = state
-        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point");
     let second = state
         .start_bench_cluster(
@@ -600,6 +600,7 @@ fn edit_mode_draws_the_active_item_and_no_item_tabs() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;
@@ -610,6 +611,7 @@ fn edit_mode_draws_the_active_item_and_no_item_tabs() {
                 pixel: [60.0, 40.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;
@@ -749,6 +751,7 @@ fn the_lock_is_greyed_at_the_cluster_stage() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor");
     let (mut panel, ctx) = settled(&state);
@@ -1054,6 +1057,7 @@ fn a_change_of_active_track_reseats_the_sliders() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;
@@ -1540,7 +1544,7 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     let (state, id) = state();
     let mut state = state;
     let label = state
-        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point");
     let whole = state.bench_track(id, &label).expect("on the bench");
     let refusals = super::photometric_refusals(None, whole, StageKind::Cluster);

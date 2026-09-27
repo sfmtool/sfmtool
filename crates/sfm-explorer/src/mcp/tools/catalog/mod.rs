@@ -134,8 +134,22 @@ fn bench_item_schema() -> Value {
         "type": "string",
         "description":
             "Which item on the bench, by the label get_bench reports. A label is minted from \
-             what the item was made from — a point id, or an image and a pixel — until \
-             rename_bench_item gives it one of your own.",
+             what the item was made from — a point id, or an image and a pixel — unless the \
+             call that created it or rename_bench_item gave it one of your own.",
+    })
+}
+
+/// The label a create tool puts its item on the bench under, which is
+/// optional: a call that names none gets one minted from what the item was
+/// made from.
+fn new_item_label_schema() -> Value {
+    json!({
+        "type": "string",
+        "description":
+            "The label to put the item on the bench under, so it needs no rename_bench_item \
+             afterwards. A label another item already holds takes the first free \" (2)\", \
+             \" (3)\", ... suffix, and the reply names the label it took. Omit for one minted \
+             from what the item was made from. Something other than whitespace.",
     })
 }
 

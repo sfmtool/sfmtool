@@ -289,6 +289,7 @@ fn discarding_the_active_item_returns_to_view_mode() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;
@@ -316,6 +317,7 @@ fn edit_mode_on_a_cluster_draws_the_cluster_headline() {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;

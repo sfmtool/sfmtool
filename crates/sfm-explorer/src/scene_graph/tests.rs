@@ -550,6 +550,7 @@ fn benched() -> (AppState, crate::scene::ReconId, String, String) {
                 pixel: [120.0, 90.0],
                 radius_px: Some(6.0),
             },
+            None,
         )
         .expect("a pixel on the sensor")
         .label;

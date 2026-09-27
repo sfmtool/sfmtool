@@ -600,6 +600,7 @@ fn create_cluster(
         pixel,
         shape,
         feature,
+        label: None,
     };
     let (next, report) = core_create_cluster(&bench.inner, &seed).map_err(refused)?;
     let track = PyEditableTrack {
