@@ -372,7 +372,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           where that photograph would be looking along the surface rather than \
                           at it, and the reply's sentence names the observation that stopped it. \
                           Nothing is pinned, and a track at infinity is refused: its normal is \
-                          its own bearing.",
+                          its own bearing. The turn drops the consensus bitmap, and the live \
+                          evaluation fuses it again from the photographs as the patch now \
+                          faces; once get_bench_track's evaluation reads current, the track \
+                          can be committed without a fit.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],

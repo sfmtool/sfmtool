@@ -284,3 +284,54 @@ fn an_evaluation_waits_while_an_operation_holds_the_node() {
     state.drive_bench_evaluation();
     assert!(state.bench_evaluation_running(id, &label));
 }
+
+#[test]
+fn a_tilt_drops_the_bitmap_and_the_evaluation_fuses_it_again_where_the_patch_now_faces() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    let payload = |track: &sfmtool_core::bench::EditableTrack| match &track.stage {
+        Stage::Track(payload) => payload.clone(),
+        Stage::Cluster(_) => panic!("the point came onto the bench as a cluster"),
+    };
+    let before = payload(&track(&state, id, &label));
+    let was = before.placement.clone().expect("the point has a patch");
+    assert!(before.bitmap.is_some(), "the point came with no bitmap");
+
+    let (sin, cos) = 10f64.to_radians().sin_cos();
+    let normal = was.normal() * cos + was.u_axis * sin;
+    state
+        .edit_bench_patch(
+            id,
+            &label,
+            &crate::bench::PatchEdit::Tilt {
+                normal: normal.into(),
+            },
+        )
+        .expect("a finite direction");
+    let tilted = payload(&track(&state, id, &label));
+    assert!(
+        tilted.bitmap.is_none(),
+        "the tilt kept the bitmap it turned away from"
+    );
+    let versions_after_tilt = versions(&state, id);
+
+    state.drive_bench_evaluation();
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    let fused = payload(&track(&state, id, &label));
+    assert!(fused.bitmap.is_some(), "the evaluation fused no bitmap");
+    assert_eq!(
+        fused.placement, tilted.placement,
+        "fusing the bitmap moved the patch"
+    );
+    assert!((fused.placement.expect("placed").normal() - normal).norm() < 1e-9);
+    assert_eq!(
+        versions(&state, id),
+        versions_after_tilt,
+        "fusing the bitmap pushed a version"
+    );
+}

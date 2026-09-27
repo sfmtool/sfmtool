@@ -372,7 +372,8 @@ pub fn fit(
 ///
 /// The fuse a [`fit`] ends its geometry with, for a track whose last step moved
 /// the patch and so left no bitmap: `build_track_at_pixel` ends on a slide of
-/// the patch onto the queried pixel, and fuses with this before it returns. The
+/// the patch onto the queried pixel, and fuses with this before it returns, and
+/// the viewer's live evaluation fuses with it after a patch step. The
 /// placement, the position, the verdicts and every keypoint come back as they
 /// were; what is written is the bitmap the `in` sightings show at their
 /// keypoints, on the reconstruction's own bitmap grid where it stores one, and
@@ -381,7 +382,7 @@ pub fn fit(
 /// A cluster, a track with no placement, and one with fewer than two `in`
 /// sightings that carry a keypoint come back unchanged, since there is no
 /// consensus to fuse.
-pub(crate) fn fuse_where_it_stands(
+pub fn fuse_where_it_stands(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],

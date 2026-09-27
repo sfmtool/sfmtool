@@ -65,7 +65,7 @@ pub use evaluate::{
     evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,
     EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
 };
-pub use fit::{fit, fit_preconditions, FitError, FitOptions, FitReport};
+pub use fit::{fit, fit_preconditions, fuse_where_it_stands, FitError, FitOptions, FitReport};
 pub use geometry_search::{
     search_geometry, GeometryMatch, GeometrySearchError, GeometrySearchOptions,
     GeometrySearchReport,

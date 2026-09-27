@@ -1529,6 +1529,12 @@ impl AppState {
     /// poses and camera intrinsics), and `search_px`. The photographs are
     /// decoded on the worker, from the node's cached pyramids where it has
     /// them.
+    ///
+    /// A track-stage track with a placement and no consensus bitmap also gets
+    /// its bitmap fused where it stands (`bench::fuse_where_it_stands`), which
+    /// moves nothing either. So a tilt, a resize, a spin or a move of the
+    /// patch, each of which drops the bitmap, gets it back from the
+    /// photographs as the patch now lies, without waiting for a fit.
     pub(crate) fn bench_evaluate_job(
         &mut self,
         id: ReconId,
@@ -1554,11 +1560,30 @@ impl AppState {
                 return live::Measured::Cancelled;
             }
             let views = decoded.views();
-            match bench::evaluate(&track, &edited, &views, &options, progress) {
-                Err(sfmtool_core::bench::EvaluateError::Cancelled) => live::Measured::Cancelled,
-                Err(e) => live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
-                Ok((measured, _)) => live::Measured::Track(Box::new(measured)),
+            let measured = match bench::evaluate(&track, &edited, &views, &options, progress) {
+                Err(sfmtool_core::bench::EvaluateError::Cancelled) => {
+                    return live::Measured::Cancelled
+                }
+                Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
+                Ok((measured, _)) => measured,
+            };
+            // A patch step drops the consensus bitmap, since it was fused over
+            // the square as it stood. The photographs are decoded here anyway,
+            // so fuse it again over the square as it stands now, moving
+            // nothing, rather than leave the track without one until a fit.
+            let needs_bitmap = matches!(
+                &measured.stage,
+                Stage::Track(payload) if payload.placement.is_some() && payload.bitmap.is_none()
+            );
+            if !needs_bitmap {
+                return live::Measured::Track(Box::new(measured));
             }
+            if progress.is_cancelled() {
+                return live::Measured::Cancelled;
+            }
+            let fused =
+                bench::fuse_where_it_stands(&measured, &edited, &views, &FitOptions::default());
+            live::Measured::Track(Box::new(fused))
         }))
     }
 

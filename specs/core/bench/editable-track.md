@@ -464,6 +464,16 @@ pub fn fit(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError>;
 
+// Fuse the consensus bitmap and colour where the track-stage patch stands, and
+// move nothing. A cluster, a track with no placement, and one with fewer than
+// two `in` sightings that carry a keypoint come back unchanged.
+pub fn fuse_where_it_stands(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitOptions,
+) -> EditableTrack;
+
 pub fn set_stage(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -1350,8 +1360,11 @@ the consensus bitmap and every track measurement but its keypoint: the
 bitmap is the observations fused over the square as it stood, and every number
 beside a keypoint was read over that square and against that position. Where
 each sighting sits is not one of those things, so it stays; an evaluation
-restores the rest, and the next fit fuses a new bitmap at the size and turn the
-patch now has.
+restores the rest, and `fuse_where_it_stands` or the next fit fuses a new bitmap
+at the size and turn the patch now has. `fuse_where_it_stands` reads the
+photographs and moves nothing, which is why it is not part of the step: the
+patch steps take no photographs. The viewer runs it in its live evaluation
+([`../../gui/bench.md`](../../gui/bench.md) § "Live evaluation").
 
 **The stage decides which step applies.** `translate_patch_to_pixel`,
 `translate_patch`, `resize_patch`, `tilt_patch` and `spin_patch` are the track
