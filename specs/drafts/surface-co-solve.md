@@ -1,8 +1,9 @@
 # Solving depth and normal together over a neighbourhood of patches
 
 **Status:** Draft. Decided: nothing yet. The first step of Use 1, finding
-anchors near the pixel, has a harness mode and a first version (see "The
-first step: anchors"). This draft sets out an approach, the
+anchors near the pixel, has a harness mode and a finder that returns
+anchors with distance ranges, grouped into depth layers (see "The first step:
+anchors"). This draft sets out an approach, the
 evidence for it, and the prototypes to build and measure in the
 leave-one-track-out harness
 ([`scripts/track_at_pixel/`](../../scripts/track_at_pixel/README.md)). It
@@ -242,7 +243,7 @@ kept (ZNCC 0.91 in R04) would pass too. The constellation query from the
 pixel, which the cascade never reached because the clusters member answered
 first, matched R05, R03 and R02: the close views again.
 
-Anchors come from three sources, strongest first. The finder stops once it has
+Anchors come from four sources, strongest first. The finder stops once it has
 enough anchors close to the pixel, and otherwise goes on to the next source:
 
 1. **Tracks.** The reconstruction's own points observed near the pixel in the
@@ -250,44 +251,91 @@ enough anchors close to the pixel, and otherwise goes on to the next source:
    to the point's projection. A solver already agreed on these; they are the
    strongest readings when they are near enough and well measured.
 2. **Clusters.** The cluster-patches clusters with a member near the pixel,
-   vetted with the posed cameras: the queried image's member is the reference
-   or kept, and the reference and kept members triangulate in front of every
-   camera with small reprojection errors. Every cluster that passes is used,
-   not only the nearest three.
-3. **Constellation queries.** The SIFT index's constellation query from the
-   pixel. Each image it matches carries the pixel into its own frame by the
-   constellation's affine warp; those sightings are triangulated, dropping the
-   worst while three or more remain. This anchor sits at the pixel itself. The
-   cluster refinement is not used to read the sightings: on point 309 it
-   rejects every true match, reading grazing ground at a fixed radius.
+   vetted with the posed cameras. Every member in a posed image is a
+   candidate, preferring the reference and kept members; the worst is dropped
+   while three or more remain, never the queried image's, until every member
+   triangulates in front of its camera with a small reprojection error. Every
+   cluster that passes is used, not only the nearest three.
+3. **Guided matching.** With the cameras posed, a keypoint's match in another
+   image lies where that image's keypoint rays pass close to its own ray. The
+   keypoints nearest the pixel are each matched by descriptor among only
+   those candidates, with a ratio test and a cap on the descriptor distance,
+   and the matches are triangulated. A second pass adds each match that passed
+   the ratio test but not the cap, if the triangulation with it still meets
+   every view. Two views are enough.
+4. **Constellation queries.** The SIFT index's constellation query from the
+   pixel, which looks for images that see the queried point itself. Each image
+   it matches carries the pixel into its own frame by the constellation's
+   affine warp; those sightings are triangulated, dropping the worst while
+   three or more remain. This anchor sits at the pixel itself. The cluster
+   refinement is not used to read the sightings: on point 309 it rejects every
+   true match, reading grazing ground at a fixed radius. It comes last, as a
+   starting hit where the clusters and the guided matches give nothing.
 
-An anchor is **supported** when another source, or another cluster, gives an
-anchor near it in 3D: two independent readings of one structure, as the
-bench's two clusters are.
+A second query, Kerry Park point 33 in `fisheye_left/frame_13` (L13), showed
+what an anchor's position does and does not say. The pixel is in trees on the
+slope below the Seattle skyline, 114 m away, and the rig moves a few metres
+between frames. A cluster and a guided match both gave anchors at the pixel,
+10 and 12% deeper than the ground truth. Their sightings are within half a
+pixel of the true point's projection in every view: the same matches. The true
+track's own seven views only fix the distance to between 0.90 and 1.08 times
+its value within a pixel, and the anchors' views, which lacked the true
+track's two widest, set no upper bound at all. Six other anchors were pairs of
+adjacent frames, whose rays meet at under half a degree and put the point
+anywhere from a quarter to one and a half times the true distance.
+
+So each anchor carries a **range**: the distances along its pixel's ray at
+which every one of its views stays within a pixel. An anchor is **bounded**
+when its range is finite at both ends and no wider than a few times, far over
+near. Two anchors **support** each other when both are bounded, their ranges
+overlap, and their readings do not rest on the same photographs.
+
+Point 33 also showed that nearness in the image says nothing about which
+surface an anchor is on. Within 40 px of that pixel there are trees at 0.3 to
+0.4 times its distance, the city at 3.3 to 3.5 times, and points at infinity,
+and no other true point on the pixel's own surface. An anchor near the pixel
+can be real geometry of another surface. The finder's result is therefore a
+set of hypotheses: the bounded anchors grouped into **layers** of overlapping
+ranges, each with its anchors and their pixels. Choosing the pixel's layer is
+the walk's job.
 
 The harness measures this step on its own (`harness.py --mode anchors`, with
 [`anchors.py`](../../scripts/track_at_pixel/anchors.py)); its README has the
-numbers. In the full pass 96 to 99% of queries get an anchor, most of them
-from the reconstruction's tracks, and three quarters or more get one within
-two of the true point's half-sizes. With no reconstructed points, seoul_bull
-still gives 91% of queries an anchor, and its constellation query reads the
-pixel's own depth within 5% on 63% of queries. Kerry Park is the gap: there
-the constellation query answers on only 17% of queries, 16% get no anchor at
-all, and 38% get one that a second source supports.
+numbers. It scores the anchors against the ground truth in three ways, none
+of which assumes the ground truth holds every surface: whether an anchor's
+range meets the true point's surface along the anchor's own ray (the pixel's
+layer), whether a reading at the pixel is right, and whether an anchor agrees
+with a true point observed at its own pixel, where there is one. An anchor
+with no true point at its pixel is unchecked, not wrong.
+
+With no reconstructed points, 95% of Kerry Park's queries and nearly all of
+seoul_bull's get an anchor, and 83% and 94% get one on the pixel's layer, up
+from 66% and 82% with the first version's clusters and constellation alone.
+Guided matching and the wider cluster vetting made most of that difference.
+The constellation query is the one source that usually reads the pixel
+itself, and it is the least accurate: on Kerry Park about as many of its
+readings at the pixel are wrong as right, and on seoul_bull a quarter are
+wrong.
 
 Open for this step:
 
-- **Kerry Park's empty pass.** How to find anchors for the 16% with none:
-  a wider cluster radius, the constellation's lateral searches, a denser
-  constellation, or the plane sweep along the pixel's ray.
-- **Enough.** When to stop looking: how many anchors, how close, and whether
-  an unsupported anchor from the strongest source beats two agreeing ones
-  from weaker sources.
+- **Readings at the pixel.** Few anchors sit at the pixel itself: 6% of
+  queries with the default stopping rule. Most are a few pixels away, so the
+  walk has to carry them over. How to make the constellation query's readings
+  at the pixel trustworthy, or confirm them from another source, is open.
+- **Enough.** When to stop looking: the finder now stops after the first
+  source that leaves two bounded anchors within 20 px. Near a depth edge two
+  anchors can both be on the wrong surface, so stopping might instead need
+  anchors around the pixel on every side, or a reading at the pixel.
+- **Choosing the layer.** Which of the layers the pixel is on. The pixel's own
+  patch, compared with the photographs at each layer's distance, is the
+  obvious test; it is the plane sweep restricted to the layers' ranges.
 - **Walking.** How to go from an anchor to the pixel. Sliding the patch there
   in small steps, fitting at each, works while the patch stays on the anchor's
   surface, and carries the anchor's depth too far past an edge. On point 309
   the reading dropped at the edge, which is where the depth should be solved
-  again.
+  again. At point 33 the true track's widest view has no keypoint at the
+  observation, so only a photometric step can reach it.
 
 ## Use 2: flood filling a surface
 
