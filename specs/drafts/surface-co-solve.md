@@ -2,8 +2,8 @@
 
 **Status:** Draft. Decided: nothing yet. The first step of Use 1, finding
 anchors near the pixel, has a harness mode and a finder that returns
-anchors with distance ranges, grouped into depth layers (see "The first step:
-anchors"). This draft sets out an approach, the
+anchors with distance ranges, grouped into depth layers and ranked by the
+evidence for each (see "The first step: anchors"). This draft sets out an approach, the
 evidence for it, and the prototypes to build and measure in the
 leave-one-track-out harness
 ([`scripts/track_at_pixel/`](../../scripts/track_at_pixel/README.md)). It
@@ -243,7 +243,7 @@ kept (ZNCC 0.91 in R04) would pass too. The constellation query from the
 pixel, which the cascade never reached because the clusters member answered
 first, matched R05, R03 and R02: the close views again.
 
-Anchors come from four sources, strongest first. The finder stops once it has
+Anchors come from five sources, strongest first. The finder stops once it has
 enough anchors close to the pixel, and otherwise goes on to the next source:
 
 1. **Tracks.** The reconstruction's own points observed near the pixel in the
@@ -269,8 +269,12 @@ enough anchors close to the pixel, and otherwise goes on to the next source:
    affine warp; those sightings are triangulated, dropping the worst while
    three or more remain. This anchor sits at the pixel itself. The cluster
    refinement is not used to read the sightings: on point 309 it rejects every
-   true match, reading grazing ground at a fixed radius. It comes last, as a
-   starting hit where the clusters and the guided matches give nothing.
+   true match, reading grazing ground at a fixed radius. It comes last among
+   the matching sources, as a starting hit where the clusters and the guided
+   matches give nothing.
+5. **The infinity test.** Whether the pixel is further than the photographs
+   can tell from infinity, below. It runs after the others, only when they
+   leave the pixel's depth open.
 
 A second query, Kerry Park point 33 in `fisheye_left/frame_13` (L13), showed
 what an anchor's position does and does not say. The pixel is in trees on the
@@ -287,17 +291,56 @@ anywhere from a quarter to one and a half times the true distance.
 So each anchor carries a **range**: the distances along its pixel's ray at
 which every one of its views stays within a pixel. An anchor is **bounded**
 when its range is finite at both ends and no wider than a few times, far over
-near. Two anchors **support** each other when both are bounded, their ranges
-overlap, and their readings do not rest on the same photographs.
+near. It is **far** when its range has no far end and starts well beyond the
+cameras' spread, several times the largest distance between two of them: the
+point is further than the photographs can tell from infinity. Bounded and far
+anchors are usable. A range with no far end that starts nearer, as two
+adjacent frames give, says nothing. Two anchors **support** each other when
+both are usable, their ranges overlap, and their readings do not rest on the
+same photographs.
 
 Point 33 also showed that nearness in the image says nothing about which
 surface an anchor is on. Within 40 px of that pixel there are trees at 0.3 to
 0.4 times its distance, the city at 3.3 to 3.5 times, and points at infinity,
 and no other true point on the pixel's own surface. An anchor near the pixel
 can be real geometry of another surface. The finder's result is therefore a
-set of hypotheses: the bounded anchors grouped into **layers** of overlapping
-ranges, each with its anchors and their pixels. Choosing the pixel's layer is
-the walk's job.
+set of hypotheses: the usable anchors grouped into **layers** of overlapping
+ranges, each with its anchors and their pixels, and **ranked** by the evidence
+for each (below).
+
+**Points at infinity.** A third query, Kerry Park point 272, in the same
+frame, is on the waterfront beyond downtown, which the ground truth puts at
+infinity. The finder had far readings there all along, clusters and guided
+matches whose ranges run from 354 to 948 m out to infinity, and counted them
+as unusable because their ranges have no far end. At infinity the pixel lands
+at one position in every other image, set by the cameras' rotations alone,
+so testing for it needs no search: the pixel's patch is read there, and the
+pixel is at infinity when the images it lands in agree. At point 272 all 21
+agree, and the true observations are within half a pixel of the positions
+the rotations predict; at point 33, 114 m away, 2 of 22 do.
+
+Agreeing at infinity is not enough on its own. On seoul_bull, whose
+photographs walk around a sculpture facing it, a pixel at infinity lands in
+only one to five other images, so the test has to accept a single one; and a
+single image agrees by chance where the texture repeats along the epipolar
+line. The hedge behind the lawn, 11 m away, reads 0.90 at infinity and 0.99 at
+its true distance. So the agreeing images are also read along the ray, in from
+infinity, at distances that move the pixel 1, 2, 4, up to 128 px: if a finite
+distance reads better, there is no reading, and otherwise the range's near end
+is where the reading starts to fall. The last misreadings were a birdhouse on
+a pole in front of distant houses, whose patch is mostly the houses, and the
+balconies of an apartment building, which repeat along the epipolar line. The
+patch's **middle**, read from the same samples, separates them: when the whole
+patch matches and its middle does not, the parts away from the pixel carry
+the match.
+
+**Ranking the layers.** Near a pixel the layers are real surfaces, so which
+one the pixel is on takes the pixel's own patch. It is read at each layer's
+distances, whole and in the middle, in every photograph, and the layers are
+ranked by the mean of the whole patch's reading and the lesser of the two. The
+anchors' own features also go with each layer: how many there are, how many
+rest on different photographs, their views and ray angles, and how near the
+pixel the nearest sits.
 
 The harness measures this step on its own (`harness.py --mode anchors`, with
 [`anchors.py`](../../scripts/track_at_pixel/anchors.py)); its README has the
@@ -306,36 +349,43 @@ of which assumes the ground truth holds every surface: whether an anchor's
 range meets the true point's surface along the anchor's own ray (the pixel's
 layer), whether a reading at the pixel is right, and whether an anchor agrees
 with a true point observed at its own pixel, where there is one. An anchor
-with no true point at its pixel is unchecked, not wrong.
+with no true point at its pixel is unchecked, not wrong. It also records which
+layer is the pixel's, which measures the ranking.
 
 With no reconstructed points, 95% of Kerry Park's queries and nearly all of
-seoul_bull's get an anchor, and 83% and 94% get one on the pixel's layer, up
+seoul_bull's get an anchor, and 89% and 98% get one on the pixel's layer, up
 from 66% and 82% with the first version's clusters and constellation alone.
-Guided matching and the wider cluster vetting made most of that difference.
-The constellation query is the one source that usually reads the pixel
-itself, and it is the least accurate: on Kerry Park about as many of its
-readings at the pixel are wrong as right, and on seoul_bull a quarter are
-wrong.
+Guided matching, the wider cluster vetting, and keeping far readings made that
+difference. The infinity test gives 191 of Kerry Park's 248 queries at
+infinity a reading at the pixel, and 40 of seoul_bull's 44, and no finite
+point a wrong one. Where there are several layers, the ranking puts the
+pixel's first 93 to 94% of the time and in the top two 99%; the anchors'
+features alone put it first 82 to 88% of the time. The constellation query
+is the one matching source that usually reads the pixel itself, and it is
+the least accurate: on Kerry Park about as many of its readings at the pixel
+are wrong as right, and on seoul_bull a quarter are wrong.
 
 Open for this step:
 
-- **Readings at the pixel.** Few anchors sit at the pixel itself: 6% of
+- **Readings at the pixel.** Few anchors sit at the pixel itself: 9 to 11% of
   queries with the default stopping rule. Most are a few pixels away, so the
   walk has to carry them over. How to make the constellation query's readings
   at the pixel trustworthy, or confirm them from another source, is open.
-- **Enough.** When to stop looking: the finder now stops after the first
-  source that leaves two bounded anchors within 20 px. Near a depth edge two
-  anchors can both be on the wrong surface, so stopping might instead need
-  anchors around the pixel on every side, or a reading at the pixel.
-- **Choosing the layer.** Which of the layers the pixel is on. The pixel's own
-  patch, compared with the photographs at each layer's distance, is the
-  obvious test; it is the plane sweep restricted to the layers' ranges.
+- **Enough.** When to stop looking: the finder stops after the first source
+  that leaves two usable anchors within 20 px. Near a depth edge two anchors
+  can both be on the wrong surface, so stopping might instead need anchors
+  around the pixel on every side, or a reading at the pixel.
+- **The ranking's misses.** Where the ranking puts the wrong layer first, 6 to
+  7% of the queries with several layers, whether the pixel's patch is too
+  large for the edge it sits on, or the layers too close in distance for the
+  photographs to tell apart, has not been looked at.
 - **Walking.** How to go from an anchor to the pixel. Sliding the patch there
   in small steps, fitting at each, works while the patch stays on the anchor's
   surface, and carries the anchor's depth too far past an edge. On point 309
   the reading dropped at the edge, which is where the depth should be solved
   again. At point 33 the true track's widest view has no keypoint at the
-  observation, so only a photometric step can reach it.
+  observation, so only a photometric step can reach it. The ranked layers say
+  which anchor to start from.
 
 ## Use 2: flood filling a surface
 

@@ -404,8 +404,9 @@ pixi run -e test python scripts/track_at_pixel/run_sharded.py --mode anchors --c
 ### The sources
 
 `find_anchors` tries its sources in order, strongest first, and by default
-stops after the first that leaves two bounded anchors (below) within 20 px of
-the pixel. `--opt stop=never` runs every source, so each is measured.
+stops after the first that leaves two usable anchors (bounded or far, below)
+within 20 px of the pixel. `--opt stop=never` runs every source, so each is
+measured.
 
 1. **Tracks** (`tracks`): the reconstruction's points observed within 40 px of
    the pixel in the queried image, finite, in two or more images, every
@@ -434,9 +435,21 @@ the pixel. `--opt stop=never` runs every source, so each is measured.
    while three or more remain, within 3 px. This anchor sits at the pixel.
    `constellation_at=keypoints` also queries from up to 4 keypoints within
    24 px of the pixel.
-5. **Plane sweep** (`sweep`, not in the default sources): the sweep of
+5. **Infinity** (`infinity`, run after the others, below).
+6. **Plane sweep** (`sweep`, not in the default sources): the sweep of
    `candidates/planesweep.py` at the pixel, keeping the best depth when two or
    more other photographs read ZNCC 0.8 or better there.
+
+### Reading the pixel's patch, whole and in the middle
+
+The infinity test and the layers' evidence read the pixel's own patch in the
+other photographs with `read_patch`: an 11 by 11 grid of samples, 17 px across,
+on a plane facing the queried camera at each distance asked for, sampled in
+every image it lands in. Each read gives two ZNCCs from the same samples: of
+the whole grid, and of its middle 5 by 5. When the whole patch matches and its
+middle does not, the parts away from the pixel carry the match: a small near
+object whose patch is mostly the background behind it, a pixel at a depth
+edge, or a facade whose pattern repeats along the epipolar line.
 
 ### Ranges, support and layers
 
@@ -447,9 +460,14 @@ pixel's ray at which every view stays within a pixel (or half a pixel more than
 its own largest error, when that is larger). `distance_range` finds it by
 doubling away from the triangulated distance until a view leaves its tolerance,
 then bisecting. An anchor is **bounded** when its range is finite at both ends
-and no wider than 3 times (`max_span`), far over near.
+and no wider than 3 times (`max_span`), far over near. It is **far** when its
+range has no far end and its near end is at least 5 times the largest distance
+between two cameras (`far_spread`): a reading that the point is further than
+the photographs can tell from infinity. Bounded and far anchors are usable;
+a range with no far end that starts nearer, such as two adjacent frames give,
+is not.
 
-Two anchors **support** each other when both are bounded, their ranges
+Two anchors **support** each other when both are usable, their ranges
 overlap, and neither's images are all among the other's, so the two readings
 do not rest on the same photographs.
 
@@ -457,9 +475,38 @@ The scene near a pixel can hold surfaces at very different depths: at Kerry
 Park point 33, within 40 px of the pixel there are trees at 0.3 to 0.4 times
 its distance, the city at 3.3 to 3.5 times, and points at infinity. An anchor
 near the pixel may be real geometry of another surface, so the anchors are
-hypotheses. `find_anchors` also returns **layers**: the bounded anchors
-grouped by overlapping ranges, nearest first. Choosing the pixel's layer is
-for the steps after this one.
+hypotheses. `find_anchors` also returns **layers**: the usable anchors grouped
+by overlapping ranges, nearest first. Each layer carries what supports it
+(`layer_evidence`): how many anchors, how many rest on different photographs,
+their most views and widest ray angle, the nearest one's distance from the
+pixel, and the pixel's own patch read at the layer's distances, whole and in
+the middle, in every photograph (five distances across the range, from
+infinity in for a far layer). Its `score` is the mean of the whole patch's
+reading and the lesser of the whole and middle readings, each the mean of the
+three best images, and its `rank` orders the layers by that score. Walking to
+the pixel starts from rank 1 and has the others.
+
+### The infinity test
+
+At infinity the pixel lands at one position in every other image, set by the
+cameras' rotations alone, so there is no search. `from_infinity` reads the
+patch there, and the pixel is at infinity when one or more images, and half of
+those it lands in, read 0.8 or better. Two more checks follow:
+
+- **The peak along the ray.** Agreeing at infinity is not enough where the
+  texture repeats along the epipolar line, or barely changes. The agreeing
+  images are read at the distances that move the pixel 1, 2, 4, up to 128 px
+  from its position at infinity. If a finite distance reads 0.02 better than
+  infinity, there is no reading. Otherwise the range's near end is where the
+  reading first falls 0.05 below infinity's.
+- **The middle.** When the patch's middle has texture (a grey standard
+  deviation of 8 or more), it must also read 0.8 on average at infinity in the
+  agreeing images.
+
+The test runs when the other sources gave no usable anchor, more than one
+layer, or no usable anchor at the pixel (`infinity=needed`, the default), and
+costs a few milliseconds a query. A pixel at infinity often has one layer of
+nearer anchors beside it and nothing at it.
 
 ### How the harness scores anchors
 
@@ -472,11 +519,14 @@ near it is not necessarily wrong. The harness asks three questions:
   its distance, so a neighbour on sloping ground is judged at its own
   distance, with the ground truth's own uncertainty. For a true point at
   infinity, its range itself.
-- **At the pixel**: for a bounded anchor within 1 px of the pixel, is its range
+- **At the pixel**: for a usable anchor within 1 px of the pixel, is its range
   overlapping the true point's range (right) or not (wrong)?
 - **Checked**: when a true point is observed within 1.5 px of an anchor's own
   pixel in the queried image, do their ranges overlap? An anchor with no true
   point at its pixel is unchecked.
+
+Each row also records, per layer, whether its range overlaps the true point's
+(`layers_right`), which measures the ranking.
 
 The summary's columns, per source and for all sources together, as shares of
 all queries unless noted:
@@ -485,8 +535,8 @@ all queries unless noted:
 |---|---|
 | has | With at least one anchor |
 | mean n | Anchors a query |
-| bnd | Share of the anchors that are bounded |
-| at px, right, wrong | With a bounded anchor at the pixel; with one there that is right; with one there but none right |
+| bnd | Share of the anchors that are usable |
+| at px, right, wrong | With a usable anchor at the pixel; with one there that is right; with one there but none right |
 | layer | With an anchor on the pixel's layer |
 | lyr px | Median distance in the queried image from the pixel to the nearest anchor on its layer |
 | l+sup | With an anchor on the pixel's layer that another anchor supports |
@@ -499,27 +549,32 @@ Every source run (`stop=never`), the defaults otherwise:
 
 | | Pass | Source | has | bnd | at px | right | wrong | layer | lyr px | l+sup | chk | agree | s |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| seoul_bull | full | tracks | 0.927 | 1.000 | 0.000 | 0.000 | 0.000 | 0.741 | 12.7 | 0.372 | 1.000 | 1.000 | 0.015 |
-| | | clusters | 0.987 | 0.996 | 0.040 | 0.034 | 0.005 | 0.926 | 5.6 | 0.792 | 0.027 | 0.922 | 0.017 |
-| | | guided | 0.891 | 0.993 | 0.047 | 0.038 | 0.009 | 0.799 | 4.7 | 0.681 | 0.037 | 0.877 | 0.056 |
-| | | constellation | 0.763 | 0.994 | 0.758 | 0.551 | 0.208 | 0.551 | 0.0 | 0.337 | 1.000 | 0.732 | 0.019 |
-| | | all | 0.998 | 0.996 | 0.764 | 0.566 | 0.198 | 0.951 | 0.0 | 0.823 | 0.327 | 0.960 | 0.106 |
-| | empty | all | 0.996 | 0.995 | 0.764 | 0.566 | 0.198 | 0.944 | 0.0 | 0.796 | 0.085 | 0.790 | 0.063 |
-| Kerry Park | full | tracks | 0.955 | 1.000 | 0.006 | 0.003 | 0.003 | 0.687 | 8.4 | 0.353 | 1.000 | 1.000 | 0.049 |
-| | | clusters | 0.946 | 0.817 | 0.048 | 0.044 | 0.004 | 0.786 | 7.6 | 0.624 | 0.063 | 0.958 | 0.016 |
-| | | guided | 0.854 | 0.921 | 0.066 | 0.059 | 0.007 | 0.666 | 5.4 | 0.519 | 0.083 | 0.844 | 0.081 |
-| | | constellation | 0.173 | 0.990 | 0.171 | 0.093 | 0.078 | 0.093 | 0.0 | 0.049 | 1.000 | 0.542 | 0.025 |
-| | | all | 0.993 | 0.904 | 0.240 | 0.160 | 0.080 | 0.901 | 4.6 | 0.697 | 0.400 | 0.978 | 0.171 |
-| | empty | all | 0.954 | 0.854 | 0.235 | 0.159 | 0.076 | 0.829 | 5.0 | 0.624 | 0.085 | 0.842 | 0.129 |
+| seoul_bull | full | tracks | 0.927 | 1.000 | 0.000 | 0.000 | 0.000 | 0.741 | 12.7 | 0.372 | 1.000 | 1.000 | 0.014 |
+| | | clusters | 0.987 | 0.999 | 0.040 | 0.034 | 0.005 | 0.942 | 5.6 | 0.798 | 0.027 | 0.922 | 0.017 |
+| | | guided | 0.891 | 0.998 | 0.047 | 0.038 | 0.009 | 0.811 | 4.7 | 0.685 | 0.037 | 0.877 | 0.048 |
+| | | constellation | 0.763 | 0.999 | 0.762 | 0.554 | 0.208 | 0.554 | 0.0 | 0.338 | 1.000 | 0.732 | 0.018 |
+| | | infinity | 0.029 | 1.000 | 0.029 | 0.029 | 0.000 | 0.029 | 0.0 | 0.002 | 1.000 | 1.000 | 0.003 |
+| | | all | 0.999 | 0.999 | 0.793 | 0.597 | 0.196 | 0.984 | 0.0 | 0.829 | 0.328 | 0.960 | 0.175 |
+| | empty | all | 0.998 | 0.999 | 0.793 | 0.597 | 0.196 | 0.977 | 0.0 | 0.802 | 0.087 | 0.795 | 0.107 |
+| Kerry Park | full | tracks | 0.955 | 1.000 | 0.006 | 0.003 | 0.003 | 0.687 | 8.4 | 0.359 | 1.000 | 1.000 | 0.044 |
+| | | clusters | 0.946 | 0.875 | 0.048 | 0.044 | 0.004 | 0.851 | 7.4 | 0.689 | 0.063 | 0.958 | 0.014 |
+| | | guided | 0.854 | 0.968 | 0.068 | 0.060 | 0.007 | 0.716 | 5.4 | 0.573 | 0.083 | 0.844 | 0.083 |
+| | | constellation | 0.173 | 0.990 | 0.171 | 0.093 | 0.078 | 0.093 | 0.0 | 0.049 | 1.000 | 0.542 | 0.027 |
+| | | infinity | 0.054 | 0.900 | 0.048 | 0.048 | 0.000 | 0.048 | 0.0 | 0.040 | 1.000 | 1.000 | 0.010 |
+| | | all | 0.993 | 0.939 | 0.288 | 0.209 | 0.078 | 0.956 | 4.4 | 0.760 | 0.402 | 0.978 | 0.316 |
+| | empty | all | 0.954 | 0.907 | 0.283 | 0.208 | 0.075 | 0.889 | 4.6 | 0.689 | 0.089 | 0.851 | 0.215 |
+
+The "all" rows' seconds include reading the pixel's patch for the layers'
+evidence: 30 to 110 ms a query at the median.
 
 The default, stopping once enough anchors are found:
 
 | | Pass | has | at px | right | wrong | layer | lyr px | l+sup | agree | s/query (median) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| seoul_bull | full | 0.998 | 0.033 | 0.024 | 0.009 | 0.915 | 8.6 | 0.474 | 0.997 | 0.042 |
-| | empty | 0.996 | 0.060 | 0.042 | 0.017 | 0.936 | 5.4 | 0.749 | 0.886 | 0.019 |
-| Kerry Park | full | 0.993 | 0.026 | 0.020 | 0.006 | 0.822 | 7.2 | 0.331 | 0.999 | 0.122 |
-| | empty | 0.954 | 0.062 | 0.052 | 0.010 | 0.811 | 6.9 | 0.552 | 0.933 | 0.032 |
+| seoul_bull | full | 0.999 | 0.062 | 0.055 | 0.007 | 0.947 | 8.5 | 0.478 | 0.997 | 0.125 |
+| | empty | 0.998 | 0.088 | 0.073 | 0.016 | 0.968 | 5.3 | 0.753 | 0.898 | 0.051 |
+| Kerry Park | full | 0.993 | 0.074 | 0.068 | 0.006 | 0.874 | 6.9 | 0.381 | 0.999 | 0.293 |
+| | empty | 0.954 | 0.109 | 0.100 | 0.009 | 0.872 | 6.5 | 0.615 | 0.940 | 0.111 |
 
 The empty pass, rescored, as the sources were added (`stop=never`; the empty
 pass has no tracks):
@@ -528,8 +583,35 @@ pass has no tracks):
 |---|---|---|---|---|---|
 | Clusters (kept, 24 px) and constellation, the first version | 0.664 | 0.321 | 0.821 | 0.471 | 0.029 |
 | + guided matching (two views), clusters of any member within 48 px | 0.813 | 0.594 | 0.946 | 0.800 | 0.120 |
-| + guided matching's second pass, ranges up to 3 times (the defaults) | 0.829 | 0.624 | 0.944 | 0.796 | 0.129 |
-| + constellation from 4 keypoints near the pixel | 0.830 | 0.636 | 0.950 | 0.818 | 0.245 |
+| + guided matching's second pass, ranges up to 3 times | 0.829 | 0.624 | 0.944 | 0.796 | 0.129 |
+| + far readings kept | 0.889 | 0.689 | 0.965 | 0.800 | 0.154 |
+| + the infinity test, and the layers' evidence (the defaults) | 0.889 | 0.689 | 0.977 | 0.802 | 0.215 |
+
+The infinity test, empty pass. Kerry Park has 248 queries whose true point is
+at infinity, seoul_bull 44:
+
+| Infinity test | Kerry Park: right at the pixel, at infinity | wrong far readings on finite points | seoul_bull: right at the pixel, at infinity | wrong far readings on finite points |
+|---|---|---|---|---|
+| None (far readings from the other sources only) | 7 | 0 | 5 | 0 |
+| Three agreeing images | 220 | 16 | 16 | 0 |
+| One agreeing image | 220 | 16 | 42 | 25 |
+| One image, and the peak along the ray | 191 | 1 | 42 | 2 |
+| One image, the peak, and the middle (the default) | 191 | 0 | 40 | 0 |
+
+Ranking the layers, over the queries with more than one layer and the pixel's
+among them (1841 on Kerry Park and 734 on seoul_bull, empty pass): the share
+where the pixel's layer is ranked first, and in the top two.
+
+| Ranking | Kerry Park top 1 | top 2 | seoul_bull top 1 | top 2 |
+|---|---|---|---|---|
+| Nearest anchor to the pixel | 0.854 | 0.964 | 0.820 | 0.960 |
+| Anchors' views, weighted by distance from the pixel | 0.866 | 0.964 | 0.883 | 0.952 |
+| Photographs voting for the layer they read best | 0.884 | 0.971 | 0.895 | 0.960 |
+| The pixel's patch, whole | 0.901 | 0.983 | 0.926 | 0.984 |
+| The pixel's patch, middle | 0.926 | 0.988 | 0.899 | 0.980 |
+| The pixel's patch, whole and middle (the `score`) | 0.929 | 0.989 | 0.939 | 0.988 |
+
+A layer chosen at random is first about 39% of the time.
 
 Each source's variants alone, empty pass, as the share of queries with an
 anchor from it (which does not depend on the scoring):
@@ -559,7 +641,9 @@ anchor from it (which does not depend on the scoring):
   querying a detected keypoint. Removing the descriptor cap lets wrong matches
   into the first triangulation on Kerry Park, which dropping the worst view
   cannot recover from; the second pass adds them only after a triangulation
-  exists.
+  exists. At Kerry Park point 5, a pixel on a depth edge beside an apartment
+  facade, its best anchor has 14 views whose rays meet within 0.1 px, up to 25
+  degrees apart.
 - **Clusters are the most accurate source.** Where the ground truth can check
   them, 96% of Kerry Park's cluster anchors and 92% of seoul_bull's agree with
   it. Using every member and letting the triangulation drop the bad ones, over
@@ -571,6 +655,32 @@ anchor from it (which does not depend on the scoring):
   matches give nothing; with `stop=enough` it runs on 1 to 2% of empty-pass
   queries. A wider search makes it worse: at a target of 100 it answers on 3%
   of Kerry Park's queries.
+- **Points at infinity.** Kerry Park's 248 queries at infinity had an anchor on
+  the pixel's layer 21 times when a range with no far end counted as
+  unusable. The clusters and the guided matches had far readings all along (at
+  point 272, from 354 to 948 m out to infinity); keeping them as far readings puts 240 of the
+  248 on their layer. The infinity test adds a reading at the pixel itself:
+  191 of them.
+- **How many images see infinity depends on how the photographs were taken.**
+  Kerry Park's paired fisheyes see the horizon in 20 or more images;
+  seoul_bull's photographs walk around a sculpture facing it, and a pixel at
+  infinity lands in only 1 to 5 of the others. With three agreeing images
+  required, the test found 16 of seoul_bull's 44; with one, 42, but also 25
+  finite points, most of them 11 to 14 m away behind the lawn, such as the
+  hedge, whose leaves read well at any shift along the ray. The peak along the ray removes those.
+- **The middle of the patch.** The last wrong far readings were a birdhouse on
+  a pole in front of distant houses (seoul_bull point 180), whose 17 px patch
+  is mostly the houses, and the balconies of an apartment building (Kerry Park
+  point 5), which repeat along the epipolar line. The birdhouse's middle reads
+  0.47 and below at infinity, and the balconies' 0.78 on average. A larger
+  patch does not do as well: requiring the test to pass at 16 px too rejects
+  the balconies, but 26 of Kerry Park's far readings at infinity then start
+  too near to count as far.
+- **Ranking the layers.** Near a pixel the layers are real surfaces, so which
+  one the pixel is on takes its own patch. Read at each layer's distances,
+  whole and in the middle, it ranks the pixel's layer first 93 to 94% of the
+  time where there are several. The anchors' own features rank it first 82 to
+  88% of the time.
 - **The plane sweep at the pixel** reads some depth on 72% of Kerry Park's
   queries, but costs 0.6 s a query, and in the full pass it mostly picks a
   wrong depth. It is kept as an option.
@@ -583,7 +693,7 @@ anchor from it (which does not depend on the scoring):
   the photographs can resolve; on Kerry Park, anchors whose rays meet at under
   2 degrees passed it only 38% of the time. That led to the ranges, the second
   pass of guided matching, and this scoring.
-- **Checked anchors are few.** In the empty pass only 8.5% of Kerry Park's
+- **Checked anchors are few.** In the empty pass only 8.9% of Kerry Park's
   anchors have a true point at their own pixel, so "agree" describes a small
   sample, and the shares with an anchor on the pixel's layer are the main
   measure.
@@ -597,7 +707,7 @@ anchor from it (which does not depend on the scoring):
 | `context.py` | `DatasetContext`, loaded once: photographs as an `ImagePyramidSet`, `LazyKdForest`, keypoints, cameras (−Z forward, depth = −z), per-point frames with 2D/3D indexes. `HoldoutContext` is what a candidate sees: `edited`, `observations_near(image, pixel, r)`, `clusters_near(image, pixel, r)`, `points_near(xyz)`, `texel_scales(track)`, `keypoints(image)`, `camera(image)` |
 | `metrics.py` | The per-query score |
 | `harness.py` | The loop, the JSONL rows, the summary. `--mode anchors` runs only the anchor step |
-| `anchors.py` | The first step, on its own: `find_anchors(ctx, image, pixel)` returns the anchors near the pixel from the reconstruction's tracks, the vetted clusters, guided matching and the constellation query, each with its range of distances, and groups them into depth layers; `distance_range` finds a range; `score_anchors` and `summarize` are the harness's side |
+| `anchors.py` | The first step, on its own: `find_anchors(ctx, image, pixel)` returns the anchors near the pixel from the reconstruction's tracks, the vetted clusters, guided matching, the constellation query and the infinity test, each with its range of distances, grouped into depth layers ranked by the evidence for each; `distance_range` finds a range; `read_patch` reads the pixel's patch along its ray, whole and in the middle; `score_anchors` and `summarize` are the harness's side |
 | `compare.py` | Several runs side by side, each re-judged against the current good-track bar |
 | `candidates/baseline.py` | The first candidate. A local prior sets size and normal, then: cluster, constellation search plus lateral search, cluster evaluate, upgrade, tilt to the prior normal, geometry search, refit, gates. `--opt finish=common` swaps its last two steps for `common.finish` |
 | `candidates/common.py` | What the other candidates share once a track stands: `finish` (anchored fit, neighbours' normal, geometry search, cleaning, gates), and `track_from_sightings`, which upgrades a pixel plus a list of `(image, pixel)` sightings straight to a track |

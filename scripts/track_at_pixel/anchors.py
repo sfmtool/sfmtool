@@ -6,9 +6,9 @@
 Before a track is built at a pixel, the depth there is unknown. An **anchor**
 is a 3D point near the pixel that several photographs agree on, with the
 pixel it sits at in the queried image: a place to start from and walk toward
-the pixel. :func:`find_anchors` looks for them in three sources, strongest
+the pixel. :func:`find_anchors` looks for them in its sources, strongest
 first, and stops once it has enough close to the pixel (``stop="enough"``) or
-runs all three (``stop="never"``, what the harness's ``anchors`` mode uses so
+runs them all (``stop="never"``, what the harness's ``anchors`` mode uses so
 each source is measured):
 
 1. **Tracks** (``tracks``): the reconstruction's own points observed within
@@ -18,28 +18,34 @@ each source is measured):
    them.
 2. **Clusters** (``clusters``): the cluster-patches clusters with a member in
    the queried image within ``cluster_radius_px``, vetted by triangulation
-   (:func:`vet_cluster`): the queried image's member must be the
-   reference or kept, and the reference and kept members must meet in front of
-   every camera within ``max_reproj_px``.
-3. **Constellation** (``constellation``): the SIFT index's constellation query
+   (:func:`vet_cluster`).
+3. **Guided matching** (``guided``): the keypoints near the pixel matched by
+   descriptor among the keypoints whose rays pass close to theirs
+   (:func:`from_guided`).
+4. **Constellation** (``constellation``): the SIFT index's constellation query
    from the pixel itself. Each image it matches carries the pixel into its
    own frame by the constellation's affine warp, and those sightings are
    triangulated, dropping the worst while three or more remain, within
    ``constellation_max_reproj_px``. Its anchor sits at the pixel.
+5. **Infinity** (``infinity``): whether the pixel is further than the
+   photographs can tell from infinity (:func:`from_infinity`), run after the
+   others when they leave the pixel's depth open.
 
 Each anchor carries the **range** of distances along its pixel's ray that its
 views allow. Photographs a few metres apart looking at a point a hundred
 metres away fix its distance only loosely, and two views from adjacent frames
-may not bound it at all. An anchor is **supported** by each other anchor whose
-range overlaps its own and whose photographs are not a subset of its own (or it
-of theirs): two independent readings of one structure. Only bounded anchors,
-finite at both ends and no wider than ``max_span``, support or are supported.
+may not bound it at all. An anchor is usable when its range is bounded, or has
+no far end and starts well beyond the cameras' spread (a far reading). An
+anchor is **supported** by each other usable anchor whose range overlaps its
+own and whose photographs are not a subset of its own (or it of theirs): two
+independent readings of one structure.
 
 The scene near a pixel can hold surfaces at very different depths: a railing in
 front, the pixel's surface, a skyline behind. An anchor near the pixel may be
 real geometry of a different surface, so the anchors are hypotheses, grouped
-into **layers** of overlapping ranges; choosing the pixel's layer is for the
-steps after this one.
+into **layers** of overlapping ranges and ranked by what supports each: the
+pixel's own patch read at the layer's distances, whole and in the middle
+(:func:`read_patch`), with the anchors' own features beside it.
 
 :func:`score_anchors` measures anchors against the ground truth, which
 :func:`find_anchors` never sees; :func:`summarize` reports a pass.
@@ -74,6 +80,46 @@ DEFAULTS = {
     # no wider than `max_span`, far over near.
     "range_px": 1.0,
     "max_span": 3.0,
+    # A range with no far end is a far reading when its near end is at least
+    # `far_spread` times the largest distance between two cameras.
+    "far_spread": 5.0,
+    # Infinity: after the other sources, when they gave no usable anchor, more
+    # than one layer, or none at the pixel ("needed"), or always, or never. The pixel's patch is
+    # compared with every image at its position at infinity; it is at infinity
+    # when `inf_min_views` or more, and `inf_min_share` of the images it lands
+    # in, read `inf_min_zncc` or better.
+    "infinity": "needed",
+    "inf_radius_px": 8.0,
+    "inf_min_zncc": 0.8,
+    "inf_min_views": 1,
+    "inf_min_share": 0.5,
+    # The agreeing images are then read at the distances that move the pixel
+    # 1, 2, 4, ... up to `inf_max_shift_px` pixels from its position at
+    # infinity in the image that moves it most. A finite distance that reads
+    # `inf_peak_margin` better than infinity rejects the reading; the range's
+    # near end is where the reading falls `inf_drop` below infinity's.
+    "inf_max_shift_px": 128.0,
+    # When set, the test must also pass with a patch of this radius, whose
+    # reading is otherwise unused: a small patch can repeat along the epipolar
+    # line where a larger one does not.
+    "inf_confirm_radius_px": 0.0,
+    # The patch of `inf_radius_px` can be mostly background when the pixel is
+    # on a small near object. Its middle (the central samples, about half its
+    # width, read from the same samples) must then also read
+    # `inf_centre_min_zncc` on average at infinity in the agreeing images, when
+    # it has texture (grey standard deviation of `inf_centre_min_std` or more);
+    # a flat middle has no say.
+    "inf_centre": True,
+    "inf_centre_min_std": 8.0,
+    "inf_centre_min_zncc": 0.8,
+    # Evidence per layer (`layer_evidence`): the pixel's own patch of
+    # `layer_radius_px` read at `layer_samples` distances across the layer's
+    # range, in every image it lands in.
+    "layer_evidence": True,
+    "layer_radius_px": 8.0,
+    "layer_samples": 5,
+    "inf_peak_margin": 0.02,
+    "inf_drop": 0.05,
     # Clusters: "kept" uses the reference and kept members, and the queried
     # image's member must be one of them; "any" uses every member in a
     # reconstruction image and lets the triangulation drop the bad ones.
@@ -585,30 +631,264 @@ def _bounded(a, max_span: float) -> bool:
     return near > 0 and np.isfinite(far) and far / near <= max_span
 
 
+def _camera_spread(ctx) -> float:
+    c = _cache(ctx)
+    if "spread" not in c:
+        C = np.asarray([cam.center for cam in ctx.dataset.cameras])
+        c["spread"] = float(np.linalg.norm(C[:, None] - C[None], axis=2).max())
+    return c["spread"]
+
+
+def _usable(a) -> bool:
+    return bool(a["bounded"] or a["far"])
+
+
+def read_patch(ctx, image, pixel, radius, depths, views=None):
+    """The pixel's patch read along its ray, whole and in the middle.
+
+    The sampling of :func:`candidates.planesweep.sweep`: a square grid of
+    ``radius`` around the pixel, on a plane facing the queried camera at each
+    of ``depths``, sampled in each other image. Each read gives two ZNCCs from
+    the same samples: of the whole grid, and of its middle (the central
+    samples, about half the grid's width). A match of the whole patch that the
+    middle does not share is carried by the parts away from the pixel.
+
+    Returns ``(others, whole, middle, centres, middle_std)``: the images read,
+    ``(depths, images)`` arrays of ZNCC (``-1`` where the patch cannot be read),
+    each read's centre pixel, and the grey standard deviation of the query's
+    middle; or ``None`` when the query's patch is flat or off the image.
+    """
+    from candidates import planesweep
+    from candidates.common import in_frame
+
+    ds = ctx.dataset
+    grey = planesweep.grey_images(ds, planesweep.DEFAULTS["blur_sigma"])
+    cam = ctx.camera(image)
+    n = planesweep.DEFAULTS["grid"]
+    s = np.linspace(-radius, radius, n)
+    gx, gy = np.meshgrid(s, s)
+    grid = np.asarray(pixel, float) + np.column_stack([gx.ravel(), gy.ravel()])
+    template = planesweep.sample(grey[image], grid)
+    if not np.all(np.isfinite(template)) or template.std() < 1e-3:
+        return None
+    c, h = n // 2, n // 4
+    ii, jj = np.meshgrid(np.arange(n), np.arange(n))
+    middle = ((abs(ii - c) <= h) & (abs(jj - c) <= h)).ravel()
+    rays = np.asarray(cam.intrinsics.pixel_to_ray_batch(grid), float) @ cam.R
+    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+    along = rays @ rays[(n * n) // 2]
+    if views is None:
+        views = [i for i in range(len(ds.cameras)) if i != image]
+    whole = np.full((len(depths), len(views)), -1.0)
+    mid = np.full((len(depths), len(views)), -1.0)
+    centres = np.full((len(depths), len(views), 2), np.nan)
+    for di, t in enumerate(depths):
+        for vi, other in enumerate(views):
+            oc = ctx.camera(other)
+            if np.isfinite(t):
+                pc = (cam.center + rays * (t / along)[:, None]) @ oc.R.T + oc.t
+            else:
+                pc = rays @ oc.R.T
+            if np.any(-pc[:, 2] <= 1e-9):
+                continue
+            px = np.asarray(
+                oc.intrinsics.ray_to_pixel_batch(
+                    pc / np.linalg.norm(pc, axis=1, keepdims=True)
+                ),
+                float,
+            )
+            centre = px[(n * n) // 2]
+            if not in_frame(ctx, other, centre, margin=radius * 0.5):
+                continue
+            vals = planesweep.sample(grey[other], px)
+            if not np.all(np.isfinite(vals)):
+                continue
+            whole[di, vi] = planesweep.zncc_rows(template, vals[None, :])[0]
+            mid[di, vi] = planesweep.zncc_rows(template[middle], vals[None, middle])[0]
+            centres[di, vi] = centre
+    return views, whole, mid, centres, float(template[middle].std())
+
+
+def from_infinity(ctx, image, pixel, opts):
+    """The pixel at infinity: one slice of the plane sweep.
+
+    At infinity the pixel lands at one position in every other image, fixed by
+    the cameras' rotations alone, so there is nothing to search. The patch of
+    ``inf_radius_px`` around the pixel is compared by ZNCC with each image it
+    lands in. A point at infinity reads well in nearly all of them; a finite
+    point only in the images whose baseline is too short to show its parallax.
+
+    Reading well at infinity is not enough where the texture repeats or barely
+    changes along the pixel's epipolar curve: on seoul_bull, a point 11 m away
+    reads 0.9 at infinity and 0.99 at its true distance in the one image that
+    sees it. So the agreeing images are also read along the ray, in from
+    infinity (:func:`_zncc_along`). If some finite distance reads better than
+    infinity, there is no reading; otherwise the range's near end is no further
+    than where the reading starts to fall (``near_limit``).
+    """
+    read = read_patch(ctx, image, pixel, opts["inf_radius_px"], [np.inf])
+    if read is None:
+        return []
+    others, zncc, mid, centre, mid_std = read
+    z = zncc[0]
+    seen = int((z > -1).sum())
+    agree = [v for v in np.argsort(-z) if z[v] >= opts["inf_min_zncc"]]
+    if len(agree) < opts["inf_min_views"] or len(agree) < opts["inf_min_share"] * seen:
+        return []
+    if (
+        opts["inf_centre"]
+        and mid_std >= opts["inf_centre_min_std"]
+        and float(np.mean(mid[0, agree])) < opts["inf_centre_min_zncc"]
+    ):
+        return []
+    # Pixels of shift per unit of inverse distance, in the image that moves
+    # most: parallax is linear in inverse distance.
+    cam = ctx.camera(image)
+    ray = cam.ray(pixel)
+    ray = ray / np.linalg.norm(ray)
+    probe = 1e3 * _camera_spread(ctx)
+    rate = 0.0
+    for v in agree:
+        oc = ctx.camera(int(others[v]))
+        a, b = oc.project(ray, 0.0), oc.project(cam.center + probe * ray)
+        if a is not None and b is not None:
+            rate = max(rate, float(np.linalg.norm(b - a)) * probe)
+    if rate <= 0:
+        return []
+    shifts = 2.0 ** np.arange(0, np.log2(opts["inf_max_shift_px"]) + 1)
+    inv = shifts / rate
+    along = _zncc_along(
+        ctx, image, pixel, [int(others[v]) for v in agree], 1.0 / inv, opts
+    )
+    at_inf = float(np.mean(z[agree]))
+    if along is None or np.nanmax(along) > at_inf + opts["inf_peak_margin"]:
+        return []
+    near_limit = float("inf")
+    for d, score in zip(1.0 / inv, along):
+        if not score >= at_inf - opts["inf_drop"]:
+            break
+        near_limit = float(d)
+    views = [[int(image), float(pixel[0]), float(pixel[1])]]
+    views += [
+        [int(others[v]), float(centre[0, v, 0]), float(centre[0, v, 1])] for v in agree
+    ]
+    return [
+        {
+            "source": "infinity",
+            "id": None,
+            "position": [float(x) for x in ray],
+            "w": 0.0,
+            "views": views,
+            "query_pixel": [float(pixel[0]), float(pixel[1])],
+            "distance_px": 0.0,
+            "n_views": len(views),
+            "max_reproj_px": 0.0,
+            "max_ray_angle_deg": 0.0,
+            "depth": float("inf"),
+            "agree_share": len(agree) / max(seen, 1),
+            "near_limit": near_limit,
+        }
+    ]
+
+
+def _zncc_along(ctx, image, pixel, views, depths, opts):
+    """Mean ZNCC of the pixel's patch over ``views`` at each of ``depths`` on its ray.
+
+    The sampling of :func:`candidates.planesweep.sweep`, for a few images only.
+    A depth at which no image can be read gives ``nan``.
+    """
+    from candidates import planesweep
+
+    ds = ctx.dataset
+    grey = planesweep.grey_images(ds, planesweep.DEFAULTS["blur_sigma"])
+    cam = ctx.camera(image)
+    r = opts["inf_radius_px"]
+    n = planesweep.DEFAULTS["grid"]
+    s = np.linspace(-r, r, n)
+    gx, gy = np.meshgrid(s, s)
+    grid = np.asarray(pixel, float) + np.column_stack([gx.ravel(), gy.ravel()])
+    template = planesweep.sample(grey[image], grid)
+    if not np.all(np.isfinite(template)) or template.std() < 1e-3:
+        return None
+    rays = np.asarray(cam.intrinsics.pixel_to_ray_batch(grid), float) @ cam.R
+    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+    along = rays @ rays[(n * n) // 2]
+    out = []
+    for t in depths:
+        pts = cam.center + rays * (t / along)[:, None]
+        scores = []
+        for other in views:
+            oc = ctx.camera(other)
+            pc = pts @ oc.R.T + oc.t
+            if np.any(-pc[:, 2] <= 1e-9):
+                continue
+            px = np.asarray(
+                oc.intrinsics.ray_to_pixel_batch(
+                    pc / np.linalg.norm(pc, axis=1, keepdims=True)
+                ),
+                float,
+            )
+            vals = planesweep.sample(grey[other], px)
+            if np.all(np.isfinite(vals)):
+                scores.append(planesweep.zncc_rows(template, vals[None, :])[0])
+        out.append(float(np.mean(scores)) if scores else float("nan"))
+    return np.asarray(out)
+
+
+def _from_infinity_confirmed(ctx, image, pixel, opts):
+    found = _from_infinity_once(ctx, image, pixel, opts)
+    if found and opts["inf_confirm_radius_px"] > 0:
+        wide = {**opts, "inf_radius_px": opts["inf_confirm_radius_px"]}
+        if not _from_infinity_once(ctx, image, pixel, wide):
+            return []
+    return found
+
+
+_from_infinity_once = from_infinity
+SOURCES["infinity"] = _from_infinity_confirmed
+
+
 def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     """The anchors near ``pixel`` in ``image``, grouped into depth layers, and
     what each source did.
 
     Each anchor carries ``range``, the distances along its pixel's ray that its
-    views allow (:func:`distance_range`, within ``range_px``), and ``bounded``,
+    views allow (:func:`distance_range`, within ``range_px``); ``bounded``,
     whether that range is finite at both ends and no wider than ``max_span``
-    (far over near). Two anchors support each other when both are bounded, their
-    ranges overlap, and neither's images are all among the other's, so the two
-    readings do not rest on the same photographs. Near the pixel the scene can
-    hold surfaces at very different depths, so the anchors are hypotheses, not
-    one estimate: ``layers`` groups the bounded anchors whose ranges overlap,
-    nearest first, each with its range and the anchors in it.
+    (far over near); and ``far``, whether it has no far end and its near end is
+    at least ``far_spread`` times the cameras' spread, a reading that the point
+    is further than the photographs can tell apart from infinity. Bounded and
+    far anchors are usable. Two anchors support each other when both are
+    usable, their ranges overlap, and neither's images are all among the
+    other's, so the two readings do not rest on the same photographs. Near the
+    pixel the scene can hold surfaces at very different depths, so the anchors
+    are hypotheses, not one estimate: ``layers`` groups the usable anchors
+    whose ranges overlap, nearest first, each with its range and the anchors in
+    it. With ``layer_evidence``, each layer also carries what supports it
+    (:func:`layer_evidence`), a ``score`` from the pixel's own patch read at the
+    layer's distances, whole and in the middle, and its ``rank`` by that score:
+    the best-supported depth is rank 1.
+
+    The infinity test (:func:`from_infinity`) runs after the other sources, when
+    they gave no usable anchor, more than one layer, or no usable anchor
+    within a pixel of the pixel (``infinity="needed"``). A pixel at infinity
+    often has one layer of nearer anchors beside it and none at it.
     """
     opts = {**DEFAULTS, **(options or {})}
     anchors, stages = [], []
-    for name in opts["sources"].split("+"):
+    far_near = opts["far_spread"] * _camera_spread(ctx)
+    cq = ctx.camera(image)
+
+    def run(name):
         t0 = time.perf_counter()
         found = SOURCES[name](ctx, image, pixel, opts)
-        cq = ctx.camera(image)
         for a in found:
-            X = np.asarray(a["position"], float)
-            ray = cq.ray(a["query_pixel"])
-            t = float((X - cq.center) @ (ray / np.linalg.norm(ray)))
+            if a.get("w", 1.0) == 0:
+                t = float("inf")
+            else:
+                X = np.asarray(a["position"], float)
+                ray = cq.ray(a["query_pixel"])
+                t = float((X - cq.center) @ (ray / np.linalg.norm(ray)))
             views = [(int(v[0]), v[1:]) for v in a["views"]]
             a["distance"] = t
             a["range"] = list(
@@ -616,31 +896,66 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
                     ctx.camera, image, a["query_pixel"], views, t, opts["range_px"]
                 )
             )
+            if "near_limit" in a:
+                a["range"][0] = min(a["range"][0], a["near_limit"])
             a["bounded"] = _bounded(a, opts["max_span"])
+            a["far"] = bool(np.isinf(a["range"][1]) and a["range"][0] >= far_near)
         stages.append(
             {"source": name, "found": len(found), "seconds": time.perf_counter() - t0}
         )
         anchors.extend(found)
+
+    for name in opts["sources"].split("+"):
+        run(name)
         close = [
-            a for a in anchors if a["bounded"] and a["distance_px"] <= opts["enough_px"]
+            a for a in anchors if _usable(a) and a["distance_px"] <= opts["enough_px"]
         ]
         if opts["stop"] == "enough" and len(close) >= opts["min_anchors"]:
             break
+    if opts["infinity"] == "always" or (
+        opts["infinity"] == "needed"
+        and (
+            len(_layers(anchors)) != 1
+            or not any(_usable(a) and a["distance_px"] <= 1.0 for a in anchors)
+        )
+    ):
+        run("infinity")
     for a in anchors:
         mine = {int(v[0]) for v in a["views"]}
         a["support"] = sum(
             1
             for b in anchors
             if b is not a
-            and a["bounded"]
-            and b["bounded"]
+            and _usable(a)
+            and _usable(b)
             and _overlap(a["range"], b["range"])
             and not (mine <= {int(v[0]) for v in b["views"]})
             and not ({int(v[0]) for v in b["views"]} <= mine)
         )
+    layers = _layers(anchors)
+    if opts["layer_evidence"] and layers:
+        t0 = time.perf_counter()
+        reads, centre = _layer_reads(ctx, image, pixel, layers, opts)
+        for n, L in enumerate(layers):
+            L["evidence"] = layer_evidence(anchors, L, reads, n, centre)
+            e = L["evidence"]
+            # The pixel's own patch there, whole and in the middle: the mean
+            # of the whole patch's reading and the lesser of the two.
+            L["score"] = 0.5 * (e["photo"] + e["photo_both"])
+        order = sorted(range(len(layers)), key=lambda n: -layers[n]["score"])
+        for rank, n in enumerate(order, 1):
+            layers[n]["rank"] = rank
+        stages.append(
+            {"source": "evidence", "found": 0, "seconds": time.perf_counter() - t0}
+        )
+    return {"anchors": anchors, "layers": layers, "stages": stages}
+
+
+def _layers(anchors) -> list[dict]:
+    """The usable anchors grouped by overlapping ranges, nearest first."""
     layers = []
     for k in sorted(
-        (k for k, a in enumerate(anchors) if a["bounded"]),
+        (k for k, a in enumerate(anchors) if _usable(a)),
         key=lambda k: anchors[k]["range"][0],
     ):
         a = anchors[k]
@@ -653,7 +968,95 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     for L in layers:
         L["nearest_px"] = min(anchors[k]["distance_px"] for k in L["anchors"])
         L["views"] = max(anchors[k]["n_views"] for k in L["anchors"])
-    return {"anchors": anchors, "layers": layers, "stages": stages}
+    return layers
+
+
+def _layer_reads(ctx, image, pixel, layers, opts):
+    """The pixel's patch read at each layer: ``(layers, images)``, the best ZNCC
+    over ``layer_samples`` distances across the layer's range (even in inverse
+    distance; from infinity in for a far layer), ``-1`` where it cannot be read;
+    for the whole patch and for its middle (:func:`read_patch`)."""
+
+    depths, owner = [], []
+    for n, L in enumerate(layers):
+        near, far = L["range"]
+        lo = 0.0 if not np.isfinite(far) else 1.0 / far
+        hi = 1.0 / near if near > 0 else lo
+        for v in np.linspace(lo, hi, opts["layer_samples"]):
+            depths.append(np.inf if v == 0 else 1.0 / v)
+            owner.append(n)
+    read = read_patch(ctx, image, pixel, opts["layer_radius_px"], depths)
+    reads = np.full((len(layers), len(ctx.dataset.cameras) - 1), -1.0)
+    mids = np.full_like(reads, -1.0)
+    if read is None:
+        return reads, mids
+    _, whole, mid, _, _ = read
+    for k, n in enumerate(owner):
+        better = whole[k] > reads[n]
+        reads[n] = np.where(better, whole[k], reads[n])
+        mids[n] = np.where(better, mid[k], mids[n])
+    return reads, mids
+
+
+def layer_evidence(anchors, layer, reads, n, centre=None) -> dict:
+    """What supports one layer: its anchors, and the photographs' votes.
+
+    The anchors give how many readings there are, how many rest on different
+    photographs (none of whose images are all among another's), their most
+    views and widest ray angle, and how near the pixel the nearest sits. The
+    pixel's own patch is read at every layer in every image (``reads``); an
+    image votes for the layer it reads best, when that reading is 0.7 or better
+    and 0.05 better than at any other layer. Short-baseline images read all
+    layers alike and do not vote. With ``centre``, the same reads for a smaller
+    patch, a vote also needs the middle of the patch to read 0.7 or better at
+    that layer: when it does not, the parts of the patch away from the pixel
+    are what match. ``votes_all`` counts the votes without that condition.
+    """
+    members = [anchors[k] for k in layer["anchors"]]
+    sets = {frozenset(int(v[0]) for v in a["views"]) for a in members}
+    independent = [a for a in sets if not any(a < b for b in sets)]
+    images = set().union(*sets) if sets else set()
+    mine = reads[n]
+    if len(reads) > 1:
+        others = np.max(np.delete(reads, n, axis=0), axis=0)
+    else:
+        others = np.full_like(mine, -1.0)
+    readable = mine > -1
+    voting = readable & (mine >= 0.7) & (mine >= others + 0.05)
+    votes_all = int(voting.sum())
+    if centre is not None:
+        voting &= centre[n] >= 0.7
+    votes = int(voting.sum())
+
+    def best3(x):
+        x = np.sort(x[readable])[::-1][:3]
+        return float(np.mean(x)) if len(x) else -1.0
+
+    return {
+        "n_anchors": len(members),
+        "n_independent": len(independent),
+        "n_images": len(images),
+        "max_views": max((a["n_views"] for a in members), default=0),
+        "max_ray_angle": max((a["max_ray_angle_deg"] for a in members), default=0.0),
+        "nearest_px": min((a["distance_px"] for a in members), default=None),
+        "at_pixel": any(a["distance_px"] <= 1.0 for a in members),
+        "sources": sorted({a["source"] for a in members}),
+        "support": float(
+            sum(
+                np.log2(1 + a["n_views"]) * np.exp(-a["distance_px"] / 20.0)
+                for a in members
+            )
+        ),
+        "photo": float(np.mean(np.sort(mine[readable])[::-1][:3]))
+        if readable.any()
+        else -1.0,
+        "votes": votes,
+        "votes_all": votes_all,
+        "photo_mid": best3(centre[n]) if centre is not None else None,
+        "photo_both": best3(np.minimum(mine, centre[n]))
+        if centre is not None
+        else None,
+    }
 
 
 # --- scoring against the ground truth (the harness's side) ------------------
@@ -729,11 +1132,12 @@ def score_anchors(ds, point: int, image: int, pixel, found: dict) -> dict:
                 "max_ray_angle_deg",
                 "support",
                 "bounded",
+                "far",
             )
         }
         r["range"] = a["range"]
         r["on_layer"] = bool(
-            a["bounded"]
+            _usable(a)
             and _overlap(
                 a["range"],
                 _layer_range(ds, point, image, pixel, truth, a["query_pixel"]),
@@ -758,13 +1162,14 @@ def score_anchors(ds, point: int, image: int, pixel, found: dict) -> dict:
         "truth_range": list(truth),
         "finite_gt": bool(ds.point_w[point] != 0),
         "n_layers": len(found["layers"]),
+        "layers_right": [bool(_overlap(L["range"], truth)) for L in found["layers"]],
     }
     for src in (*SOURCES, "all"):
         sub = [r for r in rows if src == "all" or r["source"] == src]
-        at = [r for r in sub if r["bounded"] and r["distance_px"] <= AT_PIXEL_PX]
+        at = [r for r in sub if _usable(r) and r["distance_px"] <= AT_PIXEL_PX]
         layer = [r for r in sub if r["on_layer"]]
         out[f"{src}_n"] = len(sub)
-        out[f"{src}_bounded"] = sum(r["bounded"] for r in sub)
+        out[f"{src}_bounded"] = sum(_usable(r) for r in sub)
         out[f"{src}_at_pixel"] = bool(at)
         out[f"{src}_at_pixel_right"] = any(r["on_layer"] for r in at)
         out[f"{src}_on_layer"] = bool(layer)
@@ -816,8 +1221,8 @@ def summarize(rows: list[dict]) -> str:
         )
     lines.append(
         "has: share of queries with an anchor; mean n: anchors a query; bnd: share "
-        "of anchors with a bounded range; at px, right, wrong: share of queries with "
-        "a bounded anchor at the pixel, and with one whose range does or does not "
+        "of anchors that are usable (bounded or far); at px, right, wrong: share of queries with "
+        "a usable anchor at the pixel, and with one whose range does or does not "
         "overlap the true point's; layer: share with an anchor on the pixel's layer "
         "(its range overlaps the true point's), lyr px: median pixels to the nearest "
         "one, l+sup: share with one another anchor supports; chk: share of anchors "
