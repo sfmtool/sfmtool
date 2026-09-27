@@ -581,10 +581,7 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
         other => panic!("expected a refusal, got {other:?}"),
     };
     assert!(why.starts_with("Cannot evaluate bearing"), "{why}");
-    assert!(
-        texts.contains(&why),
-        "the reason is not drawn: {texts:?}"
-    );
+    assert!(texts.contains(&why), "the reason is not drawn: {texts:?}");
 }
 
 /// Edit mode draws the active item and nothing else on the bench: no row of
