@@ -384,6 +384,96 @@ the full and empty passes, and 0.690 and 0.453 against 0.645 and 0.438 on all
 of seoul_bull, at 18 to 25 times the time. Most of its gain is good tracks in
 the full pass.
 
+## Anchors: the first step on its own
+
+Building a track at a pixel starts with no idea of the pixel's depth. The
+first step is to find **anchors**: 3D points near the pixel that several
+photographs agree on, each with the pixel it sits at in the queried image,
+for later steps to start from and walk toward the pixel. The step is framed
+in [`specs/drafts/surface-co-solve.md`](../../specs/drafts/surface-co-solve.md),
+"The first step: anchors". `anchors.py` is its first version, and the harness
+measures it on its own with `--mode anchors`: no track is built, and each
+query's anchors are scored against the ground truth, which the finder never
+sees.
+
+```bash
+pixi run -e test python scripts/track_at_pixel/run_sharded.py --mode anchors --candidate anchors --shards 8 --out <run>
+pixi run -e test python scripts/track_at_pixel/run_sharded.py --mode anchors --candidate anchors --opt stop=never --shards 8 --out <run>
+```
+
+`find_anchors` tries three sources, strongest first, and by default stops
+after the first that leaves two anchors within 20 px of the pixel
+(`--opt stop=never` runs all three, so each is measured):
+
+1. **Tracks**: the reconstruction's points observed within 40 px of the pixel
+   in the queried image, finite, in two or more images, every observation
+   within 2 px of the point's projection.
+2. **Clusters**: the cluster-patches clusters with a member within 24 px,
+   vetted with the posed cameras. The queried image's member must be the
+   reference or kept, and the reference and kept members must meet in front
+   of every camera within 2 px. Every cluster that passes is used.
+3. **Constellation**: the SIFT index's constellation query from the pixel. The
+   pixel carried into each matched image by the constellation's affine warp is
+   triangulated, dropping the worst sighting while three or more remain,
+   within 3 px. This anchor sits at the pixel.
+
+An anchor is **supported** when an anchor from another source, or another
+cluster, lies within 10% of its depth of it in 3D.
+
+The summary's columns, per source and for all sources together:
+
+| Column | Meaning |
+|---|---|
+| has | Share of queries with at least one anchor |
+| mean n | Anchors per query |
+| near px | Median distance of the nearest anchor from the pixel, in the queried image |
+| 3D h | Median distance of the nearest anchor from the true point, in the true point's half-sizes |
+| <=2h | Share of queries with an anchor within 2 half-sizes of the true point |
+| surface | Share with an anchor on the true point's surface: within a quarter of a half-size of its plane, and within 8 half-sizes of it |
+| at px, <5% | Share with an anchor at the pixel, and with one there within 5% of the true depth |
+| support | Share with an anchor another source supports |
+
+The shares after "has" are of the queries whose ground truth is finite.
+
+Every source run (`stop=never`):
+
+| | Pass | Source | has | near px | 3D h | <=2h | surface | at px | <5% | support |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seoul_bull | full | tracks | 0.927 | 13.4 | 1.40 | 0.737 | 0.713 | 0.000 | 0.000 | 0.899 |
+| | | clusters | 0.862 | 6.0 | 0.77 | 0.773 | 0.612 | 0.032 | 0.032 | 0.850 |
+| | | constellation | 0.763 | 0.0 | 0.42 | 0.650 | 0.359 | 0.785 | 0.634 | 0.729 |
+| | | all | 0.958 | 0.0 | 0.48 | 0.926 | 0.852 | 0.786 | 0.637 | 0.924 |
+| | empty | all | 0.912 | 0.0 | 0.43 | 0.853 | 0.671 | 0.786 | 0.637 | 0.796 |
+| Kerry Park | full | tracks | 0.955 | 9.7 | 1.29 | 0.634 | 0.698 | 0.007 | 0.006 | 0.563 |
+| | | clusters | 0.833 | 6.5 | 1.37 | 0.531 | 0.465 | 0.052 | 0.034 | 0.523 |
+| | | constellation | 0.173 | 0.0 | 0.89 | 0.129 | 0.069 | 0.182 | 0.085 | 0.064 |
+| | | all | 0.985 | 4.9 | 1.01 | 0.817 | 0.786 | 0.231 | 0.122 | 0.639 |
+| | empty | all | 0.844 | 5.1 | 1.25 | 0.559 | 0.479 | 0.226 | 0.117 | 0.384 |
+
+The default, stopping once enough anchors are found:
+
+| | Pass | has | near px | 3D h | <=2h | surface | at px | support | s/query (median) |
+|---|---|---|---|---|---|---|---|---|---|
+| seoul_bull | full | 0.958 | 8.6 | 1.05 | 0.867 | 0.805 | 0.074 | 0.924 | 0.003 |
+| | empty | 0.912 | 4.5 | 0.71 | 0.837 | 0.640 | 0.181 | 0.783 | 0.002 |
+| Kerry Park | full | 0.985 | 7.2 | 1.14 | 0.749 | 0.758 | 0.036 | 0.535 | 0.008 |
+| | empty | 0.844 | 6.1 | 1.30 | 0.548 | 0.475 | 0.095 | 0.372 | 0.002 |
+
+- In the full pass nearly every query gets an anchor, mostly from the
+  reconstruction's own tracks, and three quarters or more have one within 2
+  half-sizes of the true point.
+- On seoul_bull the clusters and the constellation are nearly as good as the
+  tracks, so the empty pass loses little. The constellation is the only source
+  that reads the pixel's own depth, and it is within 5% of the truth on 63% of
+  queries.
+- Kerry Park's empty pass is the gap. The constellation query answers for only
+  17% of queries (fisheye frames give few keypoints around a pixel, and much of
+  the scene is ground seen at a grazing angle), 16% of queries get no anchor at
+  all, and only 38% get one that a second source supports.
+- The finder costs a few milliseconds a query by default. The constellation
+  query is most of the cost when it runs: with every source run, the median is
+  0.012 s on seoul_bull and 0.028 s on Kerry Park.
+
 ## Files
 
 | File | Role |
@@ -392,7 +482,8 @@ the full pass.
 | `dataset.py` | Ground-truth registry, the cache workspace, SIFT, the `.kdf`, the cluster-patches `.matches` |
 | `context.py` | `DatasetContext`, loaded once: photographs as an `ImagePyramidSet`, `LazyKdForest`, keypoints, cameras (−Z forward, depth = −z), per-point frames with 2D/3D indexes. `HoldoutContext` is what a candidate sees: `edited`, `observations_near(image, pixel, r)`, `clusters_near(image, pixel, r)`, `points_near(xyz)`, `texel_scales(track)`, `keypoints(image)`, `camera(image)` |
 | `metrics.py` | The per-query score |
-| `harness.py` | The loop, the JSONL rows, the summary |
+| `harness.py` | The loop, the JSONL rows, the summary. `--mode anchors` runs only the anchor step |
+| `anchors.py` | The first step, on its own: `find_anchors(ctx, image, pixel)` returns the anchors near the pixel from the reconstruction's tracks, the vetted clusters and the constellation query; `score_anchors` and `summarize` are the harness's side |
 | `compare.py` | Several runs side by side, each re-judged against the current good-track bar |
 | `candidates/baseline.py` | The first candidate. A local prior sets size and normal, then: cluster, constellation search plus lateral search, cluster evaluate, upgrade, tilt to the prior normal, geometry search, refit, gates. `--opt finish=common` swaps its last two steps for `common.finish` |
 | `candidates/common.py` | What the other candidates share once a track stands: `finish` (anchored fit, neighbours' normal, geometry search, cleaning, gates), and `track_from_sightings`, which upgrades a pixel plus a list of `(image, pixel)` sightings straight to a track |

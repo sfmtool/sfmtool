@@ -217,6 +217,13 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--candidate", default="baseline", help="module under candidates/")
     ap.add_argument(
+        "--mode",
+        choices=["track", "anchors"],
+        default="track",
+        help="track: build and score a track per query; anchors: only find "
+        "and score the anchors near the pixel (anchors.py), the first step",
+    )
+    ap.add_argument(
         "--opt", action="append", default=[], help="candidate option key=value"
     )
     ap.add_argument(
@@ -265,7 +272,11 @@ def main(argv=None) -> int:
     )
     args = ap.parse_args(argv)
 
-    candidate = importlib.import_module(f"candidates.{args.candidate}")
+    # In the anchors mode the "candidate" is anchors.py, and only its first
+    # step runs: the anchors are scored, and no track is built.
+    candidate = importlib.import_module(
+        "anchors" if args.mode == "anchors" else f"candidates.{args.candidate}"
+    )
     options = parse_opts(args.opt)
 
     prepared = prepare(args.dataset, args.cache_dir, matches=args.matches)
@@ -314,7 +325,9 @@ def main(argv=None) -> int:
     with open(out / "rows.jsonl", "w") as sink:
         for pass_name in passes:
             for pi, point in enumerate(points):
-                gt_read = ground_truth_reading(ds, point)
+                gt_read = (
+                    ground_truth_reading(ds, point) if args.mode == "track" else None
+                )
                 ctx = ds.holdout(point, empty=pass_name == "empty")
                 images = ds.point_images[point]
                 order = range(len(images))
@@ -331,19 +344,26 @@ def main(argv=None) -> int:
                     }
                     start = time.perf_counter()
                     try:
-                        result = candidate.build_track(ctx, image, pixel, options)
-                        row["status"] = "ok"
-                        row.update(score(ds, point, image, pixel, result, gt_read))
-                        row["diagnostics"] = result.diagnostics
-                        try:
-                            built[pass_name], committed = bench.commit(
-                                built[pass_name],
-                                storable(ds, result.track),
-                                node=f"tracks-{pass_name}.sfmr",
+                        if args.mode == "anchors":
+                            found = candidate.find_anchors(ctx, image, pixel, options)
+                            row["status"] = "ok"
+                            row.update(
+                                candidate.score_anchors(ds, point, image, pixel, found)
                             )
-                            row["output_point"] = committed["point"]
-                        except ValueError as e:
-                            row["output_error"] = str(e)
+                        else:
+                            result = candidate.build_track(ctx, image, pixel, options)
+                            row["status"] = "ok"
+                            row.update(score(ds, point, image, pixel, result, gt_read))
+                            row["diagnostics"] = result.diagnostics
+                            try:
+                                built[pass_name], committed = bench.commit(
+                                    built[pass_name],
+                                    storable(ds, result.track),
+                                    node=f"tracks-{pass_name}.sfmr",
+                                )
+                                row["output_point"] = committed["point"]
+                            except ValueError as e:
+                                row["output_error"] = str(e)
                     except TrackAtPixelError as e:
                         row.update(
                             status="refused",
@@ -377,7 +397,12 @@ def main(argv=None) -> int:
     summaries = []
     for pass_name in passes:
         pass_rows = [r for r in rows if r["pass"] == pass_name]
-        summaries.append(f"== {pass_name} pass ==\n{summarize(pass_rows)}")
+        report = (
+            candidate.summarize(pass_rows)
+            if args.mode == "anchors"
+            else summarize(pass_rows)
+        )
+        summaries.append(f"== {pass_name} pass ==\n{report}")
     summary = "\n\n".join(summaries)
     (out / "summary.txt").write_text(summary + "\n")
     print()

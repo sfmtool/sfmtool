@@ -369,9 +369,9 @@ class HoldoutContext:
         """Reconstruction observations in ``image`` within ``radius_px`` of ``pixel``.
 
         Each carries the point, its keypoint, the pixel distance and offset, the
-        point's depth along the query camera's axis (``None`` for a bearing), its
-        outward normal, its world half-extent and that half-extent's apparent
-        size in ``image``'s pixels.
+        point's depth along the query camera's axis and its position (``None``
+        for a bearing), its outward normal, its world half-extent and that
+        half-extent's apparent size in ``image``'s pixels.
         """
         ds = self.dataset
         tree = ds._obs_tree[image]
@@ -401,6 +401,7 @@ class HoldoutContext:
                     "offset_px": xy - np.asarray(pixel, float),
                     "distance_px": float(np.linalg.norm(xy - np.asarray(pixel))),
                     "depth": depth,
+                    "position": ds.point_xyz[p].copy() if finite else None,
                     "normal": ds.point_normal[p].copy(),
                     "half_extent": float(ds.point_half[p]),
                     "half_px": float(half_px),

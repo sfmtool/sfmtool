@@ -98,6 +98,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", default="seoul_bull")
     ap.add_argument("--candidate", required=True)
+    ap.add_argument("--mode", choices=["track", "anchors"], default="track")
     ap.add_argument("--opt", action="append", default=[])
     ap.add_argument("--passes", default="full,empty")
     ap.add_argument("--shards", type=int, default=16)
@@ -129,6 +130,8 @@ def main(argv=None) -> int:
             args.candidate,
             "--passes",
             args.passes,
+            "--mode",
+            args.mode,
             "--point-ids",
             ",".join(map(str, shard)),
             "--out",
@@ -150,7 +153,10 @@ def main(argv=None) -> int:
         failed += proc.wait() != 0
         log.close()
 
-    from harness import summarize
+    if args.mode == "anchors":
+        from anchors import summarize
+    else:
+        from harness import summarize
 
     shard_rows = []
     for i in range(len(shards)):
@@ -159,7 +165,7 @@ def main(argv=None) -> int:
             [json.loads(line) for line in open(path)] if path.exists() else []
         )
     passes = [p.strip() for p in args.passes.split(",") if p.strip()]
-    for pass_name in passes:
+    for pass_name in passes if args.mode == "track" else []:
         merge_tracks(args.out, len(shards), pass_name, shard_rows)
     rows = [r for part in shard_rows for r in part]
     with open(args.out / "rows.jsonl", "w") as sink:

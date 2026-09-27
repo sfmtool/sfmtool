@@ -1,6 +1,8 @@
 # Solving depth and normal together over a neighbourhood of patches
 
-**Status:** Draft. Decided: nothing yet. This draft sets out an approach, the
+**Status:** Draft. Decided: nothing yet. The first step of Use 1, finding
+anchors near the pixel, has a harness mode and a first version (see "The
+first step: anchors"). This draft sets out an approach, the
 evidence for it, and the prototypes to build and measure in the
 leave-one-track-out harness
 ([`scripts/track_at_pixel/`](../../scripts/track_at_pixel/README.md)). It
@@ -207,6 +209,85 @@ current relative-depth test and gave it a normal 60 degrees off.
 
 The grid costs several times one track. That fits the harness's rule that a
 slow Python prototype is acceptable when the result is to be written in Rust.
+
+### The first step: anchors
+
+Step 1 above takes the query's track as the cascade builds it. Working one
+query by hand showed that this step should itself be split, and done more
+carefully. Before any track is built, the pixel's depth is unknown, and the
+first job is to go from knowing nothing about it to having one or more
+**anchors**: 3D points near the pixel that several photographs agree on, each
+with the pixel it sits at in the queried image. Later steps start from an
+anchor and walk toward the pixel, solving the depth again where the reading
+changes. An anchor need not be on the pixel's own surface.
+
+The query was Kerry Park point 309, a spot of flat ground seen in
+`fisheye_right/frame_04` (R04), with every point of the reconstruction
+removed. Five clusters of the cluster-patches file have a member within 16 px
+of the pixel. By eye, and by triangulating each cluster's members with the
+posed cameras, two are real and three are spurious. The real clusters'
+members meet at one point with reprojection errors under 1 px. The spurious
+clusters' best points lie behind the camera, with errors of 24 to 440 px. The
+two real clusters are both a bench beside the pixel, and they agree: their
+points are 0.4 m apart and give the same distance along the pixel's ray
+within 0.1 m. From that point the search lands within a few pixels of the
+true sightings in the views that see the spot from about the query's angle.
+
+The cascade used none of this. Its clusters member tries only the nearest
+three clusters, so it never reached the second real one, which links R04 to
+the close views that fix the depth. It carried the pixel through clusters
+whose member in R04 the cluster refinement had rejected. Nothing in it
+triangulates a cluster before using it, so a spurious cluster the refinement
+kept (ZNCC 0.91 in R04) would pass too. The constellation query from the
+pixel, which the cascade never reached because the clusters member answered
+first, matched R05, R03 and R02: the close views again.
+
+Anchors come from three sources, strongest first. The finder stops once it has
+enough anchors close to the pixel, and otherwise goes on to the next source:
+
+1. **Tracks.** The reconstruction's own points observed near the pixel in the
+   queried image, finite, seen in two or more images, every observation close
+   to the point's projection. A solver already agreed on these; they are the
+   strongest readings when they are near enough and well measured.
+2. **Clusters.** The cluster-patches clusters with a member near the pixel,
+   vetted with the posed cameras: the queried image's member is the reference
+   or kept, and the reference and kept members triangulate in front of every
+   camera with small reprojection errors. Every cluster that passes is used,
+   not only the nearest three.
+3. **Constellation queries.** The SIFT index's constellation query from the
+   pixel. Each image it matches carries the pixel into its own frame by the
+   constellation's affine warp; those sightings are triangulated, dropping the
+   worst while three or more remain. This anchor sits at the pixel itself. The
+   cluster refinement is not used to read the sightings: on point 309 it
+   rejects every true match, reading grazing ground at a fixed radius.
+
+An anchor is **supported** when another source, or another cluster, gives an
+anchor near it in 3D: two independent readings of one structure, as the
+bench's two clusters are.
+
+The harness measures this step on its own (`harness.py --mode anchors`, with
+[`anchors.py`](../../scripts/track_at_pixel/anchors.py)); its README has the
+numbers. In the full pass 96 to 99% of queries get an anchor, most of them
+from the reconstruction's tracks, and three quarters or more get one within
+two of the true point's half-sizes. With no reconstructed points, seoul_bull
+still gives 91% of queries an anchor, and its constellation query reads the
+pixel's own depth within 5% on 63% of queries. Kerry Park is the gap: there
+the constellation query answers on only 17% of queries, 16% get no anchor at
+all, and 38% get one that a second source supports.
+
+Open for this step:
+
+- **Kerry Park's empty pass.** How to find anchors for the 16% with none:
+  a wider cluster radius, the constellation's lateral searches, a denser
+  constellation, or the plane sweep along the pixel's ray.
+- **Enough.** When to stop looking: how many anchors, how close, and whether
+  an unsupported anchor from the strongest source beats two agreeing ones
+  from weaker sources.
+- **Walking.** How to go from an anchor to the pixel. Sliding the patch there
+  in small steps, fitting at each, works while the patch stays on the anchor's
+  surface, and carries the anchor's depth too far past an edge. On point 309
+  the reading dropped at the edge, which is where the depth should be solved
+  again.
 
 ## Use 2: flood filling a surface
 
