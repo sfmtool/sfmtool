@@ -16,6 +16,7 @@
 
 use nalgebra::{Point3, Vector3};
 use serde_json::{json, Value};
+use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::scene::{self, ReconId, SceneNode};
@@ -338,4 +339,26 @@ pub(super) fn point(p: &Point3<f64>) -> Value {
 /// A 3D direction as a three-element array.
 pub(super) fn vector(v: &Vector3<f64>) -> Value {
     json!([v.x, v.y, v.z])
+}
+
+/// A patch's placement, as `get_point` and `get_bench_track` both report it,
+/// or null where there is none.
+///
+/// The axes are unit and `half_extent` is the world half-size along each, so a
+/// committed point and the bench track it came from read the same numbers.
+/// `normal` is stated rather than left to `u_axis × v_axis`, because it is the
+/// outward normal `tilt_bench_patch` takes, and a caller can hand it straight
+/// back. For a point at infinity `center` is a bearing and the patch is tangent
+/// to the direction sphere; the `at_infinity` beside the block says which.
+pub(super) fn placement(patch: Option<&OrientedPatch>) -> Value {
+    let Some(patch) = patch else {
+        return Value::Null;
+    };
+    json!({
+        "center": point(&patch.center),
+        "u_axis": vector(&patch.u_axis),
+        "v_axis": vector(&patch.v_axis),
+        "normal": vector(&patch.normal()),
+        "half_extent": patch.half_extent,
+    })
 }

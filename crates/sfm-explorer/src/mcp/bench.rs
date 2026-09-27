@@ -1274,7 +1274,7 @@ fn stage_data(track: &EditableTrack) -> Value {
                 "condition_number": payload.condition_number,
                 "color": payload.color,
                 "normal_confidence": payload.normal_confidence,
-                "frame_fitted": payload.placement.is_some(),
+                "placement": super::render::placement(payload.placement.as_ref()),
                 "bitmap_fused": payload.bitmap.is_some(),
             })
         }

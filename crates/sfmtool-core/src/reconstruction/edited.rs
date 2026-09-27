@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
+use nalgebra::Vector3;
 use ndarray::{Array2, Array3, Array4, ArrayView3, Axis};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -24,6 +25,8 @@ use sfmtool_sfmr_format::{
     ContentHash, SfmrError, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
     POINT_CONSTRAINT_RANGED,
 };
+
+use crate::patch::cloud::OrientedPatch;
 
 use super::data::{
     ImageTable, ObservationSource, Point3D, PointConstraintColumns, PointSet, SfmrReconstruction,
@@ -314,6 +317,27 @@ impl<'a> PointView<'a> {
     /// The patch frame's `v` half-vector, when the base carries the frame.
     pub fn patch_v_halfvec(&self) -> Option<[f32; 3]> {
         halfvec_row(&self.set.patch_v_halfvec_xyz, self.local)
+    }
+
+    /// The point's patch placement, when the base carries the frame columns
+    /// and this row's half-vectors are non-zero.
+    ///
+    /// The stored half-vectors are split into a unit axis and a half-size, the
+    /// centre is the point's position, and `w` is the **point's** own, since a
+    /// bearing's patch is tangent to the direction sphere and the two stored
+    /// half-vectors do not say which kind it is.
+    pub fn placement(&self) -> Option<OrientedPatch> {
+        let axis = |h: [f32; 3]| Vector3::new(f64::from(h[0]), f64::from(h[1]), f64::from(h[2]));
+        let u = axis(self.patch_u_halfvec()?);
+        let v = axis(self.patch_v_halfvec()?);
+        let (hu, hv) = (u.norm(), v.norm());
+        if !(hu > 0.0 && hv > 0.0) {
+            return None;
+        }
+        let point = self.point();
+        let mut patch = OrientedPatch::new(point.position, u / hu, v / hv, [hu, hv]);
+        patch.w = if point.is_at_infinity() { 0.0 } else { 1.0 };
+        Some(patch)
     }
 
     /// The `(R, R, 4)` patch bitmap, when the base carries the column.

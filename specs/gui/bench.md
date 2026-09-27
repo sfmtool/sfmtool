@@ -847,7 +847,11 @@ carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:
 the same three numbers are a place or a bearing depending on `w`, and an agent
 that read `position` off a `w = 0` track would be holding a place one unit from
-the world origin. **An observation is
+the world origin. It carries the patch too, as `placement` -- centre, unit
+axes, outward `normal` and `half_extent`, or `null` before one is fitted -- in
+the block `get_point` reports a committed point's patch in, so an agent can
+read the normal it would `tilt_bench_patch` from and compare it with the point
+the track was committed over. **An observation is
 addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or a fit still names the same observation. The template's

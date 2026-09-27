@@ -833,6 +833,89 @@ fn tilting_a_bench_patch_turns_its_normal_and_says_how_far() {
     assert_eq!(version_count(&state), before + 1, "{still}");
 }
 
+/// The patch's placement is on the wire in one block, read the same way off a
+/// point and off the bench track made from it, and its `normal` is the one
+/// `tilt_bench_patch` takes: read, turned, sent back, read again, and committed
+/// through to `get_point`.
+#[test]
+fn the_placement_reads_the_same_off_a_point_and_its_bench_track_and_round_trips_a_tilt() {
+    let (mut state, mut viewer) = benchable();
+    let vector = |value: &Value| {
+        let n: Vec<f64> = value
+            .as_array()
+            .unwrap_or_else(|| panic!("a vector, not {value}"))
+            .iter()
+            .map(|c| c.as_f64().expect("a number"))
+            .collect();
+        nalgebra::Vector3::new(n[0], n[1], n[2])
+    };
+    let placement_of_track = |state: &mut AppState, viewer: &mut Viewer3D| {
+        let track = call(
+            state,
+            viewer,
+            "get_bench_track",
+            json!({ "reconstruction_label": "run_a" }),
+        );
+        track["stage_data"]["placement"].clone()
+    };
+
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    let stored = point["placement"].clone();
+    assert!(
+        stored.is_object(),
+        "an embedded point carries its patch: {point}"
+    );
+    on_the_bench(&mut state, &mut viewer);
+    let placement = placement_of_track(&mut state, &mut viewer);
+    assert_eq!(placement, stored, "the bench reads the point's own patch");
+
+    // The normal is the outward one, u × v, and unit.
+    let normal = vector(&placement["normal"]);
+    let u = vector(&placement["u_axis"]);
+    let v = vector(&placement["v_axis"]);
+    assert!((normal - u.cross(&v)).norm() < 1e-9, "{placement}");
+    assert!((normal.norm() - 1.0).abs() < 1e-9, "{placement}");
+
+    // Turned ten degrees toward +u and sent back, it is what the next read says.
+    let (sin, cos) = 10.0_f64.to_radians().sin_cos();
+    let asked = normal * cos + u * sin;
+    call(
+        &mut state,
+        &mut viewer,
+        "tilt_bench_patch",
+        json!({ "reconstruction_label": "run_a", "normal": [asked.x, asked.y, asked.z] }),
+    );
+    let tilted = placement_of_track(&mut state, &mut viewer);
+    assert!(
+        (vector(&tilted["normal"]) - asked).norm() < 1e-9,
+        "{tilted}"
+    );
+
+    // Committed, the point reads the tilted patch back, to the stored column's
+    // single precision.
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": committed["point"]["id"] }),
+    );
+    assert!(
+        (vector(&point["placement"]["normal"]) - asked).norm() < 1e-5,
+        "{point}"
+    );
+}
+
 /// The cap is the whole point of the handle: the normal turns until a
 /// photograph would be looking along the surface and no further, and the
 /// sentence names the observation's image that stopped it.

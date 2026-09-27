@@ -111,7 +111,7 @@ write, and one writes a file.
 | `list_camera_images` | read | One reconstruction's camera images, paginated |
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
-| `get_point` | read | One 3D point: position, colour, error, full track |
+| `get_point` | read | One 3D point: position, colour, error, patch placement, full track |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -593,11 +593,28 @@ one at the cursor, and this block reports it.
   "index": 1207,
   "position": [0.02, 0.41, 0.88], "color": [173, 141, 96], "error": 0.53,
   "at_infinity": false,
+  "placement": { "center": [0.02, 0.41, 0.88],
+                 "u_axis": [1.0, 0.0, 0.0], "v_axis": [0.0, 0.6, 0.8],
+                 "normal": [0.0, -0.8, 0.6],
+                 "half_extent": [0.004, 0.004] },  // null with no patch frame
+  "normal_confidence": 212,                         // null without the column
   "track": [ { "camera_image_index": 3, "name": "images/IMG_0042.jpg",
                "xy": [131.4, 208.9], "reproj_error": 0.44 } ] }
 
 // get_point { "point": 1207 }   // bare index, in the selected reconstruction
 ```
+
+**`placement` is the point's patch**: its centre, its unit axes, its outward
+normal and its world half-size along each axis, read through
+`PointView::placement`, which is also what putting the point on the bench reads.
+`get_bench_track` reports a track-stage patch in the same block under
+`stage_data.placement`, so a committed point and the bench track it came from
+can be compared field by field. `normal` is stated rather than left for the
+caller to take as `u_axis × v_axis`: it is the outward normal
+`tilt_bench_patch` takes, so a caller can read it and send it back. It is `null`
+where the point has no patch frame, which is every point of a `sift_files`
+value. For a point at infinity `center` is the bearing and the patch is tangent
+to the direction sphere, which the `at_infinity` beside it says.
 
 `get_camera_intrinsics`'s `outermost_keypoint` is how far out the camera's
 photographs reach

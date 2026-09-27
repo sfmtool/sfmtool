@@ -198,31 +198,13 @@ pub fn create_track(
         })
         .collect::<Vec<_>>();
 
-    let patch = match (view.patch_u_halfvec(), view.patch_v_halfvec()) {
-        (Some(u), Some(v)) => {
-            let u = Vector3::new(f64::from(u[0]), f64::from(u[1]), f64::from(u[2]));
-            let v = Vector3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
-            let (hu, hv) = (u.norm(), v.norm());
-            (hu > 0.0 && hv > 0.0).then(|| {
-                let mut patch = OrientedPatch::new(stored.position, u / hu, v / hv, [hu, hv]);
-                // A bearing's patch is tangent to the direction sphere and its
-                // corners are directions, so the renderer has to be told which
-                // kind it is; the two stored half-vectors are the same either
-                // way.
-                patch.w = if stored.is_at_infinity() { 0.0 } else { 1.0 };
-                patch
-            })
-        }
-        _ => None,
-    };
-
     let payload = TrackPayload {
         position: Some(stored.position),
         // The **point's** own `w`, read off the row rather than off the frame: a
         // node with no patch frames has no frame to read one from, and its
         // bearings are still bearings.
         at_infinity: stored.is_at_infinity(),
-        placement: patch,
+        placement: view.placement(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         color: stored.color,
         normal_confidence: view.normal_confidence(),

@@ -1873,6 +1873,7 @@ fn a_frameless_bearing_is_published_as_a_bearing_on_the_wire() {
         json!({ "point": BENCH_POINT }),
     );
     assert_eq!(point["at_infinity"], json!(true), "{point}");
+    assert!(point["placement"].is_null(), "no patch frame: {point}");
 
     // And so does the track put on the bench from it.
     on_the_bench(&mut state, &mut viewer);
@@ -1883,7 +1884,7 @@ fn a_frameless_bearing_is_published_as_a_bearing_on_the_wire() {
         json!({ "reconstruction_label": "run_a" }),
     );
     let stage = &track["stage_data"];
-    assert_eq!(stage["frame_fitted"], json!(false), "{track}");
+    assert!(stage["placement"].is_null(), "{track}");
     assert_eq!(stage["at_infinity"], json!(true), "{track}");
     assert!(stage["position"].is_null(), "{track}");
     let direction = stage["direction"].as_array().expect("a bearing: {track}");
