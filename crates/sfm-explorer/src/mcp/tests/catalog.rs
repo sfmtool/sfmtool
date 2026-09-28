@@ -708,24 +708,31 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Sixteen reads, sixty-eight writes, the one that writes a file, and the one
-    // that hands back a picture.
+    // Sixteen reads, sixty-four writes, four input tools, the one that writes a
+    // file, and the one that hands back a picture.
     assert_eq!(catalog.len(), 85, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        68
+        64
     );
-    // One tool can overwrite something the human cannot undo, and it is the
-    // only one annotated destructive.
+    // One tool can overwrite a file by name, and four can press what a person
+    // can press, File ▸ Save included; those five are the ones annotated
+    // destructive.
     let saves: Vec<&str> = catalog
         .iter()
         .filter(|spec| spec.kind == ToolKind::Save)
         .map(|spec| spec.name)
         .collect();
     assert_eq!(saves, ["save_reconstruction"]);
+    let inputs: Vec<&str> = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Input)
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(inputs, ["click", "hover", "press_key", "type_text"]);
 }
 
 /// The spec's prose carries counts the code owns, and a count written out in
@@ -767,7 +774,10 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
         .filter(|spec| spec.kind == ToolKind::Write)
         .count();
     for sentence in [
-        format!("{} write, and one writes a file", spelled(writes)),
+        format!(
+            "{} write, four send input, and one writes a file",
+            spelled(writes)
+        ),
         format!("the {} writes `destructivehint: false`", spelled(writes)),
     ] {
         assert!(

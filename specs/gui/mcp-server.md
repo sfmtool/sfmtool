@@ -102,10 +102,10 @@ place.
 ## The tool surface
 
 Eighty-five tools. Sixteen read -- fifteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-eight
-write, and one writes a file. `get_widgets` and the four input tools, `click`,
-`hover`, `press_key` and `type_text`, read and press the viewer's widgets the
-way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
+`screenshot`, which closes the loop by handing back a picture -- sixty-four
+write, four send input, and one writes a file. `get_widgets` and the four
+input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
+viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
 `hover`", § "`press_key` / `type_text`").
 
 | Tool | Kind | What it does |
@@ -190,31 +190,35 @@ way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
 | `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it, with `workspace_path` stating the workspace path it records |
 | `screenshot` | observe | PNG of the window, or of one panel, optionally cropped and with its widget listing |
 | `get_widgets` | read | Every widget drawn in the window or one panel, with its rectangle, role, name and state, and the dialogs and menus open above the dock |
-| `click` | write | Press and release a mouse button at a point of the window or a panel, or on a widget from a listing, as a person's mouse does, and report what was under the pointer and the dialogs and menus open after it |
-| `hover` | write | Move the pointer to a point or a widget and leave it there |
-| `press_key` | write | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
-| `type_text` | write | Type a string into the focused text input, or into one named by its widget id |
+| `click` | input | Press and release a mouse button at a point of the window or a panel, or on a widget from a listing, as a person's mouse does, and report what was under the pointer and the dialogs and menus open after it |
+| `hover` | input | Move the pointer to a point or a widget and leave it there |
+| `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
+| `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the fifteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-eight writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
 human can undo), and every one of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 
-The four input tools are writes by what they do themselves, which is to press
-what a person could press. What they press is the viewer's own: a click on
-File ▸ Save writes the file as a person's click does, File ▸ Quit ends the
-process, and an item that opens a file chooser (`Open...`, `Save As...`, the
-Panels menu's `Save Layout...` and `Load Layout...`) stops the GUI thread until
-the human answers it, so every call waits behind it (§ "Non-goals").
+**Five tools are annotated `destructiveHint: true`**, and a client that treats
+a destructive tool differently, with a confirmation or a stricter policy,
+should treat these five differently and none of the others:
 
-**`save_reconstruction` is the one tool annotated `destructiveHint: true`**, and
-the one whose `ToolKind` is neither read nor write but `Save`. It is the only
-call on this surface that can overwrite something no undo brings back, and a
-client that treats a destructive tool differently, with a confirmation or a
-stricter policy, should treat this one differently and none of the others.
+- **`save_reconstruction`**, the one tool whose `ToolKind` is `Save`. It is the
+  only call that names a file and can overwrite what no undo brings back.
+- **The four input tools**, `click`, `hover`, `press_key` and `type_text`, whose
+  `ToolKind` is `Input`. Each does no more than press what a person could
+  press, but what it presses is decided by the widget it lands on, and that
+  includes the viewer's own destructive items: a click on File ▸ Save writes
+  the file as a person's click does, File ▸ Quit ends the process, and an item
+  that opens a file chooser (`Open...`, `Save As...`, the Panels menu's `Save
+  Layout...` and `Load Layout...`) stops the GUI thread until the human answers
+  it, so every call waits behind it (§ "Non-goals"). A sequence of them can
+  reach anything the menus can, so the annotation is on each call rather than
+  on the few that land on those items.
 
 ### The wire vocabulary
 
@@ -4393,8 +4397,9 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-five tools**, sixteen of them reads and one of them
-  the `Save` kind that carries `destructiveHint: true`;
+- **The catalog is eighty-five tools**, sixteen of them reads, four of the
+  `Input` kind and one of the `Save` kind, those five carrying
+  `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud`, `max_dimension`, `crop_px` and `widgets`.

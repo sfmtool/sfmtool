@@ -4,7 +4,7 @@
 //! The four input tools: the pointer and the keyboard, as a person uses them.
 
 use super::*;
-use ToolKind::Write;
+use ToolKind::Input;
 
 pub(super) fn specs() -> Vec<ToolSpec> {
     vec![
@@ -21,7 +21,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           menus open after the click; what the click did is read back with the \
                           tool that reports that state, and the Action Log records it as it \
                           would a person's. The pointer stays where it was left.",
-            kind: Write,
+            kind: Input,
             schema: object(
                 &[
                     ("panel_name", panel_name_schema("at_px is a point of")),
@@ -57,7 +57,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           with at_px and an optional panel_name, or with widget. The reply gives \
                           at_px, hit (the clickable widget the pointer arrived over, or null) \
                           and the dialogs and menus open once it has settled.",
-            kind: Write,
+            kind: Input,
             schema: object(
                 &[
                     ("panel_name", panel_name_schema("at_px is a point of")),
@@ -78,7 +78,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           layer). A letter key is a key, not text: type_text types. The reply \
                           gives the dialogs and menus open afterwards and focused, the widget \
                           with keyboard focus, or null.",
-            kind: Write,
+            kind: Input,
             schema: object(
                 &[
                     ("modifiers", modifiers_schema("while the key is down")),
@@ -116,7 +116,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           field's value can be checked first. The reply gives the dialogs and \
                           menus open afterwards and focused, the widget with keyboard focus. The \
                           Action Log records how many characters were typed, never the text.",
-            kind: Write,
+            kind: Input,
             schema: object(
                 &[("widget", widget_schema())],
                 &[(
