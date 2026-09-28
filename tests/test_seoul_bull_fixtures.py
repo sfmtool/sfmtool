@@ -17,9 +17,9 @@ from sfmtool.sift.file import get_sift_path_for_image
 
 from .conftest import SEOUL_BULL_GROUND_TRUTH
 
-#: The deterministic build gives 2486 points over 6132 observations; the floor
+#: The deterministic build gives 794 points over 2748 observations; the floor
 #: leaves room for a matcher or SIFT change without letting the cloud go thin.
-MIN_POINT_COUNT = 2000
+MIN_POINT_COUNT = 650
 #: The reprojection gate the fixture triangulates under.
 BAR_PX = 2.0
 
@@ -66,7 +66,7 @@ def test_workspace_fixture_points_are_well_placed(seoul_bull_workspace: Path):
 
     assert recon.point_count >= MIN_POINT_COUNT
     assert recon.infinity_point_count == 0
-    assert (np.asarray(recon.observation_counts) >= 2).all()
+    assert (np.asarray(recon.observation_counts) >= 3).all()
 
     # Per-observation errors, read against the .sift keypoints.
     errors = np.concatenate(

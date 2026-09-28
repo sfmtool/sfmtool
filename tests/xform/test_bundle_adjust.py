@@ -40,7 +40,7 @@ def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
     output_path = tmp_path / "filtered_and_adjusted.sfmr"
 
     transforms = [
-        RemoveShortTracksFilter(2),
+        RemoveShortTracksFilter(3),
         BundleAdjustTransform(),
     ]
 
@@ -53,7 +53,7 @@ def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
     result_data = load_reconstruction_data(output_path)
 
     assert result_data["point_count"] < original["point_count"]
-    assert np.all(result_data["observation_counts"] > 2)
+    assert np.all(result_data["observation_counts"] > 3)
 
 
 def test_bundle_adjust_preserves_image_count(seoul_bull_workspace, tmp_path):

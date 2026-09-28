@@ -109,7 +109,7 @@ def test_coincident_cameras_classified_as_infinity(
     seoul_bull_workspace: Path,
 ):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    pidx = _pick_point_with_observer_count(recon, 2)
+    pidx = _pick_point_with_observer_count(recon, 3)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
     # The point is finite before classification (triangulation placed it at a
@@ -136,7 +136,7 @@ def test_coincident_cameras_unblock_feature_size_embedding(
     """A point coincident with its cameras breaks FeatureSize sizing (``d≈0``);
     classifying it to infinity fixes ``to_embedded_patches``."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    pidx = _pick_point_with_observer_count(recon, 2)
+    pidx = _pick_point_with_observer_count(recon, 3)
     collapsed, _center = _collapse_observers_onto_center(recon, pidx)
 
     # Before: the coincident point has no readable world size → the sizing error.

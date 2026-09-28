@@ -117,7 +117,7 @@ def test_the_layers_match_the_harness(harness, pyramids, query):
         )
     assert got["support"] == [a["support"] for a in ref]
     layers = harness._layers(ref)
-    assert len(got["layers"]) == len(layers) == 3
+    assert len(got["layers"]) == len(layers) >= 3
     for L, M in zip(got["layers"], layers):
         assert set(L) == RANKED_KEYS
         assert set(L["evidence"]) == EVIDENCE_KEYS

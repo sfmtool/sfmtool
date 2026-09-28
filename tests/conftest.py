@@ -407,6 +407,7 @@ def _triangulate_clusters_at_poses(
     *,
     bar_px: float,
     min_angle_deg: float,
+    min_views: int,
     max_rounds: int = 10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Triangulate a clusters ``.matches`` dict at ``reference``'s fixed geometry.
@@ -418,7 +419,8 @@ def _triangulate_clusters_at_poses(
     camera and its poses, under the angular floor and the cheirality rule. Each
     round then keeps, per track, the members that reproject within ``bar_px``
     of the solved point, at most one per image (the closest), and drops any
-    track left with fewer than two images; the survivors are solved again. The member set only ever shrinks, so the loop stops at the
+    track left with fewer than ``min_views`` images; the survivors are solved
+    again. The member set only ever shrinks, so the loop stops at the
     first round that changes nothing, where every kept observation is within the
     bar of the point solved from exactly those observations.
 
@@ -486,9 +488,9 @@ def _triangulate_clusters_at_poses(
         _, first = np.unique(key, return_index=True)
         idx = idx[first]
 
-        # A track needs two images to stay a track.
+        # A track needs `min_views` images to stay a track.
         views = np.bincount(member_cluster[idx], minlength=cluster_count)
-        idx = idx[views[member_cluster[idx]] >= 2]
+        idx = idx[views[member_cluster[idx]] >= min_views]
 
         new_active = np.zeros_like(active)
         new_active[idx] = True
@@ -541,6 +543,7 @@ def build_reconstruction_at_poses(
     cluster_d: int = 10,
     bar_px: float = 2.0,
     min_angle_deg: float = 1.0,
+    min_views: int = 3,
 ) -> Path:
     """Build a SIFT-backed ``.sfmr`` at a reference's cameras and poses, no solve.
 
@@ -557,6 +560,15 @@ def build_reconstruction_at_poses(
     reference's verbatim, and it carries the reference's ``world_space_unit``.
     Only finite points are written; a track too thin to place is dropped rather
     than kept as a point at infinity.
+
+    ``min_views`` defaults to 3 because two-view tracks are most of what the
+    cluster matches triangulate at fixed poses and the least checked: any pair
+    within ``bar_px`` of each other places a point, with no third view to
+    reject a wrong match. On seoul_bull, keeping them gives 2486 points, 1692
+    of them two-view; dropping them leaves 794, near the 957 points the solved
+    fixture this replaced carried (it had 50 two-view tracks). The embed-patches
+    tests' time scales with the point count: with 794 points they take a third
+    of what they took with 2486.
     """
     from sfmtool._sfmtool.io import read_matches
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
@@ -575,7 +587,11 @@ def build_reconstruction_at_poses(
     clusters = read_matches(clusters_file)
     positions, point_indexes, image_indexes, feature_indexes, uv = (
         _triangulate_clusters_at_poses(
-            clusters, reference, bar_px=bar_px, min_angle_deg=min_angle_deg
+            clusters,
+            reference,
+            bar_px=bar_px,
+            min_angle_deg=min_angle_deg,
+            min_views=min_views,
         )
     )
     point_count = len(positions)
@@ -614,6 +630,7 @@ def build_reconstruction_at_poses(
             "cluster_d": cluster_d,
             "bar_px": bar_px,
             "min_angle_deg": min_angle_deg,
+            "min_views": min_views,
         },
         image_count=reference.image_count,
         point_count=point_count,
@@ -674,7 +691,7 @@ def seoul_bull_workspace_once(tmp_path_factory) -> Path:
     poses (:func:`build_reconstruction_at_poses`), so every build gives the same
     reconstruction. Returns the ``seoul_bull.sfmr`` path, an ordinary
     ``sift_files`` reconstruction with all 17 images registered, finite points
-    only, in metres.
+    seen in at least three images, in metres.
     """
     image_files = sorted(SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"))
     workspace_dir = tmp_path_factory.mktemp("seoul_bull_workspace")

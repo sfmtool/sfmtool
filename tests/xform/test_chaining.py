@@ -24,7 +24,7 @@ def test_transform_chain(seoul_bull_sfmr_only, tmp_path):
     output_path = tmp_path / "chained.sfmr"
 
     transforms = [
-        RemoveShortTracksFilter(2),
+        RemoveShortTracksFilter(3),
         RotateTransform(np.array([0, 1, 0]), np.radians(45)),
         TranslateTransform(np.array([1, 2, 3])),
         ScaleTransform(2.0),
@@ -39,7 +39,7 @@ def test_transform_chain(seoul_bull_sfmr_only, tmp_path):
     transformed = load_reconstruction_data(output_path)
 
     assert transformed["point_count"] < original["point_count"]
-    assert np.all(transformed["observation_counts"] > 2)
+    assert np.all(transformed["observation_counts"] > 3)
 
 
 def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
@@ -47,7 +47,7 @@ def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
     output_path = tmp_path / "multi_filter_chain.sfmr"
 
     transforms = [
-        RemoveShortTracksFilter(2),
+        RemoveShortTracksFilter(3),
         FilterByReprojectionErrorTransform(threshold=5.0),
         ScaleTransform(0.5),
     ]
@@ -58,7 +58,7 @@ def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
     result = load_reconstruction_data(output_path)
 
     assert result["point_count"] < original["point_count"]
-    assert np.all(result["observation_counts"] > 2)
+    assert np.all(result["observation_counts"] > 3)
     assert np.all(result["errors"] <= 5.0)
 
 

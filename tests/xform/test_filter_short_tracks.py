@@ -14,7 +14,7 @@ from .conftest import apply_transforms_to_file, load_reconstruction_data
 def test_remove_short_tracks_filter(seoul_bull_sfmr_only, tmp_path):
     """Test that short tracks filter works."""
     output_path = tmp_path / "filtered.sfmr"
-    transforms = [RemoveShortTracksFilter(2)]
+    transforms = [RemoveShortTracksFilter(3)]
 
     result = apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
@@ -26,7 +26,7 @@ def test_remove_short_tracks_filter(seoul_bull_sfmr_only, tmp_path):
 
     assert filtered["point_count"] < original["point_count"]
     assert filtered["observation_count"] < original["observation_count"]
-    assert np.all(filtered["observation_counts"] > 2)
+    assert np.all(filtered["observation_counts"] > 3)
 
 
 def test_invalid_track_size_raises_error():
