@@ -55,7 +55,8 @@ The native extension `sfmtool._sfmtool` is **not** rebuilt by the editable
 Python install — `maturin develop` is required after any Rust edit that
 crosses the PyO3 boundary, otherwise Python tests run against a stale `.so`.
 
-CI runs `pixi run -e test coverage-all` on Linux and Windows, plus a fast
+CI runs the instrumented coverage suite (`scripts/coverage.sh`) on Linux and
+the same tests uninstrumented on Windows and macOS, plus a fast
 lint job (`ruff format --check`, `ruff check`, `cargo fmt --check`,
 `cargo clippy -- -D warnings`) and a DCO check (see [Sign off your commits](#sign-off-your-commits-dco)).
 The lint job gates the test matrix, so a formatting slip won't burn the

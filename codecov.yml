@@ -6,3 +6,12 @@
 # jobs, outside the instrumented coverage run; see scripts/coverage.sh.)
 ignore:
   - "crates/sfm-explorer"
+
+# Linux coverage arrives as two uploads per commit, one from each of the
+# test-linux-rust and test-linux-python CI jobs. Wait for both before posting
+# a status or a PR comment, so neither reports a partial total.
+codecov:
+  notify:
+    after_n_builds: 2
+comment:
+  after_n_builds: 2

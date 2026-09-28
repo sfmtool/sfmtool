@@ -191,7 +191,8 @@ ui = { features = ["ui-linux", "cpu"], solve-group = "default" }
 test = { features = ["runtime", "editable", "lint", "test", "test-tasks", "cpu"], solve-group = "default" }
 # Same packages as `test` but without the editable self-install, so `pixi
 # install` does no Rust build. CI installs this and compiles the extension
-# explicitly with `maturin develop --release` (test-os) / coverage.sh (test-linux).
+# explicitly with `maturin develop --release` (test-os-python) / coverage.sh
+# (test-linux-rust, test-linux-python).
 test-ci = { features = ["runtime", "lint", "test", "cpu"], solve-group = "default" }
 dev = { features = ["runtime", "editable", "dev", "cpu"], solve-group = "default" }
 docs = { features = ["runtime", "editable", "docs", "cpu"], solve-group = "default" }

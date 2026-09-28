@@ -4,8 +4,30 @@
 #
 # Generate combined Rust + Python coverage.
 # Run via: pixi run -e test coverage-all
+#
+# Usage: coverage.sh [all|rust|python]
+#
+#   all     (default) both halves below, in one target dir and one report
+#   rust    the Rust test suite only
+#   python  the Python extension build and pytest only
+#
+# CI runs `rust` and `python` as two parallel jobs (test-linux-rust and
+# test-linux-python in ci.yml), each uploading its own lcov.info; Codecov merges
+# the uploads for a commit. The halves share nothing: `cargo test` builds
+# target/debug and `maturin develop --release` builds target/release, and
+# neither reads the other's profraw files. Either way, `cargo llvm-cov report`
+# covers whatever objects and counters this invocation produced.
 
 set -euo pipefail
+
+mode=${1:-all}
+case "$mode" in
+  all | rust | python) ;;
+  *)
+    echo "usage: $0 [all|rust|python]" >&2
+    exit 2
+    ;;
+esac
 
 # Set up LLVM coverage environment
 eval "$(cargo llvm-cov show-env --sh)"
@@ -18,7 +40,9 @@ cargo llvm-cov clean --workspace --profraw-only
 # --release so the Rust kernels run at shipping speed (a debug build is ~10-15x
 # slower); instrument-coverage still emits valid region mapping under release,
 # though optimization/inlining can make Rust-side line coverage slightly coarser.
-maturin develop --release
+if [ "$mode" != rust ]; then
+  maturin develop --release
+fi
 
 # Rayon is a *loss* under coverage instrumentation, so both test phases below run
 # it single-threaded. `-C instrument-coverage` gives every coverage region one
@@ -64,18 +88,26 @@ export RAYON_NUM_THREADS=1
 # lib tests are not simply added back here under a second invocation; they run
 # uninstrumented in `test-os-rust`. Locally, use `cargo test -p sfm-explorer
 # --lib`, or just `cargo test --workspace`.
-cargo test --workspace --exclude sfm-explorer
+if [ "$mode" != python ]; then
+  cargo test --workspace --exclude sfm-explorer
+fi
 
 # Run Python tests (generates Rust coverage from Python calls + Python coverage).
 # Parallelize across min(4, cpu) xdist workers: the suite's wall time is set by a
 # few long reconstruction/patch tests, and the runner has 4 cores with plenty of
 # RAM headroom (peak ~1.4 GB per worker, measured). pytest-cov auto-detects the
 # xdist workers and combines their coverage data at the end.
-workers=$(python -c 'import os; print(min(4, os.cpu_count() or 1))')
-pytest -n "$workers" --cov=sfmtool --cov-report=lcov:python-lcov.info
+if [ "$mode" != rust ]; then
+  workers=$(python -c 'import os; print(min(4, os.cpu_count() or 1))')
+  pytest -n "$workers" --cov=sfmtool --cov-report=lcov:python-lcov.info
+fi
 
 # Generate the Rust coverage report
 cargo llvm-cov report --lcov --output-path lcov.info
 
 echo ""
-echo "Coverage reports written to lcov.info (Rust) and python-lcov.info (Python)"
+if [ "$mode" = rust ]; then
+  echo "Coverage report written to lcov.info (Rust)"
+else
+  echo "Coverage reports written to lcov.info (Rust) and python-lcov.info (Python)"
+fi

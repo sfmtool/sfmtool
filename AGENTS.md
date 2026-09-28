@@ -169,7 +169,9 @@ empty-handed". Name the thing and say what it does.
 - `skills/` — the four project skills (`audit-hygiene`, `audit-specs`,
   `implement-random-idea`, `suggest-next-steps`), checked in here and symlinked
   into `.claude/skills/`.
-- `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
+- `.github/workflows/` — `ci.yml` (Linux runs `scripts/coverage.sh` as two
+  parallel jobs, `test-linux-rust` and `test-linux-python`, each uploading
+  its own lcov to codecov;
   Windows and macOS run the same suites without instrumentation, split across
   two matrix jobs that share nothing and so run in parallel — `test-os-rust`
   (`cargo test --workspace`) and `test-os-python` (`maturin develop --release`
