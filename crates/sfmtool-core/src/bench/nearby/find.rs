@@ -10,6 +10,8 @@
 
 use std::time::Instant;
 
+use rayon::prelude::*;
+
 use crate::bench::steps::ClusterSeed;
 use crate::bench::track::{EditableTrack, Thresholds};
 use crate::bench::track_at_pixel::{
@@ -865,18 +867,30 @@ pub fn find_nearby_tracks(
     if options.tracks.build {
         let _phase = progress.phase("bench tracks");
         let stem = image_stem(edited, image);
-        for t in tracks.iter_mut() {
-            if t.layer.is_none() || t.point.is_some() {
-                continue;
-            }
-            progress.check_cancel().map_err(cancelled)?;
-            t.track = Some(bench_track(
-                edited,
-                views,
-                &stem,
-                t.sightings(),
-                options.tracks.radius_px,
-            ));
+        let todo: Vec<usize> = (0..tracks.len())
+            .filter(|&k| tracks[k].layer.is_some() && tracks[k].point.is_none())
+            .collect();
+        // Each track is built on its own, so they are built side by side; the
+        // steps inside a build are small enough that this is where the
+        // parallelism pays.
+        let built: Vec<Result<EditableTrack, String>> = todo
+            .par_iter()
+            .map(|&k| {
+                if progress.is_cancelled() {
+                    return Err("cancelled".to_string());
+                }
+                bench_track(
+                    edited,
+                    views,
+                    &stem,
+                    tracks[k].sightings(),
+                    options.tracks.radius_px,
+                )
+            })
+            .collect();
+        progress.check_cancel().map_err(cancelled)?;
+        for (k, track) in todo.into_iter().zip(built) {
+            tracks[k].track = Some(track);
         }
     }
     report.tracks_seconds = start.elapsed().as_secs_f64();
