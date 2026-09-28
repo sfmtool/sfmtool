@@ -17,7 +17,7 @@ harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
 `from_tracks`, `from_clusters`, `from_guided`, `from_constellation`), where
 they were designed and measured, and the third part of
-that finder moved into core ([the plan](../../drafts/nearby-tracks.md)). A
+that finder moved into core (combined in [nearby-tracks.md](nearby-tracks.md)). A
 candidate is a hypothesis, not a decision: near a pixel the scene can hold
 surfaces at very different depths, and grouping the candidates by the
 [distance ranges](distance-range.md) their sightings allow is a later step.

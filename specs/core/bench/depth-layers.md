@@ -19,7 +19,7 @@ The layers are the fourth part of the anchor finder in the track-at-pixel
 harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
 `_layers`, `_layer_reads`, `layer_evidence` and `_rank_layers`) moved into
-core ([the plan](../../drafts/nearby-tracks.md)). Their inputs are the
+core (combined in [nearby-tracks.md](nearby-tracks.md)). Their inputs are the
 candidates the [matching sources](nearby-sources.md) and the
 [far-field sweep](far-field-sweep.md) find, with the
 [distance ranges](distance-range.md) of their sightings; the patch reads are
@@ -325,6 +325,7 @@ and refusals. Parity with the harness is measured by running it with
 
 ## Non-goals
 
-The layers do not build or fit tracks, and do not decide what to do with a
-low confidence; the nearby-tracks finder and the steps after it do. They do not
+The layers do not build or fit tracks; the
+[nearby-tracks finder](nearby-tracks.md) does. Neither decides what to do with
+a low confidence; the steps after the finder do. The layers do not
 merge two layers whose ranges do not overlap, however close.

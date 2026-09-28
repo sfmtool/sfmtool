@@ -16,7 +16,7 @@ down, and **far**, when they put it too far out to tell from infinity.
 The ranges are part of the anchor finder in the track-at-pixel harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
 `distance_range`), where every anchor carries one, and the second part of that
-finder moved into core ([the plan](../../drafts/nearby-tracks.md)).
+finder moved into core (combined in [nearby-tracks.md](nearby-tracks.md)).
 
 ## Rust API
 

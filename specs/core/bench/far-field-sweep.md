@@ -15,7 +15,7 @@ written to the reconstruction.
 The sweep is the far test of the anchor finder in the track-at-pixel harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
 `from_farfield`), where it was designed and measured, and the first part of
-that finder moved into core ([the plan](../../drafts/nearby-tracks.md)). Its
+that finder moved into core (combined in [nearby-tracks.md](nearby-tracks.md)). Its
 readings are hypotheses, not a decision: near a pixel the scene can hold a far
 surface and a nearer one in front of it, and which of them the pixel shows is
 for a comparison between readings from several sources to settle.
@@ -303,7 +303,7 @@ implementation is measured by running the harness with `ff_impl=rust` and
 ## Non-goals
 
 The sweep does not decide which reading is the pixel's; the depth layers of the
-nearby-tracks finder do. It does not read nearer than its last disparity; the
+[nearby-tracks finder](nearby-tracks.md) do. It does not read nearer than its last disparity; the
 matching sources cover near geometry.
 
 ## Open questions
