@@ -209,7 +209,11 @@ scoring is left.
      are the harness's, blurred once per image and cached with the views.
    - **Projecting a direction**, a `w = 0` projection on the camera the
      finder uses, which the far field and the ranges need.
-2. **Ranges.** `distance_range(views, image, pixel, sightings, distance,
+2. **Ranges.** Built; the standing spec is
+   [core/bench/distance-range.md](../core/bench/distance-range.md), which also
+   has `camera_spread` and `classify_range` (bounded, far, usable), and returns
+   a `Result` for an image that is not there.
+   `distance_range(views, image, pixel, sightings, distance,
    tolerance_px) -> [f64; 2]`: the distances along the pixel's ray at which
    every sighting stays within its tolerance, which turns any set of sightings
    into a range that can be compared with another.

@@ -304,6 +304,207 @@ fn the_sweep_refuses_a_query_that_names_no_place() {
     ));
 }
 
+// ---- Distance ranges ---------------------------------------------------------
+
+/// The pixel's ray in image 0: its camera centre and unit direction.
+fn query_ray(views: &[ProjectedImage<'_>]) -> (Vector3<f64>, Vector3<f64>) {
+    let camera = ViewCamera::new(&views[0]);
+    (camera.center, camera.ray(PIXEL).normalize())
+}
+
+/// The point `t` along the queried ray, sighted where it lands in every image.
+fn sightings_at(scene: &Scene, t: f64) -> Vec<(u32, [f64; 2])> {
+    sightings_at_first(scene, t, scene.len())
+}
+
+/// [`sightings_at`] in the first `n` images only.
+fn sightings_at_first(scene: &Scene, t: f64, n: usize) -> Vec<(u32, [f64; 2])> {
+    let views = scene.views();
+    let (center, ray) = query_ray(&views);
+    let x = Point3::from(center + ray * t);
+    (0..n).map(|i| (i as u32, scene.project(i, x))).collect()
+}
+
+/// The worst error, in px, of `sightings` outside image 0 against the point `t`
+/// along the queried ray, measured with the scene's own projection.
+fn worst_error(scene: &Scene, sightings: &[(u32, [f64; 2])], t: f64) -> f64 {
+    let views = scene.views();
+    let (center, ray) = query_ray(&views);
+    let x = Point3::from(center + ray * t);
+    sightings
+        .iter()
+        .filter(|&&(i, _)| i != 0)
+        .map(|&(i, p)| {
+            let q = scene.project(i as usize, x);
+            (q[0] - p[0]).hypot(q[1] - p[1])
+        })
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn a_well_seen_point_has_a_bounded_range_around_its_distance() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let t = 4.0;
+    let sightings = sightings_at(&scene, t);
+    let [near, far] = distance_range(&views, 0, PIXEL, &sightings, t, 1.0).expect("valid");
+    assert!(near < t && t < far && far.is_finite(), "{near} {far}");
+    // Each end is where the worst sighting reaches 1 px, to the bisection's
+    // 2^-10 of a doubling.
+    assert!(worst_error(&scene, &sightings, near) <= 1.0);
+    assert!(worst_error(&scene, &sightings, near / 1.001) > 1.0);
+    assert!(worst_error(&scene, &sightings, far) <= 1.0);
+    assert!(worst_error(&scene, &sightings, far * 1.001) > 1.0);
+    let class = classify_range([near, far], camera_spread(&views), &RangeOptions::default());
+    assert!(class.bounded && !class.far && class.usable());
+}
+
+#[test]
+fn adjacent_frames_give_a_range_with_no_far_end() {
+    // Two cameras a centimetre apart move a point four units out by 0.4 px
+    // between there and infinity, less than the tolerance.
+    let centers = [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]];
+    let scene = Scene::from_centers(&centers, 4.0);
+    let views = scene.views();
+    let sightings = sightings_at(&scene, 4.0);
+    let [near, far] = distance_range(&views, 0, PIXEL, &sightings, 4.0, 1.0).expect("valid");
+    assert!(near > 0.0 && near < 4.0, "{near}");
+    assert_eq!(far, f64::INFINITY);
+    let spread = camera_spread(&views);
+    assert!((spread - 0.01).abs() < 1e-12, "{spread}");
+    // The near end is well past five times the baseline, so the range is far.
+    let class = classify_range([near, far], spread, &RangeOptions::default());
+    assert!(class.far && !class.bounded);
+}
+
+#[test]
+fn a_point_at_infinity_has_no_far_end_and_a_near_end_from_the_baseline() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let (_, ray) = query_ray(&views);
+    let direction = Point3::from(ray);
+    let sightings: Vec<(u32, [f64; 2])> = (0..scene.len())
+        .map(|i| (i as u32, scene.project_homogeneous(i, direction, 0.0)))
+        .collect();
+    let [near, far] =
+        distance_range(&views, 0, PIXEL, &sightings, f64::INFINITY, 1.0).expect("valid");
+    assert_eq!(far, f64::INFINITY);
+    // A point at the near end moves 1 px from infinity in the widest image:
+    // the focal length times the widest baseline across the view axis, in px,
+    // over the distance.
+    let widest = widest_rate();
+    assert!(
+        (near / widest - 1.0).abs() < 0.01,
+        "{near} against {widest}"
+    );
+    assert!(worst_error(&scene, &sightings, near) <= 1.0);
+    let class = classify_range([near, far], camera_spread(&views), &RangeOptions::default());
+    assert!(class.far);
+}
+
+#[test]
+fn a_large_error_at_the_distance_widens_the_tolerance() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let t = 4.0;
+    let mut sightings = sightings_at(&scene, t);
+    // One sighting 3 px off along the row.
+    sightings[1].1[0] += 3.0;
+    let at_t = worst_error(&scene, &sightings, t);
+    assert!((at_t - 3.0).abs() < 1e-9, "{at_t}");
+    let widened = distance_range(&views, 0, PIXEL, &sightings, t, 1.0).expect("valid");
+    // The same as asking for half a pixel more than the error at `t`.
+    let asked = distance_range(&views, 0, PIXEL, &sightings, t, at_t + 0.5).expect("valid");
+    assert_eq!(widened, asked);
+    assert!(widened[0] < t && t < widened[1]);
+    // A tolerance above that is not widened.
+    let wider = distance_range(&views, 0, PIXEL, &sightings, t, 6.0).expect("valid");
+    assert!(wider[0] < widened[0] && widened[1] < wider[1]);
+}
+
+#[test]
+fn a_sighting_that_cannot_see_the_point_counts_as_an_infinite_error() {
+    // A fifth camera beyond the plane, looking the same way, has the point
+    // behind it wherever along the ray it is put in front of the others.
+    let mut centers = CENTERS.to_vec();
+    centers.push([0.0, 0.0, 6.0]);
+    let scene = Scene::from_centers(&centers, 4.0);
+    let views = scene.views();
+    let mut sightings = sightings_at_first(&scene, 4.0, 4);
+    sightings.push((4, PIXEL));
+    // The error at the distance is infinite, so the tolerance is too, and
+    // nothing ends the range.
+    let range = distance_range(&views, 0, PIXEL, &sightings, 4.0, 1.0).expect("valid");
+    assert_eq!(range, [0.0, f64::INFINITY]);
+    let class = classify_range(range, camera_spread(&views), &RangeOptions::default());
+    assert!(!class.usable());
+}
+
+#[test]
+fn sightings_in_the_queried_image_are_not_checked() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let mut sightings = sightings_at(&scene, 4.0);
+    let want = distance_range(&views, 0, PIXEL, &sightings, 4.0, 1.0).expect("valid");
+    sightings[0].1 = [5.0, 100.0];
+    sightings.push((0, [0.0, 0.0]));
+    assert_eq!(
+        distance_range(&views, 0, PIXEL, &sightings, 4.0, 1.0).expect("valid"),
+        want
+    );
+    // With nothing else to check, every distance is allowed.
+    assert_eq!(
+        distance_range(&views, 0, PIXEL, &[(0, PIXEL)], 4.0, 1.0).expect("valid"),
+        [0.0, f64::INFINITY]
+    );
+}
+
+#[test]
+fn a_range_refuses_an_image_that_is_not_there() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let missing = DistanceRangeError::NoSuchImage {
+        image: 9,
+        image_count: 4,
+    };
+    assert_eq!(
+        distance_range(&views, 9, PIXEL, &[], 4.0, 1.0),
+        Err(missing.clone())
+    );
+    assert_eq!(
+        distance_range(&views, 0, PIXEL, &[(9, PIXEL)], 4.0, 1.0),
+        Err(missing)
+    );
+}
+
+#[test]
+fn the_camera_spread_is_the_widest_pair() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let mut want = 0.0f64;
+    for a in CENTERS {
+        for b in CENTERS {
+            want = want.max((a[0] - b[0]).hypot(a[1] - b[1]).hypot(a[2] - b[2]));
+        }
+    }
+    assert!((camera_spread(&scene.views()) - want).abs() < 1e-12);
+    assert_eq!(camera_spread(&scene.views()[..1]), 0.0);
+}
+
+#[test]
+fn a_range_is_bounded_when_narrow_and_far_when_open_and_distant() {
+    let options = RangeOptions::default();
+    let class = |range| classify_range(range, 2.0, &options);
+    assert!(class([1.0, 3.0]).bounded);
+    assert!(!class([1.0, 3.01]).bounded);
+    assert!(!class([0.0, 1.0]).bounded);
+    assert!(!class([1.0, f64::INFINITY]).bounded);
+    // Far from five times the spread of 2.
+    assert!(class([10.0, f64::INFINITY]).far);
+    assert!(!class([9.9, f64::INFINITY]).far);
+    assert!(!class([10.0, 1e9]).far);
+    assert!(!class([0.0, f64::INFINITY]).usable());
+}
+
 // ---- The arithmetic ----------------------------------------------------------
 
 #[test]

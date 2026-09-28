@@ -83,6 +83,12 @@ DEFAULTS = {
     # A range with no far end is a far reading when its near end is at least
     # `far_spread` times the largest distance between two cameras.
     "far_spread": 5.0,
+    # Which implementation computes an anchor's range and classifies it:
+    # "rust", the core `distance_range`, `camera_spread` and `classify_range`
+    # through their bindings, or "python", this module's own
+    # (:func:`distance_range`, :func:`_camera_spread`, :func:`_bounded`), kept
+    # as the reference the Rust one was measured against.
+    "range_impl": "rust",
     # Infinity: after the other sources, when they gave no usable anchor, more
     # than one layer, or none at the pixel ("needed"), or always, or never. The pixel's patch is
     # compared with every image at its position at infinity; it is at infinity
@@ -683,6 +689,71 @@ def _camera_spread(ctx) -> float:
         C = np.asarray([cam.center for cam in ctx.dataset.cameras])
         c["spread"] = float(np.linalg.norm(C[:, None] - C[None], axis=2).max())
     return c["spread"]
+
+
+class _Ranges:
+    """An anchor's range and its classification, by the implementation
+    ``range_impl`` names.
+
+    ``"rust"`` calls the core ``distance_range``, ``camera_spread`` and
+    ``classify_range`` (``specs/core/bench/distance-range.md``), which port
+    :func:`distance_range`, :func:`_camera_spread` and the tests in
+    :func:`find_anchors`; ``"python"`` runs those references.
+    """
+
+    def __init__(self, ctx, image: int, opts: dict):
+        self.ctx, self.image, self.opts = ctx, int(image), opts
+        self.impl = opts["range_impl"]
+        if self.impl not in ("rust", "python"):
+            raise ValueError(f"unknown range_impl {self.impl!r} (expected rust|python)")
+        if self.impl == "python":
+            self.spread = _camera_spread(ctx)
+        else:
+            from sfmtool._sfmtool import bench as B
+
+            self.B = B
+            c = _cache(ctx)
+            if "spread_rust" not in c:
+                c["spread_rust"] = B.camera_spread(ctx.edited, ctx.pyramids)
+            self.spread = c["spread_rust"]
+
+    def range(self, qpix, views, t) -> list:
+        """The range along ``qpix``'s ray that ``views`` allow, ``t`` the
+        distance they were triangulated at."""
+        if self.impl == "python":
+            return list(
+                distance_range(
+                    self.ctx.camera, self.image, qpix, views, t, self.opts["range_px"]
+                )
+            )
+        return list(
+            self.B.distance_range(
+                self.ctx.edited,
+                self.ctx.pyramids,
+                self.image,
+                (float(qpix[0]), float(qpix[1])),
+                [(int(i), (float(p[0]), float(p[1]))) for i, p in views],
+                float(t),
+                float(self.opts["range_px"]),
+            )
+        )
+
+    def classify(self, a) -> None:
+        """Set ``a``'s ``bounded`` and ``far`` from its ``range``."""
+        if self.impl == "python":
+            a["bounded"] = _bounded(a, self.opts["max_span"])
+            a["far"] = bool(
+                np.isinf(a["range"][1])
+                and a["range"][0] >= self.opts["far_spread"] * self.spread
+            )
+            return
+        c = self.B.classify_range(
+            (float(a["range"][0]), float(a["range"][1])),
+            self.spread,
+            max_span=float(self.opts["max_span"]),
+            far_spread=float(self.opts["far_spread"]),
+        )
+        a["bounded"], a["far"] = c["bounded"], c["far"]
 
 
 def _usable(a) -> bool:
@@ -1314,12 +1385,13 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     """
     opts = {**DEFAULTS, **(options or {})}
     anchors, stages = [], []
-    far_near = opts["far_spread"] * _camera_spread(ctx)
+    ranges = _Ranges(ctx, image, opts)
     cq = ctx.camera(image)
 
     def run(name):
         t0 = time.perf_counter()
         found = SOURCES[name](ctx, image, pixel, opts)
+        range_seconds = 0.0
         for a in found:
             if a.get("w", 1.0) == 0:
                 t = float("inf")
@@ -1332,17 +1404,19 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
             if "range_override" in a:
                 a["range"] = list(a["range_override"])
             else:
-                a["range"] = list(
-                    distance_range(
-                        ctx.camera, image, a["query_pixel"], views, t, opts["range_px"]
-                    )
-                )
+                r0 = time.perf_counter()
+                a["range"] = ranges.range(a["query_pixel"], views, t)
+                range_seconds += time.perf_counter() - r0
             if "near_limit" in a:
                 a["range"][0] = min(a["range"][0], a["near_limit"])
-            a["bounded"] = _bounded(a, opts["max_span"])
-            a["far"] = bool(np.isinf(a["range"][1]) and a["range"][0] >= far_near)
+            ranges.classify(a)
         stages.append(
-            {"source": name, "found": len(found), "seconds": time.perf_counter() - t0}
+            {
+                "source": name,
+                "found": len(found),
+                "seconds": time.perf_counter() - t0,
+                "range_seconds": range_seconds,
+            }
         )
         anchors.extend(found)
 

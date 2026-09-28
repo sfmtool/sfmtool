@@ -22,6 +22,7 @@ use crate::reconstruction::edited::EditedReconstruction;
 
 use super::grey::GreyImages;
 use super::patch_read::{read_patch_along_ray, PatchRead, RayPatch};
+use super::range::camera_spread;
 
 /// Which images the width of an image is judged against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,7 +415,7 @@ pub fn far_field_sweep(
     // Pixels of shift per unit of inverse distance: parallax is linear in
     // inverse distance, so the shift between infinity and a point far out,
     // times that point's distance, is the rate.
-    let probe = 1e3 * camera_spread(&cameras);
+    let probe = 1e3 * camera_spread(views);
     let far_point = cq.center + ray * probe;
     let mut rates: Vec<(u32, f64)> = Vec::new();
     for (v, &j) in others.iter().enumerate() {
@@ -571,17 +572,6 @@ pub fn far_field_sweep(
         }
     }
     Ok(sweep)
-}
-
-/// The largest distance between two camera centres.
-fn camera_spread(cameras: &[ViewCamera<'_>]) -> f64 {
-    let mut spread = 0.0f64;
-    for (a, ca) in cameras.iter().enumerate() {
-        for cb in &cameras[a + 1..] {
-            spread = spread.max((ca.center - cb.center).norm());
-        }
-    }
-    spread
 }
 
 /// The widest angle between the rays from two of `images`' camera centres to
