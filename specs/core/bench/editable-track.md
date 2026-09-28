@@ -92,7 +92,7 @@ pub struct TrackMeasurement {
     pub zncc: Option<f64>,
     pub zncc_middle: Option<f64>,            // the same samples over the middle square
     pub zncc_grid: Option<[[f64; 3]; 3]>,    // and over each ninth of the tile
-    pub seed_shift_px: Option<f64>,          // the peak's move from the sighting
+    pub seed_shift_px: Option<f64>,          // the peak's move from the sighting, grid px
     pub projection_offset_px: Option<f64>,   // the sighting's distance from the point
     pub reprojection_error: Option<f64>,
     pub ray_angle_deg: Option<f64>,
@@ -106,7 +106,7 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>, // each ninth's slide
     pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole core's ZNCC at every shift
     pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
-    pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
+    pub walked_px: Option<f64>,              // grid px, set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
     pub walked_zncc_middle: Option<f64>,     // and its middle reading
@@ -148,9 +148,9 @@ pub struct Thresholds {
     pub max_keypoint_uncertainty: f64,
     pub min_relative_zncc: f64,
 }
-// The bench's own default bars: the shift bar wider than the cluster
-// refinement's 3 px, the ZNCC bars below its 0.85.
-pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
+// The bench's own default bars: the shift bar the localizer's search radius,
+// in patch-grid px, the ZNCC bars below the cluster refinement's 0.85.
+pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MIN_ZNCC: f64 = 0.7;
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 
@@ -513,7 +513,6 @@ pub fn open_localizer() -> KeypointLocalizeParams;
 pub struct EvaluateOptions {
     pub cluster: ClusterRefineParams,
     pub localize: KeypointLocalizeParams,   // open_localizer, one round
-    pub search_px: f64,                     // patch-grid px
     pub max_seed_offset_px: f64,            // how far a seed may sit, 64
     pub max_cache_bytes: usize,             // one round's tiles, 256 MiB
 }
@@ -1031,8 +1030,9 @@ The kernels a fit runs stay gate-free and cap-free, for the reason
 `open_localizer` gives: a sighting that does not belong is turned out by the
 person or by a threshold, not deleted from the evidence by a kernel. What *is*
 bounded is where a fit may put a sighting. A row whose refined keypoint lands
-further than `max_shift_px` from its seed keeps the seed, records how far the
-peak sat in `walked_px`, and still casts its ray -- from the seed. The
+further than `max_shift_px` from its seed, measured on the patch's plane in
+grid px, keeps the seed, records how far the peak sat in `walked_px`, and still
+casts its ray -- from the seed. The
 `FitReport` counts them in `kept_at_seed`.
 
 The bound is not a verdict and turns nothing out: a correlation that jumped onto
@@ -1057,9 +1057,8 @@ the three walk fields among it, is dropped. There is no separate step for it,
 because what it writes is exactly what that step writes.
 
 The bar is the track's own `max_shift_px`, the same bar the painting judges a
-seed shift by. Its bench default, 8 px, is wider than the cluster refinement's
-3 px for this reason: a person who moves a patch by hand and fits expects the
-sightings to follow further than the batch pass's drift bound allows.
+seed shift by and the radius the evaluation looks for each peak within. Its
+bench default, 6 grid px, is the keypoint localizer's own search radius.
 
 ### The middle ZNCC
 
@@ -1736,10 +1735,10 @@ reading. What lands in each slot is:
 
 | Slot | What it says |
 |------|--------------|
-| `zncc` | The leave-one-out agreement at the peak, within `search_px` of where the sighting is. With `seed_shift_px` near zero it is the agreement at the keypoint itself. |
+| `zncc` | The leave-one-out agreement at the peak, within the track's `max_shift_px` of where the sighting is. With `seed_shift_px` near zero it is the agreement at the keypoint itself. |
 | `zncc_middle` | The same samples at the same peak against the same consensus, read over the middle square of the tile only (§ "The middle ZNCC"). |
 | `zncc_grid` | The same samples read over each ninth of the tile (§ "The ZNCC grid"). |
-| `seed_shift_px` | How far that peak sits from the observation's own keypoint, in source-image px. The **sighting's** own evidence, and what `max_shift_px` paints on. |
+| `seed_shift_px` | How far that peak sits from the observation's own keypoint, in patch-grid px on the patch's plane, both ends through the unprojection the localizer seeds from. The **sighting's** own evidence, and what `max_shift_px` paints on. In the unit of the self-similarity radius, so a shift inside the radius is within what the patch cannot tell apart. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. |
 | `localizability_deprecated` | The observation's own tile `sigma_pos`, through the frame anchored at its keypoint. |
@@ -1769,15 +1768,20 @@ decided before any correlation, from the observation and the geometry, which is
 what lets the row carry the reason instead of simply going missing from the
 kernel's answer.
 
+**The search radius is the track's shift bar.** How far from a sighting the
+reading looks for its peak and how far a peak may sit before the bar refuses it
+are one question, so they are one number, `max_shift_px`, in patch-grid px:
+moving the bar evaluates the track again at the new radius.
+
 **The search window is widened to reach the furthest seed.** The kernel anchors
 its window at the point's projection and clips the integer part of a seed beyond
-`search` back onto that bound, so a window sized for `search_px` alone would
+`search` back onto that bound, so a window sized for the bar alone would
 start a far-out sighting short of where it actually is and report the
 correlation of a place the sighting is not. Each round therefore runs at
-`search_px` plus the furthest seed's own offset
+`max_shift_px` plus the furthest seed's own offset
 ([`keypoint_grid_offset`](../patch/patch-keypoint-localization.md) is that
 offset). In return, an observation in a round that holds a far-out seed can
-report a peak further than `search_px` from itself, which is the honest reading
+report a peak further than the bar from itself, which is the honest reading
 of a window that had to be that wide.
 
 **And the widening is bounded, because it is a memory bound.** Every view of a
@@ -2026,7 +2030,8 @@ Two of the thresholds default to the kernels' own bars, read from those
 kernels' parameter types rather than written out again, so the bench and the
 batch pass start from the same bar and moving one is the person choosing to
 differ. The other three are the bench's own. `max_shift_px` is
-`BENCH_MAX_SHIFT_PX`, because on the bench it is also the bound on a fit's walk
+`BENCH_MAX_SHIFT_PX`, the localizer's own search radius, because on the bench
+it is also the radius a reading searches and the bound on a fit's walk
 (§ "The fit's walk is bounded by the person's bar"). `min_zncc` is
 `BENCH_MIN_ZNCC`, below the cluster refinement's `0.85`, because the one bar
 judges both stages and the track stage's leave-one-out ZNCC, scored against a
@@ -2040,7 +2045,7 @@ earlier default carries that default until someone moves it.
 |-----------|---------|---------|
 | `min_zncc` | `0.7` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
 | `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
-| `max_shift_px` | `8.0` | How far the correlation peak may sit from where the observation sits: the drift from its seed at the cluster stage, `seed_shift_px` at the track stage, both in source-image px; and at the track stage how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, not `ClusterRefineParams::default`'s 3 px, which stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
+| `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
 | `max_keypoint_uncertainty` | `0.35` | The largest tile localizability an observation may have, in grid px. From `KeypointLocalizeParams::default`'s `max_member_keypoint_uncertainty`. |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
 
@@ -2050,7 +2055,6 @@ machine, so they live on `EvaluateOptions` beside the search radius.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `search_px` | `6.0` | How far from each observation's own pixel the correlation peak is looked for, in patch-grid px. From `KeypointLocalizeParams::default`'s `search`. |
 | `max_seed_offset_px` | `64.0` | How far from the point's projection a seed may sit and still be read, in patch-grid px. Past it the row carries `SeedTooFar` and is left out of the round. |
 | `max_cache_bytes` | `256 MiB` | What one round's per-view tiles may take together. A round past it is refused with `TooLarge`, before anything is allocated. |
 
@@ -2141,10 +2145,10 @@ absent for the commit that wrote nothing, as it is for one that created.
 
 `evaluate`, `fit` and `set_stage` take `images` the way every patch kernel does
 -- a list of `HxW[xC]` `uint8` arrays, one per image of the reconstruction, or a
-prebuilt `ImagePyramidSet`. `evaluate` and `fit` take three optional keywords --
-`search_px`, the radius the reading looks for each peak in, and
+prebuilt `ImagePyramidSet`. `evaluate` and `fit` take two optional keywords,
 `max_seed_offset_px` and `max_cache_bytes`, the two memory bounds above, each
-defaulting to the reading's own. `fit` and `set_stage` take the
+defaulting to the reading's own; the radius the reading looks for each peak in
+is the track's `max_shift_px`. `fit` and `set_stage` take the
 classification's three knobs as well, `noise_floor_px`,
 `inverse_depth_z_cutoff` and `residual_margin`, each defaulting to core's own
 value;
@@ -2398,12 +2402,12 @@ that see the point stand close to it, a bearing placed at the point looks within
 3% of its old size in each of those three images, a point taken to a bearing and
 back looks within 1% of its old size, and with nothing to measure in the extents
 fall back to the observing distance and then to the numbers they had; a
-sighting moved four pixels off with the bar at two keeps its seed, carries
-`walked_px`, a `walked_to` within a pixel of where it was moved from and a
+sighting moved four pixels off with the bar at two grid px keeps its seed,
+carries `walked_px`, a `walked_to` within a pixel of where it was moved from and a
 `walked_zncc`, and is still scored there while the other seven move, and
 `sight_observation` at `walked_to` puts its keypoint there, pinned, with the
-walk fields gone; the bench's `max_shift_px` defaults to 8 while the cluster
-refinement's stays 3; a bearing taken
+walk fields gone; the bench's `max_shift_px` defaults to 6, the localizer's
+own search radius, while the cluster refinement's stays 3; a bearing taken
 down to the cluster stage and back up comes back a bearing at the size it was and
 commits as a `w = 0` row with a unit direction, a zero normal and a zero normal
 confidence, counted in the materialised value's `infinity_point_count`; and a

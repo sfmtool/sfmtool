@@ -129,7 +129,11 @@ pub struct ClusterMeasurement {
     /// disagreement is. `None` wherever `zncc` is; a single cell is
     /// `NaN` where the template is flat over it.
     pub zncc_grid: Option<[[f64; 3]; 3]>,
-    /// How far the refinement moved off the seed, in source-image px.
+    /// How far the refinement moved off the seed, in **patch-grid px**: the
+    /// drift in the seed's own keypoint frame, scaled to the template's grid
+    /// (`resolution` samples across `2 · radius` keypoint-frame units), so it is
+    /// measured in the unit [`Thresholds::max_shift_px`] and the self-similarity
+    /// radius are.
     pub shift_px: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in template-grid
     /// px.
@@ -339,8 +343,10 @@ pub struct TrackMeasurement {
     /// `NaN` where the consensus is flat over it.
     pub zncc_grid: Option<[[f64; 3]; 3]>,
     /// How far that correlation peak sits from the observation's own keypoint,
-    /// in source-image px: the observation's own evidence, and what
-    /// [`Thresholds::max_shift_px`] paints on.
+    /// in **patch-grid px** on the patch's plane: the observation's own
+    /// evidence, and what [`Thresholds::max_shift_px`] paints on. In the unit of
+    /// the self-similarity radius, so the two compare directly: a shift inside
+    /// the radius is within what the patch cannot tell apart.
     pub seed_shift_px: Option<f64>,
     /// How far the observation's keypoint sits from the point's projection, in
     /// source-image px: the number that says how far the **point** is off,
@@ -411,7 +417,7 @@ pub struct TrackMeasurement {
     pub zncc_self_similarity_tolerance: Option<f64>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
-    /// therefore kept, in source-image px.
+    /// therefore kept, in patch-grid px.
     ///
     /// **Present is the whole statement**: this sighting did not move, and the
     /// number says how far the kernel wanted to take it. The fit's kernels run
@@ -704,8 +710,13 @@ pub struct Thresholds {
     /// [`Self::max_keypoint_uncertainty`].
     pub min_zncc_middle: f64,
     /// How far the correlation peak may sit from where the observation sits, in
-    /// source-image px: [`ClusterMeasurement::shift_px`] at the cluster stage
+    /// **patch-grid px**: [`ClusterMeasurement::shift_px`] at the cluster stage
     /// and [`TrackMeasurement::seed_shift_px`] at the track stage.
+    ///
+    /// At the track stage it is also how far from each observation the
+    /// evaluation looks for the peak, so one number says how far a sighting may
+    /// be from where the correlation wants it, how far the evaluation looks, and
+    /// how far a fit may walk it.
     ///
     /// Both are the observation's **own** evidence. The bar is deliberately not
     /// judged on [`TrackMeasurement::projection_offset_px`], which is a verdict
@@ -724,13 +735,12 @@ pub struct Thresholds {
     pub min_relative_zncc: f64,
 }
 
-/// The bench's default [`Thresholds::max_shift_px`], in source-image px.
+/// The bench's default [`Thresholds::max_shift_px`], in patch-grid px.
 ///
-/// Separate from the cluster refinement's own `max_shift_px` (3 px), which
-/// stays the batch pass's bar. On the bench the same number bounds how far a
-/// fit may move a sighting from where the person put it, and 3 px kept
-/// sightings at their seeds that a person moving a patch by hand wanted moved.
-pub const BENCH_MAX_SHIFT_PX: f64 = 8.0;
+/// The keypoint localizer's own search radius, so a track's evaluation looks
+/// as far as the batch localizer does. Separate from the cluster refinement's
+/// own `max_shift_px` (3 source-image px), which stays the batch pass's bar.
+pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 
 /// The bench's default [`Thresholds::min_zncc`].
 ///

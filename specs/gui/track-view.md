@@ -97,8 +97,7 @@ pub struct PointTrackViewResponse {
 pub struct TrackEditResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
-    pub fit: bool,                   // at the radius the evaluation reads at
-    pub search_px: Option<f64>,      // the search px box released
+    pub fit: bool,
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -665,7 +664,8 @@ Five boxes, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
 maximum shift, maximum keypoint uncertainty and minimum relative ZNCC, so no bar
 is one only the wire can move. Each is its label and a number box: dragging the
 box left or right changes the bar (half a percent per point for the ZNCC bars,
-0.05 px per point for the shift, 0.005 per point for the keypoint uncertainty),
+0.05 grid px per point for the shift, 0.005 per point for the keypoint
+uncertainty),
 and clicking it takes a typed value. There is no slider rail beside it, since a
 rail would say nothing the box does not. The first four are the bars the painting reads;
 the fifth is the fraction of the track's own self-agreement a geometry search's view is
@@ -674,9 +674,15 @@ table's ZNCC column reads, so *min ZNCC (%)* and *min middle ZNCC (%)* both show
 70 on a new track while the track and the wire hold 0.7; a typed value may end
 in `%`. A middle bar of 0 turns it off, and a row with no middle reading clears
 it.
-`max shift px` is also the bound on how far a *Fit* may move a sighting
+*shift px*, the maximum shift, is in patch-grid px, the unit of the
+self-similarity radius, and 6 on a new track. It is three things at once, since
+they are one question -- how far from where a sighting is the correlation may
+put it: the bar the *Shift* column is painted by, the radius the evaluation
+looks for each peak within, so moving it evaluates the track again, and the
+bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
-fit's walk is bounded by the person's bar"), 8 px on a new track.
+fit's walk is bounded by the person's bar"). Its label's hover text says so.
+There is no separate search radius.
 
 **A box applies to the active track when it is let go.** Dragging one
 repaints the table live; releasing it sets the track's bars to where the five
@@ -702,18 +708,6 @@ no box is being dragged, so whatever moved them -- a release here,
 `apply_bench_track_thresholds` over the wire, an undo or redo of either, another
 item made active -- the boxes follow. Only during a drag do they hold a value
 the track does not.
-
-**Below them, one control that is not a threshold**: *search px*, how far from
-each observation's own pixel the evaluation looks for its correlation peak, in
-patch-grid px, starting at `EvaluateOptions::default`'s radius. It is an input
-to the evaluation rather than a bar the painting judges by, so it repaints
-nothing; it is the viewer's rather than a track's (`AppState::bench_search_px`),
-so it pushes no version and Undo does not reverse it. Like a threshold box it
-applies when it is let go or a typed value is committed, and then every track is
-evaluated again at the new radius. A *Fit* runs at it too, so a fit's numbers
-and the evaluation's are measured in one window. It is not greyed by a busy
-node: setting it is no step, and the evaluations it asks for wait until the
-node is free.
 
 #### The observation table
 
@@ -744,12 +738,12 @@ that is not there prints a bare `-`, with no unit.
 | Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row | same |
 | Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp |
 | Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
-| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, over the middle ZNCC, then the ZNCC grid |
-| Seed sh. | how far the refinement moved off the seed: `1.20 px` | how far that peak sits from the observation's own keypoint |
+| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | σ_pos | the tile's deprecated localizability over its middle square's: `0.08 px whole` over `0.12 px mid`, then the localizability grid | the same |
 | Self-similarity | the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
-| Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
+| Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within *shift px*, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
+| Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which says the difference
@@ -843,9 +837,9 @@ the track has left. When the track cannot be evaluated or its evaluation
 failed, every number cell reads `-` and every Status cell `not evaluated`, and
 the toolbar says why.
 
-**The two distances are two columns because they are two questions.** *Seed sh.*
+**The two distances are two columns because they are two questions.** *Shift*
 is the sighting's own evidence, where the correlation would rather sit, and is
-what the `max shift px` bar paints on. *Proj. err* is a statement about
+what the *shift px* bar paints on. *Proj. err* is a statement about
 the point: a mis-triangulated track shows a column of large errors beside a
 column of near-zero shifts, the picture that says the position is wrong and the
 sightings are not.
@@ -864,7 +858,7 @@ a ZNCC has one of core's `Unmeasured` reasons behind it, and the cell prints tha
 sentence (`it sits off the photograph`, `its ray grazes the patch`, `its seed
 sits 2,483 px from the projection, beyond the 64 px bound`) elided to its
 column. **It also names the walk a fit refused**: a sighting the fit's kernels
-wanted to carry further than the `max shift px` bar kept its seed
+wanted to carry further than the *shift px* bar kept its seed
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), which a person reading `localized`
 would get wrong, so the walk comes first among a scored row's answers. The
@@ -1108,7 +1102,7 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   cells following the stage; every row's tile at both stages,
   and a fresh row's cut around its seed; the boxes showing the track's
   bars outside a drag, following them when a step, an undo or a redo moves them,
-  and re-seating on another item; a drag of *max shift px* pushing exactly one
+  and re-seating on another item; a drag of *shift px* pushing exactly one
   version and one row on its release, with the track's bar where it was let go
   and an undo taking bar and box back; no *Apply thresholds* button drawn; a
   fit after a release to a zero bar keeping sightings at their seeds, *Accept

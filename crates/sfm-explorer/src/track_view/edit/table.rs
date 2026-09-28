@@ -113,9 +113,7 @@ impl ColumnLayout {
         let zncc = name + 130.0;
         // Room for `100% whole`, then the ZNCC grid.
         let zncc_grid = zncc + 80.0;
-        let shift = zncc_grid + GRID_SIDE + 10.0;
-        // Room for `12.25 px`.
-        let offset = shift + 62.0;
+        let offset = zncc_grid + GRID_SIDE + 10.0;
         // Room for the error in px over the same residual in degrees,
         // `12.65 px` over `0.08°`.
         let sigma = offset + 66.0;
@@ -126,7 +124,10 @@ impl ColumnLayout {
         let self_similarity_grid = self_similarity + 88.0;
         // Then the core's surface plot.
         let self_similarity_plot = self_similarity_grid + GRID_SIDE + 8.0;
-        let status = self_similarity_plot + PLOT_SIDE + 10.0;
+        // The shift sits beside the status, which says what a fit did with a
+        // shift past the bar. Room for `12.25 px`.
+        let shift = self_similarity_plot + PLOT_SIDE + 10.0;
+        let status = shift + 62.0;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
@@ -162,10 +163,10 @@ impl ColumnLayout {
             ),
             (self.name, "Name", "The image's file name."),
             (self.zncc, "ZNCC", ZNCC_TIP),
-            (self.shift, "Seed sh.", SEED_SHIFT_TIP),
             (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
             (self.sigma, "\u{3c3}_pos", SIGMA_POS_TIP),
             (self.self_similarity, "Self-similarity", SELF_SIMILARITY_TIP),
+            (self.shift, "Shift", SHIFT_TIP),
             (self.status, "Status", STATUS_TIP),
             (self.from, "From", FROM_TIP),
         ]
@@ -196,8 +197,16 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
     At the cluster stage the match is against the reference's template. At the track stage it \
     is against the consensus of the other observations, with this one left out.";
 
-const SEED_SHIFT_TIP: &str = "How far the correlation peak sits from where the observation \
-    sits, in source-image pixels: the observation's own evidence. The max shift px bar judges it.";
+/// The shift heading's hover text.
+pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where the \
+    observation sits, in patch-grid pixels, the unit of the self-similarity radius: the \
+    observation's own evidence of where it belongs.\n\n\
+    At the track stage the evaluation looks for the peak within the shift px bar of the \
+    sighting, against the consensus of the others, and moves nothing. A shift inside the \
+    self-similarity radius is within what the patch cannot tell apart; one beyond it says the \
+    other photographs want the sighting moved. A fit moves it, up to the bar.\n\n\
+    At the cluster stage it is how far the refinement moved the member off its seed.\n\n\
+    The shift px bar judges it.";
 
 /// The projection error heading's hover text.
 pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels over the \
@@ -1035,7 +1044,7 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
         _ => "not scored".to_string(),
     };
     Some(format!(
-        "Move this sighting {:.1} px to ({:.1}, {:.1}), where the last fit's walk \
+        "Move this sighting {:.1} grid px, to ({:.1}, {:.1}), where the last fit's walk \
          would have put it. ZNCC {} at the seed, {} at the walked peak. Pins it, \
          as a hand placement does.",
         m.walked_px.unwrap_or(f64::NAN),

@@ -583,11 +583,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "max_shift_px",
                         threshold_schema(
                             "How far the correlation peak may sit from where the observation \
-                             sits, in source-image px: the refinement's drift from the seed at \
-                             the cluster stage, seed_shift_px at the track stage. At the track \
-                             stage it is also how far fit_bench_track may move a sighting; one \
-                             it would move further keeps its place and reports walked_px and \
-                             walked_to. The bench's default is 8.",
+                             sits, in patch-grid px: the refinement's drift from the seed \
+                             (shift_px) at the cluster stage, seed_shift_px at the track stage. \
+                             At the track stage it is also the radius the evaluation looks for \
+                             each peak within, so moving it evaluates the track again, and how \
+                             far fit_bench_track may move a sighting; one it would move further \
+                             keeps its place and reports walked_px and walked_to. The bench's \
+                             default is 6, the keypoint localizer's own search radius.",
                         ),
                     ),
                     (
@@ -681,32 +683,6 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "set_bench_search_px",
-            description: "Set how far around each observation the bench's evaluation looks for \
-                          the correlation peak, in patch-grid px: Track View's search px box. \
-                          It is the viewer's setting rather than a track's, so it pushes no \
-                          version and undo does not reverse it; every track on every bench is \
-                          evaluated again at the new radius. There is no call that evaluates a \
-                          track: every change to a track, to the reconstruction under it or to \
-                          this radius evaluates it again on a worker, and get_bench_track \
-                          reports under evaluation whether the numbers it returns are current \
-                          or an evaluation of the current inputs is still running.",
-            kind: Write,
-            schema: object(
-                &[],
-                &[(
-                    "search_px",
-                    json!({
-                        "type": "number",
-                        "exclusiveMinimum": 0,
-                        "description":
-                            "The radius, in patch-grid px. A wider window finds a feature the \
-                             sighting sits further from, and says so in seed_shift_px.",
-                    }),
-                )],
-            ),
-        },
-        ToolSpec {
             name: "fit_bench_track",
             description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
                           the track stage it localizes every sighting against the patch, \
@@ -716,8 +692,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is dropped by a gate: a sighting that does not belong is turned out \
                           with set_bench_track_verdict or by the thresholds, not deleted from \
                           the evidence. The fit ends by evaluating its own result, and the \
-                          track is then evaluated again at the viewer's search radius like \
-                          after any other change. Refused for a track stage with fewer than two \
+                          track is then evaluated again like after any other change. Refused for a track stage with fewer than two \
                           in observations, which an evaluation permits. It runs on a worker \
                           thread, so a fit still going after 200 ms replies with running: true \
                           and an operation_id to poll with get_background_task instead of the \
@@ -725,10 +700,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           demand.",
             kind: Write,
             schema: object(
-                &[
-                    ("track", bench_track_schema()),
-                    ("search_px", search_px_schema()),
-                ],
+                &[("track", bench_track_schema())],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },

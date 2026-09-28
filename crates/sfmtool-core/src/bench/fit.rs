@@ -44,8 +44,8 @@ use super::classify::{
 };
 use super::evaluate::{
     check_observation_views, check_views, evaluate, evaluate_cluster, evaluated, finite,
-    open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError, EvaluateOptions,
-    EvaluateReport,
+    grid_distance, open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError,
+    EvaluateOptions, EvaluateReport,
 };
 use super::track::{EditableTrack, Stage, StageKind, TrackPayload};
 
@@ -707,7 +707,10 @@ pub(super) fn fit_track(
         measurement.walked_zncc_grid = None;
         measurement.keypoint = match fits.get(&i) {
             Some(fit) => {
-                let walked = seed.map(|s| (fit.keypoint[0] - s[0]).hypot(fit.keypoint[1] - s[1]));
+                // In grid px, the unit of the bar.
+                let view = &images[track.observations[i].image as usize];
+                let walked =
+                    seed.map(|s| grid_distance(frame, view, s, fit.keypoint, &options.localize));
                 match (walked, seed) {
                     (Some(walked), Some(seed)) if walked.is_finite() && walked > bound => {
                         // Where the walk would have gone and what it scored

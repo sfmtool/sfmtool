@@ -507,18 +507,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
     },
-    /// Set the radius every bench track is evaluated at, in patch-grid px.
-    SetBenchSearchPx {
-        search_px: f64,
-    },
     /// Fit the track at the stage it is in, on a worker: the step that moves
     /// it, and which ends by reading its own result.
     FitBenchTrack {
         reconstruction_label: String,
         track: Option<String>,
-        /// The search radius the fit runs at, or `None` for the one the live
-        /// evaluation reads at.
-        search_px: Option<f64>,
     },
     /// Move the track between its two representations, on a worker.
     SetBenchTrackStage {
@@ -1561,14 +1554,10 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             track.as_deref(),
         )),
-        Command::SetBenchSearchPx { search_px } => {
-            done(bench::set_bench_search_px(state, search_px))
-        }
         Command::FitBenchTrack {
             reconstruction_label,
             track,
-            search_px,
-        } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref(), search_px),
+        } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref()),
         Command::SetBenchTrackStage {
             reconstruction_label,
             track,

@@ -98,7 +98,6 @@ impl Command {
             Command::SplitBenchTrack { .. } => "split_bench_track",
             Command::SelectBenchObservations { .. } => "select_bench_observations",
             Command::CommitBenchTrack { .. } => "commit_bench_track",
-            Command::SetBenchSearchPx { .. } => "set_bench_search_px",
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
@@ -337,7 +336,6 @@ impl Command {
             | Command::SetBenchTrackVerdict { .. }
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }
-            | Command::SetBenchSearchPx { .. }
             | Command::FitBenchTrack { .. }
             | Command::SetBenchTrackStage { .. }
             | Command::SearchBenchTrackDescriptors { .. }

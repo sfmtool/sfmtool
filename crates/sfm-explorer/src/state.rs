@@ -733,15 +733,6 @@ pub struct AppState {
     /// [`crate::bench::live`].
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
 
-    /// How far around each observation a bench evaluation looks for its
-    /// correlation peak, in patch-grid px: Track View's *search px* box.
-    ///
-    /// A setting of the viewer rather than of any track, so it is kept here
-    /// for the session, pushes no version and is not undone. It is one of an
-    /// evaluation's inputs, so moving it evaluates every track again, and a
-    /// *Fit* runs at it too.
-    pub(crate) bench_search_px: f64,
-
     /// Which observations of the active bench track are selected: Track
     /// View's highlighted rows, which *Split off N rows* reads and the 3D
     /// viewer's bench figure draws larger when there is exactly one.
@@ -855,7 +846,6 @@ impl AppState {
             next_operation_id: 1,
             wake: None,
             bench_evaluations: Default::default(),
-            bench_search_px: crate::bench::default_search_px(),
             bench_rows: None,
         }
     }

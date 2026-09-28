@@ -640,9 +640,7 @@ fn a_photometric_step_decodes_on_the_worker() {
     state.action_log.clear();
     let before = versions(&state, id);
 
-    state
-        .start_bench_fit(id, &label, None)
-        .expect("the task started");
+    state.start_bench_fit(id, &label).expect("the task started");
     assert!(
         state.background_task().is_some(),
         "the step read the photographs here instead of deferring"
@@ -949,7 +947,7 @@ fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report
     let label = put_on_bench(&mut state, id);
     state.action_log.clear();
     state
-        .start_bench_fit(id, &label, None)
+        .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
     state.finish_background_task();
 

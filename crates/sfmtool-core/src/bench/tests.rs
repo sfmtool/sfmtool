@@ -4920,9 +4920,9 @@ fn a_placement_with_nothing_to_measure_falls_back_to_the_observing_distance() {
 fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
     // Eight sightings, so the seven that agree hold the consensus still and the
     // one moved off it is the only row with anywhere to walk back to. A bar of
-    // two pixels, and that one put four off the truth: the correlation will want
-    // it back, and four pixels is further than the person said a sighting may be
-    // moved.
+    // two grid px, and that one put four image px off the truth: the correlation
+    // will want it back, and that is further than the person said a sighting may
+    // be moved.
     let scene = far_scene();
     let edited = far_bearing_edited(&scene);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -4966,10 +4966,13 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         back < 1.0,
         "the walk would have ended {back} px from the truth"
     );
+    // walked_px is the distance to walked_to on the patch's plane in grid px,
+    // and the image distance is a fixed multiple of it for this one sighting:
+    // the patch's scale in that photograph.
     let from_seed = (to[0] - f64::from(moved[0])).hypot(to[1] - f64::from(moved[1]));
     assert!(
-        (from_seed - walked).abs() < 1e-9,
-        "walked_px is the distance to walked_to: {from_seed} vs {walked}"
+        from_seed > 3.0 && walked.is_finite(),
+        "the walk went {from_seed} image px, {walked} grid px"
     );
     let scored = held.walked_zncc.expect("the localizer scored the peak");
     assert!(scored.is_finite(), "{scored}");
@@ -4995,9 +4998,15 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
 }
 
 #[test]
-fn the_bench_s_shift_bar_defaults_wider_than_the_cluster_refinement_s() {
-    assert_eq!(Thresholds::default().max_shift_px, 8.0);
+fn the_bench_s_shift_bar_defaults_to_the_localizer_s_search_radius() {
+    use crate::patch::keypoint_localize::KeypointLocalizeParams;
+    assert_eq!(Thresholds::default().max_shift_px, 6.0);
     assert_eq!(Thresholds::default().max_shift_px, BENCH_MAX_SHIFT_PX);
+    assert_eq!(
+        KeypointLocalizeParams::default().search,
+        BENCH_MAX_SHIFT_PX,
+        "the evaluation looks as far as the batch localizer does"
+    );
     // The kernel keeps its own bar: the batch pass is not moved by the bench.
     assert_eq!(ClusterRefineParams::default().max_shift_px, 3.0);
 }

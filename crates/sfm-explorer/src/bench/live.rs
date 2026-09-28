@@ -12,13 +12,13 @@
 //!
 //! **What an evaluation reads** is exactly what
 //! [`AppState::bench_evaluate_job`] captures, and [`Inputs`] holds the same
-//! things: the track value, the document half of the version it stands in (the
-//! poses and the camera intrinsics the kernels project with), and the search
-//! radius. Every edit to a track gives it a new `Arc`, every edit to the
-//! document half gives the version a new document serial, and the radius is
-//! [`AppState::bench_search_px`]. So there is no list of steps that have to
-//! remember to ask for an evaluation: a step changes one of the three and the
-//! next frame sees that no evaluation matches. Undo and redo land on another
+//! things: the track value and the document half of the version it stands in
+//! (the poses and the camera intrinsics the kernels project with). The search
+//! radius is the track's own `max_shift_px`, so it is part of the track value.
+//! Every edit to a track gives it a new `Arc`, and every edit to the document
+//! half gives the version a new document serial. So there is no list of steps
+//! that have to remember to ask for an evaluation: a step changes one of the
+//! two and the next frame sees that no evaluation matches. Undo and redo land on another
 //! version, which is the same case.
 //!
 //! **One evaluation runs at a time.** When an input changes while one runs, it
@@ -63,9 +63,6 @@ pub(crate) struct Inputs {
     /// The version whose document half the track is read against: the poses
     /// and the camera intrinsics.
     document: VersionSerial,
-    /// How far around each observation the correlation peak is looked for, in
-    /// patch-grid px.
-    search_px: f64,
 }
 
 impl Inputs {
@@ -75,7 +72,6 @@ impl Inputs {
             && self.item == other.item
             && Arc::ptr_eq(&self.track, &other.track)
             && self.document == other.document
-            && self.search_px.to_bits() == other.search_px.to_bits()
     }
 }
 
@@ -177,26 +173,6 @@ impl AppState {
             .is_some_and(|current| current.same(&running.inputs))
     }
 
-    /// The radius the bench's evaluation searches within, in patch-grid px.
-    pub(crate) fn bench_search_px(&self) -> f64 {
-        self.bench_search_px
-    }
-
-    /// Set the radius the bench's evaluation searches within. Every track's
-    /// measurements then stand for another radius, so each is evaluated again.
-    ///
-    /// Not a step: the radius is a setting of the viewer rather than part of
-    /// any track, so it pushes no version and Undo does not reverse it.
-    pub(crate) fn set_bench_search_px(&mut self, search_px: f64) -> Result<(), String> {
-        if !(search_px.is_finite() && search_px > 0.0) {
-            return Err(format!(
-                "The search radius has to be a positive number of px, not {search_px}."
-            ));
-        }
-        self.bench_search_px = search_px;
-        Ok(())
-    }
-
     /// Install a finished evaluation, and start or stop one so that the
     /// evaluation running is of current inputs.
     ///
@@ -217,7 +193,7 @@ impl AppState {
         };
         let key = (inputs.node, inputs.item.clone());
         let started = self
-            .bench_evaluate_job(inputs.node, &inputs.item, inputs.search_px)
+            .bench_evaluate_job(inputs.node, &inputs.item)
             .and_then(|job| self.spawn_evaluation(inputs.clone(), job));
         if let Err(message) = started {
             self.bench_evaluations
@@ -328,7 +304,6 @@ impl AppState {
             item: item.to_string(),
             track: Arc::clone(track),
             document: node.history.current_version().document_serial,
-            search_px: self.bench_search_px,
         })
     }
 

@@ -252,16 +252,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           empty on a track that is not active), and every observation with what put it \
                           there, the verdict on it, where it sits and whatever each stage has \
                           measured about it. The measurements are kept evaluated: every change \
-                          to the track, to the reconstruction under it or to the search radius \
-                          (set_bench_search_px) evaluates it again on a worker, with no call to \
-                          ask for it. evaluation.state says which numbers these are: current \
+                          to the track, its max_shift_px bar among them since that is the radius \
+                          each peak is looked for within, or to the reconstruction under it \
+                          evaluates it again on a worker, with no call to ask for it. evaluation.state says which numbers these are: current \
                           when they are the evaluation of the track as it stands, evaluating \
                           when an evaluation of the current inputs is running or about to start \
                           (evaluation.running says which) and the numbers are the previous \
                           evaluation's, so read again until it says current; refused or failed \
                           with evaluation.reason when the \
-                          track cannot be evaluated as it stands. evaluation.search_px is the \
-                          radius it reads at. An observation's pixel is where it sits whether or \
+                          track cannot be evaluated as it stands. An observation's pixel is where it sits whether or \
                           not anything has measured it: the track-stage keypoint, else the \
                           refined cluster position, else the seed it was proposed at. So a \
                           observation a search has just added says where it is without being \

@@ -2079,7 +2079,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         &mut state,
         &mut viewer,
         "fit_bench_track",
-        json!({ "reconstruction_label": "run_a", "track": item, "search_px": 8.0 }),
+        json!({ "reconstruction_label": "run_a", "track": item }),
     );
     assert!(
         fitted["report"]
@@ -2434,10 +2434,6 @@ fn the_reads_say_whether_the_numbers_are_current_and_the_radius_is_an_input() {
     };
     let evaluation = read(&mut state, &mut viewer);
     assert_eq!(evaluation["state"], json!("evaluating"), "{evaluation}");
-    assert_eq!(
-        evaluation["search_px"],
-        json!(crate::bench::default_search_px())
-    );
     assert!(evaluation["reason"].is_null(), "{evaluation}");
 
     state.settle_bench_evaluation();
@@ -2454,29 +2450,24 @@ fn the_reads_say_whether_the_numbers_are_current_and_the_radius_is_an_input() {
         "{bench}"
     );
 
-    // The radius is the viewer's: no version, and every track reads again.
+    // The search radius is the track's shift bar: moving it is one version,
+    // and the track reads again.
+    assert!(
+        tools::parse("set_bench_search_px", None).is_err(),
+        "the search radius tool is still on the wire"
+    );
     let before = version_count(&state);
-    let set = call(
+    call(
         &mut state,
         &mut viewer,
-        "set_bench_search_px",
-        json!({ "search_px": 7.5 }),
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "track": item, "max_shift_px": 7.5 }),
     );
-    assert_eq!(set["search_px"], json!(7.5), "{set}");
-    assert_eq!(version_count(&state), before, "the radius pushed a version");
+    assert_eq!(version_count(&state), before + 1);
     let evaluation = read(&mut state, &mut viewer);
     assert_eq!(evaluation["state"], json!("evaluating"), "{evaluation}");
-    assert_eq!(evaluation["search_px"], json!(7.5), "{evaluation}");
     state.settle_bench_evaluation();
     assert_eq!(read(&mut state, &mut viewer)["state"], json!("current"));
-
-    let refusal = refused_call(
-        &mut state,
-        &mut viewer,
-        "set_bench_search_px",
-        json!({ "search_px": -1.0 }),
-    );
-    assert!(refusal.0.contains("positive"), "{refusal}");
 }
 
 // ── Create Track Here ───────────────────────────────────────────────────

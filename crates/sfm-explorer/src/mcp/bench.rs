@@ -194,7 +194,6 @@ fn evaluation(state: &AppState, id: ReconId, item: &str) -> Value {
         "state": evaluation.name(),
         "reason": evaluation.reason(),
         "running": state.bench_evaluation_running(id, item),
-        "search_px": state.bench_search_px(),
     })
 }
 
@@ -1097,32 +1096,15 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
     })
 }
 
-/// `set_bench_search_px`: the radius every bench track is evaluated at.
-///
-/// Not a step on any node: the radius is the viewer's, as the slider's
-/// position is, so it pushes no version and writes no Action Log row, and the
-/// reply is the radius read back.
-pub(super) fn set_bench_search_px(state: &mut AppState, search_px: f64) -> JsonReply {
-    state
-        .set_bench_search_px(search_px)
-        .map_err(ToolError::new)?;
-    Ok(json!({ "search_px": state.bench_search_px() }))
-}
-
 /// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
 /// back, on a worker thread.
-pub(super) fn fit_bench_track(
-    state: &mut AppState,
-    label: &str,
-    named: Option<&str>,
-    search_px: Option<f64>,
-) -> Outcome {
+pub(super) fn fit_bench_track(state: &mut AppState, label: &str, named: Option<&str>) -> Outcome {
     let (id, item) = match target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
     let since = state.action_log.revision();
-    match state.start_bench_fit(id, &item, search_px) {
+    match state.start_bench_fit(id, &item) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started(state, id, since),
     }

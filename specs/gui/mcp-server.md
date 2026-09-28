@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Eighty-one tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-five
+Eighty tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-four
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -177,7 +177,6 @@ write, and one writes a file.
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
-| `set_bench_search_px` | write | Set how far around each observation the bench's evaluation looks, which evaluates every track again at it; the viewer's setting, so no version |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
@@ -189,7 +188,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-five writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2491,7 +2490,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-three tools that read and work the **bench** beside a node
+Thirty-two tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -2660,12 +2659,12 @@ returning: `current` when they are the evaluation of the track as it stands,
 `evaluating` when an evaluation of the current inputs is running or waits to
 start (`running` says which) and the numbers are the previous evaluation's,
 `refused` or `failed` with the `reason`. An agent that has just made a step
-reads again until `state` is `current`. `set_bench_search_px` sets how far from
-each observation's own pixel the correlation peak is looked for, for every
-track at once; it is the viewer's setting, as Track View's *search px* box
-is, so it pushes no version, and the reply is the radius. `fit_bench_track` is
-the step that moves a track, and it ends by evaluating its own result. It takes
-its own `search_px`, defaulting to the viewer's. A fit of a track-stage track
+reads again until `state` is `current`. How far from each observation's own
+pixel the correlation peak is looked for is the track's `max_shift_px` bar, set
+with `apply_bench_track_thresholds`, so it is one version and moving it
+evaluates the track again; there is no separate search radius.
+`fit_bench_track` is the step that moves a track, and it ends by evaluating its
+own result. A fit of a track-stage track
 with fewer than two `in` observations is refused where an evaluation of the
 same track is not.
 
@@ -2731,7 +2730,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-three are the patch a track is**, and they are the
+**Eight of the thirty-two are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -2831,7 +2830,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the thirty-three are about the index files**, the node's SIFT index and
+**Four of the thirty-two are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -3766,10 +3765,10 @@ where a test hands no host over.
   `get_background_task` reports afterwards, with the reads reporting
   `evaluation.state` as `evaluating` until the evaluation that follows lands and
   `current` after it, and the measurements reaching the wire under the
-  observation indexes they were computed for. `set_bench_search_px` answers with
-  the radius, pushes no version and makes the track `evaluating` at it, a
-  radius that is not positive is refused, and `evaluate_bench_track` is not a
-  tool. A stage change states its stage **once**; a fit on a node with nothing
+  observation indexes they were computed for. Moving `max_shift_px` with
+  `apply_bench_track_thresholds` pushes one version and makes the track
+  `evaluating`, and neither `set_bench_search_px` nor `evaluate_bench_track` is
+  a tool. A stage change states its stage **once**; a fit on a node with nothing
   decoded still defers, and past the reply window answers with the handle; a
   step the **track**
   rules out refuses inline in the step's own sentence, starting no task and
@@ -3822,7 +3821,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-one tools**, fifteen of them reads and one of them
+- **The catalog is eighty tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

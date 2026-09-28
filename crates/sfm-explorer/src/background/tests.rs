@@ -525,7 +525,7 @@ fn real_task(operation: Operation) -> RealTask {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
-                "Fit track" => state.bench_fit_job(id, &label, None),
+                "Fit track" => state.bench_fit_job(id, &label),
                 _ => state.bench_stage_job(id, &label, StageKind::Cluster),
             }
             .expect("the fixture's track is readable");

@@ -58,12 +58,8 @@ pub struct TrackEditResponse {
     pub discard: Option<String>,
     /// *Rename* was committed: the item, and the label it should take.
     pub rename: Option<(String, String)>,
-    /// *Fit*, which runs at the radius the live evaluation reads at.
+    /// *Fit*.
     pub fit: bool,
-    /// The *search px* box was released, or a value typed into it was
-    /// committed: the radius the bench's evaluation should read at. Set only
-    /// when it differs from the viewer's own.
-    pub search_px: Option<f64>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// A threshold box was released, or a value typed into one was
@@ -188,15 +184,6 @@ pub struct TrackEdit {
     /// refusal is asked every frame, in front of this, because that one is free
     /// and does move.
     build_refusal: Option<(ReconId, Option<String>)>,
-    /// Where the *search px* box stands, in patch-grid px.
-    ///
-    /// The viewer's own radius ([`AppState::bench_search_px`]), copied on
-    /// every frame the box is not being dragged, as the threshold boxes
-    /// copy the track's bars. A release hands the new radius to the dock, and
-    /// every track is then evaluated again at it.
-    search_px: f64,
-    /// Whether the *search px* box was being dragged on the last frame.
-    searching: bool,
     /// Where the active track's evaluation stood when this frame drew it:
     /// what the status at the head of the toolbar says, and how the rows print
     /// their numbers.
@@ -238,8 +225,6 @@ impl TrackEdit {
             plots: HashMap::new(),
             rows: Vec::new(),
             build_refusal: None,
-            search_px: crate::bench::default_search_px(),
-            searching: false,
             evaluation: Evaluation::Evaluating,
             lock: true,
             scroll_offset_y: None,
@@ -256,12 +241,6 @@ impl TrackEdit {
     #[cfg(test)]
     pub(crate) fn thresholds(&self) -> &Thresholds {
         &self.thresholds
-    }
-
-    /// Where the search control stands, in patch-grid px.
-    #[cfg(test)]
-    pub(crate) fn search_px(&self) -> f64 {
-        self.search_px
     }
 
     /// Where the active track's evaluation stood when the panel last drew it.
@@ -324,9 +303,6 @@ impl TrackEdit {
 
         self.showing = Some((id, label.clone()));
         self.reseat_thresholds(track);
-        if !self.searching {
-            self.search_px = state.bench_search_px();
-        }
         self.evaluation = state
             .bench_evaluation(id, &label)
             .unwrap_or(Evaluation::Evaluating);
@@ -352,7 +328,6 @@ impl TrackEdit {
         // frame's value from the next frame on, which is the frame the dock
         // has applied it by.
         response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
-        response.search_px = self.show_search_px(ui, state.bench_search_px());
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
@@ -524,12 +499,14 @@ impl TrackEdit {
                     MIN_ZNCC_MIDDLE_LABEL,
                     percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
                 ),
+                // In patch-grid px, and also the radius the evaluation looks
+                // for each peak within.
                 (
                     MAX_SHIFT_LABEL,
                     egui::DragValue::new(&mut bars.max_shift_px)
-                        .range(0.0..=20.0)
+                        .range(0.0..=24.0)
                         .speed(0.05)
-                        .max_decimals(2),
+                        .max_decimals(1),
                 ),
                 (
                     "max \u{3c3}_pos",
@@ -547,7 +524,10 @@ impl TrackEdit {
                 ),
             ];
             for (label, value) in boxes {
-                ui.add_enabled(enabled, egui::Label::new(label));
+                let named = ui.add_enabled(enabled, egui::Label::new(label));
+                if label == MAX_SHIFT_LABEL {
+                    named.on_hover_text(MAX_SHIFT_TIP);
+                }
                 // A typed value lands when the field is left, not per
                 // keystroke, so typing "90" is one version and not two.
                 let r = ui.add_enabled(enabled, value.update_while_editing(false));
@@ -566,40 +546,6 @@ impl TrackEdit {
         self.sliding = sliding;
         (released && !sliding && self.thresholds != track.thresholds)
             .then(|| self.thresholds.clone())
-    }
-
-    /// The *search px* box: how far around each observation the evaluation
-    /// looks for its correlation peak. Its release, or a typed value's commit,
-    /// hands back the radius to set; `None` on every other frame, and on a
-    /// release that left it at `current`.
-    ///
-    /// Not a threshold: it is an input to the evaluation rather than a bar the
-    /// painting judges by, which is why it stands on a row of its own, and it
-    /// applies to every track rather than to the active one. Never greyed by a
-    /// busy node, because setting it is no step on the node: the evaluations
-    /// it asks for wait until the node is free.
-    fn show_search_px(&mut self, ui: &mut egui::Ui, current: f64) -> Option<f64> {
-        let r = ui
-            .horizontal(|ui| {
-                ui.label(SEARCH_PX_LABEL);
-                ui.add(
-                    egui::DragValue::new(&mut self.search_px)
-                        .range(1.0..=24.0)
-                        .speed(0.05)
-                        .max_decimals(1)
-                        .update_while_editing(false),
-                )
-            })
-            .inner
-            .on_hover_text(
-                "How far around each observation the evaluation looks for the correlation \
-                 peak, in patch-grid px. Every track is evaluated again at it when it is \
-                 released",
-            );
-        self.searching = r.dragged();
-        let released = r.drag_stopped() || (r.changed() && !r.dragged());
-        (released && !self.searching && self.search_px.to_bits() != current.to_bits())
-            .then_some(self.search_px)
     }
 
     /// Put the boxes where the active track's own bars are, unless a box
@@ -1028,9 +974,16 @@ fn parse_percent(text: &str) -> Option<f64> {
     number.parse::<f64>().ok().map(|v| v / 100.0)
 }
 
-/// The maximum-shift box's label: the bar the painting judges a seed shift
-/// by and the bound on how far a fit may move a sighting.
-pub(crate) const MAX_SHIFT_LABEL: &str = "max shift px";
+/// The shift box's label: the bar the painting judges a shift by, the radius
+/// the evaluation looks for each peak within, and the bound on how far a fit
+/// may move a sighting.
+pub(crate) const MAX_SHIFT_LABEL: &str = "shift px";
+
+/// The shift box's hover text.
+const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-grid px: how \
+    far the correlation peak may sit from where the sighting is. The evaluation looks for each \
+    peak within this distance, a row whose peak is further is painted out, and a fit moves no \
+    sighting further than this.";
 
 /// A kept-at-seed row's menu entry, which puts the sighting where the fit's
 /// walk would have taken it.
@@ -1051,10 +1004,6 @@ pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
 /// The track-stage geometry search entry. It is separate from the SIFT label
 /// because it reads poses and photographs, and requires no descriptor index.
 pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
-
-/// The *search px* box's label, in one constant so the tests aim at the
-/// label drawn.
-pub(crate) const SEARCH_PX_LABEL: &str = "search px";
 
 /// What the toolbar says while an evaluation of the active track's current
 /// inputs is running or waiting to start, and what each row's status cell says
@@ -1386,7 +1335,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
                 // two numbers a person accepting the walk or not decides by.
                 match m {
                     Some(m) if m.walked_px.is_some() => format!(
-                        "walked {:.0} px{}, kept at seed",
+                        "walked {:.0} grid px{}, kept at seed",
                         m.walked_px.expect("just matched"),
                         match m.walked_zncc {
                             Some(z) if z.is_finite() => format!(

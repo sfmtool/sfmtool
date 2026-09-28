@@ -527,20 +527,17 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
 
 /// Evaluation is live, so there is no *Evaluate* button: the toolbar offers
 /// *Fit*, which moves the track, and says where the evaluation of the track as
-/// it stands is. The search radius is a control of its own beside the
-/// threshold boxes -- an input to the evaluation rather than a bar the
-/// painting judges by.
+/// it stands is. There is no search radius control: the evaluation looks
+/// within the *shift px* bar.
 #[test]
 fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
     let (mut state, _, _, mut panel, ctx) = on_the_bench();
-    assert_eq!(
-        panel.search_px(),
-        crate::bench::default_search_px(),
-        "the control starts where core's own evaluation does"
-    );
-
     let texts = painted(&mut panel, &ctx, &state, Vec::new());
-    for label in ["Fit", super::SEARCH_PX_LABEL, super::EVALUATING_LABEL] {
+    assert!(
+        !texts.iter().any(|t| t == "search px"),
+        "the search px box is still drawn: {texts:?}"
+    );
+    for label in ["Fit", super::MAX_SHIFT_LABEL, super::EVALUATING_LABEL] {
         assert!(
             texts.iter().any(|t| t == label),
             "{label} is not in the toolbar: {texts:?}"
@@ -1024,7 +1021,7 @@ fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
     );
 
     state
-        .start_bench_fit(id, &label, None)
+        .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
     state.finish_background_task();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
@@ -1540,7 +1537,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     };
     let current = crate::bench::live::Evaluation::Current;
     let cells = super::measurements(&walked, StageKind::Track, &current);
-    assert_eq!(cells[5], "walked 19 px, kept at seed");
+    assert_eq!(cells[5], "walked 19 grid px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
@@ -1548,7 +1545,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
         super::measurements(&scored, StageKind::Track, &current)[5],
-        "walked 19 px (ZNCC 87% / 41% there), kept at seed"
+        "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
     );
 
     // The same row without the flag is the ordinary scored row.

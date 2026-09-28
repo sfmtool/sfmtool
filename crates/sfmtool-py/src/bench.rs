@@ -1384,16 +1384,13 @@ fn fit_report_dict<'py>(py: Python<'py>, report: &FitReport) -> PyResult<Bound<'
 }
 
 /// The reading options a call runs with: the defaults, with the caller's own
-/// search radius and memory bounds where they named them.
+/// memory bounds where they named them. The search radius is the track's own
+/// ``max_shift_px``.
 fn evaluate_options(
-    search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
 ) -> EvaluateOptions {
     let mut options = EvaluateOptions::default();
-    if let Some(search_px) = search_px {
-        options.search_px = search_px;
-    }
     if let Some(max_seed_offset_px) = max_seed_offset_px {
         options.max_seed_offset_px = max_seed_offset_px;
     }
@@ -1404,10 +1401,9 @@ fn evaluate_options(
 }
 
 /// The fit options a call runs with. The reading the fit ends with takes the
-/// same search radius and the same bounds, so a fit and an `evaluate` of its
-/// result are stated in one set of terms.
+/// same bounds, so a fit and an `evaluate` of its result are stated in one set
+/// of terms.
 fn fit_options(
-    search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     noise_floor_px: Option<f64>,
@@ -1415,7 +1411,7 @@ fn fit_options(
     residual_margin: Option<f64>,
 ) -> FitOptions {
     let mut options = FitOptions {
-        evaluate: evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
+        evaluate: evaluate_options(max_seed_offset_px, max_cache_bytes),
         ..FitOptions::default()
     };
     if let Some(noise_floor_px) = noise_floor_px {
@@ -1469,8 +1465,9 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// far the *point* is off), the reprojection error, the ray angle, and its tile's
 /// deprecated localizability and ZNCC self-similarity radius.
 ///
-/// `search_px` is how far from each observation the peak is looked for, in
-/// patch-grid px; the default is the localizer's own search radius.
+/// The peak is looked for within the track's ``max_shift_px`` of each
+/// observation, in patch-grid px, the bar the shift is judged by; both shifts
+/// are in patch-grid px.
 ///
 /// Two bounds keep a wide window from asking for memory the machine does not
 /// have -- the window is widened to reach the furthest seed and each view's
@@ -1493,7 +1490,6 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
     edited,
     images,
     *,
-    search_px = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
 ))]
@@ -1502,7 +1498,6 @@ fn evaluate(
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
-    search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
@@ -1513,7 +1508,7 @@ fn evaluate(
         &track.inner,
         &edited.inner,
         &views,
-        &evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
+        &evaluate_options(max_seed_offset_px, max_cache_bytes),
         &Progress::none(),
     )
     .map_err(refused)?;
@@ -1570,7 +1565,6 @@ fn evaluate(
     edited,
     images,
     *,
-    search_px = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
     noise_floor_px = None,
@@ -1583,7 +1577,6 @@ fn fit(
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
-    search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     noise_floor_px: Option<f64>,
@@ -1598,7 +1591,6 @@ fn fit(
         &edited.inner,
         &views,
         &fit_options(
-            search_px,
             max_seed_offset_px,
             max_cache_bytes,
             noise_floor_px,
@@ -1676,7 +1668,6 @@ fn set_stage(
         &views,
         stage,
         &fit_options(
-            None,
             None,
             None,
             noise_floor_px,

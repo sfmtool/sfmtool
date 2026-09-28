@@ -185,19 +185,6 @@ fn affine_schema() -> Value {
     })
 }
 
-/// How far around each observation a fit looks for its correlation peak.
-fn search_px_schema() -> Value {
-    json!({
-        "type": "number",
-        "exclusiveMinimum": 0,
-        "description":
-            "How far from each observation's own pixel the correlation peak is looked for, in \
-             patch-grid px. Omit for the radius the evaluation reads at, which \
-             set_bench_search_px sets. A wider window finds a feature the sighting sits \
-             further from, and says so in seed_shift_px.",
-    })
-}
-
 /// One observation of a bench track, by its position in the track's list.
 fn observation_schema() -> Value {
     json!({

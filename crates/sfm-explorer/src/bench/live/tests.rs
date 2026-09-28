@@ -209,20 +209,25 @@ fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
         Some(Evaluation::Current)
     );
 
-    // The radius is the viewer's, and every track reads at it.
-    state.set_bench_search_px(9.0).expect("a positive radius");
+    // The search radius is the track's shift bar, so moving the bar is a
+    // step on the track like any other, and evaluates it again.
+    let bars = sfmtool_core::bench::Thresholds {
+        max_shift_px: 9.0,
+        ..track(&state, id, &label).thresholds.clone()
+    };
+    state
+        .apply_bench_thresholds(id, &label, &bars)
+        .expect("on the bench");
     assert_eq!(
         state.bench_evaluation(id, &label),
         Some(Evaluation::Evaluating),
-        "the search radius is an input"
+        "the shift bar, which is the search radius, is an input"
     );
     state.settle_bench_evaluation();
     assert_eq!(
         state.bench_evaluation(id, &label),
         Some(Evaluation::Current)
     );
-    assert!(state.set_bench_search_px(0.0).is_err());
-    assert!(state.set_bench_search_px(f64::NAN).is_err());
 }
 
 #[test]

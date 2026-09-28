@@ -531,13 +531,9 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
         },
-        "set_bench_search_px" => Command::SetBenchSearchPx {
-            search_px: args.required_f64("search_px")?,
-        },
         "fit_bench_track" => Command::FitBenchTrack {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
-            search_px: args.optional_f64("search_px")?,
         },
         "set_bench_track_stage" => Command::SetBenchTrackStage {
             reconstruction_label: args.required_string("reconstruction_label")?,
