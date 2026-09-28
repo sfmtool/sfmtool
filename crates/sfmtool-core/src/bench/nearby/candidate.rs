@@ -25,6 +25,9 @@ pub enum NearbySource {
     /// The keypoints near the pixel matched by descriptor along their rays
     /// ([`super::guided_matches`]).
     Guided,
+    /// The SIFT index's constellation query from the pixel, its seed
+    /// positions triangulated ([`super::constellation_seeds`]).
+    Constellation,
 }
 
 impl NearbySource {
@@ -34,6 +37,7 @@ impl NearbySource {
             Self::Points => "points",
             Self::Clusters => "clusters",
             Self::Guided => "guided",
+            Self::Constellation => "constellation",
         }
     }
 }
@@ -55,7 +59,8 @@ pub struct NearbyCandidate {
     pub source: NearbySource,
     /// What the source names it by: the point for [`NearbySource::Points`],
     /// the cluster for [`NearbySource::Clusters`], the queried image's keypoint
-    /// row for [`NearbySource::Guided`].
+    /// row for [`NearbySource::Guided`] and for a [`NearbySource::Constellation`]
+    /// query made from a keypoint; `None` for one made from the pixel.
     pub id: Option<u32>,
     /// The point, in world coordinates.
     pub position: Vector3<f64>,

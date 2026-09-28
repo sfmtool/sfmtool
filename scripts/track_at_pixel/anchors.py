@@ -630,9 +630,9 @@ def _rust_tracks(ctx, image, pixel, opts):
 
 
 def _rust_inputs(ctx):
-    """The dataset's ``NearbyTrackSources``, built on first use and kept: every
-    image's keypoints and ``.sift`` descriptors and the cluster-patches
-    clusters."""
+    """The dataset's ``NearbyTrackSources``, built on first use and kept: the
+    SIFT index, every image's keypoints and ``.sift`` descriptors, and the
+    cluster-patches clusters."""
     ds = ctx.dataset
     if getattr(ds, "_nearby_sources", None) is None:
         from sfmtool._sfmtool import bench as B
@@ -640,6 +640,7 @@ def _rust_inputs(ctx):
 
         ds._nearby_sources = B.NearbyTrackSources(
             ctx.edited,
+            forest=ds.forest,
             keypoints=[tuple(kp) for kp in ds.keypoints],
             matches=ds.matches,
             sift=[
@@ -693,11 +694,34 @@ def _rust_guided(ctx, image, pixel, opts):
     )
 
 
+def _rust_constellation(ctx, image, pixel, opts):
+    """:func:`from_constellation` by the core ``constellation_seeds``."""
+    from sfmtool._sfmtool import bench as B
+
+    return B.constellation_seeds(
+        ctx.edited,
+        ctx.pyramids,
+        _rust_inputs(ctx),
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options={
+            "target": int(opts["constellation_target"]),
+            "min_inliers": int(opts["constellation_min_inliers"]),
+            "seed_radius_px": float(opts["constellation_radius_px"]),
+            "max_reproj_px": float(opts["constellation_max_reproj_px"]),
+            "at": opts["constellation_at"],
+            "lateral_max": int(opts["lateral_max"]),
+            "lateral_radius_px": float(opts["lateral_radius_px"]),
+        },
+    )
+
+
 # The sources moved into core, by the harness's name for each.
 _RUST_SOURCES = {
     "tracks": _rust_tracks,
     "clusters": _rust_clusters,
     "guided": _rust_guided,
+    "constellation": _rust_constellation,
 }
 
 
@@ -719,7 +743,7 @@ def _by_impl(name, python):
 SOURCES = {
     "tracks": _by_impl("tracks", from_tracks),
     "clusters": _by_impl("clusters", from_clusters),
-    "constellation": from_constellation,
+    "constellation": _by_impl("constellation", from_constellation),
     "guided": _by_impl("guided", from_guided),
     "sweep": from_sweep,
 }

@@ -6,7 +6,7 @@ can be answered, something has to propose candidates: points close to the
 pixel in that photograph that several photographs see, each with where every
 photograph sees it. The **matching sources** do this, each from a different
 kind of evidence: the reconstruction's own points, the clusters of matched
-keypoints, keypoints matched along their rays, and later the SIFT index's
+keypoints, keypoints matched along their rays, and the SIFT index's
 constellation query. Every source returns the same shape, a **nearby
 candidate**: a 3D point, its sightings (the queried photograph's first), how
 far it sits from the pixel, and how well its sightings meet. Nothing is
@@ -15,7 +15,8 @@ written to the reconstruction.
 The sources are the first step of the anchor finder in the track-at-pixel
 harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
-`from_tracks`, `from_clusters`, `from_guided`), where they were designed and measured, and the third part of
+`from_tracks`, `from_clusters`, `from_guided`, `from_constellation`), where
+they were designed and measured, and the third part of
 that finder moved into core ([the plan](../../drafts/nearby-tracks.md)). A
 candidate is a hypothesis, not a decision: near a pixel the scene can hold
 surfaces at very different depths, and grouping the candidates by the
@@ -30,11 +31,13 @@ each, with the shared shape in
 all re-exported from `sfmtool_core::bench`: the points in
 [`points.rs`](../../../crates/sfmtool-core/src/bench/nearby/points.rs), the
 clusters in
-[`clusters.rs`](../../../crates/sfmtool-core/src/bench/nearby/clusters.rs) and
+[`clusters.rs`](../../../crates/sfmtool-core/src/bench/nearby/clusters.rs),
 guided matching in
-[`guided.rs`](../../../crates/sfmtool-core/src/bench/nearby/guided.rs), bound as
-`sfmtool._sfmtool.bench.nearby_points`, `nearby_cluster_tracks` and
-`guided_matches`.
+[`guided.rs`](../../../crates/sfmtool-core/src/bench/nearby/guided.rs) and the
+constellation in
+[`constellation.rs`](../../../crates/sfmtool-core/src/bench/nearby/constellation.rs),
+bound as `sfmtool._sfmtool.bench.nearby_points`, `nearby_cluster_tracks`,
+`guided_matches` and `constellation_seeds`.
 The triangulation the sources share is
 [`triangulate.rs`](../../../crates/sfmtool-core/src/bench/nearby/triangulate.rs),
 public as `triangulate_sightings`.
@@ -70,11 +73,20 @@ pub struct GuidedSource<'a> {
     pub rays: &'a KeypointRays,              // camera-frame rays, built on first read
 }
 
+pub fn constellation_seeds(
+    edited: &EditedReconstruction,       // for the image's name
+    views: &[ProjectedImage<'_>],
+    index: &SiftIndexSource<'_>,         // the SIFT index and every image's keypoints
+    image: u32,
+    pixel: [f64; 2],
+    options: &ConstellationSeedOptions,
+) -> Result<Vec<NearbyCandidate>, NearbySourceError>;
+
 pub fn triangulate_sightings(views: &[ProjectedImage<'_>], sightings: &[(u32, [f64; 2])])
     -> Option<RayMeeting>;               // { position, errors_px }
 
 pub struct NearbyCandidate {
-    pub source: NearbySource,            // Points | Clusters | Guided
+    pub source: NearbySource,            // Points | Clusters | Guided | Constellation
     pub id: Option<u32>,                 // the point, the cluster, the keypoint row
     pub position: Vector3<f64>,          // world coordinates
     pub sightings: Vec<(u32, [f64; 2])>, // (image, pixel), the queried image's first
@@ -127,7 +139,11 @@ the ranges when it needs them.
 combines the sources. Taking each input as a plain reference makes a missing
 one impossible to pass, and leaves the skipping, and saying so, to that
 caller. The points source reads only the reconstruction and the views'
-cameras, the clusters source only the clusters and the cameras.
+cameras, the clusters source only the clusters and the cameras. The
+constellation takes the same `SiftIndexSource` that
+[track-at-pixel](track-at-pixel.md)'s constellation member reads, and runs the
+same `search_descriptors` from a one-sighting cluster seeded at the pixel, so
+the two find the same images for a pixel.
 
 **Why guided matching reads the `.sift` descriptors.** Guided matching compares
 the descriptor of each keypoint near the pixel with those of the keypoints in
@@ -220,6 +236,25 @@ integer below `2^24`, so it is exact, and only the square root rounds. The
 ratio and the two distance bars are compared in 32 bits as well, as NumPy
 compares a 32-bit value with a Python float.
 
+### The constellation
+
+A pixel someone points at is not a keypoint, so its own descriptor matches
+nothing, but the keypoints around it are, and another photograph of the same
+surface holds them under a locally affine warp. The SIFT index's constellation
+query (the bench's descriptor search, [editable-track.md](editable-track.md))
+asks the index about the queried image's keypoints within the radius that
+holds about `target` (50) of them, and keeps each other image whose matches
+agree on one warp with `min_inliers` (6) or more; the warp carries the pixel
+into that image. The pixel and the carried positions are triangulated,
+dropping the worst (below), with the looser `max_reproj_px` of 3, since the
+carried positions are the warp's predictions and not refined. The cluster
+refinement is not used to read them: on a grazing surface it rejects the true
+matches. The query from the pixel gives at most one candidate, sitting at the
+pixel with no `id`. With `at` set to `Keypoints`, the query is also made from
+each of the `lateral_max` (4) keypoints nearest the pixel within
+`lateral_radius_px` (24) and further than 1 px, each giving a candidate named
+by its row and sitting at it.
+
 ### Triangulating and dropping the worst
 
 The sightings' rays are met in the least-squares sense: the point minimising
@@ -241,34 +276,49 @@ image disagrees with is not near the pixel.
 degrees off its axis, as [distance ranges](distance-range.md) are; a point a
 camera cannot see has an infinite error there.
 
-**Parity with the harness.** The harness selects the sources' implementation
-with `sources_impl` (`"rust"` by default, `"python"` for the reference). On
-both ground truths, full and empty passes, every source run, the harness's
-scores are identical. The points source returns the same points with the same
-sightings for all but 6 of 27 906 candidates: in Kerry Park two points share a
-keypoint, so they are the same distance from the pixel, and the nearest-first
-order of a tie follows the spatial index, which the harness builds over every
-point and core over the version's live ones; where the cap falls between the
-two, each keeps a different one. The depth, the errors and the ray angle
-differ from the Python's in the last bits, from the rotation matrix being
-built from the quaternion by a different formula and the products summed in a
-different order. The clusters source returns the same clusters with the same members
-for every query. Their points differ from the Python's in the eighth
-significant digit or later, and in the sixth for the worst, two rays 0.003
-degrees apart meeting 9 km out: the least-squares system of nearly parallel
-rays is ill-conditioned, and the harness solves it with LAPACK and core with
-nalgebra's LU. The layers' keys and confidences differ by as little in turn.
-Guided matching returns the same keypoints with the same sightings. Two
-keypoints of the queried image can share a position, as SIFT's do when it
-finds two orientations at one place; they are equally near the pixel, and
-both implementations keep them in row order. The harness's reference sorted
-them with NumPy's default `argsort`, whose order of ties is not stable and
-depends on the processor's vector instructions, so where the cap of eight fell
-between two such keypoints it could keep either. It now sorts stably, which
-left seoul_bull's scores as they were and changed Kerry Park's by one query:
-the full pass's supported-layer shares of clusters and guided by 0.001, and
-the rank-1 line's queries with several layers from 2509 to 2508 (1908 to 1907
-in the empty pass).
+**Parity with the harness.** The harness selects the sources'
+implementation with `sources_impl` (`"rust"` by default, `"python"` for the
+reference). On both ground truths, full and empty passes, with every source run
+and with the default stopping rule, the two give identical summaries and rank-1
+lines, and every source returns the same candidates with the same sightings,
+with two exceptions of order, not logic:
+
+- The points source differs in 6 of 21 726 Kerry Park candidates (2 queries):
+  two points share a keypoint, so they are the same distance from the pixel,
+  and the nearest-first order of the tie follows the spatial index, which the
+  harness builds over every point and core over the version's live ones;
+  where the cap of eight falls between the two, each keeps a different one.
+- Guided matching's keypoints near the pixel can share a position, as SIFT's
+  do when it finds two orientations at one place. Both implementations keep
+  such ties in row order. The reference used to sort them with NumPy's default
+  `argsort`, whose order of ties is not stable and depends on the processor's
+  vector instructions, so where the cap of eight fell between two it could
+  keep either; it now sorts stably. That left seoul_bull's scores as they were
+  and changed Kerry Park's by one query: the full pass's supported-layer shares
+  of clusters and guided by 0.001, and the rank-1 line's queries with several
+  layers from 2509 to 2508 (1908 to 1907 in the empty pass).
+
+The numbers differ in the last bits: depth, errors and ray angle from the
+rotation matrix being built from the quaternion by a different formula and
+products summed in a different order, and the triangulated points in the
+eighth significant digit or later, the sixth for the worst (two rays 0.003
+degrees apart meeting 9 km out), because the least-squares system of nearly
+parallel rays is ill-conditioned and the harness solves it with LAPACK and core
+with nalgebra's LU. The layers' keys and confidences differ by as little in
+turn.
+
+**Cost.** Mean milliseconds a query, full pass, every source run, Python
+against core through the binding:
+
+| Source | seoul_bull | Kerry Park |
+|--------|-----------:|-----------:|
+| points | 2.5 → 0.36 | 12.7 → 0.58 |
+| clusters | 9.1 → 0.87 | 9.3 → 0.85 |
+| guided | 48 → 5.8 | 115 → 11.4 |
+| constellation | 18.3 → 16.8 | 34.5 → 32.3 |
+
+The constellation's time is the index query, `search_descriptors`, which the
+harness's Python called in core already.
 
 ## Parameters
 
@@ -294,6 +344,13 @@ Each source's options are a struct whose defaults are the harness's
 | `GuidedOptions::loose_distance` | `400.0` | `guided_loose_dist` | the largest of a match added after the triangulation |
 | `GuidedOptions::min_views` | `2` | `guided_min_views` | the fewest sightings a candidate needs |
 | `GuidedOptions::max_reproj_px` | `2.0` | `max_reproj_px` | the largest error any sighting may have |
+| `ConstellationSeedOptions::target` | `50` | `constellation_target` | the constellation's radius holds about this many keypoints |
+| `ConstellationSeedOptions::min_inliers` | `6` | `constellation_min_inliers` | the fewest agreeing correspondences an image needs |
+| `ConstellationSeedOptions::seed_radius_px` | `6.0` | `constellation_radius_px` | the seeded cluster's radius; the query reads only its position |
+| `ConstellationSeedOptions::max_reproj_px` | `3.0` | `constellation_max_reproj_px` | the largest error any carried position may have |
+| `ConstellationSeedOptions::at` | `Pixel` | `constellation_at` | where the queries are made from, `Pixel` or `Keypoints` |
+| `ConstellationSeedOptions::lateral_max` | `4` | `lateral_max` | the most keypoints queried from |
+| `ConstellationSeedOptions::lateral_radius_px` | `24.0` | `lateral_radius_px` | how far from the pixel those keypoints may be |
 
 ## Python bindings
 
@@ -303,15 +360,19 @@ from sfmtool._sfmtool import bench
 anchors = bench.nearby_points(edited, images, image, (x, y),
                               options={"radius_px": 40.0, "max_points": 8})
 
-sources = bench.NearbyTrackSources(edited, matches=MatchesFile(path),
+sources = bench.NearbyTrackSources(edited, forest=LazyKdForest(kdf),
+                                   matches=MatchesFile(path),
                                    sift=[...])  # one .sift path per image
 anchors += bench.nearby_cluster_tracks(edited, images, sources, image, (x, y),
                                        options={"members": "any"})
 anchors += bench.guided_matches(edited, images, sources, image, (x, y))
+anchors += bench.constellation_seeds(edited, images, sources, image, (x, y),
+                                     options={"at": "pixel"})
 ```
 
 `NearbyTrackSources` holds the inputs the sources read beside the
-reconstruction, each optional and built once per capture: `matches`, a
+reconstruction, each optional and built once per capture: `forest`, the SIFT
+index as a `LazyKdForest` over the reconstruction's images in its order; `matches`, a
 cluster-patches `MatchesFile`, indexed onto the reconstruction's images by name;
 `keypoints`, one `(positions, affine_shapes)` pair of float32 arrays per image
 as `TrackAtPixelSources` takes them; and `sift`, one `.sift` path per image,
@@ -321,7 +382,8 @@ list. `images` is a list of decoded images or an `ImagePyramidSet`, as every ben
 step takes them. `options` overrides fields by their Rust names; an unknown key
 is a `ValueError`, as is an image or pixel that names no place. Each candidate
 comes back as the harness's anchor dict: `source` (the harness's names,
-`"tracks"` for the points, `"clusters"` and `"guided"`), `id`, `position`, `views` (`[image, x, y]` rows, the
+`"tracks"` for the points, `"clusters"`, `"guided"` and `"constellation"`),
+`id`, `position`, `views` (`[image, x, y]` rows, the
 queried image first), `query_pixel`, `distance_px`, `n_views`,
 `max_reproj_px`, `max_ray_angle_deg` and `depth`.
 
@@ -344,7 +406,11 @@ plane points with their own descriptors, finds the match along the ray in two
 images and the loose one in a third after them; a keypoint on the queried ray
 further out whose descriptor is nearly as close makes that image's match
 ambiguous, and it is refused until the ratio allows it; and descriptors that
-are not row for row with the keypoints are refused.
+are not row for row with the keypoints are refused. The constellation, over a
+`.kdf` written for thirty plane points seen by every camera, carries the pixel
+to where the point projects in each other image and meets at the point, adds
+one candidate per keypoint queried from with `Keypoints`, and finds nothing
+under a bar no image reaches.
 [`tests/rust_bindings/test_nearby_sources_rust_bindings.py`](../../../tests/rust_bindings/test_nearby_sources_rust_bindings.py)
 checks the bindings on the seoul_bull fixture with its longest track held out.
 Parity with the harness's Python is measured by running the harness with

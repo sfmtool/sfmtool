@@ -13,13 +13,21 @@ use std::sync::Arc;
 
 use nalgebra::Point3;
 
-use crate::bench::tests::scene::{fixture_points, Scene, PLANE_Z};
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
+use crate::bench::tests::scene::{edited as scene_edited, fixture_points, Scene, PLANE_Z};
 use crate::bench::track_at_pixel::tests::matches_file;
 use crate::bench::track_at_pixel::{
-    MatchesClusters, ViewCamera, STATUS_KEPT, STATUS_REFERENCE, STATUS_REJECTED_LOW_ZNCC,
-    STATUS_REJECTED_SHIFT,
+    MatchesClusters, SiftIndexSource, ViewCamera, STATUS_KEPT, STATUS_REFERENCE,
+    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
 };
-use crate::features::kdforest::ImageKeypoints;
+use crate::features::kdforest::{
+    FeatureGeometry, FeatureOrigin, ImageKeypoints, KdForestParams, KdForestU8, KdfSiftSources,
+    KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions,
+    LazyKdForestU8,
+};
+use crate::progress::Progress;
 use crate::reconstruction::data::{ObservationSource, SfmrReconstruction};
 use crate::reconstruction::edited::EditedReconstruction;
 
@@ -507,4 +515,163 @@ fn guided_matching_refuses_descriptors_that_do_not_match_the_keypoints() {
         guided_matches(&views, &source, 0, pixel, &GuidedOptions::default()),
         Err(NearbySourceError::RowMismatch { image: 2, .. })
     ));
+}
+
+// ---- The constellation query -------------------------------------------------
+
+/// Thirty plane points around [`ON_PLANE`] with a descriptor each, seen by
+/// every camera at their projections, written to a `.kdf` with one corpus
+/// image per scene image; and every image's keypoints, row for row with its
+/// corpus features. The directory is kept alive with the forest.
+fn constellation_index(scene: &Scene) -> (tempfile::TempDir, LazyKdForestU8, Vec<ImageKeypoints>) {
+    let mut rng = StdRng::seed_from_u64(11);
+    let points: Vec<Point3<f64>> = (0..30)
+        .map(|_| {
+            Point3::new(
+                ON_PLANE.x + rng.random_range(-0.4..0.4),
+                ON_PLANE.y + rng.random_range(-0.4..0.4),
+                PLANE_Z,
+            )
+        })
+        .collect();
+    let vectors: Vec<Vec<u8>> = points
+        .iter()
+        .map(|_| (0..128).map(|_| rng.random_range(0..=u8::MAX)).collect())
+        .collect();
+    let shape = [[1.5_f32, 0.0], [0.0, 1.5]];
+    let mut descriptors = Vec::new();
+    let mut origins = Vec::new();
+    let mut geometry: Vec<FeatureGeometry> = Vec::new();
+    let mut keypoints = Vec::new();
+    for image in 0..scene.len() {
+        let mut kp = ImageKeypoints::default();
+        for (row, (&p, vector)) in points.iter().zip(&vectors).enumerate() {
+            let px = scene.project(image, p);
+            let at = [px[0] as f32, px[1] as f32];
+            descriptors.extend_from_slice(vector);
+            origins.push(FeatureOrigin {
+                image_index: image as u32,
+                image_feature_index: row as u32,
+            });
+            geometry.push([at, shape[0], shape[1]]);
+            kp.positions.push(at);
+            kp.affine_shapes.push(shape);
+        }
+        keypoints.push(kp);
+    }
+    let images = scene.len();
+    let sources = KdfSiftSources {
+        workspace: KdfWorkspaceMetadata {
+            absolute_path: "/ws".into(),
+            relative_path: ".".into(),
+            contents: KdfWorkspaceContents {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+                feature_prefix_dir: "features/sift".into(),
+            },
+        },
+        image_names: (0..images).map(|i| format!("image_{i}.jpg")).collect(),
+        feature_tool_hashes: (0..images).map(|i| [i as u8; 16]).collect(),
+        sift_content_hashes: (0..images).map(|i| [100 + i as u8; 16]).collect(),
+        origins,
+        geometry,
+    };
+    let count = sources.origins.len();
+    let forest = KdForestU8::build(
+        &descriptors,
+        count,
+        128,
+        KdForestParams {
+            num_trees: 4,
+            leaf_size: 8,
+            seed: 3,
+            ..KdForestParams::balanced()
+        },
+        &Progress::none(),
+    )
+    .expect("nothing asked it to stop");
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("index.kdf");
+    forest
+        .write_kdf(
+            &path,
+            Some(&sources),
+            &KdfWriteOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the index is written");
+    let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).expect("it opens");
+    (dir, lazy, keypoints)
+}
+
+#[test]
+fn the_constellation_carries_the_pixel_into_every_image_it_matches() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let views = scene.views();
+    let edited = scene_edited(&scene, ON_PLANE);
+    let (_dir, forest, keypoints) = constellation_index(&scene);
+    let index = SiftIndexSource {
+        forest: &forest,
+        keypoints: &keypoints,
+    };
+    let pixel = scene.project(0, ON_PLANE);
+    let found = constellation_seeds(
+        &edited,
+        &views,
+        &index,
+        0,
+        pixel,
+        &ConstellationSeedOptions::default(),
+    )
+    .expect("valid");
+
+    // The pixel's own query: every other image, the pixel carried to where
+    // the point projects in each, meeting at the point.
+    assert_eq!(found.len(), 1);
+    let c = &found[0];
+    assert_eq!(c.source, NearbySource::Constellation);
+    assert_eq!(c.id, None);
+    assert_eq!(c.query_pixel, pixel);
+    assert_eq!(c.distance_px, 0.0);
+    let images: Vec<u32> = c.sightings.iter().map(|s| s.0).collect();
+    assert_eq!(images[0], 0);
+    let mut others = images[1..].to_vec();
+    others.sort_unstable();
+    assert_eq!(others, vec![1, 2, 3]);
+    for &(image, at) in &c.sightings[1..] {
+        let want = scene.project(image as usize, ON_PLANE);
+        assert!((at[0] - want[0]).hypot(at[1] - want[1]) < 0.01);
+    }
+    assert!(c.max_reproj_px < 0.01);
+    assert!((c.position - ON_PLANE.coords).norm() < 1e-3);
+
+    // From the keypoints near the pixel as well: one more candidate each,
+    // named by its row and sitting at it.
+    let options = ConstellationSeedOptions {
+        at: ConstellationAt::Keypoints,
+        lateral_max: 2,
+        lateral_radius_px: 30.0,
+        ..ConstellationSeedOptions::default()
+    };
+    let found = constellation_seeds(&edited, &views, &index, 0, pixel, &options).expect("valid");
+    assert_eq!(found.len(), 3);
+    for c in &found[1..] {
+        let row = c.id.expect("a keypoint's query names its row") as usize;
+        let p = keypoints[0].positions[row];
+        assert_eq!(c.query_pixel, [f64::from(p[0]), f64::from(p[1])]);
+        assert_eq!(c.n_views(), 4);
+    }
+    assert!(found[1].distance_px <= found[2].distance_px);
+
+    // A bar no image reaches finds nothing.
+    let options = ConstellationSeedOptions {
+        min_inliers: 40,
+        ..ConstellationSeedOptions::default()
+    };
+    assert!(
+        constellation_seeds(&edited, &views, &index, 0, pixel, &options)
+            .expect("valid")
+            .is_empty()
+    );
 }

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the matching sources of finding the tracks near a pixel:
-``bench.nearby_points``, ``bench.nearby_cluster_tracks`` and
-``bench.guided_matches``, with ``bench.NearbyTrackSources``.
+``bench.nearby_points``, ``bench.nearby_cluster_tracks``,
+``bench.guided_matches`` and ``bench.constellation_seeds``, with
+``bench.NearbyTrackSources``.
 
 The capture is the 17-image seoul_bull fixture the other bench tests use. A
 point is deleted from the version and the query is made at one of its pixels,
@@ -20,6 +21,7 @@ from sfmtool._sfmtool.patches import ImagePyramidSet
 from sfmtool._sfmtool.reconstruction import EditedReconstruction
 
 from .test_bench_rust_bindings import (  # noqa: F401 (fixtures)
+    descriptor_index,
     embedded,
     images,
     long_track_point,
@@ -100,13 +102,15 @@ def sift_paths(embedded):  # noqa: F811
 
 
 @pytest.fixture(scope="module")
-def sources(embedded):  # noqa: F811
+def sources(embedded, descriptor_index):  # noqa: F811
     from sfmtool._sfmtool.io import MatchesFile
 
+    forest, _ = descriptor_index
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
     assert matches, "the fixture workspace holds a clusters .matches"
     return bench.NearbyTrackSources(
         EditedReconstruction(embedded),
+        forest=forest,
         matches=MatchesFile(str(matches[0])),
         sift=sift_paths(embedded),
     )
@@ -192,10 +196,49 @@ def test_the_sources_can_read_their_keypoints_from_the_sift_files(
         bench.NearbyTrackSources(EditedReconstruction(embedded), sift=paths[:1])
 
 
+def test_the_constellation_carries_the_pixel_into_the_images_it_matches(
+    pyramids, query, sources
+):
+    edited, image, pixel = query
+    assert sources.has_constellation
+    found = bench.constellation_seeds(edited, pyramids, sources, image, pixel)
+
+    assert len(found) <= 1
+    for a in found:
+        assert set(a) == ANCHOR_KEYS
+        assert a["source"] == "constellation"
+        assert a["id"] is None
+        assert a["views"][0] == [image, *pixel]
+        assert a["query_pixel"] == list(pixel)
+        assert a["distance_px"] == 0.0
+        assert a["max_reproj_px"] <= 3.0
+
+    # From the keypoints near the pixel as well: each extra candidate is named
+    # by its keypoint's row and sits on it.
+    wide = bench.constellation_seeds(
+        edited,
+        pyramids,
+        sources,
+        image,
+        pixel,
+        options={"at": "keypoints", "lateral_max": 4},
+    )
+    assert wide[: len(found)] == found
+    for a in wide[len(found) :]:
+        assert isinstance(a["id"], int)
+        assert 1.0 < a["distance_px"] <= 24.0
+    with pytest.raises(ValueError, match="pixel|keypoints"):
+        bench.constellation_seeds(
+            edited, pyramids, sources, image, pixel, options={"at": "nowhere"}
+        )
+
+
 def test_a_source_without_its_input_finds_nothing(embedded, pyramids, query):  # noqa: F811
     edited, image, pixel = query
     empty = bench.NearbyTrackSources(EditedReconstruction(embedded))
     assert not empty.has_clusters
     assert not empty.has_guided
+    assert not empty.has_constellation
     assert bench.nearby_cluster_tracks(edited, pyramids, empty, image, pixel) == []
     assert bench.guided_matches(edited, pyramids, empty, image, pixel) == []
+    assert bench.constellation_seeds(edited, pyramids, empty, image, pixel) == []

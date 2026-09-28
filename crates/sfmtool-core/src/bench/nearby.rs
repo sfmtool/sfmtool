@@ -20,6 +20,7 @@
 
 mod candidate;
 mod clusters;
+mod constellation;
 mod far_field;
 mod grey;
 mod guided;
@@ -35,6 +36,7 @@ mod tests;
 
 pub use candidate::{NearbyCandidate, NearbySource, NearbySourceError};
 pub use clusters::{nearby_cluster_tracks, ClusterMembers, ClusterTracksOptions};
+pub use constellation::{constellation_seeds, ConstellationAt, ConstellationSeedOptions};
 pub use far_field::{
     far_field_sweep, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
     FarFieldReading, FarFieldSweep, Refit, WideAmong,

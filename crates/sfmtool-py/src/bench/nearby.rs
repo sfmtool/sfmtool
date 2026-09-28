@@ -18,10 +18,11 @@ use rayon::prelude::*;
 use sfmtool_sift_format::read_sift_features;
 
 use sfmtool_core::bench::{
-    guided_matches as core_guided_matches, nearby_cluster_tracks as core_nearby_cluster_tracks,
-    nearby_points as core_nearby_points, ClusterMembers, ClusterTracksOptions, GuidedOptions,
+    constellation_seeds as core_constellation_seeds, guided_matches as core_guided_matches,
+    nearby_cluster_tracks as core_nearby_cluster_tracks, nearby_points as core_nearby_points,
+    ClusterMembers, ClusterTracksOptions, ConstellationAt, ConstellationSeedOptions, GuidedOptions,
     GuidedSource, ImageDescriptors, KeypointRays, MatchesClusters, NearbyCandidate, NearbySource,
-    PointsOptions,
+    PointsOptions, SiftIndexSource,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 
@@ -29,17 +30,20 @@ use super::{read_keypoints, views_of};
 use crate::io::matches_file::PyMatchesFile;
 use crate::patches::views::{resolve_pyramids, PosedViews, PyramidSet};
 use crate::reconstruction::edited::PyEditedReconstruction;
+use crate::spatial::kdf::PyLazyKdForest;
 
 /// What the matching sources read beside the reconstruction and the
 /// photographs, built once per capture and shared by every query.
 ///
 /// Every input is optional, and a source whose input is missing finds
-/// nothing: the clusters source needs ``matches``, and guided matching the
-/// keypoints and ``sift``.
+/// nothing: the clusters source needs ``matches``, guided matching the
+/// keypoints and ``sift``, and the constellation ``forest`` and the keypoints.
 ///
 /// Args:
 ///     edited: The reconstruction the inputs are indexed onto; only its image
 ///         names and count are read, so any version of one base will do.
+///     forest: The SIFT index, whose corpus indexes the reconstruction's
+///         images in the reconstruction's order.
 ///     keypoints: One ``(positions, affine_shapes)`` pair per image of the
 ///         reconstruction, in its order, as :class:`TrackAtPixelSources` takes
 ///         them. Read from ``sift`` when left out and ``sift`` is given.
@@ -50,6 +54,7 @@ use crate::reconstruction::edited::PyEditedReconstruction;
 #[pyclass(name = "NearbyTrackSources", module = "sfmtool.bench", frozen)]
 pub struct PyNearbyTrackSources {
     image_count: usize,
+    forest: Option<Py<PyLazyKdForest>>,
     keypoints: Option<Vec<ImageKeypoints>>,
     clusters: Option<MatchesClusters>,
     descriptors: Option<Vec<ImageDescriptors>>,
@@ -59,10 +64,11 @@ pub struct PyNearbyTrackSources {
 #[pymethods]
 impl PyNearbyTrackSources {
     #[new]
-    #[pyo3(signature = (edited, *, keypoints = None, matches = None, sift = None))]
+    #[pyo3(signature = (edited, *, forest = None, keypoints = None, matches = None, sift = None))]
     fn new(
         py: Python<'_>,
         edited: &PyEditedReconstruction,
+        forest: Option<Py<PyLazyKdForest>>,
         keypoints: Option<&Bound<'_, PyList>>,
         matches: Option<&PyMatchesFile>,
         sift: Option<Vec<PathBuf>>,
@@ -133,6 +139,7 @@ impl PyNearbyTrackSources {
         }
         Ok(Self {
             image_count,
+            forest,
             keypoints,
             clusters,
             descriptors,
@@ -152,14 +159,21 @@ impl PyNearbyTrackSources {
         self.guided().is_some()
     }
 
+    /// Whether the constellation source has its inputs.
+    #[getter]
+    fn has_constellation(&self) -> bool {
+        self.forest.is_some() && self.keypoints.is_some()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "NearbyTrackSources({} images, clusters: {}, guided: {})",
+            "NearbyTrackSources({} images, clusters: {}, guided: {}, constellation: {})",
             self.image_count,
             self.clusters
                 .as_ref()
                 .map_or_else(|| "none".into(), |c| c.cluster_count().to_string()),
             self.has_guided(),
+            self.has_constellation(),
         )
     }
 }
@@ -209,6 +223,7 @@ fn harness_name(source: NearbySource) -> &'static str {
         NearbySource::Points => "tracks",
         NearbySource::Clusters => "clusters",
         NearbySource::Guided => "guided",
+        NearbySource::Constellation => "constellation",
     }
 }
 
@@ -428,11 +443,86 @@ pub(super) fn guided_matches(
     candidate_list(py, &found)
 }
 
+/// The SIFT index's constellation query from ``pixel`` in ``image``, and with
+/// ``at="keypoints"`` from the keypoints near it, each as a candidate track.
+///
+/// Each other image whose matches agree on one affine warp carries the query's
+/// position into its own frame; those positions and the query's own are
+/// triangulated, dropping the worst while three or more remain, until every
+/// one is within ``max_reproj_px``.
+///
+/// Args:
+///     edited: The reconstruction; its cameras and the image's name are read.
+///     images: As :func:`nearby_points` takes them.
+///     sources: A :class:`NearbyTrackSources`; without ``forest`` and keypoints
+///         the result is empty.
+///     image: The queried image's index.
+///     pixel: ``(x, y)`` in that image.
+///     options: Overrides keyed by the field of the Rust
+///         ``ConstellationSeedOptions``: ``target`` (50), ``min_inliers`` (6),
+///         ``seed_radius_px`` (6), ``max_reproj_px`` (3), ``at`` (``"pixel"``
+///         or ``"keypoints"``), ``lateral_max`` (4) and ``lateral_radius_px``
+///         (24). An unknown key is an error.
+///
+/// Returns:
+///     A list of the harness's anchor dicts, as :func:`nearby_points` returns
+///     them, with ``source`` ``"constellation"`` and ``id`` ``None`` for the
+///     pixel's query or the keypoint's row for a keypoint's.
+#[pyfunction]
+#[pyo3(signature = (edited, images, sources, image, pixel, *, options = None))]
+pub(super) fn constellation_seeds(
+    py: Python<'_>,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    sources: &PyNearbyTrackSources,
+    image: u32,
+    pixel: [f64; 2],
+    options: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<PyList>> {
+    let options = with_overrides(
+        ConstellationSeedOptions::default(),
+        options,
+        |o, key, value| {
+            match key {
+                "target" => o.target = value.extract()?,
+                "min_inliers" => o.min_inliers = value.extract()?,
+                "seed_radius_px" => o.seed_radius_px = value.extract()?,
+                "max_reproj_px" => o.max_reproj_px = value.extract()?,
+                "at" => {
+                    let word: String = value.extract()?;
+                    o.at = word
+                        .parse::<ConstellationAt>()
+                        .map_err(PyValueError::new_err)?;
+                }
+                "lateral_max" => o.lateral_max = value.extract()?,
+                "lateral_radius_px" => o.lateral_radius_px = value.extract()?,
+                _ => return Ok(false),
+            }
+            Ok(true)
+        },
+    )?;
+    let (Some(forest), Some(keypoints)) = (&sources.forest, &sources.keypoints) else {
+        return Ok(PyList::empty(py).unbind());
+    };
+    let forest = forest.bind(py).borrow();
+    let index = SiftIndexSource {
+        forest: forest.inner(),
+        keypoints,
+    };
+    let (posed, pyramids) = posed_views(edited, images)?;
+    let views = views_of(&posed, &pyramids);
+    let found = py
+        .detach(|| core_constellation_seeds(&edited.inner, &views, &index, image, pixel, &options))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    candidate_list(py, &found)
+}
+
 /// Register the matching-source bindings on the `sfmtool.bench` submodule.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNearbyTrackSources>()?;
     m.add_function(wrap_pyfunction!(nearby_points, m)?)?;
     m.add_function(wrap_pyfunction!(nearby_cluster_tracks, m)?)?;
     m.add_function(wrap_pyfunction!(guided_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(constellation_seeds, m)?)?;
     Ok(())
 }

@@ -217,15 +217,24 @@ scoring is left.
    tolerance_px) -> [f64; 2]`: the distances along the pixel's ray at which
    every sighting stays within its tolerance, which turns any set of sightings
    into a range that can be compared with another.
-3. **The matching sources.** Each returns candidate tracks with their
-   sightings, ranges and triangulation errors:
+3. **The matching sources.** Built; the standing spec is
+   [core/bench/nearby-sources.md](../core/bench/nearby-sources.md). Every
+   source returns one shape, `NearbyCandidate`, whose ranges are left to
+   `NearbyCandidate::range` for stage 5 to compute; the triangulation with
+   per-view errors is public as `triangulate_sightings`; guided matching reads
+   the `.sift` descriptors (`ImageDescriptors`) and keeps the rays through the
+   keypoints (`KeypointRays`); and the Python binding's `NearbyTrackSources`
+   holds the optional inputs. Each returns candidate tracks with their
+   sightings and triangulation errors:
    - `nearby_points`: the reconstruction's own points observed near the
      pixel, with the reprojection check.
    - `nearby_cluster_tracks`: the cluster-patches clusters near the pixel,
      vetted by triangulating their members and dropping the worst.
    - `guided_matches`: the keypoints near the pixel matched along the rays of
      every other image's keypoints, with the ratio test and the two passes.
-   - The constellation seed, from the existing `seed_cluster`.
+   - `constellation_seeds`: the constellation query from the pixel, through
+     the existing `seed_cluster_with` and `search_descriptors`, its carried
+     positions triangulated.
 4. **Depth layers.** `depth_layers(views, image, pixel, candidates, options)
    -> Vec<DepthLayer>`: the usable candidates grouped by overlapping ranges,
    each layer's evidence read with `read_patch_along_ray`, its key, rank and
