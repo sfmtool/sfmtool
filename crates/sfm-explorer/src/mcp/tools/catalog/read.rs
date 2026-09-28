@@ -296,9 +296,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           where the cell is flat. A part has fewer pixels than the whole, so it \
                           reads higher for the same texture. Both grids cover the whole square, \
                           corners included. zncc_self_similarity_radius is how far, in grid px, \
-                          the tile's core can slide over itself by whole pixels and still match \
-                          itself as well as a true match between two views would: 0 on a corner \
-                          or busy texture, 1 to 1.41 or 2 to 2.24 in between, and 3 meaning 3 or \
+                          the tile's core can slide over itself and still match itself as well \
+                          as a true match between two views would, read where its ZNCC against \
+                          itself, interpolated linearly between whole-pixel shifts, falls through \
+                          that level: under 1 on a corner or busy texture, and 3 meaning 3 or \
                           more, on a straight edge or a flat patch. zncc_self_similarity_radius_middle \
                           and zncc_self_similarity_radius_grid read the middle square and each \
                           cell of the same split the same way, and zncc_self_similarity_slide_grid \

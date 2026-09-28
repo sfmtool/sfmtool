@@ -772,9 +772,9 @@ pub(crate) fn sigma_text(whole: Option<f64>, middle: Option<f64>) -> String {
 }
 
 /// A ZNCC self-similarity radius as a table cell prints it, in grid px: the
-/// whole tile's, then its middle square's (`0 / 1.41`), to two decimals with
-/// trailing zeros dropped, and `3+` for the largest radius the reading
-/// searches, which stands for that far or further.
+/// whole tile's, then its middle square's (`0.4 / 1.4`), to one decimal, and
+/// `3+` for the largest radius the reading searches, which stands for that far
+/// or further.
 ///
 /// `-` stands for a reading that is not there, as [`zncc_text`] has it.
 fn self_similarity_text(whole: Option<f64>, middle: Option<f64>) -> String {
@@ -794,8 +794,9 @@ fn max_self_similarity_radius() -> f64 {
     f64::from(sfmtool_core::patch::self_similarity::SelfSimilarityParams::default().max_radius)
 }
 
-/// One self-similarity radius as the cell and the grid's hover print it:
-/// `0`, `1`, `1.41`, `2`, `2.24`, and `3+` at the maximum.
+/// One self-similarity radius as the cell and the grid's hover print it: to
+/// one decimal (`0.4`, `1.3`), and `3+` at the maximum, which reads "that far
+/// or further".
 fn radius_number(value: f64) -> String {
     if !value.is_finite() {
         return "NaN".to_string();
@@ -804,8 +805,7 @@ fn radius_number(value: f64) -> String {
     if value >= max {
         return format!("{max:.0}+");
     }
-    let text = format!("{value:.2}");
-    text.trim_end_matches('0').trim_end_matches('.').to_string()
+    format!("{value:.1}")
 }
 
 /// The three three-by-three grids a row draws: the ZNCC grid, the deprecated
@@ -919,18 +919,19 @@ pub(crate) fn sigma_cell_color(sigma: f64, bar: f64) -> Option<egui::Color32> {
     Some(red_to_green(1.0 - t.clamp(0.0, 1.0)))
 }
 
-/// The colour a self-similarity grid cell is drawn in: green at 0, yellow at
-/// 1 to 1.41, orange at 2 to 2.24 and red at the largest radius searched,
-/// which reads "that far or further". `None` for a cell with no reading.
+/// The colour a self-similarity grid cell is drawn in: green under 1, where
+/// a match locks within a pixel; yellow from 1 to 2; orange from 2 to under
+/// the largest radius searched; and red at it, which reads "that far or
+/// further". `None` for a cell with no reading.
 fn self_similarity_cell_color(radius: f64) -> Option<egui::Color32> {
     if !radius.is_finite() {
         return None;
     }
     let t = if radius >= max_self_similarity_radius() {
         0.0
-    } else if radius >= 1.5 {
+    } else if radius >= 2.0 {
         0.25
-    } else if radius >= 0.5 {
+    } else if radius >= 1.0 {
         0.5
     } else {
         1.0

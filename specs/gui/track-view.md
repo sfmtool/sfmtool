@@ -724,7 +724,7 @@ colours and its lines mean.
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
 | σ_pos | the tile's deprecated localizability, then its middle square's: `0.08 / 0.12`, then the localizability grid | the same |
-| Self-sim. | the tile's ZNCC self-similarity radius, then its middle square's: `0 / 1.41`, `3+` for the largest, then the self-similarity grid | the same |
+| Self-sim. | the tile's ZNCC self-similarity radius, then its middle square's: `0.4 / 1.4`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
 | Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
@@ -784,13 +784,14 @@ same distance; the number prints to two decimals so the pair fits one column.
 [`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
 and § "The ZNCC self-similarity radius" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)): how far,
-in patch-grid pixels, the tile's core can slide over itself by whole pixels and
-still match itself as well as a true match between two views would. The first
-number is the whole core's and the second its middle square's, each to two
-decimals with trailing zeros dropped (`0`, `1`, `1.41`, `2`, `2.24`), and `3+`
-for the largest radius searched, which reads "3 or more". Beside them is the
-grid of each ninth of the core read alone: a box is green at `0`, yellow at `1`
-to `1.41`, orange at `2` to `2.24` and red at `3` or more, and carries a dark
+in patch-grid pixels, the tile's core can slide over itself and still match
+itself as well as a true match between two views would, read where its ZNCC
+against itself, interpolated between whole-pixel shifts, falls through that
+level. The first number is the whole core's and the second its middle square's,
+each to one decimal (`0.4`, `1.4`), and `3+` for the largest radius searched,
+which reads "3 or more". Beside them is the grid of each ninth of the core read
+alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
+`3` and red at `3` or more, and carries a dark
 line along its slide where the slide is at least `0.5` long, so the ninth's
 matching shifts line up along one direction, as on an edge. Hovering it shows
 its nine numbers as the cell prints them. No bar judges the radius, so it

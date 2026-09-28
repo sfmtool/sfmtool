@@ -23,7 +23,7 @@ A shift is **indistinguishable** from the true position when its ZNCC deficit is
 
 where `s_c` is the template's own standard deviation in channel `c` in grey levels, the mean runs over the same textured channels as `z`, `n` is the noise between two views in grey levels, and `ε` is the relative mismatch between two views of the same surface (see [Theory](#theory)). `ε` and `n` are parameters of the score, passed in `SelfSimilarityParams` and the same for every patch in a call, so the radius is a property of the patch alone: it depends on the tile and the parameters, and on nothing about the views or the track the patch belongs to.
 
-The **radius** is the length `|d| = √(dx² + dy²)` of the furthest indistinguishable shift, or 0 when there are none. It is computed as the largest squared length `dx² + dy²`, a whole number, with one square root at the end. When an indistinguishable shift lies in the disk's outermost ring, `(r − 1)² < dx² + dy² ≤ r²`, the patch still matched itself at the edge of the window and may slide further, so the radius is `r`, read as "`r` or more", whatever that shift's own length. Every direction saturates at the same value this way. At `r = 3` the radius takes the values 0, 1, 1.41, 2, 2.24 and 3. A template with no channel at or above the flat floor has no texture to match and scores `r`, with a slide of `[0, 0]`, an infinite tolerance and a surface of `NaN`.
+The **radius** is how far from the centre the surface falls through the level `1 − τ`. Over every grid edge between two neighbouring shifts of the disk, one at or above the level and the other below it, the ZNCC is interpolated linearly along the edge to the point where it equals the level; the radius is the largest distance of those points from the centre, tracked as a squared length with one square root at the end. The centre is always at or above the level, so a patch that locks reads the fraction of a pixel its peak takes to fall through it rather than 0. When an indistinguishable shift lies in the disk's outermost ring, `(r − 1)² < dx² + dy² ≤ r²`, the patch still matched itself at the edge of the window and may slide further, so the radius is `r`, read as "`r` or more". Every direction saturates at the same value this way. A template with no channel at or above the flat floor has no texture to match and scores `r`, with a slide of `[0, 0]`, an infinite tolerance and a surface of `NaN`.
 
 The **slide** is the direction of the indistinguishable shifts. With `C = Σ d dᵀ / |A|` over the set `A` of indistinguishable shifts and eigenvalues `μ₁ ≥ μ₂`, the slide is the unit eigenvector of `μ₁` scaled by `1 − μ₂ / μ₁`, in the grid frame (`x` column-right, `y` row-down). A set strung out along a line gives a slide near unit length along it, a set spread evenly around the centre gives one near zero, and an empty set gives `[0, 0]`. Its sign means nothing.
 
@@ -53,8 +53,10 @@ pub struct SelfSimilarityParams {
 
 /// One template's reading.
 pub struct SelfSimilarity {
-    /// The length of the furthest indistinguishable shift, 0 ..= max_radius,
-    /// in tile pixels; `max_radius` when one lies in the window's outer ring.
+    /// How far from the centre the surface falls through `1 − tolerance`,
+    /// interpolated linearly along the grid edges, 0 ..= max_radius, in tile
+    /// pixels; `max_radius` when an indistinguishable shift lies in the
+    /// window's outer ring.
     pub radius: f64,
     /// The direction of the indistinguishable shifts, scaled by how
     /// strongly they line up; `[0, 0]` when there are none.
@@ -155,23 +157,23 @@ ZNCC's own normalization handles the second part and not the first, which is why
 
 ### A bounded radius in pixels
 
-Keypoint lock-in is decided in the first few pixels: a patch that matches itself two or three pixels away will be pulled there by a match that starts nearby, and the exact distance past that does not change what to do with it. A bound of 3 keeps the window at 29 shifts, keeps the score to a handful of values a person reads at a glance, and makes "3" an honest "3 or more". Whole-pixel shifts are enough: the question is whether the peak is unique, and a ridge or a flat surface shows at whole pixels by construction.
+Keypoint lock-in is decided in the first few pixels: a patch that matches itself two or three pixels away will be pulled there by a match that starts nearby, and the exact distance past that does not change what to do with it. A bound of 3 keeps the window at 29 shifts and makes "3" an honest "3 or more". The ZNCC is computed at whole-pixel shifts only, which is enough to see whether the peak is unique, since a ridge or a flat surface shows at whole pixels by construction. The radius is then read between them, where the surface falls through the level, so that two patches whose furthest matching shift is the same whole pixel are told apart by how far past it they keep matching, and a patch that locks reads how sharp its peak is instead of 0.
 
 The radius is a Euclidean length because what decides lock-in is how far from the true position a match could land, in any direction: a shift of `(2, 2)` is 2.83 px away, not 2. A square window would reach 3 along the axes and 4.24 at its corners, so the same edge would score differently turned by 45°. The disk and its saturating outer ring remove that: an edge in any direction that still matches itself at the window's edge scores 3. The disk of radius 1 holds only the four axis shifts, so at `r = 1` an edge at 45° has no shift along itself to match at and scores 0; the bound needs to be at least 2 for every direction to be read.
 
-An exact repeat is also a repeat at every multiple of its step, so a pattern that repeats every `(1, 1)` matches itself at `(2, 2)` as well, which lies in the outer ring at `r = 3` and scores 3. The radius reads 1.41 on a pattern that matches itself at `(1, 1)` and stops matching by `(2, 2)`.
+An exact repeat is also a repeat at every multiple of its step, so a pattern that repeats every `(1, 1)` matches itself at `(2, 2)` as well, which lies in the outer ring at `r = 3` and scores 3. On a pattern that matches itself at `(1, 1)` and stops matching by `(2, 2)`, the radius reads between 1.41 and 2, where the surface falls through the level past `(1, 1)`.
 
 ### What the defaults rest on
 
 On 1,350 patches from `seoul_bull_sculpture` and `kerry_park`, drawn evenly from four kinds (flat, faint texture, edge, texture or corner) sorted by measures that none of the scores use, plus crops around seoul_bull's matched keypoints, the radius with `ε = 0.05`, `n = 2` and `r = 3`, measured on a 12 × 12 template of the RGB crop, gives:
 
-| Kind | 0 | 1 to 1.41 | 2 to 2.24 | 3+ |
-|---|---|---|---|---|
-| flat | 0% | 0% | 0% | 100% |
-| faint texture | 16% | 22% | 9% | 53% |
-| edge | 37% | 24% | 5% | 35% |
-| texture or corner | 92% | 7% | 0% | 1% |
-| matched keypoint | 96% | 3% | 0% | 1% |
+| Kind | under 1 | 1 to 2 | 2 to 3 | 3+ | median below 3 |
+|---|---|---|---|---|---|
+| flat | 0% | 0% | 0% | 100% | |
+| faint texture | 16% | 22% | 9% | 53% | 1.28 |
+| edge | 37% | 23% | 5% | 35% | 0.88 |
+| texture or corner | 92% | 7% | 0% | 1% | 0.25 |
+| matched keypoint | 96% | 3% | 0% | 1% | 0.32 |
 
 Scoring luminance instead changes 91 of the 1,350 patches, 80 of them to a longer radius, because it cannot see structure that is in the colour alone. On luminance, without the noise term, a plain 0.95 cutoff scores 51% of the flat patches 0.
 
@@ -193,7 +195,7 @@ The bench computes it beside the deprecated localizability at both stages, over 
 
 Both read the default `SelfSimilarityParams`. The measurements carry `zncc_self_similarity_radius`, `zncc_self_similarity_radius_middle`, `zncc_self_similarity_radius_grid` (`[[f64; 3]; 3]`), `zncc_self_similarity_slide_grid` (`[[[f64; 2]; 3]; 3]`), `zncc_self_similarity_surface` (the whole core's surface, `Vec<f64>`) and `zncc_self_similarity_tolerance` (the whole core's tolerance, `None` where it is flat), each `None` where the tile could not be rendered or sampled, and set and cleared wherever the deprecated localizability is. No bar judges them.
 
-**Track View** has a *Self-sim.* column beside σ_pos, reading the whole and middle radii to two decimals with trailing zeros dropped (`0 / 1.41`, with `3+` for the maximum) and drawing the grid: green at 0, yellow at 1 to 1.41, orange at 2 to 2.24, red at `r` or more, with a line along the slide in a cell whose slide is at least 0.5 long, and beside the grid the core's surface plot: the surface interpolated between the shifts and drawn as a heatmap, with the contour at `1 - tolerance` over it and the shifts inside it marked ([track-view.md](../../gui/track-view.md)). The σ_pos column stays while the two are compared, its heading's hover text saying it is the deprecated score. `get_bench_track` reports the same fields in both blocks, the grids as three rows of three and the surface as rows of numbers with null outside the disk ([mcp-server.md](../../gui/mcp-server.md)), and the Python observation dicts carry them as floats, float64 `(3, 3)` and `(3, 3, 2)` arrays, and a `(2r + 1, 2r + 1)` float64 surface.
+**Track View** has a *Self-sim.* column beside σ_pos, reading the whole and middle radii to one decimal (`0.4 / 1.4`, with `3+` for the maximum) and drawing the grid: green under 1, yellow from 1 to 2, orange from 2 to under `r`, red at `r` or more, with a line along the slide in a cell whose slide is at least 0.5 long, and beside the grid the core's surface plot: the surface interpolated between the shifts and drawn as a heatmap, with the contour at `1 - tolerance` over it and the shifts inside it marked ([track-view.md](../../gui/track-view.md)). The σ_pos column stays while the two are compared, its heading's hover text saying it is the deprecated score. `get_bench_track` reports the same fields in both blocks, the grids as three rows of three and the surface as rows of numbers with null outside the disk ([mcp-server.md](../../gui/mcp-server.md)), and the Python observation dicts carry them as floats, float64 `(3, 3)` and `(3, 3, 2)` arrays, and a `(2r + 1, 2r + 1)` float64 surface.
 
 ## Renamed names of the localizability score
 
@@ -236,9 +238,10 @@ out["radius"], out["radius_grid"], out["surface"][3, 3]  # 1.0 at the centre
 
 In [self_similarity/tests.rs](../../../crates/sfmtool-core/src/patch/self_similarity/tests.rs):
 
-- The scalar and AVX2 kernels agree on every shift's ZNCC within `1e-4` over random rough and smooth tiles, and on the radius, slide and tolerance exactly, at `r` from 1 to 3, templates from 4 × 4 to 24 × 24, and one to three channels (`avx2_matches_scalar`).
+- The scalar and AVX2 kernels agree on every shift's ZNCC within `1e-4` over random rough and smooth tiles, on the radius within `1e-3` (it is interpolated from the ZNCC, so it carries their rounding, amplified where the values either side of a crossing are close), and on the slide and tolerance exactly, at `r` from 1 to 3, templates from 4 × 4 to 24 × 24, and one to three channels (`avx2_matches_scalar`).
 - A red-and-green edge of equal luminance scores as an edge, not as flat; a channel flat in the template is left out; a grey tile repeated in three channels scores as the single channel does.
-- A strong corner and a blob score 0; a straight edge at 0°, 30°, 45° and 90° scores `r` at `r = 2` and `r = 3`, with its slide along the edge; a flat tile, a tile of pure 1-level noise, and an 8-bit sky ramp score `r`; a pattern repeating every 2 px along one axis scores 2, and one that matches itself at `(1, 1)` but not at `(2, 2)` scores 1.41.
+- A strong corner and a blob score under 1 and more than 0; a straight edge at 0°, 30°, 45° and 90° scores `r` at `r = 2` and `r = 3`, with its slide along the edge; a flat tile, a tile of pure 1-level noise, and an 8-bit sky ramp score `r`; a pattern repeating every 2 px along one axis scores between 2 and 2.3, and one that matches itself at `(1, 1)` but not at `(2, 2)` between 1.41 and 2.
+- The radius is where the ZNCC, interpolated linearly along a grid edge, equals the level.
 - The surface is 1 at its centre and `NaN` outside the disk.
 - The parts function agrees with separate calls on each part's template.
 - A tile with too little margin around the template, and a parts tile of the wrong size, are refused with a panic message naming the sizes.
@@ -253,6 +256,6 @@ The bench's track and cluster evaluations fill every new field wherever `localiz
 
 ## Open questions
 
-- **Calibrating the defaults of ε and n on real pairs of views.** `relative_tolerance` and `noise` are parameters; their defaults in `SelfSimilarityParams::default()` rest on the single-image sample above and are not checked against matching between two views. The check that would set them starts each sighting's search on the ground-truth tracks of `seoul_bull_sculpture` and `kerry_park` 1, 2 and 3 px off its true keypoint along each axis and along the diagonals, and records whether the localizer's ZNCC search walks back. A sighting's measured lock-in is the largest offset it recovers from, and the radius should predict it: a sighting scored under 1.5 recovers from every offset up to 3, and one scored 3 fails from some. The same test scores the deprecated localizability, and the comparison decides the default tolerance and whether the kernels' gates change. The residuals between views that the track stage already computes are a direct measurement of `n` for it.
+- **Calibrating the defaults of ε and n on real pairs of views.** `relative_tolerance` and `noise` are parameters; their defaults in `SelfSimilarityParams::default()` rest on the single-image sample above and are not checked against matching between two views. The check that would set them starts each sighting's search on the ground-truth tracks of `seoul_bull_sculpture` and `kerry_park` 1, 2 and 3 px off its true keypoint along each axis and along the diagonals, and records whether the localizer's ZNCC search walks back. A sighting's measured lock-in is the largest offset it recovers from, and the radius should predict it: a sighting scored under 1 recovers from every offset up to 3, and one scored 3 fails from some. The same test scores the deprecated localizability, and the comparison decides the default tolerance and whether the kernels' gates change. The residuals between views that the track stage already computes are a direct measurement of `n` for it.
 - **Sharing the localizer's search kernel.** `keypoint_localize::kernels::compute_channel_grids` already computes cross sums and window moments over a dense shift grid for a weighted template. A self-similarity call is that kernel with the tile's own core as the template; sharing it would mean lifting it out of `keypoint_localize` and giving it an unweighted form.
 - **A bar.** Whether the bench paints on the radius, with a `max_zncc_self_similarity_radius` bar, once the calibration settles its meaning.

@@ -111,7 +111,7 @@ impl ColumnLayout {
         // the localizability grid.
         let sigma_grid = sigma + 76.0;
         let self_similarity = sigma_grid + GRID_SIDE + 10.0;
-        // Room for the whole and the middle radius, `2.24 / 1.41`, then the
+        // Room for the whole and the middle radius, `2.3 / 1.4`, then the
         // self-similarity grid.
         let self_similarity_grid = self_similarity + 76.0;
         // Then the core's surface plot.
@@ -211,13 +211,14 @@ pub(super) const SIGMA_POS_TIP: &str = "The deprecated localizability score, sho
 /// The self-similarity heading's hover text.
 pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: how far, in \
     patch-grid pixels, this observation's own tile can slide over itself by whole pixels and \
-    still match itself as well as a true match between two photographs would. 0 means a match \
-    locks onto this position and no other nearby, as on a corner or a busy texture. 3+ means \
-    it still matched itself 3 pixels away and may slide further, as along a straight edge or \
-    over a flat patch.\n\n\
+    still match itself as well as a true match between two photographs would: where its \
+    ZNCC against itself, interpolated between whole-pixel shifts, falls through that level. \
+    Under 1 means a match locks onto this position within a pixel, as on a corner or a busy \
+    texture. 3+ means it still matched itself 3 pixels away and may slide further, as along a \
+    straight edge or over a flat patch.\n\n\
     The first number is the whole tile, the second its middle alone, the centred square half \
     its width. The grid beside them is each ninth of the tile alone, laid out as the tile is: \
-    green at 0, yellow at 1 to 1.41, orange at 2 to 2.24, red at 3 or more. A line in a box is \
+    green under 1, yellow from 1 to 2, orange from 2 to 3, red at 3 or more. A line in a box is \
     the direction that ninth can slide in, where its matching shifts line up along one. Hover \
     the grid for the numbers.";
 
@@ -838,7 +839,7 @@ pub(super) enum GridKind {
 
 /// A grid's nine values as its hover text shows them, three to a line: a
 /// ZNCC in percent, a sigma_pos to two decimals, a self-similarity radius as
-/// its cell prints it (`1.41`, `3+`), and `-` for a cell with no reading.
+/// its cell prints it (`1.4`, `3+`), and `-` for a cell with no reading.
 pub(super) fn grid_numbers(grid: &[[f64; 3]; 3], kind: GridKind) -> String {
     grid.iter()
         .map(|row| {

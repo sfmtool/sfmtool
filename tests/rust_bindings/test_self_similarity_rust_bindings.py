@@ -38,8 +38,9 @@ def test_the_result_carries_every_part_in_its_shape():
     assert out["surface"][3, 3] == 1.0
     # Outside the disk of radius 3, there is no shift.
     assert np.isnan(out["surface"][0, 0]) and np.isnan(out["surface"][6, 6])
-    # Random texture pins its position.
-    assert out["radius"] == 0.0
+    # Random texture pins its position: its surface falls through the level
+    # within a pixel.
+    assert 0.0 < out["radius"] < 1.0
 
 
 def test_an_edge_slides_along_itself_and_a_corner_does_not():
@@ -50,7 +51,7 @@ def test_an_edge_slides_along_itself_and_a_corner_does_not():
     y, x = np.mgrid[0:SIDE, 0:SIDE]
     corner = np.where((x >= SIDE // 2) & (y >= SIDE // 2), 200, 50).astype(np.uint8)
     out = zncc_self_similarity_parts(corner, R)
-    assert out["radius"] == 0.0
+    assert out["radius"] < 1.0
     np.testing.assert_array_equal(out["slide"], [0.0, 0.0])
 
 

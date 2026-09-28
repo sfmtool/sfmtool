@@ -1156,9 +1156,10 @@ score. All are `None` wherever `localizability_deprecated` is.
 Beside the localizability, at both stages and for every observation with a
 pixel, is the observation's own tile's **ZNCC self-similarity radius** (see
 [`zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md)):
-how far, in patch-grid pixels, the tile's `R×R` core can slide over itself by
-whole pixels and still match itself as well as a true match between two views
-would, `0 ..= 3` with `3` read as "3 or more", under the default
+how far, in patch-grid pixels, the tile's `R×R` core can slide over itself and
+still match itself as well as a true match between two views would, read where
+its ZNCC against itself, interpolated between whole-pixel shifts, falls through
+that level, `0 ..= 3` with `3` read as "3 or more", under the default
 `SelfSimilarityParams`. The tile is read over the same frame as the
 localizability, grown so the shifted windows have pixels to read: at the track
 stage the keypoint-anchored frame is rendered with its half-extent grown by

@@ -9,10 +9,11 @@
 //! rectangle inside a tile, [`zncc_self_similarity_radius`] computes the
 //! channel-averaged ZNCC of the template against the window of the same size
 //! moved by every shift `d` in the disk `dx² + dy² ≤ r²`, counts a shift as
-//! indistinguishable when `1 − z(d) ≤ ε + mean_c (n / s_c)²`, and reports the
-//! length of the furthest such shift (saturating at `r` when one lies in the
-//! disk's outer ring) and the direction the indistinguishable shifts line up
-//! in. [`zncc_self_similarity_parts`] reads a whole `R×R` core, its middle
+//! indistinguishable when `1 − z(d) ≤ ε + mean_c (n / s_c)²`, and reports how
+//! far from the centre the surface crosses that level (interpolated linearly
+//! along the grid edges between neighbouring shifts, and saturating at `r`
+//! when an indistinguishable shift lies in the disk's outer ring) and the
+//! direction the indistinguishable shifts line up in. [`zncc_self_similarity_parts`] reads a whole `R×R` core, its middle
 //! square and the nine cells of the ZNCC grid's split from one tile, sharing
 //! the cross sums between them.
 //!
@@ -60,9 +61,13 @@ impl Default for SelfSimilarityParams {
 /// One template's reading.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfSimilarity {
-    /// The length of the furthest indistinguishable shift, `0 ..= max_radius`,
-    /// in tile pixels; `max_radius` when one lies in the window's outer ring,
-    /// or when the template has no textured channel.
+    /// How far from the centre the ZNCC surface crosses the level `1 −
+    /// tolerance`, `0 ..= max_radius`, in tile pixels: over the grid edges
+    /// between neighbouring shifts where one is at or above the level and the
+    /// other below, the furthest point where the ZNCC interpolated linearly
+    /// along the edge equals the level. `max_radius` when an indistinguishable
+    /// shift lies in the window's outer ring, or when the template has no
+    /// textured channel.
     pub radius: f64,
     /// The direction of the indistinguishable shifts, in the grid frame (`x`
     /// column-right, `y` row-down), scaled by how strongly they line up:
@@ -432,7 +437,6 @@ impl Prepared {
         let ri = r as i64;
         let inner = (ri - 1) * (ri - 1);
         let mut surface = vec![f64::NAN; shifts];
-        let mut furthest: i64 = 0;
         let mut saturated = false;
         let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
         for dy in -ri..=ri {
@@ -464,7 +468,6 @@ impl Prepared {
                     / textured.len() as f64;
                 surface[index] = z;
                 if 1.0 - z <= tolerance {
-                    furthest = furthest.max(d2);
                     saturated |= d2 > inner;
                     let (fx, fy) = (dx as f64, dy as f64);
                     sxx += fx * fx;
@@ -476,7 +479,7 @@ impl Prepared {
         let radius = if saturated {
             r as f64
         } else {
-            (furthest as f64).sqrt()
+            crossing_radius(&surface, r, 1.0 - tolerance)
         };
         SelfSimilarity {
             radius,
@@ -485,6 +488,46 @@ impl Prepared {
             surface,
         }
     }
+}
+
+/// How far from the centre the surface crosses `level`: over every grid edge
+/// between two neighbouring shifts of the disk where one is at or above the
+/// level and the other below it, the point where the ZNCC, interpolated
+/// linearly along the edge, equals the level; the largest distance of those
+/// points from the centre. Tracked as a squared length, with one square root
+/// at the end. The centre is always at or above the level, so a patch that
+/// locks reads the fraction of a pixel its peak takes to fall through it.
+fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
+    let side = 2 * r + 1;
+    let ri = r as i64;
+    let at = |dx: i64, dy: i64| -> Option<f64> {
+        if dx * dx + dy * dy > ri * ri {
+            return None;
+        }
+        let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
+        z.is_finite().then_some(z)
+    };
+    let mut furthest = 0.0f64;
+    for dy in -ri..=ri {
+        for dx in -ri..=ri {
+            let Some(z) = at(dx, dy) else { continue };
+            if z < level {
+                continue;
+            }
+            for (ex, ey) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let Some(zn) = at(dx + ex, dy + ey) else {
+                    continue;
+                };
+                if zn >= level {
+                    continue;
+                }
+                let t = (z - level) / (z - zn);
+                let (px, py) = (dx as f64 + t * ex as f64, dy as f64 + t * ey as f64);
+                furthest = furthest.max(px * px + py * py);
+            }
+        }
+    }
+    furthest.sqrt()
 }
 
 /// The slide of a set of shifts from the sums of their second moments: the

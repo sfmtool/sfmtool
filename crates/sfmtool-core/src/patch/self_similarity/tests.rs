@@ -137,7 +137,16 @@ fn avx2_matches_scalar() {
                                 );
                             }
                         }
-                        assert_eq!(simd.radius, scalar.radius, "r={r} core={core} c={channels}");
+                        // The radius is interpolated from the surface, so it
+                        // carries the kernels' f32 rounding too, amplified
+                        // where the ZNCC either side of a crossing is close;
+                        // it is shown to one decimal.
+                        assert!(
+                            (simd.radius - scalar.radius).abs() < 1e-3,
+                            "r={r} core={core} c={channels}: {} against {}",
+                            simd.radius,
+                            scalar.radius
+                        );
                         assert_eq!(simd.slide, scalar.slide, "r={r} core={core} c={channels}");
                         assert_eq!(simd.tolerance, scalar.tolerance);
                         cases += 1;
@@ -230,8 +239,10 @@ fn grey_repeated_in_three_channels_scores_as_one() {
     }
 }
 
+/// A patch that locks reads the fraction of a pixel its peak takes to fall
+/// through the level: under one pixel, and more than nothing.
 #[test]
-fn a_corner_and_a_blob_score_zero() {
+fn a_corner_and_a_blob_score_under_a_pixel() {
     let size = 18;
     let corner = tile_of(
         size,
@@ -239,7 +250,7 @@ fn a_corner_and_a_blob_score_zero() {
         |_, x, y| if x >= 9.0 && y >= 9.0 { 200.0 } else { 50.0 },
     );
     let s = centred(&corner, 1, 12, 3);
-    assert_eq!(s.radius, 0.0, "{s:?}");
+    assert!(s.radius > 0.0 && s.radius < 1.0, "{s:?}");
     assert_eq!(s.slide, [0.0, 0.0]);
 
     let blob = tile_of(size, 1, |_, x, y| {
@@ -247,7 +258,7 @@ fn a_corner_and_a_blob_score_zero() {
         40.0 + 150.0 * (-(dx * dx + dy * dy) / (2.0 * 1.5 * 1.5)).exp()
     });
     let s = centred(&blob, 1, 12, 3);
-    assert_eq!(s.radius, 0.0, "{s:?}");
+    assert!(s.radius > 0.0 && s.radius < 1.0, "{s:?}");
 }
 
 #[test]
@@ -299,7 +310,9 @@ fn repeats_score_the_repeat_distance() {
         columns[(x as usize % 2) * size + y as usize]
     });
     let s = centred(&axis, 1, 14, 3);
-    assert_eq!(s.radius, 2.0, "{s:?}");
+    // The repeat at 2 px matches, and the surface falls through the level a
+    // fraction of a pixel either side of it.
+    assert!(s.radius > 2.0 && s.radius < 2.3, "{s:?}");
     assert!(s.slide[0].abs() > 0.99, "{:?}", s.slide);
 
     // A random texture across the diagonal, constant along (1, 1) but for a
@@ -315,7 +328,22 @@ fn repeats_score_the_repeat_distance() {
         stripe[across as usize] + 60.0 * (std::f64::consts::TAU * (x + y) / 24.0).sin()
     });
     let s = centred(&diagonal, 1, 16, 3);
-    assert_eq!(s.radius, 2f64.sqrt(), "{s:?}");
+    assert!(s.radius > 2f64.sqrt() && s.radius < 2.0, "{s:?}");
+}
+
+/// The crossing is where the ZNCC, interpolated linearly along a grid edge,
+/// equals the level.
+#[test]
+fn the_radius_is_where_the_surface_crosses_the_level() {
+    // A 3 x 3 surface (r = 1): the centre at 1, the right-hand neighbour at
+    // 0.9 and the other three at 0.5, read at the level 0.8.
+    let nan = f64::NAN;
+    let surface = [nan, 0.5, nan, 0.5, 1.0, 0.9, nan, 0.5, nan];
+    // Right: 1 to 0.9 stays above 0.8, so no crossing between them, and the
+    // shift (1, 0) is on the disk's rim with no neighbour inside it. Left, up
+    // and down: 1 to 0.5 crosses 0.8 two fifths of the way out.
+    let radius = super::crossing_radius(&surface, 1, 0.8);
+    assert!((radius - 0.4).abs() < 1e-12, "{radius}");
 }
 
 #[test]
@@ -339,7 +367,12 @@ fn parts_agree_with_separate_calls() {
     let parts = zncc_self_similarity_parts(&t, resolution, &p);
     let check = |part: &SelfSimilarity, rect: [usize; 4]| {
         let alone = zncc_self_similarity_radius(&t, rect, &p);
-        assert_eq!(part.radius, alone.radius, "{rect:?}");
+        assert!(
+            (part.radius - alone.radius).abs() < 1e-3,
+            "{rect:?}: {} against {}",
+            part.radius,
+            alone.radius
+        );
         assert!(
             (part.slide[0] - alone.slide[0]).abs() < 1e-9
                 && (part.slide[1] - alone.slide[1]).abs() < 1e-9

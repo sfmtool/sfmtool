@@ -1751,34 +1751,23 @@ fn a_grid_s_hover_text_holds_its_nine_numbers() {
  0.12  0.12  0.12
  0.12  0.12  0.12"
     );
-    let radii = [
-        [0.0, 1.0, 2f64.sqrt()],
-        [2.0, 5f64.sqrt(), 3.0],
-        [f64::NAN, 0.0, 3.0],
-    ];
+    let radii = [[0.37, 1.0, 1.44], [2.0, 2.26, 3.0], [f64::NAN, 0.04, 3.0]];
     assert_eq!(
         grid_numbers(&radii, GridKind::SelfSimilarity),
-        "    0     1  1.41
-    2  2.24    3+
-    -     0    3+"
+        "  0.4   1.0   1.4
+  2.0   2.3    3+
+    -   0.0    3+"
     );
 }
 
-/// The self-similarity cell prints the whole and the middle radius to two
-/// decimals, trailing zeros dropped, with `3+` for the largest radius the
-/// reading searches.
+/// The self-similarity cell prints the whole and the middle radius to one
+/// decimal, with `3+` for the largest radius the reading searches.
 #[test]
 fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
     use super::self_similarity_text;
-    assert_eq!(
-        self_similarity_text(Some(0.0), Some(2f64.sqrt())),
-        "0 / 1.41"
-    );
-    assert_eq!(
-        self_similarity_text(Some(3.0), Some(5f64.sqrt())),
-        "3+ / 2.24"
-    );
-    assert_eq!(self_similarity_text(Some(1.0), Some(2.0)), "1 / 2");
+    assert_eq!(self_similarity_text(Some(0.37), Some(1.44)), "0.4 / 1.4");
+    assert_eq!(self_similarity_text(Some(3.0), Some(2.26)), "3+ / 2.3");
+    assert_eq!(self_similarity_text(Some(1.0), Some(2.96)), "1.0 / 3.0");
     assert_eq!(self_similarity_text(Some(3.0), None), "3+ / -");
     assert_eq!(self_similarity_text(None, Some(1.0)), "-");
 
@@ -1788,7 +1777,7 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
     let current = crate::bench::live::Evaluation::Current;
     let mut cluster = ClusterMeasurement::from_seed([10.0, 12.0], [[1.0, 0.0], [0.0, 1.0]]);
     cluster.zncc_self_similarity_radius = Some(3.0);
-    cluster.zncc_self_similarity_radius_middle = Some(1.0);
+    cluster.zncc_self_similarity_radius_middle = Some(1.04);
     let row = Observation {
         image: 0,
         provenance: Provenance::Origin,
@@ -1798,24 +1787,24 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
         track: Some(TrackMeasurement {
             keypoint: Some([10.0, 12.0]),
             zncc: Some(0.9),
-            zncc_self_similarity_radius: Some(0.0),
-            zncc_self_similarity_radius_middle: Some(2f64.sqrt()),
+            zncc_self_similarity_radius: Some(0.37),
+            zncc_self_similarity_radius_middle: Some(1.44),
             ..TrackMeasurement::default()
         }),
     };
     assert_eq!(
         super::measurements(&row, StageKind::Cluster, &current)[4],
-        "3+ / 1"
+        "3+ / 1.0"
     );
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[4],
-        "0 / 1.41"
+        "0.4 / 1.4"
     );
 }
 
-/// The self-similarity grid runs green at 0, yellow at 1 to 1.41, orange at
-/// 2 to 2.24 and red at the largest radius; a cell with no reading has no
-/// colour.
+/// The self-similarity grid runs green under 1, yellow from 1 to 2, orange
+/// from 2 to under the largest radius and red at it; a cell with no reading
+/// has no colour.
 #[test]
 fn self_similarity_cells_run_from_green_to_red() {
     use super::self_similarity_cell_color;
@@ -1824,10 +1813,11 @@ fn self_similarity_cells_run_from_green_to_red() {
     let orange = egui::Color32::from_rgb(220, 100, 40);
     let red = egui::Color32::from_rgb(220, 0, 40);
     assert_eq!(self_similarity_cell_color(0.0), Some(green));
+    assert_eq!(self_similarity_cell_color(0.99), Some(green));
     assert_eq!(self_similarity_cell_color(1.0), Some(yellow));
-    assert_eq!(self_similarity_cell_color(2f64.sqrt()), Some(yellow));
+    assert_eq!(self_similarity_cell_color(1.99), Some(yellow));
     assert_eq!(self_similarity_cell_color(2.0), Some(orange));
-    assert_eq!(self_similarity_cell_color(5f64.sqrt()), Some(orange));
+    assert_eq!(self_similarity_cell_color(2.99), Some(orange));
     assert_eq!(self_similarity_cell_color(3.0), Some(red));
     assert_eq!(self_similarity_cell_color(f64::NAN), None);
 }
