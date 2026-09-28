@@ -23,6 +23,7 @@ area's `README.md`.
 
 | Document | Amends | Proposes |
 |----------|--------|----------|
+| [nearby-tracks.md](nearby-tracks.md) | — | Porting the harness's anchor finder into core as *Find Nearby Tracks*, in stages: the far-field sweep, distance ranges, the matching sources, depth layers, then the combined operation, the viewer entry and the wire tool. |
 | [kdf-shared-descriptor-reads.md](kdf-shared-descriptor-reads.md) | [core/features/lazy-kdforest-query.md](../core/features/lazy-kdforest-query.md) | Group nonconsecutive candidates by block and replay distances in original order to preserve ties; measure sorting and replay costs. |
 | [sift-incremental-extraction-amendment.md](sift-incremental-extraction-amendment.md) | [core/features/sift.md](../core/features/sift.md), [formats/sift-file-format.md](../formats/sift-file-format.md) | A growable `.sift` archive — detect a keypoint pool once, describe it across several commands — and the version-2 on-disk layout that carries it: append-only descriptor chunks, `described_count`, and a stable `feature_set_xxh128` that survives an append. |
 | [sift-gpu-amendment.md](sift-gpu-amendment.md) | [core/features/sift.md](../core/features/sift.md) | A `wgpu` compute backend for SIFT's dense stages (blur, DoG, extrema, descriptor), and the output-parity criterion a non-bit-identical backend needs. |
