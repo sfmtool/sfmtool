@@ -435,15 +435,16 @@ measured.
    while three or more remain, within 3 px. This anchor sits at the pixel.
    `constellation_at=keypoints` also queries from up to 4 keypoints within
    24 px of the pixel.
-5. **Infinity** (`infinity`, run after the others, below).
+5. **The far-field sweep** (`farfield`, run after the others, below).
+   `far_test=infinity` runs the infinity test in its place.
 6. **Plane sweep** (`sweep`, not in the default sources): the sweep of
    `candidates/planesweep.py` at the pixel, keeping the best depth when two or
    more other photographs read ZNCC 0.8 or better there.
 
 ### Reading the pixel's patch, whole and in the middle
 
-The infinity test and the layers' evidence read the pixel's own patch in the
-other photographs with `read_patch`: an 11 by 11 grid of samples, 17 px across,
+The far-field sweep, the infinity test and the layers' evidence read the
+pixel's own patch in the other photographs with `read_patch`: an 11 by 11 grid of samples, 17 px across,
 on a plane facing the queried camera at each distance asked for, sampled in
 every image it lands in. Each read gives two ZNCCs from the same samples: of
 the whole grid, and of its middle 5 by 5. When the whole patch matches and its
@@ -486,27 +487,73 @@ reading and the lesser of the whole and middle readings, each the mean of the
 three best images, and its `rank` orders the layers by that score. Walking to
 the pixel starts from rank 1 and has the others.
 
+### The far-field sweep
+
+`from_farfield` reads the pixel's patch from infinity in along its ray. The
+distances are counted as disparities `d`, the pixels the pixel shifts by in
+the image that moves it most for a change of inverse distance: `d = 0` is
+infinity, and `R / d` the distance, `R` that image's pixels per unit of
+inverse distance. The sweep reads 0, 1, 2, 3, 4, 6, 8, 10, 12, 14 and 16 px
+(`ff_disparities`) in every image the pixel lands in.
+
+- **Wide images.** The reading at a disparity is over the images whose whole
+  patch reads 0.8 somewhere in the sweep and that move the pixel at least half
+  as far as the widest of them (`ff_wide`, `ff_wide_among=matching`). Images
+  that barely move read alike at every disparity. Judging the width among the
+  images that match keeps an image that sees something else at the pixel from
+  setting the scale; `ff_wide_among=all` judges it against every image.
+- **The reading.** At each disparity, the middle's mean over the three best
+  wide images, or the whole patch's where the query's middle is flat (a grey
+  standard deviation under 8), since a flat middle correlates with noise.
+- **Peaks.** Every peak of the reading is a candidate, up to 3
+  (`ff_max_peaks`): not only the highest. A peak needs the whole patch to read
+  0.8 there and, unless the middle is flat, the middle 0.7; it must stand
+  0.02 above the reading around it (`ff_min_prominence`), since a flat
+  reading has no peak; and it must not be at 16 px, where a rising reading
+  says the peak is further in. Its range runs to the midpoints with the
+  neighbouring disparities.
+- **Which images belong** (`_ff_group`). The sweep compares each image with
+  the query only, so a reading can gather images of two surfaces. The query's
+  patch and each agreeing image's, sampled at the peak, are compared pair by
+  pair by the ZNCC of their middles (of the whole patch where the middle is
+  flat), and grouped by average linkage while the closest groups' mean is 0.9
+  or more (`ff_group_cut`), over at most 16 images (`ff_group_max`). The table
+  grows as the square of the images, which the cap bounds; how it scales past
+  a few dozen is not settled. The reading keeps the query's group. When the
+  query stands alone and two or more other images form a group, that group is
+  fit on the bench with the query turned out: where it lands more than 8 px
+  from the pixel, within 48 px, with every image within 2 px, the anchor moves
+  to that point, at the pixel where it lands (`refit="moved"`). When no two
+  other images agree either, the reading stands as it was.
+- **Metrics.** Each far-field anchor carries `farfield`: its `whole` and
+  `middle` readings and their profiles over the sweep, the peak's
+  `prominence`, `peak_rank` and the number of `peaks`, whether the middle was
+  flat, how many `images` agree and the most parallax any of them has
+  (`parallax_px`, against `widest_px` for the widest image that sees the
+  pixel), the query's mean middle ZNCC with its group (`group_middle`) and how
+  many images were `left_out`. A later comparison between candidates can
+  weigh these; the sweep keeps readings it has no clear evidence against.
+
+The sweep runs when the other sources gave no usable anchor, more than one
+layer, or no usable anchor at the pixel (`infinity=needed`, the default). A
+pixel at infinity often has one layer of nearer anchors beside it and nothing
+at it.
+
 ### The infinity test
 
-At infinity the pixel lands at one position in every other image, set by the
-cameras' rotations alone, so there is no search. `from_infinity` reads the
-patch there, and the pixel is at infinity when one or more images, and half of
-those it lands in, read 0.8 or better. Two more checks follow:
+`from_infinity`, with `far_test=infinity`, reads the patch only where the
+pixel lands at infinity, and the pixel is at infinity when one or more
+images, and half of those it lands in, read 0.8 or better. Two more checks
+follow:
 
-- **The peak along the ray.** Agreeing at infinity is not enough where the
-  texture repeats along the epipolar line, or barely changes. The agreeing
-  images are read at the distances that move the pixel 1, 2, 4, up to 128 px
-  from its position at infinity. If a finite distance reads 0.02 better than
-  infinity, there is no reading. Otherwise the range's near end is where the
-  reading first falls 0.05 below infinity's.
+- **The peak along the ray.** The agreeing images are read at the distances
+  that move the pixel 1, 2, 4, up to 128 px from its position at infinity. If
+  a finite distance reads 0.02 better than infinity, there is no reading.
+  Otherwise the range's near end is where the reading first falls 0.05 below
+  infinity's.
 - **The middle.** When the patch's middle has texture (a grey standard
   deviation of 8 or more), it must also read 0.8 on average at infinity in the
   agreeing images.
-
-The test runs when the other sources gave no usable anchor, more than one
-layer, or no usable anchor at the pixel (`infinity=needed`, the default), and
-costs a few milliseconds a query. A pixel at infinity often has one layer of
-nearer anchors beside it and nothing at it.
 
 ### How the harness scores anchors
 
@@ -550,31 +597,33 @@ Every source run (`stop=never`), the defaults otherwise:
 | | Pass | Source | has | bnd | at px | right | wrong | layer | lyr px | l+sup | chk | agree | s |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | seoul_bull | full | tracks | 0.927 | 1.000 | 0.000 | 0.000 | 0.000 | 0.741 | 12.7 | 0.372 | 1.000 | 1.000 | 0.014 |
-| | | clusters | 0.987 | 0.999 | 0.040 | 0.034 | 0.005 | 0.942 | 5.6 | 0.798 | 0.027 | 0.922 | 0.017 |
-| | | guided | 0.891 | 0.998 | 0.047 | 0.038 | 0.009 | 0.811 | 4.7 | 0.685 | 0.037 | 0.877 | 0.048 |
+| | | clusters | 0.987 | 0.999 | 0.040 | 0.034 | 0.005 | 0.942 | 5.6 | 0.803 | 0.027 | 0.922 | 0.017 |
+| | | guided | 0.891 | 0.998 | 0.047 | 0.038 | 0.009 | 0.811 | 4.7 | 0.688 | 0.037 | 0.877 | 0.048 |
 | | | constellation | 0.763 | 0.999 | 0.762 | 0.554 | 0.208 | 0.554 | 0.0 | 0.338 | 1.000 | 0.732 | 0.018 |
-| | | infinity | 0.029 | 1.000 | 0.029 | 0.029 | 0.000 | 0.029 | 0.0 | 0.002 | 1.000 | 1.000 | 0.003 |
-| | | all | 0.999 | 0.999 | 0.793 | 0.597 | 0.196 | 0.984 | 0.0 | 0.829 | 0.328 | 0.960 | 0.175 |
-| | empty | all | 0.998 | 0.999 | 0.793 | 0.597 | 0.196 | 0.977 | 0.0 | 0.802 | 0.087 | 0.795 | 0.107 |
-| Kerry Park | full | tracks | 0.955 | 1.000 | 0.006 | 0.003 | 0.003 | 0.687 | 8.4 | 0.359 | 1.000 | 1.000 | 0.044 |
-| | | clusters | 0.946 | 0.875 | 0.048 | 0.044 | 0.004 | 0.851 | 7.4 | 0.689 | 0.063 | 0.958 | 0.014 |
-| | | guided | 0.854 | 0.968 | 0.068 | 0.060 | 0.007 | 0.716 | 5.4 | 0.573 | 0.083 | 0.844 | 0.083 |
-| | | constellation | 0.173 | 0.990 | 0.171 | 0.093 | 0.078 | 0.093 | 0.0 | 0.049 | 1.000 | 0.542 | 0.027 |
-| | | infinity | 0.054 | 0.900 | 0.048 | 0.048 | 0.000 | 0.048 | 0.0 | 0.040 | 1.000 | 1.000 | 0.010 |
-| | | all | 0.993 | 0.939 | 0.288 | 0.209 | 0.078 | 0.956 | 4.4 | 0.760 | 0.402 | 0.978 | 0.316 |
-| | empty | all | 0.954 | 0.907 | 0.283 | 0.208 | 0.075 | 0.889 | 4.6 | 0.689 | 0.089 | 0.851 | 0.215 |
+| | | farfield | 0.079 | 1.000 | 0.079 | 0.055 | 0.024 | 0.055 | 0.0 | 0.031 | 0.991 | 0.609 | 0.013 |
+| | | all | 0.999 | 0.999 | 0.810 | 0.612 | 0.199 | 0.984 | 0.0 | 0.836 | 0.330 | 0.955 | 0.188 |
+| | empty | all | 0.998 | 0.999 | 0.810 | 0.612 | 0.199 | 0.977 | 0.0 | 0.809 | 0.091 | 0.778 | 0.113 |
+| Kerry Park | full | tracks | 0.955 | 1.000 | 0.006 | 0.003 | 0.003 | 0.687 | 8.4 | 0.360 | 1.000 | 1.000 | 0.055 |
+| | | clusters | 0.946 | 0.875 | 0.048 | 0.044 | 0.004 | 0.851 | 7.4 | 0.691 | 0.063 | 0.958 | 0.017 |
+| | | guided | 0.854 | 0.968 | 0.068 | 0.060 | 0.007 | 0.716 | 5.4 | 0.574 | 0.083 | 0.844 | 0.096 |
+| | | constellation | 0.173 | 0.990 | 0.171 | 0.093 | 0.078 | 0.093 | 0.0 | 0.049 | 1.000 | 0.542 | 0.029 |
+| | | farfield | 0.133 | 1.000 | 0.131 | 0.074 | 0.058 | 0.074 | 0.0 | 0.071 | 0.979 | 0.511 | 0.104 |
+| | | all | 0.994 | 0.939 | 0.357 | 0.232 | 0.125 | 0.958 | 4.2 | 0.762 | 0.405 | 0.968 | 0.489 |
+| | empty | all | 0.957 | 0.908 | 0.353 | 0.231 | 0.122 | 0.891 | 4.5 | 0.691 | 0.097 | 0.796 | 0.269 |
 
 The "all" rows' seconds include reading the pixel's patch for the layers'
-evidence: 30 to 110 ms a query at the median.
+evidence: 30 to 110 ms a query at the median. The far-field sweep's wrong
+readings at the pixel are candidates; most rank below the right layer (below),
+but they count in "wrong" here.
 
 The default, stopping once enough anchors are found:
 
 | | Pass | has | at px | right | wrong | layer | lyr px | l+sup | agree | s/query (median) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| seoul_bull | full | 0.999 | 0.062 | 0.055 | 0.007 | 0.947 | 8.5 | 0.478 | 0.997 | 0.125 |
-| | empty | 0.998 | 0.088 | 0.073 | 0.016 | 0.968 | 5.3 | 0.753 | 0.898 | 0.051 |
-| Kerry Park | full | 0.993 | 0.074 | 0.068 | 0.006 | 0.874 | 6.9 | 0.381 | 0.999 | 0.293 |
-| | empty | 0.954 | 0.109 | 0.100 | 0.009 | 0.872 | 6.5 | 0.615 | 0.940 | 0.111 |
+| seoul_bull | full | 0.999 | 0.138 | 0.101 | 0.037 | 0.947 | 8.2 | 0.487 | 0.988 | 0.132 |
+| | empty | 0.998 | 0.164 | 0.119 | 0.045 | 0.968 | 5.0 | 0.763 | 0.813 | 0.062 |
+| Kerry Park | full | 0.994 | 0.159 | 0.092 | 0.066 | 0.879 | 6.7 | 0.374 | 0.986 | 0.379 |
+| | empty | 0.957 | 0.191 | 0.124 | 0.068 | 0.876 | 6.4 | 0.621 | 0.831 | 0.187 |
 
 The empty pass, rescored, as the sources were added (`stop=never`; the empty
 pass has no tracks):
@@ -585,7 +634,8 @@ pass has no tracks):
 | + guided matching (two views), clusters of any member within 48 px | 0.813 | 0.594 | 0.946 | 0.800 | 0.120 |
 | + guided matching's second pass, ranges up to 3 times | 0.829 | 0.624 | 0.944 | 0.796 | 0.129 |
 | + far readings kept | 0.889 | 0.689 | 0.965 | 0.800 | 0.154 |
-| + the infinity test, and the layers' evidence (the defaults) | 0.889 | 0.689 | 0.977 | 0.802 | 0.215 |
+| + the infinity test, and the layers' evidence | 0.889 | 0.689 | 0.977 | 0.802 | 0.215 |
+| + the far-field sweep in place of the infinity test (the defaults) | 0.891 | 0.691 | 0.977 | 0.809 | 0.269 |
 
 The infinity test, empty pass. Kerry Park has 248 queries whose true point is
 at infinity, seoul_bull 44:
@@ -596,7 +646,24 @@ at infinity, seoul_bull 44:
 | Three agreeing images | 220 | 16 | 16 | 0 |
 | One agreeing image | 220 | 16 | 42 | 25 |
 | One image, and the peak along the ray | 191 | 1 | 42 | 2 |
-| One image, the peak, and the middle (the default) | 191 | 0 | 40 | 0 |
+| One image, the peak, and the middle | 191 | 0 | 40 | 0 |
+
+The far tests compared, empty pass, every source run. "Right" counts the
+queries with a right far reading at the pixel; "rank 1 right" the queries whose
+first-ranked layer is the pixel's, of all 3903 on Kerry Park and 1277 on
+seoul_bull; "wrong at rank 1" the queries whose first-ranked layer holds a
+wrong far reading.
+
+| Far test | Kerry Park: right at infinity (of 248) | right, 300 m or more (of 59) | rank 1 right | wrong at rank 1 | seoul_bull: right at infinity (of 44) | rank 1 right | Kerry Park s |
+|---|---|---|---|---|---|---|---|
+| The infinity test | 188 | 0 | 2937 | 0 | 37 | 1144 | 0.216 |
+| Sweep to 10 px, best middle, reads at 16 to 128 px to reject | 211 | 30 | 2941 | 1 | 31 | 1140 | 0.293 |
+| Sweep to 16 px, best middle, images grouped pairwise | 213 | 31 | 2941 | 1 | 31 | 1140 | 0.251 |
+| Sweep to 16 px, every peak (the default) | 225 | 48 | 2943 | 15 | 38 | 1143 | 0.269 |
+
+With the default stopping rule, rank 1 is right on 2839 of Kerry Park's empty
+pass queries against 2829 with the infinity test, and 2103 against 2088 on the
+full pass; on seoul_bull, 1108 against 1109 and 1010 against 1011.
 
 Ranking the layers, over the queries with more than one layer and the pixel's
 among them (1841 on Kerry Park and 734 on seoul_bull, empty pass): the share
@@ -676,6 +743,45 @@ anchor from it (which does not depend on the scoring):
   patch does not do as well: requiring the test to pass at 16 px too rejects
   the balconies, but 26 of Kerry Park's far readings at infinity then start
   too near to count as far.
+- **The far-field sweep in place of the infinity test.** The infinity test
+  asks whether the pixel is at infinity and, reading along the ray, rejects
+  it when something nearer reads better. The sweep asks where in the far
+  field the pixel reads, and returns each peak it finds. Kerry Park's points
+  300 m and more away had no reading at the pixel from the infinity test and
+  have 48 of 59 from the sweep.
+- **Reading further in to reject a far pick did nothing for the answer.** At
+  16, 32, 64 and 128 px the reads fell on either side of narrow peaks: at Kerry
+  Park point 250, 93 m away, the tree reads 0.99 at 40 px, 0.79 at 32 and 0.46
+  at 64. Of the 22 far readings those reads rejected, the 18 wrong ones were
+  already ranked below the right layer (or, once, below a wrong one), and 4
+  were right.
+- **Every peak, not the best.** At seoul_bull point 88, from a single image,
+  the whole patch reads best at infinity (0.98) and its middle best at 12 px
+  (0.97); the true point is at infinity. With one image there is nothing to
+  decide between them, so both go out. Picking the best reading returned
+  only the wrong one.
+- **Two surfaces in one reading.** At Kerry Park point 251 the pixel is on a
+  distant tower. Three images read the tower, and three taken close together
+  see a nearer tree in front of it, whose patch resembles the query's as a
+  whole. Against a blend of all six, every image reads in between; pair by
+  pair, by the middle, they form two groups (0.94 to 0.97 and 0.96 to 0.99,
+  with 0.78 to 0.90 between them), and the reading keeps the tower's.
+- **The query standing apart.** At Kerry Park point 5, a balcony edge, the
+  query's observation reads 0.71 on the bench, the other images' 0.90 to 0.97.
+  Fit without the query they meet on the next building's roofline, 30 to
+  40 px from the pixel, where the anchor moves.
+- **Lookalikes that do not separate.** At Kerry Park point 250 two dark trees
+  stand side by side against the sky. From one frame the sweep pairs the
+  query's tree (point 250, 93 m) with its twin (point 18, 100 m) in two
+  neighbouring frames, which agree at any depth, and reads about 900 m. The
+  query's middle reads 0.90 against them, so it joins their group. The
+  reading goes out with its evidence, two images and little parallax, against
+  the 19 images that read the tree at 91 m.
+- **Which images are wide.** Seoul_bull point 93 is seen by two images; the one
+  that moves it most sees something else there and matches nowhere. Judged
+  against it, the image that does match was not wide enough to be read.
+  Judging the width among the images that match gives the reading, and on
+  Kerry Park 15 more of the points 300 m and more away.
 - **Ranking the layers.** Near a pixel the layers are real surfaces, so which
   one the pixel is on takes its own patch. Read at each layer's distances,
   whole and in the middle, it ranks the pixel's layer first 93 to 94% of the

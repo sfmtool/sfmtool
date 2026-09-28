@@ -272,8 +272,8 @@ enough anchors close to the pixel, and otherwise goes on to the next source:
    true match, reading grazing ground at a fixed radius. It comes last among
    the matching sources, as a starting hit where the clusters and the guided
    matches give nothing.
-5. **The infinity test.** Whether the pixel is further than the photographs
-   can tell from infinity, below. It runs after the others, only when they
+5. **The far-field sweep.** Readings of the pixel's own patch from infinity in
+   to a few hundred metres, below. It runs after the others, only when they
    leave the pixel's depth open.
 
 A second query, Kerry Park point 33 in `fisheye_left/frame_13` (L13), showed
@@ -313,26 +313,62 @@ frame, is on the waterfront beyond downtown, which the ground truth puts at
 infinity. The finder had far readings there all along, clusters and guided
 matches whose ranges run from 354 to 948 m out to infinity, and counted them
 as unusable because their ranges have no far end. At infinity the pixel lands
-at one position in every other image, set by the cameras' rotations alone,
-so testing for it needs no search: the pixel's patch is read there, and the
-pixel is at infinity when the images it lands in agree. At point 272 all 21
-agree, and the true observations are within half a pixel of the positions
-the rotations predict; at point 33, 114 m away, 2 of 22 do.
+at one position in every other image, set by the cameras' rotations alone, so
+reading it there needs no search. At point 272 all 21 images agree there, and
+the true observations are within half a pixel of the positions the rotations
+predict; at point 33, 114 m away, 2 of 22 do.
 
-Agreeing at infinity is not enough on its own. On seoul_bull, whose
-photographs walk around a sculpture facing it, a pixel at infinity lands in
-only one to five other images, so the test has to accept a single one; and a
-single image agrees by chance where the texture repeats along the epipolar
-line. The hedge behind the lawn, 11 m away, reads 0.90 at infinity and 0.99 at
-its true distance. So the agreeing images are also read along the ray, in from
-infinity, at distances that move the pixel 1, 2, 4, up to 128 px: if a finite
-distance reads better, there is no reading, and otherwise the range's near end
-is where the reading starts to fall. The last misreadings were a birdhouse on
-a pole in front of distant houses, whose patch is mostly the houses, and the
-balconies of an apartment building, which repeat along the epipolar line. The
-patch's **middle**, read from the same samples, separates them: when the whole
-patch matches and its middle does not, the parts away from the pixel carry
-the match.
+**The far-field sweep.** Infinity is one end of a range the photographs can
+barely tell apart, so the pixel's patch is read at infinity and at a few
+distances in from it. The distances are counted as disparities: the pixel
+shifts by `d` pixels in the image that moves it most, 0 (infinity), 1, 2, 3,
+4, 6, 8, 10, 12, 14 and 16. Each read gives two ZNCCs from the same samples,
+of the whole patch and of its middle; when the whole matches and the middle
+does not, the parts away from the pixel carry the match. The reading at a
+disparity is over the images that move the pixel at least half as far as the
+widest image that matches, since images that barely move read alike at every
+distance; judging the width among the images that match keeps an image that
+sees something else at the pixel from setting the scale.
+
+Every peak of the reading is a candidate, not only the highest. On seoul_bull,
+point 88's patch reads best at infinity as a whole and best at 12 px in its
+middle, from a single image, and nothing in the photographs says which is the
+pixel's; both go out as anchors. A peak must stand clear of the reading
+around it (a flat reading, from images that barely move, has none), pass a
+bar for the whole patch and its middle (the middle is skipped when the query's
+middle is flat, since a flat middle correlates with noise), and not sit at 16
+px, where a rising reading says the peak is further in. Each far-field anchor
+carries what a comparison between candidates can weigh: its whole and middle
+readings and their profiles over the sweep, the peak's prominence and rank,
+how many images agree, and how much parallax they have.
+
+Reading further in along the ray to reject far picks was tried and dropped.
+At 16, 32, 64 and 128 px the reads fell on either side of narrow peaks, and
+every wrong reading they rejected was already ranked below the right layer.
+
+**Which images belong.** The sweep compares each image with the query only,
+so a reading can gather images of two surfaces. At Kerry Park point 251 the
+pixel is on a distant tower; three images read the tower, and three others,
+taken close together, see a nearer tree in front of it that resembles the
+query's patch as a whole. Compared against the blend of all six, every image
+reads in between, and the blend cannot say which belong. Compared with each
+other by the middle of the patch, pair by pair, the images fall into two
+groups, the tower's (0.94 to 0.97) and the tree's (0.96 to 0.99), with 0.78
+to 0.90 between them. The reading keeps the query's group. When the query
+stands alone and the other images agree with each other, the reading moves
+to the point they agree on, at the pixel where it lands in the queried image:
+at Kerry Park point 5 the query sits on a balcony edge 30 to 40 px from where
+three or four other images agree on the next building's roofline. The
+pairwise table grows as the square of the images; it is capped at 16 for now,
+and how it scales past that is open.
+
+Lookalikes do not always separate. At Kerry Park point 250 two dark trees
+stand side by side against the sky. From one frame the sweep pairs the
+query's tree with its twin in two neighbouring frames, which agree with each
+other at any depth, and reads about 900 m where the tree is 93 m away. Nothing
+in the far field says otherwise, so the reading goes out as a candidate, with
+its two images and their small parallax, for the comparison between anchors
+to weigh against the 19 images that read the tree at 91 m.
 
 **Ranking the layers.** Near a pixel the layers are real surfaces, so which
 one the pixel is on takes the pixel's own patch. It is read at each layer's
@@ -356,16 +392,28 @@ With no reconstructed points, 95% of Kerry Park's queries and nearly all of
 seoul_bull's get an anchor, and 89% and 98% get one on the pixel's layer, up
 from 66% and 82% with the first version's clusters and constellation alone.
 Guided matching, the wider cluster vetting, and keeping far readings made that
-difference. The infinity test gives 191 of Kerry Park's 248 queries at
-infinity a reading at the pixel, and 40 of seoul_bull's 44, and no finite
-point a wrong one. Where there are several layers, the ranking puts the
-pixel's first 93 to 94% of the time and in the top two 99%; the anchors'
+difference. The far-field sweep gives 225 of Kerry Park's 248 queries at
+infinity a right reading at the pixel, 48 of its 59 whose true point is 300 m
+or more away, and 38 of seoul_bull's 44 at infinity. Its wrong readings are
+candidates like the others; 15 of them rank first on Kerry Park, most from a
+single image with little parallax. Where there are several layers, the
+ranking puts the pixel's first 93 to 94% of the time and in the top two 99%;
+the anchors'
 features alone put it first 82 to 88% of the time. The constellation query
 is the one matching source that usually reads the pixel itself, and it is
 the least accurate: on Kerry Park about as many of its readings at the pixel
 are wrong as right, and on seoul_bull a quarter are wrong.
 
 Open for this step:
+
+- **Judging candidates by their evidence.** The layers are ranked by the
+  pixel's patch read at their distances. The far-field anchors' own evidence,
+  how many images agree and with how much parallax, how prominent the peak,
+  does not enter the ranking yet.
+- **The pairwise table.** Deciding which images belong by comparing every
+  pair costs the square of the images. It is capped at 16 for the far-field
+  sweep; the same comparison in place of the bench's blend, for any track,
+  needs a way to grow with less.
 
 - **Readings at the pixel.** Few anchors sit at the pixel itself: 9 to 11% of
   queries with the default stopping rule. Most are a few pixels away, so the

@@ -89,6 +89,43 @@ DEFAULTS = {
     # when `inf_min_views` or more, and `inf_min_share` of the images it lands
     # in, read `inf_min_zncc` or better.
     "infinity": "needed",
+    # Which far test runs then: "farfield" (the far-field sweep) or "infinity"
+    # (the infinity test, with its peak along the ray).
+    "far_test": "farfield",
+    # The far-field sweep: disparities in the image that moves the pixel most,
+    # read in every image that sees the pixel. Each peak of the reading, over
+    # the images that match somewhere and move it at least `ff_wide` as far as
+    # the one of them that moves it most, is a reading where the whole patch
+    # reads `ff_min_whole` and the middle `ff_min_middle`, up to `ff_max_peaks`
+    # of them; a peak at the largest disparity is not one.
+    "ff_disparities": (0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0),
+    "ff_wide": 0.5,
+    "ff_min_whole": 0.8,
+    "ff_min_middle": 0.7,
+    "ff_max_peaks": 3,
+    # A peak must stand at least this far above the lowest reading between it
+    # and the nearest higher peak (the lowest of all for the highest): a flat
+    # reading, from images that barely move, has no peak to find.
+    "ff_min_prominence": 0.02,
+    # What `ff_wide` is judged against: "matching", the widest image that
+    # matches somewhere in the sweep, or "all", the widest image that sees the
+    # pixel.
+    "ff_wide_among": "matching",
+    # Group a reading's images by the ZNCC of their middles with each other
+    # (:func:`_ff_group`), average linkage cut at `ff_group_cut`, over at most
+    # `ff_group_max` images, the query and the best-reading others. The
+    # pairwise table grows as the square of the image count, which is what the
+    # cap bounds; how it scales past a few dozen images is still to be looked
+    # at. With the query in a group of its own, the largest other group is
+    # refit without it: where the fit lands more than `ff_refit_px` from the
+    # pixel, the anchor moves there, if that is within `ff_refit_max_px` and
+    # every image fits within `ff_refit_max_err_px`.
+    "ff_refit": True,
+    "ff_group_cut": 0.9,
+    "ff_group_max": 16,
+    "ff_refit_px": 8.0,
+    "ff_refit_max_px": 48.0,
+    "ff_refit_max_err_px": 2.0,
     "inf_radius_px": 8.0,
     "inf_min_zncc": 0.8,
     "inf_min_views": 1,
@@ -643,7 +680,7 @@ def _usable(a) -> bool:
     return bool(a["bounded"] or a["far"])
 
 
-def read_patch(ctx, image, pixel, radius, depths, views=None):
+def read_patch(ctx, image, pixel, radius, depths, views=None, samples=False):
     """The pixel's patch read along its ray, whole and in the middle.
 
     The sampling of :func:`candidates.planesweep.sweep`: a square grid of
@@ -656,7 +693,10 @@ def read_patch(ctx, image, pixel, radius, depths, views=None):
     Returns ``(others, whole, middle, centres, middle_std)``: the images read,
     ``(depths, images)`` arrays of ZNCC (``-1`` where the patch cannot be read),
     each read's centre pixel, and the grey standard deviation of the query's
-    middle; or ``None`` when the query's patch is flat or off the image.
+    middle; or ``None`` when the query's patch is flat or off the image. With
+    ``samples``, a sixth item holds the query's ``template``, the ``values``
+    each read sampled (``(depths, images, grid)``, ``nan`` where unread) and
+    the ``middle`` mask over the grid.
     """
     from candidates import planesweep
     from candidates.common import in_frame
@@ -682,6 +722,7 @@ def read_patch(ctx, image, pixel, radius, depths, views=None):
     whole = np.full((len(depths), len(views)), -1.0)
     mid = np.full((len(depths), len(views)), -1.0)
     centres = np.full((len(depths), len(views), 2), np.nan)
+    values = np.full((len(depths), len(views), n * n), np.nan) if samples else None
     for di, t in enumerate(depths):
         for vi, other in enumerate(views):
             oc = ctx.camera(other)
@@ -706,7 +747,12 @@ def read_patch(ctx, image, pixel, radius, depths, views=None):
             whole[di, vi] = planesweep.zncc_rows(template, vals[None, :])[0]
             mid[di, vi] = planesweep.zncc_rows(template[middle], vals[None, middle])[0]
             centres[di, vi] = centre
-    return views, whole, mid, centres, float(template[middle].std())
+            if samples:
+                values[di, vi] = vals
+    out = (views, whole, mid, centres, float(template[middle].std()))
+    if samples:
+        out += ({"template": template, "values": values, "middle": middle},)
+    return out
 
 
 def from_infinity(ctx, image, pixel, opts):
@@ -848,6 +894,348 @@ _from_infinity_once = from_infinity
 SOURCES["infinity"] = _from_infinity_confirmed
 
 
+def _best3(x) -> np.ndarray:
+    """Per row, the mean of the three highest readable values (``-1`` unreadable)."""
+    x = np.where(x > -1, x, -np.inf)
+    top = -np.sort(-x, axis=-1)[..., :3]
+    top = np.where(np.isfinite(top), top, np.nan)
+    with np.errstate(all="ignore"):
+        return np.nanmean(top, axis=-1)
+
+
+def from_farfield(ctx, image, pixel, opts):
+    """The far-field sweep: the distances in the far field the pixel reads at.
+
+    Disparities are counted in the image that moves the pixel most for a
+    change of inverse distance, among those it lands in at infinity: a
+    disparity ``d`` is the distance ``R / d``, ``R`` that image's pixels per
+    unit of inverse distance, and ``d = 0`` is infinity. The pixel's patch is
+    read at ``ff_disparities`` (:func:`read_patch`) in every image it lands in.
+    The reading at each disparity is over the wide images: those whose whole
+    patch reads ``ff_min_whole`` somewhere in the sweep and that move the pixel
+    at least ``ff_wide`` as far as the one of them that moves it most, since
+    images that barely move read alike at every disparity. Judging the width
+    among the images that match keeps an image that sees something else at the
+    pixel from setting the scale.
+
+    The reading at a disparity is its middle's mean over the three best images,
+    or the whole patch's where the query's middle is flat (grey standard
+    deviation under ``inf_centre_min_std``), since a flat middle correlates
+    with noise. Every peak of it is a reading, not only the highest: near a
+    pixel the scene can hold a far surface and a nearer one, or two
+    lookalikes, and which one the pixel shows is for the comparison between
+    anchors to settle. A peak is kept when the whole patch reads
+    ``ff_min_whole`` there and, unless the middle is flat, the middle
+    ``ff_min_middle``; when it stands ``ff_min_prominence`` above the reading
+    around it (:func:`_prominence`), since a flat reading, from images that
+    barely move, has no peak; not at the largest disparity, where the rise says the
+    peak is further in than the sweep reaches; and at most ``ff_max_peaks``,
+    the highest. Each anchor sits at the pixel, at infinity for ``d = 0``, with
+    the range to the midpoints between the neighbouring disparities, and
+    carries in ``farfield`` what a comparison between candidates can weigh
+    (:func:`_ff_metrics`).
+    """
+    read = read_patch(ctx, image, pixel, opts["inf_radius_px"], [np.inf])
+    if read is None:
+        return []
+    others, z_inf = read[0], read[1][0]
+    seen = [int(others[v]) for v in range(len(others)) if z_inf[v] > -1]
+    cam = ctx.camera(image)
+    ray = cam.ray(pixel)
+    ray = ray / np.linalg.norm(ray)
+    probe = 1e3 * _camera_spread(ctx)
+    rates = {}
+    for j in seen:
+        oc = ctx.camera(j)
+        a, b = oc.project(ray, 0.0), oc.project(cam.center + probe * ray)
+        if a is not None and b is not None:
+            rates[j] = float(np.linalg.norm(b - a)) * probe
+    if not rates or max(rates.values()) <= 0:
+        return []
+    R = max(rates.values())
+    disp = np.asarray(opts["ff_disparities"], float)
+    depths = [np.inf if d == 0 else R / d for d in disp]
+    read = read_patch(
+        ctx,
+        image,
+        pixel,
+        opts["inf_radius_px"],
+        depths,
+        views=sorted(rates),
+        samples=True,
+    )
+    if read is None:
+        return []
+    views, whole, mid, centres, mid_std, sampled = read
+    rate = np.asarray([rates[int(j)] for j in views])
+    match = (whole >= opts["ff_min_whole"]).any(axis=0)
+    if not match.any():
+        return []
+    scale = rate[match].max() if opts["ff_wide_among"] == "matching" else R
+    wide = match & (rate >= opts["ff_wide"] * scale)
+    bw = _best3(np.where(wide, whole, -1.0))
+    bm = _best3(np.where(wide, mid, -1.0))
+    flat = bool(mid_std < opts["inf_centre_min_std"])
+    key = bw if flat else bm
+    key = np.where(np.isfinite(key), key, -np.inf)
+    peaks = [
+        k
+        for k in range(len(disp) - 1)
+        if np.isfinite(key[k])
+        and key[k] >= (key[k - 1] if k else -np.inf)
+        and key[k] > key[k + 1]
+        and bw[k] >= opts["ff_min_whole"]
+        and (flat or bm[k] >= opts["ff_min_middle"])
+    ]
+    peaks = [k for k in peaks if _prominence(key, k) >= opts["ff_min_prominence"]]
+    peaks = sorted(peaks, key=lambda k: -key[k])[: opts["ff_max_peaks"]]
+    found = []
+    for order, k in enumerate(peaks):
+        d = disp[k]
+        near = R / (0.5 * (d + disp[k + 1]))
+        far = np.inf if k == 0 else R / (0.5 * (d + disp[k - 1]))
+        agree = [
+            v
+            for v in range(len(views))
+            if wide[v] and whole[k, v] >= opts["ff_min_whole"]
+        ]
+        agree = sorted(agree, key=lambda v: -whole[k, v])[: opts["ff_group_max"] - 1]
+        sight = [[int(image), float(pixel[0]), float(pixel[1])]]
+        sight += [
+            [int(views[v]), float(centres[k, v, 0]), float(centres[k, v, 1])]
+            for v in agree
+        ]
+        if d == 0:
+            position, w, depth, angle = [float(x) for x in ray], 0.0, float("inf"), 0.0
+        else:
+            X = cam.center + ray * (R / d)
+            position, w, depth = [float(x) for x in X], 1.0, float(cam.depth(X))
+            angle = _ray_angle(ctx, X, [s_[0] for s_ in sight])
+        a = {
+            "source": "farfield",
+            "id": None,
+            "position": position,
+            "w": w,
+            "views": sight,
+            "query_pixel": [float(pixel[0]), float(pixel[1])],
+            "distance_px": 0.0,
+            "n_views": len(sight),
+            "max_reproj_px": 0.0,
+            "max_ray_angle_deg": angle,
+            "depth": depth,
+            "disparity": float(d),
+            "range_override": [float(near), float(far)],
+            "farfield": _ff_metrics(
+                key, bw, bm, k, order, len(peaks), flat, mid_std, rate, agree, R
+            ),
+        }
+        if opts["ff_refit"]:
+            patches = np.vstack(
+                [sampled["template"][None], sampled["values"][k, agree]]
+            )
+            found += _ff_group(ctx, image, pixel, a, patches, sampled["middle"], opts)
+        else:
+            found.append(a)
+    return found
+
+
+def _prominence(key, k) -> float:
+    """How far ``key[k]`` stands above the lowest value between it and the
+    nearest higher one on either side, or above the lowest of all when none is
+    higher."""
+    cols = []
+    for step in (-1, 1):
+        low, i = key[k], k + step
+        while 0 <= i < len(key) and key[i] <= key[k]:
+            low = min(low, key[i])
+            i += step
+        if 0 <= i < len(key):
+            cols.append(low)
+    finite = key[np.isfinite(key)]
+    base = max(cols) if cols else float(finite.min())
+    return float(key[k] - base)
+
+
+def _ff_metrics(key, bw, bm, k, order, n_peaks, flat, mid_std, rate, agree, R):
+    """What a far-field reading at the sweep's ``k``-th disparity rests on.
+
+    ``whole`` and ``middle`` are the reading there (the mean of the three best
+    wide images), and ``profile_whole`` and ``profile_middle`` the reading at
+    every disparity of the sweep, so a comparison can see the peak's shape.
+    ``prominence`` is how far the peak stands above the lowest reading between
+    it and the nearest higher peak, or the lowest reading of all for the
+    highest; ``peak_rank`` its place among the kept peaks, 1 the highest, of
+    ``peaks``. ``middle_flat`` says the peaks were read on the whole patch.
+    ``images`` counts the images that read ``ff_min_whole`` there, and
+    ``parallax_px`` is the most any of them moves the pixel per unit of inverse
+    distance, against ``R`` for the widest image that sees the pixel: a
+    reading resting on images close together has little parallax, and agrees
+    at nearly any distance.
+    """
+
+    def listed(x):
+        return [float(v) if np.isfinite(v) else None for v in x]
+
+    return {
+        "whole": float(bw[k]),
+        "middle": float(bm[k]) if np.isfinite(bm[k]) else None,
+        "prominence": _prominence(key, k),
+        "peak_rank": order + 1,
+        "peaks": n_peaks,
+        "middle_flat": flat,
+        "middle_std": float(mid_std),
+        "images": len(agree),
+        "parallax_px": float(max((rate[v] for v in agree), default=0.0)),
+        "widest_px": float(R),
+        "profile_whole": listed(bw),
+        "profile_middle": listed(bm),
+    }
+
+
+def _average_linkage(similar, cut):
+    """Groups of indexes into the square ``similar``, merged while the two
+    closest groups' mean similarity is at least ``cut``."""
+    groups = [[i] for i in range(len(similar))]
+    while len(groups) > 1:
+        best, pair = -np.inf, None
+        for x in range(len(groups)):
+            for y in range(x + 1, len(groups)):
+                m = float(similar[np.ix_(groups[x], groups[y])].mean())
+                if m > best:
+                    best, pair = m, (x, y)
+        if best < cut:
+            break
+        x, y = pair
+        groups[x] += groups.pop(y)
+    return groups
+
+
+def _ff_group(ctx, image, pixel, a, patches, middle, opts):
+    """The far-field reading ``a`` split into the tracks its images show.
+
+    The sweep compares each image with the query only, so a reading can gather
+    images of two surfaces: the query's, and one that stands in front of it
+    from a few nearby cameras and resembles the query's patch as a whole.
+    ``patches`` holds the query's patch and each other image's, sampled on
+    the sweep's plane at the pick, in the order of ``a["views"]``. Each pair is
+    compared by the ZNCC of its middle, the samples ``middle`` marks (of the
+    whole patch where the query's middle is flat), since
+    the parts away from the pixel are what a wrong match shares; and the
+    images are grouped by average linkage, merging while the two closest
+    groups' mean is at least ``ff_group_cut`` (:func:`_average_linkage`).
+
+    The reading keeps the query's group. When that is the query alone, the
+    other images agree with each other and not with the pixel, and the
+    largest other group, of two or more, is built into a track and fit with
+    the query's observation turned out: where the fit lands within
+    ``ff_refit_px`` of the pixel, the reading stands on that group; where it
+    lands further away, the anchor moves to that point, at the pixel where it
+    lands in the queried image, with the fitted sightings, as long as that is
+    within ``ff_refit_max_px`` and every sighting fits within
+    ``ff_refit_max_err_px``; otherwise there is no reading. When no two other
+    images form a group either, nothing contradicts the sweep and the reading
+    stands as it was.
+    """
+    from sfmtool._sfmtool import bench as B
+
+    from candidates.common import in_frame, track_from_sightings
+
+    # A flat middle correlates with noise, so such a reading is grouped on the
+    # whole patch.
+    flat = a.get("farfield", {}).get("middle_flat", False)
+    x = patches if flat else patches[:, middle]
+    x = x - x.mean(axis=1, keepdims=True)
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    similar = x @ x.T
+    groups = _average_linkage(similar, opts["ff_group_cut"])
+    a["groups"] = [sorted(int(a["views"][i][0]) for i in g) for g in groups]
+    a["query_middle"] = [float(z) for z in similar[0, 1:]]
+    mine = next(g for g in groups if 0 in g)
+    if "farfield" in a:
+        # How well the query's own group agrees with the query, and how many
+        # images stand apart from it.
+        a["farfield"]["group_middle"] = (
+            float(np.mean([similar[0, i] for i in mine if i != 0]))
+            if len(mine) > 1
+            else None
+        )
+        a["farfield"]["left_out"] = len(similar) - len(mine)
+    if len(mine) >= 2:
+        a["refit"] = "agrees" if len(mine) == len(similar) else "grouped"
+        a["views"] = [a["views"][i] for i in sorted(mine)]
+        a["n_views"] = len(a["views"])
+        return [a]
+    rest = max((g for g in groups if 0 not in g), key=len, default=[])
+    if len(rest) < 2:
+        # No two other images agree with each other either, so the table has
+        # no other reading to offer, and the sweep's own comparison with the
+        # query stands.
+        a["refit"] = "unsplit"
+        return [a]
+    sight = [(int(a["views"][i][0]), a["views"][i][1:]) for i in sorted(rest)]
+    try:
+        track = track_from_sightings(ctx, image, pixel, opts["inf_radius_px"], sight)
+        track, _ = B.set_verdict(track, 0, "out")
+        for _ in range(2):
+            track, _ = B.fit(track, ctx.edited, ctx.pyramids)
+    except ValueError:
+        a["refit"] = "failed"
+        return []
+    cq = ctx.camera(image)
+    if track.at_infinity:
+        X, w = np.asarray(track.direction, float), 0.0
+        land = cq.project(X, 0.0)
+    else:
+        X, w = np.asarray(track.position, float), 1.0
+        land = cq.project(X) if cq.depth(X) > 0 else None
+    if land is None or not in_frame(ctx, image, land):
+        a["refit"] = "off the image"
+        return []
+    off = float(np.linalg.norm(land - np.asarray(pixel, float)))
+    a["refit_px"] = off
+    if off <= opts["ff_refit_px"]:
+        a["refit"] = "stands"
+        a["views"] = [a["views"][0]] + [a["views"][i] for i in sorted(rest)]
+        a["n_views"] = len(a["views"])
+        return [a]
+    views, errs = [[int(image), float(land[0]), float(land[1])]], []
+    for o in track.observations[1:]:
+        t = o.get("track") or {}
+        if o["verdict"] != "in" or t.get("keypoint") is None:
+            continue
+        views.append(
+            [int(o["image"]), float(t["keypoint"][0]), float(t["keypoint"][1])]
+        )
+        errs.append(float(t.get("reprojection_error") or 0.0))
+    if (
+        off > opts["ff_refit_max_px"]
+        or len(views) < 3
+        or max(errs) > opts["ff_refit_max_err_px"]
+    ):
+        a["refit"] = "moved, rejected"
+        return []
+    moved = {
+        **{k: v for k, v in a.items() if k not in ("range_override", "disparity")},
+        "position": [float(x) for x in X],
+        "w": w,
+        "views": views,
+        "query_pixel": [float(land[0]), float(land[1])],
+        "distance_px": off,
+        "n_views": len(views),
+        "max_reproj_px": max(errs),
+        "max_ray_angle_deg": 0.0
+        if w == 0
+        else _ray_angle(ctx, X, [v[0] for v in views]),
+        "depth": float("inf") if w == 0 else float(cq.depth(X)),
+        "refit": "moved",
+        "sweep_disparity": a["disparity"],
+    }
+    return [moved]
+
+
+SOURCES["farfield"] = from_farfield
+
+
 def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     """The anchors near ``pixel`` in ``image``, grouped into depth layers, and
     what each source did.
@@ -869,10 +1257,12 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     layer's distances, whole and in the middle, and its ``rank`` by that score:
     the best-supported depth is rank 1.
 
-    The infinity test (:func:`from_infinity`) runs after the other sources, when
-    they gave no usable anchor, more than one layer, or no usable anchor
-    within a pixel of the pixel (``infinity="needed"``). A pixel at infinity
-    often has one layer of nearer anchors beside it and none at it.
+    The far test, the far-field sweep (:func:`from_farfield`) or with
+    ``far_test="infinity"`` the infinity test (:func:`from_infinity`), runs
+    after the other sources, when they gave no usable anchor, more than one
+    layer, or no usable anchor within a pixel of the pixel
+    (``infinity="needed"``). A pixel at infinity often has one layer of nearer
+    anchors beside it and none at it.
     """
     opts = {**DEFAULTS, **(options or {})}
     anchors, stages = [], []
@@ -891,11 +1281,14 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
                 t = float((X - cq.center) @ (ray / np.linalg.norm(ray)))
             views = [(int(v[0]), v[1:]) for v in a["views"]]
             a["distance"] = t
-            a["range"] = list(
-                distance_range(
-                    ctx.camera, image, a["query_pixel"], views, t, opts["range_px"]
+            if "range_override" in a:
+                a["range"] = list(a["range_override"])
+            else:
+                a["range"] = list(
+                    distance_range(
+                        ctx.camera, image, a["query_pixel"], views, t, opts["range_px"]
+                    )
                 )
-            )
             if "near_limit" in a:
                 a["range"][0] = min(a["range"][0], a["near_limit"])
             a["bounded"] = _bounded(a, opts["max_span"])
@@ -919,7 +1312,7 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
             or not any(_usable(a) and a["distance_px"] <= 1.0 for a in anchors)
         )
     ):
-        run("infinity")
+        run(opts["far_test"])
     for a in anchors:
         mine = {int(v[0]) for v in a["views"]}
         a["support"] = sum(
