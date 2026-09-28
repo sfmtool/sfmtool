@@ -10,6 +10,15 @@ is used to score and cull points whose keypoints are free to drift. One scorer
 serves a crate function, a Python binding, an `xform` filter, and an
 `embed-patches` cull.
 
+The score is the surface's curvature at its peak, so it does not say how far a
+patch can slide over itself before it stops matching, which is what decides
+whether a match locks onto the keypoint: a strong straight edge reads as sharp
+here. A bounded score of that distance, the ZNCC self-similarity radius, is
+proposed in
+[zncc-self-similarity-radius.md](../../drafts/zncc-self-similarity-radius.md),
+which also renames this score's code and bench names with a `_deprecated` suffix
+while the two are compared.
+
 ## Problem
 
 Keypoint [localization](patch-keypoint-localization.md) and
