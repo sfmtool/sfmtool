@@ -47,7 +47,7 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilin
 use crate::camera::WarpMap;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::localizability::{patch_localizability, SIGMA_NOISE};
+use crate::patch::localizability::{patch_localizability_deprecated, SIGMA_NOISE};
 use crate::patch::normal_refine::{
     build_support, znormalize_into_kept, PartZncc, Parts, ProjectedImage, Sampler, Support,
     FLAT_NORM_SQ_EPS,
@@ -514,7 +514,7 @@ fn extract_core(
 
 /// Extract the **full** `R×R` core grid of `tile` at window offset `(oy, ox)` into
 /// `out` as an *interleaved* `[pixel · channels + channel]` patch — the layout
-/// [`patch_localizability`] scores.
+/// [`patch_localizability_deprecated`] scores.
 ///
 /// Unlike [`extract_core`] this reads every grid pixel, not just the windowed
 /// support (the structure tensor's central differences reach one pixel outside
@@ -574,7 +574,8 @@ fn member_is_localizable(
     scratch.clear();
     scratch.resize(resolution * resolution * tile.channels, 0.0);
     extract_core_grid(tile, resolution, oy, ox, scratch);
-    let loc = patch_localizability(scratch, resolution, tile.channels, support, SIGMA_NOISE);
+    let loc =
+        patch_localizability_deprecated(scratch, resolution, tile.channels, support, SIGMA_NOISE);
     // An unscorable tile scores `NaN`, which is incomparable rather than
     // `Greater`, so it is kept.
     !matches!(

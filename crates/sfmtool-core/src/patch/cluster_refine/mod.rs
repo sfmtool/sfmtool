@@ -53,7 +53,7 @@ use crate::camera::remap::ImageU8Pyramid;
 // `SIGMA_NOISE` is the shared absolute-px scale of every in-crate `σ_pos` gate;
 // aliased here for the local call site's readability.
 use crate::patch::localizability::{
-    patch_localizability, SIGMA_NOISE as LOCALIZABILITY_SIGMA_NOISE,
+    patch_localizability_deprecated, SIGMA_NOISE as LOCALIZABILITY_SIGMA_NOISE,
 };
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
@@ -291,7 +291,7 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
 /// canonical unit frame onto that image's pixels) -- a seed's, or the
 /// refinement's answer for it. The grid, the mip rule and the border clamp are
 /// the kernel's own, so a caller that wants the number the gate computed
-/// ([`score_localizability_stack`](crate::patch::localizability::score_localizability_stack)
+/// ([`score_localizability_stack_deprecated`](crate::patch::localizability::score_localizability_stack_deprecated)
 /// over this stack, with [`ClusterRefineParams::window`] and the crate's
 /// `SIGMA_NOISE`) gets exactly it, and a caller that wants the reference's
 /// template to draw gets the tile the cascade registers against.
@@ -316,7 +316,7 @@ pub fn sample_member_grid(
 
 /// Sample a member's own full `R×R` grid at its SIFT geometry (identity
 /// warp, mip-selected level, bit-exact `bilinear_geometry` convention) into
-/// an interleaved `R×R×C` f32 patch — the layout [`patch_localizability`]
+/// an interleaved `R×R×C` f32 patch — the layout [`patch_localizability_deprecated`]
 /// scores. Unlike [`build_template`], every grid pixel is sampled (the
 /// scorer's gradients cover the full grid, not just the windowed support),
 /// and samples outside the frame clamp to the nearest valid pixel (border
@@ -742,7 +742,13 @@ fn refine_cluster(
             let channels = raw.len() / (r * r);
             prof::count(&prof::N_GATED, 1);
             let loc = prof::GATE_SCORE.time(|| {
-                patch_localizability(&raw, r, channels, support, LOCALIZABILITY_SIGMA_NOISE)
+                patch_localizability_deprecated(
+                    &raw,
+                    r,
+                    channels,
+                    support,
+                    LOCALIZABILITY_SIGMA_NOISE,
+                )
             });
             // NaN (empty patch) compares false -> kept, like embed-patches.
             if loc.sigma_pos_grid > params.max_keypoint_uncertainty {

@@ -85,7 +85,7 @@ def ground_truth_reading(dataset, point: int) -> dict:
     return {
         "track": track,
         **_stats("gt_zncc", _track_numbers(rows, "zncc")),
-        **_stats("gt_localizability", _track_numbers(rows, "localizability")),
+        **_stats("gt_localizability", _track_numbers(rows, "localizability_deprecated")),
         "gt_reproj_median": _stats("x", _track_numbers(rows, "reprojection_error"))[
             "x_median"
         ],
@@ -217,7 +217,7 @@ def score(
 
     zncc = _track_numbers(rows, "zncc")
     m.update(_stats("zncc", zncc))
-    m.update(_stats("localizability", _track_numbers(rows, "localizability")))
+    m.update(_stats("localizability", _track_numbers(rows, "localizability_deprecated")))
     reproj = _track_numbers(rows, "reprojection_error")
     m["reproj_median"] = float(np.median(reproj)) if reproj.size else None
     for key in (

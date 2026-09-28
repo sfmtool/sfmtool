@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the ``PatchCloud.score_localizability`` PyO3 batch scorer.
+"""Tests for the ``PatchCloud.score_localizability_deprecated`` PyO3 batch scorer.
 
 Cross-checks the binding's per-point keypoint uncertainty ``σ_pos`` against an
 independent NumPy reimplementation of the documented math
@@ -108,7 +108,7 @@ def _reference_sigma_pos(recon: SfmrReconstruction, sigma_noise: float = SIGMA_N
 def test_score_localizability_shapes_and_keys(embedded_with_bitmaps):
     recon = embedded_with_bitmaps
     cloud = recon.patches
-    result = cloud.score_localizability(
+    result = cloud.score_localizability_deprecated(
         recon, recon.patch_bitmaps, sigma_noise=SIGMA_NOISE
     )
     assert set(result) == {"sigma_pos_px", "sigma_pos_grid", "lam1", "lam2", "theta"}
@@ -121,7 +121,7 @@ def test_score_localizability_shapes_and_keys(embedded_with_bitmaps):
 def test_score_localizability_matches_numpy_reference(embedded_with_bitmaps):
     recon = embedded_with_bitmaps
     cloud = recon.patches
-    result = cloud.score_localizability(
+    result = cloud.score_localizability_deprecated(
         recon, recon.patch_bitmaps, sigma_noise=SIGMA_NOISE
     )
     ref_sigma, ref_lam1, ref_lam2, ref_theta, ref_grid = _reference_sigma_pos(recon)
@@ -149,7 +149,7 @@ def test_score_localizability_matches_numpy_reference(embedded_with_bitmaps):
 def test_score_localizability_theta_matches(embedded_with_bitmaps):
     recon = embedded_with_bitmaps
     cloud = recon.patches
-    result = cloud.score_localizability(recon, recon.patch_bitmaps)
+    result = cloud.score_localizability_deprecated(recon, recon.patch_bitmaps)
     _, _, _, ref_theta, ref_grid = _reference_sigma_pos(recon)
     got = np.asarray(result["theta"])
     scored = np.isfinite(ref_theta)
@@ -164,7 +164,7 @@ def test_score_localizability_theta_matches(embedded_with_bitmaps):
 
 def test_score_localizability_sigma_is_nonnegative(embedded_with_bitmaps):
     recon = embedded_with_bitmaps
-    result = recon.patches.score_localizability(recon, recon.patch_bitmaps)
+    result = recon.patches.score_localizability_deprecated(recon, recon.patch_bitmaps)
     sigma = np.asarray(result["sigma_pos_px"])
     assert np.all(sigma[np.isfinite(sigma)] >= 0.0)
     assert np.all(np.asarray(result["lam2"])[np.isfinite(result["lam2"])] >= 0.0)
@@ -186,4 +186,4 @@ def test_score_localizability_rejects_wrong_bitmap_rows(embedded_with_bitmaps):
     cloud = recon.patches
     bad = np.asarray(recon.patch_bitmaps)[:-1]  # one row short
     with pytest.raises(ValueError, match="rows"):
-        cloud.score_localizability(recon, bad)
+        cloud.score_localizability_deprecated(recon, bad)

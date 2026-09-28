@@ -38,6 +38,7 @@ use crate::bench::live::Evaluation;
 use crate::scene::{ImageRef, ReconId, SceneNode};
 use crate::state::AppState;
 
+mod surface_plot;
 mod table;
 mod tile;
 
@@ -161,6 +162,12 @@ pub struct TrackEdit {
     /// from: the label, and the address of the track's `Arc`. Any step on the
     /// track gives it a new `Arc`, and every step that moves a tile is one.
     tiles_for: Option<(String, usize)>,
+    /// The self-similarity surface plot of each observation, by observation
+    /// index, with the surface and tolerance it was drawn from. Checked
+    /// against the row's own reading every frame and redrawn when that
+    /// changes, since an evaluation replaces the readings without moving the
+    /// tile.
+    plots: HashMap<usize, (Vec<f64>, f64, Option<surface_plot::DrawnPlot>)>,
     /// What the table drew last frame, in row order.
     ///
     /// Recorded unconditionally rather than under `cfg(test)`, so that what the
@@ -222,6 +229,7 @@ impl TrackEdit {
             renaming: None,
             tiles: HashMap::new(),
             tiles_for: None,
+            plots: HashMap::new(),
             rows: Vec::new(),
             build_refusal: None,
             search_px: crate::bench::default_search_px(),
@@ -656,6 +664,38 @@ impl TrackEdit {
         texture_id
     }
 
+    /// The self-similarity surface plot of `observation` for `surface` read
+    /// at `tolerance`, drawing it if the row's reading has changed since it
+    /// was last drawn, or `None` when the reading has nothing to draw.
+    fn ensure_plot(
+        &mut self,
+        ctx: &egui::Context,
+        observation: usize,
+        surface: &[f64],
+        tolerance: f64,
+    ) -> Option<&surface_plot::DrawnPlot> {
+        let stale = self
+            .plots
+            .get(&observation)
+            .is_none_or(|(drawn_from, at, _)| {
+                drawn_from.as_slice() != surface || at.to_bits() != tolerance.to_bits()
+            });
+        if stale {
+            let drawn = surface_plot::SurfacePlot::new(surface, tolerance).map(|plot| {
+                surface_plot::DrawnPlot::new(
+                    ctx,
+                    plot,
+                    format!("bench_self_similarity_{observation}"),
+                )
+            });
+            self.plots
+                .insert(observation, (surface.to_vec(), tolerance, drawn));
+        }
+        self.plots
+            .get(&observation)
+            .and_then(|(_, _, drawn)| drawn.as_ref())
+    }
+
     /// Drop the rendered tiles when the track they were rendered from has
     /// moved, so a row never shows a picture of a position the observation has
     /// left.
@@ -731,16 +771,96 @@ pub(crate) fn sigma_text(whole: Option<f64>, middle: Option<f64>) -> String {
     }
 }
 
-/// The two three-by-three grids a row draws: the ZNCC grid and the
-/// localizability grid of the measurement its stage carries.
+/// A ZNCC self-similarity radius as a table cell prints it, in grid px: the
+/// whole tile's, then its middle square's (`0 / 1.41`), to two decimals with
+/// trailing zeros dropped, and `3+` for the largest radius the reading
+/// searches, which stands for that far or further.
+///
+/// `-` stands for a reading that is not there, as [`zncc_text`] has it.
+fn self_similarity_text(whole: Option<f64>, middle: Option<f64>) -> String {
+    match whole {
+        None => "-".to_string(),
+        Some(whole) => format!(
+            "{} / {}",
+            radius_number(whole),
+            middle.map_or_else(|| "-".to_string(), radius_number)
+        ),
+    }
+}
+
+/// The largest radius the self-similarity reading searches, in grid px: the
+/// value that reads "this far or further".
+fn max_self_similarity_radius() -> f64 {
+    f64::from(sfmtool_core::patch::self_similarity::SelfSimilarityParams::default().max_radius)
+}
+
+/// One self-similarity radius as the cell and the grid's hover print it:
+/// `0`, `1`, `1.41`, `2`, `2.24`, and `3+` at the maximum.
+fn radius_number(value: f64) -> String {
+    if !value.is_finite() {
+        return "NaN".to_string();
+    }
+    let max = max_self_similarity_radius();
+    if value >= max {
+        return format!("{max:.0}+");
+    }
+    let text = format!("{value:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The three three-by-three grids a row draws: the ZNCC grid, the deprecated
+/// localizability grid and the self-similarity grid of the measurement its
+/// stage carries.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct RowGrids {
     /// The ZNCC of each cell, `grid[row][col]` from the top-left cell.
     pub zncc: Option<[[f64; 3]; 3]>,
-    /// The localizability of each cell, sigma_pos in grid px.
+    /// The deprecated localizability of each cell, sigma_pos in grid px.
     pub sigma: Option<[[f64; 3]; 3]>,
-    /// Per cell, the direction a match could slide in, scaled by how freely.
+    /// Per cell, the direction a match could slide in, scaled by how freely,
+    /// from the deprecated localizability.
     pub slide: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ZNCC self-similarity radius of each cell, in grid px.
+    pub radius: Option<[[f64; 3]; 3]>,
+    /// Per cell, the direction the cell's indistinguishable shifts line up
+    /// in, scaled by how strongly.
+    pub radius_slide: Option<[[[f64; 2]; 3]; 3]>,
+}
+
+/// The whole core's self-similarity radius of `observation` at `stage`.
+fn row_radius(observation: &Observation, stage: StageKind) -> Option<f64> {
+    match stage {
+        StageKind::Cluster => observation.cluster.as_ref()?.zncc_self_similarity_radius,
+        StageKind::Track => observation.track.as_ref()?.zncc_self_similarity_radius,
+    }
+}
+
+/// The whole core's self-similarity surface of `observation` at `stage` and
+/// the tolerance it was judged by, or `None` when there is none, including
+/// while the evaluation is refused or failed.
+fn row_surface<'a>(
+    observation: &'a Observation,
+    stage: StageKind,
+    evaluation: &Evaluation,
+) -> Option<(&'a [f64], f64)> {
+    if matches!(evaluation, Evaluation::Refused(_) | Evaluation::Failed(_)) {
+        return None;
+    }
+    let (surface, tolerance) = match stage {
+        StageKind::Cluster => observation.cluster.as_ref().map(|m| {
+            (
+                m.zncc_self_similarity_surface.as_deref(),
+                m.zncc_self_similarity_tolerance,
+            )
+        })?,
+        StageKind::Track => observation.track.as_ref().map(|m| {
+            (
+                m.zncc_self_similarity_surface.as_deref(),
+                m.zncc_self_similarity_tolerance,
+            )
+        })?,
+    };
+    Some((surface?, tolerance?))
 }
 
 /// The grids of `observation` at `stage`, or none while the evaluation is
@@ -755,16 +875,20 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
-                sigma: m.localizability_grid,
-                slide: m.localizability_slide,
+                sigma: m.localizability_grid_deprecated,
+                slide: m.localizability_slide_deprecated,
+                radius: m.zncc_self_similarity_radius_grid,
+                radius_slide: m.zncc_self_similarity_slide_grid,
             }),
         StageKind::Track => observation
             .track
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
-                sigma: m.localizability_grid,
-                slide: m.localizability_slide,
+                sigma: m.localizability_grid_deprecated,
+                slide: m.localizability_slide_deprecated,
+                radius: m.zncc_self_similarity_radius_grid,
+                radius_slide: m.zncc_self_similarity_slide_grid,
             }),
     }
 }
@@ -793,6 +917,25 @@ pub(crate) fn sigma_cell_color(sigma: f64, bar: f64) -> Option<egui::Color32> {
     };
     let t = ((sigma / bar).max(f64::MIN_POSITIVE).log2() + 1.0) / 2.0;
     Some(red_to_green(1.0 - t.clamp(0.0, 1.0)))
+}
+
+/// The colour a self-similarity grid cell is drawn in: green at 0, yellow at
+/// 1 to 1.41, orange at 2 to 2.24 and red at the largest radius searched,
+/// which reads "that far or further". `None` for a cell with no reading.
+fn self_similarity_cell_color(radius: f64) -> Option<egui::Color32> {
+    if !radius.is_finite() {
+        return None;
+    }
+    let t = if radius >= max_self_similarity_radius() {
+        0.0
+    } else if radius >= 1.5 {
+        0.25
+    } else if radius >= 0.5 {
+        0.5
+    } else {
+        1.0
+    };
+    Some(red_to_green(t))
 }
 
 /// Red at `0`, yellow at `0.5`, green at `1`.
@@ -1030,8 +1173,8 @@ fn provenance_text(provenance: Provenance) -> String {
 }
 
 /// The measurements one observation shows at `stage`, as the table prints them:
-/// ZNCC, seed shift, projection offset, localizability, reprojection error, ray
-/// angle, status.
+/// ZNCC, seed shift, projection offset, the deprecated localizability, the ZNCC
+/// self-similarity radius, reprojection error, ray angle, status.
 ///
 /// The two distances are two questions and get two columns. **Seed shift** is
 /// how far the correlation peak sits from the observation itself -- the
@@ -1051,25 +1194,25 @@ fn measurements(
     observation: &Observation,
     stage: StageKind,
     evaluation: &Evaluation,
-) -> [String; 7] {
+) -> [String; 8] {
     match evaluation {
         Evaluation::Current => measured(observation, stage),
         Evaluation::Evaluating => {
             let mut cells = measured(observation, stage);
-            cells[6] = EVALUATING_LABEL.to_string();
+            cells[7] = EVALUATING_LABEL.to_string();
             cells
         }
         Evaluation::Refused(_) | Evaluation::Failed(_) => {
-            let mut cells: [String; 7] = Default::default();
-            cells[..6].fill("-".to_string());
-            cells[6] = NOT_EVALUATED.to_string();
+            let mut cells: [String; 8] = Default::default();
+            cells[..7].fill("-".to_string());
+            cells[7] = NOT_EVALUATED.to_string();
             cells
         }
     }
 }
 
 /// The cells of [`measurements`] for the numbers the track carries.
-fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
+fn measured(observation: &Observation, stage: StageKind) -> [String; 8] {
     let number = |value: Option<f64>, digits: usize| match value {
         Some(v) if v.is_finite() => format!("{v:.digits$}"),
         Some(_) => "NaN".to_string(),
@@ -1083,8 +1226,12 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
                 number(m.and_then(|m| m.shift_px), 2),
                 "-".to_string(),
                 sigma_text(
-                    m.and_then(|m| m.localizability),
-                    m.and_then(|m| m.localizability_middle),
+                    m.and_then(|m| m.localizability_deprecated),
+                    m.and_then(|m| m.localizability_middle_deprecated),
+                ),
+                self_similarity_text(
+                    m.and_then(|m| m.zncc_self_similarity_radius),
+                    m.and_then(|m| m.zncc_self_similarity_radius_middle),
                 ),
                 "-".to_string(),
                 "-".to_string(),
@@ -1099,8 +1246,12 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
                 number(m.and_then(|m| m.seed_shift_px), 2),
                 number(m.and_then(|m| m.projection_offset_px), 2),
                 sigma_text(
-                    m.and_then(|m| m.localizability),
-                    m.and_then(|m| m.localizability_middle),
+                    m.and_then(|m| m.localizability_deprecated),
+                    m.and_then(|m| m.localizability_middle_deprecated),
+                ),
+                self_similarity_text(
+                    m.and_then(|m| m.zncc_self_similarity_radius),
+                    m.and_then(|m| m.zncc_self_similarity_radius_middle),
                 ),
                 number(m.and_then(|m| m.reprojection_error), 2),
                 number(m.and_then(|m| m.ray_angle_deg), 2),

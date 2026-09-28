@@ -7,7 +7,8 @@
 //! the spec's Evidence section) whose math this scorer ports.
 
 use super::scorer::{
-    patch_localizability, score_localizability_parts, score_localizability_stack, Localizability,
+    patch_localizability_deprecated, score_localizability_parts_deprecated,
+    score_localizability_stack_deprecated, LocalizabilityDeprecated,
 };
 use crate::patch::normal_refine::{build_support, PatchWindow};
 
@@ -87,8 +88,8 @@ fn blob() -> Vec<f32> {
     rgba_from_gray(&g)
 }
 
-fn score(patch: &[f32]) -> Localizability {
-    patch_localizability(patch, R, C, &window(), 3.0)
+fn score(patch: &[f32]) -> LocalizabilityDeprecated {
+    patch_localizability_deprecated(patch, R, C, &window(), 3.0)
 }
 
 #[test]
@@ -151,7 +152,7 @@ fn linear_ramp_matches_the_analytic_tensor() {
         }
     }
     let win = window();
-    let s = patch_localizability(&rgba_from_gray(&g), R, C, &win, 3.0);
+    let s = patch_localizability_deprecated(&rgba_from_gray(&g), R, C, &win, 3.0);
     let expected_lam1 = k * k * win.total_weight;
     assert!(
         (s.lam1 - expected_lam1).abs() < 1e-6 * expected_lam1,
@@ -170,7 +171,7 @@ fn matches_python_prototype_numerically() {
     // on the exact `REF_VAL` patch below (RGBA with R=G=B=REF_VAL, alpha 255),
     // sigma_noise=3.0. The prototype computes luminance in f32; the tolerance covers that.
     let gray: Vec<f64> = REF_VAL.iter().map(|&v| v as f64).collect();
-    let s = patch_localizability(&rgba_from_gray(&gray), R, C, &window(), 3.0);
+    let s = patch_localizability_deprecated(&rgba_from_gray(&gray), R, C, &window(), 3.0);
 
     let rel = |got: f64, want: f64| (got - want).abs() / want.abs();
     assert!(rel(s.lam1, 177487.98729078675) < 2e-3, "lam1 = {}", s.lam1);
@@ -196,8 +197,8 @@ fn grayscale_scores_like_the_replicated_rgb() {
     let gray_f32: Vec<f32> = gray.iter().map(|&v| v as f32).collect();
     let rgb = rgba_from_gray(&gray);
     let win = window();
-    let s1 = patch_localizability(&gray_f32, R, 1, &win, 3.0);
-    let s3 = patch_localizability(&rgb, R, C, &win, 3.0);
+    let s1 = patch_localizability_deprecated(&gray_f32, R, 1, &win, 3.0);
+    let s3 = patch_localizability_deprecated(&rgb, R, C, &win, 3.0);
     let rel = |got: f64, want: f64| (got - want).abs() / want.abs();
     assert!(
         rel(s1.lam1, s3.lam1) < 1e-6,
@@ -222,7 +223,7 @@ fn grayscale_scores_like_the_replicated_rgb() {
 #[test]
 fn empty_patch_scores_nan() {
     let empty = vec![0.0f32; R * R * C];
-    let s = patch_localizability(&empty, R, C, &window(), 3.0);
+    let s = patch_localizability_deprecated(&empty, R, C, &window(), 3.0);
     assert!(s.lam1.is_nan() && s.lam2.is_nan());
     assert!(s.theta.is_nan() && s.sigma_pos_grid.is_nan());
 }
@@ -236,7 +237,7 @@ fn alpha_only_patch_is_flat_not_empty() {
     for px in 0..R * R {
         p[px * C + 3] = 255.0;
     }
-    let s = patch_localizability(&p, R, C, &window(), 3.0);
+    let s = patch_localizability_deprecated(&p, R, C, &window(), 3.0);
     assert!(!s.sigma_pos_grid.is_nan());
     assert!(s.lam2 < 1e-9, "alpha-only lam2 = {}", s.lam2);
 }
@@ -248,7 +249,7 @@ fn batch_matches_per_patch() {
     for p in &patches {
         stack.extend_from_slice(p);
     }
-    let batch = score_localizability_stack(
+    let batch = score_localizability_stack_deprecated(
         &stack,
         patches.len(),
         R,
@@ -300,12 +301,14 @@ const REF_VAL: [u8; R * R] = [
 /// and the cells of a textured blob a short one.
 #[test]
 fn a_cell_on_an_edge_slides_along_it() {
-    let (_, parts) = score_localizability_parts(&edge_vertical(), R, C, PatchWindow::Uniform, 3.0);
+    let (_, parts) =
+        score_localizability_parts_deprecated(&edge_vertical(), R, C, PatchWindow::Uniform, 3.0);
     let [dx, dy] = parts.slide[1][1];
     assert!(dy.abs() > 0.9, "a vertical slide: {:?}", parts.slide[1][1]);
     assert!(dx.abs() < 0.1, "{:?}", parts.slide[1][1]);
 
-    let (_, parts) = score_localizability_parts(&blob(), R, C, PatchWindow::Uniform, 3.0);
+    let (_, parts) =
+        score_localizability_parts_deprecated(&blob(), R, C, PatchWindow::Uniform, 3.0);
     let [dx, dy] = parts.slide[1][1];
     assert!(
         dx.hypot(dy) < 0.5,
@@ -314,7 +317,8 @@ fn a_cell_on_an_edge_slides_along_it() {
     );
 
     // A flat cell has no direction to slide in.
-    let (_, parts) = score_localizability_parts(&flat(), R, C, PatchWindow::Uniform, 3.0);
+    let (_, parts) =
+        score_localizability_parts_deprecated(&flat(), R, C, PatchWindow::Uniform, 3.0);
     assert_eq!(parts.slide[1][1], [0.0, 0.0]);
 }
 
@@ -336,18 +340,29 @@ fn texture_in_top_left_cell() -> Vec<f32> {
 #[test]
 fn the_parts_share_the_whole_patch_score() {
     for patch in [corner(), blob(), edge_vertical()] {
-        let (whole, _) =
-            score_localizability_parts(&patch, R, C, PatchWindow::GaussianDisk { sigma: 0.6 }, 3.0);
+        let (whole, _) = score_localizability_parts_deprecated(
+            &patch,
+            R,
+            C,
+            PatchWindow::GaussianDisk { sigma: 0.6 },
+            3.0,
+        );
         assert_eq!(whole, score(&patch));
     }
-    let (whole, parts) = score_localizability_parts(&flat()[..0], R, C, PatchWindow::Uniform, 3.0);
+    let (whole, parts) =
+        score_localizability_parts_deprecated(&flat()[..0], R, C, PatchWindow::Uniform, 3.0);
     assert!(whole.sigma_pos_grid.is_nan() && parts.middle.is_nan());
 }
 
 #[test]
 fn the_localizability_grid_says_which_cell_pins_the_position() {
-    let (whole, parts) =
-        score_localizability_parts(&texture_in_top_left_cell(), R, C, PatchWindow::Uniform, 3.0);
+    let (whole, parts) = score_localizability_parts_deprecated(
+        &texture_in_top_left_cell(),
+        R,
+        C,
+        PatchWindow::Uniform,
+        3.0,
+    );
     let textured = parts.grid[0][0];
     assert!(
         textured < 1.0,

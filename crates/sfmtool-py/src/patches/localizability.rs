@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `PatchCloud.score_localizability` + `window_weights`: keypoint
+//! `PatchCloud.score_localizability_deprecated` + `window_weights`: keypoint
 //! positional-uncertainty scoring.
 
 use numpy::ndarray::Array2;
@@ -13,7 +13,7 @@ use pyo3::types::PyDict;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::numeric::median_in_place;
 use sfmtool_core::patch::localizability::{
-    score_localizability_stack, window_weights as localizability_window_weights,
+    score_localizability_stack_deprecated, window_weights as localizability_window_weights,
 };
 
 use super::args::parse_patch_window;
@@ -61,7 +61,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, patch_bitmaps, *, sigma_noise=3.0, window="gaussian_disk", window_sigma=0.6
     ))]
-    fn score_localizability<'py>(
+    fn score_localizability_deprecated<'py>(
         &self,
         py: Python<'py>,
         recon: &PySfmrReconstruction,
@@ -154,7 +154,8 @@ impl PyPatchCloud {
         // The structure-tensor scoring is the expensive, rayon-parallel part; run
         // it with the GIL released. The grid→source-px map below is a cheap
         // per-observation pass, so it stays on the GIL-holding thread.
-        let scores = py.detach(|| score_localizability_stack(&flat, n, r, c, window, sigma_noise));
+        let scores = py
+            .detach(|| score_localizability_stack_deprecated(&flat, n, r, c, window, sigma_noise));
 
         // Median-over-views grid→source-px scale per point. The distance a world
         // half-extent is divided by is the optical-axis depth `-(R·X + t)_z` for
@@ -215,7 +216,7 @@ impl PyPatchCloud {
 
     /// The scorer's `R×R` window weights (row-major), for `window` (default
     /// ``"gaussian_disk"``) at `window_sigma`. The same kernel
-    /// [`score_localizability`](Self::score_localizability) accumulates the
+    /// [`score_localizability_deprecated`](Self::score_localizability_deprecated) accumulates the
     /// structure tensor over — exposed so callers score against it rather than
     /// reimplementing the window formula.
     #[staticmethod]

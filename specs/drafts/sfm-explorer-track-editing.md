@@ -848,7 +848,7 @@ pipeline needed it: the cluster stage is `refine_cluster_patches` over an
 in-memory cluster; the upgrade is the spawn pipeline's steps over one candidate
 with a caller-supplied view set and seeds; the track-stage measurements are
 `localize_patch_keypoints`, `refine_patch_keypoints` and
-`score_localizability_stack`; the commit is `add_point` and `replace_point`.
+`score_localizability_stack_deprecated`; the commit is `add_point` and `replace_point`.
 What the sweep and the searches still need: `select_patch_views` for the
 candidacy test, `member_coherence` for the pairwise grid, and
 `LazyKdForest::search` plus `resolve_feature_geometry` and the matcher's

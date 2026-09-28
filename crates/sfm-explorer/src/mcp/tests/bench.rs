@@ -1987,7 +1987,11 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     assert!((-1.0..=1.0).contains(&middle), "{track}");
     // And the grids, as three rows of three.
     let cluster = &track["observations"][0]["cluster"];
-    for key in ["zncc_grid", "localizability_grid"] {
+    for key in [
+        "zncc_grid",
+        "localizability_grid_deprecated",
+        "zncc_self_similarity_radius_grid",
+    ] {
         let rows = cluster[key]
             .as_array()
             .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
@@ -1998,20 +2002,51 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             assert!(row.iter().all(|cell| cell.is_number() || cell.is_null()));
         }
     }
-    assert!(cluster["localizability_middle"].is_number(), "{track}");
-    // And per cell the direction a match could slide, as an `[x, y]` pair.
-    let slides = cluster["localizability_slide"]
+    assert!(
+        cluster["localizability_middle_deprecated"].is_number(),
+        "{track}"
+    );
+    for key in [
+        "zncc_self_similarity_radius",
+        "zncc_self_similarity_radius_middle",
+    ] {
+        let radius = cluster[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
+        assert!((0.0..=3.0).contains(&radius), "{track}");
+    }
+    // The core's ZNCC against itself, seven rows of seven, 1 at the centre
+    // and null outside the disk.
+    let surface = cluster["zncc_self_similarity_surface"]
         .as_array()
-        .unwrap_or_else(|| panic!("no cluster localizability_slide on the wire: {track}"));
-    assert_eq!(slides.len(), 3, "{track}");
-    for cell in slides
+        .unwrap_or_else(|| panic!("no cluster zncc_self_similarity_surface on the wire: {track}"));
+    assert_eq!(surface.len(), 7, "{track}");
+    assert!(surface
         .iter()
-        .flat_map(|row| row.as_array().expect("a row of cells"))
-    {
-        let pair = cell.as_array().expect("an [x, y] pair");
-        assert_eq!(pair.len(), 2, "{track}");
-        let (x, y) = (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap());
-        assert!(x.hypot(y) <= 1.0 + 1e-9, "{track}");
+        .all(|row| row.as_array().is_some_and(|row| row.len() == 7)));
+    assert!(surface[0][0].is_null(), "{track}");
+    assert!(
+        surface[3][3] == json!(1.0) || surface[3][3].is_null(),
+        "{track}"
+    );
+    // And per cell the direction a match could slide, as an `[x, y]` pair.
+    for key in [
+        "localizability_slide_deprecated",
+        "zncc_self_similarity_slide_grid",
+    ] {
+        let slides = cluster[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
+        assert_eq!(slides.len(), 3, "{track}");
+        for cell in slides
+            .iter()
+            .flat_map(|row| row.as_array().expect("a row of cells"))
+        {
+            let pair = cell.as_array().expect("an [x, y] pair");
+            assert_eq!(pair.len(), 2, "{track}");
+            let (x, y) = (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap());
+            assert!(x.hypot(y) <= 1.0 + 1e-9, "{track}");
+        }
     }
 
     // The fit is its own step, under its own operation name, and it ends by
@@ -2052,20 +2087,38 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         "zncc_middle",
         "seed_shift_px",
         "projection_offset_px",
-        "localizability_middle",
+        "localizability_middle_deprecated",
+        "zncc_self_similarity_radius",
+        "zncc_self_similarity_radius_middle",
     ] {
         assert!(
             measured[column].is_number(),
             "{column} is not on the wire: {track}"
         );
     }
-    for key in ["zncc_grid", "localizability_grid"] {
+    for key in [
+        "zncc_grid",
+        "localizability_grid_deprecated",
+        "zncc_self_similarity_radius_grid",
+        "zncc_self_similarity_slide_grid",
+    ] {
         assert_eq!(
             measured[key].as_array().map(Vec::len),
             Some(3),
             "{key} is not on the wire: {track}"
         );
     }
+    assert_eq!(
+        measured["zncc_self_similarity_surface"]
+            .as_array()
+            .map(Vec::len),
+        Some(7),
+        "zncc_self_similarity_surface is not on the wire: {track}"
+    );
+    assert!(
+        measured["zncc_self_similarity_tolerance"].is_number(),
+        "zncc_self_similarity_tolerance is not on the wire: {track}"
+    );
     assert!(
         measured["reason"].is_null(),
         "a measured row carries no reason: {track}"

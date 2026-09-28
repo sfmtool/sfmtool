@@ -956,7 +956,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Sub-pixel refinement against the consensus | `PatchCloud.refine_keypoints` |
 | Normal refinement | `PatchCloud.refine_normals` |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
-| Localizability | `PatchCloud.score_localizability` |
+| Localizability | `PatchCloud.score_localizability_deprecated` |
 | Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |
 | Cluster refinement | `matching.refine_cluster_patches` |
 

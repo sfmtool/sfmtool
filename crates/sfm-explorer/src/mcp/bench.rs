@@ -1357,12 +1357,24 @@ fn cluster_measurement(observation: &Observation) -> Value {
         // And over each ninth of the patch, rows from the top.
         "zncc_grid": grid(measured.zncc_grid),
         "shift_px": finite(measured.shift_px),
-        "localizability": finite(measured.localizability),
+        "localizability_deprecated": finite(measured.localizability_deprecated),
         // The same tile's middle and each ninth of it, scored alone.
-        "localizability_middle": finite(measured.localizability_middle),
-        "localizability_grid": grid(measured.localizability_grid),
+        "localizability_middle_deprecated": finite(measured.localizability_middle_deprecated),
+        "localizability_grid_deprecated": grid(measured.localizability_grid_deprecated),
         // Per cell, the direction a match could slide and how freely.
-        "localizability_slide": slides(measured.localizability_slide),
+        "localizability_slide_deprecated": slides(measured.localizability_slide_deprecated),
+        // How far the tile's core can slide over itself and still match
+        // itself, in grid px, 3 meaning 3 or more; over the middle and each
+        // ninth too, with each ninth's slide direction, and the core's ZNCC
+        // against itself at every shift of the 7 x 7 square.
+        "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
+        "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
+        "zncc_self_similarity_radius_grid": grid(measured.zncc_self_similarity_radius_grid),
+        "zncc_self_similarity_slide_grid": slides(measured.zncc_self_similarity_slide_grid),
+        "zncc_self_similarity_surface": surface(measured.zncc_self_similarity_surface.as_deref()),
+        // The deficit the core was judged by: the radius is read on the
+        // surface at 1 - tolerance.
+        "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
         "status": measured.status.map(|status| format!("{status:?}")),
     })
 }
@@ -1391,12 +1403,24 @@ fn track_measurement(observation: &Observation) -> Value {
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
-        "localizability": finite(measured.localizability),
+        "localizability_deprecated": finite(measured.localizability_deprecated),
         // The same tile's middle and each ninth of it, scored alone.
-        "localizability_middle": finite(measured.localizability_middle),
-        "localizability_grid": grid(measured.localizability_grid),
+        "localizability_middle_deprecated": finite(measured.localizability_middle_deprecated),
+        "localizability_grid_deprecated": grid(measured.localizability_grid_deprecated),
         // Per cell, the direction a match could slide and how freely.
-        "localizability_slide": slides(measured.localizability_slide),
+        "localizability_slide_deprecated": slides(measured.localizability_slide_deprecated),
+        // How far the tile's core can slide over itself and still match
+        // itself, in grid px, 3 meaning 3 or more; over the middle and each
+        // ninth too, with each ninth's slide direction, and the core's ZNCC
+        // against itself at every shift of the 7 x 7 square.
+        "zncc_self_similarity_radius": finite(measured.zncc_self_similarity_radius),
+        "zncc_self_similarity_radius_middle": finite(measured.zncc_self_similarity_radius_middle),
+        "zncc_self_similarity_radius_grid": grid(measured.zncc_self_similarity_radius_grid),
+        "zncc_self_similarity_slide_grid": slides(measured.zncc_self_similarity_slide_grid),
+        "zncc_self_similarity_surface": surface(measured.zncc_self_similarity_surface.as_deref()),
+        // The deficit the core was judged by: the radius is read on the
+        // surface at 1 - tolerance.
+        "zncc_self_similarity_tolerance": finite(measured.zncc_self_similarity_tolerance),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is
@@ -1429,4 +1453,21 @@ fn grid(value: Option<[[f64; 3]; 3]>) -> Option<[[Option<f64>; 3]; 3]> {
 /// first, with null in place of a cell that has no reading; or null for none.
 fn slides(value: Option<[[[f64; 2]; 3]; 3]>) -> Option<[[Option<[f64; 2]>; 3]; 3]> {
     value.map(|rows| rows.map(|row| row.map(|v| v.iter().all(|x| x.is_finite()).then_some(v))))
+}
+
+/// A square ZNCC surface, stored row-major, as rows of numbers from the top
+/// row (`dy = -r`), with null for a shift outside the disk or with no reading;
+/// or null for no surface.
+fn surface(value: Option<&[f64]>) -> Option<Vec<Vec<Option<f64>>>> {
+    let values = value?;
+    let side = (values.len() as f64).sqrt().round() as usize;
+    if side == 0 || side * side != values.len() {
+        return None;
+    }
+    Some(
+        values
+            .chunks(side)
+            .map(|row| row.iter().map(|&v| finite(Some(v))).collect())
+            .collect(),
+    )
 }

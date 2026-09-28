@@ -29,7 +29,7 @@ def embedded_with_bitmaps(seoul_bull_workspace_once) -> SfmrReconstruction:
 def _sigma_pos(recon: SfmrReconstruction) -> np.ndarray:
     # The filter culls on the intrinsic patch-grid-px score; the tests derive
     # their thresholds from the same quantity so they stay unit-consistent.
-    result = recon.patches.score_localizability(recon, recon.patch_bitmaps)
+    result = recon.patches.score_localizability_deprecated(recon, recon.patch_bitmaps)
     return np.asarray(result["sigma_pos_grid"], dtype=float)
 
 

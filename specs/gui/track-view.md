@@ -710,7 +710,10 @@ area. Each heading has hover text over the width of its column saying what the
 column holds; the *ZNCC (%)* heading's says what a ZNCC is, that the first
 number is over the whole patch and the second over its middle half, what the
 two apart mean, and how the grid beside them is coloured. The *σ_pos* heading's
-says the same of its two numbers and its grid.
+says it is the deprecated score, shown while it is compared with the
+self-similarity radius, and then the same of its two numbers and its grid. The
+*Self-sim.* heading's says what the radius is and what its two numbers, its
+colours and its lines mean.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
@@ -720,7 +723,8 @@ says the same of its two numbers and its grid.
 | ZNCC (%) | against the reference template, then the middle ZNCC: `92 / 61`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, then the middle ZNCC: `92 / 61`, then the ZNCC grid |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
-| σ_pos | the tile's localizability, then its middle square's: `0.08 / 0.12`, then the localizability grid | the same |
+| σ_pos | the tile's deprecated localizability, then its middle square's: `0.08 / 0.12`, then the localizability grid | the same |
+| Self-sim. | the tile's ZNCC self-similarity radius, then its middle square's: `0 / 1.41`, `3+` for the largest, then the self-similarity grid | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
 | Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
@@ -769,12 +773,45 @@ a `+` when its uncertainty along its weaker axis is at or under the bar, so it
 pins both; a line along the slide when only the stronger axis is under the bar,
 as on a straight edge, where a match could slide along the line; and nothing
 when neither is. The stronger axis's uncertainty is the cell's times
-`sqrt(1 - |slide|)`, so the mark needs nothing beyond `localizability_grid` and
-`localizability_slide`. A box is green at half
+`sqrt(1 - |slide|)`, so the mark needs nothing beyond
+`localizability_grid_deprecated` and `localizability_slide_deprecated`. A box
+is green at half
 the track's *max σ_pos* bar and below, red at twice the bar and above, and
 yellow at the bar, on a log scale so that each doubling moves the colour the
 same distance; the number prints to two decimals so the pair fits one column.
-Both grids fade with the numbers while an evaluation is on its way.
+
+**The Self-sim. cell holds the ZNCC self-similarity radius** (see
+[`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
+and § "The ZNCC self-similarity radius" of
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md)): how far,
+in patch-grid pixels, the tile's core can slide over itself by whole pixels and
+still match itself as well as a true match between two views would. The first
+number is the whole core's and the second its middle square's, each to two
+decimals with trailing zeros dropped (`0`, `1`, `1.41`, `2`, `2.24`), and `3+`
+for the largest radius searched, which reads "3 or more". Beside them is the
+grid of each ninth of the core read alone: a box is green at `0`, yellow at `1`
+to `1.41`, orange at `2` to `2.24` and red at `3` or more, and carries a dark
+line along its slide where the slide is at least `0.5` long, so the ninth's
+matching shifts line up along one direction, as on an edge. Hovering it shows
+its nine numbers as the cell prints them. No bar judges the radius, so it
+colours nothing in the row's painting.
+
+**Beside the grid is the core's surface plot**: the whole core's ZNCC against
+itself at every whole-pixel shift the radius searches, interpolated between
+the shifts (Catmull-Rom) and drawn as a disk, with the contour at `1 - τ`, the
+level the radius is read at, over it. The colour ramp is keyed to that level so
+the region inside the contour reads as one shape: below the level a muted ramp
+from dark to mid slate, and at it a jump to bright amber that lightens towards
+pale yellow at `1`. A dot marks each whole-pixel shift inside the contour and a
+ring marks the centre, so the radius is the distance to the furthest dot. A
+small ring round the centre is a patch that locks; a long region is a patch
+that slides along it; a region that runs to the edge of the disk is one that
+slides at least as far as the radius looks. Hovering the plot draws it large
+with a sentence giving the contour's level, the tolerance and the radius. The
+picture and the contour are computed once per reading and kept until the row's
+surface or tolerance changes.
+
+All three grids and the surface plot fade with the numbers while an evaluation is on its way.
 
 **The cells follow where the evaluation stands.** While an evaluation of the
 track's current inputs is on its way, the numbers are the previous

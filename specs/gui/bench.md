@@ -937,7 +937,13 @@ measurements where they exist -- at both stages `zncc_middle` and `zncc_grid`
 beside `zncc` (the same samples read over the middle square of the patch and
 over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and
-`localizability_middle`, `localizability_grid` and `localizability_slide` beside `localizability`, at the track stage
+`localizability_middle_deprecated`, `localizability_grid_deprecated` and
+`localizability_slide_deprecated` beside `localizability_deprecated`, and the ZNCC
+self-similarity radius `zncc_self_similarity_radius` with its `_middle` and
+`_grid`, `zncc_self_similarity_slide_grid`, `zncc_self_similarity_surface` and
+`zncc_self_similarity_tolerance`
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+ZNCC self-similarity radius"), at the track stage
 the two distances
 (`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the evaluation could

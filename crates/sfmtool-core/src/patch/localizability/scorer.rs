@@ -5,7 +5,7 @@
 //! the window-weighted second-moment matrix, and its 2×2 symmetric eigensystem.
 //!
 //! See `specs/core/patch/patch-localizability.md`. Given a point's cross-view consensus
-//! patch, [`patch_localizability`] measures the curvature of the ZNCC
+//! patch, [`patch_localizability_deprecated`] measures the curvature of the ZNCC
 //! self-similarity surface (the Harris/Shi–Tomasi structure tensor) and reports
 //! the noise-normalized weak-axis positional uncertainty `σ_pos` in **grid** px.
 
@@ -22,7 +22,7 @@ use crate::patch::normal_refine::{build_support, Parts, PatchWindow, Support};
 /// direction, the axis of greatest positional ambiguity. Every field is `NaN`
 /// when the patch is empty (all pixels zero — a culled / uncovered consensus).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Localizability {
+pub struct LocalizabilityDeprecated {
     /// Larger eigenvalue of `M_sum = Σ_k w_k ∇I∇Iᵀ` (steep axis).
     pub lam1: f64,
     /// Smaller eigenvalue of `M_sum` (the Shi–Tomasi weak-axis score).
@@ -34,7 +34,7 @@ pub struct Localizability {
     pub sigma_pos_grid: f64,
 }
 
-impl Localizability {
+impl LocalizabilityDeprecated {
     /// The unscorable sentinel (empty / uncovered consensus): every field `NaN`.
     fn nan() -> Self {
         Self {
@@ -152,18 +152,18 @@ fn eig_2x2_sym(a: f64, b: f64, c: f64) -> (f64, f64, f64) {
 /// The structure tensor `M_sum = Σ_k w_k ∇I∇Iᵀ` is accumulated over the window's
 /// positive-weight pixels (gradients themselves are the full-grid central
 /// differences, so a support pixel's stencil may reach just outside the disk —
-/// exactly the prototype). Returns the [`Localizability`] (all-`NaN` for an empty patch).
-pub(in crate::patch) fn patch_localizability(
+/// exactly the prototype). Returns the [`LocalizabilityDeprecated`] (all-`NaN` for an empty patch).
+pub(in crate::patch) fn patch_localizability_deprecated(
     patch: &[f32],
     resolution: usize,
     channels: usize,
     window: &Support,
     sigma_noise: f64,
-) -> Localizability {
+) -> LocalizabilityDeprecated {
     debug_assert_eq!(patch.len(), resolution * resolution * channels);
     let (gray, valid) = luminance_grid(patch, resolution, channels);
     if !valid {
-        return Localizability::nan();
+        return LocalizabilityDeprecated::nan();
     }
     let (grad_row, grad_col) = central_diff_gradient(&gray, resolution);
     let everything = 0..window.pixels.len();
@@ -177,7 +177,7 @@ pub(in crate::patch) fn patch_localizability(
     )
 }
 
-/// The [`Localizability`] of the structure tensor summed over the support
+/// The [`LocalizabilityDeprecated`] of the structure tensor summed over the support
 /// positions `at`, position `k` weighted by `weight(k)`.
 fn tensor_localizability(
     grad_row: &[f64],
@@ -186,7 +186,7 @@ fn tensor_localizability(
     at: impl IntoIterator<Item = usize>,
     weight: impl Fn(usize) -> f64,
     sigma_noise: f64,
-) -> Localizability {
+) -> LocalizabilityDeprecated {
     let (mut sxx, mut syy, mut sxy) = (0.0f64, 0.0f64, 0.0f64);
     for k in at {
         let (p, w) = (window.pixels[k], weight(k));
@@ -198,7 +198,7 @@ fn tensor_localizability(
     }
     let (lam1, lam2, theta) = eig_2x2_sym(sxx, sxy, syy);
     let sigma_pos_grid = sigma_noise / lam2.max(LAM2_FLOOR).sqrt();
-    Localizability {
+    LocalizabilityDeprecated {
         lam1,
         lam2,
         theta,
@@ -207,14 +207,14 @@ fn tensor_localizability(
 }
 
 /// One patch's weak-axis positional uncertainty over parts of its grid, beside
-/// the whole-patch [`Localizability::sigma_pos_grid`], in patch-grid px.
+/// the whole-patch [`LocalizabilityDeprecated::sigma_pos_grid`], in patch-grid px.
 ///
 /// Each is the structure tensor of the same gradients summed over a part of
 /// the support alone, so it says whether that part pins a position by itself.
 /// A part has fewer pixels than the whole, so its uncertainty reads higher for
 /// the same texture.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LocalizabilityParts {
+pub struct LocalizabilityPartsDeprecated {
     /// Over the middle square of the grid, the rows and columns `R/4 .. R -
     /// R/4`, under the window weights.
     pub middle: f64,
@@ -235,9 +235,9 @@ pub struct LocalizabilityParts {
     pub slide: [[[f64; 2]; 3]; 3],
 }
 
-impl Localizability {
+impl LocalizabilityDeprecated {
     /// The weak-axis direction scaled by how much weaker that axis is:
-    /// [`LocalizabilityParts::slide`] for one part. `[0, 0]` when the tensor
+    /// [`LocalizabilityPartsDeprecated::slide`] for one part. `[0, 0]` when the tensor
     /// is empty, and `NaN` when it was not scored.
     fn slide(&self) -> [f64; 2] {
         if self.lam1.is_nan() {
@@ -251,29 +251,29 @@ impl Localizability {
     }
 }
 
-/// Score one `R×R×C` patch as [`score_localizability_stack`] scores it, and
-/// over parts of its grid as well: the whole-patch [`Localizability`] and the
-/// [`LocalizabilityParts`] of the same gradients. Every value is `NaN` for an
+/// Score one `R×R×C` patch as [`score_localizability_stack_deprecated`] scores it, and
+/// over parts of its grid as well: the whole-patch [`LocalizabilityDeprecated`] and the
+/// [`LocalizabilityPartsDeprecated`] of the same gradients. Every value is `NaN` for an
 /// empty patch.
-pub fn score_localizability_parts(
+pub fn score_localizability_parts_deprecated(
     patch: &[f32],
     resolution: usize,
     channels: usize,
     window: PatchWindow,
     sigma_noise: f64,
-) -> (Localizability, LocalizabilityParts) {
-    let empty = LocalizabilityParts {
+) -> (LocalizabilityDeprecated, LocalizabilityPartsDeprecated) {
+    let empty = LocalizabilityPartsDeprecated {
         middle: f64::NAN,
         grid: [[f64::NAN; 3]; 3],
         slide: [[[f64::NAN; 2]; 3]; 3],
     };
     if resolution == 0 || patch.len() != resolution * resolution * channels {
-        return (Localizability::nan(), empty);
+        return (LocalizabilityDeprecated::nan(), empty);
     }
     let support = build_support(window, resolution as u32);
     let (gray, valid) = luminance_grid(patch, resolution, channels);
     if !valid {
-        return (Localizability::nan(), empty);
+        return (LocalizabilityDeprecated::nan(), empty);
     }
     let (grad_row, grad_col) = central_diff_gradient(&gray, resolution);
     // The whole tile and its middle over the support, under the window
@@ -282,7 +282,7 @@ pub fn score_localizability_parts(
     let score = |on: &Support, at: &[usize], weighted: bool| {
         if at.is_empty() {
             // A part with no pixels has no reading, not the floor's.
-            return Localizability::nan();
+            return LocalizabilityDeprecated::nan();
         }
         tensor_localizability(
             &grad_row,
@@ -302,7 +302,7 @@ pub fn score_localizability_parts(
         .map(|row| row.each_ref().map(|cell| score(&square, cell, false)));
     (
         whole,
-        LocalizabilityParts {
+        LocalizabilityPartsDeprecated {
             middle: score(&support, &parts.middle, true).sigma_pos_grid,
             grid: cells.map(|row| row.map(|cell| cell.sigma_pos_grid)),
             slide: cells.map(|row| row.map(|cell| cell.slide())),
@@ -314,7 +314,7 @@ pub fn score_localizability_parts(
 /// `R·R·C` values each), rayon-parallel across patches. Builds the frozen scoring
 /// `Support` once for `window` at resolution `R` and reuses it for every patch.
 ///
-/// Returns one [`Localizability`] per patch, in input order (all-`NaN` for an
+/// Returns one [`LocalizabilityDeprecated`] per patch, in input order (all-`NaN` for an
 /// empty patch). The grid→source-px mapping and `σ_pos` in source px are the
 /// caller's (they need the recon geometry, not the consensus); this entry stops
 /// at `sigma_pos_grid`.
@@ -322,14 +322,14 @@ pub fn score_localizability_parts(
 /// # Panics
 ///
 /// Panics if `patches.len() != num_patches * resolution * resolution * channels`.
-pub fn score_localizability_stack(
+pub fn score_localizability_stack_deprecated(
     patches: &[f32],
     num_patches: usize,
     resolution: usize,
     channels: usize,
     window: PatchWindow,
     sigma_noise: f64,
-) -> Vec<Localizability> {
+) -> Vec<LocalizabilityDeprecated> {
     let stride = resolution * resolution * channels;
     assert_eq!(
         patches.len(),
@@ -337,11 +337,11 @@ pub fn score_localizability_stack(
         "patch stack must be P*R*R*C values"
     );
     if stride == 0 {
-        return vec![Localizability::nan(); num_patches];
+        return vec![LocalizabilityDeprecated::nan(); num_patches];
     }
     let support = build_support(window, resolution as u32);
     patches
         .par_chunks(stride)
-        .map(|p| patch_localizability(p, resolution, channels, &support, sigma_noise))
+        .map(|p| patch_localizability_deprecated(p, resolution, channels, &support, sigma_noise))
         .collect()
 }

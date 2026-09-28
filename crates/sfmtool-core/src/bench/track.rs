@@ -134,26 +134,60 @@ pub struct ClusterMeasurement {
     pub shift_px: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in template-grid
     /// px.
-    pub localizability: Option<f64>,
+    pub localizability_deprecated: Option<f64>,
     /// The localizability of the middle square of the same tile alone, the
     /// rows and columns `R/4 .. R - R/4`, sigma_pos in template-grid px. Reads higher
-    /// than [`Self::localizability`] for the same texture, because it has
-    /// fewer pixels to pin a position with. `None` wherever `localizability`
+    /// than [`Self::localizability_deprecated`] for the same texture, because it has
+    /// fewer pixels to pin a position with. `None` wherever `localizability_deprecated`
     /// is.
-    pub localizability_middle: Option<f64>,
+    pub localizability_middle_deprecated: Option<f64>,
     /// The localizability of each cell of the ZNCC grid's three-by-three split
     /// of the same tile alone, with every pixel weighted equally, sigma_pos in
     /// template-grid px, `grid[row][col]` from the top-left cell. It says which parts
     /// of the tile carry the texture that pins a position. `None` wherever
-    /// `localizability` is.
-    pub localizability_grid: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::localizability_grid`], the direction a match
+    /// `localizability_deprecated` is.
+    pub localizability_grid_deprecated: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::localizability_grid_deprecated`], the direction a match
     /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
     /// template-grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
     /// `1` on a straight edge and near `0` where both axes are pinned alike or
     /// the cell is flat. Its sign means nothing. `None` wherever
-    /// `localizability` is.
-    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>,
+    /// `localizability_deprecated` is.
+    pub localizability_slide_deprecated: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ZNCC self-similarity radius of the observation's own tile, in
+    /// template-grid px: the length of the furthest whole-pixel shift at which
+    /// the tile's core still matches itself within the tolerance a true match
+    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more"
+    /// (see `specs/core/patch/zncc-self-similarity-radius.md`). `None` wherever
+    /// the tile could not be sampled.
+    pub zncc_self_similarity_radius: Option<f64>,
+    /// The ZNCC self-similarity radius of the middle square of the same tile,
+    /// the rows and columns `R/4 .. R - R/4`. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_radius_middle: Option<f64>,
+    /// The ZNCC self-similarity radius of each cell of the ZNCC grid's
+    /// three-by-three split of the same tile, `grid[row][col]` from the
+    /// top-left cell. `None` wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::zncc_self_similarity_radius_grid`], the
+    /// direction the cell's indistinguishable shifts line up in, `[x, y]` in
+    /// the template-grid frame (`x` column-right, `y` row-down), scaled by how
+    /// strongly they line up: near `1` along a straight edge, near `0` where
+    /// they spread evenly or there are none. Its sign means nothing. `None`
+    /// wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
+    /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
+    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre and
+    /// `NaN` outside the disk `dx² + dy² ≤ r²`, all `NaN` when the core has no
+    /// texture. `None` wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_surface: Option<Vec<f64>>,
+    /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
+    /// whose ZNCC deficit is at or under it is indistinguishable from the
+    /// true position, so `1 - tolerance` is the level of
+    /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
+    /// wherever `zncc_self_similarity_radius` is, and where the core has no
+    /// texture.
+    pub zncc_self_similarity_tolerance: Option<f64>,
     /// The refinement's own verdict on the observation, in the `member_status`
     /// legend.
     pub status: Option<MemberStatus>,
@@ -171,10 +205,16 @@ impl ClusterMeasurement {
             zncc_middle: None,
             zncc_grid: None,
             shift_px: None,
-            localizability: None,
-            localizability_middle: None,
-            localizability_grid: None,
-            localizability_slide: None,
+            localizability_deprecated: None,
+            localizability_middle_deprecated: None,
+            localizability_grid_deprecated: None,
+            localizability_slide_deprecated: None,
+            zncc_self_similarity_radius: None,
+            zncc_self_similarity_radius_middle: None,
+            zncc_self_similarity_radius_grid: None,
+            zncc_self_similarity_slide_grid: None,
+            zncc_self_similarity_surface: None,
+            zncc_self_similarity_tolerance: None,
             status: None,
         }
     }
@@ -316,26 +356,60 @@ pub struct TrackMeasurement {
     /// *Angle* column shows for a committed track.
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
-    pub localizability: Option<f64>,
+    pub localizability_deprecated: Option<f64>,
     /// The localizability of the middle square of the same tile alone, the
     /// rows and columns `R/4 .. R - R/4`, sigma_pos in grid px. Reads higher
-    /// than [`Self::localizability`] for the same texture, because it has
-    /// fewer pixels to pin a position with. `None` wherever `localizability`
+    /// than [`Self::localizability_deprecated`] for the same texture, because it has
+    /// fewer pixels to pin a position with. `None` wherever `localizability_deprecated`
     /// is.
-    pub localizability_middle: Option<f64>,
+    pub localizability_middle_deprecated: Option<f64>,
     /// The localizability of each cell of the ZNCC grid's three-by-three split
     /// of the same tile alone, with every pixel weighted equally, sigma_pos in
     /// grid px, `grid[row][col]` from the top-left cell. It says which parts
     /// of the tile carry the texture that pins a position. `None` wherever
-    /// `localizability` is.
-    pub localizability_grid: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::localizability_grid`], the direction a match
+    /// `localizability_deprecated` is.
+    pub localizability_grid_deprecated: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::localizability_grid_deprecated`], the direction a match
     /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
     /// grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
     /// `1` on a straight edge and near `0` where both axes are pinned alike or
     /// the cell is flat. Its sign means nothing. `None` wherever
-    /// `localizability` is.
-    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>,
+    /// `localizability_deprecated` is.
+    pub localizability_slide_deprecated: Option<[[[f64; 2]; 3]; 3]>,
+    /// The ZNCC self-similarity radius of the observation's own tile, in
+    /// grid px: the length of the furthest whole-pixel shift at which
+    /// the tile's core still matches itself within the tolerance a true match
+    /// between two views allows, `0 ..= r`, with `r` read as "`r` or more"
+    /// (see `specs/core/patch/zncc-self-similarity-radius.md`). `None` wherever
+    /// the tile could not be sampled.
+    pub zncc_self_similarity_radius: Option<f64>,
+    /// The ZNCC self-similarity radius of the middle square of the same tile,
+    /// the rows and columns `R/4 .. R - R/4`. `None` wherever
+    /// `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_radius_middle: Option<f64>,
+    /// The ZNCC self-similarity radius of each cell of the ZNCC grid's
+    /// three-by-three split of the same tile, `grid[row][col]` from the
+    /// top-left cell. `None` wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::zncc_self_similarity_radius_grid`], the
+    /// direction the cell's indistinguishable shifts line up in, `[x, y]` in
+    /// the grid frame (`x` column-right, `y` row-down), scaled by how
+    /// strongly they line up: near `1` along a straight edge, near `0` where
+    /// they spread evenly or there are none. Its sign means nothing. `None`
+    /// wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
+    /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
+    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre and
+    /// `NaN` outside the disk `dx² + dy² ≤ r²`, all `NaN` when the core has no
+    /// texture. `None` wherever `zncc_self_similarity_radius` is.
+    pub zncc_self_similarity_surface: Option<Vec<f64>>,
+    /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
+    /// whose ZNCC deficit is at or under it is indistinguishable from the
+    /// true position, so `1 - tolerance` is the level of
+    /// [`Self::zncc_self_similarity_surface`] the radius is read at. `None`
+    /// wherever `zncc_self_similarity_radius` is, and where the core has no
+    /// texture.
+    pub zncc_self_similarity_tolerance: Option<f64>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in source-image px.

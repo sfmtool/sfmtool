@@ -283,16 +283,35 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           weighted equally, as three rows of three from the top-left, in the \
                           layout the patch tile is drawn in. It says where in the patch an \
                           agreement or a disagreement is; a cell is null where the patch is flat \
-                          over it, and the grid is null where zncc is. Beside localizability \
-                          (sigma_pos of the observation's own tile, in grid px) are \
-                          localizability_middle, the middle square of the same tile scored \
-                          alone, and localizability_grid, each cell of the same split scored \
-                          alone with every pixel weighted equally, and localizability_slide, per \
-                          cell an [x, y] vector (x column-right, y row-down) along which a match \
-                          could slide, of length 1 - lambda2/lambda1: near 1 on a straight edge, \
-                          near 0 on a corner or where the cell is flat. A part has fewer pixels \
-                          than the whole, so it reads higher for the same texture. Both grids \
-                          cover the whole square, corners included. A track-stage \
+                          over it, and the grid is null where zncc is. Beside \
+                          localizability_deprecated (sigma_pos of the observation's own tile, \
+                          in grid px, the score the ZNCC self-similarity radius is being \
+                          compared against) are localizability_middle_deprecated, the middle \
+                          square of the same tile scored alone, and \
+                          localizability_grid_deprecated, each cell of the same split scored \
+                          alone with every pixel weighted equally, and \
+                          localizability_slide_deprecated, per cell an [x, y] vector (x \
+                          column-right, y row-down) along which a match could slide, of length \
+                          1 - lambda2/lambda1: near 1 on a straight edge, near 0 on a corner or \
+                          where the cell is flat. A part has fewer pixels than the whole, so it \
+                          reads higher for the same texture. Both grids cover the whole square, \
+                          corners included. zncc_self_similarity_radius is how far, in grid px, \
+                          the tile's core can slide over itself by whole pixels and still match \
+                          itself as well as a true match between two views would: 0 on a corner \
+                          or busy texture, 1 to 1.41 or 2 to 2.24 in between, and 3 meaning 3 or \
+                          more, on a straight edge or a flat patch. zncc_self_similarity_radius_middle \
+                          and zncc_self_similarity_radius_grid read the middle square and each \
+                          cell of the same split the same way, and zncc_self_similarity_slide_grid \
+                          gives per cell the [x, y] direction the matching shifts line up in, \
+                          near 1 long along an edge and near 0 where they spread evenly or there \
+                          are none. zncc_self_similarity_surface is the core's ZNCC against \
+                          itself at every shift of the 7 x 7 square, seven rows of seven from \
+                          (dx, dy) = (-3, -3), 1 at the centre and null outside the disk of \
+                          radius 3 or where the core is flat, and \
+                          zncc_self_similarity_tolerance the ZNCC deficit the core was judged \
+                          by, so the radius is read on the surface at 1 - tolerance. The \
+                          self-similarity fields are \
+                          null where the tile could not be read. A track-stage \
                           observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
                           it), walked_to (the pixel it would have reached), walked_zncc (the \

@@ -2376,11 +2376,21 @@ fn proposed_verdict(
     let (zncc, middle, shift, localizability) = match stage {
         StageKind::Cluster => {
             let m = observation.cluster.as_ref()?;
-            (m.zncc?, m.zncc_middle, m.shift_px, m.localizability)
+            (
+                m.zncc?,
+                m.zncc_middle,
+                m.shift_px,
+                m.localizability_deprecated,
+            )
         }
         StageKind::Track => {
             let m = observation.track.as_ref()?;
-            (m.zncc?, m.zncc_middle, m.seed_shift_px, m.localizability)
+            (
+                m.zncc?,
+                m.zncc_middle,
+                m.seed_shift_px,
+                m.localizability_deprecated,
+            )
         }
     };
     // The middle bar is off at `0`, and a row with no middle reading has

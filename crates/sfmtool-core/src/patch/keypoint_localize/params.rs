@@ -98,7 +98,7 @@ pub struct KeypointLocalizeParams {
     pub min_absolute_zncc: f64,
     /// Drop a view whose **own** rendered core tile is not localizable: the
     /// weak-axis positional uncertainty `σ_pos` of its structure tensor
-    /// (patch-grid px, from [`patch_localizability`](crate::patch::localizability))
+    /// (patch-grid px, from [`patch_localizability_deprecated`](crate::patch::localizability))
     /// above this `τ`. The member-level counterpart of the per-point consensus
     /// gate (`specs/core/patch/patch-localizability.md`) and the same units and
     /// default: a flat or edge-only member pins no 2D position, so its ZNCC to

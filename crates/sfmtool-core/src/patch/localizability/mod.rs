@@ -11,8 +11,8 @@
 //! which catches the aperture blind spot the cross-view agreement gate misses
 //! (a patch straddling a straight edge agrees perfectly yet slides along it).
 //!
-//! `patch_localizability` is the pure per-patch
-//! scorer (structure tensor + 2×2 eig); [`score_localizability_stack`] batches it
+//! `patch_localizability_deprecated` is the pure per-patch
+//! scorer (structure tensor + 2×2 eig); [`score_localizability_stack_deprecated`] batches it
 //! over a `(P, R, R, C)` consensus stack in parallel. The grid→source-px mapping
 //! that turns `sigma_pos_grid` into a source-pixel `σ_pos` lives at the binding /
 //! Python layer (it needs recon geometry, not the consensus).
@@ -23,16 +23,17 @@ mod scorer;
 mod tests;
 
 pub use scorer::{
-    score_localizability_parts, score_localizability_stack, Localizability, LocalizabilityParts,
+    score_localizability_parts_deprecated, score_localizability_stack_deprecated,
+    LocalizabilityDeprecated, LocalizabilityPartsDeprecated,
 };
 
-pub(in crate::patch) use scorer::patch_localizability;
+pub(in crate::patch) use scorer::patch_localizability_deprecated;
 
 use crate::patch::normal_refine::{window_weights as kernel_window_weights, PatchWindow};
 
 /// Global photometric-noise constant `σ_noise` (intensity units) the in-crate
 /// gates score with — the value that sets the absolute px scale of `σ_pos`. It
-/// matches the `score_localizability` binding's / `embed-patches`' default (see
+/// matches the `score_localizability_deprecated` binding's / `embed-patches`' default (see
 /// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)"),
 /// so a member-level gate and the per-point consensus cull read the same scale.
 pub const SIGMA_NOISE: f64 = 3.0;

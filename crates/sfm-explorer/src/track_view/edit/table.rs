@@ -22,8 +22,9 @@ use sfmtool_core::bench::{EditableTrack, StageKind, Verdict};
 use sfmtool_core::SfmrReconstruction;
 
 use super::{
-    measurements, provenance_text, row_grids, sigma_cell_color, zncc_cell_color, RowGrids,
-    TrackEdit, TrackEditResponse,
+    measurements, provenance_text, radius_number, row_grids, row_radius, row_surface,
+    self_similarity_cell_color, sigma_cell_color, zncc_cell_color, RowGrids, TrackEdit,
+    TrackEditResponse,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -37,10 +38,14 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 /// Width of the verdict control.
 const VERDICT_WIDTH: f32 = 72.0;
 /// Side of one cell of a three-by-three grid a row draws: room for the slide
-/// line the localizability grid draws in a cell.
+/// line the localizability and the self-similarity grids draw in a cell.
 const GRID_CELL: f32 = 10.0;
 /// Side of a whole grid: three cells and the four lines of its border.
 const GRID_SIDE: f32 = 3.0 * GRID_CELL + 4.0;
+/// Side of the self-similarity surface plot a row draws.
+const PLOT_SIDE: f32 = 44.0;
+/// Side of the same plot in its hover view.
+const PLOT_HOVER_SIDE: f32 = 220.0;
 
 /// What one row drew, kept so that a test reads the table the app draws rather
 /// than a second computation of it.
@@ -56,13 +61,16 @@ pub(crate) struct RowSummary {
     pub pinned: bool,
     /// What the thresholds propose for it, which is what the row is painted by.
     pub painted: Verdict,
-    /// The seven measurement cells, as printed.
-    pub cells: [String; 7],
-    /// The two grids drawn beside the ZNCC and the sigma_pos cells.
+    /// The eight measurement cells, as printed.
+    pub cells: [String; 8],
+    /// The three grids drawn beside the ZNCC, the sigma_pos and the
+    /// self-similarity cells.
     pub grids: RowGrids,
     /// Whether the row drew a rendered tile, rather than the empty frame that
     /// stands in when there is nothing to render.
     pub tile: bool,
+    /// Whether the row drew the self-similarity surface plot.
+    pub self_similarity_plot: bool,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
@@ -77,6 +85,9 @@ pub(super) struct ColumnLayout {
     offset: f32,
     sigma: f32,
     sigma_grid: f32,
+    self_similarity: f32,
+    self_similarity_grid: f32,
+    self_similarity_plot: f32,
     error: f32,
     angle: f32,
     status: f32,
@@ -99,7 +110,13 @@ impl ColumnLayout {
         // Room for the whole and the middle sigma_pos, `0.08 / 0.12`, then
         // the localizability grid.
         let sigma_grid = sigma + 76.0;
-        let error = sigma_grid + GRID_SIDE + 10.0;
+        let self_similarity = sigma_grid + GRID_SIDE + 10.0;
+        // Room for the whole and the middle radius, `2.24 / 1.41`, then the
+        // self-similarity grid.
+        let self_similarity_grid = self_similarity + 76.0;
+        // Then the core's surface plot.
+        let self_similarity_plot = self_similarity_grid + GRID_SIDE + 8.0;
+        let error = self_similarity_plot + PLOT_SIDE + 10.0;
         let angle = error + 54.0;
         let status = angle + 54.0;
         // The status cell holds a sentence at the track stage -- the reason a
@@ -117,6 +134,9 @@ impl ColumnLayout {
             offset,
             sigma,
             sigma_grid,
+            self_similarity,
+            self_similarity_grid,
+            self_similarity_plot,
             error,
             angle,
             status,
@@ -126,7 +146,7 @@ impl ColumnLayout {
 
     /// The header's cells, each at the offset its column is drawn at, with the
     /// hover text that says what the column holds.
-    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 11] {
+    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 12] {
         [
             (self.verdict, "Verdict", VERDICT_TIP),
             (
@@ -139,6 +159,7 @@ impl ColumnLayout {
             (self.shift, "Seed sh.", SEED_SHIFT_TIP),
             (self.offset, "Proj. off", PROJECTION_OFFSET_TIP),
             (self.sigma, "\u{3c3}_pos", SIGMA_POS_TIP),
+            (self.self_similarity, "Self-sim.", SELF_SIMILARITY_TIP),
             (self.error, "Error", ERROR_TIP),
             (self.angle, "Angle", ANGLE_TIP),
             (self.status, "Status", STATUS_TIP),
@@ -173,7 +194,10 @@ const PROJECTION_OFFSET_TIP: &str = "How far the observation sits from where the
     point projects into this image, in pixels. Large offsets on every row beside small seed \
     shifts say the point is off, not the sightings. Track stage only.";
 
-const SIGMA_POS_TIP: &str = "How precisely this observation's own tile pins a position, as \
+/// The sigma_pos heading's hover text.
+pub(super) const SIGMA_POS_TIP: &str = "The deprecated localizability score, shown while it is \
+    compared with the self-similarity radius beside it.\n\n\
+    How precisely this observation's own tile pins a position, as \
     the positional uncertainty in patch-grid pixels. Lower is better; a flat tile or a single \
     straight edge scores high. The max \u{3c3}_pos bar judges the first number.\n\n\
     The second number is the middle of the tile alone, the centred square half its width. The \
@@ -183,6 +207,19 @@ const SIGMA_POS_TIP: &str = "How precisely this observation's own tile pins a po
     in both directions as well as the bar asks of a whole tile. A line says it pins one \
     direction only, and a match could slide along the line, as along an edge. A box with \
     neither pins nothing. Hover the grid for the numbers.";
+
+/// The self-similarity heading's hover text.
+pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: how far, in \
+    patch-grid pixels, this observation's own tile can slide over itself by whole pixels and \
+    still match itself as well as a true match between two photographs would. 0 means a match \
+    locks onto this position and no other nearby, as on a corner or a busy texture. 3+ means \
+    it still matched itself 3 pixels away and may slide further, as along a straight edge or \
+    over a flat patch.\n\n\
+    The first number is the whole tile, the second its middle alone, the centred square half \
+    its width. The grid beside them is each ninth of the tile alone, laid out as the tile is: \
+    green at 0, yellow at 1 to 1.41, orange at 2 to 2.24, red at 3 or more. A line in a box is \
+    the direction that ninth can slide in, where its matching shifts line up along one. Hover \
+    the grid for the numbers.";
 
 const ERROR_TIP: &str = "The reprojection error against the triangulated position, in \
     pixels. Track stage only.";
@@ -552,6 +589,7 @@ impl TrackEdit {
             cols.shift,
             cols.offset,
             cols.sigma,
+            cols.self_similarity,
             cols.error,
             cols.angle,
         ]
@@ -562,7 +600,7 @@ impl TrackEdit {
         }
         // The status cell is a sentence rather than a number at the track
         // stage, so it is elided to its column the way the image name is.
-        let status = crate::elide::middle(&cells[6], cols.from - cols.status - 8.0, |value| {
+        let status = crate::elide::middle(&cells[7], cols.from - cols.status - 8.0, |value| {
             ui.ctx().fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(value.to_owned(), font.clone(), text_color)
@@ -573,7 +611,7 @@ impl TrackEdit {
         text(cols.status, &status, text_color);
         text(cols.from, &provenance_text(row.provenance), weak);
 
-        // The two grids, faded with the numbers while an evaluation is on its
+        // The three grids, faded with the numbers while an evaluation is on its
         // way. Each is laid out as the tile is, so a cell sits over the part
         // of the tile it read.
         let fade = if number_color == weak { 0.45 } else { 1.0 };
@@ -584,7 +622,7 @@ impl TrackEdit {
                 grids.zncc,
                 None,
                 &zncc_cell_color as &dyn Fn(f64) -> Option<egui::Color32>,
-                "zncc",
+                GridKind::Zncc,
             ),
             (
                 cols.sigma_grid,
@@ -595,7 +633,16 @@ impl TrackEdit {
                     })
                 }),
                 &|sigma| sigma_cell_color(sigma, bar),
-                "sigma",
+                GridKind::Sigma,
+            ),
+            (
+                cols.self_similarity_grid,
+                grids.radius,
+                grids
+                    .radius_slide
+                    .map(|slide| slide.map(|row| row.map(slide_mark))),
+                &self_similarity_cell_color,
+                GridKind::SelfSimilarity,
             ),
         ];
         for (x, grid, marks, color, which) in drawn {
@@ -613,8 +660,36 @@ impl TrackEdit {
                 egui::Sense::hover(),
             )
             .on_hover_ui(|ui| {
-                ui.label(egui::RichText::new(grid_numbers(&grid, which == "zncc")).monospace());
+                ui.label(egui::RichText::new(grid_numbers(&grid, which)).monospace());
             });
+        }
+
+        // The core's self-similarity surface, with the contour its radius is
+        // read at, and a larger one on hover.
+        let mut plotted = false;
+        if let Some((surface, tolerance)) = row_surface(row, stage, &self.evaluation) {
+            let radius = row_radius(row, stage);
+            if let Some(drawn) = self.ensure_plot(ui.ctx(), observation, surface, tolerance) {
+                plotted = true;
+                let plot_rect = egui::Rect::from_min_size(
+                    egui::pos2(x0 + cols.self_similarity_plot, cy - PLOT_SIDE / 2.0),
+                    egui::vec2(PLOT_SIDE, PLOT_SIDE),
+                );
+                drawn.paint(ui.painter(), plot_rect, fade);
+                ui.interact(
+                    plot_rect,
+                    ui.id().with(("track_view_plot", observation)),
+                    egui::Sense::hover(),
+                )
+                .on_hover_ui(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(PLOT_HOVER_SIDE, PLOT_HOVER_SIDE),
+                        egui::Sense::hover(),
+                    );
+                    drawn.paint(ui.painter(), rect, 1.0);
+                    ui.label(plot_caption(radius, tolerance));
+                });
+            }
         }
 
         self.rows.push(RowSummary {
@@ -626,8 +701,22 @@ impl TrackEdit {
             cells,
             grids,
             tile: tile.is_some(),
+            self_similarity_plot: plotted,
         });
     }
+}
+
+/// The words under the hover view of a surface plot: the radius and the
+/// level the contour is drawn at.
+pub(super) fn plot_caption(radius: Option<f64>, tolerance: f64) -> String {
+    let radius = radius.map_or_else(|| "-".to_string(), super::radius_number);
+    format!(
+        "ZNCC of the patch against itself at every shift up to 3 px. The contour is at \
+         {:.3}, one minus the tolerance {:.3}; the dots are the whole-pixel shifts inside \
+         it. Radius {radius}.",
+        1.0 - tolerance,
+        tolerance
+    )
 }
 
 /// Paint a three-by-three grid into `rect`: a border, and each cell filled
@@ -723,17 +812,44 @@ pub(super) fn cell_mark(sigma: f64, slide: [f64; 2], bar: f64) -> CellMark {
     CellMark::Line(along * (GRID_CELL / 2.0 - 1.0))
 }
 
+/// The [`CellMark`] of a self-similarity cell with slide vector `slide`: a
+/// line along the slide where it is at least `0.5` long, so the cell's
+/// matching shifts line up along one direction, and nothing otherwise.
+pub(super) fn slide_mark(slide: [f64; 2]) -> CellMark {
+    let strength = slide[0].hypot(slide[1]);
+    if !strength.is_finite() || strength < 0.5 {
+        return CellMark::Nothing;
+    }
+    let along = egui::vec2(slide[0] as f32, slide[1] as f32) / strength as f32;
+    CellMark::Line(along * (GRID_CELL / 2.0 - 1.0))
+}
+
+/// Which of a row's grids a value belongs to, which says how its hover text
+/// prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum GridKind {
+    /// A ZNCC, printed in percent.
+    Zncc,
+    /// A sigma_pos, printed to two decimals.
+    Sigma,
+    /// A self-similarity radius, printed as the cell prints it.
+    SelfSimilarity,
+}
+
 /// A grid's nine values as its hover text shows them, three to a line: a
-/// ZNCC in percent, a sigma_pos to two decimals, and `-` for a cell with no
-/// reading.
-pub(super) fn grid_numbers(grid: &[[f64; 3]; 3], percent: bool) -> String {
+/// ZNCC in percent, a sigma_pos to two decimals, a self-similarity radius as
+/// its cell prints it (`1.41`, `3+`), and `-` for a cell with no reading.
+pub(super) fn grid_numbers(grid: &[[f64; 3]; 3], kind: GridKind) -> String {
     grid.iter()
         .map(|row| {
             row.iter()
-                .map(|&value| match (value.is_finite(), percent) {
+                .map(|&value| match (value.is_finite(), kind) {
                     (false, _) => format!("{:>5}", "-"),
-                    (true, true) => format!("{:>5.0}", 100.0 * value),
-                    (true, false) => format!("{value:>5.2}"),
+                    (true, GridKind::Zncc) => format!("{:>5.0}", 100.0 * value),
+                    (true, GridKind::Sigma) => format!("{value:>5.2}"),
+                    (true, GridKind::SelfSimilarity) => {
+                        format!("{:>5}", radius_number(value))
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(" ")

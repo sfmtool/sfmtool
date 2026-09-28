@@ -11,6 +11,7 @@ pub mod keypoint_subpixel;
 pub mod localizability;
 pub mod member_coherence;
 pub mod normal_refine;
+pub mod self_similarity;
 pub mod spawn;
 pub mod view_selection;
 

@@ -318,15 +318,29 @@ class TestEvaluating:
             assert entry["ray_angle_deg"] >= 0.0
             assert entry.get("seed_shift_px", 0.0) >= 0.0
             assert entry.get("projection_offset_px", 0.0) >= 0.0
-            assert entry.get("localizability", 1.0) > 0.0
+            assert entry.get("localizability_deprecated", 1.0) > 0.0
             # Each score carries its parts: the ZNCC grid and the
             # localizability of the tile's middle and of each ninth of it.
             if "zncc" in entry:
                 assert entry["zncc_grid"].shape == (3, 3)
-            if "localizability" in entry:
-                assert entry["localizability_middle"] > 0.0
-                assert entry["localizability_grid"].shape == (3, 3)
-                assert entry["localizability_slide"].shape == (3, 3, 2)
+            if "localizability_deprecated" in entry:
+                assert entry["localizability_middle_deprecated"] > 0.0
+                assert entry["localizability_grid_deprecated"].shape == (3, 3)
+                assert entry["localizability_slide_deprecated"].shape == (3, 3, 2)
+                # The self-similarity is read wherever the localizability is.
+                assert 0.0 <= entry["zncc_self_similarity_radius"] <= 3.0
+                assert 0.0 <= entry["zncc_self_similarity_radius_middle"] <= 3.0
+                radii = entry["zncc_self_similarity_radius_grid"]
+                assert radii.shape == (3, 3) and radii.dtype == np.float64
+                assert ((radii >= 0.0) & (radii <= 3.0)).all()
+                slides = entry["zncc_self_similarity_slide_grid"]
+                assert slides.shape == (3, 3, 2) and slides.dtype == np.float64
+                surface = entry["zncc_self_similarity_surface"]
+                assert surface.shape == (7, 7) and surface.dtype == np.float64
+                assert surface[3, 3] == 1.0 or np.isnan(surface).all()
+                assert np.isnan(surface[0, 0])
+                if not np.isnan(surface).all():
+                    assert 0.0 < entry["zncc_self_similarity_tolerance"] < 1.0
 
     def test_the_reading_takes_its_memory_bounds_as_keyword_arguments(
         self, edited, images, long_track_point

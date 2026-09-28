@@ -13,11 +13,20 @@ serves a crate function, a Python binding, an `xform` filter, and an
 The score is the surface's curvature at its peak, so it does not say how far a
 patch can slide over itself before it stops matching, which is what decides
 whether a match locks onto the keypoint: a strong straight edge reads as sharp
-here. A bounded score of that distance, the ZNCC self-similarity radius, is
-proposed in
-[zncc-self-similarity-radius.md](../../drafts/zncc-self-similarity-radius.md),
-which also renames this score's code and bench names with a `_deprecated` suffix
-while the two are compared.
+here. A bounded score of that distance is the ZNCC self-similarity radius,
+[zncc-self-similarity-radius.md](zncc-self-similarity-radius.md). While the two
+are compared, this score's code and bench names carry a `_deprecated` suffix:
+`patch_localizability_deprecated`, `score_localizability_stack_deprecated`,
+`score_localizability_parts_deprecated`, `LocalizabilityDeprecated`,
+`LocalizabilityPartsDeprecated`, `PatchCloud.score_localizability_deprecated`,
+and the bench fields `localizability_deprecated`,
+`localizability_middle_deprecated`, `localizability_grid_deprecated` and
+`localizability_slide_deprecated`. The names of the gates built on it, their
+parameters and flags (`max_keypoint_uncertainty`,
+`max_member_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
+`SIGMA_NOISE`, the `.matches` status `rejected_unlocalizable` and the module
+`patch::localizability` keep their names, and the gates keep calling this
+score.
 
 ## Problem
 
@@ -218,7 +227,7 @@ automatically.)
 
 The scorer lives in
 [localizability/](../../../crates/sfmtool-core/src/patch/localizability/), bound
-as `PatchCloud.score_localizability`, with the reconstruction-level filter in
+as `PatchCloud.score_localizability_deprecated`, with the reconstruction-level filter in
 [_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
 
 One scorer, three entry points (plus two internal consumers, the member-level
@@ -226,24 +235,26 @@ gates of [The per-member counterpart](#the-per-member-counterpart): the
 [cluster-patch refinement](cluster-patch-refinement.md) kernel's
 `max_keypoint_uncertainty` and the [keypoint
 localizer](patch-keypoint-localization.md)'s
-`max_member_keypoint_uncertainty`, both calling `patch_localizability` directly
+`max_member_keypoint_uncertainty`, both calling `patch_localizability_deprecated` directly
 on the member's own tile with the shared `localizability::SIGMA_NOISE`):
 
 1. **Crate function** (a submodule sibling of `keypoint_localize` /
    `normal_refine`):
 
    ```
-   fn patch_localizability(patch: &[f32] /* R×R×C consensus */, resolution, channels,
-                           window: &Support, sigma_noise: f64) -> Localizability
-   struct Localizability { lam1: f64, lam2: f64, theta: f64, sigma_pos_grid: f64 }
+   fn patch_localizability_deprecated(patch: &[f32] /* R×R×C consensus */, resolution,
+                                      channels, window: &Support, sigma_noise: f64)
+       -> LocalizabilityDeprecated
+   struct LocalizabilityDeprecated { lam1: f64, lam2: f64, theta: f64, sigma_pos_grid: f64 }
    // public batch entry (builds Support internally, rayon-parallel):
-   fn score_localizability_stack(patches, num_patches, resolution, channels,
-                                 window: PatchWindow, sigma_noise) -> Vec<Localizability>
+   fn score_localizability_stack_deprecated(patches, num_patches, resolution, channels,
+                                            window: PatchWindow, sigma_noise)
+       -> Vec<LocalizabilityDeprecated>
    // one patch, whole and by parts:
-   fn score_localizability_parts(patch, resolution, channels,
-                                 window: PatchWindow, sigma_noise)
-       -> (Localizability, LocalizabilityParts)
-   struct LocalizabilityParts {
+   fn score_localizability_parts_deprecated(patch, resolution, channels,
+                                            window: PatchWindow, sigma_noise)
+       -> (LocalizabilityDeprecated, LocalizabilityPartsDeprecated)
+   struct LocalizabilityPartsDeprecated {
        middle: f64,
        grid: [[f64; 3]; 3],
        slide: [[[f64; 2]; 3]; 3],
@@ -252,11 +263,11 @@ on the member's own tile with the shared `localizability::SIGMA_NOISE`):
 
    Pure and standalone (structure tensor + 2×2 eig). The batch entry scores a
    `(P, R, R, C)` stack (rayon-parallel). Reuses the existing `Support` window from
-   `normal_refine`. (`patch_localizability` itself is `pub(in crate::patch)` since
+   `normal_refine`. (`patch_localizability_deprecated` itself is `pub(in crate::patch)` since
    `Support` is crate-private; the batch entry takes a `PatchWindow` and is the
    public surface.)
 
-   `score_localizability_parts` scores one patch as the batch entry does, and
+   `score_localizability_parts_deprecated` scores one patch as the batch entry does, and
    also over parts of its grid, each from the same gradients with the tensor
    summed over that part alone: `middle` over the centred square half the
    grid's width (rows and columns `R/4 .. R - R/4`) under the window weights,
@@ -273,7 +284,7 @@ on the member's own tile with the shared `localizability::SIGMA_NOISE`):
    cell. The bench reports these beside each observation's own tile score; no
    gate reads them.
 
-2. **Python binding** — `PatchCloud.score_localizability(recon, patch_bitmaps, …)`
+2. **Python binding** — `PatchCloud.score_localizability_deprecated(recon, patch_bitmaps, …)`
    scores the batch over `patch_bitmaps`, returning per-point
    `{lam1, lam2, theta, sigma_pos_grid, sigma_pos_px}`. `sigma_pos_grid` is the cull
    quantity; `sigma_pos_px` (source px, via the recon-geometry grid→px map, median

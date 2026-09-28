@@ -24,7 +24,8 @@ from),
 [`../patch/cluster-patch-refinement.md`](../patch/cluster-patch-refinement.md)
 (the cluster stage's representation and the kernel that measures it),
 [`../patch/patch-keypoint-localization.md`](../patch/patch-keypoint-localization.md),
-[`../patch/patch-localizability.md`](../patch/patch-localizability.md) and
+[`../patch/patch-localizability.md`](../patch/patch-localizability.md),
+[`../patch/zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md) and
 [`../patch/candidate-track-spawning.md`](../patch/candidate-track-spawning.md)
 (the track stage's kernels and the pipeline an upgrade runs),
 [`../patch/patch-cloud.md`](../patch/patch-cloud.md) (the frame an upgrade
@@ -95,10 +96,16 @@ pub struct TrackMeasurement {
     pub projection_offset_px: Option<f64>,   // the sighting's distance from the point
     pub reprojection_error: Option<f64>,
     pub ray_angle_deg: Option<f64>,
-    pub localizability: Option<f64>,
-    pub localizability_middle: Option<f64>,  // the tile's middle square scored alone
-    pub localizability_grid: Option<[[f64; 3]; 3]>, // each ninth of it scored alone
-    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>, // and the way each ninth could slide
+    pub localizability_deprecated: Option<f64>,
+    pub localizability_middle_deprecated: Option<f64>,  // the tile's middle square scored alone
+    pub localizability_grid_deprecated: Option<[[f64; 3]; 3]>, // each ninth of it scored alone
+    pub localizability_slide_deprecated: Option<[[[f64; 2]; 3]; 3]>, // and the way each ninth could slide
+    pub zncc_self_similarity_radius: Option<f64>,        // how far the tile slides over itself
+    pub zncc_self_similarity_radius_middle: Option<f64>, // its middle square's
+    pub zncc_self_similarity_radius_grid: Option<[[f64; 3]; 3]>, // each ninth's
+    pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>, // each ninth's slide
+    pub zncc_self_similarity_surface: Option<Vec<f64>>, // the whole core's ZNCC at every shift
+    pub zncc_self_similarity_tolerance: Option<f64>, // the deficit it was judged by
     pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
@@ -771,7 +778,7 @@ spells `duplicate_image`.
 in memory: a **reference** observation, a **radius**, a template cut around the
 reference, and per observation a seed (a position and a 2x2 affine shape in that
 image's pixels), the refined absolute position and shape, the achieved ZNCC and
-its middle reading and ZNCC grid (`zncc_middle` and `zncc_grid`, § "The middle ZNCC" and § "The ZNCC grid"), the shift from the seed, the observation's own tile localizability with its middle and grid, and a status in
+its middle reading and ZNCC grid (`zncc_middle` and `zncc_grid`, § "The middle ZNCC" and § "The ZNCC grid"), the shift from the seed, the observation's own tile's deprecated localizability and ZNCC self-similarity radius, each with its middle and grid, and a status in
 the `member_status` legend. No pose, no position, no normal. It is what a track
 is when it starts from a pixel or from a search hit. The template is `Option`
 because cutting it reads the reference's pixels: a track carries one once an
@@ -1119,19 +1126,21 @@ of the frame or off the image.
 
 ### The parts of the localizability
 
-`localizability` is the `sigma_pos` of an observation's own tile, from the
-structure tensor summed over the whole support (see
-[`patch-localizability.md`](../patch/patch-localizability.md)). Beside it are
-the same tile's parts, each scored alone from the same gradients:
-`localizability_middle` over the middle square under the window weights, and
-`localizability_grid` over each cell of the ZNCC grid's split of the whole
-square with every pixel weighted equally (`score_localizability_parts`). All
+`localizability_deprecated` is the `sigma_pos` of an observation's own tile,
+from the structure tensor summed over the whole support (see
+[`patch-localizability.md`](../patch/patch-localizability.md)); its names end in
+`_deprecated` while it is compared with the ZNCC self-similarity radius below.
+Beside it are the same tile's parts, each scored alone from the same gradients:
+`localizability_middle_deprecated` over the middle square under the window
+weights, and `localizability_grid_deprecated` over each cell of the ZNCC grid's
+split of the whole square with every pixel weighted equally
+(`score_localizability_parts_deprecated`). All
 three are in patch-grid pixels, but they are sums over different pixel counts
 under different weights, so a part has less to pin a position with and reads
 higher than the whole for the same texture. A flat part reads very high rather
 than `NaN`, as a flat whole tile does.
 
-Beside each cell is `localizability_slide`: the direction a match could slide
+Beside each cell is `localizability_slide_deprecated`: the direction a match could slide
 in there, the unit vector along the structure tensor's weak axis in the grid
 frame (`x` column-right, `y` row-down), scaled by `1 - λ₂/λ₁`. On a straight
 edge the tensor has one strong axis, across the edge, and the vector is nearly
@@ -1140,7 +1149,38 @@ vector is short. A flat cell reads `[0, 0]`. The vector's sign means nothing,
 since a slide goes both ways.
 
 No bar judges any of these; `max_keypoint_uncertainty` judges the whole tile's
-score. All are `None` wherever `localizability` is.
+score. All are `None` wherever `localizability_deprecated` is.
+
+### The ZNCC self-similarity radius
+
+Beside the localizability, at both stages and for every observation with a
+pixel, is the observation's own tile's **ZNCC self-similarity radius** (see
+[`zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md)):
+how far, in patch-grid pixels, the tile's `R×R` core can slide over itself by
+whole pixels and still match itself as well as a true match between two views
+would, `0 ..= 3` with `3` read as "3 or more", under the default
+`SelfSimilarityParams`. The tile is read over the same frame as the
+localizability, grown so the shifted windows have pixels to read: at the track
+stage the keypoint-anchored frame is rendered with its half-extent grown by
+`(R + 2r) / R` at resolution `R + 2r`, and at the cluster stage the member grid
+is sampled at its seed geometry with its radius grown by the same factor and its
+resolution set to `R + 2r`. Either way the core is the same `R×R` grid the
+localizability scores, and the ring of `r` pixels around it is what the shifted
+windows read.
+
+`zncc_self_similarity_radius` is the whole core's radius,
+`zncc_self_similarity_radius_middle` its middle square's, and
+`zncc_self_similarity_radius_grid` each cell's of the ZNCC grid's split.
+`zncc_self_similarity_slide_grid` is, per cell, the direction the cell's
+indistinguishable shifts line up in, in the grid frame, near unit length along
+a straight edge and near zero where they spread evenly or there are none.
+`zncc_self_similarity_surface` is the whole core's ZNCC against itself at every
+shift of the `(2r + 1)²` square, row-major from `(dx, dy) = (-r, -r)`, `1` at the
+centre and `NaN` outside the disk `dx² + dy² ≤ r²` or where the core is flat.
+`zncc_self_similarity_tolerance` is the deficit `ε + mean_c (n / s_c)²` the core
+was judged by, so the radius is read on the surface at `1 -` that value; it is
+`None` where the core is flat. No bar judges any of them. All are `None` where the tile could not be rendered
+or sampled, and are cleared and set wherever the localizability is.
 ## The steps
 
 ### Putting a point on the bench
@@ -1648,7 +1688,7 @@ through its borrowed-pyramid entry. The kernel picks the reference -- its
 largest-scale usable member -- cuts the template there and warps every other
 seed onto it; what lands in each observation's slot is the refined position and
 shape, the achieved ZNCC, the drift from the seed, the observation's own tile
-localizability and the kernel's `member_status`. The kernel runs at the
+localizability and self-similarity radius and the kernel's `member_status`. The kernel runs at the
 cluster's own radius rather than the one in the evaluation's options, so the
 square it registers is the square the seeds were written against. The payload's
 reference is set to where the kernel cut, and `ClusterPayload::template` to the
@@ -1657,7 +1697,8 @@ No pose is read, so a cluster evaluates on a node whose images have none.
 
 The tile localizability is scored at each observation's **seed** geometry, which
 is where the kernel's own gate scores it, so the column and a
-`RejectedUnlocalizable` status are the same measurement rather than two.
+`RejectedUnlocalizable` status are the same measurement rather than two. The
+self-similarity radius is read at the same seed geometry.
 
 **At the track stage** the reading is **one round** of
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) over the
@@ -1675,8 +1716,9 @@ reading. What lands in each slot is:
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in source-image px. The **sighting's** own evidence, and what `max_shift_px` paints on. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. |
-| `localizability` | The observation's own tile `sigma_pos`, through the frame anchored at its keypoint. |
-| `localizability_middle`, `localizability_grid` | The same tile's middle square, and each ninth of it, scored alone (§ "The parts of the localizability"). |
+| `localizability_deprecated` | The observation's own tile `sigma_pos`, through the frame anchored at its keypoint. |
+| `localizability_middle_deprecated`, `localizability_grid_deprecated` | The same tile's middle square, and each ninth of it, scored alone (§ "The parts of the localizability"). |
+| `zncc_self_similarity_radius` and its middle, grid, slide and surface | How far the same tile's core slides over itself and still matches itself (§ "The ZNCC self-similarity radius"). |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The last four rows are filled for every observation that has a pixel at all,
@@ -2093,9 +2135,14 @@ a fit; and
 `walked_to` (with `walked_zncc` and `walked_zncc_middle` where the localizer
 scored the peak) exactly when the last fit refused to walk that sighting and
 kept its seed, with `walked_zncc_grid` beside them. Both stages' dicts carry
-`zncc_middle`, `localizability_middle`, as `(3, 3)` float64 arrays with
-`NaN` in a cell with no reading `zncc_grid` and `localizability_grid`, and as
-a `(3, 3, 2)` float64 array `localizability_slide`, where there are ones, and `thresholds` and `apply_thresholds` carry
+`zncc_middle`, `localizability_middle_deprecated` and
+`zncc_self_similarity_radius_middle` as floats, `zncc_self_similarity_radius`
+as a float, as `(3, 3)` float64 arrays with `NaN` in a cell with no reading
+`zncc_grid`, `localizability_grid_deprecated` and
+`zncc_self_similarity_radius_grid`, as `(3, 3, 2)` float64 arrays
+`localizability_slide_deprecated` and `zncc_self_similarity_slide_grid`, and as
+a `(2r + 1, 2r + 1)` float64 array `zncc_self_similarity_surface` with the
+float `zncc_self_similarity_tolerance` beside it, where there are ones, and `thresholds` and `apply_thresholds` carry
 `min_zncc_middle`.
 
 **The coordinate crosses under the name of whichever it is**, in the reports and

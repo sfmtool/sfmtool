@@ -61,7 +61,7 @@ impl PyPatchCloud {
     ///         tile does not pin a 2D position — structure-tensor weak-axis
     ///         uncertainty ``σ_pos`` (patch-grid px) above this ``τ``. The
     ///         member-level counterpart of the per-point consensus cull
-    ///         (``score_localizability`` / ``embed-patches``'s
+    ///         (``score_localizability_deprecated`` / ``embed-patches``'s
     ///         ``max_keypoint_uncertainty``), same units, same default ``0.35``:
     ///         a flat sky tile or a lone straight edge correlates to noise, so it
     ///         is refused before it is scored and is never restored by the

@@ -3,8 +3,8 @@
 
 //! Bindings for the patch (surfel) pipeline: the `OrientedPatch` and
 //! `PatchCloud` types, the `CameraViews`/`ImagePyramidSet` scene inputs, the
-//! photometric RANSAC refiner, the consensus-atlas compositor, and candidate
-//! track spawning.
+//! photometric RANSAC refiner, the consensus-atlas compositor, candidate
+//! track spawning, and the ZNCC self-similarity radius of one tile.
 //!
 //! `PatchCloud`'s heavy per-point kernels each live in their own module as an
 //! additional `#[pymethods]` block (enabled by pyo3's `multiple-pymethods`
@@ -26,6 +26,7 @@ pub mod refine_keypoints;
 pub mod refine_normals;
 pub mod render_bitmaps;
 pub mod select_views;
+pub mod self_similarity;
 pub mod spawn;
 pub mod views;
 
@@ -49,5 +50,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(spawn::spawn_candidate_tracks, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        self_similarity::zncc_self_similarity_parts,
+        m
+    )?)?;
     Ok(())
 }

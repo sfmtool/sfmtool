@@ -316,7 +316,9 @@ def _cull_by_localizability(
     """
     if bitmaps is None or not localizations:
         return localizations, 0
-    result = cloud.score_localizability(recon, bitmaps, sigma_noise=sigma_noise)
+    result = cloud.score_localizability_deprecated(
+        recon, bitmaps, sigma_noise=sigma_noise
+    )
     sigma = np.asarray(result["sigma_pos_grid"], dtype=float)
     kept: list[dict[str, Any]] = []
     culled = 0

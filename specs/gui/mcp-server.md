@@ -2657,12 +2657,26 @@ a three-by-three split of the patch with every pixel weighted equally, as three
 rows of three from the top-left in the layout the tile is drawn in (§ "The ZNCC
 grid" of the same spec), with null in a cell the patch is flat over and null
 for the whole grid where `zncc` is null; the `track` block carries
-`walked_zncc_grid` beside `walked_zncc_middle`. Beside `localizability` both
-blocks carry `localizability_middle` and `localizability_grid`, the same tile's
-middle square and each of its ninths scored alone, and `localizability_slide`,
-per cell an `[x, y]` vector along which a match could slide, as long as the
-slide is free (§ "The parts of the localizability"). Both grids cover the whole
-square of the patch, corners included. The
+`walked_zncc_grid` beside `walked_zncc_middle`. Beside
+`localizability_deprecated` both blocks carry
+`localizability_middle_deprecated` and `localizability_grid_deprecated`, the
+same tile's middle square and each of its ninths scored alone, and
+`localizability_slide_deprecated`, per cell an `[x, y]` vector along which a
+match could slide, as long as the slide is free (§ "The parts of the
+localizability"). Both grids cover the whole square of the patch, corners
+included. **Both blocks also carry the ZNCC self-similarity radius** (§ "The
+ZNCC self-similarity radius" of the same spec): `zncc_self_similarity_radius`
+and `zncc_self_similarity_radius_middle`, how far in grid px the tile's core
+and its middle square slide over themselves and still match themselves, `3`
+meaning 3 or more; `zncc_self_similarity_radius_grid`, the same for each
+ninth, as three rows of three; `zncc_self_similarity_slide_grid`, per ninth the
+`[x, y]` direction its matching shifts line up in, as three rows of three
+pairs; and `zncc_self_similarity_surface`, the core's ZNCC against itself at
+every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
+-r)`, with null outside the disk and where the core is flat, beside
+`zncc_self_similarity_tolerance`, the deficit the core was judged by, so the
+radius is read on the surface at `1 -` that value. Each is null where the tile
+could not be read. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bar,
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
 off at `0`.

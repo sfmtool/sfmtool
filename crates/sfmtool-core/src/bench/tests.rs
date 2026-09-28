@@ -46,6 +46,31 @@ const BITMAP_R: usize = 8;
 /// of plane the scene's texture actually varies over.
 const PIXEL_SEED_RADIUS_PX: f64 = 5.0;
 
+/// Check a measurement's ZNCC self-similarity readings are all present and in
+/// range: radii in `0 ..= 3`, slides at most unit length, and a `7 × 7`
+/// surface that is `1` at its centre (or all `NaN` for a flat core).
+fn assert_self_similarity(
+    radius: Option<f64>,
+    middle: Option<f64>,
+    grid: Option<[[f64; 3]; 3]>,
+    slide: Option<[[[f64; 2]; 3]; 3]>,
+    surface: Option<&Vec<f64>>,
+) {
+    let in_range = |r: f64| (0.0..=3.0).contains(&r);
+    assert!(in_range(radius.expect("a self-similarity radius")));
+    assert!(in_range(middle.expect("a middle self-similarity radius")));
+    let grid = grid.expect("a self-similarity radius grid");
+    assert!(grid.iter().flatten().all(|&r| in_range(r)));
+    let slide = slide.expect("a self-similarity slide grid");
+    assert!(slide
+        .iter()
+        .flatten()
+        .all(|s| s[0].hypot(s[1]) <= 1.0 + 1e-9));
+    let surface = surface.expect("a self-similarity surface");
+    assert_eq!(surface.len(), 49);
+    assert!(surface[24] == 1.0 || surface.iter().all(|z| z.is_nan()));
+}
+
 /// The fixture wrapped as a version, with the optional columns a full commit
 /// has to fill in.
 fn edited_with_columns(scene: &Scene, world: Point3<f64>) -> EditedReconstruction {
@@ -767,7 +792,7 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         let measurement = observation.track.as_mut().expect("a track slot");
         measurement.zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
-        measurement.localizability = Some(0.1);
+        measurement.localizability_deprecated = Some(0.1);
     }
     track
 }
@@ -1730,7 +1755,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         assert!(m.zncc.expect("a score") > 0.5, "image {image}");
         assert_eq!(m.reason, None);
         assert!(m.seed_shift_px.expect("a peak") < 1.0);
-        assert!(m.localizability.expect("a scored tile") > 0.0);
+        assert!(m.localizability_deprecated.expect("a scored tile") > 0.0);
         assert!(m.reprojection_error.expect("a residual") < 1.0);
         // The parts of the same readings come with them.
         let grid = m.zncc_grid.expect("a ZNCC grid beside the ZNCC");
@@ -1739,9 +1764,19 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             .flatten()
             .all(|z| z.is_nan() || z.abs() <= 1.0 + 1e-9));
         assert!(grid.iter().flatten().any(|z| z.is_finite()));
-        assert!(m.localizability_middle.expect("a middle score") > 0.0);
-        let sigmas = m.localizability_grid.expect("a localizability grid");
+        assert!(m.localizability_middle_deprecated.expect("a middle score") > 0.0);
+        let sigmas = m
+            .localizability_grid_deprecated
+            .expect("a localizability grid");
         assert!(sigmas.iter().flatten().all(|s| s.is_nan() || *s > 0.0));
+        // The self-similarity is read wherever the localizability is.
+        assert_self_similarity(
+            m.zncc_self_similarity_radius,
+            m.zncc_self_similarity_radius_middle,
+            m.zncc_self_similarity_radius_grid,
+            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_surface.as_ref(),
+        );
     }
 
     // The track's own point is where its sightings say it is, and the frame
@@ -2205,11 +2240,18 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         let m = observation.cluster.as_ref().expect("a cluster slot");
         assert!(m.status.is_some());
         assert!(m.position.is_some(), "both members were fitted");
-        assert!(m.localizability.expect("a scored tile") > 0.0);
+        assert!(m.localizability_deprecated.expect("a scored tile") > 0.0);
         // The parts of the same readings come with them.
         assert!(m.zncc_grid.is_some(), "a ZNCC grid beside the ZNCC");
-        assert!(m.localizability_middle.expect("a middle score") > 0.0);
-        assert!(m.localizability_grid.is_some());
+        assert!(m.localizability_middle_deprecated.expect("a middle score") > 0.0);
+        assert!(m.localizability_grid_deprecated.is_some());
+        assert_self_similarity(
+            m.zncc_self_similarity_radius,
+            m.zncc_self_similarity_radius_middle,
+            m.zncc_self_similarity_radius_grid,
+            m.zncc_self_similarity_slide_grid,
+            m.zncc_self_similarity_surface.as_ref(),
+        );
     }
     assert_eq!(
         refined.observations[reference]

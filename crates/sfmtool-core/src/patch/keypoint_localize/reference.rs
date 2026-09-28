@@ -24,7 +24,7 @@ use super::{
     ContextTile, KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::localizability::{patch_localizability, SIGMA_NOISE};
+use crate::patch::localizability::{patch_localizability_deprecated, SIGMA_NOISE};
 use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
     ConsensusScratch, ProjectedImage, Support,
@@ -446,7 +446,7 @@ impl ReferenceConsensus {
 fn core_sigma_pos(tile: &ContextTile, support: &Support, r: usize, c0: usize) -> f64 {
     let mut grid = vec![0f32; r * r * tile.channels];
     extract_core_grid(tile, r, c0, c0, &mut grid);
-    patch_localizability(&grid, r, tile.channels, support, SIGMA_NOISE).sigma_pos_grid
+    patch_localizability_deprecated(&grid, r, tile.channels, support, SIGMA_NOISE).sigma_pos_grid
 }
 
 /// A raw core z-normalised over the channels `mask` keeps (the leading

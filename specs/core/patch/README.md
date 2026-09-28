@@ -12,7 +12,8 @@ across views, and everything refined on top of it. Implemented in
 | [patch-cloud.md](patch-cloud.md) | Oriented patches and the patch-projected warp maps that render one point's surface the same way in every view. |
 | [sift-to-patch-reconstruction.md](sift-to-patch-reconstruction.md) | The `sfm embed-patches` pipeline: converting SIFT-referencing observations into embedded patches. Python pipeline. |
 | [patch-view-selection.md](patch-view-selection.md) | Which views photometrically see a point's patch. |
-| [patch-localizability.md](patch-localizability.md) | How well a patch pins its own keypoint — the curvature of its ZNCC self-similarity surface. |
+| [patch-localizability.md](patch-localizability.md) | How well a patch pins its own keypoint — the curvature of its ZNCC self-similarity surface; the deprecated score, compared with the self-similarity radius. |
+| [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md) | How far a patch can slide over itself by whole pixels and still match itself as well as a true match between two views: the radius, its direction and the ZNCC surface, whole, middle and by ninths. |
 
 ## Normal refinement
 

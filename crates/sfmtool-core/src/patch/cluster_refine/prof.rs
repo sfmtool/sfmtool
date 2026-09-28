@@ -69,7 +69,7 @@ pub static TOTAL: Phase = Phase::new("cluster_total");
 /// Localizability gate: per-member full-grid patch sample
 /// (`sample_patch_grid`).
 pub static GATE_SAMPLE: Phase = Phase::new("gate_sample");
-/// Localizability gate: per-member `patch_localizability` score.
+/// Localizability gate: per-member `patch_localizability_deprecated` score.
 pub static GATE_SCORE: Phase = Phase::new("gate_score");
 /// Reference template builds (`build_template`), including fallback retries.
 pub static TEMPLATE: Phase = Phase::new("build_template");

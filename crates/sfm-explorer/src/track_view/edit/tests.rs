@@ -423,11 +423,12 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
 #[test]
 fn the_cells_follow_the_stage_the_track_is_in() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // The seven cells are ZNCC, seed shift, projection offset, sigma_pos,
-    // reprojection error, ray angle, status. At the track stage the last three
+    // The eight cells are ZNCC, seed shift, projection offset, sigma_pos,
+    // self-similarity, reprojection error, ray angle, status. At the track
+    // stage the last three
     // and the projection offset have numbers behind them; at the cluster stage
     // there is no geometry behind an observation and they are absent.
-    assert_eq!(panel.rows()[0].cells[4], "-", "nothing has measured it yet");
+    assert_eq!(panel.rows()[0].cells[5], "-", "nothing has measured it yet");
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
@@ -444,8 +445,8 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     assert!(whole.parse::<f64>().is_ok(), "{whole}");
     assert!(middle.parse::<f64>().is_ok(), "{middle}");
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
-    assert_eq!(rows[0].cells[4], "-", "a cluster has no reprojection error");
-    assert_eq!(rows[0].cells[5], "-", "a cluster has no ray angle");
+    assert_eq!(rows[0].cells[5], "-", "a cluster has no reprojection error");
+    assert_eq!(rows[0].cells[6], "-", "a cluster has no ray angle");
     // Beside the ZNCC and the sigma_pos cells, the row draws their grids.
     assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
     assert!(
@@ -454,6 +455,21 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     );
     assert!(rows[0].grids.slide.is_some(), "no slide lines drawn");
     assert!(rows[0].cells[3].contains(" / "), "{}", rows[0].cells[3]);
+    // And beside the self-similarity cell, its grid and its slides.
+    assert!(rows[0].cells[4].contains(" / "), "{}", rows[0].cells[4]);
+    assert!(
+        rows[0].grids.radius.is_some(),
+        "no self-similarity grid drawn"
+    );
+    assert!(
+        rows[0].grids.radius_slide.is_some(),
+        "no self-similarity slides"
+    );
+    // And the core's surface plot.
+    assert!(
+        rows[0].self_similarity_plot,
+        "no self-similarity surface plot"
+    );
 }
 
 /// A row the reading refused to widen its window for says so in the Status
@@ -480,7 +496,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
-    let status = rows.last().expect("the row just added").cells[6].clone();
+    let status = rows.last().expect("the row just added").cells[7].clone();
     assert!(
         status.contains("beyond the 64 px bound"),
         "the cell names the bound the seed passed: {status}"
@@ -540,7 +556,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[6] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[7] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -552,7 +568,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[6] != super::EVALUATING_LABEL),
+            .all(|row| row.cells[7] != super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -566,7 +582,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[6] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[7] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -1510,14 +1526,14 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     };
     let current = crate::bench::live::Evaluation::Current;
     let cells = super::measurements(&walked, StageKind::Track, &current);
-    assert_eq!(cells[6], "walked 19 px, kept at seed");
+    assert_eq!(cells[7], "walked 19 px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
     slot.walked_zncc = Some(0.873);
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
-        super::measurements(&scored, StageKind::Track, &current)[6],
+        super::measurements(&scored, StageKind::Track, &current)[7],
         "walked 19 px (ZNCC 87% / 41% there), kept at seed"
     );
 
@@ -1525,7 +1541,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     let mut moved = walked.clone();
     moved.track.as_mut().expect("a track slot").walked_px = None;
     assert_eq!(
-        super::measurements(&moved, StageKind::Track, &current)[6],
+        super::measurements(&moved, StageKind::Track, &current)[7],
         "localized"
     );
 }
@@ -1721,18 +1737,236 @@ fn a_cell_marks_how_many_directions_it_pins() {
 
 #[test]
 fn a_grid_s_hover_text_holds_its_nine_numbers() {
-    use super::table::grid_numbers;
+    use super::table::{grid_numbers, GridKind};
     let grid = [[0.92, 0.5, f64::NAN], [1.0, -0.2, 0.33], [0.0, 0.07, 0.8]];
     assert_eq!(
-        grid_numbers(&grid, true),
+        grid_numbers(&grid, GridKind::Zncc),
         "   92    50     -
   100   -20    33
     0     7    80"
     );
     assert_eq!(
-        grid_numbers(&[[0.123; 3]; 3], false),
+        grid_numbers(&[[0.123; 3]; 3], GridKind::Sigma),
         " 0.12  0.12  0.12
  0.12  0.12  0.12
  0.12  0.12  0.12"
     );
+    let radii = [
+        [0.0, 1.0, 2f64.sqrt()],
+        [2.0, 5f64.sqrt(), 3.0],
+        [f64::NAN, 0.0, 3.0],
+    ];
+    assert_eq!(
+        grid_numbers(&radii, GridKind::SelfSimilarity),
+        "    0     1  1.41
+    2  2.24    3+
+    -     0    3+"
+    );
+}
+
+/// The self-similarity cell prints the whole and the middle radius to two
+/// decimals, trailing zeros dropped, with `3+` for the largest radius the
+/// reading searches.
+#[test]
+fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
+    use super::self_similarity_text;
+    assert_eq!(
+        self_similarity_text(Some(0.0), Some(2f64.sqrt())),
+        "0 / 1.41"
+    );
+    assert_eq!(
+        self_similarity_text(Some(3.0), Some(5f64.sqrt())),
+        "3+ / 2.24"
+    );
+    assert_eq!(self_similarity_text(Some(1.0), Some(2.0)), "1 / 2");
+    assert_eq!(self_similarity_text(Some(3.0), None), "3+ / -");
+    assert_eq!(self_similarity_text(None, Some(1.0)), "-");
+
+    // At both stages, from the fields the measurement carries, beside the
+    // deprecated sigma_pos cell.
+    use sfmtool_core::bench::{ClusterMeasurement, Observation, Provenance, TrackMeasurement};
+    let current = crate::bench::live::Evaluation::Current;
+    let mut cluster = ClusterMeasurement::from_seed([10.0, 12.0], [[1.0, 0.0], [0.0, 1.0]]);
+    cluster.zncc_self_similarity_radius = Some(3.0);
+    cluster.zncc_self_similarity_radius_middle = Some(1.0);
+    let row = Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: Some(cluster),
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            zncc: Some(0.9),
+            zncc_self_similarity_radius: Some(0.0),
+            zncc_self_similarity_radius_middle: Some(2f64.sqrt()),
+            ..TrackMeasurement::default()
+        }),
+    };
+    assert_eq!(
+        super::measurements(&row, StageKind::Cluster, &current)[4],
+        "3+ / 1"
+    );
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[4],
+        "0 / 1.41"
+    );
+}
+
+/// The self-similarity grid runs green at 0, yellow at 1 to 1.41, orange at
+/// 2 to 2.24 and red at the largest radius; a cell with no reading has no
+/// colour.
+#[test]
+fn self_similarity_cells_run_from_green_to_red() {
+    use super::self_similarity_cell_color;
+    let green = egui::Color32::from_rgb(0, 200, 40);
+    let yellow = egui::Color32::from_rgb(220, 200, 40);
+    let orange = egui::Color32::from_rgb(220, 100, 40);
+    let red = egui::Color32::from_rgb(220, 0, 40);
+    assert_eq!(self_similarity_cell_color(0.0), Some(green));
+    assert_eq!(self_similarity_cell_color(1.0), Some(yellow));
+    assert_eq!(self_similarity_cell_color(2f64.sqrt()), Some(yellow));
+    assert_eq!(self_similarity_cell_color(2.0), Some(orange));
+    assert_eq!(self_similarity_cell_color(5f64.sqrt()), Some(orange));
+    assert_eq!(self_similarity_cell_color(3.0), Some(red));
+    assert_eq!(self_similarity_cell_color(f64::NAN), None);
+}
+
+/// A self-similarity cell draws a line along its slide where the slide is at
+/// least half a unit long, and nothing where it is shorter or absent.
+#[test]
+fn a_self_similarity_cell_marks_its_slide() {
+    use super::table::{slide_mark, CellMark};
+    match slide_mark([0.9, 0.0]) {
+        CellMark::Line(half) => {
+            assert!(half.y.abs() < 1e-6 && half.x.abs() > 3.0, "{half:?}");
+        }
+        other => panic!("expected a line, got {other:?}"),
+    }
+    match slide_mark([0.0, -0.5]) {
+        CellMark::Line(half) => assert!(half.x.abs() < 1e-6 && half.y.abs() > 3.0),
+        other => panic!("expected a line, got {other:?}"),
+    }
+    assert_eq!(slide_mark([0.3, 0.3]), CellMark::Nothing);
+    assert_eq!(slide_mark([0.0, 0.0]), CellMark::Nothing);
+    assert_eq!(slide_mark([f64::NAN, 0.0]), CellMark::Nothing);
+}
+
+/// The sigma_pos heading says it is the deprecated score, and the
+/// self-similarity heading says what its numbers and grid are.
+#[test]
+fn the_localizability_headings_say_which_score_is_deprecated() {
+    let headings = super::table::ColumnLayout::new().headers();
+    assert!(headings
+        .iter()
+        .any(|&(_, heading, _)| heading == "Self-sim."));
+    assert!(super::table::SIGMA_POS_TIP.contains("deprecated"));
+    let tip = super::table::SELF_SIMILARITY_TIP;
+    assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
+}
+
+// ---- The self-similarity surface plot ----------------------------------------
+
+/// A bowl `1 - k (dx² + dy²)` over the `7 × 7` square, `NaN` outside the disk
+/// of radius 3.
+fn bowl(k: f64) -> Vec<f64> {
+    (0..49)
+        .map(|i| {
+            let (dx, dy) = ((i % 7) as f64 - 3.0, (i / 7) as f64 - 3.0);
+            let d2 = dx * dx + dy * dy;
+            if d2 > 9.0 {
+                f64::NAN
+            } else {
+                1.0 - k * d2
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_surface_plot_passes_through_the_measured_shifts() {
+    use super::surface_plot::SurfacePlot;
+    let surface = bowl(0.02);
+    let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");
+    let step = (plot.n - 1) / 6;
+    for (i, &z) in surface.iter().enumerate() {
+        if !z.is_finite() {
+            continue;
+        }
+        let (x, y) = ((i % 7) * step, (i / 7) * step);
+        assert!(
+            (plot.values[y * plot.n + x] - z).abs() < 1e-9,
+            "shift {i}: {} against {z}",
+            plot.values[y * plot.n + x]
+        );
+    }
+    // The shifts inside the contour at 0.95 are those with 0.02 d² <= 0.05,
+    // d² <= 2.5: the four axis neighbours and the four diagonals.
+    assert_eq!(plot.inside.len(), 8, "{:?}", plot.inside);
+}
+
+#[test]
+fn a_bowl_s_contour_is_the_circle_at_its_level() {
+    use super::surface_plot::SurfacePlot;
+    let plot = SurfacePlot::new(&bowl(0.02), 0.05).expect("a textured surface");
+    let contour = plot.contour();
+    assert!(!contour.is_empty());
+    // 1 - 0.02 d² = 0.95 at d = sqrt(2.5) px of shift, in a picture 6 px of
+    // shift across.
+    let expected = 2.5f32.sqrt() / 6.0;
+    for [a, b] in contour {
+        for p in [a, b] {
+            let d = ((p[0] - 0.5).powi(2) + (p[1] - 0.5).powi(2)).sqrt();
+            assert!(
+                (d - expected).abs() < 0.02,
+                "a contour point {d} from the centre"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_surface_colours_jump_at_the_contour() {
+    use super::surface_plot::surface_color;
+    let below = surface_color(0.9499, 0.95);
+    let above = surface_color(0.9501, 0.95);
+    // Rec.601 luma, 0 to 255.
+    let lightness = |c: egui::Color32| {
+        0.299 * f64::from(c.r()) + 0.587 * f64::from(c.g()) + 0.114 * f64::from(c.b())
+    };
+    assert!(
+        lightness(above) > lightness(below) + 80.0,
+        "{below:?} to {above:?} is no jump"
+    );
+    // Below the level the ramp is muted and rises towards it.
+    assert!(lightness(surface_color(0.5, 0.95)) < lightness(below));
+    // Above it the colour lightens towards 1.
+    assert!(lightness(surface_color(1.0, 0.95)) > lightness(above));
+}
+
+#[test]
+fn a_surface_with_nothing_to_draw_has_no_plot() {
+    use super::surface_plot::SurfacePlot;
+    assert!(SurfacePlot::new(&[f64::NAN; 49], 0.05).is_none());
+    assert!(SurfacePlot::new(&bowl(0.02)[..48], 0.05).is_none());
+    assert!(SurfacePlot::new(&bowl(0.02), f64::INFINITY).is_none());
+}
+
+#[test]
+fn a_ridge_s_contour_runs_to_the_edge_of_the_disk() {
+    use super::surface_plot::SurfacePlot;
+    // A ridge along x: the ZNCC falls only across it.
+    let surface: Vec<f64> = (0..49)
+        .map(|i| {
+            let (dx, dy) = ((i % 7) as f64 - 3.0, (i / 7) as f64 - 3.0);
+            if dx * dx + dy * dy > 9.0 {
+                f64::NAN
+            } else {
+                1.0 - 0.001 * dx * dx - 0.1 * dy * dy
+            }
+        })
+        .collect();
+    let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");
+    assert!(plot.inside.contains(&[3, 0]) && plot.inside.contains(&[-3, 0]));
+    assert!(!plot.inside.iter().any(|&[_, dy]| dy != 0));
 }

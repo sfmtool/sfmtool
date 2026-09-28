@@ -50,7 +50,7 @@ class FilterByLocalizabilityTransform:
                 "embedded_patches reconstruction)."
             )
 
-        result = cloud.score_localizability(
+        result = cloud.score_localizability_deprecated(
             recon, bitmaps, sigma_noise=self.sigma_noise
         )
         sigma_pos = np.asarray(result["sigma_pos_grid"], dtype=float)
