@@ -210,7 +210,13 @@ fn a_channel_flat_in_the_template_is_left_out() {
     });
     let a = centred(&two, 2, 12, 3);
     let b = centred(&three, 3, 12, 3);
-    assert_eq!(a.radius, b.radius);
+    // Interpolated from the surface, so equal to rounding, not to the bit.
+    assert!(
+        (a.radius - b.radius).abs() < 1e-9,
+        "{} vs {}",
+        a.radius,
+        b.radius
+    );
     assert_eq!(a.slide, b.slide);
     assert!((a.tolerance - b.tolerance).abs() < 1e-12);
     for (x, y) in a.surface.iter().zip(&b.surface) {
@@ -231,7 +237,14 @@ fn grey_repeated_in_three_channels_scores_as_one() {
     let rgb: Vec<f32> = grey.iter().chain(&grey).chain(&grey).copied().collect();
     let one = centred(&grey, 1, 14, 3);
     let three = centred(&rgb, 3, 14, 3);
-    assert_eq!(one.radius, three.radius);
+    // The radius is interpolated from the surface, which the channel mean
+    // reproduces to rounding, not to the bit.
+    assert!(
+        (one.radius - three.radius).abs() < 1e-9,
+        "{} vs {}",
+        one.radius,
+        three.radius
+    );
     assert_eq!(one.slide, three.slide);
     assert!((one.tolerance - three.tolerance).abs() < 1e-12);
     for (x, y) in one.surface.iter().zip(&three.surface) {
