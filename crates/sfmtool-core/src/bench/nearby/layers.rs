@@ -39,7 +39,7 @@ const VOTE_MIN_ZNCC: f64 = 0.7;
 const VOTE_MARGIN: f64 = 0.05;
 /// A member within this many px of the pixel is a reading of the pixel's own
 /// distance.
-const AT_PIXEL_PX: f64 = 1.0;
+pub(super) const AT_PIXEL_PX: f64 = 1.0;
 /// The distance from the pixel, in px, over which a member's weight falls by
 /// a factor of `e`.
 const WEIGHT_FALLOFF_PX: f64 = 20.0;

@@ -73,14 +73,17 @@ pub use geometry_search::{
 };
 pub use nearby::{
     camera_spread, classify_range, constellation_seeds, depth_layers, distance_range,
-    far_field_sweep, guided_matches, nearby_cluster_tracks, nearby_points, read_patch_along_ray,
-    triangulate_sightings, ClusterMembers, ClusterTracksOptions, ConstellationAt,
+    far_field_sweep, find_nearby_tracks, guided_matches, nearby_cluster_tracks, nearby_group_label,
+    nearby_points, nearby_track_label, read_patch_along_ray, triangulate_sightings,
+    BenchTrackOptions, ClusterMembers, ClusterTracksOptions, ConstellationAt,
     ConstellationSeedOptions, DepthLayer, DepthLayerError, DepthLayerOptions, DepthLayers,
     DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
-    FarFieldReading, FarFieldSweep, GreyImage, GreyImages, GuidedOptions, GuidedSource,
-    ImageDescriptors, KeypointRays, LayerCandidate, LayerEvidence, LayerRankBy, LayerRanking,
-    NearbyCandidate, NearbySource, NearbySourceError, PatchRead, PatchSamples, PointsOptions,
-    RangeClass, RangeOptions, RayMeeting, RayPatch, Refit, WideAmong, PATCH_GRID,
+    FarFieldReading, FarFieldRun, FarFieldSweep, FarFieldTrigger, FarFieldWhen, GreyImage,
+    GreyImages, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays, LayerCandidate,
+    LayerEvidence, LayerRankBy, LayerRanking, NearbyCandidate, NearbyFinding, NearbySource,
+    NearbySourceError, NearbyTrack, NearbyTrackOptions, NearbyTrackSources, NearbyTracks,
+    NearbyTracksError, NearbyTracksReport, PatchRead, PatchSamples, PointsOptions, RangeClass,
+    RangeOptions, RayMeeting, RayPatch, Refit, SourceReport, StopRule, WideAmong, PATCH_GRID,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,

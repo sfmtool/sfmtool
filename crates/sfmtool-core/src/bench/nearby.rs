@@ -1,17 +1,17 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The building blocks of finding the tracks near a pixel: reading the pixel's
-//! patch along its ray, the far-field sweep built on that read, the distance
-//! range a set of sightings allows along the pixel's ray, the matching
-//! sources that find candidate tracks near the pixel, and the depth layers
-//! that group and rank what they find.
+//! Finding the tracks near a pixel, [`find_nearby_tracks`], and its building
+//! blocks: reading the pixel's patch along its ray, the far-field sweep built
+//! on that read, the distance range a set of sightings allows along the
+//! pixel's ray, the matching sources that find candidate tracks near the
+//! pixel, and the depth layers that group and rank what they find.
 //!
-//! `specs/drafts/nearby-tracks.md` is the plan these belong to, and
-//! `specs/core/bench/far-field-sweep.md`,
+//! `specs/core/bench/nearby-tracks.md` is the design of the combined
+//! operation, and `specs/core/bench/far-field-sweep.md`,
 //! `specs/core/bench/distance-range.md`,
 //! `specs/core/bench/nearby-sources.md` and
-//! `specs/core/bench/depth-layers.md` the design of the pieces here. Like
+//! `specs/core/bench/depth-layers.md` the design of the pieces. Like
 //! the rest of [`super`], nothing here writes the reconstruction: the sweep
 //! reads the photographs and fits bench tracks, the sources read the
 //! reconstruction and its index files, and each returns what it found.
@@ -24,6 +24,7 @@ mod candidate;
 mod clusters;
 mod constellation;
 mod far_field;
+mod find;
 mod grey;
 mod guided;
 mod layers;
@@ -32,6 +33,8 @@ mod points;
 mod range;
 mod triangulate;
 
+#[cfg(test)]
+mod find_tests;
 #[cfg(test)]
 mod layer_tests;
 #[cfg(test)]
@@ -45,6 +48,12 @@ pub use constellation::{constellation_seeds, ConstellationAt, ConstellationSeedO
 pub use far_field::{
     far_field_sweep, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
     FarFieldReading, FarFieldSweep, Refit, WideAmong,
+};
+pub use find::{
+    find_nearby_tracks, nearby_group_label, nearby_track_label, BenchTrackOptions, FarFieldRun,
+    FarFieldTrigger, FarFieldWhen, NearbyFinding, NearbyTrack, NearbyTrackOptions,
+    NearbyTrackSources, NearbyTracks, NearbyTracksError, NearbyTracksReport, SourceReport,
+    StopRule,
 };
 pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImages, GREY_BLUR_SIGMA};
 pub use guided::{guided_matches, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays};
