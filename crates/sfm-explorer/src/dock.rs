@@ -662,7 +662,8 @@ impl TabContext<'_> {
             // `String`, the track its own `Arc`), because the panel is handed
             // `&mut` into the state further down the same call.
             let bench_busy = self.state.busy_refusal(id);
-            // Why *Create Track Here* is greyed on the image shown, if it is.
+            // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
+            // image shown, if they are.
             let create_track_refusal = selected_image
                 .and_then(|idx| self.state.create_track_here_refusal(ImageRef::new(id, idx)));
             let (bench_label, bench_track) = match self.state.bench(id) {
@@ -811,6 +812,13 @@ impl TabContext<'_> {
             {
                 self.state
                     .create_track_here(ImageRef::new(id, image), pixel);
+            }
+            // Find Nearby Tracks, from the menu entry: the run starts on a
+            // worker, and a refusal in front of it is one failed row.
+            if let (Some(pixel), Some(image)) = (detail_response.find_nearby_tracks, selected_image)
+            {
+                self.state
+                    .find_nearby_tracks_here(ImageRef::new(id, image), pixel);
             }
             // A drag of one of the bench layer's handles: the sighting placed,
             // the patch resized or turned. One version per gesture, through the

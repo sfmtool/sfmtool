@@ -696,12 +696,15 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
 
 // ── Edit on Bench, and what a double-click means ────────────────────────
 
-use super::overlay::{create_track_here_entry, edit_on_bench_entry, feature_at, FeatureHit};
+use super::overlay::{
+    create_track_here_entry, edit_on_bench_entry, feature_at, find_nearby_tracks_entry, FeatureHit,
+};
+use crate::bench::nearby_tracks::FIND_NEARBY_TRACKS_LABEL;
 use crate::bench::track_at_pixel::{CREATE_TRACK_HERE_LABEL, CREATE_TRACK_HERE_SHORTCUT};
 use crate::state::edits::PointGesture;
 use crate::viewer_3d::EDIT_ON_BENCH_LABEL;
 
-/// The menu's entries in the order they are drawn, of the four this panel
+/// The menu's entries in the order they are drawn, of the five this panel
 /// adds.
 fn menu_entries(texts: &[String]) -> Vec<&str> {
     texts
@@ -711,6 +714,7 @@ fn menu_entries(texts: &[String]) -> Vec<&str> {
             [
                 CREATE_TRACK_HERE_LABEL,
                 EDIT_ON_BENCH_LABEL,
+                FIND_NEARBY_TRACKS_LABEL,
                 START_CLUSTER_LABEL,
                 ADD_BENCH_OBSERVATION_LABEL,
             ]
@@ -720,7 +724,8 @@ fn menu_entries(texts: &[String]) -> Vec<&str> {
 }
 
 /// `Create Track Here` stands at the top of the menu, directly above `Edit on
-/// Bench`, which is above the two bench entries; and `Edit on Bench` is
+/// Bench`, then `Find Nearby Tracks`, then the two bench entries; and `Edit on
+/// Bench` is
 /// **drawn** where it cannot run rather than hidden: the menu here is opened
 /// over empty image, so nothing is under it to stage, while a track can be
 /// created at any pixel.
@@ -732,6 +737,7 @@ fn the_feature_menu_puts_create_track_here_directly_above_edit_on_bench() {
         [
             CREATE_TRACK_HERE_LABEL,
             EDIT_ON_BENCH_LABEL,
+            FIND_NEARBY_TRACKS_LABEL,
             START_CLUSTER_LABEL,
             ADD_BENCH_OBSERVATION_LABEL
         ],
@@ -762,6 +768,29 @@ fn create_track_here_is_greyed_with_the_reason_it_cannot_run() {
         assert_eq!(
             menu_entries(&context_menu_texts(menu)).first(),
             Some(&CREATE_TRACK_HERE_LABEL),
+            "the greyed entry left the menu or its place"
+        );
+    }
+}
+
+/// *Find Nearby Tracks* is greyed exactly when *Create Track Here* is, with
+/// the same sentence, and stays drawn in its place, third, when greyed.
+#[test]
+fn find_nearby_tracks_is_greyed_with_create_track_heres_reasons() {
+    assert_eq!(find_nearby_tracks_entry(BenchMenu::default()), Ok(()));
+    for why in [
+        crate::bench::track_at_pixel::NOT_POSED,
+        crate::bench::track_at_pixel::NOT_EMBEDDED_PATCHES,
+        BUSY,
+    ] {
+        let menu = BenchMenu {
+            create_track: Some(why),
+            ..BenchMenu::default()
+        };
+        assert_eq!(find_nearby_tracks_entry(menu), Err(why.to_string()));
+        assert_eq!(
+            menu_entries(&context_menu_texts(menu)).get(2),
+            Some(&FIND_NEARBY_TRACKS_LABEL),
             "the greyed entry left the menu or its place"
         );
     }

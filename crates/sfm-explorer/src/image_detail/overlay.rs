@@ -71,6 +71,8 @@ pub struct BenchMenu<'a> {
     /// Why *Create Track Here* cannot run on the image shown, or `None` when
     /// it can: the node busy, the image not posed, or a reconstruction a
     /// commit cannot write ([`crate::state::AppState::create_track_here_refusal`]).
+    /// *Find Nearby Tracks* is greyed by the same answer, since it ends in the
+    /// same commit.
     pub create_track: Option<&'a str>,
 }
 
@@ -100,6 +102,16 @@ pub(crate) fn create_track_here_entry(bench: BenchMenu<'_>) -> Result<(), String
         Some(why) => Err(why.to_string()),
         None => Ok(()),
     }
+}
+
+/// Whether the menu's *Find Nearby Tracks* entry can run, and why not when it
+/// is greyed.
+///
+/// The reasons are *Create Track Here*'s, word for word, and are read from the
+/// same field: the entry commits what it finds, so what stops a commit at the
+/// pixel stops it too ([`crate::state::AppState::find_nearby_tracks_refusal`]).
+pub(crate) fn find_nearby_tracks_entry(bench: BenchMenu<'_>) -> Result<(), String> {
+    create_track_here_entry(bench)
 }
 
 /// Which point the menu's Edit-on-Bench entry would stage, and why it is greyed
@@ -456,6 +468,23 @@ impl ImageDetail {
             };
             if clicked {
                 response.edit_on_bench = point.ok();
+                ui.close();
+            }
+
+            // ── Find Nearby Tracks ──
+            //
+            // At the pixel the menu was opened at, like Create Track Here, and
+            // greyed for the same reasons: what it ends in is the same commit.
+            let button = egui::Button::new(crate::bench::nearby_tracks::FIND_NEARBY_TRACKS_LABEL);
+            let clicked = match find_nearby_tracks_entry(bench) {
+                Ok(()) => ui.add(button).clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.find_nearby_tracks = pixel;
                 ui.close();
             }
 

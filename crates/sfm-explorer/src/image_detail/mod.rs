@@ -201,6 +201,15 @@ pub struct ImageDetailResponse {
     /// ends in a layout operation and so has to outlive the tab body: `show`
     /// turns it into the [`PointGesture`] `app.rs` drains after the frame.
     pub edit_on_bench: Option<usize>,
+    /// The pixel *Find Nearby Tracks* was chosen at, in source-image
+    /// coordinates: the pixel the context menu was opened at. The tracks the
+    /// photographs agree on near it are put on the node's bench and the new
+    /// ones committed, as one version.
+    ///
+    /// Applied by the dock, as `create_track_here` is: the step raises no
+    /// panel, and the active track's point becomes the selection, which Track
+    /// View already follows.
+    pub find_nearby_tracks: Option<[f32; 2]>,
     /// A mark of the bench layer was clicked: select this observation's row of
     /// the active track in Track View. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
@@ -539,6 +548,7 @@ impl ImageDetail {
             add_bench_observation: None,
             create_track_here: None,
             edit_on_bench: None,
+            find_nearby_tracks: None,
             select_bench_row: None,
             bench_edit: None,
             view: None,
