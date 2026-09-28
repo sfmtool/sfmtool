@@ -11,12 +11,12 @@ that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
 one, on one node (or, for an open, on none), with an id of its own. One task
-runs at a time. The twelve operations are `Open`, which reads files and makes
+runs at a time. The thirteen operations are `Open`, which reads files and makes
 them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
 `Convert to embedded patches`, `Retriangulate all points` and `Prune covered
-observations`; `Add image to tracks`; and the six the bench runs, `Fit track`,
-`Set track stage`, `Search descriptors`, `Geometry search`, `Build index files`
-and `Create track at pixel`
+observations`; `Add image to tracks`; and the seven the bench runs, `Fit track`,
+`Set track stage`, `Search descriptors`, `Geometry search`, `Build index files`,
+`Create track at pixel` and `Find nearby tracks`
 ([bench.md](bench.md)). Every one of them is **cancellable**. The bench's live
 evaluation is not one of them: it locks no node, writes no row and is not what
 the Background panel shows ([bench.md](bench.md) § "Live evaluation"). The open polls the
@@ -454,7 +454,13 @@ the keypoints and the cluster patches, and the cascade polls in front of each
 member and hands back `TrackAtPixelError::Cancelled`; a member once entered
 runs to its end. Its phases are `decode images`, `read keypoints`, `read
 cluster patches`, and one per member tried. A cancelled run puts
-nothing on the bench and commits nothing.
+nothing on the bench and commits nothing. `Find nearby tracks` polls in the
+same places, around the decode and its reads of the `.sift` files and the
+cluster patches, and core's search polls in front of each source, in the
+far-field sweep and in front of building the tracks, and hands back
+`NearbyTracksError::Cancelled`. Its phases are `decode images`, `read .sift
+files`, `read cluster patches`, and one per source run. It too puts nothing
+on the bench when cancelled.
 
 ## Rust API
 
@@ -560,6 +566,16 @@ pub(crate) enum Finished {
         cluster_patches: Option<PathBuf>,
         end: IndexFilesEnd, // Built(text), Cancelled, Failed(message)
     },
+    /// A track-at-pixel run: the track the cascade built, put on the bench
+    /// and then committed on the GUI thread as two versions, or every
+    /// member's refusal ([bench.md](bench.md) § "Create Track Here").
+    TrackAtPixel(Box<TrackAtPixelRun>),
+    /// A Find Nearby Tracks run: what core found near the pixel, landed on
+    /// the GUI thread as one version, every usable track on the bench and the
+    /// new ones committed, or as a row alone when nothing usable was found
+    /// ([bench.md](bench.md) § "Find Nearby Tracks"). The row is an `Edit`
+    /// when the version wrote points and a `Bench` row otherwise.
+    NearbyTracks(Box<NearbyTracksRun>),
     /// The files an open read, each with what it filled in for display or
     /// the sentence saying why it could not be read. Appended in order.
     Opened(Vec<OpenedFile>),
@@ -659,7 +675,9 @@ already broken. One still running at the threshold replies with a handle:
 `open_reconstruction` is one of these. Its normal result is the reconstruction
 entry of the node the open made, with `already_open` saying whether the path was
 open when the call was made; the pending reply records which answer it owes as
-`Answer::Opened { already_open }`, where an edit's is `Answer::Version(node)`.
+`Answer::Opened { already_open }`, where an edit's is `Answer::Version(node)`,
+`create_track_at_pixel`'s `Answer::CreatedTrack(node)` and
+`find_nearby_tracks`'s `Answer::FoundNearby(node)`.
 Its handle's `reconstruction_label` is the file's stem, the label the node
 arrives with unless another node already holds it.
 

@@ -22,9 +22,10 @@ adds is the order they run in, when the sources stop, when the far-field
 sweep runs, and the tracks and labels the bench takes. It is the anchor finder
 of the track-at-pixel harness
 ([`scripts/track_at_pixel/anchors.py`](../../../scripts/track_at_pixel/anchors.py),
-`find_anchors`) moved into core, and it scores the same there. The viewer's
-menu entry and the wire tool that call it are proposed in
-[the plan](../../drafts/nearby-tracks.md).
+`find_anchors`) moved into core, and it scores the same there. The viewer
+calls it from Image Detail's *Find Nearby Tracks* and the wire's
+`find_nearby_tracks`, which put every usable track on the bench and commit the
+new ones as one version ([the viewer](../../gui/bench.md#find-nearby-tracks)).
 
 ## Rust API
 
@@ -338,6 +339,6 @@ and its older infinity test (`far_test="infinity"`) are not in core; the
 far-field sweep replaced the one and the matching sources outrank the other.
 The operation does not walk from a nearby track to the pixel, and does not
 decide what to do with a low confidence. It commits nothing; the Python
-binding's `commit` is the bench's commit applied to each built track. The
-viewer's *Find Nearby Tracks*, the batch commit as one version, and the wire
-tool are proposed in [the plan](../../drafts/nearby-tracks.md).
+binding's `commit` is the bench's commit applied to each built track, and the
+viewer's *Find Nearby Tracks* commits them as one version
+([the viewer](../../gui/bench.md#find-nearby-tracks)).

@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Eighty tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-four
+Eighty-one tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-five
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -157,6 +157,7 @@ write, and one writes a file.
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
 | `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
 | `create_track_at_pixel` | write | Build a track at a pixel of one camera image, put it on the bench and commit it as a new point, on a worker thread: Image Detail's *Create Track Here* |
+| `find_nearby_tracks` | write | Find the tracks near a pixel of one camera image, put every usable one on the bench and commit the new ones as points, as one version, on a worker thread: Image Detail's *Find Nearby Tracks* |
 | `activate_bench_item` | write | Make one item the active one, the item Track View edits |
 | `deactivate_bench_item` | write | Leave every item on the bench with none active: Track View's Edit box cleared |
 | `rename_bench_item` | write | Give one item a label of your own |
@@ -188,7 +189,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-five writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2490,7 +2491,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-two tools that read and work the **bench** beside a node
+Thirty-three tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -2601,6 +2602,47 @@ are each member's stage and reason in the order tried. Nothing is pushed then.
 It answers in two levels like the other steps that run on a worker, and a
 handle's `get_background_task` reports `Create track at pixel`.
 
+**`find_nearby_tracks` is Image Detail's *Find Nearby Tracks*.** It takes a
+`camera_image` and a `pixel`, and two arguments the menu entry does not offer:
+`commit` (default `true`) and `label`, the group label in place of
+`<stem>@<x>,<y>`. It runs `AppState::start_find_nearby_tracks`, the call the
+entry makes: core's `find_nearby_tracks` on a worker, reading the node's index
+files only where `get_bench` reports them `current` and the `.sift` files when
+every image has one, then every usable track put on the bench under its label
+and, with `commit`, the ones that are not existing points committed, all as one
+version ([bench.md](bench.md) § "Find Nearby Tracks"). With `commit: false`
+the tracks go on the bench and nothing is written to the reconstruction. The
+reply is an edit's (the version, `changed`, and the row's sentence under
+`report`) plus what was found:
+
+```jsonc
+{
+  "changed": true,
+  "report": "Found 3 nearby tracks in 2 layers at (412.0, 230.0) in frame_13.jpg, ...",
+  "group_label": "frame_13@412,230",
+  "layers": [{ "range": [4.1, 4.6], "rank": 1, "confidence": 0.87,
+               "members": 2, "nearest_px": 3.2 }, ...],
+  "tracks": [{ "label": "frame_13@412,230 1a pt 812", "item": "frame_13@412,230 1a pt 812",
+               "point": { "index": 812, "id": "pt3d_a1b2c3d4_812" },
+               "existing": true, "committed": false, "source": "points",
+               "layer": 0, "rank": 1, "confidence": 0.87, "range": [4.1, 4.3],
+               "pixel": [410.8, 232.9], "distance_px": 3.2, "n_views": 7 }, ...],
+  "sources": [{ "source": "points", "found": 3, "skipped": null, "seconds": 0.004 },
+              { "source": "clusters", "found": 0, "skipped": "clusters", "seconds": 0.0 }],
+  "stopped_after": "points",
+  "far_field": null
+}
+```
+
+`tracks` holds the usable tracks in label order, and a track whose build or
+commit refused carries an `error` beside `item` (null when it never reached the
+bench). A range's far end is `null` when it is infinite. A find with nothing
+usable pushes no version and answers `changed: false` with no tracks. Its
+refusals in the call are *Create Track Here*'s (a busy node, an image with no
+pose, a pixel off the photograph, and with `commit` a node whose observations
+are `.sift` features), and a handle's `get_background_task` reports `Find
+nearby tracks`.
+
 **Evaluation is live, and fitting is a tool.** There is no call that evaluates a
 track: every track on a bench is evaluated as soon as it is put there and again
 after every change to its inputs -- a step on it, an undo or redo, a document
@@ -2686,7 +2728,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-two are the patch a track is**, and they are the
+**Eight of the thirty-three are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -2786,7 +2828,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Four of the thirty-two are about the index files**, the node's SIFT index and
+**Four of the thirty-three are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -3777,7 +3819,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty tools**, fifteen of them reads and one of them
+- **The catalog is eighty-one tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

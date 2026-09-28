@@ -1072,21 +1072,23 @@ long it is held: like every menu in this window it is built from
 reaches egui as a touch contact
 ([scene-graph.md](scene-graph.md) § "Panel plumbing").
 
-Its four entries work through the node's **bench** ([`bench.md`](bench.md)),
+Its five entries work through the node's **bench** ([`bench.md`](bench.md)),
 in this order:
 
 | Entry | What it does |
 |-------|--------------|
 | `Create Track Here` (`Ctrl+Shift+Click`) | Builds a track at the clicked pixel with the track-at-pixel cascade, on a worker, puts it on the bench as the active item and commits it as a new point |
 | `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises Track View on it |
+| `Find Nearby Tracks` | Finds the tracks the photographs agree on near the clicked pixel, on a worker, puts every usable one on the bench under its label, commits the ones that are not existing points as new points, all as one version, and makes the nearest the pixel on the best-ranked depth layer the active item |
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
 | `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track: at the track stage the pixel is its keypoint, at the cluster stage its seed |
 
-The lower three are edited afterwards in Track View
-([`track-view.md`](track-view.md)), and the commit there is what reaches the
-reconstruction. `Create Track Here` is the one that commits by itself, and its
-track stays on the bench afterwards, active and seated on the point it wrote,
-for Track View to work on if it needs it. Every entry but `Edit on Bench` names
+What `Edit on Bench` and the two bench entries put on the bench is edited
+afterwards in Track View ([`track-view.md`](track-view.md)), and the commit
+there is what reaches the reconstruction. `Create Track Here` and `Find Nearby
+Tracks` are the two that commit by themselves, and what they commit stays on
+the bench afterwards, seated on the points it wrote, for Track View to work on
+if it needs it. Every entry but `Edit on Bench` names
 a pixel, and this menu is the viewer's only way to name one, so this is where
 every gesture that needs one lives.
 
@@ -1104,6 +1106,14 @@ have helped says so in its refusal ([`bench.md`](bench.md) § "Create Track
 Here"). It raises no panel, so the dock applies it where it reads the panel's
 response: the point the commit writes becomes the selection, which Track View
 already follows.
+
+`Find Nearby Tracks` sits directly below `Edit on Bench`. It too acts at the
+pixel the menu was opened at, and it is greyed with `Create Track Here`'s
+sentences, word for word, since it ends in the same commit
+(`AppState::find_nearby_tracks_refusal`). It raises no panel either: the
+nearest track on the best-ranked layer becomes the active item and its point,
+existing or just committed, the selection ([`bench.md`](bench.md) § "Find
+Nearby Tracks").
 
 `Edit on Bench` is the same entry the 3D viewport's point menu offers, under the
 same name and reporting the same request

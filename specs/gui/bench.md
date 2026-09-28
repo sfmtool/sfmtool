@@ -193,6 +193,18 @@ impl AppState {
         -> Result<(), String>;
     /// Why that cannot run on this image, or `None`: what greys the entry.
     pub(crate) fn create_track_here_refusal(&self, image: ImageRef) -> Option<String>;
+    /// Image Detail's *Find Nearby Tracks*: the tracks near the pixel found on
+    /// a worker, then every usable one put on the bench and, with `commit`,
+    /// the new ones committed, as one version. `label` replaces the group
+    /// label. A refusal in front of the worker is one failed row and no task.
+    pub(crate) fn start_find_nearby_tracks(&mut self, image: ImageRef, pixel: [f64; 2],
+                                           commit: bool, label: Option<&str>)
+        -> Result<(), String>;
+    /// Why that cannot run on this image, or `None`: with `commit`, Create
+    /// Track Here's reasons word for word; without it, all but the one about
+    /// `.sift` features.
+    pub(crate) fn find_nearby_tracks_refusal(&self, image: ImageRef, commit: bool)
+        -> Option<String>;
     /// Discarding the active item leaves nothing active.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     /// A copy of the item beside it, active, with no origin: the label it took.
@@ -636,7 +648,8 @@ photographs too, `Search descriptors`, which reads a `.kdf` and a capture's
 `.sift` files rather than photographs, and `Build index files`, which reads
 the `.sift` files and then the photographs ([`index-files.md`](index-files.md)),
 and `Create track at pixel`, which reads the photographs and the index files
-(§ "Create Track Here").
+(§ "Create Track Here"), and `Find nearby tracks`, which reads the photographs,
+the index files and the `.sift` files (§ "Find Nearby Tracks").
 All of them are
 **cancellable**: the kernels they run take the `Progress` for their phases and
 poll its flag as well -- between the fit's rounds, between the views the
@@ -785,6 +798,112 @@ row is expanded; the wire's refusal carries the same lines.
 
 ---
 
+## Find Nearby Tracks
+
+*Find Nearby Tracks* asks what the other photographs agree is at one pixel of a
+posed photograph, or near it, and puts the answer on the bench: Image Detail's
+context-menu entry, directly below *Edit on Bench*
+([`multi-panel-image-browser.md`](multi-panel-image-browser.md)), and the
+wire's `find_nearby_tracks`. Both are `AppState::start_find_nearby_tracks`, in
+[bench/nearby_tracks.rs](../../crates/sfm-explorer/src/bench/nearby_tracks.rs).
+The search is core's `find_nearby_tracks`
+([`../core/bench/nearby-tracks.md`](../core/bench/nearby-tracks.md)): the
+**nearby tracks**, 3D points near the pixel that several photographs see,
+grouped into ranked **depth layers**, each track labelled with its layer's
+rank and its place in the layer. Where *Create Track Here* builds the one
+track at the pixel, this finds the geometry around it that the photographs
+already agree on.
+
+```rust
+// The menu entry: at the pixel the menu was opened at, committing.
+state.find_nearby_tracks_here(ImageRef::new(id, 13), [412.0, 230.0]);
+// The wire, with the tracks put on the bench and nothing committed.
+state.start_find_nearby_tracks(ImageRef::new(id, 13), [412.0, 230.0], false, None)?;
+// ... the worker lands: one version, or one row when nothing usable was found ...
+```
+
+**What stops it before the worker** is `find_nearby_tracks_refusal`, which the
+greyed entry, the step and the wire all read. With `commit` its reasons are
+*Create Track Here*'s, word for word, since it ends in the same commit: a
+background task holding the node, an image with no pose, and a node whose
+observations are `.sift` features. Without `commit`, which only the wire
+offers, the last does not apply. A pixel off the photograph is refused, not
+clamped.
+
+**It runs on a worker** as the background operation `Find nearby tracks`,
+cancellable. It gets what *Create Track Here*'s worker gets -- `ViewSources`
+for every image, a clone of the value at the cursor, the SIFT index's forest
+handle and the cluster-patches path **only when each is `current`** -- and
+every image's `.sift` path, which it reads there, when every image has one,
+into the keypoints and descriptors guided matching reads and the keypoints the
+constellation source queries the index with. A source whose input is missing is
+skipped and named in core's report, not refused: a node with no index files and
+no `.sift` files still gets its own points and the far-field sweep. The grey
+images the far-field sweep and the layers sample, and the rays through the
+keypoints, are built on the worker for the run and dropped with it: the viewer
+keeps no decoded set of photographs between runs for a cache of them to sit
+beside, and building them is a small part of a run, which decodes every
+photograph it does not find in the node's full-resolution cache. The options
+are core's defaults, the harness's, with the caller's `label` as the group
+label.
+
+**What lands is one version.** Every track in core's `bench_order()` -- the
+usable ones, best-ranked layer first and within a layer nearest the pixel first
+-- goes on the bench under its label, one after another, and the value and the
+bench that result are pushed as one pair, so one Undo takes back the whole find
+and one Redo puts it back:
+
+- **an existing point** goes on as its own track, as *Edit on Bench* puts it
+  (core's `create_track`, seated on the point), under the label with its
+  point, `frame_13@412,230 1b pt 812`, and is never committed again. A point a
+  bench item already came from keeps that item under the label it has, as
+  *Edit on Bench* activates the item it made rather than putting a second one
+  on, so a second find at the same pixel puts no copies of its existing points
+  on the bench;
+- **a built track** goes on under its label, `frame_13@412,230 2a`, and with
+  `commit` is committed as a new point by core's `commit`, then seated on that
+  point as `commit_bench_track` seats a creation. The commits' point maps are
+  chained into the version's, and the points they created are named by one
+  content hash over them all, in the order they were made
+  ([`goto-point.md`](goto-point.md)). A commit that refuses leaves its track
+  on the bench and the rest are committed;
+- **a track whose build failed** goes nowhere; the row counts it and the wire
+  carries its reason.
+
+A find that would change nothing -- every track it found on the bench already,
+and `1a` active already -- pushes no version and ends its row with *no effect,
+the bench holds them already*.
+
+A label another item holds takes core's ` (n)` suffix, as every label on the
+bench does, so a second find at the same pixel puts its new tracks beside the
+first's (`frame_13@412,230 2a (2)`); a caller who wants them apart names a
+group label. The version is labelled *Found 8 nearby tracks at
+frame_13@412,230*. The row is an `Edit` row when the version wrote points and
+a `Bench` row when it wrote only the bench, and its sentence says how many
+tracks were found in how many layers, the first layer's confidence, what
+became of the tracks, and which item is active:
+
+> Found 8 nearby tracks in 2 layers at (412.0, 230.0) in frame_13.jpg, the
+> first layer at 87% confidence: 5 committed as new points, 3 existing points
+> put on the bench; frame_13@412,230 1a is active (v12 -> v13)
+
+**`1a` is the active item afterwards**, the track nearest the pixel on the
+best-ranked layer, the best stand-in for the pixel on the surface the
+photographs favour. Its point, existing or just committed, becomes the
+selection after the row, as a commit selects the point it wrote, so Track View
+opens on it.
+
+**A find with nothing usable pushes no version** and writes one row saying so,
+with the sources that were skipped for want of their input:
+
+> Found no nearby tracks at (2.0, 125.0) in image_0.jpg; skipped clusters (no
+> clusters), guided (no descriptors), constellation (no SIFT index)
+
+A run core refuses (a pixel that is not a place on the photograph, inputs that
+do not match the reconstruction) is one failed row in core's words.
+
+---
+
 ## The Bench groups in the Scene tree
 
 Each node gains two **Bench** children beside its Camera Intrinsics, Camera
@@ -827,7 +946,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through thirty-two MCP tools
+An agent gets the same bench a human does, through thirty-three MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -859,6 +978,11 @@ create_bench_cluster."*
 // Create Track Here: built at the pixel, put on the bench and committed.
 // create_track_at_pixel { "reconstruction_label": "bull", "camera_image": 4,
 //                         "pixel": [142.0, 197.5] }
+//
+// Find Nearby Tracks: every usable track near the pixel on the bench, the new
+// ones committed, one version. "commit": false commits nothing.
+// find_nearby_tracks { "reconstruction_label": "bull", "camera_image": 4,
+//                      "pixel": [142.0, 197.5], "commit": false, "label": "nose" }
 //
 // The list.
 // get_bench            { "reconstruction_label": "bull" }
@@ -1270,6 +1394,27 @@ Shift alone asks for nothing; and a Control+Shift double-click is neither *Edit
 on Bench* nor a zoom. The background tests cancel the operation over the same
 plane, as they do every operation that says it is cancellable.
 
+*Find Nearby Tracks* is tested in
+[bench/nearby_tracks/tests.rs](../../crates/sfm-explorer/src/bench/nearby_tracks/tests.rs),
+over the same plane and over the same capture of a plane ten million units out,
+whose one point sits beyond the points source's reach so that only the
+far-field sweep finds anything. At the held-out point's pixel of the near plane
+the eight points around it land as their own tracks, labelled `1a` to `1h` with
+their points, seated on them, nothing committed, one `Bench` version, `1a`
+active and its point selected; a second find there puts no copies on and
+pushes no version. On the far plane the sweep's reading is built and committed as a new point in the same
+version, whose row is an `Edit`, and one undo takes back the point and the
+bench items together, one redo puts both back; without `commit` the track goes
+on the bench under the caller's group label and nothing is written, and a
+second find takes the ` (2)` suffix. At a pixel far from every point on the
+near plane nothing usable is found: one row, no version, the bench untouched.
+The refusals are *Create Track Here*'s, and a `sift_files` node refuses only a
+find that commits. The panel's side, in
+[image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
+draws the entry third, directly below *Edit on Bench*, and greys it with
+*Create Track Here*'s sentences in the same place. The background tests cancel
+it over the near plane.
+
 The wire is tested in
 [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs), over the same
 fixture with a label on the node, for what the boundary owes: each tool being
@@ -1315,5 +1460,5 @@ refused in the call with no task.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The thirty-two tools for the steps that exist
+  proposed in the same draft. The thirty-three tools for the steps that exist
   are § "The wire".
