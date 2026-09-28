@@ -264,8 +264,11 @@ fn a_verdict_shows_under_the_same_observation_index() {
     assert_eq!(rows[2].verdict, Verdict::In);
 }
 
+/// The *Keep* cells show what the bars propose, a drag of the boxes moves no
+/// pinned verdict, and an unpinned row's proposal is exactly what applying the
+/// bars makes it.
 #[test]
-fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
+fn the_thresholds_propose_for_the_rows_and_move_no_pinned_verdict() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     // Measure the track, so the rows have numbers for the bars to judge.
     state
@@ -274,40 +277,36 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
     assert!(
-        panel.rows().iter().all(|row| row.painted.is_some()),
+        panel.rows().iter().all(|row| row.proposal.is_some()),
         "every row is measured: {:?}",
         panel.rows()
     );
     let pinned_before = panel.rows()[1].verdict;
 
     // A bar nothing can clear: every measured row would be refused.
-    panel.thresholds.min_zncc = 1.01;
-    run_frame(&mut panel, &ctx, &state);
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = 1.01;
+    });
     let rows = panel.rows();
     assert!(
-        rows.iter().any(|row| row.painted == Some(Verdict::Out)),
-        "an unreachable bar painted nothing out: {rows:?}"
+        rows.iter().all(|row| row.proposal == Some(Verdict::Out)),
+        "an unreachable bar proposed a row in: {rows:?}"
     );
     assert_eq!(
         rows[1].verdict, pinned_before,
-        "the painting moved a verdict the person set"
-    );
-    assert_eq!(
-        rows[1].painted,
-        Some(pinned_before),
-        "a pinned row is painted as what it is, not as what the bars propose"
+        "the proposal moved a verdict the person set"
     );
 
-    // And the painting is exactly what applying the bars would do.
+    // And an unpinned row's proposal is exactly what applying the bars does.
     state
         .apply_bench_thresholds(id, &label, panel.thresholds())
         .expect("on the bench");
     run_frame(&mut panel, &ctx, &state);
-    for row in panel.rows() {
+    for row in panel.rows().iter().filter(|row| !row.pinned) {
         assert_eq!(
             Some(row.verdict),
-            row.painted,
-            "applying the bars produced a verdict the painting did not show"
+            row.proposal,
+            "applying the bars produced a verdict the Keep cell did not show"
         );
     }
     assert_eq!(
@@ -847,9 +846,13 @@ fn the_boxes_follow_the_active_track_s_own_thresholds() {
     let track = state.bench_track(id, &label).expect("on the bench");
     assert_eq!(panel.thresholds(), &track.thresholds);
     assert_eq!(panel.thresholds().min_zncc, 0.94);
-    // And the painting is the track's rule rather than the box's old one.
+    // And the proposals are the track's rule rather than the box's old one.
     assert_eq!(
-        panel.painted,
+        panel
+            .judged
+            .iter()
+            .map(|judged| judged.map(|j| j.proposal))
+            .collect::<Vec<_>>(),
         sfmtool_core::bench::apply_thresholds(track)
             .0
             .observations
@@ -1969,7 +1972,8 @@ fn clicking_the_keep_switch_turns_a_kept_row_out() {
     assert_eq!(panel.rows()[1].verdict, Verdict::In);
     let y = row_y(&mut panel, &ctx, &state, 1);
     // Left of the switch itself, still in its cell.
-    let response = at_pointer(&mut panel, &ctx, &state, egui::pos2(12.0, y + 8.0), true);
+    let x = super::table::ColumnLayout::new().keep_x() + 1.0;
+    let response = at_pointer(&mut panel, &ctx, &state, egui::pos2(x, y + 8.0), true);
     assert_eq!(response.set_verdict, Some((1, Verdict::Out)));
     assert_eq!(
         response.pick_row, None,
@@ -1989,7 +1993,8 @@ fn a_pinned_row_offers_to_unpin_from_the_switch_and_from_the_row() {
     assert!(panel.rows()[0].pinned);
 
     let y = row_y(&mut panel, &ctx, &state, 0);
-    for x in [12.0, 400.0] {
+    let switch = super::table::ColumnLayout::new().keep_x() + 12.0;
+    for x in [switch, 400.0] {
         let at = egui::pos2(x, y + 8.0);
         open_row_menu(&mut panel, &ctx, &state, at);
         let entry = menu_entry_pos(&mut panel, &ctx, &state, super::table::UNPIN_LABEL);
@@ -2061,7 +2066,7 @@ fn a_track_from_a_point_resolves_the_id_the_header_copies() {
 fn the_pin_pins_a_verdict_and_unpins_a_pinned_one() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     let y = row_y(&mut panel, &ctx, &state, 1);
-    let pin = egui::pos2(52.0, y + 8.0);
+    let pin = egui::pos2(super::table::ColumnLayout::new().keep_x() + 52.0, y + 8.0);
     let response = at_pointer(&mut panel, &ctx, &state, pin, true);
     assert_eq!(response.set_verdict, Some((1, Verdict::In)));
     assert_eq!(
@@ -2387,4 +2392,318 @@ fn hovering_a_tile_shows_it_in_context_and_keeps_the_row() {
         Some((1, false)),
         "a click on the tile did not pick the row"
     );
+}
+
+// ── The bars' colours and the Keep cell's proposal ──────────────────────
+
+/// Set the boxes the way a drag in progress holds them: from the active
+/// track's bars with `change` applied, and held there for the next frame, which
+/// is drawn.
+fn with_boxes(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &AppState,
+    id: ReconId,
+    label: &str,
+    change: impl FnOnce(&mut Thresholds),
+) {
+    let mut bars = state
+        .bench_track(id, label)
+        .expect("on the bench")
+        .thresholds
+        .clone();
+    change(&mut bars);
+    panel.thresholds = bars;
+    panel.sliding = true;
+    run_frame(panel, ctx, state);
+}
+
+/// [`POINT`] on the bench with its first evaluation landed, so every row has
+/// readings for the bars to judge.
+fn measured_on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    (state, id, label, panel, ctx)
+}
+
+/// The whole and the middle ZNCC of observation `i` of the active track.
+fn zncc_readings(state: &AppState, id: ReconId, label: &str, i: usize) -> (f64, f64) {
+    let track = state.bench_track(id, label).expect("on the bench");
+    let m = track.observations[i]
+        .track
+        .as_ref()
+        .expect("a track-stage reading");
+    (
+        m.zncc.expect("a whole ZNCC"),
+        m.zncc_middle.expect("a middle ZNCC"),
+    )
+}
+
+/// Each line of the ZNCC cell takes the colour of its own bar: the whole
+/// reading can pass while the middle fails, and the reverse.
+#[test]
+fn each_line_of_the_zncc_cell_is_judged_by_its_own_bar() {
+    use sfmtool_core::bench::BarCheck;
+
+    let (state, id, label, mut panel, ctx) = measured_on_the_bench();
+    let (whole, middle) = zncc_readings(&state, id, &label, 0);
+    assert!(middle > 0.02, "the fixture's middle ZNCC is {middle}");
+
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = whole - 0.01;
+        bars.min_zncc_middle = middle + 0.01;
+    });
+    assert_eq!(
+        panel.rows()[0].checks[0],
+        [BarCheck::Pass, BarCheck::Fail],
+        "whole over its bar, middle under its own"
+    );
+
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = whole + 0.01;
+        bars.min_zncc_middle = middle - 0.01;
+    });
+    assert_eq!(
+        panel.rows()[0].checks[0],
+        [BarCheck::Fail, BarCheck::Pass],
+        "whole under its bar, middle over its own"
+    );
+}
+
+/// The readings no bar judges stay in the plain colour: the projection error,
+/// the self-similarity middle radius, the status, the middle ZNCC while its
+/// bar is off, a reading that is missing, and every reading of a row nothing
+/// has measured or whose evaluation was refused.
+#[test]
+fn readings_no_bar_judges_are_drawn_plain() {
+    use sfmtool_core::bench::{bar_checks, BarCheck, Observation, Provenance, TrackMeasurement};
+
+    let (state, id, label, mut panel, ctx) = measured_on_the_bench();
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc_middle = 0.0;
+    });
+    let plain = [BarCheck::NotJudged; 2];
+    for row in panel.rows() {
+        assert_eq!(row.checks[0][1], BarCheck::NotJudged, "mid ZNCC, bar off");
+        assert_eq!(row.checks[2], plain, "Proj. err");
+        assert_eq!(row.checks[3][1], BarCheck::NotJudged, "self-similarity mid");
+        assert_eq!(row.checks[4], plain, "Status");
+        assert_ne!(
+            row.checks[0][0],
+            BarCheck::NotJudged,
+            "ZNCC whole is judged"
+        );
+    }
+
+    // A reading that is missing (`-`) is not judged, though it clears its bar.
+    let row = Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            zncc: Some(0.95),
+            ..TrackMeasurement::default()
+        }),
+    };
+    let judged = super::Judgement {
+        checks: bar_checks(&row, StageKind::Track, &Thresholds::default()).expect("measured"),
+        proposal: Verdict::In,
+    };
+    let current = crate::bench::live::Evaluation::Current;
+    let checks = super::table::cell_checks(Some(&judged), &current);
+    assert_eq!(checks[0], [BarCheck::Pass, BarCheck::NotJudged]);
+    assert_eq!(checks[1][0], BarCheck::NotJudged, "no shift reading");
+    assert_eq!(checks[3][0], BarCheck::NotJudged, "no radius reading");
+
+    // A row nothing has measured, and a row whose cells print no numbers.
+    assert_eq!(super::table::cell_checks(None, &current), [plain; 5]);
+    let refused = crate::bench::live::Evaluation::Refused("no photographs".to_string());
+    assert_eq!(
+        super::table::cell_checks(Some(&judged), &refused),
+        [plain; 5]
+    );
+}
+
+/// Dragging a box judges the readings against the box at once, and changes
+/// nothing on the track until it is let go.
+#[test]
+fn dragging_a_box_changes_the_judgement_and_not_the_track() {
+    use sfmtool_core::bench::BarCheck;
+
+    let (state, id, label, mut panel, ctx) = measured_on_the_bench();
+    let before = state.bench_track(id, &label).expect("on the bench").clone();
+    let versions_before = versions(&state, id);
+
+    // Bars every reading clears: each row is proposed in, and says why.
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = -1.0;
+        bars.min_zncc_middle = 0.0;
+        bars.max_shift_px = 1.0e6;
+        bars.max_zncc_self_similarity_radius = 1.0e6;
+    });
+    for row in panel.rows() {
+        assert_eq!(row.checks[0][0], BarCheck::Pass, "{row:?}");
+        assert_eq!(row.proposal, Some(Verdict::In), "{row:?}");
+        assert!(
+            row.keep_hover.contains("it clears every bar"),
+            "{}",
+            row.keep_hover
+        );
+    }
+
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = 1.01;
+    });
+    for row in panel.rows() {
+        assert_eq!(row.checks[0][0], BarCheck::Fail, "{row:?}");
+        assert_eq!(row.proposal, Some(Verdict::Out), "{row:?}");
+        assert_eq!(row.verdict, Verdict::In, "the drag moved a verdict");
+    }
+    let after = state.bench_track(id, &label).expect("on the bench");
+    assert!(
+        std::sync::Arc::ptr_eq(&before, after),
+        "the drag stepped the track"
+    );
+    assert_eq!(versions(&state, id), versions_before);
+}
+
+/// An unpinned row's *Keep* cell shows what applying the bars makes it, and a
+/// pinned row's what unpinning it would: a switch that is on in a red cell is
+/// a hand ruling against the bars, and its hover text says which bar.
+#[test]
+fn a_pinned_row_ruled_against_the_bars_shows_what_unpinning_would_give() {
+    let (mut state, id, label, mut panel, ctx) = measured_on_the_bench();
+    state
+        .set_bench_verdict(id, &label, 0, Verdict::In)
+        .expect("observation 0 exists");
+    let (whole, _) = zncc_readings(&state, id, &label, 0);
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = whole + 0.001;
+    });
+
+    let row = &panel.rows()[0];
+    assert!(row.pinned && row.verdict == Verdict::In, "{row:?}");
+    assert_eq!(row.proposal, Some(Verdict::Out), "the bars fail it");
+    assert!(
+        row.keep_hover.contains("ZNCC whole is under the bar"),
+        "{}",
+        row.keep_hover
+    );
+    assert!(
+        row.keep_hover.contains("Kept, set by hand."),
+        "the switch's own text is kept: {}",
+        row.keep_hover
+    );
+
+    // And that is what unpinning it gives.
+    let bars = panel.thresholds().clone();
+    state
+        .apply_bench_thresholds(id, &label, &bars)
+        .expect("on the bench");
+    state
+        .unpin_bench_verdict(id, &label, 0)
+        .expect("observation 0 exists");
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_eq!(track.observations[0].verdict, Verdict::Out);
+}
+
+/// Of two sightings in one image that both clear every bar, the one the
+/// painting does not take is proposed `out`, and its hover text says another
+/// sighting in that image is kept.
+#[test]
+fn a_row_that_clears_every_bar_but_loses_its_image_says_so() {
+    use sfmtool_core::bench::BarCheck;
+
+    let (mut state, id, label, _, _) = on_the_bench();
+    let pixel = crate::bench::observation_pixel(
+        &state
+            .bench_track(id, &label)
+            .expect("on the bench")
+            .observations[1],
+    )
+    .expect("a placed observation");
+    state
+        .add_bench_observation(
+            &label,
+            ImageRef::new(id, 1),
+            &crate::bench::Seed::Pixel {
+                pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
+                radius_px: None,
+            },
+        )
+        .expect("a pixel in the photograph");
+    state.settle_bench_evaluation();
+    let (mut panel, ctx) = settled(&state);
+    // Bars every measured reading clears.
+    with_boxes(&mut panel, &ctx, &state, id, &label, |bars| {
+        bars.min_zncc = -1.0;
+        bars.min_zncc_middle = 0.0;
+        bars.max_shift_px = 1.0e6;
+        bars.max_zncc_self_similarity_radius = 1.0e6;
+    });
+
+    let rows = panel.rows();
+    assert_eq!(rows.len(), 4, "{rows:?}");
+    let in_image_1: Vec<_> = rows.iter().filter(|row| row.image == 1).collect();
+    assert!(
+        in_image_1.iter().all(|row| row.proposal.is_some()
+            && row.checks.iter().flatten().all(|&c| c != BarCheck::Fail)),
+        "both sightings are measured and clear every bar: {in_image_1:?}"
+    );
+    let lost: Vec<_> = in_image_1
+        .iter()
+        .filter(|row| row.proposal == Some(Verdict::Out))
+        .collect();
+    assert_eq!(
+        lost.len(),
+        1,
+        "one of the two keeps the image: {in_image_1:?}"
+    );
+    assert!(
+        lost[0]
+            .keep_hover
+            .contains("another sighting in image 1 is kept"),
+        "{}",
+        lost[0].keep_hover
+    );
+}
+
+/// The tile stands at the table's left edge with no heading, and the *Keep*
+/// column comes after it.
+#[test]
+fn the_tile_column_is_left_of_the_keep_column() {
+    let cols = super::table::ColumnLayout::new();
+    assert_eq!(cols.tile_x(), 0.0);
+    assert!(
+        cols.keep_x() >= cols.tile_x() + super::table::TILE_SIZE,
+        "the Keep column overlaps the tile"
+    );
+    let headers = cols.headers();
+    assert_eq!(headers[0].1, "Keep");
+    assert_eq!(headers[0].0, cols.keep_x());
+    assert!(
+        headers.iter().all(|&(x, _, _)| x >= cols.keep_x()),
+        "a heading stands over the tile"
+    );
+}
+
+/// The headings are drawn at the size of the cells under them.
+#[test]
+fn the_headings_are_as_large_as_the_cells() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let painted = crate::test_support::painted_text_rects(&ctx, input(Vec::new()), |ui| {
+        panel.show(ui, &state);
+    });
+    let height = |text: &str| {
+        painted
+            .iter()
+            .find(|painted| painted.text == text)
+            .map(|painted| painted.rect.height())
+            .unwrap_or_else(|| panic!("{text:?} was not painted"))
+    };
+    assert_eq!(height("Name"), height("image_000.jpg"));
 }

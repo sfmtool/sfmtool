@@ -970,6 +970,202 @@ fn the_painting_gives_one_image_one_in() {
     assert_eq!(painted.verdict_counts(), (1, 1));
 }
 
+/// The track-stage measurement of `track`'s observation `i`, to set readings on.
+fn slot(track: &mut EditableTrack, i: usize) -> &mut TrackMeasurement {
+    track.observations[i].track.as_mut().expect("a track slot")
+}
+
+/// Each bar passes a reading that clears it and fails one that does not, and a
+/// `NaN` reading fails its bar.
+#[test]
+fn bar_checks_pass_a_reading_that_clears_its_bar_and_fail_one_that_does_not() {
+    let mut track = scored_track([0.95, 0.40]);
+    track.thresholds.min_zncc_middle = 0.6;
+    slot(&mut track, 0).zncc_middle = Some(0.9);
+    slot(&mut track, 1).zncc_middle = Some(0.3);
+    slot(&mut track, 1).seed_shift_px = Some(track.thresholds.max_shift_px + 1.0);
+    slot(&mut track, 1).zncc_self_similarity_radius = Some(3.0);
+    let stage = track.stage_kind();
+
+    let passes = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
+    assert_eq!(
+        passes,
+        BarChecks {
+            min_zncc: BarCheck::Pass,
+            min_zncc_middle: BarCheck::Pass,
+            max_shift_px: BarCheck::Pass,
+            max_zncc_self_similarity_radius: BarCheck::Pass,
+        }
+    );
+    assert!(passes.clears_every_bar());
+
+    let fails = bar_checks(&track.observations[1], stage, &track.thresholds).expect("measured");
+    assert_eq!(
+        fails,
+        BarChecks {
+            min_zncc: BarCheck::Fail,
+            min_zncc_middle: BarCheck::Fail,
+            max_shift_px: BarCheck::Fail,
+            max_zncc_self_similarity_radius: BarCheck::Fail,
+        }
+    );
+    assert!(!fails.clears_every_bar());
+
+    // A reading no round produced fails its bar, whichever bar it is.
+    for set in [
+        |m: &mut TrackMeasurement| m.zncc_middle = Some(f64::NAN),
+        |m: &mut TrackMeasurement| m.seed_shift_px = Some(f64::NAN),
+        |m: &mut TrackMeasurement| m.zncc_self_similarity_radius = Some(f64::NAN),
+    ] {
+        let mut nan = track.clone();
+        set(slot(&mut nan, 0));
+        let checks = bar_checks(&nan.observations[0], stage, &nan.thresholds).expect("measured");
+        assert!(!checks.clears_every_bar(), "{checks:?}");
+    }
+    slot(&mut track, 0).zncc = Some(f64::NAN);
+    let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
+    assert_eq!(checks.min_zncc, BarCheck::Fail);
+}
+
+/// A missing reading is not judged and clears its bar, the middle bar at `0`
+/// judges nothing, and a row with no whole-patch ZNCC has no checks at all.
+#[test]
+fn bar_checks_judge_no_missing_reading_and_no_bar_that_is_off() {
+    let mut track = scored_track([0.95, 0.40]);
+    track.thresholds.min_zncc_middle = 0.6;
+    slot(&mut track, 0).zncc_middle = None;
+    slot(&mut track, 0).seed_shift_px = None;
+    slot(&mut track, 0).zncc_self_similarity_radius = None;
+    let stage = track.stage_kind();
+    let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
+    assert_eq!(
+        checks,
+        BarChecks {
+            min_zncc: BarCheck::Pass,
+            min_zncc_middle: BarCheck::NotJudged,
+            max_shift_px: BarCheck::NotJudged,
+            max_zncc_self_similarity_radius: BarCheck::NotJudged,
+        }
+    );
+    assert!(
+        checks.clears_every_bar(),
+        "a missing reading clears its bar"
+    );
+
+    // The middle bar at 0 is off, even over a reading that would fail it.
+    slot(&mut track, 0).zncc_middle = Some(0.1);
+    track.thresholds.min_zncc_middle = 0.0;
+    let checks = bar_checks(&track.observations[0], stage, &track.thresholds).expect("measured");
+    assert_eq!(checks.min_zncc_middle, BarCheck::NotJudged);
+
+    slot(&mut track, 0).zncc = None;
+    assert_eq!(
+        bar_checks(&track.observations[0], stage, &track.thresholds),
+        None,
+        "a row with no ZNCC is one nothing has measured"
+    );
+}
+
+/// For every observation, pinned or not, what [`verdicts_if_unpinned`] says
+/// is what unpinning it and then applying the thresholds makes it.
+fn assert_verdicts_if_unpinned_match_an_unpin(track: &EditableTrack) {
+    let proposals = verdicts_if_unpinned(track);
+    for (i, proposal) in proposals.iter().enumerate() {
+        let (unpinned, _) = unpin_verdict(track, i).expect("a live observation");
+        let (painted, _) = apply_thresholds(&unpinned);
+        assert_eq!(
+            *proposal,
+            Some(painted.observations[i].verdict),
+            "observation {i} of {:?}",
+            track
+                .observations
+                .iter()
+                .map(|o| (o.image, o.verdict, o.pinned))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A pinned row's proposal is what it becomes when unpinned: its bars, and
+/// whether another sighting of its image keeps the image's one `in`.
+#[test]
+fn verdicts_if_unpinned_give_a_pinned_row_what_unpinning_it_would() {
+    // Pinned in and out, against the bars and with them, in two images.
+    let track = scored_track([0.95, 0.40]);
+    for (a, b) in [
+        (Verdict::In, Verdict::In),
+        (Verdict::Out, Verdict::In),
+        (Verdict::Out, Verdict::Out),
+        (Verdict::In, Verdict::Out),
+    ] {
+        let (pinned, _) = set_verdict(&track, 0, a).expect("a live observation");
+        let (pinned, _) = set_verdict(&pinned, 1, b).expect("a free image");
+        assert_eq!(
+            verdicts_if_unpinned(&pinned),
+            [Some(Verdict::In), Some(Verdict::Out)],
+            "the bars alone decide two rows in two images"
+        );
+        assert_verdicts_if_unpinned_match_an_unpin(&pinned);
+    }
+
+    // Three rows, two of them in image 0, all clearing every bar: the
+    // competing sighting holds the image when it is pinned `in`, and when it
+    // is unpinned and scores better.
+    let mut shared = scored_track([0.95, 0.99]);
+    let mut third = shared.observations[0].clone();
+    third.image = 0;
+    third.track.as_mut().expect("a slot").zncc = Some(0.90);
+    shared.observations.push(third);
+    shared.observations[1].image = 0;
+    // Observation 2 (0.90) is pinned `in`, and holds image 0 against the two
+    // unpinned rows; unpinned, it would lose the image to observation 1
+    // (0.99), which scores better.
+    let (pinned, _) = set_verdict(&shared, 2, Verdict::In).expect("image 0 is free");
+    assert_eq!(
+        verdicts_if_unpinned(&pinned),
+        [Some(Verdict::Out), Some(Verdict::Out), Some(Verdict::Out)]
+    );
+    assert_verdicts_if_unpinned_match_an_unpin(&pinned);
+    // With the other two pinned `out`, nothing competes with it for the
+    // image, and observation 1 still loses the image to it.
+    let (pinned, _) = set_verdict(&pinned, 0, Verdict::Out).expect("a live observation");
+    let (pinned, _) = set_verdict(&pinned, 1, Verdict::Out).expect("a live observation");
+    assert_eq!(
+        verdicts_if_unpinned(&pinned),
+        [Some(Verdict::Out), Some(Verdict::Out), Some(Verdict::In)]
+    );
+    assert_verdicts_if_unpinned_match_an_unpin(&pinned);
+    // Every row pinned out: each alone would take the image.
+    let mut all_out = pinned.clone();
+    for i in 0..3 {
+        (all_out, _) = set_verdict(&all_out, i, Verdict::Out).expect("a live observation");
+    }
+    assert_eq!(
+        verdicts_if_unpinned(&all_out),
+        [Some(Verdict::In), Some(Verdict::In), Some(Verdict::In)]
+    );
+    assert_verdicts_if_unpinned_match_an_unpin(&all_out);
+}
+
+/// Unpinned rows get exactly what [`apply_thresholds`] gives them, and an
+/// unmeasured row gets no proposal.
+#[test]
+fn verdicts_if_unpinned_give_an_unpinned_row_the_painting() {
+    let mut track = scored_track([0.95, 0.99]);
+    track.observations[1].image = 0;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(
+        verdicts_if_unpinned(&track),
+        painted
+            .observations
+            .iter()
+            .map(|o| Some(o.verdict))
+            .collect::<Vec<_>>()
+    );
+    slot(&mut track, 0).zncc = None;
+    assert_eq!(verdicts_if_unpinned(&track)[0], None);
+}
+
 // ---- Splitting -------------------------------------------------------------
 
 /// A four-observation cluster on a fresh bench, and its label.

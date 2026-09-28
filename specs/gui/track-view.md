@@ -148,7 +148,7 @@ if let Some(on) = response.set_edit.or(response.edit_selected_point.then_some(tr
 View mode caches thumbnails and patch tiles per image of a committed point;
 edit mode caches tiles and their hover views per observation of a bench
 track keyed on its `Arc`, and
-the box seeding, the painting and the commit refusal. Keeping each as the
+the box seeding, the bars' judgement and the commit refusal. Keeping each as the
 struct it is means neither cache learns about the other, and each body's
 headless tests read what that body drew. What the panel adds is the checkbox,
 the dispatch on it and the notice.
@@ -532,7 +532,7 @@ Almost no state lives in the body. The bench is the node's, at its cursor, so a
 step taken anywhere, in this panel, in the Scene tree or by an undo, shows here on
 the next frame. What the body owns is about looking rather than about the track:
 where the boxes stand, whether *Lock* is ticked, which rows are selected, the
-tiles it has rendered, and the painting.
+tiles it has rendered, and the bars' judgement of each row.
 
 #### The header
 
@@ -668,7 +668,7 @@ the box left or right changes the bar (half a percent per point for the ZNCC
 bars, 0.05 grid px per point for the shift, 0.02 grid px per point for the
 self-similarity radius),
 and clicking it takes a typed value. There is no slider rail beside it, since a
-rail would say nothing the box does not. The first four are the bars the painting reads;
+rail would say nothing the box does not. The first four are the bars the painting and the table's colours read;
 the fifth is the fraction of the track's own self-agreement a geometry search's view is
 scored by. The three ZNCC boxes read and take percent in whole steps, as the
 table's ZNCC column reads, so *min ZNCC (%)* and *min middle ZNCC (%)* both show
@@ -678,7 +678,7 @@ it.
 *shift px*, the maximum shift, is in patch-grid px, the unit of the
 self-similarity radius, and 6 on a new track. It is three things at once, since
 they are one question -- how far from where a sighting is the correlation may
-put it: the bar the *Shift* column is painted by, the radius the evaluation
+put it: the bar the *Shift* column is judged by, the radius the evaluation
 looks for each peak within, so moving it evaluates the track again, and the
 bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
@@ -692,23 +692,28 @@ hover text says what the radius is, what a row past the bar is, and that `3`
 turns nothing out.
 
 **A box applies to the active track when it is let go.** Dragging one
-repaints the table live; releasing it sets the track's bars to where the five
+recolours the table live; releasing it sets the track's bars to where the five
 boxes stand and turns the painting into verdicts, one version carrying both,
 with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
 it. A typed value is the same gesture, applied when the field is left rather
 than per keystroke, and an arrow key on a focused box is one step each. No
 intermediate drag position pushes a version, and a release that leaves the bars
 where the track has them pushes nothing. There is no separate *Apply* button:
-a box that painted the table while the track kept its old bar would let a
+a box that coloured the table while the track kept its old bar would let a
 *Fit* run on a bar the person had already moved away from. The boxes are
 greyed with the busy sentence while the node is busy, since a release there
 would be refused.
 
-**The painting is `apply_thresholds` run over a copy**, the core step itself
-with the boxes' bars, so a row can never be painted one way and turned the
-other way when the box is released, and a pinned verdict comes back
-unchanged. It is recomputed when the track's `Arc` or the bars move, and not per
-frame, because a copy of a track carries its consensus bitmap.
+**The colours are the core's judgement run over a copy** carrying the boxes'
+bars: `bar_checks` for each reading and `verdicts_if_unpinned` for each row's
+*Keep* cell ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Growing and judging"). For an unpinned row the proposal is what `apply_thresholds`, the
+step a release applies, gives it, so a row can never be shown one way and turned
+the other way when the box is released; for a pinned row it is what unpinning
+it would give, which a release does not apply, since the painting leaves a
+pinned verdict unchanged. It is recomputed when the track's `Arc` or the bars
+move, and not per frame, because a copy of a track carries its consensus
+bitmap.
 
 **The boxes show the active track's own bars**, copied from it on every frame
 no box is being dragged, so whatever moved them -- a release here,
@@ -719,10 +724,13 @@ the track does not.
 #### The observation table
 
 One row per observation, in index order, with the headings above the scroll
-area. Each heading has hover text over the width of its column saying what the
-column holds; the *Keep* heading's says what a kept observation is used for,
-when the thresholds set the switch, and what a click on the switch and on the
-pin does. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
+area. The rendered tile is the first column, at the table's left edge, and
+*Keep* follows it; the tile has no heading. The headings are drawn at the
+cells' own body size, in the weak text colour so they still read as headings.
+Each heading has hover text over the width of its column, running to where the
+next heading starts, saying what the column holds; the *Keep* heading's says
+what a kept observation is used for, when the thresholds set the switch, what a
+click on the switch and on the pin does, and what the cell's colour means. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
 whole patch and `mid` over its middle half, what the two apart mean, and how
 the grid beside them is coloured. The *Self-similarity* heading's
 says what the radius is and what its two readings, its colours and its lines
@@ -741,8 +749,8 @@ that is not there prints a bare `-`, with no unit.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
-| Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row | same |
 | Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp; hovering it shows it in context, with the projection |
+| Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
 | Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
@@ -755,7 +763,7 @@ A cell with nothing measured behind it reads `-`, which says the difference
 between a number a round produced and a round that has not been run.
 
 **The ZNCC cell holds two readings of the same samples.** `whole` is the
-whole-patch ZNCC, the number the bars and the painting judge. `mid` is the
+whole-patch ZNCC, the number the *min ZNCC* bar judges. `mid` is the
 middle ZNCC: the same samples, at the same peak and against the same reference,
 correlated over only the centred square half the grid's width (the middle
 `12 x 12` of a `24 x 24` grid). A whole-patch ZNCC can be high because of the
@@ -914,10 +922,37 @@ observation and the photograph, which returns the picture with the box, the
 keypoint and the projection in its own texels, so the tests check the geometry
 rather than the pixels on screen.
 
-**Each row is painted** by what the boxes propose for it: green for
-would-pass, red for would-not, the panel's faint background for a row nothing
-has measured. The *Keep* switch shows the verdict itself, so a pinned row whose
-switch and colour disagree is one the person ruled on against the bars.
+**Each judged reading is coloured by its bar.** Four readings are judged, one
+per bar: the *whole* line of the ZNCC cell by *min ZNCC*, its *mid* line by
+*min middle ZNCC*, the Shift cell by *shift px*, and the *whole* line of the
+Self-similarity cell by *self-sim. px*. A reading that clears its bar is drawn
+green and one that does not red, in a green and a red chosen for each of the
+dark and light visuals so they read as text on the panel's background. Each line
+of a two-line cell takes its own colour, so a whole ZNCC can be green over a red
+middle one. Everything no bar judges keeps the plain text colour: *Proj. err*,
+the self-similarity *mid* line, Status, From, the *mid* ZNCC while its bar is
+off at 0, a reading that is not there (`-`, though it clears its bar), and every
+reading of a row nothing at this stage has measured or whose evaluation was
+refused. A `NaN` reading fails its bar and is red. While an evaluation is on its
+way the colours fade with the numbers, as the grids do, so a stale number does
+not read as judged. The colours follow the boxes live during a drag.
+
+**The *Keep* cell's colour is what the bars say, and the switch is what the
+person decided.** The switch-and-pin cell, the full height of the row, is
+tinted green where the bars propose `in` and red where they propose `out`, and
+left untinted for a row nothing has measured; the rest of the row carries only
+the selection and hover highlights. For an unpinned row the proposal is what
+applying the bars makes it. For a pinned row it is what unpinning it would
+make it: its bars, and whether its image is free -- not already held by a
+pinned `in` sighting of the same image, or by an unpinned one the painting
+takes because it scores better. A switch that is on in a red cell, or off in a
+green one, is a hand ruling against the bars. The switch's hover text says what
+the switch and the pin say, then why the bars propose what they do: that the
+row clears every bar, or which bars it fails, named as the headings name the
+readings (`ZNCC whole is under the bar`, `ZNCC mid is under the bar`, `Shift is
+over the bar`, `Self-similarity whole is over the bar`), or, for a row that
+clears every bar and is still proposed `out`, that another sighting in the same
+image is kept, naming the image.
 
 **The Keep switch is the verdict.** On is `in`: the evaluation and a fit read
 the track by the observation, and a commit writes it. Off is `out`. The
@@ -1125,8 +1160,18 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   and the row's, a second unpin being no effect; the header printing the point's
   ID once, beside a renamed label, and the old index for a point that is gone,
   and a track from a point resolving the ID its copy button copies; a hover on
-  an elided name showing it whole, with the row still hovered; the painting
-  matching what applying the bars produces and leaving a pinned verdict; the
+  an elided name showing it whole, with the row still hovered; the *Keep*
+  cells' proposals matching what applying the bars produces on unpinned rows and
+  a drag leaving a pinned verdict; each line of the ZNCC cell judged by its own
+  bar, whole passing while mid fails and the reverse; the projection error, the
+  self-similarity middle, the status, the middle ZNCC with its bar off, a
+  missing reading, an unmeasured row and a refused evaluation drawn plain; a
+  drag of the boxes changing the judgement without stepping the track; a pinned
+  `in` row ruled against the bars proposed `out` with the failing bar in its
+  hover text, and unpinning it turning it `out`; of two sightings in one image
+  that clear every bar, the one that loses the image proposed `out` with the
+  image named in its hover text; the tile column left of *Keep* with no heading
+  over it; the headings as tall as the cells; the
   cells following the stage; every row's tile at both stages,
   and a fresh row's cut around its seed; a tile's hover view at both stages
   holding the tile texel for texel in its middle third with the keypoint at the

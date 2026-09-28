@@ -19,9 +19,9 @@
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
 //! the panel owns is the threshold boxes' values during a drag, the *Lock* box Image Detail reads a
 //! dot drag by, the tiles it has rendered and their hover views, and the
-//! painting the boxes produce. The last two are cached against the
-//! track's own `Arc` rather than recomputed per frame, because the painting is
-//! `apply_thresholds` run over a copy (and a copy of a track carries its
+//! judgement the boxes produce. The last two are cached against the
+//! track's own `Arc` rather than recomputed per frame, because the judgement is
+//! `verdicts_if_unpinned` run over a copy (and a copy of a track carries its
 //! consensus bitmap) and a tile is a warp of a full-resolution photograph.
 //! The row selection is not the panel's: it is the bench's, in
 //! `AppState::bench_rows`, and a row click reports through
@@ -30,7 +30,8 @@
 use std::collections::HashMap;
 
 use sfmtool_core::bench::{
-    apply_thresholds, EditableTrack, Observation, Provenance, StageKind, Thresholds, Verdict,
+    bar_checks, verdicts_if_unpinned, BarChecks, EditableTrack, Observation, Provenance, StageKind,
+    Thresholds, Verdict,
 };
 use sfmtool_core::SfmrReconstruction;
 
@@ -126,15 +127,16 @@ pub struct TrackEdit {
     /// what keeps [`TrackEdit::thresholds`] from being reset to the track's bars
     /// in the middle of the drag.
     sliding: bool,
-    /// The verdicts the boxes propose for the active track, one per
-    /// observation, which is what the rows are painted by: `None` for an
-    /// observation nothing at the track's stage has measured, which has no
-    /// proposal.
-    painted: Vec<Option<Verdict>>,
-    /// The item and the exact track value [`TrackEdit::painted`] was computed
-    /// from: the label, and the address of the track's `Arc`. A step on the
-    /// track gives it a new `Arc`, which is what says the painting is stale.
-    painted_for: Option<(String, usize, Thresholds)>,
+    /// What the boxes say about each observation of the active track, which
+    /// is what its readings and its *Keep* cell are coloured by: `None` for an
+    /// observation nothing at the track's stage has measured, which the bars
+    /// do not judge.
+    judged: Vec<Option<Judgement>>,
+    /// The item, the exact track value and the bars [`TrackEdit::judged`] was
+    /// computed from: the label, the address of the track's `Arc`, and the
+    /// boxes. A step on the track gives it a new `Arc`, which is what says the
+    /// judgement is stale.
+    judged_for: Option<(String, usize, Thresholds)>,
     /// Why the active track cannot be committed, or `None` when it can, as of
     /// the value and the track [`TrackEdit::commit_refusal_for`] last asked.
     ///
@@ -219,8 +221,8 @@ impl TrackEdit {
         Self {
             thresholds: Thresholds::default(),
             sliding: false,
-            painted: Vec::new(),
-            painted_for: None,
+            judged: Vec::new(),
+            judged_for: None,
             commit_refusal: None,
             commit_refusal_for: None,
             showing: None,
@@ -274,11 +276,11 @@ impl TrackEdit {
         if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
             self.showing = None;
         }
-        self.painted_for = None;
+        self.judged_for = None;
         self.commit_refusal_for = None;
         self.build_refusal = None;
         self.sliding = false;
-        self.painted.clear();
+        self.judged.clear();
         self.rows.clear();
     }
 
@@ -313,7 +315,7 @@ impl TrackEdit {
         self.evaluation = state
             .bench_evaluation(id, &label)
             .unwrap_or(Evaluation::Evaluating);
-        self.repaint_if_stale(&label, track);
+        self.rejudge_if_stale(&label, track);
         self.recheck_commit_if_stale(&label, track, node);
         self.retile_if_stale(&label, track);
 
@@ -572,31 +574,37 @@ impl TrackEdit {
         }
     }
 
-    /// Recompute the painting when the track or the bars have moved.
+    /// Recompute the judgement when the track or the bars have moved.
     ///
-    /// The painting **is** what applying the thresholds would do, computed by
-    /// the same core function a box's release applies, so a row can never be
-    /// painted one way and turned another when the box is let go. A pinned verdict
-    /// comes back unchanged from that call, which is what leaves it alone.
-    fn repaint_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
+    /// Both halves are the core's own: the readings are judged by
+    /// `bar_checks`, and the proposal is `verdicts_if_unpinned`, which gives an
+    /// unpinned row what applying the bars would do -- the same core step a
+    /// box's release applies, so a row can never be shown one way and turned
+    /// another when the box is let go -- and a pinned row what unpinning it
+    /// would. Both run with the boxes' bars, so they follow a drag live.
+    fn rejudge_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
         let key = (
             label.to_string(),
             std::sync::Arc::as_ptr(track) as usize,
             self.thresholds.clone(),
         );
-        if self.painted_for.as_ref() == Some(&key) {
+        if self.judged_for.as_ref() == Some(&key) {
             return;
         }
         let mut with_bars = (**track).clone();
         with_bars.thresholds = self.thresholds.clone();
-        let (painted, _) = apply_thresholds(&with_bars);
         let stage = track.stage_kind();
-        self.painted = painted
-            .observations
-            .iter()
-            .map(|o| is_measured(o, stage).then_some(o.verdict))
+        self.judged = verdicts_if_unpinned(&with_bars)
+            .into_iter()
+            .zip(&with_bars.observations)
+            .map(|(proposal, observation)| {
+                Some(Judgement {
+                    checks: bar_checks(observation, stage, &self.thresholds)?,
+                    proposal: proposal?,
+                })
+            })
             .collect();
-        self.painted_for = Some(key);
+        self.judged_for = Some(key);
     }
 
     /// Ask again why the active track cannot be committed, when the track or the
@@ -814,15 +822,6 @@ fn finite_or_nan(value: f64, number: impl Fn(f64) -> String) -> String {
     }
 }
 
-/// Whether anything at `stage` has measured `observation`: whether it carries
-/// the ZNCC the thresholds judge first, without which they propose nothing.
-fn is_measured(observation: &Observation, stage: StageKind) -> bool {
-    match stage {
-        StageKind::Cluster => observation.cluster.as_ref().and_then(|m| m.zncc).is_some(),
-        StageKind::Track => observation.track.as_ref().and_then(|m| m.zncc).is_some(),
-    }
-}
-
 /// The largest radius the self-similarity reading searches, in grid px: the
 /// value that reads "this far or further".
 fn max_self_similarity_radius() -> f64 {
@@ -841,6 +840,16 @@ fn radius_number(value: f64) -> String {
         return format!("{max:.0}+");
     }
     format!("{value:.1}")
+}
+
+/// What the bars say about one measured observation: each reading's check,
+/// and the verdict the bars propose for it were its verdict unpinned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Judgement {
+    /// What each bar says about the reading it judges.
+    pub checks: BarChecks,
+    /// The verdict the bars propose, with one `in` per image kept.
+    pub proposal: Verdict,
 }
 
 /// The two three-by-three grids a row draws: the ZNCC grid and the

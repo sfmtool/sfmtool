@@ -4,11 +4,10 @@
 //! The observation table: the columns, one row per observation, and the
 //! *Keep* switch each row carries.
 //!
-//! The columns Track View has come first -- the rendered
-//! patch tile, the image and its name, the reprojection error and the ray angle
-//! -- and what the bench adds follows them: the *Keep* switch, the stage's own
-//! photometric numbers, the kernel's status and where the observation came
-//! from. A reader who knows the view-only panel reads this one.
+//! The rendered patch tile comes first, at the table's left edge, then the
+//! *Keep* switch, then the image and its name, the stage's own photometric
+//! numbers and the reprojection error, the kernel's status and where the
+//! observation came from.
 //!
 //! Rows are painted at fixed x-offsets rather than laid out by egui, as the
 //! view-only panel's are, so the header and every row stay aligned whatever a
@@ -21,13 +20,19 @@
 //! A cell with two readings, the whole patch's and its middle's, prints them
 //! on two lines, each with its unit and its name (`93% whole` over `89% mid`),
 //! so the headings carry names alone.
+//!
+//! Each reading a bar judges is drawn green when it clears the bar and red when
+//! it does not, and the *Keep* cell is tinted by what the bars propose for the
+//! row. Both come from the core's own judgement (`bar_checks` and
+//! `verdicts_if_unpinned`), so the colours and the verdicts a release applies
+//! cannot disagree.
 
-use sfmtool_core::bench::{EditableTrack, StageKind, Verdict};
+use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Verdict};
 use sfmtool_core::SfmrReconstruction;
 
 use super::{
     measurements, provenance_text, radius_number, row_grids, row_radius, row_surface,
-    self_similarity_cell_color, zncc_cell_color, RowGrids, TrackEdit, TrackEditResponse,
+    self_similarity_cell_color, zncc_cell_color, Judgement, RowGrids, TrackEdit, TrackEditResponse,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -68,12 +73,21 @@ pub(crate) struct RowSummary {
     pub verdict: Verdict,
     /// Whether that verdict was set by hand.
     pub pinned: bool,
-    /// What the thresholds propose for it, which is what the row is painted
-    /// by, or `None` for a row nothing at this stage has measured.
-    pub painted: Option<Verdict>,
+    /// What the thresholds propose for it were its verdict unpinned, which is
+    /// what its *Keep* cell is tinted by, or `None` for a row nothing at this
+    /// stage has measured, whose cell is not tinted.
+    pub proposal: Option<Verdict>,
+    /// The *Keep* cell's hover text: what the switch and the pin say, and why
+    /// the bars propose what they do.
+    pub keep_hover: String,
     /// The five measurement cells, as printed, a cell with two readings
     /// holding them on two lines.
     pub cells: [String; 5],
+    /// What each line of each cell was coloured by, indexed as
+    /// [`RowSummary::cells`] and then by line: a pass is drawn green, a fail
+    /// red, and a reading no bar judged in the plain text colour. A cell's
+    /// second entry is [`BarCheck::NotJudged`] where it has one line.
+    pub checks: [[BarCheck; 2]; 5],
     /// The two grids drawn beside the ZNCC and the self-similarity cells.
     pub grids: RowGrids,
     /// Whether the row drew a rendered tile, rather than the empty frame that
@@ -102,9 +116,9 @@ pub(super) struct ColumnLayout {
 
 impl ColumnLayout {
     pub(super) fn new() -> Self {
-        let keep = 0.0;
-        let tile = keep + KEEP_WIDTH + 6.0;
-        let image = tile + TILE_SIZE + 8.0;
+        let tile = 0.0;
+        let keep = tile + TILE_SIZE + 8.0;
+        let image = keep + KEEP_WIDTH + 6.0;
         let name = image + 34.0;
         let zncc = name + 130.0;
         // Room for `100% whole`, then the ZNCC grid.
@@ -148,8 +162,15 @@ impl ColumnLayout {
         self.tile
     }
 
+    /// The *Keep* column's offset from the table's left edge.
+    #[cfg(test)]
+    pub(super) fn keep_x(&self) -> f32 {
+        self.keep
+    }
+
     /// The header's cells, each at the offset its column is drawn at, with the
-    /// hover text that says what the column holds.
+    /// hover text that says what the column holds. The tile column, left of
+    /// *Keep*, has no heading.
     pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 9] {
         [
             (self.keep, "Keep", KEEP_TIP),
@@ -177,7 +198,10 @@ pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A ke
     solid on a pinned verdict, which the thresholds leave alone, and a faint outline on one \
     they set. Click the pin to unpin a verdict and let the thresholds decide again, or to pin \
     one as it stands.\n\n\
-    The tile beside it is the patch as this photograph sees it.";
+    The cell is green when the bars propose keeping the observation and red when they \
+    propose turning it out, as they would were its verdict unpinned, so a switch that is on \
+    in a red cell is a hand ruling against the bars. Hover a switch for the reason.\n\n\
+    The tile left of it is the patch as this photograph sees it.";
 
 /// The ZNCC heading's hover text, in one constant so the tests aim at the text
 /// shown.
@@ -330,8 +354,9 @@ fn paint_pushpin(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32, s
     );
 }
 
-/// The switch's hover text: what the switch says now, and how to change it.
-fn keep_hover(kept: bool, pinned: bool) -> String {
+/// The switch's hover text: what the switch says now, how to change it, and
+/// why the bars propose what they do for the row.
+fn keep_hover(kept: bool, pinned: bool, judged: Option<&Judgement>, image: u32) -> String {
     let state = match (kept, pinned) {
         (true, true) => "Kept, set by hand.",
         (true, false) => "Kept, as the thresholds propose.",
@@ -340,7 +365,95 @@ fn keep_hover(kept: bool, pinned: bool) -> String {
             "Not kept: the thresholds did not take it, or nothing has measured it yet."
         }
     };
-    format!("{state} Click to switch it, which pins it.")
+    format!(
+        "{state} Click to switch it, which pins it.\n\n{}",
+        proposal_reason(judged, image)
+    )
+}
+
+/// Why the bars propose what they do for a row in `image`: which bars it
+/// fails, named as the column headings name the readings, or, for a row that
+/// clears every bar and is still proposed `out`, that another sighting of its
+/// image keeps the image's one `in`.
+fn proposal_reason(judged: Option<&Judgement>, image: u32) -> String {
+    let Some(judged) = judged else {
+        return "Nothing at this stage has measured it, so the bars propose nothing.".to_string();
+    };
+    if judged.proposal == Verdict::In {
+        return "The bars propose keeping it: it clears every bar.".to_string();
+    }
+    let checks = &judged.checks;
+    let failed: Vec<&str> = [
+        (checks.min_zncc, "ZNCC whole is under the bar"),
+        (checks.min_zncc_middle, "ZNCC mid is under the bar"),
+        (checks.max_shift_px, "Shift is over the bar"),
+        (
+            checks.max_zncc_self_similarity_radius,
+            "Self-similarity whole is over the bar",
+        ),
+    ]
+    .into_iter()
+    .filter(|&(check, _)| check == BarCheck::Fail)
+    .map(|(_, why)| why)
+    .collect();
+    if failed.is_empty() {
+        format!(
+            "The bars propose turning it out: it clears every bar, but another sighting in \
+             image {image} is kept, and a track keeps one sighting per image."
+        )
+    } else {
+        format!("The bars propose turning it out: {}.", failed.join("; "))
+    }
+}
+
+/// The text colour a reading is drawn in by what its bar says of it: a green
+/// and a red chosen to read as text on the panel's background in the dark and
+/// the light visuals, and `plain` for a reading no bar judged.
+fn check_color(visuals: &egui::Visuals, check: BarCheck, plain: egui::Color32) -> egui::Color32 {
+    match (check, visuals.dark_mode) {
+        (BarCheck::NotJudged, _) => plain,
+        (BarCheck::Pass, true) => egui::Color32::from_rgb(110, 205, 125),
+        (BarCheck::Fail, true) => egui::Color32::from_rgb(240, 115, 105),
+        (BarCheck::Pass, false) => egui::Color32::from_rgb(25, 125, 50),
+        (BarCheck::Fail, false) => egui::Color32::from_rgb(195, 40, 35),
+    }
+}
+
+/// The tint of a row's *Keep* cell by what the bars propose for the row, or
+/// `None` for a row they propose nothing for.
+fn proposal_tint(visuals: &egui::Visuals, proposal: Option<Verdict>) -> Option<egui::Color32> {
+    Some(match (proposal?, visuals.dark_mode) {
+        (Verdict::In, true) => egui::Color32::from_rgb(34, 78, 44),
+        (Verdict::Out, true) => egui::Color32::from_rgb(88, 40, 40),
+        (Verdict::In, false) => egui::Color32::from_rgb(196, 232, 200),
+        (Verdict::Out, false) => egui::Color32::from_rgb(244, 200, 196),
+    })
+}
+
+/// What each line of a row's five cells is coloured by: the bar that judges
+/// it, from `judged`, where the cell prints the reading that bar judged. No
+/// line is judged on a row the bars do not judge or whose cells print no
+/// numbers.
+pub(super) fn cell_checks(
+    judged: Option<&Judgement>,
+    evaluation: &crate::bench::live::Evaluation,
+) -> [[BarCheck; 2]; 5] {
+    use crate::bench::live::Evaluation;
+    let none = [BarCheck::NotJudged; 2];
+    let Some(judged) = judged else {
+        return [none; 5];
+    };
+    if matches!(evaluation, Evaluation::Refused(_) | Evaluation::Failed(_)) {
+        return [none; 5];
+    }
+    let checks = &judged.checks;
+    [
+        [checks.min_zncc, checks.min_zncc_middle],
+        [checks.max_shift_px, BarCheck::NotJudged],
+        none,
+        [checks.max_zncc_self_similarity_radius, BarCheck::NotJudged],
+        none,
+    ]
 }
 
 /// The pin's hover text: what it says now, and what a click does.
@@ -448,8 +561,10 @@ impl TrackEdit {
     ) {
         let row = &track.observations[observation];
         let image = ImageRef::new(id, row.image as usize);
-        let painted = self.painted.get(observation).copied().flatten();
+        let judged = self.judged.get(observation).copied().flatten();
+        let proposal = judged.map(|j| j.proposal);
         let cells = measurements(row, stage, &self.evaluation);
+        let checks = cell_checks(judged.as_ref(), &self.evaluation);
         let grids = row_grids(row, stage, &self.evaluation);
         let name = recon
             .image_table
@@ -463,17 +578,19 @@ impl TrackEdit {
             egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
         let row_response = ui.allocate_rect(rect, egui::Sense::click());
 
-        // The painting first, then the selection and the hover over it: what a
-        // row would become is a property of the numbers, and which row the
-        // pointer or the split is on is a property of this frame.
+        // The *Keep* cell's tint first, then the selection and the hover over
+        // the whole row: what the bars propose is a property of the numbers,
+        // and which row the pointer or the split is on is a property of this
+        // frame. Only the *Keep* cell is tinted, so the switch in it reads as
+        // the person's decision set against the bars' proposal.
         let visuals = ui.visuals();
-        let paint = match painted {
-            Some(Verdict::In) => egui::Color32::from_rgb(40, 90, 50),
-            Some(Verdict::Out) => egui::Color32::from_rgb(96, 44, 44),
-            None => visuals.faint_bg_color,
-        };
-        ui.painter()
-            .rect_filled(rect, 0.0, paint.gamma_multiply(0.7));
+        let keep_cell = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + cols.keep, rect.min.y),
+            egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
+        );
+        if let Some(tint) = proposal_tint(visuals, proposal) {
+            ui.painter().rect_filled(keep_cell, 0.0, tint);
+        }
         if selected.contains(&observation) {
             ui.painter()
                 .rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.45));
@@ -673,7 +790,8 @@ impl TrackEdit {
                 ui.close();
             }
         });
-        keep.on_hover_text(keep_hover(kept, row.pinned));
+        let keep_hover = keep_hover(kept, row.pinned, judged.as_ref(), row.image);
+        keep.on_hover_text(&keep_hover);
 
         // The tile: rendered once per observation and kept until the track or
         // the item moves, because a warp per row per frame is a warp per row
@@ -760,11 +878,41 @@ impl TrackEdit {
             crate::bench::live::Evaluation::Evaluating => weak,
             _ => text_color,
         };
-        for (x, cell) in [cols.zncc, cols.shift, cols.offset, cols.self_similarity]
+        // The colours fade with the numbers, as the grids do, so a stale
+        // number does not read as judged.
+        let fade = if number_color == weak { 0.45 } else { 1.0 };
+        // Each line of a cell in the colour its own bar gives it, laid out as
+        // one galley so the two lines stack exactly as one string would.
+        let lines = |x: f32, value: &str, colors: [egui::Color32; 2]| {
+            let mut job = egui::text::LayoutJob::default();
+            for (k, line) in value.split('\n').enumerate() {
+                let line = if k == 0 {
+                    line.to_string()
+                } else {
+                    format!("\n{line}")
+                };
+                job.append(
+                    &line,
+                    0.0,
+                    egui::TextFormat::simple(font.clone(), colors[k.min(1)]),
+                );
+            }
+            let galley = painter.layout_job(job);
+            let at = egui::Align2::LEFT_CENTER
+                .anchor_size(egui::pos2(x0 + x, cy), galley.size())
+                .min;
+            painter.galley(at, galley, colors[0]);
+        };
+        for ((x, cell), check) in [cols.zncc, cols.shift, cols.offset, cols.self_similarity]
             .into_iter()
             .zip(cells.iter())
+            .zip(checks.iter())
         {
-            text(x, cell, number_color);
+            let colors = check.map(|check| match check {
+                BarCheck::NotJudged => number_color,
+                judged => check_color(ui.visuals(), judged, number_color).gamma_multiply(fade),
+            });
+            lines(x, cell, colors);
         }
         // The status cell is a sentence rather than a number at the track
         // stage, so it is elided to its column the way the image name is.
@@ -782,7 +930,6 @@ impl TrackEdit {
         // The two grids, faded with the numbers while an evaluation is on its
         // way. Each is laid out as the tile is, so a cell sits over the part
         // of the tile it read.
-        let fade = if number_color == weak { 0.45 } else { 1.0 };
         let drawn = [
             (
                 cols.zncc_grid,
@@ -853,8 +1000,10 @@ impl TrackEdit {
             image: row.image,
             verdict: row.verdict,
             pinned: row.pinned,
-            painted,
+            proposal,
+            keep_hover,
             cells,
+            checks,
             grids,
             tile: tile.is_some(),
             self_similarity_plot: plotted,
@@ -998,9 +1147,12 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
 /// scroll area so it stays put while the rows move under it.
 fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
     let available = ui.available_rect_before_wrap();
-    let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), 20.0));
+    // Body-sized, as the cells under them are, and in the weak colour, so
+    // they still read as headings.
+    let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+    let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), height));
     ui.allocate_rect(rect, egui::Sense::hover());
-    let font = egui::TextStyle::Small.resolve(ui.style());
+    let font = egui::TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().weak_text_color();
     let headers = cols.headers();
     for (k, &(x, label, tip)) in headers.iter().enumerate() {

@@ -183,6 +183,23 @@ pub fn unpin_verdict(
 
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
 
+pub fn verdicts_if_unpinned(track: &EditableTrack) -> Vec<Option<Verdict>>;
+
+pub fn bar_checks(
+    observation: &Observation,
+    stage: StageKind,
+    thresholds: &Thresholds,
+) -> Option<BarChecks>;               // None: nothing at this stage measured it
+
+pub enum BarCheck { Pass, Fail, NotJudged }
+
+pub struct BarChecks {                // one per bar, named after it
+    pub min_zncc: BarCheck,
+    pub min_zncc_middle: BarCheck,
+    pub max_shift_px: BarCheck,
+    pub max_zncc_self_similarity_radius: BarCheck,
+}
+
 pub fn duplicate(
     bench: &Bench,
     label: &str,
@@ -1256,6 +1273,40 @@ The painting cannot produce a track that observes an image twice. It walks the
 observations best score first, and where several unpinned sightings of one image
 would pass, the best takes the `in` and the rest are turned `out`.
 
+**One function judges every bar.** `bar_checks` says, per bar of the
+thresholds, whether one observation's reading passes it, fails it, or was not
+judged, and returns `None` for an observation with no whole-patch ZNCC, which
+nothing at the stage has measured. A bar does not judge a reading that is not
+there, and the middle bar at `0` judges nothing; a reading nobody judged clears
+its bar. A `NaN` reading fails. The thresholds propose `in` for an observation
+exactly when no bar fails it (`BarChecks::clears_every_bar`) and its image is
+free, so the painting, `unpin_verdict`, the first reading's turn `in`, and a
+viewer that colours each reading by its bar all read the same judgement, and a
+reading shown as passing cannot sit on a row the painting turns out for that
+reading.
+
+`verdicts_if_unpinned` is what the thresholds propose for every observation
+whatever the person decided: for an unpinned one the verdict `apply_thresholds`
+gives it, and for a pinned one the verdict `unpin_verdict` followed by
+`apply_thresholds` would give it. That second case judges the one row as
+though it were unpinned while every other pin stands, so the row takes its
+image's `in` only when no pinned `in` sighting of that image holds it and no
+unpinned sighting of that image that the painting takes scores better. A
+viewer sets it beside the verdict to show where a hand has ruled against the
+bars. It runs the painting once per pinned observation over the same track
+rather than over a copy, which costs a sort per pin and no clone of the
+consensus bitmap.
+
+```rust
+use sfmtool_core::bench::{bar_checks, verdicts_if_unpinned, BarCheck};
+
+let proposals = verdicts_if_unpinned(&track);
+let checks = bar_checks(&track.observations[0], track.stage_kind(), &track.thresholds);
+if let Some(checks) = checks {
+    let red = checks.min_zncc == BarCheck::Fail;
+}
+```
+
 ### Splitting
 
 `split` moves the named observations off one track into a second track beside it
@@ -2260,7 +2311,11 @@ covers: a point put on the bench being at the track stage with every observation
 carrying its pixel as its keypoint and committing without a fit, and one added at
 the cluster stage carrying a seed alone; two observations in one image not both
 being `in`; the painting proposing from the measurements, leaving a pinned
-verdict alone and giving one image one `in`; a split taking exactly the named
+verdict alone and giving one image one `in`; `bar_checks` passing and failing
+each bar, failing a `NaN`, and judging neither a missing reading nor the middle
+bar at `0`; `verdicts_if_unpinned` giving an unpinned row the painting's verdict
+and a pinned one, `in` or `out`, with and without a competing sighting in its
+image, exactly what unpinning it and applying the thresholds makes it; a split taking exactly the named
 observations, handing the half it takes off back as a cluster, and refusing an
 empty list or all of them; a duplicate carrying every observation and all of the
 stage's data, dropping the origin so its commit creates a point rather than
