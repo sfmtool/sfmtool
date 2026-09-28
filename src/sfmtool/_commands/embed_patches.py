@@ -43,18 +43,18 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
-    "--max-member-keypoint-uncertainty",
+    "--max-member-zncc-self-similarity-radius",
     type=float,
-    default=0.35,
+    default=0.0,
     show_default=True,
     help=(
-        "Refuse an observation whose OWN patch tile pins no 2D position: "
-        "structure-tensor weak-axis uncertainty sigma_pos above this, in "
-        "patch-grid pixels. The per-observation counterpart of "
-        "--max-keypoint-uncertainty's per-point cull, same scorer and units — it "
-        "throws out the flat sky or water crop whose correlation to anything is "
-        "noise, before it is scored. 0 disables it. See "
-        "specs/core/patch/patch-localizability.md."
+        "Refuse an observation whose OWN patch tile pins no 2D position: its "
+        "ZNCC self-similarity radius, how far the tile can slide over itself "
+        "and still match itself, is above this, in patch-grid pixels. It "
+        "throws out a flat sky or water crop, or a lone straight edge, before "
+        "it is scored. The radius reads at most 3, so 3 or more turns nothing "
+        "out; 0 (the default) disables it. See "
+        "specs/core/patch/zncc-self-similarity-radius.md."
     ),
 )
 @click.option(
@@ -267,7 +267,7 @@ def embed_patches_command(
     output_path,
     min_relative_zncc,
     min_absolute_zncc,
-    max_member_keypoint_uncertainty,
+    max_member_zncc_self_similarity_radius,
     max_iters,
     search,
     max_shift_px,
@@ -379,7 +379,7 @@ def embed_patches_command(
             images,
             min_relative_zncc=min_relative_zncc,
             min_absolute_zncc=min_absolute_zncc,
-            max_member_keypoint_uncertainty=max_member_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             patch_size=patch_size,
             max_shift_px=max_shift_px,
             min_views=min_views,
@@ -420,7 +420,7 @@ def embed_patches_command(
                 "max_shift_px": max_shift_px,
                 "min_relative_zncc": min_relative_zncc,
                 "min_absolute_zncc": min_absolute_zncc,
-                "max_member_keypoint_uncertainty": max_member_keypoint_uncertainty,
+                "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
                 "max_keypoint_uncertainty": max_keypoint_uncertainty,
                 "max_obliquity_deg": max_obliquity_deg,
                 "obliquity_weight_power": obliquity_weight_power,

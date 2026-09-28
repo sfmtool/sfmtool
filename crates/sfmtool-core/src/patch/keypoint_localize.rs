@@ -47,11 +47,11 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilin
 use crate::camera::WarpMap;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::localizability::{patch_localizability_deprecated, SIGMA_NOISE};
 use crate::patch::normal_refine::{
     build_support, znormalize_into_kept, PartZncc, Parts, ProjectedImage, Sampler, Support,
     FLAT_NORM_SQ_EPS,
 };
+use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper;
 // the reference LOO-template test also needs the window enum.
@@ -65,7 +65,10 @@ use nalgebra::Point3;
 use rayon::prelude::*;
 
 // Public API, re-exported at the historical `keypoint_localize::` paths.
-pub use params::{BasisPick, KeypointLocalization, KeypointLocalizeParams, SearchStrategy};
+pub use params::{
+    BasisPick, KeypointLocalization, KeypointLocalizeParams, SearchStrategy,
+    DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
+};
 pub use reference::{ReferenceConsensus, ViewScore, ViewSearch};
 pub use tail::keypoint_grid_offset;
 
@@ -512,32 +515,6 @@ fn extract_core(
     true
 }
 
-/// Extract the **full** `R×R` core grid of `tile` at window offset `(oy, ox)` into
-/// `out` as an *interleaved* `[pixel · channels + channel]` patch — the layout
-/// [`patch_localizability_deprecated`] scores.
-///
-/// Unlike [`extract_core`] this reads every grid pixel, not just the windowed
-/// support (the structure tensor's central differences reach one pixel outside
-/// the support disk), and it never refuses: a pixel out of frame was rendered
-/// black and reads back as that black, exactly what a re-render at this offset
-/// would hand the scorer. A core entirely out of frame is therefore all-zero,
-/// which the scorer reports as the unscorable `NaN`.
-fn extract_core_grid(tile: &ContextTile, resolution: usize, oy: usize, ox: usize, out: &mut [f32]) {
-    let ch = tile.channels;
-    let istride = tile.istride;
-    for row in 0..resolution {
-        let src = (oy + row) * istride + ox;
-        let dst = row * resolution * ch;
-        for col in 0..resolution {
-            for (c, plane) in tile.planes.iter().enumerate() {
-                // The planes are centered; add the channel mean back to recover
-                // the source value the scorer's gradients are defined on.
-                out[dst + col * ch + c] = plane[src + col] + tile.means[c];
-            }
-        }
-    }
-}
-
 /// Whether a leave-one-out ZNCC fails the **absolute** floor: finite and below
 /// `floor`. A `NaN` (no round scored this view) has no verdict to fail, and a
 /// `floor` of `0.0` or below disables the gate exactly — a negative correlation
@@ -547,41 +524,107 @@ fn below_absolute_floor(loo: f64, floor: f64) -> bool {
     floor > 0.0 && loo.is_finite() && loo < floor
 }
 
-/// Whether one view's **own** core tile pins a 2D position well enough to take
-/// part: the weak-axis positional uncertainty `σ_pos` (patch-grid px) of its
-/// structure tensor, at or below `tau`. This is the member-level counterpart of
-/// the per-point consensus localizability cull — the same scorer, the same
-/// `σ_noise` scale, the same `τ` units — applied to a single view's appearance
-/// rather than to the cross-view consensus, so a flat sky tile or a lone straight
-/// edge is refused before its ZNCC (pure noise) can vote.
+/// The ZNCC self-similarity radius of the `R×R` core sitting at window offset
+/// `(oy, ox)` of `tile`, in the tile's grid px, read with the default
+/// [`SelfSimilarityParams`]; `None` when the tile has fewer than
+/// `max_radius` px of ring around the core on some side, which the shifted
+/// windows need.
 ///
-/// `tau <= 0`, or a non-finite `tau`, disables the gate exactly. An unscorable
-/// tile (all-black: fully out of frame) scores `NaN`, which compares false and is
-/// kept — the same benefit of the doubt the consensus cull gives an empty
-/// consensus. `scratch` is the caller's reusable interleaved-grid buffer.
-fn member_is_localizable(
+/// The ring is read from the tile as rendered: a pixel out of frame reads back
+/// as the black it was rendered, as it does for every other read of the tile.
+/// Only the leading three channels are read, as a patch tile's colour.
+fn core_self_similarity_radius(
     tile: &ContextTile,
-    support: &Support,
     resolution: usize,
     oy: usize,
     ox: usize,
-    tau: f64,
     scratch: &mut Vec<f32>,
-) -> bool {
-    if !tau.is_finite() || tau <= 0.0 {
-        return true;
+) -> Option<f64> {
+    let params = SelfSimilarityParams::default();
+    let ring = params.max_radius as usize;
+    if oy < ring
+        || ox < ring
+        || oy + resolution + ring > tile.res
+        || ox + resolution + ring > tile.res
+    {
+        return None;
+    }
+    let side = resolution + 2 * ring;
+    let colour = tile.channels.min(3);
+    if colour == 0 {
+        return Some(f64::NAN);
     }
     scratch.clear();
-    scratch.resize(resolution * resolution * tile.channels, 0.0);
-    extract_core_grid(tile, resolution, oy, ox, scratch);
-    let loc =
-        patch_localizability_deprecated(scratch, resolution, tile.channels, support, SIGMA_NOISE);
-    // An unscorable tile scores `NaN`, which is incomparable rather than
-    // `Greater`, so it is kept.
-    !matches!(
-        loc.sigma_pos_grid.partial_cmp(&tau),
-        Some(std::cmp::Ordering::Greater)
+    scratch.resize(colour * side * side, 0.0);
+    for (c, plane) in tile.planes.iter().take(colour).enumerate() {
+        for row in 0..side {
+            let src = (oy - ring + row) * tile.istride + (ox - ring);
+            let dst = c * side * side + row * side;
+            for col in 0..side {
+                // The planes are centred; add the channel mean back so the
+                // reading sees the source values (its flat test is on spread,
+                // so this only keeps the numbers recognisable).
+                scratch[dst + col] = plane[src + col] + tile.means[c];
+            }
+        }
+    }
+    let patch_tile = PatchTile {
+        values: scratch,
+        channels: colour,
+        width: side,
+        height: side,
+    };
+    Some(
+        zncc_self_similarity_radius(&patch_tile, [ring, ring, resolution, resolution], &params)
+            .radius,
     )
+}
+
+/// One view's **own** core's ZNCC self-similarity radius, the number the
+/// member gate ([`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`])
+/// judges: the core at window offset `(oy, ox)` of `tile`, which sits at in-plane
+/// offset `offset` (grid px, the `R`-grid of `resolution`) from the patch
+/// centre.
+///
+/// The tile a caller already rendered is read wherever it has the
+/// `max_radius` px of ring the reading needs, which the localizer's own tiles
+/// have at every search radius of 3 grid px or more (a cache is `R + 4·margin`
+/// with the core within `margin` of its centre, a search tile `R + 2·margin`
+/// with the core at its centre). Under that, a tile of `R + 2·max_radius` px is
+/// rendered centred on the same core, so the reading does not depend on the
+/// search radius.
+#[allow(clippy::too_many_arguments)]
+fn member_self_similarity_radius(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    tile: &ContextTile,
+    oy: usize,
+    ox: usize,
+    offset: [f64; 2],
+    wpp: [f64; 2],
+    resolution: u32,
+    sampler: Sampler,
+    scratch: &mut Vec<f32>,
+) -> Result<f64, LocalizeError> {
+    let r = resolution as usize;
+    if let Some(radius) = core_self_similarity_radius(tile, r, oy, ox, scratch) {
+        return Ok(radius);
+    }
+    let ring = SelfSimilarityParams::default().max_radius;
+    let own = render_context(
+        patch,
+        view,
+        offset[0],
+        offset[1],
+        wpp[0],
+        wpp[1],
+        resolution,
+        resolution + 2 * ring,
+        sampler,
+    )?;
+    let ring = ring as usize;
+    Ok(core_self_similarity_radius(&own, r, ring, ring, scratch)
+        .expect("a tile rendered with the ring around its core has it"))
 }
 
 /// z-normalize a raw core (`raw[channel * n + k]`) over the kept original
@@ -1206,30 +1249,33 @@ pub fn try_localize_patch_keypoints_with_basis(
         Ok(())
     })?;
 
-    // Member localizability gate. A view whose own tile pins no 2D position — a
-    // flat sky/water crop, a lone straight edge — correlates to noise against
-    // anything, so it is refused *before* it can join a consensus or be scored
-    // against one. Scored once, on the tile at the view's seed offset: the
-    // property is the member's appearance, not the round's, and dropping it up
-    // front keeps it out of every round's template. Nothing below restores it —
-    // the two-view floor is a consensus remedy and this is not a consensus
-    // question.
-    {
-        let tau = params.max_member_keypoint_uncertainty;
+    // Member self-similarity gate. A view whose own tile pins no 2D position — a
+    // flat sky/water crop, a lone straight edge — matches itself a few pixels
+    // away and correlates to noise against anything, so it is refused *before*
+    // it can join a consensus or be scored against one. Read once, on the tile
+    // at the view's seed offset: the property is the member's appearance, not
+    // the round's, and dropping it up front keeps it out of every round's
+    // template. Nothing below restores it — the two-view floor is a consensus
+    // remedy and this is not a consensus question.
+    if params.member_self_similarity_gate_is_on() {
         let mut scratch: Vec<f32> = Vec::new();
         let mut member_ok: Vec<bool> = Vec::with_capacity(states.len());
         for (si, st) in states.iter().enumerate() {
             let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
             let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
-            member_ok.push(member_is_localizable(
+            let radius = member_self_similarity_radius(
+                patch,
+                &views[st.idx as usize],
                 &caches[si],
-                &support,
-                r,
                 oy,
                 ox,
-                tau,
+                [st.iacc[0] as f64, st.iacc[1] as f64],
+                [wpp_u, wpp_v],
+                resolution,
+                params.sampler,
                 &mut scratch,
-            ));
+            )?;
+            member_ok.push(params.admits_member_zncc_self_similarity_radius(radius));
         }
         prof::count(
             &prof::N_DROP_UNLOCALIZABLE,

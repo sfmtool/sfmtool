@@ -238,7 +238,7 @@ fn the_outcome_names_the_refusals_most_first() {
             search_keypoint: None,
             keypoint: None,
             offset_px: f64::NAN,
-            sigma_pos: f64::NAN,
+            zncc_self_similarity_radius: f64::NAN,
             peak_zncc: f64::NAN,
             zncc: f64::NAN,
             pair_zncc: Vec::new(),

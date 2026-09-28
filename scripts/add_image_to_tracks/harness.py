@@ -22,7 +22,7 @@ For each image of a ground-truth reconstruction:
    retriangulated with the new observation included.
 
 The rules only filter candidates the operation has measured, so for each
-measurement setting (template, sub-pixel step, localizability gate) the
+measurement setting (template, sub-pixel step, self-similarity gate) the
 retriangulation of every measured candidate is computed once and every
 strategy's accepted set is looked up in it.
 

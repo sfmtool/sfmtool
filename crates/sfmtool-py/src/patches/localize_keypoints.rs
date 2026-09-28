@@ -57,15 +57,18 @@ impl PyPatchCloud {
     ///         (each view's leave-one-out template is the other view, so the bar
     ///         reduces to a fraction of the very correlation it is testing).
     ///         Default ``0.5``; ``0`` disables it exactly.
-    ///     max_member_keypoint_uncertainty: Drop a view whose **own** rendered core
-    ///         tile does not pin a 2D position — structure-tensor weak-axis
-    ///         uncertainty ``σ_pos`` (patch-grid px) above this ``τ``. The
-    ///         member-level counterpart of the per-point consensus cull
-    ///         (``score_localizability_deprecated`` / ``embed-patches``'s
-    ///         ``max_keypoint_uncertainty``), same units, same default ``0.35``:
-    ///         a flat sky tile or a lone straight edge correlates to noise, so it
-    ///         is refused before it is scored and is never restored by the
-    ///         two-view floor. ``0`` disables it exactly.
+    ///     max_member_zncc_self_similarity_radius: Drop a view whose **own**
+    ///         rendered core tile does not pin a 2D position: its ZNCC
+    ///         self-similarity radius, how far the core can slide over itself
+    ///         and still match itself as well as a true match between two
+    ///         views would (grid px of the search grid), is above this bar. A
+    ///         flat sky tile or a lone straight edge matches itself a few
+    ///         pixels away, so it is refused before it is scored and is never
+    ///         restored by the two-view floor. A ``NaN`` radius fails. The
+    ///         radius reads at most ``3``, so a bar of ``3`` or more turns
+    ///         nothing out. Default ``0``: the gate is off, since no bar under ``3``
+    ///         kept correct sightings as well as the older localizability gate
+    ///         did (``specs/core/patch/patch-keypoint-localization.md``).
     ///     min_grazing_cos: Grazing cutoff; drop a view whose ray is near-parallel
     ///         to the patch plane (``|d·n|`` below this).
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
@@ -146,7 +149,7 @@ impl PyPatchCloud {
     ///     ``is_basis`` marks the consensus-basis members (all ``True`` unless
     ///     ``basis_max_views`` capped that point's view set). ``K`` can be **below
     ///     two**: the absolute gates (``max_shift_px``, ``min_absolute_zncc``,
-    ///     ``max_member_keypoint_uncertainty``) are not undone by the two-view
+    ///     ``max_member_zncc_self_similarity_radius``) are not undone by the two-view
     ///     floor, so a point whose members individually fail them is reported with
     ///     one view or none for the caller's ``min_views`` cull to remove.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
@@ -155,7 +158,7 @@ impl PyPatchCloud {
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
-        min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
+        min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=0.0,
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
@@ -174,7 +177,7 @@ impl PyPatchCloud {
         max_shift_px: f64,
         min_relative_zncc: f64,
         min_absolute_zncc: f64,
-        max_member_keypoint_uncertainty: f64,
+        max_member_zncc_self_similarity_radius: f64,
         min_grazing_cos: f64,
         resolution: u32,
         window: &str,
@@ -233,7 +236,7 @@ impl PyPatchCloud {
             max_shift_px,
             min_relative_zncc,
             min_absolute_zncc,
-            max_member_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius,
             min_grazing_cos,
             resolution,
             window,

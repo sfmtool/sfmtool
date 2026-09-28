@@ -20,11 +20,10 @@
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
-    extract_core, extract_core_grid, project, render_context, seed_offset, shifted_center,
-    ContextTile, KeypointLocalizeParams, LocalizeError,
+    extract_core, member_self_similarity_radius, project, render_context, seed_offset,
+    shifted_center, KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::localizability::{patch_localizability_deprecated, SIGMA_NOISE};
 use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
     ConsensusScratch, ProjectedImage, Support,
@@ -85,10 +84,11 @@ pub struct ViewSearch {
     /// instead the local maximum an ascent from the start reached (see
     /// [`ReferenceConsensus::search`]'s `ascend_on_edge`).
     pub ascended: bool,
-    /// The weak-axis positional uncertainty `σ_pos` of the view's own core at
-    /// the search's start, in patch-grid px (the member localizability score).
-    /// `NaN` when the core is out of frame.
-    pub sigma_pos: f64,
+    /// The ZNCC self-similarity radius of the view's own core at the search's
+    /// start, in patch-grid px: the number the member gate
+    /// ([`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`])
+    /// judges. `NaN` when the point does not project into the view.
+    pub zncc_self_similarity_radius: f64,
 }
 
 /// One view scored at a given keypoint.
@@ -287,10 +287,10 @@ impl ReferenceConsensus {
     /// at the point's projection).
     ///
     /// The tail registration's search, run exhaustively: the view's context
-    /// tile is rendered once centred on the start, its own core is scored for
-    /// localizability there, and every shift of the window is correlated with
-    /// the template. No gate is applied; the caller reads
-    /// [`ViewSearch::sigma_pos`], [`ViewSearch::at_edge`] and the peak and
+    /// tile is rendered once centred on the start, its own core's ZNCC
+    /// self-similarity radius is read there, and every shift of the window is
+    /// correlated with the template. No gate is applied; the caller reads
+    /// [`ViewSearch::zncc_self_similarity_radius`], [`ViewSearch::at_edge`] and the peak and
     /// decides. `Ok` with no keypoint when the point does not project into the
     /// view's frame.
     ///
@@ -314,7 +314,7 @@ impl ReferenceConsensus {
             peak_zncc: f64::NAN,
             at_edge: false,
             ascended: false,
-            sigma_pos: f64::NAN,
+            zncc_self_similarity_radius: f64::NAN,
         };
         let Some(proj) = project(view, &patch.center, patch.w) else {
             return Ok(out);
@@ -337,7 +337,18 @@ impl ReferenceConsensus {
             params.sampler,
         )?;
         let c0 = margin as usize;
-        out.sigma_pos = core_sigma_pos(&tile, &self.support, r, c0);
+        out.zncc_self_similarity_radius = member_self_similarity_radius(
+            patch,
+            view,
+            &tile,
+            c0,
+            c0,
+            start,
+            self.wpp,
+            self.resolution,
+            params.sampler,
+            &mut Vec::new(),
+        )?;
 
         let mask = &self.template_mask[..self.template_mask.len().min(tile.channels)];
         let kept = mask.iter().filter(|&&k| k).count();
@@ -439,14 +450,6 @@ impl ReferenceConsensus {
             .collect();
         Some(ViewScore { zncc, pair_zncc })
     }
-}
-
-/// The member localizability score of the `R × R` core sitting at `(c0, c0)`
-/// of `tile`, in patch-grid px.
-fn core_sigma_pos(tile: &ContextTile, support: &Support, r: usize, c0: usize) -> f64 {
-    let mut grid = vec![0f32; r * r * tile.channels];
-    extract_core_grid(tile, r, c0, c0, &mut grid);
-    patch_localizability_deprecated(&grid, r, tile.channels, support, SIGMA_NOISE).sigma_pos_grid
 }
 
 /// A raw core z-normalised over the channels `mask` keeps (the leading

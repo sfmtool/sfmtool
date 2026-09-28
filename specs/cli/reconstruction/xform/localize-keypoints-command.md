@@ -15,8 +15,8 @@ in-plane offset, builds the robust cross-view consensus, and searches each
 view's residual shift against the **leave-one-out** consensus of the others.
 Views that drift too far, leave the frame, graze the patch plane
 (`min_grazing_cos`), pin no 2D position of their own
-(`max_member_keypoint_uncertainty`), or stop agreeing — absolutely
-(`min_absolute_zncc`) or relative to their peers (`min_relative_zncc`) — are
+(`max_member_zncc_self_similarity_radius`, off by default), or stop agreeing
+— absolutely (`min_absolute_zncc`) or relative to their peers (`min_relative_zncc`) — are
 **dropped**.
 Seeds are each point's own projection (`project_i(X_p)`); the search basin is
 `±search` patch-grid px around it.
@@ -113,7 +113,7 @@ threshold consumed by `compact_to_embedded_patches`.
 | `max_shift_px`                 | `3.0`           | `localize_keypoints` (drop a view whose keypoint sits further than this from the point's projection, source-image px) |
 | `min_relative_zncc`            | `0.7`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC falls below this fraction of the median — the one gate the two-view floor can undo) |
 | `min_absolute_zncc`            | `0.5`           | `localize_keypoints` (drop a view whose leave-one-out ZNCC is finite and below this absolute floor, whatever the view count; `0` disables) |
-| `max_member_keypoint_uncertainty` | `0.35`       | `localize_keypoints` (drop a view whose own tile scores `σ_pos` above this `τ`, patch-grid px — see [`specs/core/patch/patch-localizability.md`](../../../core/patch/patch-localizability.md); `0` disables) |
+| `max_member_zncc_self_similarity_radius` | `0.0` | `localize_keypoints` (drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px — see [`specs/core/patch/patch-keypoint-localization.md`](../../../core/patch/patch-keypoint-localization.md#the-member-self-similarity-gate); `0` disables, `3` or more turns nothing out) |
 | `min_grazing_cos`              | `0.1`           | `localize_keypoints` (drop a view whose ray grazes the patch plane) |
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |

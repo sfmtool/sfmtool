@@ -656,11 +656,17 @@ def test_localize_keypoints_chunked_with_whole_cloud_view_scores(
         assert np.array_equal(np.asarray(r["is_basis"]), np.asarray(c["is_basis"]))
 
 
+# The member self-similarity gate's bar in the flat-member test. The default
+# is off, so the test sets one.
+MEMBER_GATE = 2.0
+
+
 def _healthy_two_view_point(recon, cloud, images) -> tuple[int, list[int]]:
     """A cloud point and two of its observing views that survive the default
-    gates on the real imagery — the control the flat-member case is measured
-    against. Not every real pair does (some are already refused), so this scans
-    rather than taking the first two-view point it finds."""
+    gates, with the member gate at ``MEMBER_GATE``, on the real imagery — the
+    control the flat-member case is measured against. Not every real pair does
+    (some are already refused), so this scans rather than taking the first
+    two-view point it finds."""
     track_pids = np.asarray(recon.track_point_indexes)
     track_imgs = np.asarray(recon.track_image_indexes)
     for candidate in np.asarray(cloud.point_indexes).tolist():
@@ -669,7 +675,11 @@ def _healthy_two_view_point(recon, cloud, images) -> tuple[int, list[int]]:
             continue
         pid, pair = int(candidate), [int(views[0]), int(views[1])]
         res = cloud.localize_keypoints(
-            recon, images, view_sets={pid: pair}, point_indexes=[pid]
+            recon,
+            images,
+            view_sets={pid: pair},
+            point_indexes=[pid],
+            max_member_zncc_self_similarity_radius=MEMBER_GATE,
         )
         if [int(v) for v in np.asarray(res[0]["views"])] == pair:
             return pid, pair
@@ -680,15 +690,16 @@ def test_localize_keypoints_flat_member_culls_a_two_view_point(
     seoul_bull_workspace: Path,
 ):
     """A two-view point whose second member renders a textureless tile is left
-    below ``min_views`` under the defaults, and keeps both views once the two
-    absolute gates are switched off.
+    below ``min_views`` with the member gate at ``MEMBER_GATE``, and keeps both
+    views once the two absolute gates are switched off.
 
     Neither ZNCC bar can see this on its own. Each view's leave-one-out template
     IS the other view, so both score the same pairwise correlation, each clears
     ``min_relative_zncc`` times itself, and the two-view floor would restore the
-    pair even if they did not. ``max_member_keypoint_uncertainty`` judges the
-    flat tile on its own content instead -- the member-level counterpart of the
-    per-point consensus cull.
+    pair even if they did not. ``max_member_zncc_self_similarity_radius`` judges
+    the flat tile on its own content instead: a flat tile matches itself at
+    every shift, so its ZNCC self-similarity radius reads the largest shift
+    searched.
     """
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
@@ -708,13 +719,14 @@ def test_localize_keypoints_flat_member_culls_a_two_view_point(
         return [int(v) for v in np.asarray(res[0]["views"])]
 
     # Blank the second member's source image: its tile then carries no gradient
-    # at all, so its structure tensor pins no 2D position.
+    # at all, so it matches itself at every shift.
     flat = list(images)
     flat[pair[1]] = np.full_like(images[pair[1]], 128)
 
-    assert len(kept(flat)) < 2, (
+    assert len(kept(flat, max_member_zncc_self_similarity_radius=MEMBER_GATE)) < 2, (
         "the flat member must be dropped, leaving the point below min_views"
     )
     assert (
-        kept(flat, min_absolute_zncc=0.0, max_member_keypoint_uncertainty=0.0) == pair
+        kept(flat, min_absolute_zncc=0.0, max_member_zncc_self_similarity_radius=0.0)
+        == pair
     ), "with both absolute gates at 0 the flat member survives, as it used to"

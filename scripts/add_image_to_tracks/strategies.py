@@ -4,7 +4,7 @@
 """The judging strategies and measurement settings the harness compares.
 
 A *measurement* changes what the operation measures (the template it searches
-against, the sub-pixel step, the member localizability gate); a *strategy*
+against, the sub-pixel step, the member self-similarity gate); a *strategy*
 changes only how the measured candidates are judged. Both are keyword sets for
 ``EditedReconstruction.add_image_to_tracks``.
 """
@@ -12,9 +12,15 @@ changes only how the measured candidates are judged. Both are keyword sets for
 from __future__ import annotations
 
 MEASUREMENTS = {
-    # The default: rendered consensus, sub-pixel step, localizability gate on.
+    # The default: rendered consensus, sub-pixel step, self-similarity gate on.
     "default": {},
-    "no_localizability": {"max_keypoint_uncertainty": 0.0},
+    "no_self_similarity_gate": {"max_zncc_self_similarity_radius": 0.0},
+    # The self-similarity gate's bar, swept to choose its default.
+    "self_similarity_1": {"max_zncc_self_similarity_radius": 1.0},
+    "self_similarity_1.5": {"max_zncc_self_similarity_radius": 1.5},
+    "self_similarity_2": {"max_zncc_self_similarity_radius": 2.0},
+    "self_similarity_2.5": {"max_zncc_self_similarity_radius": 2.5},
+    "self_similarity_2.9": {"max_zncc_self_similarity_radius": 2.9},
     "no_subpixel": {"subpixel": False},
     # Only where the file stores bitmaps.
     "stored_bitmap": {"template": "stored_bitmap"},

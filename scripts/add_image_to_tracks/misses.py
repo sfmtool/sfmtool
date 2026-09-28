@@ -95,7 +95,9 @@ def main():
                         "judged": float(c["judged"][k]),
                         "offset_px": float(c["offset_px"][k]),
                         "bound_px": rep["position_bound_px"],
-                        "sigma_pos": float(c["sigma_pos"][k]),
+                        "zncc_self_similarity_radius": float(
+                            c["zncc_self_similarity_radius"][k]
+                        ),
                         "peak_zncc": float(c["peak_zncc"][k]),
                         "gt_offset_px": float(np.hypot(*(known[p] - proj)))
                         if np.all(np.isfinite(proj))

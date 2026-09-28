@@ -711,7 +711,7 @@ person's bar").
 **Neither step lets a kernel drop a sighting.** Both default their localizer to
 `open_localizer`: the four per-view gates
 (`max_shift_px`, `min_absolute_zncc`, `min_relative_zncc`,
-`max_member_keypoint_uncertainty`) off, and the consensus-basis cap lifted
+`max_member_zncc_self_similarity_radius`) off, and the consensus-basis cap lifted
 (`basis_max_views = 0`). A gate deletes a view from the kernel's answer, and a
 deleted view is a row the bench would show empty for a reason nothing recorded;
 on the bench the deleting is the person's, through a verdict or a threshold they

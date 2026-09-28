@@ -58,8 +58,9 @@ recovers it by unprojecting the keypoint onto the patch plane.
   keypoint is the all-projection case, identical to supplying no seeds at all.
 - **Drop thresholds** — the per-view gates the refiner uses to drop a view
   in-loop (below), in two families. The **photometric** gates judge one view's
-  pixels on their own and their verdicts stand: `max_member_keypoint_uncertainty`
-  (the view's own tile pins no 2D position), `min_absolute_zncc` (its
+  pixels on their own and their verdicts stand:
+  `max_member_zncc_self_similarity_radius` (the view's own tile pins no 2D
+  position; off by default), `min_absolute_zncc` (its
   leave-one-out ZNCC is below a fixed floor), and the grazing cutoff. The
   **positional** gate `max_shift_px` (its keypoint sits too far from the
   projection) and the **relative** gate `min_relative_zncc` (does a view agree
@@ -83,16 +84,17 @@ coordinate `acc[v]` (patch-grid units) for the patch centre on `Π_p`, measured
 from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
 (zero when the seed is the point's own projection).
 
-Before the first round, each surviving view's own tile faces the **member
-localizability gate**: its `R×R` core at its seed offset is scored by the
-[patch-localizability](patch-localizability.md) structure tensor, and a view
-whose weak-axis positional uncertainty `σ_pos` exceeds
-`max_member_keypoint_uncertainty` is dropped. A member that pins no 2D position
-of its own — a flat sky or water crop, a lone straight edge — has a ZNCC to
-anything that is noise, so refusing it up front keeps it out of every round's
-template rather than letting it vote and then be judged by the votes. It is
-scored once, on the member's appearance rather than the round's, and no later
-step restores it. Then each round:
+Before the first round, when the gate is on, each surviving view's own tile
+faces the **member self-similarity gate**: the
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md) of its `R×R` core
+at its seed offset is read, and a view whose radius is over
+`max_member_zncc_self_similarity_radius` is dropped. A member that pins no 2D
+position of its own — a flat sky or water crop, a lone straight edge — matches
+itself a few pixels away, so its ZNCC to anything cannot place it; refusing it
+up front keeps it out of every round's template rather than letting it vote and
+then be judged by the votes. It is read once, on the member's appearance rather
+than the round's, and no later step restores it. The gate is off by default
+(see [The member gate's default](#the-member-gates-default)). Then each round:
 
 1. **Render** every view's patch tile from its source image at its accumulated
    offset `acc[v]` — a *single* resample of the source, with the patch centre
@@ -145,7 +147,8 @@ step restores it. Then each round:
    pairwise correlation, `min_relative_zncc × median` reduces to a fraction of
    that same number, and the floor would restore the pair regardless. Two
    unrelated surfaces are refused by `min_absolute_zncc`; a textureless member is
-   refused by the localizability gate before the round begins.
+   refused by the member self-similarity gate, when it is on, before the round
+   begins.
 6. **Repeat** to convergence or a small iteration cap (default 5). Convergence
    is the mean **round-over-round change** of each view's refined position
    (integer accumulator + sub-pixel residual, this round vs the previous one)
@@ -260,7 +263,7 @@ existing patch machinery:
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it); `0` disables |
 | `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
-| `max_member_keypoint_uncertainty` | 0.35 | drop a view whose own tile scores `σ_pos` above this `τ` (patch-grid px, the [patch-localizability](patch-localizability.md) scorer); `0` disables |
+| `max_member_zncc_self_similarity_radius` | 0 (off) | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more turns nothing out; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
@@ -273,11 +276,83 @@ existing patch machinery:
 The patch size is carried by the frame the algorithm is handed (the `(u, v)`
 half-vectors).
 
+## The member self-similarity gate
+
+The member gate reads each view's own `R×R` core, at its seed offset, with the
+default `SelfSimilarityParams` (`max_radius` `r = 3`), on the grid the search
+runs on (`R_s`, which is `R` at the default multiplier). The reading needs `r`
+px of tile around the core for its shifted windows. The localizer's own tiles
+have them whenever `search` is at least 3 grid px: a round-loop cache is
+`R_s + 4·margin` with the core within `margin` of its centre, a tail view's or a
+reference search's tile `R_s + 2·margin` with the core at its centre, and
+`margin = ⌈search⌉`. Under that, the gate renders a tile of `R_s + 2r` centred on
+the same core, so the reading does not depend on the search radius. Pixels out
+of frame read as the black they were rendered as, as every other read of the
+tile does.
+
+A view passes when its radius is at or below the bar
+(`KeypointLocalizeParams::admits_member_zncc_self_similarity_radius`). A `NaN`
+radius fails an active gate. A bar of `0` or a non-finite bar is off, and the
+radius is then not read at all. The radius reads at most `r`, which stands for
+"that far or further", so a bar of `r` or more reads every view and turns none
+out. A flat tile reads `r` and so does a straight edge, since each matches
+itself along the whole search.
+
+### The member gate's default
+
+The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `0`: the gate
+is off. It was chosen on the seoul_bull and kerry_park ground truths, by two
+measurements run with the gate off, with the older gate on the localizability
+score (`σ_pos` over `0.35` grid px) it replaced, and with the new gate at bars
+from 1 to 2.9.
+
+The [add-image-to-tracks harness](../../../scripts/add_image_to_tracks/README.md),
+default rule, resected pose, summed over every image. *Recall* is the known
+tracks rejoined, *> 2 px* the rejoined keypoints over 2 px from the ground
+truth's, *extra* the tracks joined that the image was not in, *x bad* those whose
+new observation's residual after retriangulation is over 2 px, and *x worse*
+those whose largest residual grew by more than 1 px:
+
+| member gate | seoul recall | > 2 px | extra | x bad | kerry recall | > 2 px | extra | x bad | x worse |
+|---|---|---|---|---|---|---|---|---|---|
+| `σ_pos` ≤ 0.35 (older gate) | 91.2% | 20 | 125 | 0 | 89.9% | 14 | 1419 | 2 | 18 |
+| off | 91.2% | 20 | 126 | 0 | 90.0% | 14 | 1432 | 2 | 18 |
+| radius ≤ 1 | 39.7% | 10 | 50 | 0 | 24.4% | 10 | 299 | 3 | 13 |
+| radius ≤ 1.5 | 66.7% | 17 | 74 | 0 | 46.7% | 12 | 625 | 5 | 15 |
+| radius ≤ 2 | 76.8% | 19 | 94 | 0 | 66.2% | 12 | 846 | 0 | 7 |
+| radius ≤ 2.5 | 80.4% | 19 | 106 | 0 | 73.8% | 12 | 985 | 0 | 6 |
+| radius ≤ 2.9 | 81.2% | 19 | 104 | 0 | 75.7% | 13 | 1010 | 0 | 6 |
+
+The localizer over each ground truth's own tracks, every finite point, each view
+seeded at the point's projection, each kept view's keypoint against the ground
+truth's observation (1233 observations on seoul_bull, 2193 on kerry_park):
+
+| member gate | seoul kept | err med / p90 px | > 2 px | points under 2 views | kerry kept | err med / p90 px | > 2 px | points under 2 views |
+|---|---|---|---|---|---|---|---|---|
+| `σ_pos` ≤ 0.35 (older gate) | 97.8% | 0.185 / 0.789 | 35 | 0 | 98.4% | 0.170 / 0.664 | 50 | 1 |
+| off | 97.8% | 0.185 / 0.789 | 35 | 0 | 98.5% | 0.170 / 0.664 | 51 | 1 |
+| radius ≤ 1.5 | 72.5% | 0.156 / 0.692 | 32 | 53 | 58.7% | 0.149 / 0.585 | 32 | 99 |
+| radius ≤ 2 | 83.7% | 0.169 / 0.823 | 41 | 29 | 75.0% | 0.160 / 0.624 | 42 | 54 |
+| radius ≤ 2.9 | 88.0% | 0.173 / 0.792 | 39 | 17 | 84.4% | 0.164 / 0.633 | 45 | 33 |
+
+The older gate turned out almost nothing on either capture. Every bar on the
+radius cost 10 to 66 points of recall and a tenth or more of the localized
+views, and the sightings it turned out were as good as the ones it kept: over
+the known tracks the harness's default rule accepts with the gate off, those
+whose new view's core reads the largest radius land within 1 px of the ground
+truth 96.6% (seoul_bull, 119) and 98.7% (kerry_park, 318) of the time, against
+97.9% and 98.5% for a radius under 1. A fifth of seoul_bull's and a third of
+kerry_park's candidates read the largest radius. A likely cause, which these
+runs did not isolate: the radius is in patch-grid px, and a patch grid finer
+than the source pixels it samples renders a smooth tile, which matches itself a
+few grid px away however well the source pins it. Only a gate that turns nothing out matches the older one, so the default is
+off, and a caller that wants to refuse flat or edge-only views sets a bar.
+
 ## Implementation details
 
 `PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
-min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
+min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=0.0,
 min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
 `{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, loo_zncc_grid, is_basis}`,
 with `loo_zncc_grid` a `(K, 3, 3)` array. Each round renders a
@@ -287,8 +362,9 @@ compacted channel space (a channel flat in any view is dropped, as in normal
 refinement), builds the leave-one-out IRLS consensus of the *other* views, and
 runs a full-res integer windowed-ZNCC search refined by a separable parabolic fit;
 the per-view offset accumulates and is clipped to `±search`. A view is dropped when
-its own tile scores `σ_pos > max_member_keypoint_uncertainty` (checked once, on the
-tile at its seed, before the first round), when its core leaves the frame (any
+its own tile's ZNCC self-similarity radius is over
+`max_member_zncc_self_similarity_radius` (checked once, on the tile at its seed,
+before the first round, when the gate is on), when its core leaves the frame (any
 window-support pixel out of frame), its keypoint sits more than `max_shift_px`
 from the projection, its leave-one-out ZNCC is finite and below
 `min_absolute_zncc`, or its leave-one-out ZNCC falls below `min_relative_zncc ×`
@@ -296,7 +372,7 @@ the views' median. Only the last of those is subject to the two-view
 leave-one-out floor: when it would leave fewer than two, the two best-agreeing
 views *that cleared the absolute gates* are kept, so the result can carry one view
 or none and the caller's `min_views` cull removes the point. Setting
-`min_absolute_zncc`, `max_member_keypoint_uncertainty` or `min_relative_zncc` to
+`min_absolute_zncc`, `max_member_zncc_self_similarity_radius` or `min_relative_zncc` to
 `0` (or a non-finite value) disables that gate exactly -- the relative bar reads
 `0` as "off" rather than as a bar at zero, so a caller that asked for no gate
 keeps even the anti-correlated view and its number, which is what a *reading* of

@@ -96,16 +96,24 @@ pub struct KeypointLocalizeParams {
     /// pair anyway. This gate is never undone by that floor. `0.0` (or a
     /// non-finite value) disables it exactly.
     pub min_absolute_zncc: f64,
-    /// Drop a view whose **own** rendered core tile is not localizable: the
-    /// weak-axis positional uncertainty `σ_pos` of its structure tensor
-    /// (patch-grid px, from [`patch_localizability_deprecated`](crate::patch::localizability))
-    /// above this `τ`. The member-level counterpart of the per-point consensus
-    /// gate (`specs/core/patch/patch-localizability.md`) and the same units and
-    /// default: a flat or edge-only member pins no 2D position, so its ZNCC to
-    /// anything is noise. Scored once per view on the tile at its seed offset,
-    /// before any ZNCC, and never undone by the two-view floor. `0.0` (or a
-    /// non-finite value) disables it exactly.
-    pub max_member_keypoint_uncertainty: f64,
+    /// Drop a view whose **own** rendered core tile does not pin a 2D position:
+    /// its [ZNCC self-similarity radius](crate::patch::self_similarity), how far
+    /// the core can slide over itself and still match itself as well as a true
+    /// match between two views would, is above this bar, in grid px of the
+    /// grid the search runs on (patch-grid px at the default
+    /// [`search_resolution_multiplier`](Self::search_resolution_multiplier) of
+    /// `1`). A flat or edge-only member matches itself along the edge or
+    /// everywhere, so its ZNCC to anything cannot place it. Read once per view on
+    /// the tile at its seed offset, before any ZNCC, and never undone by the
+    /// two-view floor.
+    ///
+    /// A view passes when its radius is at or below the bar; a `NaN` radius
+    /// fails. The radius reads at most the default
+    /// [`SelfSimilarityParams::max_radius`](crate::patch::self_similarity::SelfSimilarityParams::max_radius)
+    /// (`3`), which stands for "that far or further", so a bar at or above it
+    /// turns nothing out. `0.0` (or a non-finite value) disables the gate
+    /// exactly. See [`Self::admits_member_zncc_self_similarity_radius`].
+    pub max_member_zncc_self_similarity_radius: f64,
     /// Grazing cutoff: drop a view whose viewing ray is near-parallel to the
     /// patch plane (`|d̂ · n̂|` below this), where the in-plane anchor is
     /// ill-conditioned and the view would only contaminate the consensus.
@@ -158,6 +166,39 @@ pub struct KeypointLocalizeParams {
     pub basis_pick: BasisPick,
 }
 
+/// The default [`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`]:
+/// `0`, the gate off.
+///
+/// Chosen by measurement on seoul_bull and kerry_park (the add-image-to-tracks
+/// harness and the localizer over each ground truth's own tracks; see
+/// `specs/core/patch/patch-keypoint-localization.md`, "The member gate's
+/// default"). Every bar under the largest radius read cost the
+/// add-image-to-tracks harness 10 to 66 points of recall and did not make the
+/// kept sightings more accurate: a sighting
+/// whose core reads the largest radius lands within 1 px of the ground truth
+/// as often as one that reads under 1. The older gate on the localizability
+/// score, at its `0.35` grid px, turned out almost nothing on the same data, so
+/// the gate off is what matches it.
+pub const DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 0.0;
+
+impl KeypointLocalizeParams {
+    /// Whether [`Self::max_member_zncc_self_similarity_radius`] is on: finite
+    /// and above `0`.
+    pub fn member_self_similarity_gate_is_on(&self) -> bool {
+        let bar = self.max_member_zncc_self_similarity_radius;
+        bar.is_finite() && bar > 0.0
+    }
+
+    /// Whether a view whose own core reads `radius` passes the member gate:
+    /// always when the gate is off, otherwise when `radius` is at or below
+    /// [`Self::max_member_zncc_self_similarity_radius`]. A `NaN` radius fails
+    /// an active gate.
+    pub fn admits_member_zncc_self_similarity_radius(&self, radius: f64) -> bool {
+        !self.member_self_similarity_gate_is_on()
+            || radius <= self.max_member_zncc_self_similarity_radius
+    }
+}
+
 impl Default for KeypointLocalizeParams {
     fn default() -> Self {
         Self {
@@ -166,7 +207,7 @@ impl Default for KeypointLocalizeParams {
             max_shift_px: 3.0,
             min_relative_zncc: 0.7,
             min_absolute_zncc: 0.5,
-            max_member_keypoint_uncertainty: 0.35,
+            max_member_zncc_self_similarity_radius: DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
             min_grazing_cos: 0.1,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
@@ -189,7 +230,7 @@ impl Default for KeypointLocalizeParams {
 ///
 /// The kept set can be **shorter than two**: the absolute gates
 /// ([`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
-/// [`max_member_keypoint_uncertainty`](KeypointLocalizeParams::max_member_keypoint_uncertainty),
+/// [`max_member_zncc_self_similarity_radius`](KeypointLocalizeParams::max_member_zncc_self_similarity_radius),
 /// [`max_shift_px`](KeypointLocalizeParams::max_shift_px)) are not undone by the
 /// two-view floor, so a point whose members individually fail them is reported
 /// with one view or none, for the caller's `min_views` cull to remove.

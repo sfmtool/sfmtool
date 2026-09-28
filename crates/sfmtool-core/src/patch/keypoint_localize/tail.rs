@@ -5,7 +5,7 @@
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
-    below_absolute_floor, extract_core, member_is_localizable, part_zncc, prof, project,
+    below_absolute_floor, extract_core, member_self_similarity_radius, part_zncc, prof, project,
     render_context, shifted_center, square_consensus, square_core, ContextTile,
     KeypointLocalization, KeypointLocalizeParams, LocalizeError, SearchStrategy, ViewState,
 };
@@ -130,8 +130,8 @@ fn within_max_shift(
 /// `R_s + 2·margin` — it searches one `±margin` window around that seed and so
 /// needs no drift headroom (basis caches keep the `R_s + 4·margin` sizing that
 /// covers a whole round loop). The gates are the loop's verbatim: drop a view
-/// whose own tile fails the member localizability gate (scored before the search,
-/// so an unlocalizable tail view is never even registered), whose refined
+/// whose own tile fails the member self-similarity gate (read before the search,
+/// so a tail view that pins no position is never even registered), whose refined
 /// keypoint sits more than `max_shift_px` from the projection, whose ZNCC is
 /// below the absolute `min_absolute_zncc` floor, or whose ZNCC falls below
 /// `min_relative_zncc ×` the **basis members'** median final ZNCC (the same
@@ -176,7 +176,7 @@ pub(super) fn register_tail(
         // agreement gate cannot be evaluated without a template, but the
         // positional one can and still must be — a seed can already sit further
         // than `max_shift_px` from the projection, and nothing downstream would
-        // catch it. The member localizability gate needs a rendered tile, and
+        // catch it. The member self-similarity gate needs a rendered tile, and
         // this path renders none (that is the cost it exists to avoid), so it is
         // not applied; the point has already collapsed below two in-frame basis
         // views, and `min_views` is what decides its fate.
@@ -214,7 +214,7 @@ pub(super) fn register_tail(
     let tail_c0 = geom.margin as usize;
     let parts = Parts::new(support, geom.resolution);
     prof::count(&prof::N_RENDER, tail.len() as u64);
-    // Parallel to `tail`: whether the view cleared the member localizability
+    // Parallel to `tail`: whether the view cleared the member self-similarity
     // gate. A view that did not is never searched and never kept, whatever it
     // would have scored against the basis template.
     let mut member_ok: Vec<bool> = Vec::with_capacity(tail.len());
@@ -235,18 +235,25 @@ pub(super) fn register_tail(
                 params.sampler,
             )
         })?;
-        // Member localizability gate, the loop's verbatim: score this view's own
-        // core tile (at its seed, where the cache is centred) and refuse a tile
-        // that pins no 2D position before it is scored against the template.
-        let ok = member_is_localizable(
-            &cache,
-            support,
-            r,
-            tail_c0,
-            tail_c0,
-            params.max_member_keypoint_uncertainty,
-            &mut grid_scratch,
-        );
+        // Member self-similarity gate, the loop's verbatim: read this view's
+        // own core tile (at its seed, where the cache is centred) and refuse a
+        // tile that pins no 2D position before it is scored against the
+        // template.
+        let ok = !params.member_self_similarity_gate_is_on() || {
+            let radius = member_self_similarity_radius(
+                patch,
+                view,
+                &cache,
+                tail_c0,
+                tail_c0,
+                [st.iacc[0] as f64, st.iacc[1] as f64],
+                [geom.wpp_u, geom.wpp_v],
+                geom.resolution,
+                params.sampler,
+                &mut grid_scratch,
+            )?;
+            params.admits_member_zncc_self_similarity_radius(radius)
+        };
         member_ok.push(ok);
         if !ok {
             prof::count(&prof::N_DROP_UNLOCALIZABLE, 1);

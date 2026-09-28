@@ -304,8 +304,8 @@ impl std::fmt::Display for FitReport {
 /// that reads the patches writes what it read and nothing else changes.
 ///
 /// `progress` names the phases the batch kernels carry: `localize`, `refine` and
-/// `fuse` for the fit itself, then `localize` and `localizability` for the
-/// reading; `refine` and `localizability` at the cluster stage.
+/// `fuse` for the fit itself, then `localize` and `self-similarity` for the
+/// reading; `refine` and `self-similarity` at the cluster stage.
 ///
 /// # Example
 ///

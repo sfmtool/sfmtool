@@ -100,7 +100,10 @@ fn report_to_py<'py>(py: Python<'py>, r: &AddImageToTracksReport) -> PyResult<Bo
             "offset_px",
             c.iter().map(|x| x.offset_px).collect::<Vec<_>>(),
         ),
-        ("sigma_pos", c.iter().map(|x| x.sigma_pos).collect()),
+        (
+            "zncc_self_similarity_radius",
+            c.iter().map(|x| x.zncc_self_similarity_radius).collect(),
+        ),
         ("peak_zncc", c.iter().map(|x| x.peak_zncc).collect()),
         ("zncc", c.iter().map(|x| x.zncc).collect()),
         ("judged", c.iter().map(|x| x.judged).collect()),
@@ -180,8 +183,11 @@ impl PyEditedReconstruction {
     ///     require_facing, subpixel, ascend_on_edge,
     ///         min_keypoint_separation_px: see the spec.
     ///     search: The search radius in patch-grid pixels.
-    ///     max_keypoint_uncertainty: The member localizability gate's ``τ``
-    ///         (``0`` disables it).
+    ///     max_zncc_self_similarity_radius: The largest ZNCC self-similarity
+    ///         radius the new view's own core may have, in patch-grid px; a
+    ///         view over it is refused as ``unlocalizable``. ``0``, the default,
+    ///         turns the gate off, and a bar of ``3`` or more, the largest
+    ///         radius read, turns nothing out.
     ///     min_grazing_cos: The grazing cutoff.
     ///     resolution: The patch grid (a stored bitmap's own grid overrides it
     ///         under ``"stored_bitmap"``).
@@ -193,7 +199,8 @@ impl PyEditedReconstruction {
     ///     count) and ``candidates``, a dict of columns over every point the
     ///     image did not observe: ``point``, ``accepted``, ``refusal`` (a name
     ///     or ``None``), ``projection``, ``search_keypoint`` and ``keypoint``
-    ///     (``(N, 2)``, ``NaN`` where absent), ``offset_px``, ``sigma_pos``,
+    ///     (``(N, 2)``, ``NaN`` where absent), ``offset_px``,
+    ///     ``zncc_self_similarity_radius``,
     ///     ``peak_zncc``, ``zncc``, ``judged``, ``bar``, and the lists
     ///     ``references``, ``reference_loo_zncc``, ``reference_pair_zncc``
     ///     (row-major ``n × n``) and ``pair_zncc``. Raises ``ValueError`` with
@@ -223,7 +230,7 @@ impl PyEditedReconstruction {
         ascend_on_edge = false,
         min_keypoint_separation_px = 1.0,
         search = 6.0,
-        max_keypoint_uncertainty = 0.35,
+        max_zncc_self_similarity_radius = 0.0,
         min_grazing_cos = 0.1,
         resolution = 24,
     ))]
@@ -253,7 +260,7 @@ impl PyEditedReconstruction {
         ascend_on_edge: bool,
         min_keypoint_separation_px: f64,
         search: f64,
-        max_keypoint_uncertainty: f64,
+        max_zncc_self_similarity_radius: f64,
         min_grazing_cos: f64,
         resolution: u32,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
@@ -316,7 +323,7 @@ impl PyEditedReconstruction {
             min_keypoint_separation_px,
             localize: sfmtool_core::patch::keypoint_localize::KeypointLocalizeParams {
                 search,
-                max_member_keypoint_uncertainty: max_keypoint_uncertainty,
+                max_member_zncc_self_similarity_radius: max_zncc_self_similarity_radius,
                 min_grazing_cos,
                 resolution,
                 ..defaults.localize.clone()

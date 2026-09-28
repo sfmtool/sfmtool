@@ -196,7 +196,7 @@ fn params() -> KeypointLocalizeParams {
 fn gates_off() -> KeypointLocalizeParams {
     KeypointLocalizeParams {
         min_absolute_zncc: 0.0,
-        max_member_keypoint_uncertainty: 0.0,
+        max_member_zncc_self_similarity_radius: 0.0,
         ..params()
     }
 }
@@ -1037,15 +1037,30 @@ fn two_view_floor_keeps_exactly_two_when_all_fail() {
     );
 }
 
+/// [`params`] with the member self-similarity gate at `bar`.
+fn self_similarity_bar(bar: f64) -> KeypointLocalizeParams {
+    KeypointLocalizeParams {
+        max_member_zncc_self_similarity_radius: bar,
+        ..params()
+    }
+}
+
+/// A straight edge running along the plane's `y` axis: a tile of it matches
+/// itself at every shift along the edge.
+fn edge_texture(x: f64, _y: f64) -> f64 {
+    127.5 + 70.0 * (x * 12.0).tanh()
+}
+
 #[test]
 fn two_view_flat_member_is_dropped_as_unlocalizable() {
     // A two-view point whose second member is a textureless tile (flat sky /
-    // water). Its own structure tensor pins no 2D position, so `σ_pos` is
-    // enormous and the member localizability gate refuses it before any ZNCC is
-    // computed — leaving the point with one view, which the caller's `min_views`
-    // cull removes. With the gate off both views survive, because on a two-view
-    // point the relative bar is `min_relative_zncc ×` the very correlation it is
-    // testing and the two-view floor would restore the pair regardless.
+    // water). It matches itself at every shift, so its ZNCC self-similarity
+    // radius reads the largest shift searched and the member gate refuses it
+    // before any ZNCC is computed — leaving the point with one view, which the
+    // caller's `min_views` cull removes. With the gate off both views survive,
+    // because on a two-view point the relative bar is `min_relative_zncc ×` the
+    // very correlation it is testing and the two-view floor would restore the
+    // pair regardless.
     let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]; 2];
     let texs: Vec<fn(f64, f64) -> f64> = vec![texture, flat_texture];
@@ -1053,7 +1068,7 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &self_similarity_bar(2.0));
     assert!(
         pos(&res, 1).is_none(),
         "the flat member must be dropped as unlocalizable: {:?}",
@@ -1071,6 +1086,117 @@ fn two_view_flat_member_is_dropped_as_unlocalizable() {
         vec![0, 1],
         "with the gates disabled the flat member survives (the old behaviour)"
     );
+}
+
+#[test]
+fn the_member_gate_judges_the_self_similarity_radius() {
+    // Four views: two of the textured plane, one of a flat surface and one of
+    // a straight edge. The flat and edge tiles match themselves the whole way
+    // across the shifts searched, so a bar under the largest radius drops
+    // them; the textured views read well under 1 px and stay.
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0; 2]; 4];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, flat_texture, edge_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    let loose = |bar: f64| KeypointLocalizeParams {
+        // Only the member gate decides here.
+        min_absolute_zncc: 0.0,
+        min_relative_zncc: 0.0,
+        ..self_similarity_bar(bar)
+    };
+
+    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &loose(2.0));
+    assert_eq!(
+        gated.views,
+        vec![0, 1],
+        "the flat and edge members are dropped, the textured ones kept"
+    );
+
+    // `0` turns the gate off, and a bar at the largest radius read turns
+    // nothing out.
+    for bar in [0.0, 3.0] {
+        let open = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &loose(bar));
+        assert_eq!(open.views, vec![0, 1, 2, 3], "bar {bar} keeps every member");
+    }
+}
+
+#[test]
+fn the_member_gate_reads_the_same_radius_at_a_search_too_narrow_for_its_ring() {
+    // With `search = 1` the tiles the localizer renders have one grid px
+    // around the core where the reading needs three, so the gate renders a
+    // tile of its own; its verdicts are the wide search's.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
+    let offs = [[0.0; 2]; 3];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, edge_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    for search in [1.0, 6.0] {
+        let p = KeypointLocalizeParams {
+            search,
+            min_absolute_zncc: 0.0,
+            min_relative_zncc: 0.0,
+            ..self_similarity_bar(2.0)
+        };
+        let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
+        assert_eq!(res.views, vec![0, 1], "search {search}");
+    }
+}
+
+#[test]
+fn the_member_gate_admits_at_or_under_its_bar_and_fails_nan() {
+    let on = self_similarity_bar(2.0);
+    assert!(on.member_self_similarity_gate_is_on());
+    assert!(on.admits_member_zncc_self_similarity_radius(0.4));
+    assert!(on.admits_member_zncc_self_similarity_radius(2.0));
+    assert!(!on.admits_member_zncc_self_similarity_radius(2.1));
+    assert!(!on.admits_member_zncc_self_similarity_radius(f64::NAN));
+    for bar in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let off = self_similarity_bar(bar);
+        assert!(!off.member_self_similarity_gate_is_on(), "bar {bar}");
+        assert!(off.admits_member_zncc_self_similarity_radius(f64::NAN));
+        assert!(off.admits_member_zncc_self_similarity_radius(3.0));
+    }
+    // The default is off (see `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`).
+    assert!(!KeypointLocalizeParams::default().member_self_similarity_gate_is_on());
+}
+
+#[test]
+fn a_reference_search_reports_the_view_s_own_self_similarity_radius() {
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0; 2]; 4];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, texture, edge_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    let p = params();
+    let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    let consensus = ReferenceConsensus::build(&patch, &views, &[0, 1], &[[cx, cy], [cx, cy]], &p)
+        .expect("two textured references");
+    let textured = consensus
+        .search(&patch, &views[2], None, false, &p)
+        .expect("a search");
+    let edge = consensus
+        .search(&patch, &views[3], None, false, &p)
+        .expect("a search");
+    assert!(
+        textured.zncc_self_similarity_radius < 1.0,
+        "{}",
+        textured.zncc_self_similarity_radius
+    );
+    assert_eq!(edge.zncc_self_similarity_radius, 3.0);
 }
 
 #[test]
@@ -2516,7 +2642,7 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
             // Hold the member localizability gate off: it would refuse these
             // flat tiles outright, and the path under test is the one the
             // *z-normalization* bail reaches.
-            max_member_keypoint_uncertainty: 0.0,
+            max_member_zncc_self_similarity_radius: 0.0,
             ..capped(3)
         },
     );
@@ -2538,7 +2664,7 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
         BasisEvidence::default(),
         &KeypointLocalizeParams {
             max_shift_px: 0.5,
-            max_member_keypoint_uncertainty: 0.0,
+            max_member_zncc_self_similarity_radius: 0.0,
             ..capped(3)
         },
     );

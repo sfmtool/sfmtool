@@ -73,7 +73,7 @@ class LocalizeKeypointsTransform:
         max_shift_px: float = 3.0,
         min_relative_zncc: float = 0.7,
         min_absolute_zncc: float = 0.5,
-        max_member_keypoint_uncertainty: float = 0.35,
+        max_member_zncc_self_similarity_radius: float = 0.0,
         min_grazing_cos: float = 0.1,
         resolution: int = 24,
         window: str = "gaussian_disk",
@@ -101,10 +101,10 @@ class LocalizeKeypointsTransform:
             raise ValueError(
                 f"min_absolute_zncc must be in [0, 1], got {min_absolute_zncc}"
             )
-        if max_member_keypoint_uncertainty < 0:
+        if max_member_zncc_self_similarity_radius < 0:
             raise ValueError(
-                f"max_member_keypoint_uncertainty must be >= 0, "
-                f"got {max_member_keypoint_uncertainty}"
+                f"max_member_zncc_self_similarity_radius must be >= 0, "
+                f"got {max_member_zncc_self_similarity_radius}"
             )
         if not 0 <= min_grazing_cos <= 1:
             raise ValueError(
@@ -136,7 +136,9 @@ class LocalizeKeypointsTransform:
         self.max_shift_px = max_shift_px
         self.min_relative_zncc = min_relative_zncc
         self.min_absolute_zncc = min_absolute_zncc
-        self.max_member_keypoint_uncertainty = max_member_keypoint_uncertainty
+        self.max_member_zncc_self_similarity_radius = (
+            max_member_zncc_self_similarity_radius
+        )
         self.min_grazing_cos = min_grazing_cos
         self.resolution = resolution
         self.window = window
@@ -182,7 +184,7 @@ class LocalizeKeypointsTransform:
             max_shift_px=self.max_shift_px,
             min_relative_zncc=self.min_relative_zncc,
             min_absolute_zncc=self.min_absolute_zncc,
-            max_member_keypoint_uncertainty=self.max_member_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius=self.max_member_zncc_self_similarity_radius,
             min_grazing_cos=self.min_grazing_cos,
             resolution=self.resolution,
             window=self.window,

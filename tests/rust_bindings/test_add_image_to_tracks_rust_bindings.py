@@ -112,7 +112,8 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
         dict(rule="pooled_or_track", track_basis="min", ascend_on_edge=True),
         dict(position_gate="image_mad", position_k=3.0),
         dict(position_gate="max_px", position_max_px=2.0),
-        dict(subpixel=False, max_keypoint_uncertainty=0.0),
+        dict(subpixel=False, max_zncc_self_similarity_radius=0.0),
+        dict(max_zncc_self_similarity_radius=2.0),
     ]:
         _, report = edited.add_image_to_tracks(IMAGE, pyramids, **kwargs)
         assert report["accepted"] >= 0
@@ -131,6 +132,36 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
             "too_far",
             "shared_keypoint",
         }
+
+
+def test_the_self_similarity_gate_refuses_what_is_over_its_bar(without_image, pyramids):
+    """Every searched candidate reports its core's ZNCC self-similarity radius,
+    and a bar refuses as ``unlocalizable`` exactly the candidates over it; the
+    default, ``0``, refuses none."""
+    edited = EditedReconstruction(without_image[0])
+    _, off = edited.add_image_to_tracks(IMAGE, pyramids)
+    radius = np.asarray(off["candidates"]["zncc_self_similarity_radius"])
+    refusal = off["candidates"]["refusal"]
+    assert "unlocalizable" not in off["refusal_counts"]
+    searched = np.isfinite(radius)
+    assert searched.any()
+    assert np.all((radius[searched] >= 0.0) & (radius[searched] <= 3.0))
+
+    bar = 1.0
+    _, gated = edited.add_image_to_tracks(
+        IMAGE, pyramids, max_zncc_self_similarity_radius=bar
+    )
+    g_refusal = gated["candidates"]["refusal"]
+    for k in range(len(refusal)):
+        if not searched[k]:
+            continue
+        if radius[k] > bar:
+            assert g_refusal[k] == "unlocalizable"
+        else:
+            assert g_refusal[k] != "unlocalizable"
+    assert gated["refusal_counts"]["unlocalizable"] == int(
+        np.sum(radius[searched] > bar)
+    )
 
 
 def test_bad_arguments_raise(without_image, pyramids):

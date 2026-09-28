@@ -361,7 +361,7 @@ def embed_patches(
     *,
     min_relative_zncc: float = 0.7,
     min_absolute_zncc: float = 0.5,
-    max_member_keypoint_uncertainty: float = 0.35,
+    max_member_zncc_self_similarity_radius: float = 0.0,
     patch_size: float = 11.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
@@ -438,13 +438,13 @@ def embed_patches(
             it is what refuses a two-view point made of two unrelated surfaces —
             there the relative bar is a fraction of the very pairwise correlation it
             is testing and always passes. ``0`` disables it.
-        max_member_keypoint_uncertainty: Localizer gate — drop a view whose **own**
-            rendered tile pins no 2D position (structure-tensor weak-axis ``σ_pos``
-            above this ``τ``, patch-grid px). The member-level counterpart of
-            ``max_keypoint_uncertainty``'s per-point consensus cull, same scorer,
-            same units, same default: a flat sky or water crop correlates to noise,
-            so it is refused before it is scored and never restored by the two-view
-            floor. ``0`` disables it.
+        max_member_zncc_self_similarity_radius: Localizer gate — drop a view
+            whose **own** rendered tile pins no 2D position: its ZNCC
+            self-similarity radius is above this, in patch-grid px. A flat sky
+            or water crop, or a lone straight edge, matches itself a few pixels
+            away, so it is refused before it is scored and never restored by
+            the two-view floor. The radius reads at most ``3``, so ``3`` or more
+            turns nothing out; ``0`` (the default) disables it.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the
@@ -659,7 +659,7 @@ def embed_patches(
             max_shift_px=max_shift_px,
             min_relative_zncc=min_relative_zncc,
             min_absolute_zncc=min_absolute_zncc,
-            max_member_keypoint_uncertainty=max_member_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             resolution=resolution,
             search_resolution_multiplier=search_resolution_multiplier,
             search_strategy=localize_search_strategy,

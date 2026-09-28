@@ -201,8 +201,8 @@ pub struct AddImageToTracksOptions {
     pub min_keypoint_separation_px: f64,
     /// The localizer's grid, window, sampler, search radius (`search`,
     /// patch-grid px), grazing cutoff (`min_grazing_cos`) and member
-    /// localizability gate (`max_member_keypoint_uncertainty`, `0` disables
-    /// it). Its per-view drop gates are not read.
+    /// self-similarity gate (`max_member_zncc_self_similarity_radius`, `0`
+    /// disables it). Its per-view drop gates are not read.
     pub localize: KeypointLocalizeParams,
     /// The sub-pixel solve's step and convergence settings; its grid, window,
     /// sampler and robust iterations are taken from [`Self::localize`].
@@ -319,9 +319,9 @@ pub struct CandidateReport {
     pub keypoint: Option<[f64; 2]>,
     /// The final keypoint's distance from the projection, source px.
     pub offset_px: f64,
-    /// The member localizability score of the new view's core at the
-    /// projection, patch-grid px.
-    pub sigma_pos: f64,
+    /// The ZNCC self-similarity radius of the new view's core at the
+    /// projection, patch-grid px: the number the member gate judges.
+    pub zncc_self_similarity_radius: f64,
     /// The ZNCC at the search's integer peak.
     pub peak_zncc: f64,
     /// The new view's ZNCC against the consensus, at the final keypoint.
@@ -348,7 +348,7 @@ impl CandidateReport {
             search_keypoint: None,
             keypoint: None,
             offset_px: f64::NAN,
-            sigma_pos: f64::NAN,
+            zncc_self_similarity_radius: f64::NAN,
             peak_zncc: f64::NAN,
             zncc: f64::NAN,
             pair_zncc: Vec::new(),
@@ -867,11 +867,13 @@ impl Context<'_, '_> {
                 return out;
             }
         };
-        out.sigma_pos = search.sigma_pos;
+        out.zncc_self_similarity_radius = search.zncc_self_similarity_radius;
         out.peak_zncc = search.peak_zncc;
         out.search_keypoint = search.keypoint;
-        let tau = self.localize.max_member_keypoint_uncertainty;
-        if tau.is_finite() && tau > 0.0 && search.sigma_pos > tau {
+        if !self
+            .localize
+            .admits_member_zncc_self_similarity_radius(search.zncc_self_similarity_radius)
+        {
             out.refusal = Some(Refusal::Unlocalizable);
             return out;
         }

@@ -105,8 +105,9 @@ the default is one of them.
 one `CandidateReport` with its outcome (`refusal` is `None` for an added
 observation, or a named `Refusal`) and the numbers the verdict was made on: the
 projection, the searched and final keypoints, the offset from the projection,
-the member localizability score, the ZNCC against the consensus and against
-each reference, the references' leave-one-out and pairwise ZNCCs, and the
+the ZNCC self-similarity radius of the new view's core
+(`zncc_self_similarity_radius`), the ZNCC against the consensus and against each
+reference, the references' leave-one-out and pairwise ZNCCs, and the
 number the rule compared with its bar. A caller can see why a point was not
 added, and a harness can re-judge without re-running. The refusals are
 `no_patch`, `not_in_frame`, `grazing`, `back_facing`, `too_few_references`,
@@ -153,8 +154,9 @@ For a point `p` with existing observations in images `J`, and the target image
    bitmap instead, on the bitmap's own grid, and the references still supply the
    leave-one-out and pairwise numbers.
 3. **Search.** The target's context tile is rendered once around the point's
-   projection and its own core is scored for localizability (`unlocalizable`
-   above `max_member_keypoint_uncertainty`). One windowed-ZNCC shift search over
+   projection and its own core's [ZNCC self-similarity
+   radius](../patch/zncc-self-similarity-radius.md) is read (`unlocalizable`
+   over `max_member_zncc_self_similarity_radius`, when that gate is on). One windowed-ZNCC shift search over
    `±search` patch-grid pixels then finds the peak: the tail registration's
    search, run exhaustively because it is one view per point. A peak on the edge
    of the window is `peak_at_edge`, because the true maximum may lie outside
@@ -242,7 +244,7 @@ keyword defaults.
 | `min_keypoint_separation_px` | `1.0` | One observation per place |
 | `localize.search` | `6.0` | Search radius, patch-grid px |
 | `localize.resolution` | `24` | Patch grid (a stored bitmap's own grid under `StoredBitmap`) |
-| `localize.max_member_keypoint_uncertainty` | `0.35` | Localizability gate `τ` |
+| `localize.max_member_zncc_self_similarity_radius` | `0` (off) | Self-similarity gate: the largest ZNCC self-similarity radius of the new view's core, patch-grid px ([why off](../patch/patch-keypoint-localization.md#the-member-gates-default)) |
 | `localize.min_grazing_cos` | `0.1` | Grazing cutoff |
 
 ## Python bindings
@@ -251,8 +253,8 @@ keyword defaults.
 basis_k, basis_fraction, track_basis, track_basis_k, track_basis_fraction,
 pair_statistic, pair_factor, min_zncc, position_gate, position_max_px,
 position_k, position_floor_px, template, require_facing, subpixel,
-ascend_on_edge, min_keypoint_separation_px, search, max_keypoint_uncertainty,
-min_grazing_cos, resolution)` in
+ascend_on_edge, min_keypoint_separation_px, search,
+max_zncc_self_similarity_radius, min_grazing_cos, resolution)` in
 [add_image_to_tracks.rs](../../../crates/sfmtool-py/src/reconstruction/add_image_to_tracks.rs)
 returns `(EditedReconstruction, report)`. `images` is one decoded image per
 image of the reconstruction, or an `ImagePyramidSet`. The rule and gates are
@@ -286,7 +288,8 @@ reference image leaves that reference out; the preconditions refuse by name.
 Binding tests in
 [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py)
 remove one image's observations from the seoul_bull ground truth and find them
-again at its ground-truth pose. The leave-one-image-out harness in
+again at its ground-truth pose, and check that a self-similarity bar refuses as
+`unlocalizable` exactly the candidates whose radius is over it. The leave-one-image-out harness in
 [`scripts/add_image_to_tracks/`](../../../scripts/add_image_to_tracks/README.md)
 measures recall, keypoint error and the retriangulation residuals of the tracks
 an image joins on ground-truth captures.

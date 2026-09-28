@@ -60,7 +60,7 @@ use super::track::{
 /// [`max_shift_px`](KeypointLocalizeParams::max_shift_px),
 /// [`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
 /// [`min_relative_zncc`](KeypointLocalizeParams::min_relative_zncc) and
-/// [`max_member_keypoint_uncertainty`](KeypointLocalizeParams::max_member_keypoint_uncertainty)
+/// [`max_member_zncc_self_similarity_radius`](KeypointLocalizeParams::max_member_zncc_self_similarity_radius)
 /// -- each delete a view from the answer, and a deleted view is a row the bench
 /// would show empty for a reason nothing recorded. On the bench the deleting is
 /// the person's: they see the number and turn the observation `out`, or move a
@@ -75,7 +75,7 @@ use super::track::{
 pub fn open_localizer() -> KeypointLocalizeParams {
     KeypointLocalizeParams {
         // Disabled exactly: each of the three reads "0 or non-finite is off".
-        max_member_keypoint_uncertainty: 0.0,
+        max_member_zncc_self_similarity_radius: 0.0,
         min_absolute_zncc: 0.0,
         min_relative_zncc: 0.0,
         max_shift_px: f64::MAX,

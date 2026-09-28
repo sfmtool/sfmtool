@@ -144,8 +144,8 @@ pub static N_TAIL: AtomicU64 = AtomicU64::new(0);
 /// seed offsets and face only the `max_shift_px` gate. A large share here means
 /// the cap's reported keypoints are partly un-refined seeds.
 pub static N_TAIL_NO_BASIS: AtomicU64 = AtomicU64::new(0);
-/// Views dropped by the member localizability gate
-/// ([`max_member_keypoint_uncertainty`](super::KeypointLocalizeParams::max_member_keypoint_uncertainty)),
+/// Views dropped by the member self-similarity gate
+/// ([`max_member_zncc_self_similarity_radius`](super::KeypointLocalizeParams::max_member_zncc_self_similarity_radius)),
 /// summed over points — their own tile pins no 2D position.
 pub static N_DROP_UNLOCALIZABLE: AtomicU64 = AtomicU64::new(0);
 /// Views dropped by the absolute leave-one-out floor

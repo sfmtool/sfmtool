@@ -503,7 +503,7 @@ def test_embed_patches_cli_localize_basis_views_forwards(
 def test_embed_patches_cli_absolute_localizer_gates_forward(
     monkeypatch, seoul_bull_workspace, tmp_path
 ):
-    """`--min-absolute-zncc` and `--max-member-keypoint-uncertainty` parse and
+    """`--min-absolute-zncc` and `--max-member-zncc-self-similarity-radius` parse and
     reach `embed_patches` as their matching kwargs, and the written file records
     them in its own `tool_options` (the merge would otherwise leave only the
     upstream operation's options there)."""
@@ -514,7 +514,7 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
         captured.update(
             {
                 k: kwargs.get(k)
-                for k in ("min_absolute_zncc", "max_member_keypoint_uncertainty")
+                for k in ("min_absolute_zncc", "max_member_zncc_self_similarity_radius")
             }
         )
         return real(recon, images, **{**kwargs, "resolution": 12})
@@ -528,7 +528,7 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
         str(out),
         "--min-absolute-zncc",
         "0.25",
-        "--max-member-keypoint-uncertainty",
+        "--max-member-zncc-self-similarity-radius",
         "0.5",
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
@@ -536,10 +536,10 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
     assert result.exit_code == 0, result.output
     assert captured == {
         "min_absolute_zncc": 0.25,
-        "max_member_keypoint_uncertainty": 0.5,
+        "max_member_zncc_self_similarity_radius": 0.5,
     }
 
     reloaded = SfmrReconstruction.load(str(out))
     opts = reloaded.metadata()["tool_options"]
     assert opts["min_absolute_zncc"] == 0.25
-    assert opts["max_member_keypoint_uncertainty"] == 0.5
+    assert opts["max_member_zncc_self_similarity_radius"] == 0.5

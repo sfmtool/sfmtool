@@ -20,13 +20,15 @@ are compared, this score's code names carry a `_deprecated` suffix:
 `score_localizability_parts_deprecated`, `LocalizabilityDeprecated`,
 `LocalizabilityPartsDeprecated` and `PatchCloud.score_localizability_deprecated`.
 The names of the gates built on it, their parameters and flags
-(`max_keypoint_uncertainty`, `max_member_keypoint_uncertainty`,
-`--filter-by-keypoint-uncertainty`), `SIGMA_NOISE`, the `.matches` status
-`rejected_unlocalizable` and the module `patch::localizability` keep their
-names, and the batch gates keep calling this score. The
-[editable track](../bench/editable-track.md) does not read it: the bench judges
-a sighting's tile by its ZNCC self-similarity radius, and its evaluation runs
-the cluster refinement with the member gate below turned off.
+(`max_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
+`SIGMA_NOISE`, the `.matches` status `rejected_unlocalizable` and the module
+`patch::localizability` keep their names, and those gates keep calling this
+score. The [editable track](../bench/editable-track.md) does not read it: the
+bench judges a sighting's tile by its ZNCC self-similarity radius, and its
+evaluation runs the cluster refinement with the member gate below turned off.
+Nor does the [keypoint localizer](patch-keypoint-localization.md): its member
+gate, `max_member_zncc_self_similarity_radius`, judges a view's own tile by the
+ZNCC self-similarity radius.
 
 ## Problem
 
@@ -102,18 +104,17 @@ admits partially-covered patches, revisit: the fix would be to zero the window w
 The consensus score grades a **point**. The same scorer, on the same `R×R`
 window with the same `σ_noise` and the same `τ` units, also grades a single
 **member**: one view's own rendered core tile, scored before that view is allowed
-to vote. Two gates use it that way, and both refuse a member rather than a point:
+to vote. [Cluster-patch refinement](cluster-patch-refinement.md) uses it that
+way for a cluster member's own template-grid patch (`max_keypoint_uncertainty`,
+status `rejected_unlocalizable`), refusing a member rather than a point. A
+member that pins no 2D position on its own — a flat sky or water crop, a lone
+straight edge — correlates to noise against any template, so its ZNCC carries no
+information about whether it registered.
 
-- [Keypoint localization](patch-keypoint-localization.md) scores each view's core
-  at its seed offset and drops the view when `σ_pos` exceeds
-  `max_member_keypoint_uncertainty` (same default `0.35` grid px). A member that
-  pins no 2D position on its own — a flat sky or water crop, a lone straight edge
-  — correlates to noise against any template, so its ZNCC carries no information
-  about whether it registered. Refusing it is not a consensus judgement and the
-  localizer's two-view floor does not restore it.
-- [Cluster-patch refinement](cluster-patch-refinement.md) does the same for a
-  cluster member's own template-grid patch (`max_keypoint_uncertainty`, status
-  `rejected_unlocalizable`).
+[Keypoint localization](patch-keypoint-localization.md) has a member gate too,
+but it judges the view's core by its
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md)
+(`max_member_zncc_self_similarity_radius`, off by default), not by this score.
 
 The two levels are complementary, not redundant: a point whose members are each
 localizable can still fuse a consensus that slides (the aperture case the
@@ -230,12 +231,10 @@ The scorer lives in
 as `PatchCloud.score_localizability_deprecated`, with the reconstruction-level filter in
 [_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
 
-One scorer, three entry points (plus two internal consumers, the member-level
-gates of [The per-member counterpart](#the-per-member-counterpart): the
+One scorer, three entry points (plus one internal consumer, the member-level
+gate of [The per-member counterpart](#the-per-member-counterpart): the
 [cluster-patch refinement](cluster-patch-refinement.md) kernel's
-`max_keypoint_uncertainty` and the [keypoint
-localizer](patch-keypoint-localization.md)'s
-`max_member_keypoint_uncertainty`, both calling `patch_localizability_deprecated` directly
+`max_keypoint_uncertainty`, calling `patch_localizability_deprecated` directly
 on the member's own tile with the shared `localizability::SIGMA_NOISE`):
 
 1. **Crate function** (a submodule sibling of `keypoint_localize` /
@@ -361,7 +360,6 @@ the round-1-vs-final mis-cull delta is measured.
 | `window` | `gaussian_disk` | scoring window (shared with the rest of the pipeline) |
 | `sigma_noise` | ~3 gray levels (global constant) | sets the absolute px scale of `σ_pos`; only the *ranking* is scale-free |
 | `max_keypoint_uncertainty` (`τ`) | `0.35` grid px | drop points with `σ_pos > τ` (**grid px** — transfers across resolution, see [Threshold](#threshold)); conservative self-limiting tail cut |
-| `max_member_keypoint_uncertainty` (`τ`) | `0.35` grid px | the member-level gate: drop a *view* whose own tile scores `σ_pos > τ`, in the localizer (see [The per-member counterpart](#the-per-member-counterpart)) |
 
 ## Evidence (prototype)
 
