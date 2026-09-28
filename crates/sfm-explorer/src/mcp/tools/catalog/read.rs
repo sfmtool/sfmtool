@@ -282,19 +282,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           weighted equally, as three rows of three from the top-left, in the \
                           layout the patch tile is drawn in. It says where in the patch an \
                           agreement or a disagreement is; a cell is null where the patch is flat \
-                          over it, and the grid is null where zncc is. Beside \
-                          localizability_deprecated (sigma_pos of the observation's own tile, \
-                          in grid px, the score the ZNCC self-similarity radius is being \
-                          compared against) are localizability_middle_deprecated, the middle \
-                          square of the same tile scored alone, and \
-                          localizability_grid_deprecated, each cell of the same split scored \
-                          alone with every pixel weighted equally, and \
-                          localizability_slide_deprecated, per cell an [x, y] vector (x \
-                          column-right, y row-down) along which a match could slide, of length \
-                          1 - lambda2/lambda1: near 1 on a straight edge, near 0 on a corner or \
-                          where the cell is flat. A part has fewer pixels than the whole, so it \
-                          reads higher for the same texture. Both grids cover the whole square, \
-                          corners included. zncc_self_similarity_radius is how far, in grid px, \
+                          over it, and the grid is null where zncc is. \
+                          zncc_self_similarity_radius is how far, in grid px, \
                           the tile's core can slide over itself and still match itself as well \
                           as a true match between two views would, read where its ZNCC against \
                           itself, interpolated linearly between whole-pixel shifts, falls through \

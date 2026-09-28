@@ -721,7 +721,7 @@ pub(crate) struct ThresholdChange {
     pub(crate) min_zncc: Option<f64>,
     pub(crate) min_zncc_middle: Option<f64>,
     pub(crate) max_shift_px: Option<f64>,
-    pub(crate) max_keypoint_uncertainty: Option<f64>,
+    pub(crate) max_zncc_self_similarity_radius: Option<f64>,
     pub(crate) min_relative_zncc: Option<f64>,
 }
 
@@ -741,8 +741,8 @@ impl ThresholdChange {
         if let Some(value) = self.max_shift_px {
             next.max_shift_px = value;
         }
-        if let Some(value) = self.max_keypoint_uncertainty {
-            next.max_keypoint_uncertainty = value;
+        if let Some(value) = self.max_zncc_self_similarity_radius {
+            next.max_zncc_self_similarity_radius = value;
         }
         if let Some(value) = self.min_relative_zncc {
             next.min_relative_zncc = value;

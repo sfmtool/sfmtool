@@ -661,11 +661,11 @@ cannot say which of two tracks it belongs to.
 #### The thresholds
 
 Five boxes, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
-maximum shift, maximum keypoint uncertainty and minimum relative ZNCC, so no bar
-is one only the wire can move. Each is its label and a number box: dragging the
-box left or right changes the bar (half a percent per point for the ZNCC bars,
-0.05 grid px per point for the shift, 0.005 per point for the keypoint
-uncertainty),
+maximum shift, maximum self-similarity radius and minimum relative ZNCC, so no
+bar is one only the wire can move. Each is its label and a number box: dragging
+the box left or right changes the bar (half a percent per point for the ZNCC
+bars, 0.05 grid px per point for the shift, 0.02 grid px per point for the
+self-similarity radius),
 and clicking it takes a typed value. There is no slider rail beside it, since a
 rail would say nothing the box does not. The first four are the bars the painting reads;
 the fifth is the fraction of the track's own self-agreement a geometry search's view is
@@ -683,6 +683,12 @@ bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"). Its label's hover text says so.
 There is no separate search radius.
+*self-sim. px*, the largest self-similarity radius, is in patch-grid px, 2 on a
+new track, and takes `0` to `3` to one decimal. It judges the whole tile's
+radius, the upper reading in the *Self-similarity* column; `3`, the largest
+radius read, turns nothing out, and a row with no reading clears it. Its label's
+hover text says what the radius is, what a row past the bar is, and that `3`
+turns nothing out.
 
 **A box applies to the active track when it is let go.** Dragging one
 repaints the table live; releasing it sets the track's bars to where the five
@@ -717,17 +723,16 @@ column holds; the *Keep* heading's says what a kept observation is used for,
 when the thresholds set the switch, and what a click on the switch and on the
 pin does. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
 whole patch and `mid` over its middle half, what the two apart mean, and how
-the grid beside them is coloured. The *σ_pos* heading's says it is the
-deprecated score, shown while it is compared with the self-similarity radius,
-and then the same of its two readings and its grid. The *Self-similarity* heading's
+the grid beside them is coloured. The *Self-similarity* heading's
 says what the radius is and what its two readings, its colours and its lines
-mean. The *Proj. err* heading's says what the error is measured to before and
+mean, and ends by saying that the *self-sim. px* bar judges the whole tile's
+radius. The *Proj. err* heading's says what the error is measured to before and
 after the track is triangulated, and that the degrees are the same residual as
 an angle.
 
 **A cell with two readings prints them on two lines**, each with its unit, and
 the whole patch's and the middle's each with its name: `93% whole` over
-`89% mid`, `0.08 px whole` over `0.12 px mid`, and `0.65 px` over `0.08°` for
+`89% mid`, `0.4 px whole` over `1.4 px mid`, and `0.65 px` over `0.08°` for
 the reprojection error. The rows are tall enough for the tile, so the second
 line costs no height, and a reading that names its own part and unit needs no
 explanation in the heading, which carries the column's name alone. A reading
@@ -740,7 +745,6 @@ that is not there prints a bare `-`, with no unit.
 | Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
-| σ_pos | the tile's deprecated localizability over its middle square's: `0.08 px whole` over `0.12 px mid`, then the localizability grid | the same |
 | Self-similarity | the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within *shift px*, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
@@ -778,23 +782,6 @@ corner that disagrees. A box is red at a ZNCC of `0.5` and below, green at
 absent where the cell prints `-`. Hovering it shows its nine numbers in
 percent, in the same layout.
 
-**The σ_pos cell holds the same pair and a grid of its own.** `whole` is the
-tile's localizability, the one the *max σ_pos* bar judges; `mid` is its middle
-square's alone; the grid is each ninth of the tile scored alone
-(§ "The parts of the localizability" of the same spec). A part has fewer pixels
-than the whole, so it reads higher for the same texture. Each box also carries
-a dark mark saying how many directions that ninth pins, judged by the same bar:
-a `+` when its uncertainty along its weaker axis is at or under the bar, so it
-pins both; a line along the slide when only the stronger axis is under the bar,
-as on a straight edge, where a match could slide along the line; and nothing
-when neither is. The stronger axis's uncertainty is the cell's times
-`sqrt(1 - |slide|)`, so the mark needs nothing beyond
-`localizability_grid_deprecated` and `localizability_slide_deprecated`. A box
-is green at half
-the track's *max σ_pos* bar and below, red at twice the bar and above, and
-yellow at the bar, on a log scale so that each doubling moves the colour the
-same distance; each reading prints to two decimals.
-
 **The Self-similarity cell holds the ZNCC self-similarity radius** (see
 [`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
 and § "The ZNCC self-similarity radius" of
@@ -809,8 +796,8 @@ alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
 `3` and red at `3` or more, and carries a dark
 line along its slide where the slide is at least `0.5` long, so the ninth's
 matching shifts line up along one direction, as on an edge. Hovering it shows
-its nine numbers as the cell prints them. No bar judges the radius, so it
-colours nothing in the row's painting.
+its nine numbers as the cell prints them. The *self-sim. px* bar judges
+`whole`; the middle and the grid are shown and judged by no bar.
 
 **Beside the grid is the core's surface plot**: the whole core's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between

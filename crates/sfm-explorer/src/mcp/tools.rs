@@ -513,7 +513,8 @@ pub(crate) fn parse(
                 min_zncc: args.optional_f64("min_zncc")?,
                 min_zncc_middle: args.optional_f64("min_zncc_middle")?,
                 max_shift_px: args.optional_f64("max_shift_px")?,
-                max_keypoint_uncertainty: args.optional_f64("max_keypoint_uncertainty")?,
+                max_zncc_self_similarity_radius: args
+                    .optional_f64("max_zncc_self_similarity_radius")?,
                 min_relative_zncc: args.optional_f64("min_relative_zncc")?,
             },
         },

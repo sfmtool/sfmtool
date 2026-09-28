@@ -2701,14 +2701,9 @@ a three-by-three split of the patch with every pixel weighted equally, as three
 rows of three from the top-left in the layout the tile is drawn in (§ "The ZNCC
 grid" of the same spec), with null in a cell the patch is flat over and null
 for the whole grid where `zncc` is null; the `track` block carries
-`walked_zncc_grid` beside `walked_zncc_middle`. Beside
-`localizability_deprecated` both blocks carry
-`localizability_middle_deprecated` and `localizability_grid_deprecated`, the
-same tile's middle square and each of its ninths scored alone, and
-`localizability_slide_deprecated`, per cell an `[x, y]` vector along which a
-match could slide, as long as the slide is free (§ "The parts of the
-localizability"). Both grids cover the whole square of the patch, corners
-included. **Both blocks also carry the ZNCC self-similarity radius** (§ "The
+`walked_zncc_grid` beside `walked_zncc_middle`. The grid covers the whole square
+of the patch, corners included. **Both blocks also carry the ZNCC
+self-similarity radius** (§ "The
 ZNCC self-similarity radius" of the same spec): `zncc_self_similarity_radius`
 and `zncc_self_similarity_radius_middle`, how far in grid px the tile's core
 and its middle square slide over themselves and still match themselves, `3`
@@ -2721,10 +2716,13 @@ every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
 `zncc_self_similarity_tolerance`, the deficit the core was judged by, so the
 radius is read on the surface at `1 -` that value. Each is null where the tile
 could not be read. The
-`thresholds` block and `apply_bench_track_thresholds` carry the matching bar,
+`thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
-off at `0`.
-The bound is the track's `max_shift_px`, 8 px by default on the bench. **A refused
+off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2` on a
+new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
+further is painted `out`, a row with no reading clears it, and at `3`, the
+largest radius read, it turns nothing out.
+The bound is the track's `max_shift_px`, 6 px by default on the bench. **A refused
 walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 `pixel`: that is Track View's *Accept walk*, and like any placed sighting it pins
 the observation and drops the measurements read at the seed. No tool of its own

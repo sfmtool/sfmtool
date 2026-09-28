@@ -15,7 +15,6 @@ use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{ClusterRefineParams, MemberStatus};
-use crate::patch::keypoint_localize::KeypointLocalizeParams;
 use crate::patch::view_selection::ViewSelectParams;
 
 /// Where an observation came from.
@@ -135,28 +134,6 @@ pub struct ClusterMeasurement {
     /// measured in the unit [`Thresholds::max_shift_px`] and the self-similarity
     /// radius are.
     pub shift_px: Option<f64>,
-    /// The observation's own tile localizability, sigma_pos in template-grid
-    /// px.
-    pub localizability_deprecated: Option<f64>,
-    /// The localizability of the middle square of the same tile alone, the
-    /// rows and columns `R/4 .. R - R/4`, sigma_pos in template-grid px. Reads higher
-    /// than [`Self::localizability_deprecated`] for the same texture, because it has
-    /// fewer pixels to pin a position with. `None` wherever `localizability_deprecated`
-    /// is.
-    pub localizability_middle_deprecated: Option<f64>,
-    /// The localizability of each cell of the ZNCC grid's three-by-three split
-    /// of the same tile alone, with every pixel weighted equally, sigma_pos in
-    /// template-grid px, `grid[row][col]` from the top-left cell. It says which parts
-    /// of the tile carry the texture that pins a position. `None` wherever
-    /// `localizability_deprecated` is.
-    pub localizability_grid_deprecated: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::localizability_grid_deprecated`], the direction a match
-    /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
-    /// template-grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
-    /// `1` on a straight edge and near `0` where both axes are pinned alike or
-    /// the cell is flat. Its sign means nothing. `None` wherever
-    /// `localizability_deprecated` is.
-    pub localizability_slide_deprecated: Option<[[[f64; 2]; 3]; 3]>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
     /// template-grid px: the length of the furthest whole-pixel shift at which
     /// the tile's core still matches itself within the tolerance a true match
@@ -208,10 +185,6 @@ impl ClusterMeasurement {
             zncc_middle: None,
             zncc_grid: None,
             shift_px: None,
-            localizability_deprecated: None,
-            localizability_middle_deprecated: None,
-            localizability_grid_deprecated: None,
-            localizability_slide_deprecated: None,
             zncc_self_similarity_radius: None,
             zncc_self_similarity_radius_middle: None,
             zncc_self_similarity_radius_grid: None,
@@ -360,27 +333,6 @@ pub struct TrackMeasurement {
     /// lenses and depths. The same number Track View's
     /// *Angle* column shows for a committed track.
     pub ray_angle_deg: Option<f64>,
-    /// The observation's own tile localizability, sigma_pos in grid px.
-    pub localizability_deprecated: Option<f64>,
-    /// The localizability of the middle square of the same tile alone, the
-    /// rows and columns `R/4 .. R - R/4`, sigma_pos in grid px. Reads higher
-    /// than [`Self::localizability_deprecated`] for the same texture, because it has
-    /// fewer pixels to pin a position with. `None` wherever `localizability_deprecated`
-    /// is.
-    pub localizability_middle_deprecated: Option<f64>,
-    /// The localizability of each cell of the ZNCC grid's three-by-three split
-    /// of the same tile alone, with every pixel weighted equally, sigma_pos in
-    /// grid px, `grid[row][col]` from the top-left cell. It says which parts
-    /// of the tile carry the texture that pins a position. `None` wherever
-    /// `localizability_deprecated` is.
-    pub localizability_grid_deprecated: Option<[[f64; 3]; 3]>,
-    /// For each cell of [`Self::localizability_grid_deprecated`], the direction a match
-    /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
-    /// grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
-    /// `1` on a straight edge and near `0` where both axes are pinned alike or
-    /// the cell is flat. Its sign means nothing. `None` wherever
-    /// `localizability_deprecated` is.
-    pub localizability_slide_deprecated: Option<[[[f64; 2]; 3]; 3]>,
     /// The ZNCC self-similarity radius of the observation's own tile, in
     /// grid px: the length of the furthest whole-pixel shift at which
     /// the tile's core still matches itself within the tolerance a true match
@@ -684,15 +636,18 @@ pub struct Origin {
 
 /// The bars the threshold painting judges an observation against.
 ///
-/// Two of the defaults are read from the kernels' own parameter types rather
-/// than written out again, so the bench and the batch pass start from the same
-/// bar and moving one is the person choosing to differ. The other three are the
-/// bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
+/// [`Self::min_relative_zncc`]'s default is read from view selection's own
+/// parameter type rather than written out again, so the bench and the batch
+/// pass start from the same bar and moving it is the person choosing to
+/// differ. The other four are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
 /// fit may move a sighting, and the cluster refinement's 3 px turned away walks
 /// a person wanted. [`BENCH_MIN_ZNCC`] and [`BENCH_MIN_ZNCC_MIDDLE`]: the
 /// cluster refinement's `0.85` judges the score it reached by fitting a whole
 /// affine warp, and the track stage's leave-one-out score runs lower on correct
 /// sightings, so that bar turned out sightings a person would keep.
+/// [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`]: the batch passes gate on the
+/// older localizability score, which the self-similarity radius replaces on
+/// the bench.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
@@ -706,8 +661,8 @@ pub struct Thresholds {
     /// `0` turns the bar off. The default is [`BENCH_MIN_ZNCC_MIDDLE`]. An
     /// observation with no middle reading, because its middle is flat or it
     /// was read back from a committed point, has nothing to judge and clears
-    /// the bar, as a row with no localizability clears
-    /// [`Self::max_keypoint_uncertainty`].
+    /// the bar, as a row with no self-similarity reading clears
+    /// [`Self::max_zncc_self_similarity_radius`].
     pub min_zncc_middle: f64,
     /// How far the correlation peak may sit from where the observation sits, in
     /// **patch-grid px**: [`ClusterMeasurement::shift_px`] at the cluster stage
@@ -727,9 +682,20 @@ pub struct Thresholds {
     /// fit's kernels would move further than this from where it sat keeps its
     /// place ([`TrackMeasurement::walked_px`]).
     pub max_shift_px: f64,
-    /// The largest tile localizability sigma_pos an observation may have, in
-    /// grid px.
-    pub max_keypoint_uncertainty: f64,
+    /// The largest ZNCC self-similarity radius an observation's own tile may
+    /// have, in patch-grid px: [`ClusterMeasurement::zncc_self_similarity_radius`]
+    /// at the cluster stage and [`TrackMeasurement::zncc_self_similarity_radius`]
+    /// at the track stage. It turns out a sighting whose patch can slide over
+    /// itself further than this and still match, such as a straight edge or a
+    /// flat patch, whose position a match cannot pin.
+    ///
+    /// The radius reads at most the largest shift searched, `3` by default,
+    /// which stands for "that far or further", so a bar at or above it turns
+    /// nothing out. The default is [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`].
+    /// An observation with no reading, because its tile could not be sampled
+    /// or it was read back from a committed point, has nothing to judge and
+    /// clears the bar.
+    pub max_zncc_self_similarity_radius: f64,
     /// The fraction of the track's own self-agreement a candidate's ZNCC has to
     /// reach, which view selection scores a sweep candidate by.
     pub min_relative_zncc: f64,
@@ -759,6 +725,17 @@ pub const BENCH_MIN_ZNCC: f64 = 0.7;
 /// turn out correct sightings the whole bar keeps.
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 
+/// The bench's default [`Thresholds::max_zncc_self_similarity_radius`], in
+/// patch-grid px.
+///
+/// Under the largest shift the reading searches (`3`), so a tile that still
+/// matches itself at the edge of the search is turned out, and at the radius
+/// where Track View's self-similarity cells turn from yellow to orange: a
+/// corner or a busy texture reads under `1`, and a patch that slides `2` px
+/// along an edge or across a flat area before it stops matching itself does
+/// not pin a position well enough to keep.
+pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.0;
+
 // The middle bar sits no higher than the whole bar, for the reason above.
 const _: () = assert!(BENCH_MIN_ZNCC_MIDDLE <= BENCH_MIN_ZNCC);
 
@@ -768,8 +745,7 @@ impl Default for Thresholds {
             min_zncc: BENCH_MIN_ZNCC,
             min_zncc_middle: BENCH_MIN_ZNCC_MIDDLE,
             max_shift_px: BENCH_MAX_SHIFT_PX,
-            max_keypoint_uncertainty: KeypointLocalizeParams::default()
-                .max_member_keypoint_uncertainty,
+            max_zncc_self_similarity_radius: BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
             min_relative_zncc: ViewSelectParams::default().min_relative_zncc,
         }
     }

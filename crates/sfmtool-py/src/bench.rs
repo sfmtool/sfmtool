@@ -238,24 +238,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         if let Some(v) = m.shift_px {
             c.set_item("shift_px", v)?;
         }
-        if let Some(v) = m.localizability_deprecated {
-            c.set_item("localizability_deprecated", v)?;
-        }
-        if let Some(v) = m.localizability_middle_deprecated {
-            c.set_item("localizability_middle_deprecated", v)?;
-        }
-        if let Some(g) = m.localizability_grid_deprecated {
-            c.set_item(
-                "localizability_grid_deprecated",
-                grid_array(g).into_pyarray(py),
-            )?;
-        }
-        if let Some(s) = m.localizability_slide_deprecated {
-            c.set_item(
-                "localizability_slide_deprecated",
-                slide_array(s).into_pyarray(py),
-            )?;
-        }
         set_self_similarity(
             py,
             &c,
@@ -284,12 +266,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("projection_offset_px", m.projection_offset_px),
             ("reprojection_error", m.reprojection_error),
             ("ray_angle_deg", m.ray_angle_deg),
-            ("localizability_deprecated", m.localizability_deprecated),
-            // The middle of the same tile scored alone.
-            (
-                "localizability_middle_deprecated",
-                m.localizability_middle_deprecated,
-            ),
             // Present exactly when the last fit refused the walk and left this
             // sighting at its seed; the number is how far the peak sat, and
             // `walked_zncc` what the localizer scored there.
@@ -304,21 +280,11 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
         for (key, grid) in [
             ("zncc_grid", m.zncc_grid),
-            (
-                "localizability_grid_deprecated",
-                m.localizability_grid_deprecated,
-            ),
             ("walked_zncc_grid", m.walked_zncc_grid),
         ] {
             if let Some(grid) = grid {
                 t.set_item(key, grid_array(grid).into_pyarray(py))?;
             }
-        }
-        if let Some(s) = m.localizability_slide_deprecated {
-            t.set_item(
-                "localizability_slide_deprecated",
-                slide_array(s).into_pyarray(py),
-            )?;
         }
         set_self_similarity(
             py,
@@ -495,7 +461,10 @@ impl PyEditableTrack {
         d.set_item("min_zncc", t.min_zncc)?;
         d.set_item("min_zncc_middle", t.min_zncc_middle)?;
         d.set_item("max_shift_px", t.max_shift_px)?;
-        d.set_item("max_keypoint_uncertainty", t.max_keypoint_uncertainty)?;
+        d.set_item(
+            "max_zncc_self_similarity_radius",
+            t.max_zncc_self_similarity_radius,
+        )?;
         d.set_item("min_relative_zncc", t.min_relative_zncc)?;
         Ok(d)
     }
@@ -1229,7 +1198,7 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
 #[pyo3(signature = (
-    track, *, min_zncc = None, max_shift_px = None, max_keypoint_uncertainty = None,
+    track, *, min_zncc = None, max_shift_px = None, max_zncc_self_similarity_radius = None,
     min_relative_zncc = None, min_zncc_middle = None
 ))]
 fn apply_thresholds(
@@ -1237,7 +1206,7 @@ fn apply_thresholds(
     track: &PyEditableTrack,
     min_zncc: Option<f64>,
     max_shift_px: Option<f64>,
-    max_keypoint_uncertainty: Option<f64>,
+    max_zncc_self_similarity_radius: Option<f64>,
     min_relative_zncc: Option<f64>,
     min_zncc_middle: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
@@ -1246,7 +1215,10 @@ fn apply_thresholds(
     for (slot, value) in [
         (&mut t.min_zncc, min_zncc),
         (&mut t.max_shift_px, max_shift_px),
-        (&mut t.max_keypoint_uncertainty, max_keypoint_uncertainty),
+        (
+            &mut t.max_zncc_self_similarity_radius,
+            max_zncc_self_similarity_radius,
+        ),
         (&mut t.min_relative_zncc, min_relative_zncc),
         (&mut t.min_zncc_middle, min_zncc_middle),
     ] {
@@ -1454,7 +1426,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// the refinement kernel is run over it: the kernel picks the reference, cuts
 /// the template there and warps every other seed onto it, and each observation
 /// gets the refined position and shape, the achieved ZNCC, the drift from its
-/// seed, its own tile's deprecated localizability and ZNCC self-similarity
+/// seed, its own tile's ZNCC self-similarity
 /// radius, and the kernel's ``member_status``. No pose is read.
 ///
 /// At the **track stage** one round of the localizer scores every observation
@@ -1463,7 +1435,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// peak sits from the observation itself), ``projection_offset_px`` (how far
 /// the observation sits from the point's projection -- the number that says how
 /// far the *point* is off), the reprojection error, the ray angle, and its tile's
-/// deprecated localizability and ZNCC self-similarity radius.
+/// ZNCC self-similarity radius.
 ///
 /// The peak is looked for within the track's ``max_shift_px`` of each
 /// observation, in patch-grid px, the bar the shift is judged by; both shifts

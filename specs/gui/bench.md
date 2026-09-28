@@ -1059,9 +1059,7 @@ every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at both stages `zncc_middle` and `zncc_grid`
 beside `zncc` (the same samples read over the middle square of the patch and
 over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
-[`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and
-`localizability_middle_deprecated`, `localizability_grid_deprecated` and
-`localizability_slide_deprecated` beside `localizability_deprecated`, and the ZNCC
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and the ZNCC
 self-similarity radius `zncc_self_similarity_radius` with its `_middle` and
 `_grid`, `zncc_self_similarity_slide_grid`, `zncc_self_similarity_surface` and
 `zncc_self_similarity_tolerance`

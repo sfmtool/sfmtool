@@ -792,7 +792,7 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         let measurement = observation.track.as_mut().expect("a track slot");
         measurement.zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
-        measurement.localizability_deprecated = Some(0.1);
+        measurement.zncc_self_similarity_radius = Some(0.5);
     }
     track
 }
@@ -843,6 +843,43 @@ fn the_painting_judges_the_middle_zncc_against_its_own_bar() {
         .as_mut()
         .expect("a slot")
         .zncc_middle = None;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[1].verdict, Verdict::In);
+}
+
+/// The self-similarity bar turns out a row whose tile slides over itself
+/// further than the bar, turns out nothing at the largest radius searched, and
+/// has nothing to judge on a row with no reading.
+#[test]
+fn the_painting_judges_the_self_similarity_radius_against_its_bar() {
+    let mut track = scored_track([0.95, 0.96]);
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a slot")
+        .zncc_self_similarity_radius = Some(3.0);
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(painted.observations[0].verdict, Verdict::In);
+    assert_eq!(
+        painted.observations[1].verdict,
+        Verdict::Out,
+        "a patch that still matches itself 3 px away is turned out"
+    );
+
+    track.thresholds.max_zncc_self_similarity_radius = 3.0;
+    let (painted, _) = apply_thresholds(&track);
+    assert_eq!(
+        painted.verdict_counts().0,
+        2,
+        "a bar at the largest radius is off"
+    );
+
+    track.thresholds = Thresholds::default();
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a slot")
+        .zncc_self_similarity_radius = None;
     let (painted, _) = apply_thresholds(&track);
     assert_eq!(painted.observations[1].verdict, Verdict::In);
 }
@@ -1798,7 +1835,6 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         assert!(m.zncc.expect("a score") > 0.5, "image {image}");
         assert_eq!(m.reason, None);
         assert!(m.seed_shift_px.expect("a peak") < 1.0);
-        assert!(m.localizability_deprecated.expect("a scored tile") > 0.0);
         assert!(m.reprojection_error.expect("a residual") < 1.0);
         // The parts of the same readings come with them.
         let grid = m.zncc_grid.expect("a ZNCC grid beside the ZNCC");
@@ -1807,12 +1843,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
             .flatten()
             .all(|z| z.is_nan() || z.abs() <= 1.0 + 1e-9));
         assert!(grid.iter().flatten().any(|z| z.is_finite()));
-        assert!(m.localizability_middle_deprecated.expect("a middle score") > 0.0);
-        let sigmas = m
-            .localizability_grid_deprecated
-            .expect("a localizability grid");
-        assert!(sigmas.iter().flatten().all(|s| s.is_nan() || *s > 0.0));
-        // The self-similarity is read wherever the localizability is.
+        // The self-similarity is read with them.
         assert_self_similarity(
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
@@ -1961,8 +1992,13 @@ fn an_evaluation_gives_a_first_reading_the_proposed_verdict() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
+    // The scene's plane is smooth over a tile, so its patches read the largest
+    // self-similarity radius; the bar is set where it turns nothing out, so
+    // the ZNCC bars decide.
+    let mut on_the_bench = track_of(&bench, &label);
+    on_the_bench.thresholds.max_zncc_self_similarity_radius = 3.0;
     let (track, added) = add_observation(
-        &track_of(&bench, &label),
+        &on_the_bench,
         &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
     )
     .expect("a finite pixel");
@@ -2318,11 +2354,8 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         let m = observation.cluster.as_ref().expect("a cluster slot");
         assert!(m.status.is_some());
         assert!(m.position.is_some(), "both members were fitted");
-        assert!(m.localizability_deprecated.expect("a scored tile") > 0.0);
         // The parts of the same readings come with them.
         assert!(m.zncc_grid.is_some(), "a ZNCC grid beside the ZNCC");
-        assert!(m.localizability_middle_deprecated.expect("a middle score") > 0.0);
-        assert!(m.localizability_grid_deprecated.is_some());
         assert_self_similarity(
             m.zncc_self_similarity_radius,
             m.zncc_self_similarity_radius_middle,
@@ -5017,6 +5050,25 @@ fn the_bench_s_zncc_bars_default_below_the_cluster_refinement_s() {
     assert_eq!(Thresholds::default().min_zncc_middle, BENCH_MIN_ZNCC_MIDDLE);
     // The kernel keeps its own bar: the batch pass is not moved by the bench.
     assert_eq!(ClusterRefineParams::default().min_zncc, 0.85);
+}
+
+#[test]
+fn the_bench_s_self_similarity_bar_sits_under_the_largest_radius_searched() {
+    use crate::patch::self_similarity::SelfSimilarityParams;
+    assert_eq!(
+        Thresholds::default().max_zncc_self_similarity_radius,
+        BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS
+    );
+    assert!(
+        BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS
+            < f64::from(SelfSimilarityParams::default().max_radius),
+        "a bar at the largest radius would turn nothing out"
+    );
+    // The bench's refinement does not gate on the older localizability score.
+    assert_eq!(
+        EvaluateOptions::default().cluster.max_keypoint_uncertainty,
+        0.0
+    );
 }
 
 #[test]

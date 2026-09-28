@@ -932,7 +932,7 @@ still charges one on another piece of surface, or an `in` view with no keypoint.
 - **Photometry**
   - `zncc_median` / `_min`: leave-one-out ZNCC, set against the same
     `evaluate` reading of the GT point (`gt_zncc_*`, `zncc_median_delta`).
-  - `localizability_*` and `reproj_median`.
+  - `self_similarity_*` (the ZNCC self-similarity radius) and `reproj_median`.
 - **Cost**
   - `seconds` per query.
 
@@ -956,7 +956,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Sub-pixel refinement against the consensus | `PatchCloud.refine_keypoints` |
 | Normal refinement | `PatchCloud.refine_normals` |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
-| Localizability | `PatchCloud.score_localizability_deprecated` |
+| ZNCC self-similarity radius | `sfmtool._sfmtool.patches.zncc_self_similarity_parts` |
 | Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |
 | Cluster refinement | `matching.refine_cluster_patches` |
 

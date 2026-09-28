@@ -1426,7 +1426,7 @@ fn thresholds(bars: &Thresholds) -> Value {
         "min_zncc": bars.min_zncc,
         "min_zncc_middle": bars.min_zncc_middle,
         "max_shift_px": bars.max_shift_px,
-        "max_keypoint_uncertainty": bars.max_keypoint_uncertainty,
+        "max_zncc_self_similarity_radius": bars.max_zncc_self_similarity_radius,
         "min_relative_zncc": bars.min_relative_zncc,
     })
 }
@@ -1517,12 +1517,6 @@ fn cluster_measurement(observation: &Observation) -> Value {
         // And over each ninth of the patch, rows from the top.
         "zncc_grid": grid(measured.zncc_grid),
         "shift_px": finite(measured.shift_px),
-        "localizability_deprecated": finite(measured.localizability_deprecated),
-        // The same tile's middle and each ninth of it, scored alone.
-        "localizability_middle_deprecated": finite(measured.localizability_middle_deprecated),
-        "localizability_grid_deprecated": grid(measured.localizability_grid_deprecated),
-        // Per cell, the direction a match could slide and how freely.
-        "localizability_slide_deprecated": slides(measured.localizability_slide_deprecated),
         // How far the tile's core can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
         // ninth too, with each ninth's slide direction, and the core's ZNCC
@@ -1563,12 +1557,6 @@ fn track_measurement(observation: &Observation) -> Value {
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
-        "localizability_deprecated": finite(measured.localizability_deprecated),
-        // The same tile's middle and each ninth of it, scored alone.
-        "localizability_middle_deprecated": finite(measured.localizability_middle_deprecated),
-        "localizability_grid_deprecated": grid(measured.localizability_grid_deprecated),
-        // Per cell, the direction a match could slide and how freely.
-        "localizability_slide_deprecated": slides(measured.localizability_slide_deprecated),
         // How far the tile's core can slide over itself and still match
         // itself, in grid px, 3 meaning 3 or more; over the middle and each
         // ninth too, with each ninth's slide direction, and the core's ZNCC

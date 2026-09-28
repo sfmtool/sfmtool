@@ -593,10 +593,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         ),
                     ),
                     (
-                        "max_keypoint_uncertainty",
+                        "max_zncc_self_similarity_radius",
                         threshold_schema(
-                            "The largest tile localizability sigma_pos an observation may carry, \
-                             in template-grid px.",
+                            "The largest zncc_self_similarity_radius an observation's own tile \
+                             may have, in patch-grid px: how far the tile can slide over itself \
+                             and still match, as along a straight edge or over a flat patch. The \
+                             radius reads at most 3, which means 3 or more, so 3 turns nothing \
+                             out. The bench's default is 2. An observation with no reading \
+                             clears it.",
                         ),
                     ),
                     (

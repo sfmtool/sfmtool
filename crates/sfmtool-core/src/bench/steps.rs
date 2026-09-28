@@ -2235,7 +2235,7 @@ fn place_keypoints(
 /// Drop every track measurement but the keypoint it was read at.
 ///
 /// What a change to the patch invalidates, stated once: the ZNCC, both
-/// distances, the reprojection residual, the localizability and the reason were
+/// distances, the reprojection residual, the self-similarity and the reason were
 /// all read over the square as it stood and against the position it stood at,
 /// and neither holds after the patch has been resized, moved or turned. Where
 /// each sighting sits is not one of those things, so it stays.
@@ -2468,14 +2468,14 @@ fn proposed_verdict(
     stage: StageKind,
     thresholds: &Thresholds,
 ) -> Option<Verdict> {
-    let (zncc, middle, shift, localizability) = match stage {
+    let (zncc, middle, shift, radius) = match stage {
         StageKind::Cluster => {
             let m = observation.cluster.as_ref()?;
             (
                 m.zncc?,
                 m.zncc_middle,
                 m.shift_px,
-                m.localizability_deprecated,
+                m.zncc_self_similarity_radius,
             )
         }
         StageKind::Track => {
@@ -2484,7 +2484,7 @@ fn proposed_verdict(
                 m.zncc?,
                 m.zncc_middle,
                 m.seed_shift_px,
-                m.localizability_deprecated,
+                m.zncc_self_similarity_radius,
             )
         }
     };
@@ -2496,7 +2496,7 @@ fn proposed_verdict(
         && zncc >= thresholds.min_zncc
         && middle_passes
         && shift.is_none_or(|s| !s.is_nan() && s <= thresholds.max_shift_px)
-        && localizability.is_none_or(|s| !s.is_nan() && s <= thresholds.max_keypoint_uncertainty);
+        && radius.is_none_or(|r| !r.is_nan() && r <= thresholds.max_zncc_self_similarity_radius);
     Some(if passes { Verdict::In } else { Verdict::Out })
 }
 

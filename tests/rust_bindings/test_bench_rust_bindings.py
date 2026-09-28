@@ -298,7 +298,7 @@ class TestTheEditableTrack:
             "min_zncc": 0.7,
             "min_zncc_middle": 0.7,
             "max_shift_px": 6.0,
-            "max_keypoint_uncertainty": 0.35,
+            "max_zncc_self_similarity_radius": 2.0,
             "min_relative_zncc": 0.7,
         }
 
@@ -335,16 +335,11 @@ class TestEvaluating:
             assert entry["ray_angle_deg"] >= 0.0
             assert entry.get("seed_shift_px", 0.0) >= 0.0
             assert entry.get("projection_offset_px", 0.0) >= 0.0
-            assert entry.get("localizability_deprecated", 1.0) > 0.0
-            # Each score carries its parts: the ZNCC grid and the
-            # localizability of the tile's middle and of each ninth of it.
+            # Each score carries its parts: the ZNCC grid, and the tile's
+            # self-similarity over its middle and each ninth of it.
             if "zncc" in entry:
                 assert entry["zncc_grid"].shape == (3, 3)
-            if "localizability_deprecated" in entry:
-                assert entry["localizability_middle_deprecated"] > 0.0
-                assert entry["localizability_grid_deprecated"].shape == (3, 3)
-                assert entry["localizability_slide_deprecated"].shape == (3, 3, 2)
-                # The self-similarity is read wherever the localizability is.
+            if "zncc_self_similarity_radius" in entry:
                 assert 0.0 <= entry["zncc_self_similarity_radius"] <= 3.0
                 assert 0.0 <= entry["zncc_self_similarity_radius_middle"] <= 3.0
                 radii = entry["zncc_self_similarity_radius_grid"]

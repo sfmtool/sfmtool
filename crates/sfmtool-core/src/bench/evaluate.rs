@@ -42,7 +42,6 @@ use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
     KeypointLocalizeParams, LocalizeError,
 };
-use crate::patch::localizability::{score_localizability_parts_deprecated, SIGMA_NOISE};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::self_similarity::{zncc_self_similarity_parts, PatchTile, SelfSimilarityParams};
 use crate::progress::{Cancelled, Progress};
@@ -148,7 +147,13 @@ pub const DEFAULT_MAX_CACHE_BYTES: usize = 256 << 20;
 impl Default for EvaluateOptions {
     fn default() -> Self {
         Self {
-            cluster: ClusterRefineParams::default(),
+            // The bench judges a sighting's tile by its self-similarity radius
+            // (`Thresholds::max_zncc_self_similarity_radius`), so the
+            // refinement's own gate on the older localizability score is off.
+            cluster: ClusterRefineParams {
+                max_keypoint_uncertainty: 0.0,
+                ..ClusterRefineParams::default()
+            },
             localize: KeypointLocalizeParams {
                 max_iters: 1,
                 ..open_localizer()
@@ -343,7 +348,7 @@ impl std::fmt::Display for EvaluateReport {
 /// member), cuts the template there, and warps every other seed onto it. What
 /// lands in each observation's slot is the refined position and shape, the
 /// achieved ZNCC, the drift from the seed, the observation's own tile
-/// localizability and the kernel's `member_status`, which is that stage's own
+/// self-similarity and the kernel's `member_status`, which is that stage's own
 /// account of a member it could not fit. The template's half-width is the
 /// cluster's own
 /// [`ClusterPayload::radius`](super::track::ClusterPayload::radius) rather than
@@ -357,7 +362,7 @@ impl std::fmt::Display for EvaluateReport {
 /// [`max_shift_px`](super::track::Thresholds::max_shift_px) of it. What lands in
 /// each slot is that ZNCC, how far the peak sits from the observation's own
 /// keypoint, how far that keypoint sits from the point's projection, the
-/// reprojection error, the ray angle and the tile localizability -- and, for an
+/// reprojection error, the ray angle and the tile self-similarity -- and, for an
 /// observation no round could read, the [`Unmeasured`] reason instead of a
 /// score. **The keypoint itself is not written**, nor the position, the frame or
 /// the bitmap: what a reading gives back is the same track with its own account
@@ -371,8 +376,8 @@ impl std::fmt::Display for EvaluateReport {
 /// where it was.
 ///
 /// `progress` is where the call names its phases, the names the batch kernels
-/// carry: `refine` and `localizability` at the cluster stage, `localize` and
-/// `localizability` at the track stage. Pass `&Progress::none()` to report
+/// carry: `refine` and `self-similarity` at the cluster stage, `localize` and
+/// `self-similarity` at the track stage. Pass `&Progress::none()` to report
 /// nothing.
 ///
 /// # Example
@@ -648,31 +653,20 @@ pub(super) fn evaluate_cluster(
         }
     }
 
-    // The tile localizability, at each member's **seed** geometry: that is
-    // where the kernel's own gate scores it, so the column and the
-    // `RejectedUnlocalizable` status are the same measurement.
+    // The tile self-similarity, at each member's **seed** geometry, where the
+    // kernel cuts the tile it registers.
     {
-        let mut phase = progress.phase("localizability");
+        let mut phase = progress.phase("self-similarity");
         for &i in &members {
             let observation = &track.observations[i];
             let measurement = observation
                 .cluster
                 .as_ref()
                 .expect("every member carries the seed it was built from");
-            let sigma = tile_localizability(
-                images[observation.image as usize].pyramid,
-                measurement.seed_position,
-                measurement.seed_shape,
-                &params,
-            );
             let next_measurement = next.observations[i]
                 .cluster
                 .as_mut()
                 .expect("the same member");
-            next_measurement.localizability_deprecated = sigma.whole;
-            next_measurement.localizability_middle_deprecated = sigma.middle;
-            next_measurement.localizability_grid_deprecated = sigma.grid;
-            next_measurement.localizability_slide_deprecated = sigma.slide;
             let similarity = tile_self_similarity(
                 images[observation.image as usize].pyramid,
                 measurement.seed_position,
@@ -726,53 +720,6 @@ pub(super) fn evaluate_cluster(
             condition_number: None,
         },
     ))
-}
-
-/// One tile's localizability, `sigma_pos` in grid px: over the whole tile and
-/// over its parts.
-#[derive(Default)]
-struct TileSigma {
-    whole: Option<f64>,
-    middle: Option<f64>,
-    grid: Option<[[f64; 3]; 3]>,
-    slide: Option<[[[f64; 2]; 3]; 3]>,
-}
-
-/// Score an `R×R×C` tile, whole and by parts. Every value is `None` when the
-/// whole-tile score is not finite.
-fn score_tile(
-    samples: &[f32],
-    resolution: usize,
-    channels: usize,
-    window: crate::patch::normal_refine::PatchWindow,
-) -> TileSigma {
-    let (whole, parts) =
-        score_localizability_parts_deprecated(samples, resolution, channels, window, SIGMA_NOISE);
-    match finite(whole.sigma_pos_grid) {
-        Some(sigma) => TileSigma {
-            whole: Some(sigma),
-            middle: finite(parts.middle),
-            grid: Some(parts.grid),
-            slide: Some(parts.slide),
-        },
-        None => TileSigma::default(),
-    }
-}
-
-/// One observation's own tile localizability, `sigma_pos` in template-grid px,
-/// or `None` when the geometry is degenerate or the tile leaves the pyramid.
-fn tile_localizability(
-    pyramid: &ImageU8Pyramid,
-    position: [f64; 2],
-    shape: [[f64; 2]; 2],
-    params: &ClusterRefineParams,
-) -> TileSigma {
-    let Some(grid) = sample_member_grid(pyramid, position, shape, params) else {
-        return TileSigma::default();
-    };
-    let resolution = params.resolution.max(2) as usize;
-    let channels = grid.len() / (resolution * resolution);
-    score_tile(&grid, resolution, channels, params.window)
 }
 
 /// One tile's ZNCC self-similarity readings, in grid px: the radius over the
@@ -833,8 +780,8 @@ fn score_self_similarity(
     }
 }
 
-/// One observation's own tile self-similarity, at the geometry
-/// [`tile_localizability`] reads: the member grid sampled with its radius
+/// One observation's own tile self-similarity, at its seed
+/// geometry: the member grid sampled with its radius
 /// grown by `(R + 2r) / R` and its resolution set to `R + 2r`, so the core is
 /// the same `R×R` grid and the ring around it is what the shifted windows
 /// read. All `None` when the geometry is degenerate or the tile leaves the
@@ -1083,11 +1030,10 @@ fn evaluate_track(
     // still has a distance from the projection, and that distance is often the
     // thing that explains the row.
     let resolution = options.localize.resolution.max(2) as usize;
-    let window = options.localize.window;
     let mut next = track.clone();
     let (mut measured, mut unmeasured) = (0, 0);
     {
-        let mut phase = progress.phase("localizability");
+        let mut phase = progress.phase("self-similarity");
         for i in evaluated(track) {
             let observation = &track.observations[i];
             let view = &images[observation.image as usize];
@@ -1106,10 +1052,6 @@ fn evaluate_track(
             measurement.projection_offset_px = None;
             measurement.reprojection_error = None;
             measurement.ray_angle_deg = None;
-            measurement.localizability_deprecated = None;
-            measurement.localizability_middle_deprecated = None;
-            measurement.localizability_grid_deprecated = None;
-            measurement.localizability_slide_deprecated = None;
             measurement.zncc_self_similarity_radius = None;
             measurement.zncc_self_similarity_radius_middle = None;
             measurement.zncc_self_similarity_radius_grid = None;
@@ -1131,12 +1073,7 @@ fn evaluate_track(
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
-                let (sigma, similarity) =
-                    patch_tile_readings(&frame, view, pixel, resolution, window);
-                measurement.localizability_deprecated = sigma.whole;
-                measurement.localizability_middle_deprecated = sigma.middle;
-                measurement.localizability_grid_deprecated = sigma.grid;
-                measurement.localizability_slide_deprecated = sigma.slide;
+                let similarity = patch_tile_readings(&frame, view, pixel, resolution);
                 measurement.zncc_self_similarity_radius = similarity.radius;
                 measurement.zncc_self_similarity_radius_middle = similarity.middle;
                 measurement.zncc_self_similarity_radius_grid = similarity.grid;
@@ -1411,12 +1348,9 @@ pub(super) fn observation_metrics(
     (error, cos.acos().to_degrees())
 }
 
-/// The localizability and the self-similarity of what one view shows of the
-/// patch at its keypoint.
+/// The self-similarity of what one view shows of the patch at its keypoint.
 ///
-/// The localizability is the tile rendered through the keypoint-anchored
-/// frame, scored by the same kernel the consensus is scored by, whole and by
-/// parts. The self-similarity reads the same frame rendered with its
+/// It reads the patch through the keypoint-anchored frame, rendered with its
 /// half-extent grown by `(R + 2r) / R` at resolution `R + 2r`, so its core is
 /// the same `R×R` patch and the ring around it is what the shifted windows
 /// read.
@@ -1425,24 +1359,17 @@ fn patch_tile_readings(
     view: &ProjectedImage<'_>,
     keypoint: [f64; 2],
     resolution: usize,
-    window: crate::patch::normal_refine::PatchWindow,
-) -> (TileSigma, TileSelfSimilarity) {
+) -> TileSelfSimilarity {
     let anchored = patch.anchored_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let frame = anchored.as_ref().unwrap_or(patch);
     let channels = view.pyramid.level(0).channels() as usize;
     let to_f32 = |tile: Array3<u8>| tile.iter().map(|&v| f32::from(v)).collect::<Vec<f32>>();
-    let samples = to_f32(render_bitmap(frame, view, resolution, channels));
-    let sigma = score_tile(&samples, resolution, channels, window);
-
     let size = resolution + 2 * self_similarity_margin();
     let grow = size as f64 / resolution as f64;
     let mut wide = frame.clone();
     wide.half_extent = [frame.half_extent[0] * grow, frame.half_extent[1] * grow];
     let samples = to_f32(render_bitmap(&wide, view, size, channels));
-    (
-        sigma,
-        score_self_similarity(&samples, size, channels, resolution),
-    )
+    score_self_similarity(&samples, size, channels, resolution)
 }
 
 /// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame, the

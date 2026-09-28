@@ -2003,11 +2003,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     assert!((-1.0..=1.0).contains(&middle), "{track}");
     // And the grids, as three rows of three.
     let cluster = &track["observations"][0]["cluster"];
-    for key in [
-        "zncc_grid",
-        "localizability_grid_deprecated",
-        "zncc_self_similarity_radius_grid",
-    ] {
+    for key in ["zncc_grid", "zncc_self_similarity_radius_grid"] {
         let rows = cluster[key]
             .as_array()
             .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
@@ -2018,10 +2014,6 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             assert!(row.iter().all(|cell| cell.is_number() || cell.is_null()));
         }
     }
-    assert!(
-        cluster["localizability_middle_deprecated"].is_number(),
-        "{track}"
-    );
     for key in [
         "zncc_self_similarity_radius",
         "zncc_self_similarity_radius_middle",
@@ -2046,10 +2038,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         "{track}"
     );
     // And per cell the direction a match could slide, as an `[x, y]` pair.
-    for key in [
-        "localizability_slide_deprecated",
-        "zncc_self_similarity_slide_grid",
-    ] {
+    for key in ["zncc_self_similarity_slide_grid"] {
         let slides = cluster[key]
             .as_array()
             .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
@@ -2103,7 +2092,6 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         "zncc_middle",
         "seed_shift_px",
         "projection_offset_px",
-        "localizability_middle_deprecated",
         "zncc_self_similarity_radius",
         "zncc_self_similarity_radius_middle",
     ] {
@@ -2114,7 +2102,6 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     }
     for key in [
         "zncc_grid",
-        "localizability_grid_deprecated",
         "zncc_self_similarity_radius_grid",
         "zncc_self_similarity_slide_grid",
     ] {

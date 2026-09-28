@@ -15,18 +15,18 @@ patch can slide over itself before it stops matching, which is what decides
 whether a match locks onto the keypoint: a strong straight edge reads as sharp
 here. A bounded score of that distance is the ZNCC self-similarity radius,
 [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md). While the two
-are compared, this score's code and bench names carry a `_deprecated` suffix:
+are compared, this score's code names carry a `_deprecated` suffix:
 `patch_localizability_deprecated`, `score_localizability_stack_deprecated`,
 `score_localizability_parts_deprecated`, `LocalizabilityDeprecated`,
-`LocalizabilityPartsDeprecated`, `PatchCloud.score_localizability_deprecated`,
-and the bench fields `localizability_deprecated`,
-`localizability_middle_deprecated`, `localizability_grid_deprecated` and
-`localizability_slide_deprecated`. The names of the gates built on it, their
-parameters and flags (`max_keypoint_uncertainty`,
-`max_member_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
-`SIGMA_NOISE`, the `.matches` status `rejected_unlocalizable` and the module
-`patch::localizability` keep their names, and the gates keep calling this
-score.
+`LocalizabilityPartsDeprecated` and `PatchCloud.score_localizability_deprecated`.
+The names of the gates built on it, their parameters and flags
+(`max_keypoint_uncertainty`, `max_member_keypoint_uncertainty`,
+`--filter-by-keypoint-uncertainty`), `SIGMA_NOISE`, the `.matches` status
+`rejected_unlocalizable` and the module `patch::localizability` keep their
+names, and the batch gates keep calling this score. The
+[editable track](../bench/editable-track.md) does not read it: the bench judges
+a sighting's tile by its ZNCC self-similarity radius, and its evaluation runs
+the cluster refinement with the member gate below turned off.
 
 ## Problem
 
@@ -281,8 +281,8 @@ on the member's own tile with the shared `localizability::SIGMA_NOISE`):
    part reads very high, as a flat patch does. `slide` is, per cell, the unit
    weak-axis vector `(cos θ, sin θ)` scaled by `1 - λ₂/λ₁`: near unit length
    along a straight edge, short on a corner or a blob, and `[0, 0]` on a flat
-   cell. The bench reports these beside each observation's own tile score; no
-   gate reads them.
+   cell. No gate reads them, and nothing outside this module's tests calls
+   the function.
 
 2. **Python binding** — `PatchCloud.score_localizability_deprecated(recon, patch_bitmaps, …)`
    scores the batch over `patch_bitmaps`, returning per-point

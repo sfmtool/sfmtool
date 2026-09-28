@@ -85,7 +85,10 @@ def ground_truth_reading(dataset, point: int) -> dict:
     return {
         "track": track,
         **_stats("gt_zncc", _track_numbers(rows, "zncc")),
-        **_stats("gt_localizability", _track_numbers(rows, "localizability_deprecated")),
+        **_stats(
+            "gt_self_similarity",
+            _track_numbers(rows, "zncc_self_similarity_radius"),
+        ),
         "gt_reproj_median": _stats("x", _track_numbers(rows, "reprojection_error"))[
             "x_median"
         ],
@@ -217,13 +220,15 @@ def score(
 
     zncc = _track_numbers(rows, "zncc")
     m.update(_stats("zncc", zncc))
-    m.update(_stats("localizability", _track_numbers(rows, "localizability_deprecated")))
+    m.update(
+        _stats("self_similarity", _track_numbers(rows, "zncc_self_similarity_radius"))
+    )
     reproj = _track_numbers(rows, "reprojection_error")
     m["reproj_median"] = float(np.median(reproj)) if reproj.size else None
     for key in (
         "gt_zncc_median",
         "gt_zncc_min",
-        "gt_localizability_median",
+        "gt_self_similarity_median",
         "gt_reproj_median",
     ):
         m[key] = gt_read.get(key)

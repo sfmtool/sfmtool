@@ -429,8 +429,8 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
 #[test]
 fn the_cells_follow_the_stage_the_track_is_in() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // The six cells are ZNCC, seed shift, projection error, sigma_pos,
-    // self-similarity and status. At the track stage the projection error has
+    // The five cells are ZNCC, seed shift, projection error, self-similarity
+    // and status. At the track stage the projection error has
     // numbers behind it; at the cluster stage there is no geometry behind an
     // observation and it is absent.
     assert_eq!(panel.rows()[0].cells[2], "-", "nothing has measured it yet");
@@ -457,23 +457,13 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     percent(whole, "whole");
     percent(middle, "mid");
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
-    // Beside the ZNCC and the sigma_pos cells, the row draws their grids.
+    // Beside the ZNCC cell, the row draws its grid.
     assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
-    assert!(
-        rows[0].grids.sigma.is_some(),
-        "no localizability grid drawn"
-    );
-    assert!(rows[0].grids.slide.is_some(), "no slide lines drawn");
+    // And beside the self-similarity cell, its grid and its slides.
     assert!(
         rows[0].cells[3].contains(" px whole\n") && rows[0].cells[3].ends_with(" px mid"),
         "{}",
         rows[0].cells[3]
-    );
-    // And beside the self-similarity cell, its grid and its slides.
-    assert!(
-        rows[0].cells[4].contains(" px whole\n") && rows[0].cells[4].ends_with(" px mid"),
-        "{}",
-        rows[0].cells[4]
     );
     assert!(
         rows[0].grids.radius.is_some(),
@@ -514,7 +504,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
-    let status = rows.last().expect("the row just added").cells[5].clone();
+    let status = rows.last().expect("the row just added").cells[4].clone();
     assert!(
         status.contains("beyond the 64 px bound"),
         "the cell names the bound the seed passed: {status}"
@@ -571,7 +561,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[5] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[4] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -583,7 +573,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[5] != super::EVALUATING_LABEL),
+            .all(|row| row.cells[4] != super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -597,7 +587,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[5] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[4] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -1537,14 +1527,14 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     };
     let current = crate::bench::live::Evaluation::Current;
     let cells = super::measurements(&walked, StageKind::Track, &current);
-    assert_eq!(cells[5], "walked 19 grid px, kept at seed");
+    assert_eq!(cells[4], "walked 19 grid px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
     slot.walked_zncc = Some(0.873);
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
-        super::measurements(&scored, StageKind::Track, &current)[5],
+        super::measurements(&scored, StageKind::Track, &current)[4],
         "walked 19 grid px (ZNCC 87% / 41% there), kept at seed"
     );
 
@@ -1552,7 +1542,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     let mut moved = walked.clone();
     moved.track.as_mut().expect("a track slot").walked_px = None;
     assert_eq!(
-        super::measurements(&moved, StageKind::Track, &current)[5],
+        super::measurements(&moved, StageKind::Track, &current)[4],
         "localized"
     );
 }
@@ -1689,23 +1679,11 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     assert_eq!(refusals.stage.as_deref(), Some("Busy."));
 }
 
-#[test]
-fn sigma_text_formats_the_whole_and_the_middle() {
-    use super::sigma_text;
-    assert_eq!(
-        sigma_text(Some(0.0812), Some(0.1234)),
-        "0.08 px whole\n0.12 px mid"
-    );
-    assert_eq!(sigma_text(Some(0.3), None), "0.30 px whole\n- mid");
-    assert_eq!(sigma_text(None, Some(0.3)), "-");
-}
-
-/// The grid colours run red, yellow, green: a ZNCC from 50 to 100, and a
-/// sigma_pos from twice the bar down to half of it. A cell with no reading
-/// has no colour.
+/// The ZNCC grid's colours run red, yellow, green, from 50 to 100. A cell
+/// with no reading has no colour.
 #[test]
 fn grid_cells_run_from_red_to_green() {
-    use super::{sigma_cell_color, zncc_cell_color};
+    use super::zncc_cell_color;
     let red = egui::Color32::from_rgb(220, 0, 40);
     let yellow = egui::Color32::from_rgb(220, 200, 40);
     let green = egui::Color32::from_rgb(0, 200, 40);
@@ -1714,39 +1692,6 @@ fn grid_cells_run_from_red_to_green() {
     assert_eq!(zncc_cell_color(0.75), Some(yellow));
     assert_eq!(zncc_cell_color(1.0), Some(green));
     assert_eq!(zncc_cell_color(f64::NAN), None);
-
-    assert_eq!(sigma_cell_color(0.7, 0.35), Some(red));
-    assert_eq!(sigma_cell_color(0.35, 0.35), Some(yellow));
-    assert_eq!(sigma_cell_color(0.175, 0.35), Some(green));
-    assert_eq!(sigma_cell_color(0.01, 0.35), Some(green));
-    assert_eq!(sigma_cell_color(f64::NAN, 0.35), None);
-    // A bar at 0 still leaves a scale to colour by.
-    assert!(sigma_cell_color(0.1, 0.0).is_some());
-}
-
-/// A localizability cell draws a `+` when it pins both directions, a line
-/// along its slide when it pins only the direction across it, and nothing
-/// when it pins neither.
-#[test]
-fn a_cell_marks_how_many_directions_it_pins() {
-    use super::table::{cell_mark, CellMark};
-    let bar = 0.35;
-    // The weak axis is under the bar, so both are: a +, however one-sided.
-    assert_eq!(cell_mark(0.2, [0.0, 0.9], bar), CellMark::Plus);
-    // An edge: the weak axis is far over the bar, the strong one well under it
-    // (0.8 * sqrt(1 - 0.95) = 0.18), so a line along the slide, here vertical.
-    match cell_mark(0.8, [0.0, -0.95], bar) {
-        CellMark::Line(half) => {
-            assert!(half.x.abs() < 1e-6 && half.y.abs() > 3.0, "{half:?}");
-        }
-        other => panic!("expected a line, got {other:?}"),
-    }
-    // Neither axis pinned: a flat or weak cell draws nothing.
-    assert_eq!(cell_mark(0.8, [0.0, 0.3], bar), CellMark::Nothing);
-    assert_eq!(cell_mark(40.0, [0.0, 0.0], bar), CellMark::Nothing);
-    assert_eq!(cell_mark(f64::NAN, [0.0, 0.0], bar), CellMark::Nothing);
-    // A bar at 0 still leaves one to judge by.
-    assert_eq!(cell_mark(0.2, [0.0, 0.0], 0.0), CellMark::Plus);
 }
 
 #[test]
@@ -1758,12 +1703,6 @@ fn a_grid_s_hover_text_holds_its_nine_numbers() {
         "   92    50     -
   100   -20    33
     0     7    80"
-    );
-    assert_eq!(
-        grid_numbers(&[[0.123; 3]; 3], GridKind::Sigma),
-        " 0.12  0.12  0.12
- 0.12  0.12  0.12
- 0.12  0.12  0.12"
     );
     let radii = [[0.37, 1.0, 1.44], [2.0, 2.26, 3.0], [f64::NAN, 0.04, 3.0]];
     assert_eq!(
@@ -1816,11 +1755,11 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
         }),
     };
     assert_eq!(
-        super::measurements(&row, StageKind::Cluster, &current)[4],
+        super::measurements(&row, StageKind::Cluster, &current)[3],
         "3+ px whole\n1.0 px mid"
     );
     assert_eq!(
-        super::measurements(&row, StageKind::Track, &current)[4],
+        super::measurements(&row, StageKind::Track, &current)[3],
         "0.4 px whole\n1.4 px mid"
     );
 }
@@ -1865,17 +1804,20 @@ fn a_self_similarity_cell_marks_its_slide() {
     assert_eq!(slide_mark([f64::NAN, 0.0]), CellMark::Nothing);
 }
 
-/// The sigma_pos heading says it is the deprecated score, and the
-/// self-similarity heading says what its numbers and grid are.
+/// The self-similarity heading says what its numbers and grid are, and which
+/// bar judges them; the older localizability score has no column.
 #[test]
-fn the_localizability_headings_say_which_score_is_deprecated() {
+fn the_self_similarity_heading_says_what_it_shows() {
     let headings = super::table::ColumnLayout::new().headers();
     assert!(headings
         .iter()
         .any(|&(_, heading, _)| heading == "Self-similarity"));
-    assert!(super::table::SIGMA_POS_TIP.contains("deprecated"));
+    assert!(headings
+        .iter()
+        .all(|&(_, heading, _)| !heading.contains('\u{3c3}')));
     let tip = super::table::SELF_SIMILARITY_TIP;
     assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
+    assert!(tip.contains(super::MAX_SELF_SIMILARITY_LABEL), "{tip}");
 }
 
 // ---- The self-similarity surface plot ----------------------------------------

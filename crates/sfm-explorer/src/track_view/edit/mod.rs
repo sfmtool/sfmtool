@@ -508,12 +508,14 @@ impl TrackEdit {
                         .speed(0.05)
                         .max_decimals(1),
                 ),
+                // In patch-grid px, the unit of the self-similarity column; at
+                // the largest radius read it turns nothing out.
                 (
-                    "max \u{3c3}_pos",
-                    egui::DragValue::new(&mut bars.max_keypoint_uncertainty)
-                        .range(0.0..=2.0)
-                        .speed(0.005)
-                        .max_decimals(2),
+                    MAX_SELF_SIMILARITY_LABEL,
+                    egui::DragValue::new(&mut bars.max_zncc_self_similarity_radius)
+                        .range(0.0..=max_self_similarity_radius())
+                        .speed(0.02)
+                        .max_decimals(1),
                 ),
                 // The fourth bar of `Thresholds`, which view selection scores a
                 // candidate by as a fraction of the track's own self-agreement:
@@ -527,6 +529,8 @@ impl TrackEdit {
                 let named = ui.add_enabled(enabled, egui::Label::new(label));
                 if label == MAX_SHIFT_LABEL {
                     named.on_hover_text(MAX_SHIFT_TIP);
+                } else if label == MAX_SELF_SIMILARITY_LABEL {
+                    named.on_hover_text(MAX_SELF_SIMILARITY_TIP);
                 }
                 // A typed value lands when the field is left, not per
                 // keystroke, so typing "90" is one version and not two.
@@ -727,15 +731,6 @@ pub(crate) fn zncc_sentence(whole: Option<f64>, middle: Option<f64>) -> String {
     }
 }
 
-/// A patch localizability as a table cell prints it, sigma_pos in grid px:
-/// the whole tile's over its middle square's (`0.08 px whole` over
-/// `0.12 px mid`), to two decimals.
-///
-/// `-` stands for a reading that is not there, as [`zncc_text`] has it.
-pub(crate) fn sigma_text(whole: Option<f64>, middle: Option<f64>) -> String {
-    stacked(whole, middle, |value| format!("{value:.2} px"))
-}
-
 /// A ZNCC self-similarity radius as a table cell prints it, in grid px: the
 /// whole tile's over its middle square's (`0.4 px whole` over `3+ px mid`), to
 /// one decimal, and `3+` for the largest radius the reading searches, which
@@ -806,18 +801,12 @@ fn radius_number(value: f64) -> String {
     format!("{value:.1}")
 }
 
-/// The three three-by-three grids a row draws: the ZNCC grid, the deprecated
-/// localizability grid and the self-similarity grid of the measurement its
-/// stage carries.
+/// The two three-by-three grids a row draws: the ZNCC grid and the
+/// self-similarity grid of the measurement its stage carries.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct RowGrids {
     /// The ZNCC of each cell, `grid[row][col]` from the top-left cell.
     pub zncc: Option<[[f64; 3]; 3]>,
-    /// The deprecated localizability of each cell, sigma_pos in grid px.
-    pub sigma: Option<[[f64; 3]; 3]>,
-    /// Per cell, the direction a match could slide in, scaled by how freely,
-    /// from the deprecated localizability.
-    pub slide: Option<[[[f64; 2]; 3]; 3]>,
     /// The ZNCC self-similarity radius of each cell, in grid px.
     pub radius: Option<[[f64; 3]; 3]>,
     /// Per cell, the direction the cell's indistinguishable shifts line up
@@ -873,8 +862,6 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
-                sigma: m.localizability_grid_deprecated,
-                slide: m.localizability_slide_deprecated,
                 radius: m.zncc_self_similarity_radius_grid,
                 radius_slide: m.zncc_self_similarity_slide_grid,
             }),
@@ -883,8 +870,6 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
             .as_ref()
             .map_or_else(RowGrids::default, |m| RowGrids {
                 zncc: m.zncc_grid,
-                sigma: m.localizability_grid_deprecated,
-                slide: m.localizability_slide_deprecated,
                 radius: m.zncc_self_similarity_radius_grid,
                 radius_slide: m.zncc_self_similarity_slide_grid,
             }),
@@ -896,25 +881,6 @@ fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluatio
 pub(crate) fn zncc_cell_color(zncc: f64) -> Option<egui::Color32> {
     zncc.is_finite()
         .then(|| red_to_green(((zncc - 0.5) / 0.5).clamp(0.0, 1.0)))
-}
-
-/// The colour a localizability grid cell is drawn in, against `bar`, the
-/// track's max sigma_pos: green at half the bar and below, red at twice the
-/// bar and above, through yellow between on a log scale, so each doubling of
-/// the uncertainty moves the colour the same distance. `None` for a cell with
-/// no reading.
-pub(crate) fn sigma_cell_color(sigma: f64, bar: f64) -> Option<egui::Color32> {
-    if !sigma.is_finite() {
-        return None;
-    }
-    // A bar at 0 turns every row out; the colours still need a scale.
-    let bar = if bar > 0.0 {
-        bar
-    } else {
-        Thresholds::default().max_keypoint_uncertainty
-    };
-    let t = ((sigma / bar).max(f64::MIN_POSITIVE).log2() + 1.0) / 2.0;
-    Some(red_to_green(1.0 - t.clamp(0.0, 1.0)))
 }
 
 /// The colour a self-similarity grid cell is drawn in: green under 1, where
@@ -984,6 +950,17 @@ const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-gri
     far the correlation peak may sit from where the sighting is. The evaluation looks for each \
     peak within this distance, a row whose peak is further is painted out, and a fit moves no \
     sighting further than this.";
+
+/// The self-similarity box's label: the largest ZNCC self-similarity radius
+/// an observation's tile may have.
+pub(crate) const MAX_SELF_SIMILARITY_LABEL: &str = "self-sim. px";
+
+/// The self-similarity box's hover text.
+const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a sighting's \
+    own tile may have, in patch-grid px: how far the tile can slide over itself and still \
+    match. A row whose whole tile reads further than this is painted out, since a match \
+    cannot pin its position, as along a straight edge or over a flat patch. At 3, the largest \
+    radius read, it turns nothing out.";
 
 /// A kept-at-seed row's menu entry, which puts the sighting where the fit's
 /// walk would have taken it.
@@ -1216,8 +1193,8 @@ fn provenance_text(provenance: Provenance) -> String {
 }
 
 /// The measurements one observation shows at `stage`, as the table prints them:
-/// ZNCC, seed shift, projection offset, the deprecated localizability, the ZNCC
-/// self-similarity radius, reprojection error, ray angle, status.
+/// ZNCC, seed shift, the reprojection error over the ray angle, the ZNCC
+/// self-similarity radius, status.
 ///
 /// The two distances are two questions and get two columns. **Seed shift** is
 /// how far the correlation peak sits from the observation itself -- the
@@ -1237,18 +1214,18 @@ fn measurements(
     observation: &Observation,
     stage: StageKind,
     evaluation: &Evaluation,
-) -> [String; 6] {
+) -> [String; 5] {
     match evaluation {
         Evaluation::Current => measured(observation, stage),
         Evaluation::Evaluating => {
             let mut cells = measured(observation, stage);
-            cells[5] = EVALUATING_LABEL.to_string();
+            cells[4] = EVALUATING_LABEL.to_string();
             cells
         }
         Evaluation::Refused(_) | Evaluation::Failed(_) => {
-            let mut cells: [String; 6] = Default::default();
-            cells[..5].fill("-".to_string());
-            cells[5] = NOT_EVALUATED.to_string();
+            let mut cells: [String; 5] = Default::default();
+            cells[..4].fill("-".to_string());
+            cells[4] = NOT_EVALUATED.to_string();
             cells
         }
     }
@@ -1274,7 +1251,7 @@ fn projection_error_text(px: Option<f64>, deg: Option<f64>) -> String {
 }
 
 /// The cells of [`measurements`] for the numbers the track carries.
-fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
+fn measured(observation: &Observation, stage: StageKind) -> [String; 5] {
     let px = |value: Option<f64>| match value {
         Some(v) if v.is_finite() => format!("{v:.2} px"),
         Some(_) => "NaN".to_string(),
@@ -1287,10 +1264,6 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 px(m.and_then(|m| m.shift_px)),
                 "-".to_string(),
-                sigma_text(
-                    m.and_then(|m| m.localizability_deprecated),
-                    m.and_then(|m| m.localizability_middle_deprecated),
-                ),
                 self_similarity_text(
                     m.and_then(|m| m.zncc_self_similarity_radius),
                     m.and_then(|m| m.zncc_self_similarity_radius_middle),
@@ -1312,10 +1285,6 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
                 projection_error_text(
                     m.and_then(|m| m.reprojection_error.or(m.projection_offset_px)),
                     m.and_then(|m| m.ray_angle_deg),
-                ),
-                sigma_text(
-                    m.and_then(|m| m.localizability_deprecated),
-                    m.and_then(|m| m.localizability_middle_deprecated),
                 ),
                 self_similarity_text(
                     m.and_then(|m| m.zncc_self_similarity_radius),
