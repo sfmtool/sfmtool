@@ -67,19 +67,20 @@ from .._cli_utils import timed_command
     help="Max translation drift from the SIFT seed, px.",
 )
 @click.option(
-    "--max-keypoint-uncertainty",
-    "max_keypoint_uncertainty",
+    "--max-member-zncc-self-similarity-radius",
+    "max_member_zncc_self_similarity_radius",
     type=click.FloatRange(min=0.0),
-    default=0.35,
+    default=2.5,
     show_default=True,
     help=(
-        "Exclude cluster members whose own patch scores a predicted keypoint "
-        "position uncertainty (patch localizability, template-grid px) above "
-        "this, before reference selection and refinement — the flat/edge "
-        "aperture cases that cannot pin a 2D position. Same default value as "
-        "embed-patches' cull (scored here on the template grid with the "
-        "refinement window); `0` disables the gate. See "
-        "specs/core/patch/patch-localizability.md."
+        "Exclude cluster members whose own patch does not pin a 2D position, "
+        "before reference selection and refinement: the member's ZNCC "
+        "self-similarity radius, how far its template-grid patch can slide "
+        "over itself and still match itself as well as a true match between "
+        "two views would, is above this bar (template-grid px). Flat and "
+        "edge-only patches read 3, the largest radius, so a bar of 3 or more "
+        "turns nothing out; `0` disables the gate. See "
+        "specs/core/patch/zncc-self-similarity-radius.md."
     ),
 )
 def cluster_patches(
@@ -89,11 +90,11 @@ def cluster_patches(
     resolution,
     min_zncc,
     max_shift,
-    max_keypoint_uncertainty,
+    max_member_zncc_self_similarity_radius,
 ):
     """Refine a cluster-bearing .matches file into patch clusters.
 
-    Per cluster: exclude members whose patch fails the localizability gate,
+    Per cluster: exclude members whose own patch does not pin a position,
     pick a reference member (largest SIFT scale), refine a
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
     other member (seeded from the SIFT affine shapes), vet members by
@@ -119,7 +120,7 @@ def cluster_patches(
             resolution,
             min_zncc,
             max_shift,
-            max_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius,
         )
     except click.UsageError:
         raise

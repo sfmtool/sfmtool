@@ -31,7 +31,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--resolution` | int ≥ 3 | 25 | Template samples per axis |
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
-| `--max-keypoint-uncertainty` | float ≥ 0 | 0.35 | Localizability gate: exclude members whose own patch scores a predicted keypoint position uncertainty (`σ_pos`, template-grid px) above this, before reference selection and refinement; `0` disables |
+| `--max-member-zncc-self-similarity-radius` | float ≥ 0 | 2.5 | Member gate: exclude members whose own patch's ZNCC self-similarity radius (template-grid px) is above this, before reference selection and refinement; `0` disables, `3` or more turns nothing out |
 
 The `patch_size` default sits at SIFT's ~12× descriptor window — the template
 vets a member against roughly the texture context the detector deemed
@@ -43,12 +43,14 @@ past ~12 grow the fraction of members dropped unjudged because the wider
 template's support leaves the frame (see `specs/core/patch/cluster-patches.md`,
 "The operation"). `min_zncc` is permissive by design —
 over-culling, not contamination, is the observed failure mode, and downstream
-stages re-gate on the stored signals. `--max-keypoint-uncertainty` shares its
-default value with `embed-patches` (the conservative tail cut of
-[`patch-localizability.md`](../../core/patch/patch-localizability.md)); it is scored
-on each member's own template-grid patch with the refinement window (not on
-a consensus), which catches the flat/edge aperture cases that agree
-photometrically yet cannot pin a 2D position.
+stages re-gate on the stored signals. `--max-member-zncc-self-similarity-radius`
+reads the [ZNCC self-similarity radius](../../core/patch/zncc-self-similarity-radius.md)
+of each member's own template-grid patch at its SIFT seed: how far the patch
+can slide over itself and still match itself as well as a true match between
+two views would. That catches the flat and edge-only patches that agree
+photometrically yet cannot pin a 2D position; they read `3`, the largest
+radius. Its default, `2.5`, is the same bar as the keypoint localizer's member
+gate (`embed-patches --max-member-zncc-self-similarity-radius`).
 
 ## Process
 
@@ -72,7 +74,7 @@ photometrically yet cannot pin a 2D position.
    in submission order — present the seed geometry from step 2 in
    images-section order,
    and call `_sfmtool.matching.refine_cluster_patches` (the
-   `patch::cluster_refine` kernel — per-member localizability gate,
+   `patch::cluster_refine` kernel — per-member self-similarity gate,
    reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine
    shapes, vetting, one kept member per image), with a `ProgressCounter`
@@ -90,7 +92,11 @@ photometrically yet cannot pin a 2D position.
    per-member warp-consistency residual
    ([`cluster-warp-consistency.md`](../../core/patch/cluster-warp-consistency.md), a
    stored signal computed in the same kernel call, no CLI knobs) —
-   `refine_options` = the CLI parameters, metadata updated
+   `refine_options` = the CLI parameters (`patch_size`, `resolution`,
+   `min_zncc`, `max_shift_px`, `max_member_zncc_self_similarity_radius`; a
+   file written before the gate read the radius carries
+   `max_keypoint_uncertainty` in place of the last, and nothing reads either
+   back), metadata updated
    (`has_cluster_patches: true`, fresh timestamp, workspace `relative_path`
    recomputed from the output location; the content hash is recomputed by
    the writer). Summary lines report the consistency distribution (median /

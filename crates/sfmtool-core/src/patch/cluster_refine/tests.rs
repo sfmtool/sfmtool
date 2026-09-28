@@ -9,8 +9,25 @@ use super::*;
 use crate::camera::remap::{ImageU8, ImageU8Pyramid};
 use ndarray::{Array2, Array3 as NdArray3};
 
-/// Smooth band-limited analytic texture in `[12, 242]` (no u8 clipping).
+/// Band-limited analytic texture in `[2, 252]` (no u8 clipping).
+///
+/// The two fine terms (periods of about 6.6 and 6.1 px) are what make a
+/// member's own patch pin a position under the member gate: without them the
+/// patch is smooth on the template grid and matches itself 3 grid px away,
+/// which reads as the largest ZNCC self-similarity radius.
 fn texture(x: f64, y: f64) -> f64 {
+    127.0
+        + 40.0 * (0.11 * x + 0.06 * y + 1.3).sin()
+        + 28.0 * (0.05 * x - 0.12 * y + 0.7).sin()
+        + 20.0 * (0.17 * x + 0.13 * y + 2.9).sin()
+        + 10.0 * (0.29 * x - 0.23 * y + 0.4).cos()
+        + 15.0 * (0.83 * x + 0.47 * y + 0.2).sin()
+        + 12.0 * (-0.52 * x + 0.88 * y + 1.1).sin()
+}
+
+/// [`texture`] without its two fine terms: smooth on the template grid, so a
+/// member's own patch reads the largest ZNCC self-similarity radius.
+fn smooth_texture(x: f64, y: f64) -> f64 {
     127.0
         + 50.0 * (0.11 * x + 0.06 * y + 1.3).sin()
         + 35.0 * (0.05 * x - 0.12 * y + 0.7).sin()
@@ -298,11 +315,11 @@ fn gate_low_zncc_rejects_flat_member() {
     // ~50-effective-sample Gaussian window the affine optimizer can chase a
     // spurious ZNCC above the permissive 0.85 gate, tripping the shift gate
     // instead — the flat case pins the RejectedLowZncc path
-    // deterministically.) The localizability gate is disabled: a flat patch
+    // deterministically.) The member gate is off: a flat patch
     // is exactly what it excludes (see gate_unlocalizable_member_excluded),
     // and this test pins the downstream ZNCC path.
     let params = ClusterRefineParams {
-        max_keypoint_uncertainty: 0.0,
+        max_member_zncc_self_similarity_radius: 0.0,
         ..Default::default()
     };
     let img1 = make_image(128, 128, texture);
@@ -331,9 +348,9 @@ fn gate_low_zncc_rejects_flat_member() {
 
 #[test]
 fn gate_unlocalizable_member_excluded() {
-    // Default params: the flat member's own patch has zero gradients, so its
-    // weak-axis positional uncertainty is enormous and the localizability
-    // gate excludes it before refinement. With one usable member left the
+    // Default params: the flat member's own patch matches itself at every
+    // shift, so it reads the largest ZNCC self-similarity radius and the
+    // member gate excludes it before refinement. With one usable member left the
     // cluster is unrefinable.
     let params = ClusterRefineParams::default();
     let img1 = make_image(128, 128, texture);
@@ -394,7 +411,7 @@ fn gate_unlocalizable_member_cannot_be_reference() {
 
 #[test]
 fn gate_scores_border_member_with_clamped_sampling() {
-    // A member whose patch straddles the image border is still scored — the
+    // A member whose patch straddles the image border is still read by the gate — the
     // sampler clamps to the nearest valid pixel instead of skipping the
     // gate. On a flat image the clamped patch is flat, so the member is
     // RejectedUnlocalizable (before this behavior it fell through to the
@@ -432,6 +449,138 @@ fn gate_scores_border_member_with_clamped_sampling() {
         None,
     );
     assert_eq!(result.member_status[1], MemberStatus::NotEvaluated);
+}
+
+/// A straight vertical edge through `x = 64`, softened over a couple of px:
+/// a patch on it slides along the edge and still matches itself.
+fn edge(x: f64, _y: f64) -> f64 {
+    127.0 + 80.0 * ((x - 64.0) / 2.0).tanh()
+}
+
+#[test]
+fn the_member_gate_reads_the_zncc_self_similarity_radius() {
+    let params = ClusterRefineParams::default();
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let radius = |f: fn(f64, f64) -> f64| {
+        member_zncc_self_similarity_radius(
+            &pyramid(&make_image(128, 128, f)),
+            [64.0, 64.0],
+            a,
+            &params,
+        )
+        .expect("an interior member's tile can be sampled")
+    };
+    // A textured patch pins its position; a flat one, a straight edge and a
+    // texture smooth on the template grid match themselves at the largest
+    // shift the reading searches.
+    let textured = radius(texture);
+    assert!(textured < 1.5, "textured: {textured}");
+    assert_eq!(radius(|_, _| 127.0), 3.0);
+    assert_eq!(radius(edge), 3.0);
+    let smooth = radius(smooth_texture);
+    assert!(smooth > 2.5, "smooth: {smooth}");
+
+    // The same number the bench reads: the tile the gate reads is the member
+    // grid with the ring around it, and its core is the member grid itself.
+    let pyr = pyramid(&make_image(128, 128, texture));
+    let (tile, size) = sample_member_self_similarity_tile(&pyr, [64.0, 64.0], a, &params).unwrap();
+    let grid = sample_member_grid(&pyr, [64.0, 64.0], a, &params).unwrap();
+    let (r, ring) = (params.resolution as usize, 3);
+    assert_eq!(size, r + 2 * ring);
+    for row in 0..r {
+        for col in 0..r {
+            let (got, want) = (tile[(row + ring) * size + col + ring], grid[row * r + col]);
+            assert!((got - want).abs() < 1e-3, "({row}, {col}): {got} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn the_member_gate_refuses_flat_and_edge_members_at_the_default() {
+    // Three members of one cluster over the same point: one on a textured
+    // image, one on an edge, one on a flat image. At the default bar the
+    // edge and the flat member are refused before reference selection; the
+    // edge member has the largest SIFT scale and would otherwise have been
+    // the reference.
+    let run = |params: &ClusterRefineParams| {
+        let a = [[2.5, 0.0], [0.0, 2.5]];
+        let a_big = [[3.0, 0.0], [0.0, 3.0]];
+        let feats = [
+            ImageFeatures::new(&[([64.0, 64.0], a)]),
+            ImageFeatures::new(&[([64.0, 64.0], a)]),
+            ImageFeatures::new(&[([64.0, 64.0], a_big)]),
+            ImageFeatures::new(&[([64.0, 64.0], a)]),
+        ];
+        let pyramids = [
+            pyramid(&make_image(128, 128, texture)),
+            pyramid(&make_image(128, 128, texture)),
+            pyramid(&make_image(128, 128, edge)),
+            pyramid(&make_image(128, 128, |_, _| 127.0)),
+        ];
+        refine_cluster_patches(
+            &pyramids,
+            &geometry(&feats),
+            &[0, 4],
+            &[0, 1, 2, 3],
+            &[0, 0, 0, 0],
+            params,
+            None,
+        )
+    };
+    let result = run(&ClusterRefineParams::default());
+    assert_eq!(result.reference_members[0], 0);
+    assert_eq!(result.member_status[0], MemberStatus::Reference);
+    assert_eq!(result.member_status[1], MemberStatus::Kept);
+    assert_eq!(result.member_status[2], MemberStatus::RejectedUnlocalizable);
+    assert_eq!(result.member_status[3], MemberStatus::RejectedUnlocalizable);
+
+    // 0 turns the gate off: nobody is refused by it, and the edge member,
+    // the largest, becomes the reference.
+    let off = run(&ClusterRefineParams {
+        max_member_zncc_self_similarity_radius: 0.0,
+        ..Default::default()
+    });
+    assert!(!off
+        .member_status
+        .contains(&MemberStatus::RejectedUnlocalizable));
+    assert_eq!(off.reference_members[0], 2);
+
+    // A bar at the largest radius the reading reports turns nothing out.
+    let open = run(&ClusterRefineParams {
+        max_member_zncc_self_similarity_radius: 3.0,
+        ..Default::default()
+    });
+    assert!(!open
+        .member_status
+        .contains(&MemberStatus::RejectedUnlocalizable));
+}
+
+#[test]
+fn the_member_gate_passes_at_or_under_the_bar_and_fails_nan() {
+    let on = ClusterRefineParams::default();
+    assert_eq!(
+        on.max_member_zncc_self_similarity_radius,
+        crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS
+    );
+    assert_eq!(on.max_member_zncc_self_similarity_radius, 2.5);
+    assert!(on.member_self_similarity_gate_is_on());
+    assert!(on.admits_member_zncc_self_similarity_radius(0.4));
+    assert!(on.admits_member_zncc_self_similarity_radius(2.5));
+    assert!(!on.admits_member_zncc_self_similarity_radius(2.6));
+    assert!(!on.admits_member_zncc_self_similarity_radius(3.0));
+    assert!(!on.admits_member_zncc_self_similarity_radius(f64::NAN));
+    for bar in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let off = ClusterRefineParams {
+            max_member_zncc_self_similarity_radius: bar,
+            ..Default::default()
+        };
+        assert!(!off.member_self_similarity_gate_is_on(), "{bar}");
+        assert!(off.admits_member_zncc_self_similarity_radius(3.0), "{bar}");
+        assert!(
+            off.admits_member_zncc_self_similarity_radius(f64::NAN),
+            "{bar}"
+        );
+    }
 }
 
 #[test]

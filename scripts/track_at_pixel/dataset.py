@@ -192,7 +192,7 @@ CLUSTER_PATCH_DEFAULTS = {
     "resolution": 25,
     "min_zncc": 0.85,
     "max_shift": 3.0,
-    "max_keypoint_uncertainty": 0.35,
+    "max_member_zncc_self_similarity_radius": 2.5,
 }
 
 

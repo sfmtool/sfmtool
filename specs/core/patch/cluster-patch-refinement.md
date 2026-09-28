@@ -75,6 +75,27 @@ pub fn refine_cluster_patches(
     progress: Option<&AtomicUsize>,     // one tick per finished cluster
 ) -> ClusterRefineResult;
 
+/// One member's own `R×R` grid at a position and affine shape, and the same
+/// grid with `max_radius` px of ring around it: what the member gate reads.
+pub fn sample_member_grid(
+    pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<Vec<f32>>;
+pub fn sample_member_self_similarity_tile(
+    pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<(Vec<f32>, usize)>;             // (samples, R + 2·max_radius)
+/// The number the member gate judges.
+pub fn member_zncc_self_similarity_radius(
+    pyramid: &ImageU8Pyramid, position: [f64; 2], affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<f64>;
+
+impl ClusterRefineParams {
+    pub fn member_self_similarity_gate_is_on(&self) -> bool;
+    pub fn admits_member_zncc_self_similarity_radius(&self, radius: f64) -> bool;
+}
+
 /// The reconstruction-free contamination signal computed from the refined
 /// warps; see [cluster-warp-consistency.md](cluster-warp-consistency.md).
 pub fn warp_consistency_residuals(
@@ -98,7 +119,10 @@ boundary. Nothing returns a `Result` — a member that cannot be evaluated is
 remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
-pay for it.
+pay for it. The member-grid samplers and the radius are public so the bench
+([editable-track.md](../bench/editable-track.md)) reads a cluster-stage
+sighting's self-similarity from the same tile the gate reads, rather than from a
+second copy of the sampling.
 
 ```rust
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
@@ -235,19 +259,29 @@ choice the other patch kernels make, differing only in the level rule
 
 ### Which member anchors, and which members are eligible
 
-Before anything is refined, each member's own patch is scored for
-*localizability* — the noise-normalized weak-axis positional uncertainty of its
-ZNCC self-similarity surface
-([patch-localizability.md](patch-localizability.md)) — on its full `resolution²`
-grid at its own SIFT geometry, with the shared refinement window and the global
-`σ_noise = 3.0`. A member whose `σ_pos` exceeds `max_keypoint_uncertainty`
-becomes `RejectedUnlocalizable` and takes no further part: a flat wash or a
-straight edge can neither anchor a cluster nor honestly join one, since it
-agrees photometrically with any translation along its weak axis. The gate
-samples with a nearest-valid-pixel clamp rather than an in-frame requirement, so
-a member near the border is scored on its visible content instead of escaping
-the gate; only non-finite geometry skips it, a `NaN` score keeps the member (the
-`embed-patches` convention), and a threshold of `0` disables the gate.
+Before anything is refined, each member's own patch is read for its
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md): how far, in
+template-grid px, the member's full `resolution²` grid at its own SIFT geometry
+can slide over itself and still match itself as well as a true match between two
+views would. The reading uses the default `SelfSimilarityParams` (shifts up to
+`max_radius = 3` px) on `sample_member_self_similarity_tile`, the member grid
+sampled with its half-width grown by `(R + 6) / R` at resolution `R + 6`, so the
+core is the member grid itself, the grid spacing and mip level are unchanged,
+and the 3 px ring around it is what the shifted windows read. A member whose
+radius is above `max_member_zncc_self_similarity_radius` becomes
+`RejectedUnlocalizable` and takes no further part: a flat wash or a straight
+edge can neither anchor a cluster nor honestly join one, since it matches itself
+along the edge or everywhere and so agrees photometrically with a translation
+the refinement cannot pin. The gate samples with a nearest-valid-pixel clamp
+rather than an in-frame requirement, so a member near the border is read on its
+visible content instead of escaping the gate; only non-finite geometry (or a
+pyramid level too small to sample) skips it. The pass rule is the keypoint
+localizer's ([patch-keypoint-localization.md](patch-keypoint-localization.md)):
+a member passes when its radius is at or below the bar, a `NaN` radius fails, a
+bar of `0` (or a non-finite one) disables the gate, and since the radius reads
+at most `3`, a bar of `3` or more turns nothing out. The default, `2.5`, is the
+localizer's `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, so the two member
+gates start from the same bar.
 
 The reference is then the surviving member with the largest SIFT scale
 `√|det A|`, ties to the lowest global member index — a larger patch resolves the
@@ -427,10 +461,38 @@ stage with a Gauss-Newton/ECC step on an analytic windowed-ZNCC gradient, and
 luminance-only refinement (3× fewer channel passes, but it changes matching
 semantics and needs its own quality study).
 
+### The member gate's effect and cost
+
+Measured on the clusters the track-at-pixel harness builds from each ground
+truth's own index (`scripts/track_at_pixel/dataset.py`: seoul_bull's 17 images,
+and kerry_park's 48 fisheye frames of candidate `tk113`), with every other
+setting at its default. The older gate is the structure-tensor gate on the
+localizability score at its `0.35` grid px, which the radius replaced.
+
+| gate | dataset | refused | refinable clusters | clusters keeping a member | reference + kept | gate CPU per member |
+|---|---|---|---|---|---|---|
+| `σ_pos` ≤ 0.35 (older) | seoul_bull | 0 of 12,506 | 4,942 of 5,071 | 2,183 | 8,169 | 32 µs |
+| off | seoul_bull | 0 | 4,942 | 2,183 | 8,169 | 0 |
+| radius ≤ 2.5 | seoul_bull | 1,466 (11.7%) | 4,360 | 1,747 | 6,851 | 66 µs |
+| `σ_pos` ≤ 0.35 (older) | kerry_park | 52 of 41,620 | 14,274 of 14,515 | 9,277 | 31,042 | 33 µs |
+| off | kerry_park | 0 | 14,288 | 9,294 | 31,091 | 0 |
+| radius ≤ 2.5 | kerry_park | 6,457 (15.5%) | 12,026 | 7,706 | 25,585 | 70 µs |
+
+The older gate turned out almost nothing; the radius at `2.5` refuses about one
+member in eight. Reading the radius costs about twice what the structure tensor
+did (the tile is `(R + 6)²` rather than `R²`, and the reading correlates 29
+shifts), but the members it refuses are never refined, so the kernel as a whole
+spends less CPU (seoul_bull 5.7 → 5.5 CPU-s, kerry_park 22.7 → 20.0) and a full
+`sfm cluster-patches` run is no slower (0.39 → 0.37 s and 1.08 → 1.01 s wall,
+i9-14900HX, 32 threads). The resections the add-image-to-tracks harness runs
+over these files move little: at the resected pose its default rule recovers
+80.4% → 80.6% of the known observations on seoul_bull and 71.5% → 70.7% on
+kerry_park, and the recovery at the ground-truth pose is unchanged.
+
 ## Parameters
 
 Defaults are `ClusterRefineParams::default()` in
-`crates/sfmtool-core/src/patch/cluster_refine/params.rs`, except for the three
+`crates/sfmtool-core/src/patch/cluster_refine/params.rs`, except for the two
 module constants the last column marks. The CLI's `--patch-size` is the **full**
 template edge length while the kernel's `radius` is a half-width;
 `src/sfmtool/_cluster_patches.py` is the sole conversion site
@@ -443,7 +505,7 @@ template edge length while the kernel's `radius` is a half-width;
 | `window` | `GaussianDisk { sigma: 0.5 }` | Scoring window; sigma in normalized patch coordinates, where the grid spans `[−1, 1]²` |
 | `min_zncc` | `0.85` | Acceptance threshold on the achieved windowed ZNCC |
 | `max_shift_px` | `3.0` | Max translation drift from the SIFT seed, source px |
-| `max_keypoint_uncertainty` | `0.35` | Localizability gate on `σ_pos`, template-grid px; `0` disables it |
+| `max_member_zncc_self_similarity_radius` | `2.5` | Member gate on the ZNCC self-similarity radius of the member's own patch, template-grid px; `0` disables it (CLI `--max-member-zncc-self-similarity-radius`) |
 | `max_iters` | `120` | Nelder-Mead iterations per cascade stage |
 | `convergence` | `1e-5` | Simplex value-spread stop, affine stage |
 | `intermediate_convergence` | `1e-4` | …and for the shift and similarity stages, which only seed the next |
@@ -451,7 +513,6 @@ template edge length while the kernel's `radius` is a half-width;
 | `stall_tol` | `1e-4` | Best-value improvement (ZNCC units) that counts as progress |
 | `MIN_ABS_DET` | `1e-9` | Floor on a usable SIFT shape's `det A` magnitude (`mod.rs`) |
 | `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`mod.rs`) |
-| `LOCALIZABILITY_SIGMA_NOISE` | `3.0` | Photometric-noise constant of the gate, intensity units (`mod.rs`) |
 
 ## Python bindings
 
@@ -466,7 +527,7 @@ refine_cluster_patches(
     radius=6.0, resolution=25,
     window="gaussian_disk", window_sigma=None,
     min_zncc=0.85, max_shift_px=3.0,
-    max_keypoint_uncertainty=0.35,
+    max_member_zncc_self_similarity_radius=2.5,
     max_iters=120, progress=None,
 ) -> dict
 ```
@@ -519,10 +580,19 @@ consumer would and asserting a support-grid RMSE around 0.3 px; **one test per
 gate** (flat member image → `RejectedLowZncc`; seed drifted past `max_shift_px`
 → `RejectedShift`; support out of frame → `NotEvaluated`; an unlocalizable
 member excluded, and unable to become the reference; a border member still
-scored through the clamped sampling; every reference candidate out of frame →
+read through the clamped sampling; every reference candidate out of frame →
 unrefinable; a degenerate cluster → not evaluated; two members in one image →
-exactly one `Kept`); **determinism**, two runs bit-identical; and a **dual-path**
-check that AVX2 and scalar scores agree within 1e-4. That the low-ZNCC test uses
+exactly one `Kept`); the **member gate** (a textured patch reads well under the
+bar while a flat patch, a straight edge and a texture smooth on the template
+grid read over it; the tile's core is the member grid; at the default a flat
+and an edge member are refused and a textured one kept, `0` refuses nobody and
+`3` turns nothing out; the pass rule at, over and under the bar and for `NaN`);
+**determinism**, two runs bit-identical; and a **dual-path**
+check that AVX2 and scalar scores agree within 1e-4. The synthetic `texture`
+carries two fine terms (periods near 6 px) beside its smooth ones, because the
+smooth terms alone read over `2.5` on the template grid and the default gate
+would refuse every member; `smooth_texture` keeps the smooth terms alone for
+the test that shows it. That the low-ZNCC test uses
 a *flat* member image rather than an unrelated smooth texture is behaviour, not
 test convenience: over the ~50 effective samples of the window the affine
 optimizer can chase an unrelated smooth texture to a spurious ZNCC above the
@@ -554,14 +624,16 @@ at least one member, and that statuses stay inside the enum.
 
 ## Open questions
 
-- **The localizability threshold's unit is not resolution-invariant.**
-  `max_keypoint_uncertainty` is in template-grid px, so the gate weakens as the
-  template is sampled more finely: on dino_dog_toy, moving from 15 to 31 samples
-  per axis at a fixed `0.35` cut `RejectedUnlocalizable` from 1,913 members to
-  372. Since `--resolution` is freely tunable, one knob silently moves another
-  gate's strength. Re-expressing the threshold in a resolution-independent unit
-  (keypoint-frame or source px) would fix it, and would change the meaning of the
-  current default.
+- **The member gate's unit is not resolution-invariant.**
+  `max_member_zncc_self_similarity_radius` is in template-grid px, and the
+  shifts the reading searches are whole grid px, so the same bar asks for a
+  different image-space sharpness as the template is sampled more or less
+  finely. Under the older gate on the localizability score this was measured:
+  on dino_dog_toy, moving from 15 to 31 samples per axis at a fixed `0.35` cut
+  `RejectedUnlocalizable` from 1,913 members to 372. Since `--resolution` is
+  freely tunable, one knob moves another gate's strength. Re-expressing the bar
+  in a resolution-independent unit (keypoint-frame or source px) would fix it,
+  and would change the meaning of the current default.
 - **Reference-selection policy.** Largest SIFT scale is the shipped policy and a
   known weakness on rig captures, where the largest-scale member is often an
   untracked feature. The format is policy-agnostic; the alternatives (template

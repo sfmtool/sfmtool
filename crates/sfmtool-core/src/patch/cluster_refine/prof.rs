@@ -66,10 +66,11 @@ impl Phase {
 pub static TOTAL: Phase = Phase::new("cluster_total");
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
-/// Localizability gate: per-member full-grid patch sample
-/// (`sample_patch_grid`).
+/// Member self-similarity gate: per-member tile sample, the grid with its
+/// ring (`sample_member_self_similarity_tile`).
 pub static GATE_SAMPLE: Phase = Phase::new("gate_sample");
-/// Localizability gate: per-member `patch_localizability_deprecated` score.
+/// Member self-similarity gate: per-member ZNCC self-similarity radius
+/// reading.
 pub static GATE_SCORE: Phase = Phase::new("gate_score");
 /// Reference template builds (`build_template`), including fallback retries.
 pub static TEMPLATE: Phase = Phase::new("build_template");
@@ -86,7 +87,7 @@ pub static EVAL: Phase = Phase::new("eval_zncc");
 // Event counters (no time attached).
 /// Members carrying usable geometry (the gate + refinement population).
 pub static N_MEMBERS: AtomicU64 = AtomicU64::new(0);
-/// Members scored by the localizability gate.
+/// Members read by the member self-similarity gate.
 pub static N_GATED: AtomicU64 = AtomicU64::new(0);
 /// Members the gate rejected.
 pub static N_GATE_REJECTED: AtomicU64 = AtomicU64::new(0);

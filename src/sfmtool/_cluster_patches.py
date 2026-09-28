@@ -46,7 +46,7 @@ def _run_cluster_patches(
     resolution: int,
     min_zncc: float,
     max_shift: float,
-    max_keypoint_uncertainty: float,
+    max_member_zncc_self_similarity_radius: float,
 ):
     import os
     from concurrent.futures import ThreadPoolExecutor
@@ -158,7 +158,7 @@ def _run_cluster_patches(
             resolution=resolution,
             min_zncc=min_zncc,
             max_shift_px=max_shift,
-            max_keypoint_uncertainty=max_keypoint_uncertainty,
+            max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             progress=counter,
         )
 
@@ -219,7 +219,7 @@ def _run_cluster_patches(
             "resolution": resolution,
             "min_zncc": min_zncc,
             "max_shift_px": max_shift,
-            "max_keypoint_uncertainty": max_keypoint_uncertainty,
+            "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
         },
         "has_two_view_geometries": False,
     }

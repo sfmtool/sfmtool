@@ -6,10 +6,9 @@
 //! See `specs/core/patch/cluster-patch-refinement.md` (implementation) and
 //! `specs/core/patch/cluster-patches.md` (design). Given per-image pyramids, SIFT
 //! feature geometry, and CSR clusters, [`refine_cluster_patches`] first
-//! gates each member on the localizability of its own patch (the
-//! noise-normalized structure-tensor uncertainty of
-//! `specs/core/patch/patch-localizability.md`; members above
-//! `max_keypoint_uncertainty` are excluded up front), then picks a
+//! gates each member on the ZNCC self-similarity radius of its own patch
+//! (`specs/core/patch/zncc-self-similarity-radius.md`; members above
+//! `max_member_zncc_self_similarity_radius` are excluded up front), then picks a
 //! reference member per cluster (largest SIFT scale, deterministic
 //! tie-breaks), builds a Gaussian-windowed z-normalized template around the
 //! reference detection, refines an affine warp to every other member by a
@@ -50,14 +49,10 @@ use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
 use crate::camera::remap::ImageU8Pyramid;
-// `SIGMA_NOISE` is the shared absolute-px scale of every in-crate `σ_pos` gate;
-// aliased here for the local call site's readability.
-use crate::patch::localizability::{
-    patch_localizability_deprecated, SIGMA_NOISE as LOCALIZABILITY_SIGMA_NOISE,
-};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };
+use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::patch::view_selection::AffineCoreMap;
 
 use kernels::{
@@ -283,18 +278,17 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
 }
 
 /// One member's own tile on the template grid: the `R×R×C` interleaved `f32`
-/// samples the localizability gate scores, at the member's own position and
-/// affine shape.
+/// samples at the member's own position and affine shape, the grid the
+/// reference's template is cut from.
 ///
 /// `position` is the member's keypoint in source-image pixels and
 /// `affine_shape` its absolute affine shape `S` (the map from the detector's
 /// canonical unit frame onto that image's pixels) -- a seed's, or the
 /// refinement's answer for it. The grid, the mip rule and the border clamp are
-/// the kernel's own, so a caller that wants the number the gate computed
-/// ([`score_localizability_stack_deprecated`](crate::patch::localizability::score_localizability_stack_deprecated)
-/// over this stack, with [`ClusterRefineParams::window`] and the crate's
-/// `SIGMA_NOISE`) gets exactly it, and a caller that wants the reference's
-/// template to draw gets the tile the cascade registers against.
+/// the kernel's own, so a caller that wants the reference's template to draw
+/// gets the tile the cascade registers against.
+/// [`sample_member_self_similarity_tile`] is the same grid with the ring
+/// around it that the member gate reads.
 ///
 /// `None` for a degenerate shape, a non-finite coordinate, or a pyramid whose
 /// selected level is too small to bilinear-sample.
@@ -314,15 +308,83 @@ pub fn sample_member_grid(
     sample_patch_grid(pyramid, position, &affine_shape, resolution, step, off)
 }
 
+/// One member's own tile for its ZNCC self-similarity reading: the
+/// [`sample_member_grid`] grid with `max_radius` px of ring around it on every
+/// side, where `max_radius` is the default
+/// [`SelfSimilarityParams::max_radius`], so the shifted windows the reading
+/// compares have pixels to read. Interleaved `S×S×C` `f32`, with
+/// `S = R + 2·max_radius`; the `R×R` core at offset `(max_radius, max_radius)`
+/// is the member grid itself.
+///
+/// The tile is the member grid sampled with its half-width grown by `S / R`
+/// and its resolution set to `S`, so the grid spacing, and with it the mip
+/// level the sampler picks, is unchanged. A ring pixel outside the frame
+/// reads the nearest valid pixel, as the grid's own border samples do.
+/// Returns the samples and `S`; `None` where [`sample_member_grid`] would
+/// return `None`.
+pub fn sample_member_self_similarity_tile(
+    pyramid: &ImageU8Pyramid,
+    position: [f64; 2],
+    affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<(Vec<f32>, usize)> {
+    let resolution = params.resolution.max(2) as usize;
+    let size = resolution + 2 * SelfSimilarityParams::default().max_radius as usize;
+    let wide = ClusterRefineParams {
+        radius: params.radius * size as f64 / resolution as f64,
+        resolution: size as u32,
+        ..params.clone()
+    };
+    let samples = sample_member_grid(pyramid, position, affine_shape, &wide)?;
+    Some((samples, size))
+}
+
+/// The ZNCC self-similarity radius of one member's own `R×R` grid at
+/// `position` and `affine_shape`, in template-grid px, read with the default
+/// [`SelfSimilarityParams`] from [`sample_member_self_similarity_tile`]: the
+/// number [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]
+/// judges. Only the leading three channels are read, as a patch tile's colour.
+/// `None` where the tile cannot be sampled.
+pub fn member_zncc_self_similarity_radius(
+    pyramid: &ImageU8Pyramid,
+    position: [f64; 2],
+    affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<f64> {
+    let (samples, size) =
+        sample_member_self_similarity_tile(pyramid, position, affine_shape, params)?;
+    Some(tile_self_similarity_radius(&samples, size))
+}
+
+/// The ZNCC self-similarity radius of the core of an interleaved `S×S×C`
+/// tile from [`sample_member_self_similarity_tile`]; `NaN` for a tile with no
+/// channels.
+fn tile_self_similarity_radius(samples: &[f32], size: usize) -> f64 {
+    let channels = samples.len() / (size * size);
+    if channels == 0 {
+        return f64::NAN;
+    }
+    let (planes, colour) = PatchTile::planes_from_interleaved(samples, size, size, channels);
+    let tile = PatchTile {
+        values: &planes,
+        channels: colour,
+        width: size,
+        height: size,
+    };
+    let params = SelfSimilarityParams::default();
+    let ring = params.max_radius as usize;
+    let resolution = size - 2 * ring;
+    zncc_self_similarity_radius(&tile, [ring, ring, resolution, resolution], &params).radius
+}
+
 /// Sample a member's own full `R×R` grid at its SIFT geometry (identity
 /// warp, mip-selected level, bit-exact `bilinear_geometry` convention) into
-/// an interleaved `R×R×C` f32 patch — the layout [`patch_localizability_deprecated`]
-/// scores. Unlike [`build_template`], every grid pixel is sampled (the
-/// scorer's gradients cover the full grid, not just the windowed support),
-/// and samples outside the frame clamp to the nearest valid pixel (border
-/// replicate) so a border member is scored on its visible content instead
-/// of skipping the gate. `None` only for non-finite coordinates (degenerate
-/// geometry) or a level too small to bilinear-sample.
+/// an interleaved `R×R×C` f32 patch. Unlike [`build_template`], every grid
+/// pixel is sampled, not just the windowed support, and samples outside the
+/// frame clamp to the nearest valid pixel (border replicate) so a border
+/// member is read on its visible content instead of skipping the member
+/// gate. `None` only for non-finite coordinates (degenerate geometry) or a
+/// level too small to bilinear-sample.
 fn sample_patch_grid(
     pyramid: &ImageU8Pyramid,
     pos: [f64; 2],
@@ -721,37 +783,26 @@ fn refine_cluster(
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
 
-    // 1b. Localizability gate: score each usable member's own patch and
-    // exclude members whose weak-axis positional uncertainty exceeds the
-    // threshold — before reference selection, so an unlocalizable patch can
+    // 1b. Member self-similarity gate: read each usable member's own patch
+    // and exclude members that match themselves further than the bar away —
+    // before reference selection, so a patch that pins no position can
     // neither anchor nor join the cluster. Border patches sample with a
-    // nearest-valid-pixel clamp, so they are scored on their visible
-    // content; only degenerate geometry (non-finite coordinates, or a
-    // sub-2px pyramid level) skips the gate.
-    if params.max_keypoint_uncertainty > 0.0 {
+    // nearest-valid-pixel clamp, so they are read on their visible content;
+    // only degenerate geometry (non-finite coordinates, or a sub-2px pyramid
+    // level) skips the gate.
+    if params.member_self_similarity_gate_is_on() {
         for (j, slot) in geo.iter_mut().enumerate() {
             let Some(g) = slot.as_ref() else {
                 continue;
             };
-            let Some(raw) = prof::GATE_SAMPLE
-                .time(|| sample_patch_grid(pyramids[g.image], g.pos, &g.a, resolution, step, off))
+            let Some((tile, size)) = prof::GATE_SAMPLE
+                .time(|| sample_member_self_similarity_tile(pyramids[g.image], g.pos, g.a, params))
             else {
                 continue;
             };
-            let r = resolution as usize;
-            let channels = raw.len() / (r * r);
             prof::count(&prof::N_GATED, 1);
-            let loc = prof::GATE_SCORE.time(|| {
-                patch_localizability_deprecated(
-                    &raw,
-                    r,
-                    channels,
-                    support,
-                    LOCALIZABILITY_SIGMA_NOISE,
-                )
-            });
-            // NaN (empty patch) compares false -> kept, like embed-patches.
-            if loc.sigma_pos_grid > params.max_keypoint_uncertainty {
+            let radius = prof::GATE_SCORE.time(|| tile_self_similarity_radius(&tile, size));
+            if !params.admits_member_zncc_self_similarity_radius(radius) {
                 prof::count(&prof::N_GATE_REJECTED, 1);
                 members[j].status = MemberStatus::RejectedUnlocalizable;
                 *slot = None;

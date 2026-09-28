@@ -47,7 +47,7 @@ pub(crate) fn state() -> (AppState, ReconId) {
         // fixture's rather than the code's. Its periods are a few pixels and
         // they differ between the axes, because the patch of the demo's frames
         // is only a few pixels across: a pattern coarser than the template
-        // hands the localizability gate a one-dimensional tile, and every
+        // hands the member gate a one-dimensional tile, and every
         // member is refused before anything fits it.
         let data: Vec<u8> = (0..(w * h * 3))
             .map(|i| {

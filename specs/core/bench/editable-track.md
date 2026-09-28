@@ -508,7 +508,7 @@ pub fn set_stage(
 pub fn open_localizer() -> KeypointLocalizeParams;
 
 pub struct EvaluateOptions {
-    pub cluster: ClusterRefineParams,       // max_keypoint_uncertainty 0: its gate off
+    pub cluster: ClusterRefineParams,       // member gate 0: off
     pub localize: KeypointLocalizeParams,   // open_localizer, one round
     pub max_seed_offset_px: f64,            // how far a seed may sit, 64
     pub max_cache_bytes: usize,             // one round's tiles, 256 MiB
@@ -1143,7 +1143,9 @@ observation through, grown so the shifted windows have pixels to read: at the
 track stage the frame anchored at the observation's keypoint is rendered with
 its half-extent grown by `(R + 2r) / R` at resolution `R + 2r`, and at the
 cluster stage the member grid is sampled at its seed geometry with its radius
-grown by the same factor and its resolution set to `R + 2r`. Either way the core
+grown by the same factor and its resolution set to `R + 2r`, by cluster
+refinement's own `sample_member_self_similarity_tile`, the tile its member gate
+reads. Either way the core
 is the `R×R` tile of the observation at that geometry, and the ring of `r`
 pixels around it is what the shifted windows read.
 
@@ -1179,10 +1181,12 @@ reading fails it.
 
 The bench judges the self-similarity radius in its painting and never through a
 kernel's gate. The evaluation's cluster refinement therefore runs
-with its own localizability gate off (`EvaluateOptions::default()` sets
-`cluster.max_keypoint_uncertainty` to `0`), as the track stage's
+with its own member gate off (`EvaluateOptions::default()` sets
+`cluster.max_member_zncc_self_similarity_radius` to `0`), as the track stage's
 `open_localizer` does, so no member of a bench cluster is
-`RejectedUnlocalizable`.
+`RejectedUnlocalizable`. That gate reads the same radius from the same tile, so
+a member the batch pass would refuse is a row the painting turns out at the same
+bar.
 
 ## The steps
 
@@ -1715,7 +1719,7 @@ reference's own tile on the template grid, sampled by the kernel's own sampler.
 No pose is read, so a cluster evaluates on a node whose images have none.
 
 The self-similarity radius is read at each observation's **seed** geometry,
-where the kernel cuts the tile it registers. The kernel's own localizability
+where the kernel cuts the tile it registers. The kernel's own member
 gate is off (§ "The ZNCC self-similarity radius"), so a member's tile is judged
 by the track's `max_zncc_self_similarity_radius` and never by a
 `RejectedUnlocalizable` status.

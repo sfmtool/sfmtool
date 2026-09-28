@@ -35,8 +35,8 @@ use crate::camera::remap::{remap_bilinear_mip, ImageU8Pyramid};
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
-    refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
-    MemberStatus, REFERENCE_UNREFINABLE,
+    refine_cluster_patches_borrowed, sample_member_grid, sample_member_self_similarity_tile,
+    ClusterRefineParams, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
@@ -148,10 +148,11 @@ impl Default for EvaluateOptions {
     fn default() -> Self {
         Self {
             // The bench judges a sighting's tile by its self-similarity radius
-            // (`Thresholds::max_zncc_self_similarity_radius`), so the
-            // refinement's own gate on the older localizability score is off.
+            // in its painting (`Thresholds::max_zncc_self_similarity_radius`),
+            // so the refinement's own member gate on the same radius is off:
+            // a gate is a decision, and the reading makes none.
             cluster: ClusterRefineParams {
-                max_keypoint_uncertainty: 0.0,
+                max_member_zncc_self_similarity_radius: 0.0,
                 ..ClusterRefineParams::default()
             },
             localize: KeypointLocalizeParams {
@@ -780,30 +781,25 @@ fn score_self_similarity(
     }
 }
 
-/// One observation's own tile self-similarity, at its seed
-/// geometry: the member grid sampled with its radius
-/// grown by `(R + 2r) / R` and its resolution set to `R + 2r`, so the core is
-/// the same `R×R` grid and the ring around it is what the shifted windows
-/// read. All `None` when the geometry is degenerate or the tile leaves the
-/// pyramid.
+/// One observation's own tile self-similarity, at its seed geometry: the tile
+/// cluster refinement's member gate reads
+/// ([`sample_member_self_similarity_tile`]), the member grid with the ring
+/// around it that the shifted windows read, so the whole radius here is the
+/// number that gate judges. All `None` when the geometry is degenerate or the
+/// tile leaves the pyramid.
 fn tile_self_similarity(
     pyramid: &ImageU8Pyramid,
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
 ) -> TileSelfSimilarity {
-    let resolution = params.resolution.max(2) as usize;
-    let size = resolution + 2 * self_similarity_margin();
-    let wide = ClusterRefineParams {
-        radius: params.radius * size as f64 / resolution as f64,
-        resolution: size as u32,
-        ..params.clone()
-    };
-    let Some(grid) = sample_member_grid(pyramid, position, shape, &wide) else {
+    let Some((tile, size)) = sample_member_self_similarity_tile(pyramid, position, shape, params)
+    else {
         return TileSelfSimilarity::default();
     };
-    let channels = grid.len() / (size * size);
-    score_self_similarity(&grid, size, channels, resolution)
+    let resolution = params.resolution.max(2) as usize;
+    let channels = tile.len() / (size * size);
+    score_self_similarity(&tile, size, channels, resolution)
 }
 
 // ---- The track stage -------------------------------------------------------

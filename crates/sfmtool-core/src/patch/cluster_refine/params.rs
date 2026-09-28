@@ -8,6 +8,7 @@
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 
+use crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS;
 use crate::patch::normal_refine::PatchWindow;
 
 /// Per-member refinement status.
@@ -33,10 +34,10 @@ pub enum MemberStatus {
     /// Not evaluated: degenerate shape, template/seed support out of frame,
     /// or the cluster itself was unrefinable.
     NotEvaluated = 5,
-    /// Rejected: the member's own patch scored a keypoint position
-    /// uncertainty above
-    /// [`ClusterRefineParams::max_keypoint_uncertainty`] (excluded before
-    /// reference selection and refinement).
+    /// Rejected: the member's own patch does not pin a position, its ZNCC
+    /// self-similarity radius is above
+    /// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`]
+    /// (excluded before reference selection and refinement).
     RejectedUnlocalizable = 6,
 }
 
@@ -62,15 +63,28 @@ pub struct ClusterRefineParams {
     pub min_zncc: f64,
     /// Max translation drift from the SIFT seed, source-image pixels.
     pub max_shift_px: f64,
-    /// Localizability gate: exclude a member up front (before reference
-    /// selection and refinement) when its own patch's noise-normalized
-    /// weak-axis positional uncertainty `σ_pos` exceeds this, in
-    /// template-grid px (see `specs/core/patch/patch-localizability.md`). `0`
-    /// disables the gate. The default value matches `embed-patches`'
-    /// `--max-keypoint-uncertainty`, though the score here is measured on
-    /// the member's template-grid patch with [`Self::window`] rather than
-    /// on the consensus with the scorer's frozen window.
-    pub max_keypoint_uncertainty: f64,
+    /// Exclude a member up front (before reference selection and refinement)
+    /// when its own patch does not pin a 2D position: its
+    /// [ZNCC self-similarity radius](crate::patch::self_similarity), how far
+    /// the patch can slide over itself and still match itself as well as a
+    /// true match between two views would, is above this bar, in
+    /// template-grid px. The patch is the member's `R×R` grid at its SIFT
+    /// seed geometry, read with the default
+    /// [`SelfSimilarityParams`](crate::patch::self_similarity::SelfSimilarityParams)
+    /// from a tile with `max_radius` px of ring around it
+    /// ([`sample_member_self_similarity_tile`](super::sample_member_self_similarity_tile)).
+    /// A flat or edge-only member matches itself along the edge or
+    /// everywhere, so its ZNCC to the reference cannot place it.
+    ///
+    /// A member passes when its radius is at or below the bar; a `NaN`
+    /// radius fails. The radius reads at most `max_radius` (`3`), which
+    /// stands for "that far or further", so a bar at or above it turns
+    /// nothing out. `0.0` (or a non-finite value) disables the gate exactly.
+    /// See [`Self::admits_member_zncc_self_similarity_radius`]. The default is
+    /// the keypoint localizer's
+    /// [`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`], `2.5`, so the two
+    /// member gates start from the same bar.
+    pub max_member_zncc_self_similarity_radius: f64,
     /// Nelder-Mead iterations per cascade stage.
     pub max_iters: u32,
     /// Simplex value-spread stop threshold for the affine stage (the stored
@@ -104,7 +118,7 @@ impl Default for ClusterRefineParams {
             window: PatchWindow::GaussianDisk { sigma: 0.5 },
             min_zncc: 0.85,
             max_shift_px: 3.0,
-            max_keypoint_uncertainty: 0.35,
+            max_member_zncc_self_similarity_radius: DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
             max_iters: 120,
             convergence: 1e-5,
             // Tuned on dino_dog_toy (85 images, 105K clusters): together
@@ -117,6 +131,24 @@ impl Default for ClusterRefineParams {
             stall_iters: 20,
             stall_tol: 1e-4,
         }
+    }
+}
+
+impl ClusterRefineParams {
+    /// Whether [`Self::max_member_zncc_self_similarity_radius`] is on: finite
+    /// and above `0`.
+    pub fn member_self_similarity_gate_is_on(&self) -> bool {
+        let bar = self.max_member_zncc_self_similarity_radius;
+        bar.is_finite() && bar > 0.0
+    }
+
+    /// Whether a member whose own patch reads `radius` passes the member
+    /// gate: always when the gate is off, otherwise when `radius` is at or
+    /// below [`Self::max_member_zncc_self_similarity_radius`]. A `NaN` radius
+    /// fails an active gate.
+    pub fn admits_member_zncc_self_similarity_radius(&self, radius: f64) -> bool {
+        !self.member_self_similarity_gate_is_on()
+            || radius <= self.max_member_zncc_self_similarity_radius
     }
 }
 

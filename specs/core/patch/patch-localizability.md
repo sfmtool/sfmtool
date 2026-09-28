@@ -20,14 +20,14 @@ are compared, this score's code names carry a `_deprecated` suffix:
 `score_localizability_parts_deprecated`, `LocalizabilityDeprecated`,
 `LocalizabilityPartsDeprecated` and `PatchCloud.score_localizability_deprecated`.
 The names of the gates built on it, their parameters and flags
-(`max_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
-`SIGMA_NOISE`, the `.matches` status `rejected_unlocalizable` and the module
-`patch::localizability` keep their names, and those gates keep calling this
-score. The [editable track](../bench/editable-track.md) does not read it: the
-bench judges a sighting's tile by its ZNCC self-similarity radius, and its
-evaluation runs the cluster refinement with the member gate below turned off.
-Nor does the [keypoint localizer](patch-keypoint-localization.md): its member
-gate, `max_member_zncc_self_similarity_radius`, judges a view's own tile by the
+(`embed-patches`' `max_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
+`SIGMA_NOISE` and the module `patch::localizability` keep their names, and
+those gates keep calling this score. The [editable track](../bench/editable-track.md)
+does not read it: the bench judges a sighting's tile by its ZNCC
+self-similarity radius. Nor do the member gates of the
+[keypoint localizer](patch-keypoint-localization.md) and of
+[cluster-patch refinement](cluster-patch-refinement.md): both,
+`max_member_zncc_self_similarity_radius`, judge a member's own tile by the
 ZNCC self-similarity radius.
 
 ## Problem
@@ -101,27 +101,23 @@ admits partially-covered patches, revisit: the fix would be to zero the window w
 
 ### The per-member counterpart
 
-The consensus score grades a **point**. The same scorer, on the same `R×R`
-window with the same `σ_noise` and the same `τ` units, also grades a single
-**member**: one view's own rendered core tile, scored before that view is allowed
-to vote. [Cluster-patch refinement](cluster-patch-refinement.md) uses it that
-way for a cluster member's own template-grid patch (`max_keypoint_uncertainty`,
-status `rejected_unlocalizable`), refusing a member rather than a point. A
-member that pins no 2D position on its own — a flat sky or water crop, a lone
-straight edge — correlates to noise against any template, so its ZNCC carries no
-information about whether it registered.
+The consensus score grades a **point**. A point's members can also be graded
+one at a time: one view's own tile, judged before that view is allowed to
+vote. A member that pins no 2D position on its own — a flat sky or water crop,
+a lone straight edge — correlates to noise against any template, so its ZNCC
+carries no information about whether it registered. Both member gates do this,
+and neither uses this score: [cluster-patch refinement](cluster-patch-refinement.md)
+(`max_member_zncc_self_similarity_radius`, status `rejected_unlocalizable`) and
+[keypoint localization](patch-keypoint-localization.md)
+(`max_member_zncc_self_similarity_radius`) judge the member's own tile by its
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md), 2.5 by default.
+Cluster refinement's gate read this score, with a `0.35` bar called
+`max_keypoint_uncertainty`, until it moved to the radius.
 
-[Keypoint localization](patch-keypoint-localization.md) has a member gate too,
-but it judges the view's core by its
-[ZNCC self-similarity radius](zncc-self-similarity-radius.md)
-(`max_member_zncc_self_similarity_radius`, 2.5 by default), not by this score.
-
-The two levels are complementary, not redundant: a point whose members are each
-localizable can still fuse a consensus that slides (the aperture case the
+The two levels are complementary, not redundant: a point whose members each pin
+a position can still fuse a consensus that slides (the aperture case the
 consensus gate exists for), and a point with one textureless member can still
-fuse a perfectly sharp consensus from the others. The member gate runs where
-the tile is already in hand, so it costs one structure tensor per member and no
-extra render.
+fuse a perfectly sharp consensus from the others.
 
 ## Two normalizations, and why noise-normalized wins
 
@@ -231,11 +227,8 @@ The scorer lives in
 as `PatchCloud.score_localizability_deprecated`, with the reconstruction-level filter in
 [_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
 
-One scorer, three entry points (plus one internal consumer, the member-level
-gate of [The per-member counterpart](#the-per-member-counterpart): the
-[cluster-patch refinement](cluster-patch-refinement.md) kernel's
-`max_keypoint_uncertainty`, calling `patch_localizability_deprecated` directly
-on the member's own tile with the shared `localizability::SIGMA_NOISE`):
+One scorer, three entry points (no member gate calls it; see
+[The per-member counterpart](#the-per-member-counterpart)):
 
 1. **Crate function** (a submodule sibling of `keypoint_localize` /
    `normal_refine`):
@@ -459,7 +452,7 @@ the four repo datasets:
    (weight 1.0; applying only Rec.601's red weight would shrink gradients
    ~3.3× and inflate `σ_pos` by the same factor for identical content).
    Consensus stacks are always ≥ 3 channels, so this only affects
-   single-channel callers (the cluster-refine gate on grayscale images).
+   single-channel callers.
 6. **`σ_pos` reduction over views.** Median chosen; mean / worst-case are
    alternatives if a specific view's precision should dominate.
 

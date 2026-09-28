@@ -362,8 +362,9 @@ pub fn clusters_to_pair_matches(
 /// Refine SIFT clusters into patch clusters (see
 /// `specs/core/patch/cluster-patch-refinement.md`).
 ///
-/// Per cluster: exclude members whose own patch fails the localizability
-/// gate (see `specs/core/patch/patch-localizability.md`), pick a reference member
+/// Per cluster: exclude members whose own patch does not pin a position (the
+/// member gate on the ZNCC self-similarity radius, see
+/// `specs/core/patch/zncc-self-similarity-radius.md`), pick a reference member
 /// (largest SIFT scale), build a Gaussian-windowed z-normalized template
 /// around its detection, refine an affine warp to every other member by a
 /// shift → similarity → affine Nelder-Mead cascade on the windowed ZNCC
@@ -395,14 +396,17 @@ pub fn clusters_to_pair_matches(
 ///         (default 0.85).
 ///     max_shift_px: Max translation drift from the SIFT seed, px
 ///         (default 3.0).
-///     max_keypoint_uncertainty: Exclude a member before reference selection
-///         and refinement when its own patch's predicted keypoint position
-///         uncertainty (noise-normalized structure-tensor sigma_pos,
-///         template-grid px) exceeds this; the member is marked
-///         rejected_unlocalizable. 0 disables the gate. Default 0.35 — the
-///         same default value as embed-patches' cull, though scored here on
-///         the member's template-grid patch with the refinement window
-///         rather than on the consensus.
+///     max_member_zncc_self_similarity_radius: Exclude a member before
+///         reference selection and refinement when its own patch does not
+///         pin a position: its ZNCC self-similarity radius, how far the
+///         template-grid patch at its SIFT seed can slide over itself and
+///         still match itself as well as a true match between two views
+///         would, is above this bar, in template-grid px. The member is
+///         marked rejected_unlocalizable. A NaN radius fails; the radius
+///         reads at most 3, so a bar of 3 or more turns nothing out, and 0
+///         disables the gate exactly. Default 2.5, the same bar as the
+///         keypoint localizer's member gate
+///         (specs/core/patch/zncc-self-similarity-radius.md).
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     progress: Optional ProgressCounter, bumped once per finished cluster.
 ///
@@ -433,7 +437,7 @@ pub fn clusters_to_pair_matches(
                     radius = 6.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
-                    max_keypoint_uncertainty = 0.35,
+                    max_member_zncc_self_similarity_radius = 2.5,
                     max_iters = 120, progress = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches<'py>(
@@ -450,7 +454,7 @@ pub fn refine_cluster_patches<'py>(
     window_sigma: Option<f64>,
     min_zncc: f64,
     max_shift_px: f64,
-    max_keypoint_uncertainty: f64,
+    max_member_zncc_self_similarity_radius: f64,
     max_iters: u32,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -518,7 +522,7 @@ pub fn refine_cluster_patches<'py>(
         window: parse_patch_window(window, window_sigma.unwrap_or(0.5))?,
         min_zncc,
         max_shift_px,
-        max_keypoint_uncertainty,
+        max_member_zncc_self_similarity_radius,
         max_iters,
         ..ClusterRefineParams::default()
     };

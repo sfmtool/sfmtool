@@ -168,7 +168,7 @@ more:
 | `count features` | Reads each image's `.sift` metadata: its feature count, its image size, its two hashes, as `sfm match --cluster` records them. The counts give each image's offsets in the index, and their sum is checked against the index's length. |
 | `cluster features` | The background-floor clustering of `sfm match --cluster` over the index: a self-join of every descriptor at `d + 1 = 11` neighbours and 128 leaf checks, then the clustering with `d = 10`, `alpha = 0.8`, `min_size = 2` (`sfmtool_core::features::cluster_match::background_floor_clusters_lazy`, the function the `background_floor_clusters_kdf` binding calls). |
 | `read photographs` | Decodes every photograph into a full pyramid, in OpenCV's blue-green-red channel order. |
-| `refine patches` | `sfm cluster-patches`' refinement with its defaults: a 12-unit patch, 25 samples a side, ZNCC 0.85, 3 px of shift, 0.35 keypoint uncertainty (`sfmtool_core::patch::cluster_refine::refine_cluster_patches`), then the warp-consistency residuals. |
+| `refine patches` | `sfm cluster-patches`' refinement with its defaults: a 12-unit patch, 25 samples a side, ZNCC 0.85, 3 px of shift, a 2.5 px bar on each member's ZNCC self-similarity radius (`sfmtool_core::patch::cluster_refine::refine_cluster_patches`), then the warp-consistency residuals. |
 | `write cluster patches` | Writes the `.matches`, through a temporary sibling renamed over the target. |
 
 The members' detected positions and shapes are read out of the index's feature

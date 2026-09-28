@@ -5064,11 +5064,11 @@ fn the_bench_s_self_similarity_bar_sits_under_the_largest_radius_searched() {
             < f64::from(SelfSimilarityParams::default().max_radius),
         "a bar at the largest radius would turn nothing out"
     );
-    // The bench's refinement does not gate on the older localizability score.
-    assert_eq!(
-        EvaluateOptions::default().cluster.max_keypoint_uncertainty,
-        0.0
-    );
+    // The bench's refinement turns its own member gate off: the bench judges
+    // the radius in its painting instead.
+    assert!(!EvaluateOptions::default()
+        .cluster
+        .member_self_similarity_gate_is_on());
 }
 
 #[test]

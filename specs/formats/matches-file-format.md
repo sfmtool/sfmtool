@@ -590,7 +590,11 @@ refinement measured and which members stand.
   under one of two keys across writer generations: `patch_size` (the full
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   Consumers needing the half-width normalize via the reader's
-  `refine_radius` accessor (`patch_size / 2`, or `radius` as-is)
+  `refine_radius` accessor (`patch_size / 2`, or `radius` as-is). The other
+  keys record the settings for a reader to see and are not read back:
+  `sfm cluster-patches` also writes `min_zncc`, `max_shift_px` and
+  `max_member_zncc_self_similarity_radius` (older files carry
+  `max_keypoint_uncertainty`, the bar of the older member gate, in its place)
 
 #### `cluster_patches/reference_members.{C}.uint32.zst`
 
@@ -618,10 +622,12 @@ refinement measured and which members stand.
     shares the reference's image
   - `5 not_evaluated` — degenerate shape, template/seed support out of frame, or the
     cluster itself was unrefinable
-  - `6 rejected_unlocalizable` — the member's own patch scored a keypoint position
-    uncertainty above the localizability threshold, so it was excluded before
-    reference selection and refinement (see
-    [`patch-localizability.md`](../core/patch/patch-localizability.md))
+  - `6 rejected_unlocalizable` — the member's own patch does not pin a position
+    (its ZNCC self-similarity radius is above the member gate's bar), so it was
+    excluded before reference selection and refinement (see
+    [`cluster-patch-refinement.md`](../core/patch/cluster-patch-refinement.md)).
+    Files written before that gate read the radius hold members refused under
+    the older localizability score with the same status
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor

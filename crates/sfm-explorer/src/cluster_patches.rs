@@ -1033,7 +1033,7 @@ fn matches_data(
                 "resolution": refine_defaults.resolution,
                 "min_zncc": refine_defaults.min_zncc,
                 "max_shift_px": refine_defaults.max_shift_px,
-                "max_keypoint_uncertainty": refine_defaults.max_keypoint_uncertainty,
+                "max_member_zncc_self_similarity_radius": refine_defaults.max_member_zncc_self_similarity_radius,
             }),
         }),
         two_view_geometries: None,

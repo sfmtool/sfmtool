@@ -74,7 +74,7 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     np.testing.assert_array_equal(data["member_features"], src["member_features"])
     assert data["refine_options"]["patch_size"] == 12.0
     assert data["refine_options"]["min_zncc"] == 0.85
-    assert data["refine_options"]["max_keypoint_uncertainty"] == 0.35
+    assert data["refine_options"]["max_member_zncc_self_similarity_radius"] == 2.5
 
     statuses = data["member_status"]
     starts = data["cluster_starts"]

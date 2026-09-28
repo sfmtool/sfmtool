@@ -18,15 +18,22 @@ STATUS_REJECTED_UNLOCALIZABLE = 6
 
 
 def _texture(w: int, h: int) -> np.ndarray:
-    """Smooth deterministic texture (no clipping)."""
+    """Deterministic texture (no clipping).
+
+    The two fine terms (periods near 6 px) make a member's own patch pin a
+    position under the member gate; the smooth terms alone match themselves
+    3 template-grid px away and every member would be refused at the default.
+    """
     y, x = np.mgrid[0:h, 0:w].astype(np.float64)
     x += 0.5
     y += 0.5
     v = (
         127.0
-        + 50.0 * np.sin(0.11 * x + 0.06 * y + 1.3)
-        + 35.0 * np.sin(0.05 * x - 0.12 * y + 0.7)
+        + 45.0 * np.sin(0.11 * x + 0.06 * y + 1.3)
+        + 30.0 * np.sin(0.05 * x - 0.12 * y + 0.7)
         + 20.0 * np.sin(0.17 * x + 0.13 * y + 2.9)
+        + 15.0 * np.sin(0.83 * x + 0.47 * y + 0.2)
+        + 12.0 * np.sin(-0.52 * x + 0.88 * y + 1.1)
     )
     return np.clip(np.round(v), 0, 255).astype(np.uint8)
 
@@ -129,9 +136,10 @@ class TestRefineClusterPatches:
         assert np.isnan(result["member_zncc"]).all()
 
     def test_unlocalizable_member_excluded(self):
-        # The member's image is flat: its own patch has no gradient signal,
-        # so the localizability gate excludes it before refinement and the
-        # 2-member cluster becomes unrefinable.
+        # The member's image is flat: its own patch matches itself at every
+        # shift, so it reads the largest ZNCC self-similarity radius, the
+        # member gate excludes it before refinement and the 2-member cluster
+        # becomes unrefinable.
         images, pos, aff, starts, m_img, m_feat = _inputs()
         images[1] = np.full_like(images[1], 127)
         result = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
@@ -142,7 +150,13 @@ class TestRefineClusterPatches:
         # Disabling the gate re-admits the member; the flat patch then fails
         # the downstream ZNCC vet instead.
         result = refine_cluster_patches(
-            images, pos, aff, starts, m_img, m_feat, max_keypoint_uncertainty=0.0
+            images,
+            pos,
+            aff,
+            starts,
+            m_img,
+            m_feat,
+            max_member_zncc_self_similarity_radius=0.0,
         )
         assert result["member_status"][1] == STATUS_REJECTED_LOW_ZNCC
 

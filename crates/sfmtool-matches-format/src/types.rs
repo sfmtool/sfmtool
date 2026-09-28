@@ -454,9 +454,10 @@ pub enum ClusterMemberStatus {
     /// Not evaluated: degenerate shape, template/seed support out of frame,
     /// or the cluster itself was unrefinable.
     NotEvaluated = 5,
-    /// Rejected: the member's own patch scored a keypoint position
-    /// uncertainty above the localizability threshold (excluded before
-    /// reference selection and refinement).
+    /// Rejected: the member's own patch does not pin a position, its ZNCC
+    /// self-similarity radius is above the member gate's bar (excluded before
+    /// reference selection and refinement). Files written before that gate
+    /// read the radius used the older localizability score here.
     RejectedUnlocalizable = 6,
 }
 

@@ -27,15 +27,14 @@ pub use scorer::{
     LocalizabilityDeprecated, LocalizabilityPartsDeprecated,
 };
 
-pub(in crate::patch) use scorer::patch_localizability_deprecated;
-
 use crate::patch::normal_refine::{window_weights as kernel_window_weights, PatchWindow};
 
-/// Global photometric-noise constant `σ_noise` (intensity units) the in-crate
-/// gates score with — the value that sets the absolute px scale of `σ_pos`. It
-/// matches the `score_localizability_deprecated` binding's / `embed-patches`' default (see
-/// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)"),
-/// so a member-level gate and the per-point consensus cull read the same scale.
+/// Global photometric-noise constant `σ_noise` (intensity units), the value
+/// that sets the absolute px scale of `σ_pos`. It matches the
+/// `score_localizability_deprecated` binding's / `embed-patches`' default (see
+/// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)").
+/// No gate in this crate reads it any more: the member gates of cluster
+/// refinement and the keypoint localizer read the ZNCC self-similarity radius.
 pub const SIGMA_NOISE: f64 = 3.0;
 
 /// The scorer's `R×R` window weights (row-major) for `window` — the shared patch
