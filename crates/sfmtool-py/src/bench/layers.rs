@@ -23,7 +23,7 @@ use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// The source the harness's name `word` names.
-fn source_named(word: &str) -> PyResult<NearbySource> {
+pub(super) fn source_named(word: &str) -> PyResult<NearbySource> {
     Ok(match word {
         "tracks" => NearbySource::Points,
         "clusters" => NearbySource::Clusters,
@@ -201,7 +201,7 @@ pub(super) fn depth_layers(
 }
 
 /// One layer as the harness's layer dict.
-fn layer_dict<'py>(py: Python<'py>, layer: &DepthLayer) -> PyResult<Bound<'py, PyDict>> {
+pub(super) fn layer_dict<'py>(py: Python<'py>, layer: &DepthLayer) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("range", layer.range.to_vec())?;
     d.set_item("anchors", &layer.members)?;

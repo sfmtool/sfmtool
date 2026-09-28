@@ -52,6 +52,7 @@ use crate::spatial::kdf::PyLazyKdForest;
 mod far_field;
 mod layers;
 mod nearby;
+mod nearby_tracks;
 mod patch_read;
 mod range;
 mod track_at_pixel;
@@ -2011,6 +2012,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     far_field::register(m)?;
     layers::register(m)?;
     nearby::register(m)?;
+    nearby_tracks::register(m)?;
     patch_read::register(m)?;
     range::register(m)?;
     track_at_pixel::register(m)?;

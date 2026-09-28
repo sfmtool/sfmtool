@@ -185,6 +185,18 @@ DEFAULTS = {
     # sources in core and the far-field sweep, not the `sweep` or `infinity`
     # sources.
     "layers_impl": "rust",
+    # Which implementation runs the whole finder: "rust", the core
+    # `find_nearby_tracks` through its binding (`specs/core/bench/
+    # nearby-tracks.md`), which runs every piece in core whatever the other
+    # `*_impl` switches say; or "python", :func:`find_anchors`' own loop over
+    # the sources, the ranges, the far test and the layers, with the pieces the
+    # other switches name, kept as the reference the Rust one was measured
+    # against. The Rust one has no `sweep` source and no `far_test="infinity"`.
+    "finder_impl": "rust",
+    # With the Rust finder, also build the track-stage track the bench takes
+    # for every usable anchor that is not an existing point, and record the
+    # time in a `bench_tracks` stage. Scoring reads none of them, so it is off.
+    "build_tracks": False,
     "inf_peak_margin": 0.02,
     "inf_drop": 0.05,
     # Clusters: "kept" uses the reference and kept members, and the queried
@@ -1528,8 +1540,19 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     layer, or no usable anchor within a pixel of the pixel
     (``infinity="needed"``). A pixel at infinity often has one layer of nearer
     anchors beside it and none at it.
+
+    With ``finder_impl="rust"`` (the default) all of this runs in the core
+    ``find_nearby_tracks`` (:func:`_rust_finder`,
+    ``specs/core/bench/nearby-tracks.md``); ``"python"`` runs the loop here,
+    the reference it was measured against.
     """
     opts = {**DEFAULTS, **(options or {})}
+    if opts["finder_impl"] == "rust":
+        return _rust_finder(ctx, image, pixel, opts)
+    if opts["finder_impl"] != "python":
+        raise ValueError(
+            f"unknown finder_impl {opts['finder_impl']!r} (expected rust|python)"
+        )
     anchors, stages = [], []
     ranges = _Ranges(ctx, image, opts)
     cq = ctx.camera(image)
@@ -1596,6 +1619,97 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
             {"source": "evidence", "found": 0, "seconds": time.perf_counter() - t0}
         )
     return {"anchors": anchors, "layers": layers, "stages": stages}
+
+
+def _rust_finder_options(opts) -> dict:
+    """``opts`` as the overrides the core ``find_nearby_tracks`` takes."""
+    names = opts["sources"].split("+")
+    if opts["far_test"] != "farfield" or not set(names) <= set(_RUST_SOURCES):
+        raise ValueError(
+            "the Rust finder runs the sources "
+            f"{'+'.join(_RUST_SOURCES)} and the far-field sweep; for "
+            f"sources={opts['sources']!r} far_test={opts['far_test']!r} use "
+            "finder_impl=python"
+        )
+    return {
+        "sources": names,
+        "stop": opts["stop"],
+        "enough_count": int(opts["min_anchors"]),
+        "enough_px": float(opts["enough_px"]),
+        "far_field_when": opts["infinity"],
+        "points.radius_px": float(opts["track_radius_px"]),
+        "points.max_points": int(opts["track_max"]),
+        "points.min_views": int(opts["track_min_views"]),
+        "points.max_reproj_px": float(opts["max_reproj_px"]),
+        "clusters.radius_px": float(opts["cluster_radius_px"]),
+        "clusters.max_clusters": int(opts["cluster_max"]),
+        "clusters.max_reproj_px": float(opts["max_reproj_px"]),
+        "clusters.members": opts["cluster_members"],
+        "guided.radius_px": float(opts["guided_radius_px"]),
+        "guided.max_keypoints": int(opts["guided_max"]),
+        "guided.skip_px": float(opts["guided_skip_px"]),
+        "guided.epipolar_px": float(opts["guided_epipolar_px"]),
+        "guided.ratio": float(opts["guided_ratio"]),
+        "guided.max_distance": float(opts["guided_max_dist"]),
+        "guided.loose_distance": float(opts["guided_loose_dist"]),
+        "guided.min_views": int(opts["guided_min_views"]),
+        "guided.max_reproj_px": float(opts["max_reproj_px"]),
+        "constellation.target": int(opts["constellation_target"]),
+        "constellation.min_inliers": int(opts["constellation_min_inliers"]),
+        "constellation.seed_radius_px": float(opts["constellation_radius_px"]),
+        "constellation.max_reproj_px": float(opts["constellation_max_reproj_px"]),
+        "constellation.at": opts["constellation_at"],
+        "constellation.lateral_max": int(opts["lateral_max"]),
+        "constellation.lateral_radius_px": float(opts["lateral_radius_px"]),
+        "range.tolerance_px": float(opts["range_px"]),
+        "range.max_span": float(opts["max_span"]),
+        "range.far_spread": float(opts["far_spread"]),
+        "far_field.disparities": [float(d) for d in opts["ff_disparities"]],
+        "far_field.radius_px": float(opts["inf_radius_px"]),
+        "far_field.wide": float(opts["ff_wide"]),
+        "far_field.wide_among": opts["ff_wide_among"],
+        "far_field.min_whole": float(opts["ff_min_whole"]),
+        "far_field.min_middle": float(opts["ff_min_middle"]),
+        "far_field.middle_min_std": float(opts["inf_centre_min_std"]),
+        "far_field.max_peaks": int(opts["ff_max_peaks"]),
+        "far_field.min_prominence": float(opts["ff_min_prominence"]),
+        "far_field.refit": bool(opts["ff_refit"]),
+        "far_field.group_cut": float(opts["ff_group_cut"]),
+        "far_field.group_max": int(opts["ff_group_max"]),
+        "far_field.refit_px": float(opts["ff_refit_px"]),
+        "far_field.refit_max_px": float(opts["ff_refit_max_px"]),
+        "far_field.refit_max_err_px": float(opts["ff_refit_max_err_px"]),
+        "layers.evidence": bool(opts["layer_evidence"]),
+        "layers.rank_by": opts["layer_rank"],
+        "layers.radius_px": float(opts["layer_radius_px"]),
+        "layers.samples": int(opts["layer_samples"]),
+        "tracks.build": bool(opts["build_tracks"]),
+    }
+
+
+def _rust_finder(ctx, image, pixel, opts) -> dict:
+    """:func:`find_anchors` by the core ``find_nearby_tracks``: its anchors
+    (``found``), layers and stages, with the same keys."""
+    from sfmtool._sfmtool import bench as B
+
+    found = B.find_nearby_tracks(
+        ctx.edited,
+        ctx.pyramids,
+        _rust_inputs(ctx),
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options=_rust_finder_options(opts),
+    )
+    stages = found["stages"]
+    if opts["build_tracks"]:
+        stages.append(
+            {
+                "source": "bench_tracks",
+                "found": sum(t["track"] is not None for t in found["tracks"]),
+                "seconds": found["report"]["tracks_seconds"],
+            }
+        )
+    return {"anchors": found["found"], "layers": found["layers"], "stages": stages}
 
 
 def _python_layers(ctx, image, pixel, anchors, opts) -> list[dict]:

@@ -21,7 +21,11 @@ use crate::patches::views::{resolve_grey, resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// Set one field of `options` from a Python value.
-fn set_option(options: &mut FarFieldOptions, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(super) fn set_option(
+    options: &mut FarFieldOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let o = options;
     match key {
         "disparities" => o.disparities = value.extract()?,
@@ -133,7 +137,10 @@ pub(super) fn far_field_sweep(
 }
 
 /// One reading as the harness's anchor dict.
-fn reading_dict<'py>(py: Python<'py>, r: &FarFieldReading) -> PyResult<Bound<'py, PyDict>> {
+pub(super) fn reading_dict<'py>(
+    py: Python<'py>,
+    r: &FarFieldReading,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("source", "farfield")?;
     d.set_item("id", py.None())?;

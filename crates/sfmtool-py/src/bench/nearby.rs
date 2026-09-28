@@ -180,12 +180,30 @@ impl PyNearbyTrackSources {
 
 impl PyNearbyTrackSources {
     /// What guided matching reads, when every part of it is here.
-    fn guided(&self) -> Option<GuidedSource<'_>> {
+    pub(super) fn guided(&self) -> Option<GuidedSource<'_>> {
         Some(GuidedSource {
             keypoints: self.keypoints.as_deref()?,
             descriptors: self.descriptors.as_deref()?,
             rays: &self.rays,
         })
+    }
+}
+
+impl PyNearbyTrackSources {
+    /// The cluster-patches clusters, when given.
+    pub(super) fn clusters(&self) -> Option<&MatchesClusters> {
+        self.clusters.as_ref()
+    }
+
+    /// The SIFT index, borrowed, and the keypoints, when both are given.
+    pub(super) fn sift_index<'py>(
+        &'py self,
+        py: Python<'py>,
+    ) -> Option<(PyRef<'py, PyLazyKdForest>, &'py [ImageKeypoints])> {
+        let (Some(forest), Some(keypoints)) = (&self.forest, &self.keypoints) else {
+            return None;
+        };
+        Some((forest.bind(py).borrow(), keypoints.as_slice()))
     }
 }
 
@@ -216,6 +234,89 @@ fn with_overrides<T>(
     Ok(options)
 }
 
+/// Set one field of the points source's options; `false` for an unknown key.
+pub(super) fn set_points_option(
+    o: &mut PointsOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "radius_px" => o.radius_px = value.extract()?,
+        "max_points" => o.max_points = value.extract()?,
+        "min_views" => o.min_views = value.extract()?,
+        "max_reproj_px" => o.max_reproj_px = value.extract()?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Set one field of the clusters source's options; `false` for an unknown key.
+pub(super) fn set_clusters_option(
+    o: &mut ClusterTracksOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "radius_px" => o.radius_px = value.extract()?,
+        "max_clusters" => o.max_clusters = value.extract()?,
+        "max_reproj_px" => o.max_reproj_px = value.extract()?,
+        "members" => {
+            let word: String = value.extract()?;
+            o.members = word
+                .parse::<ClusterMembers>()
+                .map_err(PyValueError::new_err)?;
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Set one field of guided matching's options; `false` for an unknown key.
+pub(super) fn set_guided_option(
+    o: &mut GuidedOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "radius_px" => o.radius_px = value.extract()?,
+        "max_keypoints" => o.max_keypoints = value.extract()?,
+        "skip_px" => o.skip_px = value.extract()?,
+        "epipolar_px" => o.epipolar_px = value.extract()?,
+        "ratio" => o.ratio = value.extract()?,
+        "max_distance" => o.max_distance = value.extract()?,
+        "loose_distance" => o.loose_distance = value.extract()?,
+        "min_views" => o.min_views = value.extract()?,
+        "max_reproj_px" => o.max_reproj_px = value.extract()?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Set one field of the constellation source's options; `false` for an
+/// unknown key.
+pub(super) fn set_constellation_option(
+    o: &mut ConstellationSeedOptions,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "target" => o.target = value.extract()?,
+        "min_inliers" => o.min_inliers = value.extract()?,
+        "seed_radius_px" => o.seed_radius_px = value.extract()?,
+        "max_reproj_px" => o.max_reproj_px = value.extract()?,
+        "at" => {
+            let word: String = value.extract()?;
+            o.at = word
+                .parse::<ConstellationAt>()
+                .map_err(PyValueError::new_err)?;
+        }
+        "lateral_max" => o.lateral_max = value.extract()?,
+        "lateral_radius_px" => o.lateral_radius_px = value.extract()?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 /// The name the harness gives a source's anchors.
 pub(super) fn harness_name(source: NearbySource) -> &'static str {
     match source {
@@ -229,7 +330,10 @@ pub(super) fn harness_name(source: NearbySource) -> &'static str {
 }
 
 /// One candidate as the harness's anchor dict.
-fn candidate_dict<'py>(py: Python<'py>, c: &NearbyCandidate) -> PyResult<Bound<'py, PyDict>> {
+pub(super) fn candidate_dict<'py>(
+    py: Python<'py>,
+    c: &NearbyCandidate,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("source", harness_name(c.source))?;
     d.set_item("id", c.id)?;
@@ -299,16 +403,7 @@ pub(super) fn nearby_points(
     pixel: [f64; 2],
     options: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyList>> {
-    let options = with_overrides(PointsOptions::default(), options, |o, key, value| {
-        match key {
-            "radius_px" => o.radius_px = value.extract()?,
-            "max_points" => o.max_points = value.extract()?,
-            "min_views" => o.min_views = value.extract()?,
-            "max_reproj_px" => o.max_reproj_px = value.extract()?,
-            _ => return Ok(false),
-        }
-        Ok(true)
-    })?;
+    let options = with_overrides(PointsOptions::default(), options, set_points_option)?;
     let (posed, pyramids) = posed_views(edited, images)?;
     let views = views_of(&posed, &pyramids);
     let found = py
@@ -353,21 +448,11 @@ pub(super) fn nearby_cluster_tracks(
     pixel: [f64; 2],
     options: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyList>> {
-    let options = with_overrides(ClusterTracksOptions::default(), options, |o, key, value| {
-        match key {
-            "radius_px" => o.radius_px = value.extract()?,
-            "max_clusters" => o.max_clusters = value.extract()?,
-            "max_reproj_px" => o.max_reproj_px = value.extract()?,
-            "members" => {
-                let word: String = value.extract()?;
-                o.members = word
-                    .parse::<ClusterMembers>()
-                    .map_err(PyValueError::new_err)?;
-            }
-            _ => return Ok(false),
-        }
-        Ok(true)
-    })?;
+    let options = with_overrides(
+        ClusterTracksOptions::default(),
+        options,
+        set_clusters_option,
+    )?;
     let Some(clusters) = &sources.clusters else {
         return Ok(PyList::empty(py).unbind());
     };
@@ -418,21 +503,7 @@ pub(super) fn guided_matches(
     pixel: [f64; 2],
     options: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyList>> {
-    let options = with_overrides(GuidedOptions::default(), options, |o, key, value| {
-        match key {
-            "radius_px" => o.radius_px = value.extract()?,
-            "max_keypoints" => o.max_keypoints = value.extract()?,
-            "skip_px" => o.skip_px = value.extract()?,
-            "epipolar_px" => o.epipolar_px = value.extract()?,
-            "ratio" => o.ratio = value.extract()?,
-            "max_distance" => o.max_distance = value.extract()?,
-            "loose_distance" => o.loose_distance = value.extract()?,
-            "min_views" => o.min_views = value.extract()?,
-            "max_reproj_px" => o.max_reproj_px = value.extract()?,
-            _ => return Ok(false),
-        }
-        Ok(true)
-    })?;
+    let options = with_overrides(GuidedOptions::default(), options, set_guided_option)?;
     let Some(source) = sources.guided() else {
         return Ok(PyList::empty(py).unbind());
     };
@@ -483,24 +554,7 @@ pub(super) fn constellation_seeds(
     let options = with_overrides(
         ConstellationSeedOptions::default(),
         options,
-        |o, key, value| {
-            match key {
-                "target" => o.target = value.extract()?,
-                "min_inliers" => o.min_inliers = value.extract()?,
-                "seed_radius_px" => o.seed_radius_px = value.extract()?,
-                "max_reproj_px" => o.max_reproj_px = value.extract()?,
-                "at" => {
-                    let word: String = value.extract()?;
-                    o.at = word
-                        .parse::<ConstellationAt>()
-                        .map_err(PyValueError::new_err)?;
-                }
-                "lateral_max" => o.lateral_max = value.extract()?,
-                "lateral_radius_px" => o.lateral_radius_px = value.extract()?,
-                _ => return Ok(false),
-            }
-            Ok(true)
-        },
+        set_constellation_option,
     )?;
     let (Some(forest), Some(keypoints)) = (&sources.forest, &sources.keypoints) else {
         return Ok(PyList::empty(py).unbind());
