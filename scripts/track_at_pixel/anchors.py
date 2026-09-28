@@ -89,6 +89,12 @@ DEFAULTS = {
     # (:func:`distance_range`, :func:`_camera_spread`, :func:`_bounded`), kept
     # as the reference the Rust one was measured against.
     "range_impl": "rust",
+    # Which implementation runs the matching sources that have been moved into
+    # core (`_RUST_SOURCES`): "rust", the core functions through their
+    # bindings (`specs/core/bench/nearby-sources.md`), or "python", this
+    # module's own (:func:`from_tracks` and the others), kept as the reference
+    # the Rust ones were measured against.
+    "sources_impl": "rust",
     # Infinity: after the other sources, when they gave no usable anchor, more
     # than one layer, or none at the pixel ("needed"), or always, or never. The pixel's patch is
     # compared with every image at its position at infinity; it is at infinity
@@ -603,8 +609,47 @@ def from_sweep(ctx, image, pixel, opts):
     return [a]
 
 
+def _rust_tracks(ctx, image, pixel, opts):
+    """:func:`from_tracks` by the core ``nearby_points``."""
+    from sfmtool._sfmtool import bench as B
+
+    return B.nearby_points(
+        ctx.edited,
+        ctx.pyramids,
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options={
+            "radius_px": float(opts["track_radius_px"]),
+            "max_points": int(opts["track_max"]),
+            "min_views": int(opts["track_min_views"]),
+            "max_reproj_px": float(opts["max_reproj_px"]),
+        },
+    )
+
+
+# The sources moved into core, by the harness's name for each.
+_RUST_SOURCES = {
+    "tracks": _rust_tracks,
+}
+
+
+def _by_impl(name, python):
+    """The source ``name``, run by the implementation ``sources_impl`` names."""
+
+    def run(ctx, image, pixel, opts):
+        impl = opts["sources_impl"]
+        if impl == "python":
+            return python(ctx, image, pixel, opts)
+        if impl != "rust":
+            raise ValueError(f"unknown sources_impl {impl!r} (expected rust|python)")
+        return _RUST_SOURCES[name](ctx, image, pixel, opts)
+
+    run.__name__ = python.__name__
+    return run
+
+
 SOURCES = {
-    "tracks": from_tracks,
+    "tracks": _by_impl("tracks", from_tracks),
     "clusters": from_clusters,
     "constellation": from_constellation,
     "guided": from_guided,

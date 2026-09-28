@@ -72,9 +72,10 @@ pub use geometry_search::{
     GeometrySearchReport,
 };
 pub use nearby::{
-    camera_spread, classify_range, distance_range, far_field_sweep, read_patch_along_ray,
-    DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
-    FarFieldReading, FarFieldSweep, GreyImage, GreyImages, PatchRead, PatchSamples, RangeClass,
+    camera_spread, classify_range, distance_range, far_field_sweep, nearby_points,
+    read_patch_along_ray, DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics,
+    FarFieldOptions, FarFieldReading, FarFieldSweep, GreyImage, GreyImages, NearbyCandidate,
+    NearbySource, NearbySourceError, PatchRead, PatchSamples, PointsOptions, RangeClass,
     RangeOptions, RayPatch, Refit, WideAmong, PATCH_GRID,
 };
 pub use search::{

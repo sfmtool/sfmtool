@@ -20,6 +20,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
+use super::candidate::ray_angle;
 use super::grey::GreyImages;
 use super::patch_read::{read_patch_along_ray, PatchRead, RayPatch};
 use super::range::camera_spread;
@@ -572,25 +573,6 @@ pub fn far_field_sweep(
         }
     }
     Ok(sweep)
-}
-
-/// The widest angle between the rays from two of `images`' camera centres to
-/// `x`, in degrees.
-fn ray_angle(
-    cameras: &[ViewCamera<'_>],
-    x: &Vector3<f64>,
-    images: impl Iterator<Item = u32>,
-) -> f64 {
-    let dirs: Vec<Vector3<f64>> = images
-        .map(|i| (cameras[i as usize].center - x).normalize())
-        .collect();
-    let mut best = 0.0f64;
-    for (a, da) in dirs.iter().enumerate() {
-        for db in &dirs[a + 1..] {
-            best = best.max(da.dot(db).clamp(-1.0, 1.0).acos().to_degrees());
-        }
-    }
-    best
 }
 
 /// The mean of the three highest of `values` that were read (above `-1`), or

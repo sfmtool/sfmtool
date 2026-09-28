@@ -49,9 +49,7 @@ pub use neighbourhood::{
 };
 
 pub(crate) use finish::{seed_cluster_with, upgrade_sightings};
-pub(crate) use neighbourhood::ViewCamera;
-
-use neighbourhood::ObservationIndex;
+pub(crate) use neighbourhood::{ObservationIndex, ViewCamera};
 
 /// One way of finding the pixel's sightings in the other photographs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

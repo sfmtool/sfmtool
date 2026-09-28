@@ -50,6 +50,7 @@ use crate::spatial::constellation_query::DEFAULTS as QUERY_DEFAULTS;
 use crate::spatial::kdf::PyLazyKdForest;
 
 mod far_field;
+mod nearby;
 mod range;
 mod track_at_pixel;
 
@@ -2006,6 +2007,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(search_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     far_field::register(m)?;
+    nearby::register(m)?;
     range::register(m)?;
     track_at_pixel::register(m)?;
     Ok(())

@@ -188,13 +188,13 @@ struct ImageObservations {
 ///
 /// A point observed twice in one image is listed at its first observation
 /// there, in track order.
-pub(super) struct ObservationIndex<'a> {
+pub(crate) struct ObservationIndex<'a> {
     edited: &'a EditedReconstruction,
     per_image: Vec<ImageObservations>,
 }
 
 impl<'a> ObservationIndex<'a> {
-    pub(super) fn new(edited: &'a EditedReconstruction) -> Self {
+    pub(crate) fn new(edited: &'a EditedReconstruction) -> Self {
         let mut per_image: Vec<ImageObservations> = (0..edited.image_count())
             .map(|_| ImageObservations {
                 points: Vec::new(),
@@ -228,7 +228,7 @@ impl<'a> ObservationIndex<'a> {
 
     /// Every observation in `image` within `radius_px` of `pixel`, nearest
     /// first, read through `camera` (the queried image's).
-    pub(super) fn near(
+    pub(crate) fn near(
         &self,
         image: u32,
         pixel: [f64; 2],
@@ -303,7 +303,7 @@ impl<'a> ObservationIndex<'a> {
     }
 
     /// Every observation of `point`, as `(image, keypoint)` in track order.
-    pub(super) fn point_observations(&self, point: u32) -> Vec<(u32, [f64; 2])> {
+    pub(crate) fn point_observations(&self, point: u32) -> Vec<(u32, [f64; 2])> {
         let Some(view) = self.edited.point(point) else {
             return Vec::new();
         };
@@ -318,7 +318,7 @@ impl<'a> ObservationIndex<'a> {
     }
 
     /// A live point's position, or `None` for one the version does not hold.
-    pub(super) fn position(&self, point: u32) -> Option<Point3<f64>> {
+    pub(crate) fn position(&self, point: u32) -> Option<Point3<f64>> {
         Some(self.edited.point(point)?.point().position)
     }
 }
