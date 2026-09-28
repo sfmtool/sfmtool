@@ -17,8 +17,8 @@
 //! `&AppState` while it draws, and a step needs it mutably.
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
-//! the panel owns is the slider positions during a drag, the *Lock* box Image Detail reads a
-//! dot drag by, the tiles it has rendered, and the painting the sliders
+//! the panel owns is the threshold boxes' values during a drag, the *Lock* box Image Detail reads a
+//! dot drag by, the tiles it has rendered, and the painting the boxes
 //! produce. The last two are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the painting is
 //! `apply_thresholds` run over a copy (and a copy of a track carries its
@@ -50,7 +50,7 @@ pub(crate) use table::RowSummary;
 /// What one frame of the panel asks the dock to do.
 ///
 /// Every field is one gesture, and at most one of them is set on a frame: the
-/// entries that push a version are buttons and slider releases, and each is
+/// entries that push a version are buttons and box releases, and each is
 /// made once.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TrackEditResponse {
@@ -60,14 +60,14 @@ pub struct TrackEditResponse {
     pub rename: Option<(String, String)>,
     /// *Fit*, which runs at the radius the live evaluation reads at.
     pub fit: bool,
-    /// The *search px* slider was released, or a value typed into it was
+    /// The *search px* box was released, or a value typed into it was
     /// committed: the radius the bench's evaluation should read at. Set only
     /// when it differs from the viewer's own.
     pub search_px: Option<f64>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
-    /// A threshold slider was released, or a value typed into one was
-    /// committed: the bars the four sliders stand at, for the active track.
+    /// A threshold box was released, or a value typed into one was
+    /// committed: the bars the four boxes stand at, for the active track.
     /// Set only when they differ from the track's own.
     pub apply_thresholds: Option<Thresholds>,
     /// A kept-at-seed row's *Accept walk*, carrying the observation: put its
@@ -113,20 +113,20 @@ pub struct TrackEditResponse {
 
 /// Track View's edit-mode state.
 pub struct TrackEdit {
-    /// Where the threshold sliders stand.
+    /// Where the threshold boxes stand.
     ///
-    /// The **active track's own bars**, copied from it on every frame no slider
+    /// The **active track's own bars**, copied from it on every frame no box
     /// is being dragged, so an undo, a redo, a step over the wire or a change
-    /// of active item moves the sliders with it. Only during a drag does this
+    /// of active item moves the boxes with it. Only during a drag does this
     /// hold a value the track does not: the drag repaints the table live, and
     /// its release applies the bars to the track as one version. The panel
     /// therefore never holds bars a *Fit* would not use.
     thresholds: Thresholds,
-    /// Whether a threshold slider was being dragged on the last frame, which is
+    /// Whether a threshold box was being dragged on the last frame, which is
     /// what keeps [`TrackEdit::thresholds`] from being reset to the track's bars
     /// in the middle of the drag.
     sliding: bool,
-    /// The verdicts the sliders propose for the active track, one per
+    /// The verdicts the boxes propose for the active track, one per
     /// observation, which is what the rows are painted by.
     painted: Vec<Verdict>,
     /// The item and the exact track value [`TrackEdit::painted`] was computed
@@ -182,14 +182,14 @@ pub struct TrackEdit {
     /// refusal is asked every frame, in front of this, because that one is free
     /// and does move.
     build_refusal: Option<(ReconId, Option<String>)>,
-    /// Where the *search px* slider stands, in patch-grid px.
+    /// Where the *search px* box stands, in patch-grid px.
     ///
     /// The viewer's own radius ([`AppState::bench_search_px`]), copied on
-    /// every frame the slider is not being dragged, as the threshold sliders
+    /// every frame the box is not being dragged, as the threshold boxes
     /// copy the track's bars. A release hands the new radius to the dock, and
     /// every track is then evaluated again at it.
     search_px: f64,
-    /// Whether the *search px* slider was being dragged on the last frame.
+    /// Whether the *search px* box was being dragged on the last frame.
     searching: bool,
     /// Where the active track's evaluation stood when this frame drew it:
     /// what the status at the head of the toolbar says, and how the rows print
@@ -246,7 +246,7 @@ impl TrackEdit {
         &self.rows
     }
 
-    /// Where the sliders stand.
+    /// Where the boxes stand.
     #[cfg(test)]
     pub(crate) fn thresholds(&self) -> &Thresholds {
         &self.thresholds
@@ -336,7 +336,7 @@ impl TrackEdit {
 
         show_header(ui, &label, track);
         self.show_toolbar(ui, state, node, &label, track, &mut response);
-        // A release applies what the drag left the sliders at. Painted by this
+        // A release applies what the drag left the boxes at. Painted by this
         // frame's value from the next frame on, which is the frame the dock
         // has applied it by.
         response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
@@ -475,13 +475,13 @@ impl TrackEdit {
         }
     }
 
-    /// The threshold sliders, which apply to the active track: a drag paints
+    /// The threshold boxes, which apply to the active track: a drag paints
     /// the table live, and its release (or a typed value's commit) hands back
     /// the bars to apply as one version. `None` on every other frame, and on a
     /// release that left the bars where the track has them.
     ///
     /// Greyed while the node is busy, with the busy sentence: a release there
-    /// would be refused, and a slider that snapped back after a drag would say
+    /// would be refused, and a box that snapped back after a drag would say
     /// less than one that could not be dragged.
     fn show_thresholds(
         &mut self,
@@ -495,27 +495,48 @@ impl TrackEdit {
         ui.horizontal_wrapped(|ui| {
             ui.label("Thresholds");
             let bars = &mut self.thresholds;
-            // The ZNCC bars read in percent, as the table's ZNCC column does;
-            // the track stores them on the 0 to 1 scale.
-            let sliders = [
-                percent(egui::Slider::new(&mut bars.min_zncc, 0.0..=1.0)).text(MIN_ZNCC_LABEL),
+            // Each bar is a label and a box that is dragged left and right to
+            // change it, or clicked to type into: a slider's rail beside the
+            // box would say nothing the box does not. The ZNCC bars read in
+            // percent, as the table's ZNCC column does; the track stores them
+            // on the 0 to 1 scale.
+            let boxes = [
+                (
+                    MIN_ZNCC_LABEL,
+                    percent(egui::DragValue::new(&mut bars.min_zncc)),
+                ),
                 // The bar on the middle reading; 0 turns it off.
-                percent(egui::Slider::new(&mut bars.min_zncc_middle, 0.0..=1.0))
-                    .text(MIN_ZNCC_MIDDLE_LABEL),
-                egui::Slider::new(&mut bars.max_shift_px, 0.0..=20.0).text(MAX_SHIFT_LABEL),
-                egui::Slider::new(&mut bars.max_keypoint_uncertainty, 0.0..=2.0)
-                    .text("max \u{3c3}_pos"),
+                (
+                    MIN_ZNCC_MIDDLE_LABEL,
+                    percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
+                ),
+                (
+                    MAX_SHIFT_LABEL,
+                    egui::DragValue::new(&mut bars.max_shift_px)
+                        .range(0.0..=20.0)
+                        .speed(0.05)
+                        .max_decimals(2),
+                ),
+                (
+                    "max \u{3c3}_pos",
+                    egui::DragValue::new(&mut bars.max_keypoint_uncertainty)
+                        .range(0.0..=2.0)
+                        .speed(0.005)
+                        .max_decimals(2),
+                ),
                 // The fourth bar of `Thresholds`, which view selection scores a
                 // candidate by as a fraction of the track's own self-agreement:
-                // a bar with no slider is a bar only the wire can move.
-                percent(egui::Slider::new(&mut bars.min_relative_zncc, 0.0..=1.0))
-                    .text(MIN_RELATIVE_ZNCC_LABEL),
+                // a bar with no box is a bar only the wire can move.
+                (
+                    MIN_RELATIVE_ZNCC_LABEL,
+                    percent(egui::DragValue::new(&mut bars.min_relative_zncc)),
+                ),
             ];
-            for slider in sliders {
+            for (label, value) in boxes {
+                ui.add_enabled(enabled, egui::Label::new(label));
                 // A typed value lands when the field is left, not per
                 // keystroke, so typing "90" is one version and not two.
-                let slider = slider.max_decimals(2).update_while_editing(false);
-                let r = ui.add_enabled(enabled, slider);
+                let r = ui.add_enabled(enabled, value.update_while_editing(false));
                 let r = match &busy {
                     Some(why) => r.on_disabled_hover_text(why),
                     None => r.on_hover_text(
@@ -533,7 +554,7 @@ impl TrackEdit {
             .then(|| self.thresholds.clone())
     }
 
-    /// The *search px* slider: how far around each observation the evaluation
+    /// The *search px* box: how far around each observation the evaluation
     /// looks for its correlation peak. Its release, or a typed value's commit,
     /// hands back the radius to set; `None` on every other frame, and on a
     /// release that left it at `current`.
@@ -545,12 +566,17 @@ impl TrackEdit {
     /// it asks for wait until the node is free.
     fn show_search_px(&mut self, ui: &mut egui::Ui, current: f64) -> Option<f64> {
         let r = ui
-            .add(
-                egui::Slider::new(&mut self.search_px, 1.0..=24.0)
-                    .text(SEARCH_PX_LABEL)
-                    .max_decimals(1)
-                    .update_while_editing(false),
-            )
+            .horizontal(|ui| {
+                ui.label(SEARCH_PX_LABEL);
+                ui.add(
+                    egui::DragValue::new(&mut self.search_px)
+                        .range(1.0..=24.0)
+                        .speed(0.05)
+                        .max_decimals(1)
+                        .update_while_editing(false),
+                )
+            })
+            .inner
             .on_hover_text(
                 "How far around each observation the evaluation looks for the correlation \
                  peak, in patch-grid px. Every track is evaluated again at it when it is \
@@ -562,13 +588,13 @@ impl TrackEdit {
             .then_some(self.search_px)
     }
 
-    /// Put the sliders where the active track's own bars are, unless a slider
+    /// Put the boxes where the active track's own bars are, unless a box
     /// is being dragged.
     ///
-    /// Every frame, rather than when something is seen to change: the sliders
+    /// Every frame, rather than when something is seen to change: the boxes
     /// show the track's bars and nothing else, so whatever moved them -- a
-    /// slider's release here, `apply_bench_track_thresholds` over the wire, an
-    /// undo or redo of either, another item made active -- the sliders follow.
+    /// box's release here, `apply_bench_track_thresholds` over the wire, an
+    /// undo or redo of either, another item made active -- the boxes follow.
     fn reseat_thresholds(&mut self, track: &EditableTrack) {
         if !self.sliding {
             self.thresholds = track.thresholds.clone();
@@ -578,8 +604,8 @@ impl TrackEdit {
     /// Recompute the painting when the track or the bars have moved.
     ///
     /// The painting **is** what applying the thresholds would do, computed by
-    /// the same core function a slider's release applies, so a row can never be
-    /// painted one way and turned another when the slider is let go. A pinned verdict
+    /// the same core function a box's release applies, so a row can never be
+    /// painted one way and turned another when the box is let go. A pinned verdict
     /// comes back unchanged from that call, which is what leaves it alone.
     fn repaint_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
         let key = (
@@ -947,22 +973,24 @@ fn red_to_green(t: f64) -> egui::Color32 {
     egui::Color32::from_rgb((220.0 * red) as u8, (200.0 * green) as u8, 40)
 }
 
-/// The minimum-ZNCC slider's label, in one constant so the tests aim at the
+/// The minimum-ZNCC box's label, in one constant so the tests aim at the
 /// label drawn.
 pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC (%)";
 
-/// The minimum-middle-ZNCC slider's label.
+/// The minimum-middle-ZNCC box's label.
 pub(crate) const MIN_ZNCC_MIDDLE_LABEL: &str = "min middle ZNCC (%)";
 
-/// The minimum-relative-ZNCC slider's label.
+/// The minimum-relative-ZNCC box's label.
 pub(crate) const MIN_RELATIVE_ZNCC_LABEL: &str = "min relative ZNCC (%)";
 
-/// A slider over a `0 ..= 1` bar that shows and takes the value in percent, in
-/// whole steps: `70` for a stored `0.7`. A typed value may carry a trailing
-/// `%`.
-fn percent(slider: egui::Slider<'_>) -> egui::Slider<'_> {
-    slider
-        .step_by(0.01)
+/// A box over a `0 ..= 1` bar that shows and takes the value in percent, in
+/// whole steps: `70` for a stored `0.7`, half a percent per point dragged. A
+/// typed value may carry a trailing `%`.
+fn percent(value: egui::DragValue<'_>) -> egui::DragValue<'_> {
+    value
+        .range(0.0..=1.0)
+        .speed(0.005)
+        .max_decimals(2)
         .custom_formatter(|value, _| format!("{:.0}", 100.0 * value))
         .custom_parser(parse_percent)
 }
@@ -974,7 +1002,7 @@ fn parse_percent(text: &str) -> Option<f64> {
     number.parse::<f64>().ok().map(|v| v / 100.0)
 }
 
-/// The maximum-shift slider's label: the bar the painting judges a seed shift
+/// The maximum-shift box's label: the bar the painting judges a seed shift
 /// by and the bound on how far a fit may move a sighting.
 pub(crate) const MAX_SHIFT_LABEL: &str = "max shift px";
 
@@ -998,7 +1026,7 @@ pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
 /// because it reads poses and photographs, and requires no descriptor index.
 pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
 
-/// The *search px* slider's label, in one constant so the tests aim at the
+/// The *search px* box's label, in one constant so the tests aim at the
 /// label drawn.
 pub(crate) const SEARCH_PX_LABEL: &str = "search px";
 

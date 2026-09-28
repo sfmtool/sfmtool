@@ -734,7 +734,7 @@ pub struct AppState {
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
 
     /// How far around each observation a bench evaluation looks for its
-    /// correlation peak, in patch-grid px: Track View's *search px* slider.
+    /// correlation peak, in patch-grid px: Track View's *search px* box.
     ///
     /// A setting of the viewer rather than of any track, so it is kept here
     /// for the session, pushes no version and is not undone. It is one of an

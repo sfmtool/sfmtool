@@ -163,7 +163,7 @@ impl AppState {
         pub(crate) clamped_from: Option<[f64; 2]>,
     }
     /// Set the track's bars and paint their verdicts, as one version: Track
-    /// View's threshold slider released, or `apply_bench_track_thresholds`.
+    /// View's threshold box released, or `apply_bench_track_thresholds`.
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
                                          thresholds: &Thresholds) -> Result<(), String>;
     /// Track View's *Accept walk*: put a sighting the last fit kept at its seed
@@ -244,7 +244,7 @@ impl AppState {
     /// Whether an evaluation of that track's current inputs is on a worker now.
     pub(crate) fn bench_evaluation_running(&self, id: ReconId, item: &str) -> bool;
     /// The radius every evaluation reads at, and its setter: Track View's
-    /// *search px* slider and the wire's `set_bench_search_px`.
+    /// *search px* box and the wire's `set_bench_search_px`.
     pub(crate) fn bench_search_px(&self) -> f64;
     pub(crate) fn set_bench_search_px(&mut self, search_px: f64) -> Result<(), String>;
     /// Once per frame: land a finished evaluation, cancel one whose inputs
@@ -580,7 +580,7 @@ holds the same three things:
 |---|---|---|
 | The track value: observations, their seeds and keypoints, verdicts, pins, the stage and its patch frame, position and template | every bench step on the track -- a put, an add, a verdict, a patch or sighting edit, *Accept walk*, the thresholds (their painting moves verdicts), a fit, a stage change, a search, a split, a duplicate -- and an undo, redo or jump that lands on another version of it | the track is a new `Arc` |
 | The document half of the version: the poses and camera intrinsics the kernels project with | every document edit under the track -- a bundle adjustment, a resection, a refit or switch of the camera model, a commit -- and an undo, redo or jump across one | the version's `document_serial` moves |
-| The search radius | Track View's *search px* slider, the wire's `set_bench_search_px` | `AppState::bench_search_px` moves |
+| The search radius | Track View's *search px* box, the wire's `set_bench_search_px` | `AppState::bench_search_px` moves |
 
 So no step has to remember to ask for an evaluation, and none does. The track's
 label is part of the key too, so a renamed item is evaluated under its new
@@ -593,7 +593,7 @@ and then either cancels the running one when its inputs are no longer the
 track's, or, when nothing is running, starts the next track whose evaluation is
 `Evaluating`: the active track of each bench first, then the rest in bench
 order, in scene order. It does not start the next until a cancelled one has
-reported back, so a slider drag that moves an input on every frame has at most
+reported back, so a box drag that moves an input on every frame has at most
 one worker behind it rather than a queue. It also waits while a background task
 holds the node, since that task's answer replaces the inputs it would read.
 

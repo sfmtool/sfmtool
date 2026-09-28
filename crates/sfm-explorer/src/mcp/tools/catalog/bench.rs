@@ -551,7 +551,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           they propose, and an observation ruled on by hand is left alone. A bar \
                           the call does not name stays where the track has it. The reply's report \
                           says how many were turned in, turned out, left pinned and left \
-                          unmeasured. Track View's threshold sliders are this step: releasing \
+                          unmeasured. Track View's threshold boxes are this step: releasing \
                           one applies the five bars as one version.",
             kind: Write,
             schema: object(
@@ -678,7 +678,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "set_bench_search_px",
             description: "Set how far around each observation the bench's evaluation looks for \
-                          the correlation peak, in patch-grid px: Track View's search px slider. \
+                          the correlation peak, in patch-grid px: Track View's search px box. \
                           It is the viewer's setting rather than a track's, so it pushes no \
                           version and undo does not reverse it; every track on every bench is \
                           evaluated again at the new radius. There is no call that evaluates a \

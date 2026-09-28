@@ -47,7 +47,7 @@ selection changes), `header`, `table` and `patch`; the numbers it displays come
 from [metrics/](../../crates/sfm-explorer/src/metrics), at the crate root,
 because the Image Detail overlay and the MCP surface read the same ones.
 [edit/](../../crates/sfm-explorer/src/track_view/edit/) is edit mode: `mod.rs`
-the header, the toolbar and the sliders, `table.rs` the observation table and
+the header, the toolbar and the boxes, `table.rs` the observation table and
 `tile.rs` the tile each row draws. The bench steps it reports are `AppState`
 methods in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock
 applies them in [dock.rs](../../crates/sfm-explorer/src/dock.rs).
@@ -98,9 +98,9 @@ pub struct TrackEditResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,                   // at the radius the evaluation reads at
-    pub search_px: Option<f64>,      // the search px slider released
+    pub search_px: Option<f64>,      // the search px box released
     pub set_stage: Option<StageKind>,
-    pub apply_thresholds: Option<Thresholds>, // a threshold slider released
+    pub apply_thresholds: Option<Thresholds>, // a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
     pub split: Option<Vec<usize>>,
     pub duplicate: bool,
@@ -146,7 +146,7 @@ if let Some(on) = response.set_edit.or(response.edit_selected_point.then_some(tr
 **Two bodies behind one tab, not one body.** The two modes' state is disjoint.
 View mode caches thumbnails and patch tiles per image of a committed point;
 edit mode caches tiles per observation of a bench track keyed on its `Arc`, and
-the slider seeding, the painting and the commit refusal. Keeping each as the
+the box seeding, the painting and the commit refusal. Keeping each as the
 struct it is means neither cache learns about the other, and each body's
 headless tests read what that body drew. What the panel adds is the checkbox,
 the dispatch on it and the notice.
@@ -529,7 +529,7 @@ cluster after Edit has been cleared is its row under *Bench Clusters*.
 Almost no state lives in the body. The bench is the node's, at its cursor, so a
 step taken anywhere, in this panel, in the Scene tree or by an undo, shows here on
 the next frame. What the body owns is about looking rather than about the track:
-where the sliders stand, whether *Lock* is ticked, which rows are selected, the
+where the boxes stand, whether *Lock* is ticked, which rows are selected, the
 tiles it has rendered, and the painting.
 
 #### The header
@@ -653,11 +653,15 @@ cannot say which of two tracks it belongs to.
 
 #### The thresholds
 
-Five sliders, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
+Five boxes, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
 maximum shift, maximum keypoint uncertainty and minimum relative ZNCC, so no bar
-is one only the wire can move. The first four are the bars the painting reads;
+is one only the wire can move. Each is its label and a number box: dragging the
+box left or right changes the bar (half a percent per point for the ZNCC bars,
+0.05 px per point for the shift, 0.005 per point for the keypoint uncertainty),
+and clicking it takes a typed value. There is no slider rail beside it, since a
+rail would say nothing the box does not. The first four are the bars the painting reads;
 the fifth is the fraction of the track's own self-agreement a sweep candidate is
-scored by. The three ZNCC sliders read and take percent in whole steps, as the
+scored by. The three ZNCC boxes read and take percent in whole steps, as the
 table's ZNCC column reads, so *min ZNCC (%)* and *min middle ZNCC (%)* both show
 70 on a new track while the track and the wire hold 0.7; a typed value may end
 in `%`. A middle bar of 0 turns it off, and a row with no middle reading clears
@@ -666,29 +670,29 @@ it.
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), 8 px on a new track.
 
-**A slider applies to the active track when it is let go.** Dragging one
+**A box applies to the active track when it is let go.** Dragging one
 repaints the table live; releasing it sets the track's bars to where the five
-sliders stand and turns the painting into verdicts, one version carrying both,
+boxes stand and turns the painting into verdicts, one version carrying both,
 with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
 it. A typed value is the same gesture, applied when the field is left rather
-than per keystroke, and an arrow key on a focused slider is one step each. No
+than per keystroke, and an arrow key on a focused box is one step each. No
 intermediate drag position pushes a version, and a release that leaves the bars
 where the track has them pushes nothing. There is no separate *Apply* button:
-a slider that painted the table while the track kept its old bar would let a
-*Fit* run on a bar the person had already moved away from. The sliders are
+a box that painted the table while the track kept its old bar would let a
+*Fit* run on a bar the person had already moved away from. The boxes are
 greyed with the busy sentence while the node is busy, since a release there
 would be refused.
 
 **The painting is `apply_thresholds` run over a copy**, the core step itself
-with the sliders' bars, so a row can never be painted one way and turned the
-other way when the slider is released, and a pinned verdict comes back
+with the boxes' bars, so a row can never be painted one way and turned the
+other way when the box is released, and a pinned verdict comes back
 unchanged. It is recomputed when the track's `Arc` or the bars move, and not per
 frame, because a copy of a track carries its consensus bitmap.
 
-**The sliders show the active track's own bars**, copied from it on every frame
-no slider is being dragged, so whatever moved them -- a release here,
+**The boxes show the active track's own bars**, copied from it on every frame
+no box is being dragged, so whatever moved them -- a release here,
 `apply_bench_track_thresholds` over the wire, an undo or redo of either, another
-item made active -- the sliders follow. Only during a drag do they hold a value
+item made active -- the boxes follow. Only during a drag do they hold a value
 the track does not.
 
 **Below them, one control that is not a threshold**: *search px*, how far from
@@ -696,7 +700,7 @@ each observation's own pixel the evaluation looks for its correlation peak, in
 patch-grid px, starting at `EvaluateOptions::default`'s radius. It is an input
 to the evaluation rather than a bar the painting judges by, so it repaints
 nothing; it is the viewer's rather than a track's (`AppState::bench_search_px`),
-so it pushes no version and Undo does not reverse it. Like a threshold slider it
+so it pushes no version and Undo does not reverse it. Like a threshold box it
 applies when it is let go or a typed value is committed, and then every track is
 evaluated again at the new radius. A *Fit* runs at it too, so a fit's numbers
 and the evaluation's are measured in one window. It is not greyed by a busy
@@ -872,7 +876,7 @@ patch. The photographs are the node's full-resolution cache, which the dock fill
 for the active track's images before edit mode draws; the rendered tiles are kept
 against the track's `Arc` and rebuilt when a step moves it.
 
-**Each row is painted** by what the sliders propose for it: green for
+**Each row is painted** by what the boxes propose for it: green for
 would-pass, red for would-not, the panel's faint background for a row nothing
 has measured.
 
@@ -1048,11 +1052,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   row per observation in index order; a verdict under the same observation index,
   pinned; the painting matching what applying the bars produces and leaving a
   pinned verdict; the cells following the stage; every row's tile at both stages,
-  and a fresh candidate's cut around its seed; the sliders showing the track's
+  and a fresh candidate's cut around its seed; the boxes showing the track's
   bars outside a drag, following them when a step, an undo or a redo moves them,
   and re-seating on another item; a drag of *max shift px* pushing exactly one
   version and one row on its release, with the track's bar where it was let go
-  and an undo taking bar and slider back; no *Apply thresholds* button drawn; a
+  and an undo taking bar and box back; no *Apply thresholds* button drawn; a
   fit after a release to a zero bar keeping sightings at their seeds, *Accept
   walk* absent from a row before that and offered on exactly the kept rows
   after, reporting the observation, and accepting it moving the keypoint to the
@@ -1089,7 +1093,7 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   singleton.
 - **Listing the bench in the panel.** The Scene tree's two Bench groups are the
   list, per node, with the stage each item is at.
-- **Deciding anything from a number.** The sliders propose and the person
+- **Deciding anything from a number.** The boxes propose and the person
   decides.
 - **A second tile beside the first**, the cluster template and each member warped
   onto it side by side, and **the remaining searches**, both proposed in

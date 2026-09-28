@@ -273,7 +273,7 @@ pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
 /// The reading options a bench step runs with: core's own, at `search_px`.
 ///
 /// The live evaluation reads at [`AppState::bench_search_px`], which Track
-/// View's *search px* slider and the wire's `set_bench_search_px` set, and a
+/// View's *search px* box and the wire's `set_bench_search_px` set, and a
 /// fit passes its radius through to the reading it ends with, so every number
 /// on screen was measured in one window.
 fn evaluate_options(search_px: f64) -> EvaluateOptions {
@@ -895,7 +895,7 @@ impl AppState {
     /// onto its unpinned observations.
     ///
     /// One version for the two, because they are one gesture: a threshold
-    /// slider's release in Track View, or one `apply_bench_track_thresholds`
+    /// box's release in Track View, or one `apply_bench_track_thresholds`
     /// call, and what it applies is the painting those bars produce.
     pub(crate) fn apply_bench_thresholds(
         &mut self,

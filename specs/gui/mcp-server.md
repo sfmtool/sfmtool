@@ -173,7 +173,7 @@ write, and one writes a file.
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
 | `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
-| `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold sliders are this step on their release |
+| `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
@@ -2662,7 +2662,7 @@ start (`running` says which) and the numbers are the previous evaluation's,
 `refused` or `failed` with the `reason`. An agent that has just made a step
 reads again until `state` is `current`. `set_bench_search_px` sets how far from
 each observation's own pixel the correlation peak is looked for, for every
-track at once; it is the viewer's setting, as Track View's *search px* slider
+track at once; it is the viewer's setting, as Track View's *search px* box
 is, so it pushes no version, and the reply is the radius. `fit_bench_track` is
 the step that moves a track, and it ends by evaluating its own result. It takes
 its own `search_px`, defaulting to the viewer's. A fit of a track-stage track

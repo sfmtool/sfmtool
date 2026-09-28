@@ -5,9 +5,9 @@
 //!
 //! egui needs no GPU to lay out a frame, so the whole body runs through
 //! `Context::run_ui` here: `show` really does draw the header, the toolbar,
-//! the sliders and every row of the table. What the assertions target
+//! the boxes and every row of the table. What the assertions target
 //! is what the panel *decides* -- which rows it drew, what each says, what the
-//! sliders paint, and what it reports back to the dock -- rather than pixels.
+//! boxes paint, and what it reports back to the dock -- rather than pixels.
 
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
@@ -115,7 +115,7 @@ fn at_pointer(
 
 /// The y at which the row for `image` answers the pointer, found by walking
 /// down the panel: what sits above the table is the header, the toolbar and
-/// the sliders, and a hard-coded offset would go stale the moment
+/// the boxes, and a hard-coded offset would go stale the moment
 /// one of them gains a line.
 fn row_y(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, image: usize) -> f32 {
     for step in 0..(VIEWPORT.y as usize / 8) {
@@ -508,7 +508,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
 /// Evaluation is live, so there is no *Evaluate* button: the toolbar offers
 /// *Fit*, which moves the track, and says where the evaluation of the track as
 /// it stands is. The search radius is a control of its own beside the
-/// threshold sliders -- an input to the evaluation rather than a bar the
+/// threshold boxes -- an input to the evaluation rather than a bar the
 /// painting judges by.
 #[test]
 fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
@@ -802,10 +802,10 @@ fn the_lock_is_greyed_at_the_cluster_stage() {
     assert!(panel.lock(), "a greyed box took the click");
 }
 
-/// Outside a drag the sliders hold no value of their own: whatever the panel
+/// Outside a drag the boxes hold no value of their own: whatever the panel
 /// had is replaced by the track's bars on the next frame.
 #[test]
-fn the_sliders_show_the_active_track_s_bars_outside_a_drag() {
+fn the_boxes_show_the_active_track_s_bars_outside_a_drag() {
     let (state, id, label, mut panel, ctx) = on_the_bench();
     panel.thresholds.min_zncc = 0.5;
     run_frame(&mut panel, &ctx, &state);
@@ -813,12 +813,12 @@ fn the_sliders_show_the_active_track_s_bars_outside_a_drag() {
     assert_eq!(panel.thresholds(), &track.thresholds);
 }
 
-/// The sliders show the **active track's** bars, whoever moved them: a step
+/// The boxes show the **active track's** bars, whoever moved them: a step
 /// taken over the wire moves the track's, and the panel that paints the rows by
 /// them has to be showing the same numbers or it proposes a rule the track does
 /// not hold. An undo moves them back.
 #[test]
-fn the_sliders_follow_the_active_track_s_own_thresholds() {
+fn the_boxes_follow_the_active_track_s_own_thresholds() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     let before = state
         .bench_track(id, &label)
@@ -839,7 +839,7 @@ fn the_sliders_follow_the_active_track_s_own_thresholds() {
     let track = state.bench_track(id, &label).expect("on the bench");
     assert_eq!(panel.thresholds(), &track.thresholds);
     assert_eq!(panel.thresholds().min_zncc, 0.94);
-    // And the painting is the track's rule rather than the slider's old one.
+    // And the painting is the track's rule rather than the box's old one.
     assert_eq!(
         panel.painted,
         sfmtool_core::bench::apply_thresholds(track)
@@ -852,11 +852,7 @@ fn the_sliders_follow_the_active_track_s_own_thresholds() {
 
     state.undo(id).expect("the thresholds step undoes");
     run_frame(&mut panel, &ctx, &state);
-    assert_eq!(
-        panel.thresholds(),
-        &before,
-        "an undo moves the sliders back"
-    );
+    assert_eq!(panel.thresholds(), &before, "an undo moves the boxes back");
     state.redo(id).expect("and redoes");
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds().min_zncc, 0.94, "a redo moves them again");
@@ -883,21 +879,19 @@ fn drag_frames(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     ]
 }
 
-/// Drag the *max shift px* slider from `from_frac` to `to_frac` of its rail,
+/// Drag the *max shift px* box `by` points to the right (left when negative),
 /// applying each frame's response the way the dock does, and hand back every
 /// frame's response.
 ///
-/// The rail is found from the slider's own label: egui lays a slider out as
-/// the rail, its value box and then the label, so the rail ends a value box
-/// and two gaps left of the label.
+/// The box is found from its label: the label comes first and the box one
+/// gap to its right.
 fn drag_max_shift(
     panel: &mut TrackEdit,
     ctx: &egui::Context,
     state: &mut AppState,
     id: ReconId,
     label: &str,
-    from_frac: f32,
-    to_frac: f32,
+    by: f32,
 ) -> Vec<TrackEditResponse> {
     let texts = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
         panel.show(ui, state);
@@ -905,14 +899,15 @@ fn drag_max_shift(
     let named = texts
         .iter()
         .find(|t| t.text == super::MAX_SHIFT_LABEL)
-        .expect("the max shift slider is drawn")
+        .expect("the max shift box is drawn")
         .rect;
     let spacing = egui::Spacing::default();
-    let rail_right = named.left() - 2.0 * spacing.item_spacing.x - spacing.interact_size.x - 4.0;
-    let rail_left = rail_right - spacing.slider_width;
-    let at = |frac: f32| egui::pos2(rail_left + frac * spacing.slider_width, named.center().y);
+    let start = egui::pos2(
+        named.right() + spacing.item_spacing.x + 0.5 * spacing.interact_size.x,
+        named.center().y,
+    );
     let mut responses = Vec::new();
-    for events in drag_frames(at(from_frac), at(to_frac)) {
+    for events in drag_frames(start, start + egui::vec2(by, 0.0)) {
         let response = run_frame_with(panel, ctx, state, events);
         if let Some(bars) = response.apply_thresholds.as_ref() {
             state
@@ -928,11 +923,11 @@ fn versions(state: &AppState, id: ReconId) -> usize {
     state.node(id).expect("loaded").history.versions().len()
 }
 
-/// A slider applies on its release: the drag's frames push nothing, the
+/// A box applies on its release: the drag's frames push nothing, the
 /// release pushes exactly one version with one Action Log row, and the
-/// track's bar is where the slider was let go.
+/// track's bar is where the box was let go.
 #[test]
-fn releasing_a_threshold_slider_applies_it_as_one_version() {
+fn releasing_a_threshold_box_applies_it_as_one_version() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     let before = versions(&state, id);
     let bar = state
@@ -943,7 +938,7 @@ fn releasing_a_threshold_slider_applies_it_as_one_version() {
     assert_eq!(bar, sfmtool_core::bench::BENCH_MAX_SHIFT_PX);
     state.action_log.clear();
 
-    let responses = drag_max_shift(&mut panel, &ctx, &mut state, id, &label, 0.3, 0.8);
+    let responses = drag_max_shift(&mut panel, &ctx, &mut state, id, &label, 100.0);
     let applied: Vec<&Thresholds> = responses
         .iter()
         .filter_map(|r| r.apply_thresholds.as_ref())
@@ -961,13 +956,13 @@ fn releasing_a_threshold_slider_applies_it_as_one_version() {
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds(), &track.thresholds);
 
-    // And an undo takes the bar and the slider back together.
+    // And an undo takes the bar and the box back together.
     state.undo(id).expect("undoes");
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds().max_shift_px, bar);
 }
 
-/// There is no button left to forget to press: the sliders are the whole
+/// There is no button left to forget to press: the boxes are the whole
 /// gesture.
 #[test]
 fn there_is_no_apply_thresholds_button() {
@@ -983,14 +978,14 @@ fn there_is_no_apply_thresholds_button() {
     );
 }
 
-/// The bar a slider was let go at is the bar the next *Fit* bounds its walk
+/// The bar a box was let go at is the bar the next *Fit* bounds its walk
 /// by, and a kept-at-seed row then offers *Accept walk*, which moves the
 /// keypoint to the walked pixel as one version.
 #[test]
 fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     // A bar of zero: any move at all is a walk past it.
-    drag_max_shift(&mut panel, &ctx, &mut state, id, &label, 0.5, -0.5);
+    drag_max_shift(&mut panel, &ctx, &mut state, id, &label, -400.0);
     assert_eq!(
         state
             .bench_track(id, &label)
@@ -1070,9 +1065,9 @@ fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
     assert!(super::table::accepted_walk(row).is_none());
 }
 
-/// A second track has its own bars, so making it active moves the sliders.
+/// A second track has its own bars, so making it active moves the boxes.
 #[test]
-fn a_change_of_active_track_reseats_the_sliders() {
+fn a_change_of_active_track_reseats_the_boxes() {
     let (mut state, id, first, mut panel, ctx) = on_the_bench();
     state
         .apply_bench_thresholds(

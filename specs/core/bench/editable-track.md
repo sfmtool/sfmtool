@@ -641,7 +641,7 @@ observation sits takes the keypoint first (`Observation::site`).
 
 **The verdict and the pin are separate fields.** `verdict` is what the person
 has decided and `pinned` is whether they decided it by hand. Without the second,
-a threshold slider would either be unable to propose anything or would silently
+a threshold box would either be unable to propose anything or would silently
 overwrite a judgement, and the whole difference between the bench and the batch
 pipeline is that here the numbers are shown and the person decides.
 
@@ -701,7 +701,7 @@ and a script that just read the files.
 **The kernel parameters are not the track's thresholds.** `EvaluateOptions` and
 `FitOptions` carry what the kernels are allowed to do; the track's `Thresholds`
 are what the *painting* judges the result against. Keeping them apart is what
-makes a slider a question about verdicts rather than about numbers: moving one
+makes a box a question about verdicts rather than about numbers: moving one
 repaints, and it cannot change what was measured. The one bar a fit reads is
 `max_shift_px`, and it reads it as a bound on where the fit may put a sighting,
 never as a gate on what the kernels see (§ "The fit's walk is bounded by the
@@ -1637,7 +1637,7 @@ the finite patch or direction patch (`w = 0`) into every supplied camera,
 requires the existing front-facing, cheirality and image-support gates, and
 admits a view only when its rendered patch clears the relative-ZNCC bar against
 a trustworthy reference appearance. The bar is the editable track's own
-`thresholds.min_relative_zncc`; changing the panel slider therefore changes the
+`thresholds.min_relative_zncc`; changing the panel box therefore changes the
 next geometry search by the same rule it changes a batch view selection.
 
 **The row names the appearance being searched from.** Its observation is first
@@ -1680,7 +1680,7 @@ basis.
 track is in, whatever its verdict, and **moves nothing else**: the position, the
 frame, the bitmap, every keypoint and every verdict come back as they went in.
 An `out` observation is scored the way a candidate is, so a refusal is shown
-beside the number it would have been judged on and a slider can propose taking
+beside the number it would have been judged on and a box can propose taking
 it back.
 
 **At the cluster stage** every observation's seed is a member of an in-memory
