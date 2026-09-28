@@ -1165,6 +1165,29 @@ impl AppState {
         Ok(())
     }
 
+    /// Take every item off the bench, the points and the clusters alike.
+    ///
+    /// The two Scene tree groups are one bench, so *Clear the Bench* on either
+    /// clears both. Like a discard it is one version and asks for no
+    /// confirmation: an undo puts every item back, and the active one active
+    /// again. Clearing an empty bench is no step.
+    pub(crate) fn clear_bench(&mut self, id: ReconId) -> Result<(), String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let bench = Arc::clone(self.scene[index].history.current_bench());
+        if bench.is_empty() {
+            self.no_effect("Cleared the bench: no effect, nothing is on it".to_string());
+            return Ok(());
+        }
+        let count = bench.len();
+        let items = if count == 1 { "item" } else { "items" };
+        let text = format!("Cleared the bench of {count} {items}");
+        self.push_bench_step(index, Bench::new(), text);
+        Ok(())
+    }
+
     /// Rename the item called `label` to `to`.
     pub(crate) fn rename_bench_item(
         &mut self,

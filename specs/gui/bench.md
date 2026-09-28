@@ -807,7 +807,9 @@ as a click on the node's own row selects it, so a pass of clicks down the tree
 pushes no versions. A **double-click** makes the item active, selects the node
 and raises Track View on it (`AppState::edit_bench_item_at`); on the item that
 is active already it pushes no version and writes no row, since the gesture
-asked for the panel. A secondary click offers *Discard*. One item is active
+asked for the panel. A secondary click offers *Discard*, and one on either
+group's header offers *Clear the Bench*, which takes off every item of both
+groups in one version (`AppState::clear_bench`). One item is active
 across both groups, the kind being the item rather than the stage. The bench is in the tree
 because the tree is where a node's parts are listed, and it is per node because
 an item names that node's images and poses.

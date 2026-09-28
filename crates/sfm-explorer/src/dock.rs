@@ -1202,6 +1202,11 @@ impl TabContext<'_> {
                 }
             }
         }
+        if let Some(id) = response.clear_bench {
+            if let Err(why) = self.state.clear_bench(id) {
+                self.state.action_log.fail(Kind::Bench, why);
+            }
+        }
     }
 
     /// The label of the item at `position` on `id`'s bench.

@@ -213,6 +213,8 @@ pub struct SceneGraphResponse {
     pub edit_bench_item: Option<(ReconId, usize)>,
     /// `Discard` chosen on a Bench row, the item named the same way.
     pub discard_bench_item: Option<(ReconId, usize)>,
+    /// `Clear the Bench` chosen on either bench group's header row.
+    pub clear_bench: Option<ReconId>,
     /// An entry of the image menu chosen on an image row: the image and the
     /// entry. The dock carries it out after the frame, through the same path
     /// as the Image Browser strip's menu (`crate::image_menu`).
@@ -1009,6 +1011,10 @@ fn show_node_header(
     });
 }
 
+/// The entry on either bench group's header that takes every item off the
+/// bench ([`crate::state::AppState::clear_bench`]).
+pub(crate) const CLEAR_THE_BENCH_LABEL: &str = "Clear the Bench";
+
 /// The bench, as two groups: `[▸] Bench Points (2)` and
 /// `[▸] Bench Clusters (1)`.
 ///
@@ -1038,7 +1044,9 @@ fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
 /// A click on a row selects the node it is under and does nothing to the
 /// bench, the way a click on the node's own row selects it; a double-click
 /// makes the item active and raises [`crate::track_view`] on it, and a
-/// secondary click offers *Discard*. An item is named by its **position on the
+/// secondary click offers *Discard*. A secondary click on the group's own
+/// header offers *Clear the Bench*, which takes off every item of both groups,
+/// since they are one bench. An item is named by its **position on the
 /// bench**, which is the position it holds in the whole list rather than in the
 /// group it is drawn under, so both groups' rows reach the same item.
 fn show_bench_stage_group(
@@ -1076,7 +1084,22 @@ fn show_bench_stage_group(
     };
     let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
-        ui.label(format!("{title} ({})", items.len()));
+        let title = ui.add(
+            egui::Label::new(format!("{title} ({})", items.len()))
+                .selectable(false)
+                .sense(egui::Sense::click()),
+        );
+        let title = out.hit(row_id(id, &format!("{key}_header")), title);
+        crate::context_menu::on_secondary_click(&title).show(|ui| {
+            let clear = ui.button(CLEAR_THE_BENCH_LABEL);
+            if out
+                .hit(row_id(id, &format!("{key}_clear")), clear)
+                .clicked()
+            {
+                out.response.clear_bench = Some(id);
+                ui.close();
+            }
+        });
     });
     header.body(|ui| {
         for (position, entry) in items {

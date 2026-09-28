@@ -516,6 +516,13 @@ is active already it pushes no version and writes no row. A secondary click
 offers *Discard*. An item is named by its position in the whole bench, so both
 groups' rows reach the same list.
 
+A secondary click on either group's own header offers **Clear the Bench**,
+which takes every item off the bench, both groups', since they are one bench
+(`AppState::clear_bench`, reported as `clear_bench` and applied by the dock).
+Like a discard it asks for no confirmation and is one version, so one undo puts
+every item back and the active one active again. Clearing an empty bench writes
+a row saying it had no effect and pushes no version.
+
 The raise is a layout operation, and the tree is drawn inside a tab body, where
 the dock is swapped out of the state and a raise would land on the placeholder.
 So the double-click travels in the response as `edit_bench_item`, the panel

@@ -850,6 +850,69 @@ fn discard_works_from_either_group() {
     assert!(state.bench(id).expect("a bench").is_empty());
 }
 
+/// *Clear the Bench* is on either group's header, takes both groups' items off
+/// in one version, and one undo puts them all back.
+#[test]
+fn clear_the_bench_works_from_either_group_header() {
+    for group in ["bench_points", "bench_clusters"] {
+        let (mut state, id, point, cluster) = benched();
+        let (mut panel, ctx) = settled(&mut state);
+        let versions = state.node(id).expect("a node").history.versions().len();
+
+        open_context_menu(
+            &mut panel,
+            &ctx,
+            &mut state,
+            row_id(id, &format!("{group}_header")),
+        );
+        let response = click(
+            &mut panel,
+            &ctx,
+            &mut state,
+            row_id(id, &format!("{group}_clear")),
+        );
+        assert_eq!(
+            response.clear_bench,
+            Some(id),
+            "Clear the Bench on {group} reported nothing"
+        );
+        state
+            .clear_bench(id)
+            .expect("a bench to clear, as the dock would");
+        assert!(state.bench(id).expect("a bench").is_empty());
+        assert_eq!(
+            state.node(id).expect("a node").history.versions().len(),
+            versions + 1,
+            "clearing is one version"
+        );
+
+        state.undo(id).expect("the clear to undo");
+        let labels: Vec<&str> = state
+            .bench(id)
+            .expect("a bench")
+            .entries()
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        assert!(labels.contains(&point.as_str()) && labels.contains(&cluster.as_str()));
+    }
+}
+
+/// Clearing an empty bench is no step.
+#[test]
+fn clearing_an_empty_bench_pushes_no_version() {
+    let (mut state, id, _, _) = benched();
+    state.clear_bench(id).expect("the first clear");
+    let versions = state.node(id).expect("a node").history.versions().len();
+    state
+        .clear_bench(id)
+        .expect("an empty bench is not an error");
+    assert_eq!(
+        state.node(id).expect("a node").history.versions().len(),
+        versions
+    );
+}
+
 /// Each group remembers its own expansion: collapsing the points group leaves
 /// the clusters group's rows drawn.
 #[test]
