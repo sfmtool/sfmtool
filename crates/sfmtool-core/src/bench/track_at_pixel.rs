@@ -48,7 +48,10 @@ pub use neighbourhood::{
     ClusterMember, MatchesClusters, MatchesClustersError, NearbyCluster, NearbyObservation,
 };
 
-use neighbourhood::{ObservationIndex, ViewCamera};
+pub(crate) use finish::{seed_cluster_with, upgrade_sightings};
+pub(crate) use neighbourhood::ViewCamera;
+
+use neighbourhood::ObservationIndex;
 
 /// One way of finding the pixel's sightings in the other photographs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

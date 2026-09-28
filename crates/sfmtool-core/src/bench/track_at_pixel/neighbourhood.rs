@@ -24,29 +24,37 @@ use crate::spatial::PointCloud;
 /// as a matrix and a translation, the centre, the mean focal length and the
 /// frame size. Cameras look down their own `-Z` axis, so a point's depth is
 /// `-z` in the camera frame.
-pub(super) struct ViewCamera<'a> {
+///
+/// Shared with the nearby-tracks building blocks in
+/// [`crate::bench::nearby`], which project directions as well as points.
+pub(crate) struct ViewCamera<'a> {
     view: &'a ProjectedImage<'a>,
     rotation: Matrix3<f64>,
     translation: Vector3<f64>,
+    /// Whether the lens maps rays by angle (a fisheye or an equirectangular
+    /// panorama), and so can see past 90 degrees off its axis.
+    wide_angle: bool,
     /// The camera centre in world coordinates.
-    pub(super) center: Vector3<f64>,
+    pub(crate) center: Vector3<f64>,
     /// The mean of the two focal lengths, in px.
-    pub(super) focal: f64,
+    pub(crate) focal: f64,
     /// The frame width, in px.
-    pub(super) width: u32,
+    pub(crate) width: u32,
     /// The frame height, in px.
-    pub(super) height: u32,
+    pub(crate) height: u32,
 }
 
 impl<'a> ViewCamera<'a> {
-    pub(super) fn new(view: &'a ProjectedImage<'a>) -> Self {
+    pub(crate) fn new(view: &'a ProjectedImage<'a>) -> Self {
         let rotation = view.cam_from_world.to_rotation_matrix();
         let translation = view.cam_from_world.translation;
         let (fx, fy) = view.camera.focal_lengths();
+        let model = &view.camera.model;
         Self {
             view,
             rotation,
             translation,
+            wide_angle: model.is_fisheye() || model.is_equirectangular(),
             center: -(rotation.transpose() * translation),
             focal: 0.5 * (fx + fy),
             width: view.camera.width,
@@ -54,19 +62,25 @@ impl<'a> ViewCamera<'a> {
         }
     }
 
+    /// A homogeneous world point in the camera frame: a place at `w = 1`,
+    /// translated and rotated; a direction at `w = 0`, rotated only.
+    pub(crate) fn to_camera_homogeneous(&self, xyz: &Vector3<f64>, w: f64) -> Vector3<f64> {
+        self.rotation * xyz + self.translation * w
+    }
+
     /// A world point in the camera frame.
     fn to_camera(&self, xyz: &Vector3<f64>) -> Vector3<f64> {
-        self.rotation * xyz + self.translation
+        self.to_camera_homogeneous(xyz, 1.0)
     }
 
     /// Distance in front of the camera along its axis.
-    pub(super) fn depth(&self, xyz: &Vector3<f64>) -> f64 {
+    pub(crate) fn depth(&self, xyz: &Vector3<f64>) -> f64 {
         -self.to_camera(xyz).z
     }
 
     /// The pixel a world point projects to, or `None` when it is behind the
     /// camera or outside the lens model's domain.
-    pub(super) fn project(&self, xyz: &Vector3<f64>) -> Option<[f64; 2]> {
+    pub(crate) fn project(&self, xyz: &Vector3<f64>) -> Option<[f64; 2]> {
         let p = self.to_camera(xyz);
         if -p.z <= 1e-12 {
             return None;
@@ -76,14 +90,48 @@ impl<'a> ViewCamera<'a> {
         Some([u, v])
     }
 
+    /// The pixel a homogeneous world point projects to, a place at `w = 1` or
+    /// a direction at `w = 0`, or `None` where the lens cannot see it.
+    ///
+    /// A perspective lens sees only what is in front of its image plane. A
+    /// wide-angle lens can see past 90 degrees off its axis, so its ray goes to
+    /// the lens model whatever its side, and whether the pixel lands in the
+    /// photograph is the caller's test, as it is for any lens. This is the
+    /// harness camera's rule; [`Self::project`] keeps the stricter one the
+    /// track-at-pixel members were measured with.
+    pub(crate) fn project_homogeneous(&self, xyz: &Vector3<f64>, w: f64) -> Option<[f64; 2]> {
+        let p = self.to_camera_homogeneous(xyz, w);
+        let norm = p.norm();
+        if norm == 0.0 || (-p.z <= 1e-12 && !self.wide_angle) {
+            return None;
+        }
+        let ray = p / norm;
+        let (u, v) = self.view.camera.ray_to_pixel([ray.x, ray.y, ray.z])?;
+        (u.is_finite() && v.is_finite()).then_some([u, v])
+    }
+
+    /// The pixel a world direction projects to: where a point infinitely far
+    /// along it lands, fixed by the camera's rotation alone.
+    pub(crate) fn project_direction(&self, direction: &Vector3<f64>) -> Option<[f64; 2]> {
+        self.project_homogeneous(direction, 0.0)
+    }
+
+    /// The pixel a camera-frame ray projects to, or `None` outside the lens
+    /// model's domain. The ray need not be of unit length.
+    pub(crate) fn camera_ray_to_pixel(&self, ray: &Vector3<f64>) -> Option<[f64; 2]> {
+        let ray = ray / ray.norm();
+        let (u, v) = self.view.camera.ray_to_pixel([ray.x, ray.y, ray.z])?;
+        Some([u, v])
+    }
+
     /// The world-frame unit ray through a pixel.
-    pub(super) fn ray(&self, pixel: [f64; 2]) -> Vector3<f64> {
+    pub(crate) fn ray(&self, pixel: [f64; 2]) -> Vector3<f64> {
         let d = self.view.camera.pixel_to_ray(pixel[0], pixel[1]);
         self.rotation.transpose() * Vector3::new(d[0], d[1], d[2])
     }
 
     /// Whether `pixel` lies at least `margin` px inside the frame.
-    pub(super) fn in_frame(&self, pixel: [f64; 2], margin: f64) -> bool {
+    pub(crate) fn in_frame(&self, pixel: [f64; 2], margin: f64) -> bool {
         let (w, h) = (f64::from(self.width), f64::from(self.height));
         margin <= pixel[0] && pixel[0] < w - margin && margin <= pixel[1] && pixel[1] < h - margin
     }

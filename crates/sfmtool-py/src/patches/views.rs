@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use rayon::prelude::*;
 
+use sfmtool_core::bench::GreyImages;
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::PatchCloud;
@@ -250,6 +251,17 @@ pub(crate) fn resolve_pyramids(
     }
 }
 
+/// The grey images a patch read along a ray samples, for the same `images`
+/// argument [`resolve_pyramids`] resolved: a prebuilt [`PyImagePyramidSet`]'s
+/// own cache, kept across calls, or a fresh cache of `count` images for a
+/// list, which lives for this one call.
+pub(crate) fn resolve_grey(images: &Bound<'_, PyAny>, count: usize) -> Arc<GreyImages> {
+    match images.cast::<PyImagePyramidSet>() {
+        Ok(set) => Arc::clone(&set.get().grey),
+        Err(_) => Arc::new(GreyImages::new(count)),
+    }
+}
+
 /// Extract a `list[CameraIntrinsics]` as owned core cameras.
 pub(super) fn extract_camera_list(obj: &Bound<'_, PyAny>) -> PyResult<Vec<CameraIntrinsics>> {
     let list = obj
@@ -423,6 +435,10 @@ impl PyCameraViews {
 #[pyclass(name = "ImagePyramidSet", module = "sfmtool.patches", frozen)]
 pub struct PyImagePyramidSet {
     pub(crate) pyramids: Arc<Vec<ImageU8Pyramid>>,
+    /// The same photographs in grey and blurred, as the bench's patch reads
+    /// along a ray sample them, each built the first time a read asks for it
+    /// and kept with the set, so repeated queries convert each image once.
+    pub(crate) grey: Arc<GreyImages>,
 }
 
 #[pymethods]
@@ -437,6 +453,7 @@ impl PyImagePyramidSet {
         let (posed, _recon) = resolve_scene(views_or_recon)?;
         let pyramids = build_pyramids_from_cameras(py, &posed.cameras, &images)?;
         Ok(Self {
+            grey: Arc::new(GreyImages::new(pyramids.len())),
             pyramids: Arc::new(pyramids),
         })
     }

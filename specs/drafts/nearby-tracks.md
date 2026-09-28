@@ -172,7 +172,9 @@ queried camera, whole and middle ZNCC from the same samples, on the blurred
 grey images the harness samples; the far-field sweep with its peaks,
 prominence and metrics; the pairwise grouping by average linkage and the
 relocation fit; the layers, their evidence reads, the key and the confidence.
-The camera needs projecting a direction (`w = 0`), which `ViewCamera` lacks.
+The camera needs projecting a direction (`w = 0`), which `ViewCamera` has
+had since stage 1 (`project_direction`, with the harness camera's wide-angle
+rule in `project_homogeneous`).
 
 **Parity.** The harness keeps its Python finder as the reference until the Rust
 one matches it on both ground truths (layer, rank-1 right, confidence AUC, and
@@ -190,7 +192,11 @@ function in place of the Python one and shows the scores unchanged on both
 ground truths. `anchors.py` shrinks stage by stage until only the harness's
 scoring is left.
 
-1. **The far-field sweep.** `far_field_sweep(edited, views, image, pixel,
+1. **The far-field sweep.** Built; the standing spec is
+   [core/bench/far-field-sweep.md](../core/bench/far-field-sweep.md), which
+   also takes the grey images as an argument (`GreyImages`) and returns the
+   dropped peaks beside the kept readings.
+   `far_field_sweep(edited, views, image, pixel,
    options) -> Vec<FarFieldReading>`: the pixel's patch read from infinity in
    to 16 px of disparity in every image it lands in, one reading per peak, each
    with its range and metrics, its images grouped by pairwise middle ZNCC, and

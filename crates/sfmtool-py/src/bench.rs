@@ -49,6 +49,7 @@ use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
 use crate::spatial::constellation_query::DEFAULTS as QUERY_DEFAULTS;
 use crate::spatial::kdf::PyLazyKdForest;
 
+mod far_field;
 mod track_at_pixel;
 
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
@@ -2003,6 +2004,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(search_descriptors, m)?)?;
     m.add_function(wrap_pyfunction!(search_geometry, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
+    far_field::register(m)?;
     track_at_pixel::register(m)?;
     Ok(())
 }

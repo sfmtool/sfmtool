@@ -121,6 +121,11 @@ DEFAULTS = {
     # pixel, the anchor moves there, if that is within `ff_refit_max_px` and
     # every image fits within `ff_refit_max_err_px`.
     "ff_refit": True,
+    # Which implementation runs the far-field sweep: "rust", the core
+    # `far_field_sweep` through its binding, or "python", this module's own
+    # (:func:`_from_farfield_python`), kept as the reference the Rust one was
+    # measured against.
+    "ff_impl": "rust",
     "ff_group_cut": 0.9,
     "ff_group_max": 16,
     "ff_refit_px": 8.0,
@@ -908,6 +913,44 @@ def _best3(x) -> np.ndarray:
 
 
 def from_farfield(ctx, image, pixel, opts):
+    """The far-field sweep, by the implementation ``ff_impl`` names.
+
+    ``"rust"`` calls the core ``far_field_sweep`` (``specs/core/bench/
+    far-field-sweep.md``), which ports :func:`_from_farfield_python` and returns
+    its anchors with the same keys; ``"python"`` runs that reference.
+    """
+    if opts["ff_impl"] == "python":
+        return _from_farfield_python(ctx, image, pixel, opts)
+    if opts["ff_impl"] != "rust":
+        raise ValueError(f"unknown ff_impl {opts['ff_impl']!r} (expected rust|python)")
+    from sfmtool._sfmtool import bench as B
+
+    return B.far_field_sweep(
+        ctx.edited,
+        ctx.pyramids,
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options={
+            "disparities": [float(d) for d in opts["ff_disparities"]],
+            "radius_px": float(opts["inf_radius_px"]),
+            "wide": float(opts["ff_wide"]),
+            "wide_among": opts["ff_wide_among"],
+            "min_whole": float(opts["ff_min_whole"]),
+            "min_middle": float(opts["ff_min_middle"]),
+            "middle_min_std": float(opts["inf_centre_min_std"]),
+            "max_peaks": int(opts["ff_max_peaks"]),
+            "min_prominence": float(opts["ff_min_prominence"]),
+            "refit": bool(opts["ff_refit"]),
+            "group_cut": float(opts["ff_group_cut"]),
+            "group_max": int(opts["ff_group_max"]),
+            "refit_px": float(opts["ff_refit_px"]),
+            "refit_max_px": float(opts["ff_refit_max_px"]),
+            "refit_max_err_px": float(opts["ff_refit_max_err_px"]),
+        },
+    )
+
+
+def _from_farfield_python(ctx, image, pixel, opts):
     """The far-field sweep: the distances in the far field the pixel reads at.
 
     Disparities are counted in the image that moves the pixel most for a

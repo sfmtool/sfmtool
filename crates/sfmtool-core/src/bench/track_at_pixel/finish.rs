@@ -23,10 +23,14 @@ use crate::bench::steps::{
     add_observation, apply_thresholds, create_cluster, resize_patch, set_verdict, tilt_patch,
     translate_patch_to_pixel, ClusterSeed, ObservationSeed, Viewpoint,
 };
-use crate::bench::track::{EditableTrack, Provenance, StageKind, TrackMeasurement, Verdict};
+use crate::bench::track::{
+    EditableTrack, Provenance, StageKind, Thresholds, TrackMeasurement, Verdict,
+};
 use crate::bench::Bench;
 use crate::numeric::median_in_place;
+use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
+use crate::reconstruction::edited::EditedReconstruction;
 
 use super::{Ctx, FinishOptions, Refusal, RefusalStage, StageRecord, TiltRecord};
 
@@ -218,7 +222,20 @@ pub(super) fn track_from_sightings(
     radius_px: f64,
     sightings: &[(u32, [f64; 2])],
 ) -> Result<EditableTrack, String> {
-    let mut track = seed_cluster(ctx, image, pixel, radius_px)?;
+    let track = seed_cluster(ctx, image, pixel, radius_px)?;
+    upgrade_sightings(ctx.edited, ctx.views, track, sightings)
+}
+
+/// `track` with each `(image, pixel)` sighting added and set `in` by hand, then
+/// upgraded to the track stage without a cluster reading: what
+/// [`track_from_sightings`] does after seeding its cluster, for a caller that
+/// seeds its own.
+pub(crate) fn upgrade_sightings(
+    edited: &EditedReconstruction,
+    views: &[ProjectedImage<'_>],
+    mut track: EditableTrack,
+    sightings: &[(u32, [f64; 2])],
+) -> Result<EditableTrack, String> {
     for &(other, px) in sightings {
         let seed = ObservationSeed {
             image: other,
@@ -233,8 +250,8 @@ pub(super) fn track_from_sightings(
     }
     set_stage(
         &track,
-        ctx.edited,
-        ctx.views,
+        edited,
+        views,
         StageKind::Track,
         &FitOptions::default(),
         &Progress::none(),
@@ -252,12 +269,21 @@ pub(super) fn seed_cluster(
     radius_px: f64,
 ) -> Result<EditableTrack, String> {
     let seed = ClusterSeed::from_pixel(image, ctx.image_stem(image), pixel, radius_px);
-    let (bench, report) = create_cluster(&Bench::new(), &seed).map_err(|e| e.to_string())?;
+    seed_cluster_with(&seed, &ctx.thresholds)
+}
+
+/// A one-sighting cluster from `seed`, carrying `thresholds`, with that
+/// sighting set `in` by hand.
+pub(crate) fn seed_cluster_with(
+    seed: &ClusterSeed,
+    thresholds: &Thresholds,
+) -> Result<EditableTrack, String> {
+    let (bench, report) = create_cluster(&Bench::new(), seed).map_err(|e| e.to_string())?;
     let mut track = (**bench
         .track(&report.label)
         .expect("the cluster was just put on the bench"))
     .clone();
-    track.thresholds = ctx.thresholds.clone();
+    track.thresholds = thresholds.clone();
     set_verdict(&track, 0, Verdict::In)
         .map(|(t, _)| t)
         .map_err(|e| e.to_string())

@@ -44,6 +44,7 @@ pub mod commit;
 pub mod evaluate;
 pub mod fit;
 pub mod geometry_search;
+pub mod nearby;
 pub mod search;
 pub mod stage;
 pub mod steps;
@@ -69,6 +70,11 @@ pub use fit::{fit, fit_preconditions, fuse_bitmap_in_place, FitError, FitOptions
 pub use geometry_search::{
     search_geometry, GeometryMatch, GeometrySearchError, GeometrySearchOptions,
     GeometrySearchReport,
+};
+pub use nearby::{
+    far_field_sweep, read_patch_along_ray, FarFieldError, FarFieldGrouping, FarFieldMetrics,
+    FarFieldOptions, FarFieldReading, FarFieldSweep, GreyImage, GreyImages, PatchRead,
+    PatchSamples, RayPatch, Refit, WideAmong, PATCH_GRID,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,
