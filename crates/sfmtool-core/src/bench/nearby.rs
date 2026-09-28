@@ -19,11 +19,13 @@
 //! are read by every query.
 
 mod candidate;
+mod clusters;
 mod far_field;
 mod grey;
 mod patch_read;
 mod points;
 mod range;
+mod triangulate;
 
 #[cfg(test)]
 mod source_tests;
@@ -31,6 +33,7 @@ mod source_tests;
 mod tests;
 
 pub use candidate::{NearbyCandidate, NearbySource, NearbySourceError};
+pub use clusters::{nearby_cluster_tracks, ClusterMembers, ClusterTracksOptions};
 pub use far_field::{
     far_field_sweep, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
     FarFieldReading, FarFieldSweep, Refit, WideAmong,
@@ -41,3 +44,4 @@ pub use points::{nearby_points, PointsOptions};
 pub use range::{
     camera_spread, classify_range, distance_range, DistanceRangeError, RangeClass, RangeOptions,
 };
+pub use triangulate::{triangulate_sightings, RayMeeting};

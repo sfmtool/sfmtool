@@ -5,13 +5,19 @@
 //! pinhole cameras looking down world `+z` at a textured plane, with a grid of
 //! points on it that every camera sees at its exact projection. One point is
 //! deleted from the version and the query is made at its pixel, the way the
-//! harness holds a point out.
+//! harness holds a point out. The other sources are decided on the same
+//! plane seen by four cameras, with clusters, keypoints and descriptors placed
+//! at the point's exact projections.
 
 use std::sync::Arc;
 
 use nalgebra::Point3;
 
 use crate::bench::tests::scene::{fixture_points, Scene, PLANE_Z};
+use crate::bench::track_at_pixel::tests::matches_file;
+use crate::bench::track_at_pixel::{
+    MatchesClusters, STATUS_KEPT, STATUS_REFERENCE, STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
+};
 use crate::reconstruction::data::{ObservationSource, SfmrReconstruction};
 use crate::reconstruction::edited::EditedReconstruction;
 
@@ -165,4 +171,171 @@ fn a_source_refuses_a_query_that_names_no_place() {
         nearby_points(&edited, &views[..2], 0, [10.0, 10.0], &options),
         Err(NearbySourceError::InputMismatch { input: "views", .. })
     ));
+}
+
+// ---- The cluster-patches clusters --------------------------------------------
+
+/// Four cameras a metre or so apart, all looking down world `+z`, so a
+/// cluster can lose one bad member and keep three.
+const FOUR: [[f64; 3]; 4] = [
+    [-0.5, -0.3, 0.0],
+    [0.45, 0.25, 0.0],
+    [0.1, -0.55, 0.0],
+    [0.3, 0.4, 0.0],
+];
+
+/// The point the clusters are built on, and where the query is made.
+const ON_PLANE: Point3<f64> = Point3::new(0.05, -0.1, PLANE_Z);
+
+/// A member at `world`'s projection in `image`, `off` px to the right, with
+/// the `.matches` status `status`.
+fn member(
+    scene: &Scene,
+    image: u32,
+    world: Point3<f64>,
+    off: f32,
+    status: u8,
+) -> (u32, [f32; 2], u8) {
+    let p = scene.project(image as usize, world);
+    (image, [p[0] as f32 + off, p[1] as f32], status)
+}
+
+fn four_names() -> Vec<String> {
+    (0..4).map(|i| format!("image_{i}.jpg")).collect()
+}
+
+fn clusters_of(clusters: &[Vec<(u32, [f32; 2], u8)>]) -> MatchesClusters {
+    let names = four_names();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    MatchesClusters::new(&matches_file(&names, clusters, 1.0, true), &names).expect("clusters")
+}
+
+#[test]
+fn a_cluster_with_a_bad_member_keeps_the_good_ones() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let views = scene.views();
+    // The reference in image 1, the queried member in image 0, a kept member
+    // in image 2 and one 8 px off in image 3.
+    let clusters = clusters_of(&[vec![
+        member(&scene, 1, ON_PLANE, 0.0, STATUS_REFERENCE),
+        member(&scene, 0, ON_PLANE, 0.0, STATUS_KEPT),
+        member(&scene, 2, ON_PLANE, 0.0, STATUS_KEPT),
+        member(&scene, 3, ON_PLANE, 8.0, STATUS_KEPT),
+    ]]);
+    let pixel = scene.project(0, ON_PLANE);
+    let found = nearby_cluster_tracks(
+        &views,
+        &clusters,
+        0,
+        pixel,
+        &ClusterTracksOptions::default(),
+    )
+    .expect("valid");
+    assert_eq!(found.len(), 1);
+    let c = &found[0];
+    assert_eq!(c.source, NearbySource::Clusters);
+    assert_eq!(c.id, Some(0));
+    assert_eq!(c.point, None);
+    // The queried member first, then the rest in the order the file lists
+    // them, without the bad one.
+    let images: Vec<u32> = c.sightings.iter().map(|s| s.0).collect();
+    assert_eq!(images, vec![0, 1, 2]);
+    assert!(c.max_reproj_px < 1e-3);
+    assert!((c.position - ON_PLANE.coords).norm() < 1e-4);
+    assert!(c.distance_px < 1e-3);
+    assert!((c.depth - PLANE_Z).abs() < 1e-4);
+
+    // With the bad member within the bar, it stays.
+    let options = ClusterTracksOptions {
+        max_reproj_px: 20.0,
+        ..ClusterTracksOptions::default()
+    };
+    let found = nearby_cluster_tracks(&views, &clusters, 0, pixel, &options).expect("valid");
+    assert_eq!(found[0].n_views(), 4);
+}
+
+#[test]
+fn a_cluster_whose_worst_member_is_the_queried_one_gives_nothing() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let views = scene.views();
+    let clusters = clusters_of(&[vec![
+        member(&scene, 1, ON_PLANE, 0.0, STATUS_REFERENCE),
+        member(&scene, 0, ON_PLANE, 8.0, STATUS_KEPT),
+        member(&scene, 2, ON_PLANE, 0.0, STATUS_KEPT),
+        member(&scene, 3, ON_PLANE, 0.0, STATUS_KEPT),
+    ]]);
+    let pixel = scene.project(0, ON_PLANE);
+    let found = nearby_cluster_tracks(
+        &views,
+        &clusters,
+        0,
+        pixel,
+        &ClusterTracksOptions::default(),
+    )
+    .expect("valid");
+    assert!(found.is_empty());
+}
+
+#[test]
+fn the_member_policy_decides_which_members_are_used() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let views = scene.views();
+    // Image 1 holds a kept member at the point and a rejected one 30 px away;
+    // image 2's only member was rejected for its ZNCC.
+    let clusters = clusters_of(&[vec![
+        member(&scene, 0, ON_PLANE, 0.0, STATUS_REFERENCE),
+        member(&scene, 1, ON_PLANE, 30.0, STATUS_REJECTED_SHIFT),
+        member(&scene, 1, ON_PLANE, 0.0, STATUS_KEPT),
+        member(&scene, 2, ON_PLANE, 0.0, STATUS_REJECTED_LOW_ZNCC),
+    ]]);
+    let pixel = scene.project(0, ON_PLANE);
+    let images = |members: ClusterMembers| -> Vec<u32> {
+        let options = ClusterTracksOptions {
+            members,
+            ..ClusterTracksOptions::default()
+        };
+        let found = nearby_cluster_tracks(&views, &clusters, 0, pixel, &options).expect("valid");
+        found[0].sightings.iter().map(|s| s.0).collect()
+    };
+    // Any member: the kept one in image 1 is preferred to the rejected one,
+    // and image 2's rejected member is used.
+    assert_eq!(images(ClusterMembers::Any), vec![0, 1, 2]);
+    // Only the reference and the kept.
+    assert_eq!(images(ClusterMembers::Kept), vec![0, 1]);
+
+    // A queried member the policy does not admit gives nothing.
+    let clusters = clusters_of(&[vec![
+        member(&scene, 0, ON_PLANE, 0.0, STATUS_REJECTED_LOW_ZNCC),
+        member(&scene, 1, ON_PLANE, 0.0, STATUS_REFERENCE),
+        member(&scene, 2, ON_PLANE, 0.0, STATUS_KEPT),
+    ]]);
+    let options = ClusterTracksOptions {
+        members: ClusterMembers::Kept,
+        ..ClusterTracksOptions::default()
+    };
+    assert!(nearby_cluster_tracks(&views, &clusters, 0, pixel, &options)
+        .expect("valid")
+        .is_empty());
+}
+
+#[test]
+fn sightings_meet_where_their_rays_do_with_each_error() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let views = scene.views();
+    let mut sightings: Vec<(u32, [f64; 2])> = (0..4)
+        .map(|i| (i, scene.project(i as usize, ON_PLANE)))
+        .collect();
+    let met = triangulate_sightings(&views, &sightings).expect("the rays meet");
+    assert!((met.position - ON_PLANE.coords).norm() < 1e-9);
+    assert!(met.max_error_px() < 1e-6);
+    // One sighting off by 4 px carries most of the error.
+    sightings[2].1[0] += 4.0;
+    let met = triangulate_sightings(&views, &sightings).expect("the rays meet");
+    let worst = (0..4)
+        .max_by(|&a, &b| met.errors_px[a].total_cmp(&met.errors_px[b]))
+        .unwrap();
+    assert_eq!(worst, 2);
+    // One ray fixes no point, and an image that is not there none either.
+    assert!(triangulate_sightings(&views, &sightings[..1]).is_none());
+    assert!(triangulate_sightings(&views, &[(0, [64.0, 64.0]), (9, [64.0, 64.0])]).is_none());
 }

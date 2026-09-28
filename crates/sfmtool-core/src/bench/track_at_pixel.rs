@@ -31,7 +31,7 @@ mod members;
 mod neighbourhood;
 
 #[cfg(test)]
-mod tests;
+pub(in crate::bench) mod tests;
 
 use nalgebra::Vector3;
 
@@ -49,7 +49,10 @@ pub use neighbourhood::{
 };
 
 pub(crate) use finish::{seed_cluster_with, upgrade_sightings};
-pub(crate) use neighbourhood::{ObservationIndex, ViewCamera};
+pub(crate) use neighbourhood::{
+    ObservationIndex, ViewCamera, STATUS_KEPT, STATUS_NOT_EVALUATED, STATUS_REFERENCE,
+    STATUS_REJECTED_LOW_ZNCC, STATUS_REJECTED_SHIFT,
+};
 
 /// One way of finding the pixel's sightings in the other photographs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

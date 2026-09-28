@@ -627,9 +627,40 @@ def _rust_tracks(ctx, image, pixel, opts):
     )
 
 
+def _rust_inputs(ctx):
+    """The dataset's ``NearbyTrackSources``, built on first use and kept: the
+    cluster-patches clusters."""
+    ds = ctx.dataset
+    if getattr(ds, "_nearby_sources", None) is None:
+        from sfmtool._sfmtool import bench as B
+
+        ds._nearby_sources = B.NearbyTrackSources(ctx.edited, matches=ds.matches)
+    return ds._nearby_sources
+
+
+def _rust_clusters(ctx, image, pixel, opts):
+    """:func:`from_clusters` by the core ``nearby_cluster_tracks``."""
+    from sfmtool._sfmtool import bench as B
+
+    return B.nearby_cluster_tracks(
+        ctx.edited,
+        ctx.pyramids,
+        _rust_inputs(ctx),
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options={
+            "radius_px": float(opts["cluster_radius_px"]),
+            "max_clusters": int(opts["cluster_max"]),
+            "max_reproj_px": float(opts["max_reproj_px"]),
+            "members": opts["cluster_members"],
+        },
+    )
+
+
 # The sources moved into core, by the harness's name for each.
 _RUST_SOURCES = {
     "tracks": _rust_tracks,
+    "clusters": _rust_clusters,
 }
 
 
@@ -650,7 +681,7 @@ def _by_impl(name, python):
 
 SOURCES = {
     "tracks": _by_impl("tracks", from_tracks),
-    "clusters": from_clusters,
+    "clusters": _by_impl("clusters", from_clusters),
     "constellation": from_constellation,
     "guided": from_guided,
     "sweep": from_sweep,

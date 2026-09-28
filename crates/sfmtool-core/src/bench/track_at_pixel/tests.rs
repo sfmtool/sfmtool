@@ -153,7 +153,7 @@ fn the_observation_index_does_not_see_a_deleted_point() {
 /// A cluster-patches `.matches` file over images named `names`, whose members
 /// are `(image, position, status)`, one cluster per entry of `clusters`, each
 /// member with the shape `scale` times the identity.
-fn matches_file(
+pub(in crate::bench) fn matches_file(
     names: &[&str],
     clusters: &[Vec<(u32, [f32; 2], u8)>],
     scale: f32,

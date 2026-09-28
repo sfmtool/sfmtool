@@ -13,12 +13,82 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::bench::{
-    nearby_points as core_nearby_points, NearbyCandidate, NearbySource, PointsOptions,
+    nearby_cluster_tracks as core_nearby_cluster_tracks, nearby_points as core_nearby_points,
+    ClusterMembers, ClusterTracksOptions, MatchesClusters, NearbyCandidate, NearbySource,
+    PointsOptions,
 };
 
 use super::views_of;
-use crate::patches::views::{resolve_pyramids, PosedViews};
+use crate::io::matches_file::PyMatchesFile;
+use crate::patches::views::{resolve_pyramids, PosedViews, PyramidSet};
 use crate::reconstruction::edited::PyEditedReconstruction;
+
+/// What the matching sources read beside the reconstruction and the
+/// photographs, built once per capture and shared by every query.
+///
+/// Every input is optional, and a source whose input is missing finds
+/// nothing: the clusters source needs ``matches``.
+///
+/// Args:
+///     edited: The reconstruction the inputs are indexed onto; only its image
+///         names and count are read, so any version of one base will do.
+///     matches: A cluster-patches :class:`MatchesFile`. Its images are matched
+///         to the reconstruction's by name.
+#[pyclass(name = "NearbyTrackSources", module = "sfmtool.bench", frozen)]
+pub struct PyNearbyTrackSources {
+    image_count: usize,
+    clusters: Option<MatchesClusters>,
+}
+
+#[pymethods]
+impl PyNearbyTrackSources {
+    #[new]
+    #[pyo3(signature = (edited, *, matches = None))]
+    fn new(edited: &PyEditedReconstruction, matches: Option<&PyMatchesFile>) -> PyResult<Self> {
+        let names: Vec<&str> = edited
+            .inner
+            .base
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.name.as_str())
+            .collect();
+        let clusters = matches
+            .map(|m| MatchesClusters::new(m.data(), &names))
+            .transpose()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self {
+            image_count: names.len(),
+            clusters,
+        })
+    }
+
+    /// Whether the clusters source has its input.
+    #[getter]
+    fn has_clusters(&self) -> bool {
+        self.clusters.is_some()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NearbyTrackSources({} images, clusters: {})",
+            self.image_count,
+            self.clusters
+                .as_ref()
+                .map_or_else(|| "none".into(), |c| c.cluster_count().to_string()),
+        )
+    }
+}
+
+/// The posed views of `edited` over `images`, which a query reads.
+fn posed_views(
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+) -> PyResult<(PosedViews, PyramidSet)> {
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    Ok((posed, pyramids))
+}
 
 /// Apply the `options` overrides through `set`, one key at a time.
 fn with_overrides<T>(
@@ -42,6 +112,7 @@ fn harness_name(source: NearbySource) -> &'static str {
     match source {
         // The harness calls the reconstruction's own points its tracks.
         NearbySource::Points => "tracks",
+        NearbySource::Clusters => "clusters",
     }
 }
 
@@ -126,8 +197,7 @@ pub(super) fn nearby_points(
         }
         Ok(true)
     })?;
-    let posed = PosedViews::from_reconstruction(&edited.inner.base);
-    let pyramids = resolve_pyramids(&posed, images)?;
+    let (posed, pyramids) = posed_views(edited, images)?;
     let views = views_of(&posed, &pyramids);
     let found = py
         .detach(|| core_nearby_points(&edited.inner, &views, image, pixel, &options))
@@ -135,8 +205,72 @@ pub(super) fn nearby_points(
     candidate_list(py, &found)
 }
 
+/// The cluster-patches clusters with a member near ``pixel`` in ``image``,
+/// nearest first, each vetted by triangulating its members, as candidate
+/// tracks.
+///
+/// A cluster's member in ``image`` is its nearest there; elsewhere it
+/// contributes one admitted member per image, the reference or a kept one
+/// first, then the best-reading. The members are triangulated, dropping the
+/// worst while three or more remain, until every one is within
+/// ``max_reproj_px``; never the queried member.
+///
+/// Args:
+///     edited: The reconstruction; only its cameras are read.
+///     images: As :func:`nearby_points` takes them.
+///     sources: A :class:`NearbyTrackSources`; with no ``matches`` the result
+///         is empty.
+///     image: The queried image's index.
+///     pixel: ``(x, y)`` in that image.
+///     options: Overrides keyed by the field of the Rust
+///         ``ClusterTracksOptions``: ``radius_px`` (48), ``max_clusters``
+///         (16), ``max_reproj_px`` (2) and ``members`` (``"any"`` or
+///         ``"kept"``). An unknown key is an error.
+///
+/// Returns:
+///     A list of the harness's anchor dicts, as :func:`nearby_points` returns
+///     them, with ``source`` ``"clusters"`` and ``id`` the cluster.
+#[pyfunction]
+#[pyo3(signature = (edited, images, sources, image, pixel, *, options = None))]
+pub(super) fn nearby_cluster_tracks(
+    py: Python<'_>,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    sources: &PyNearbyTrackSources,
+    image: u32,
+    pixel: [f64; 2],
+    options: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<PyList>> {
+    let options = with_overrides(ClusterTracksOptions::default(), options, |o, key, value| {
+        match key {
+            "radius_px" => o.radius_px = value.extract()?,
+            "max_clusters" => o.max_clusters = value.extract()?,
+            "max_reproj_px" => o.max_reproj_px = value.extract()?,
+            "members" => {
+                let word: String = value.extract()?;
+                o.members = word
+                    .parse::<ClusterMembers>()
+                    .map_err(PyValueError::new_err)?;
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    })?;
+    let Some(clusters) = &sources.clusters else {
+        return Ok(PyList::empty(py).unbind());
+    };
+    let (posed, pyramids) = posed_views(edited, images)?;
+    let views = views_of(&posed, &pyramids);
+    let found = py
+        .detach(|| core_nearby_cluster_tracks(&views, clusters, image, pixel, &options))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    candidate_list(py, &found)
+}
+
 /// Register the matching-source bindings on the `sfmtool.bench` submodule.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyNearbyTrackSources>()?;
     m.add_function(wrap_pyfunction!(nearby_points, m)?)?;
+    m.add_function(wrap_pyfunction!(nearby_cluster_tracks, m)?)?;
     Ok(())
 }

@@ -325,12 +325,18 @@ impl<'a> ObservationIndex<'a> {
 
 /// The member-status legend of the `.matches` cluster-patches section: the
 /// reference member.
-const STATUS_REFERENCE: u8 = 0;
+pub(crate) const STATUS_REFERENCE: u8 = 0;
 /// The member-status legend: a member the refinement kept.
-const STATUS_KEPT: u8 = 1;
+pub(crate) const STATUS_KEPT: u8 = 1;
+/// The member-status legend: a member whose ZNCC against the reference fell
+/// under the refinement's bar.
+pub(crate) const STATUS_REJECTED_LOW_ZNCC: u8 = 2;
+/// The member-status legend: a member the refinement moved too far from its
+/// seed.
+pub(crate) const STATUS_REJECTED_SHIFT: u8 = 3;
 /// The member-status legend: a member nothing evaluated, which is what every
 /// member of a file with no cluster-patches section is.
-const STATUS_NOT_EVALUATED: u8 = 5;
+pub(crate) const STATUS_NOT_EVALUATED: u8 = 5;
 
 /// Why a `.matches` file cannot serve as the clusters a track-at-pixel query
 /// reads.

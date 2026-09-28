@@ -19,6 +19,9 @@ pub enum NearbySource {
     /// The reconstruction's own points observed near the pixel
     /// ([`super::nearby_points`]).
     Points,
+    /// The cluster-patches clusters near the pixel, vetted by triangulation
+    /// ([`super::nearby_cluster_tracks`]).
+    Clusters,
 }
 
 impl NearbySource {
@@ -26,6 +29,7 @@ impl NearbySource {
     pub fn name(self) -> &'static str {
         match self {
             Self::Points => "points",
+            Self::Clusters => "clusters",
         }
     }
 }
@@ -45,7 +49,8 @@ impl std::fmt::Display for NearbySource {
 pub struct NearbyCandidate {
     /// The source that found it.
     pub source: NearbySource,
-    /// What the source names it by: the point for [`NearbySource::Points`].
+    /// What the source names it by: the point for [`NearbySource::Points`],
+    /// the cluster for [`NearbySource::Clusters`].
     pub id: Option<u32>,
     /// The point, in world coordinates.
     pub position: Vector3<f64>,

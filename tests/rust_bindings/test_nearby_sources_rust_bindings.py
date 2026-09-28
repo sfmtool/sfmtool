@@ -87,3 +87,52 @@ def test_the_points_near_the_pixel_are_found_without_the_held_out_one(
         bench.nearby_points(edited, pyramids, image, pixel, options={"radius": 1.0})
     with pytest.raises(ValueError):
         bench.nearby_points(edited, pyramids, 99, pixel)
+
+
+@pytest.fixture(scope="module")
+def sources(embedded):  # noqa: F811
+    from pathlib import Path
+
+    from sfmtool._sfmtool.io import MatchesFile
+
+    matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
+    assert matches, "the fixture workspace holds a clusters .matches"
+    return bench.NearbyTrackSources(
+        EditedReconstruction(embedded), matches=MatchesFile(str(matches[0]))
+    )
+
+
+def test_the_clusters_near_the_pixel_are_vetted_by_triangulation(
+    pyramids, query, sources
+):
+    edited, image, pixel = query
+    assert sources.has_clusters
+    found = bench.nearby_cluster_tracks(edited, pyramids, sources, image, pixel)
+
+    assert found, "the fixture's clusters reach the pixel"
+    for a in found:
+        assert set(a) == ANCHOR_KEYS
+        assert a["source"] == "clusters"
+        assert a["views"][0][0] == image
+        assert a["query_pixel"] == a["views"][0][1:]
+        assert len({v[0] for v in a["views"]}) == a["n_views"] >= 2
+        assert a["max_reproj_px"] <= 2.0
+        assert a["distance_px"] <= 48.0
+    assert len({a["id"] for a in found}) == len(found)
+
+    # The stricter policy builds from the reference and the kept members.
+    kept = bench.nearby_cluster_tracks(
+        edited, pyramids, sources, image, pixel, options={"members": "kept"}
+    )
+    assert all(a["source"] == "clusters" and a["max_reproj_px"] <= 2.0 for a in kept)
+    with pytest.raises(ValueError, match="kept|any"):
+        bench.nearby_cluster_tracks(
+            edited, pyramids, sources, image, pixel, options={"members": "all"}
+        )
+
+
+def test_a_source_without_its_input_finds_nothing(embedded, pyramids, query):  # noqa: F811
+    edited, image, pixel = query
+    empty = bench.NearbyTrackSources(EditedReconstruction(embedded))
+    assert not empty.has_clusters
+    assert bench.nearby_cluster_tracks(edited, pyramids, empty, image, pixel) == []
