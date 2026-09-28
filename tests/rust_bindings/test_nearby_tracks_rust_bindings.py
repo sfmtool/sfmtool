@@ -124,7 +124,16 @@ def test_the_tracks_are_labelled_by_layer_rank_and_order(
 
     tracks = got["tracks"]
     usable = [a for a in got["found"] if a["bounded"] or a["far"]]
-    assert tracks and len(tracks) == len(usable)
+    # A usable track whose built track repeats another's is a duplicate: it
+    # names that track, has no label and is not among the tracks.
+    duplicates = [a for a in usable if a["duplicate_of"] is not None]
+    assert got["report"]["duplicates"] == len(duplicates)
+    for a in duplicates:
+        assert a["label"] is None
+        b = got["found"][a["duplicate_of"]]
+        assert b["duplicate_of"] is None and b["label"] is not None
+    assert all(a["duplicate_of"] is None for a in got["found"] if a not in usable)
+    assert tracks and len(tracks) == len(usable) - len(duplicates)
     pattern = re.compile(re.escape(group) + r" (\d+)([a-z]+)( pt (\d+))?$")
     keys = []
     for t in tracks:

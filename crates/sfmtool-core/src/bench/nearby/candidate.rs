@@ -305,3 +305,31 @@ pub(super) fn candidate(
         errors_px,
     }
 }
+
+/// How near, in px, two sightings in one image must be for two tracks to be
+/// the same track. It is half the 2 px reprojection error a fitted sighting
+/// may have, so two fits that converged on the same feature match, and half
+/// the 2 px, at the least, that the widest image moves the pixel between two
+/// of the far-field sweep's peaks, so two readings of the patch at different
+/// distances do not.
+pub(super) const SAME_SIGHTING_PX: f64 = 1.0;
+
+/// Whether `a` and `b` are the same track: sightings in the same images, one
+/// each, and in every image within [`SAME_SIGHTING_PX`] of each other. The
+/// order of the sightings does not matter.
+pub(super) fn same_sightings(a: &[(u32, [f64; 2])], b: &[(u32, [f64; 2])]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let sorted = |s: &[(u32, [f64; 2])]| {
+        let mut s = s.to_vec();
+        s.sort_by_key(|&(image, _)| image);
+        s
+    };
+    let (a, b) = (sorted(a), sorted(b));
+    let distinct = a.windows(2).all(|w| w[0].0 != w[1].0);
+    distinct
+        && a.iter()
+            .zip(&b)
+            .all(|(x, y)| x.0 == y.0 && pixel_distance(x.1, y.1) <= SAME_SIGHTING_PX)
+}

@@ -2675,6 +2675,7 @@ fn find_nearby_tracks_lands_the_existing_points_under_their_labels() {
     }
     assert_eq!(reply["sources"][0]["source"], json!("points"), "{reply}");
     assert_eq!(reply["stopped_after"], json!("points"), "{reply}");
+    assert_eq!(reply["duplicates"], json!(0), "{reply}");
     assert!(
         reply["report"]
             .as_str()

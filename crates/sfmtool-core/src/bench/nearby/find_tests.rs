@@ -264,6 +264,113 @@ fn a_cluster_at_the_pixel_becomes_a_fitted_track_that_commits() {
     assert!(found.tracks[0].label.is_some());
 }
 
+/// The matches file's clusters at `world`, each seen by all four images of
+/// `scene`, `copies` of them.
+fn clusters_at(scene: &Scene, world: Point3<f64>, copies: usize) -> MatchesClusters {
+    let member = |image: u32, status: u8| {
+        let p = scene.project(image as usize, world);
+        (image, [p[0] as f32, p[1] as f32], status)
+    };
+    let cluster = vec![
+        member(1, STATUS_REFERENCE),
+        member(0, STATUS_KEPT),
+        member(2, STATUS_KEPT),
+        member(3, STATUS_KEPT),
+    ];
+    let names: Vec<String> = (0..4).map(|i| format!("image_{i}.jpg")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    MatchesClusters::new(
+        &matches_file(&names, &vec![cluster; copies], 1.0, true),
+        &names,
+    )
+    .expect("clusters")
+}
+
+#[test]
+fn a_track_built_twice_goes_on_the_bench_once() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let world = Point3::new(0.05, -0.1, PLANE_Z);
+    let clusters = clusters_at(&scene, world, 2);
+    let edited = scene_edited(&scene, Point3::new(0.9, 0.9, PLANE_Z));
+    let sources = NearbyTrackSources {
+        clusters: Some(&clusters),
+        ..NearbyTrackSources::default()
+    };
+    let pixel = scene.project(0, world);
+    let options = NearbyTrackOptions {
+        label: Some("here".into()),
+        ..NearbyTrackOptions::default()
+    };
+    let found = find(&edited, &scene, &sources, pixel, &options);
+
+    // Both clusters are found, placed on the one layer and built; the second
+    // repeats the first, so it gets no label and stays off the bench.
+    let [first, second] = found.tracks.as_slice() else {
+        panic!("two tracks, got {}", found.tracks.len());
+    };
+    assert!(matches!(first.track, Some(Ok(_))));
+    assert!(matches!(second.track, Some(Ok(_))));
+    assert_eq!(first.duplicate_of, None);
+    assert_eq!(second.duplicate_of, Some(0));
+    assert_eq!(first.label.as_deref(), Some("here 1a"));
+    assert_eq!(second.label, None);
+    assert_eq!((first.order, second.order), (Some(0), None));
+    assert_eq!(second.layer, Some(0));
+    assert_eq!(found.layers[0].members.len(), 2);
+    assert_eq!(found.bench_order(), vec![0]);
+    assert_eq!(found.report.duplicates, 1);
+
+    // Without building there is nothing to compare, and both are labelled.
+    let options = NearbyTrackOptions {
+        tracks: BenchTrackOptions {
+            build: false,
+            ..BenchTrackOptions::default()
+        },
+        ..options
+    };
+    let found = find(&edited, &scene, &sources, pixel, &options);
+    assert!(found.tracks.iter().all(|t| t.duplicate_of.is_none()));
+    assert_eq!(found.bench_order().len(), 2);
+    assert_eq!(found.report.duplicates, 0);
+}
+
+#[test]
+fn a_track_built_on_an_existing_points_observations_repeats_the_point() {
+    let scene = Scene::from_centers(&FOUR, PLANE_Z);
+    let world = Point3::new(0.05, -0.1, PLANE_Z);
+    let clusters = clusters_at(&scene, world, 1);
+    // The reconstruction's one point is the cluster's, seen where it projects.
+    let edited = EditedReconstruction::new(Arc::new(fixture_points(&scene, &[world])));
+    let sources = NearbyTrackSources {
+        clusters: Some(&clusters),
+        ..NearbyTrackSources::default()
+    };
+    let pixel = scene.project(0, world);
+    let options = NearbyTrackOptions {
+        stop: StopRule::Never,
+        label: Some("here".into()),
+        ..NearbyTrackOptions::default()
+    };
+    let found = find(&edited, &scene, &sources, pixel, &options);
+
+    let point = found
+        .tracks
+        .iter()
+        .position(|t| t.source() == NearbySource::Points)
+        .expect("the point is found");
+    let cluster = found
+        .tracks
+        .iter()
+        .position(|t| t.source() == NearbySource::Clusters)
+        .expect("the cluster is found");
+    assert!(matches!(found.tracks[cluster].track, Some(Ok(_))));
+    assert_eq!(found.tracks[cluster].duplicate_of, Some(point));
+    assert_eq!(found.tracks[cluster].label, None);
+    assert_eq!(found.tracks[point].label.as_deref(), Some("here 1a pt 0"));
+    assert_eq!(found.bench_order(), vec![point]);
+    assert_eq!(found.report.duplicates, 1);
+}
+
 #[test]
 fn a_far_pixel_gets_a_far_field_reading_when_the_sources_leave_it_open() {
     let depth = 1e7;

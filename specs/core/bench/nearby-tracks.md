@@ -78,7 +78,7 @@ pub struct NearbyTracks {
     pub report: NearbyTracksReport,
 }
 impl NearbyTracks {
-    pub fn bench_order(&self) -> Vec<usize>;       // the usable ones, in label order
+    pub fn bench_order(&self) -> Vec<usize>;       // the labelled ones, in label order
     pub fn first_layer(&self) -> Option<&DepthLayer>; // the rank-1 layer
 }
 
@@ -90,9 +90,10 @@ pub struct NearbyTrack {
     pub support: usize,
     pub layer: Option<usize>,         // when usable
     pub order: Option<usize>,         // its place in the layer, 0 first
-    pub label: Option<String>,        // when usable
+    pub label: Option<String>,        // when usable and not a duplicate
     pub point: Option<u32>,           // the existing point, for Points
     pub track: Option<Result<EditableTrack, String>>, // built, for the rest
+    pub duplicate_of: Option<usize>,  // the track its built track repeats
 }
 impl NearbyTrack {
     pub fn source(&self) -> NearbySource;
@@ -109,6 +110,7 @@ pub struct NearbyTracksReport {
     pub far_field: Option<FarFieldRun>, // trigger, report, dropped
     pub layers_seconds: f64,
     pub tracks_seconds: f64,
+    pub duplicates: usize,            // how many tracks are duplicates
 }
 
 pub fn nearby_group_label(image_stem: &str, pixel: [f64; 2]) -> String;
@@ -132,8 +134,8 @@ and the photographs.
 layers' members, each track's support and the harness's scoring all refer to
 every candidate by its place in the order found, and a candidate that is not
 usable is still evidence someone looking at the result may want. The usable
-ones, the ones the bench takes, are `bench_order()`, in the order of their
-labels.
+ones that are not duplicates, the ones the bench takes, are `bench_order()`,
+in the order of their labels.
 
 **Why an existing point carries its index and not a track.** A point near the
 pixel is already a track with its own frame, bitmap and keypoints; rebuilding
@@ -212,6 +214,31 @@ with sixteen threads for one query, as the viewer runs it, the building takes
 3 to 9 ms. A caller that only reads the layers, like the harness's scoring,
 turns it off.
 
+**Duplicates.** Two candidates can come out as one track: two far-field peaks
+refitted on the same images (the sweep drops those itself,
+[far-field-sweep.md](far-field-sweep.md)), a cluster and a guided match on the
+same feature, or a new track built on an existing point's observations. Put on
+the bench and committed, they become points at the same place with the same
+observations. So once the tracks are built, they are walked in the order their
+labels would run, and a built track whose `in` sightings are in the same images
+as an existing point's observations, each within 1 px, is a duplicate of that
+point wherever the point sits in the order; otherwise one whose `in` sightings
+match an earlier built track's that way is a duplicate of that track. The `in`
+sightings compared are the keypoints a commit would write. A duplicate names the
+track it repeats in `duplicate_of`, keeps its layer (the layer's members and
+the harness still index it), and has no order in the layer and no label, so it
+is not in `bench_order()` and the letters of the others close up; the report
+counts them in `duplicates`. With `tracks.build` off nothing is built, so
+nothing is compared and every usable track is labelled.
+
+Duplicates are common. In the harness with the tracks built and the default
+stopping rule, 9% of seoul_bull's queries and 8% of Kerry Park's have one,
+most of them a cluster repeating another cluster; with every source run, 62% and
+34%, most of them a cluster and a guided match on the same features. Two
+guided matches repeat each other when the queried image has two keypoints at
+one place, which SIFT gives a feature with two orientations. The far-field
+sweep's own check dropped no reading in either ground truth.
+
 ## The labels
 
 A query's tracks share a **group label**, the queried image's stem and the
@@ -231,7 +258,7 @@ so the labels sort best-supported first. When the layers are not ranked (the
 evidence is off), the layer's place, nearest first, stands in for the rank.
 
 **Within a layer the tracks run by their distance from the pixel, nearest
-first**, ties keeping the layer's order. The track nearest the pixel is the
+first**, ties keeping the layer's order, with the duplicates left out. The track nearest the pixel is the
 best stand-in for the pixel on that surface and the one a caller walks from,
 so `1a` is the track the viewer makes active. The layer's own member order is
 by the near end of each range, which says nothing about the pixel.
@@ -274,7 +301,7 @@ or `+`-joined, with `tracks` accepted for `points`; `stop`; `enough_count`;
 and `tracks.`. An unknown key is a `ValueError`, as is a query that names no
 place.
 
-The result is a dict. `tracks` holds the usable tracks in label order, each
+The result is a dict. `tracks` holds the labelled tracks in label order, each
 with `label`, `source`, `found` (its index into `found`), `layer`, `rank`,
 `confidence`, `pixel`, `distance_px`, `range`, `n_views`, `point` and
 `track` (an `EditableTrack`, or `None` for an existing point or when building
@@ -285,12 +312,13 @@ track the commit refuses gets an `error` and the rest are committed.
 
 For the harness, `found` holds every track as the anchor dicts `find_anchors`
 returned (the source's keys, the far-field reading's, `distance`, `range`,
-`bounded`, `far`, `support`, and `label`), `layers` the layer dicts
+`bounded`, `far`, `support`, `label`, and `duplicate_of`, an index into
+`found`), `layers` the layer dicts
 `depth_layers` returns, and `stages` its per-source records (`source` in the
 harness's names, `found`, `seconds`, `range_seconds`, `skipped`, and an
 `evidence` record for the layers). `report` carries the same in core's names,
-with `stopped_after`, `far_field` (`trigger`, `found`, `dropped`, `seconds`)
-and the layers' and tracks' seconds. The harness's `find_anchors` calls it by
+with `stopped_after`, `far_field` (`trigger`, `found`, `dropped`, `seconds`),
+the layers' and tracks' seconds, and `duplicates`. The harness's `find_anchors` calls it by
 default (`finder_impl="rust"`) with `tracks.build` off, and returns `found`,
 `layers` and `stages` as its `anchors`, `layers` and `stages`;
 `finder_impl="python"` runs its own loop over the pieces' bindings, the
@@ -306,7 +334,10 @@ sources without input skipped and named, and the far-field sweep run because
 none sits at the pixel; the stopping rule stops after the points and runs
 every source when asked for more than there are; a cluster at the pixel
 becomes a fitted track-stage track with the caller's label that commits as a
-new point, and is labelled but not built with building off; a plane far past
+new point, and is labelled but not built with building off; two identical
+clusters are both built and the second is a duplicate of the first, with no
+label and off the bench order, and a cluster on an existing point's
+observations is a duplicate of the point; a plane far past
 the cameras' spread, with no sources, gets one far-field reading that keeps
 the sweep's range, a far layer and a built track, and nothing when the sweep
 is told never to run; the refusals; and the labels' letters and forms.
@@ -314,7 +345,8 @@ is told never to run; the refusals; and the labels' letters and forms.
 checks on the seoul_bull fixture that every source finds what its own binding
 finds, in order, with the range bindings' ranges and classes, the far-field
 binding's readings after them, and the depth-layers binding's layers and
-support; the labels, their order and the caller's label; that `commit=True`
+support; the labels, their order and the caller's label, and that a
+duplicate names a labelled track and is left out; that `commit=True`
 adds every built track as a point and leaves the given version alone; the
 skipped sources; and the options' refusals.
 

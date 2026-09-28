@@ -2630,13 +2630,16 @@ reply is an edit's (the version, `changed`, and the row's sentence under
   "sources": [{ "source": "points", "found": 3, "skipped": null, "seconds": 0.004 },
               { "source": "clusters", "found": 0, "skipped": "clusters", "seconds": 0.0 }],
   "stopped_after": "points",
+  "duplicates": 0,
   "far_field": null
 }
 ```
 
 `tracks` holds the usable tracks in label order, and a track whose build or
 commit refused carries an `error` beside `item` (null when it never reached the
-bench). A range's far end is `null` when it is infinite. A find with nothing
+bench). A track whose built track repeats an existing point or a track before
+it is left out of `tracks` and never reaches the bench; `duplicates` counts
+them. A range's far end is `null` when it is infinite. A find with nothing
 usable pushes no version and answers `changed: false` with no tracks. Its
 refusals in the call are *Create Track Here*'s (a busy node, an image with no
 pose, a pixel off the photograph, and with `commit` a node whose observations

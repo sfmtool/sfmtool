@@ -848,8 +848,9 @@ are core's defaults, the harness's, with the caller's `label` as the group
 label.
 
 **What lands is one version.** Every track in core's `bench_order()` -- the
-usable ones, best-ranked layer first and within a layer nearest the pixel first
--- goes on the bench under its label, one after another, and the value and the
+usable ones, best-ranked layer first and within a layer nearest the pixel first,
+less the duplicates, whose built track repeats an existing point or a track
+before it and which carry no label -- goes on the bench under its label, one after another, and the value and the
 bench that result are pushed as one pair, so one Undo takes back the whole find
 and one Redo puts it back:
 

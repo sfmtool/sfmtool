@@ -20,7 +20,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::candidate::ray_angle;
+use super::candidate::{ray_angle, same_sightings};
 use super::grey::GreyImages;
 use super::patch_read::{read_patch_along_ray, PatchRead, RayPatch};
 use super::range::camera_spread;
@@ -269,6 +269,10 @@ pub struct FarFieldReading {
     pub refit: Option<Refit>,
     /// How far the refit landed from the pixel, in px, when it got that far.
     pub refit_px: Option<f64>,
+    /// For a dropped reading whose sightings, after the refit, are a
+    /// higher-ranked kept reading's: that reading's
+    /// [`FarFieldMetrics::peak_rank`]. `None` on every kept reading.
+    pub repeats: Option<usize>,
 }
 
 /// What the far-field sweep found.
@@ -276,8 +280,10 @@ pub struct FarFieldReading {
 pub struct FarFieldSweep {
     /// The kept readings, highest peak first.
     pub readings: Vec<FarFieldReading>,
-    /// The peaks whose refit dropped them, each as it stood before the refit
-    /// with the refit's outcome.
+    /// The peaks the refit dropped: each one the refit rejected, as it stood
+    /// before the refit with the refit's outcome, and each one that repeats a
+    /// kept reading, as the refit left it with [`FarFieldReading::repeats`]
+    /// naming that reading.
     pub dropped: Vec<FarFieldReading>,
 }
 
@@ -552,6 +558,7 @@ pub fn far_field_sweep(
             grouping: None,
             refit: None,
             refit_px: None,
+            repeats: None,
         };
         if !options.refit {
             sweep.readings.push(reading);
@@ -567,12 +574,35 @@ pub fn far_field_sweep(
         };
         let (reading, kept) = refit.group(reading, &read, k, &agree);
         if kept {
-            sweep.readings.push(reading);
+            sweep.keep_unless_repeated(reading);
         } else {
             sweep.dropped.push(reading);
         }
     }
     Ok(sweep)
+}
+
+impl FarFieldSweep {
+    /// Keep `reading`, or drop it when its sightings are a kept reading's
+    /// ([`same_sightings`]), marking which one it repeats.
+    ///
+    /// Two peaks whose queried image stands apart and whose other images form
+    /// the same group are refitted on the same sightings, move to the same
+    /// place, and come out as one track twice. The readings are kept highest
+    /// peak first, so the one kept is the higher.
+    pub(super) fn keep_unless_repeated(&mut self, mut reading: FarFieldReading) {
+        let repeated = self
+            .readings
+            .iter()
+            .find(|kept| same_sightings(&kept.views, &reading.views));
+        match repeated {
+            Some(kept) => {
+                reading.repeats = Some(kept.metrics.peak_rank);
+                self.dropped.push(reading);
+            }
+            None => self.readings.push(reading),
+        }
+    }
 }
 
 /// The mean of the three highest of `values` that were read (above `-1`), or

@@ -221,6 +221,46 @@ fn a_plane_at_infinity_reads_at_disparity_zero() {
 }
 
 #[test]
+fn a_reading_with_a_kept_readings_sightings_is_dropped_as_repeating_it() {
+    let scene = Scene::from_centers(&CENTERS, 1e7);
+    let found = sweep(&scene, 1e7, &FarFieldOptions::default());
+    let first = found.readings[0].clone();
+    assert_eq!(first.repeats, None);
+
+    // A second peak refitted onto the same sightings, each within a pixel of
+    // the first's and listed in another order, as two moved peaks come out.
+    let mut again = first.clone();
+    again.metrics.peak_rank = 2;
+    again.views.reverse();
+    for (_, px) in &mut again.views {
+        px[0] += 0.6;
+        px[1] -= 0.6;
+    }
+    // A third whose sightings are a pixel and a half from the first's in one
+    // image: another track.
+    let mut apart = first.clone();
+    apart.metrics.peak_rank = 3;
+    apart.views[1].1[0] += 1.5;
+    // A fourth seen by one image fewer.
+    let mut fewer = first.clone();
+    fewer.metrics.peak_rank = 4;
+    fewer.views.pop();
+
+    let mut sweep = FarFieldSweep::default();
+    for reading in [first, again, apart, fewer] {
+        sweep.keep_unless_repeated(reading);
+    }
+    let kept: Vec<usize> = sweep.readings.iter().map(|r| r.metrics.peak_rank).collect();
+    assert_eq!(kept, vec![1, 3, 4]);
+    let [dropped] = sweep.dropped.as_slice() else {
+        panic!("one dropped, got {:?}", sweep.dropped.len());
+    };
+    assert_eq!(dropped.metrics.peak_rank, 2);
+    assert_eq!(dropped.repeats, Some(1));
+    assert!(sweep.readings.iter().all(|r| r.repeats.is_none()));
+}
+
+#[test]
 fn a_plane_in_the_far_field_reads_at_its_disparity() {
     let rate = widest_rate();
     let depth = rate / 6.0;

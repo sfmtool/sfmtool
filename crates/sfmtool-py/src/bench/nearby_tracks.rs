@@ -173,20 +173,24 @@ fn set_option(
 ///
 /// Returns:
 ///     A dict, or with ``commit`` ``(EditedReconstruction, dict)``. The dict
-///     carries ``group_label``; ``tracks``, the usable tracks in label order,
+///     carries ``group_label``; ``tracks``, the usable tracks that are not
+///     duplicates, in label order,
 ///     each with ``label``, ``source``, ``found`` (its index into ``found``),
 ///     ``layer``, ``rank``, ``confidence`` (its layer's, when ranked),
 ///     ``pixel`` (where it sits in the queried image), ``distance_px``,
 ///     ``range``, ``n_views``, ``point`` (the existing point it is, or with
 ///     ``commit`` the new point it became), ``track`` (the built
 ///     :class:`EditableTrack`, or ``None``) and, when building or committing
-///     it failed, ``error``; ``found``, every track found, usable or not, and
-///     ``layers``, as the harness's anchor and layer dicts; ``stages``, the
+///     it failed, ``error``; ``found``, every track found, usable or not, as
+///     the harness's anchor dicts with ``label`` (``None`` off the bench) and
+///     ``duplicate_of`` (the index into ``found`` of the track whose built
+///     track it repeats, which leaves it off the bench, or ``None``), and
+///     ``layers``, as the harness's layer dicts; ``stages``, the
 ///     harness's per-source records (``source``, ``found``, ``seconds``,
 ///     ``range_seconds``, and ``skipped`` naming the missing input); and
 ///     ``report``: ``sources``, ``stopped_after``, ``far_field`` (``trigger``,
 ///     ``found``, ``dropped``, ``seconds``, or ``None`` when it did not run),
-///     ``layers_seconds`` and ``tracks_seconds``.
+///     ``layers_seconds``, ``tracks_seconds`` and ``duplicates``.
 ///
 /// Raises:
 ///     ValueError: the image or pixel names no place, an input does not
@@ -327,6 +331,7 @@ fn result_dict<'py>(
         d.set_item("far", t.class.far)?;
         d.set_item("support", t.support)?;
         d.set_item("label", &t.label)?;
+        d.set_item("duplicate_of", t.duplicate_of)?;
         all.append(d)?;
     }
     out.set_item("found", all)?;
@@ -395,6 +400,7 @@ fn result_dict<'py>(
     report.set_item("far_field", far_field)?;
     report.set_item("layers_seconds", r.layers_seconds)?;
     report.set_item("tracks_seconds", r.tracks_seconds)?;
+    report.set_item("duplicates", r.duplicates)?;
     out.set_item("report", report)?;
     Ok(out)
 }

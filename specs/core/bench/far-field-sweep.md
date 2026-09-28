@@ -54,7 +54,8 @@ pub fn far_field_sweep(
 
 pub struct FarFieldSweep {
     pub readings: Vec<FarFieldReading>, // kept, highest peak first
-    pub dropped: Vec<FarFieldReading>,  // peaks the refit dropped, with why
+    pub dropped: Vec<FarFieldReading>,  // peaks the refit dropped, with why,
+                                        // and peaks that repeat a kept one
 }
 
 pub struct FarFieldReading {
@@ -72,6 +73,7 @@ pub struct FarFieldReading {
     pub grouping: Option<FarFieldGrouping>,
     pub refit: Option<Refit>,        // Agrees | Grouped | Unsplit | Stands | Moved | ...
     pub refit_px: Option<f64>,
+    pub repeats: Option<usize>,      // a dropped repeat: the kept reading's peak rank
 }
 
 pub fn read_patch_along_ray(
@@ -104,7 +106,8 @@ the caller's. The Python binding keeps one inside each `ImagePyramidSet`.
 **Why the result keeps the dropped peaks.** The harness returns only the kept
 readings, and so does the binding. A dropped peak still says something a
 caller may show: that the photographs agreed on a distance until the grouping
-split them and the refit landed off the image or too far away.
+split them and the refit landed off the image or too far away, or that a peak
+came out as the same track as a higher one.
 
 **Why one reading type for moved and unmoved readings.** A reading the refit
 moves is still the sweep's peak, sighted by a different group of images; the
@@ -183,6 +186,20 @@ and fitted. Where it lands within 8 px of the pixel the reading stands on that
 group (`Stands`); further out, within 48 px and with every sighting within 2 px
 of the fitted point, the reading moves there (`Moved`); otherwise, or where the
 fit lands off the image or cannot be built, the peak is dropped.
+
+**A peak that repeats a higher one is dropped.** Two peaks whose query stands
+alone and whose other images form the same group are both refitted on that
+group, move to the same place and come out with the same sightings: one track,
+found twice. Each reading the refit keeps is compared with the readings kept
+before it, which are the higher peaks; when its sightings are in the same
+images as one of theirs and each within 1 px of it, it is dropped with
+`repeats` set to that reading's `peak_rank`, and its `refit` stays what the
+refit made of it. The 1 px is half the 2 px a moved reading's sightings may be
+from the fitted point, so two fits that converged on the same feature match;
+and half the 2 px, at the least, the widest image moves the pixel between two
+peaks of the sweep, so two readings at different distances do not. The same
+test marks duplicate bench tracks in
+[nearby-tracks.md](nearby-tracks.md) § "Duplicates".
 
 **Measured.** In the harness, against the ground truths of seoul_bull and Kerry
 Park, the sweep gives a reading at the pixel for Kerry Park's points 300 m and
@@ -293,7 +310,10 @@ plane at the distance of disparity 6 reading there and nowhere at infinity; a
 plane too near for the sweep giving no far reading; the patch reading best at
 the plane's distance and landing where the scene projects; a flat or
 off-photograph patch not read; the grey conversion and blur against OpenCV's
-numbers; best-three, prominence and average linkage on small cases.
+numbers; best-three, prominence and average linkage on small cases; and a
+reading whose sightings are within a pixel of a kept one's, in the same images,
+dropped as repeating it, where one a pixel and a half off or seen by one
+image fewer is kept.
 [`tests/rust_bindings/test_far_field_sweep_rust_bindings.py`](../../../tests/rust_bindings/test_far_field_sweep_rust_bindings.py)
 checks the binding's keys, that an image list and a pyramid set read alike,
 the overrides and the refusals. Parity with the harness's Python

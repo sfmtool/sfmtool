@@ -13,7 +13,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::bench::steps::ClusterSeed;
-use crate::bench::track::{EditableTrack, Thresholds};
+use crate::bench::track::{EditableTrack, Thresholds, Verdict};
 use crate::bench::track_at_pixel::{
     seed_cluster_with, upgrade_sightings, MatchesClusters, SiftIndexSource, ViewCamera,
 };
@@ -21,7 +21,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::candidate::{NearbyCandidate, NearbySource, NearbySourceError};
+use super::candidate::{same_sightings, NearbyCandidate, NearbySource, NearbySourceError};
 use super::clusters::{nearby_cluster_tracks, ClusterTracksOptions};
 use super::constellation::{constellation_seeds, ConstellationSeedOptions};
 use super::far_field::{far_field_sweep, FarFieldError, FarFieldOptions, FarFieldReading};
@@ -249,10 +249,11 @@ pub struct NearbyTrack {
     pub support: usize,
     /// Its depth layer, an index into [`NearbyTracks::layers`], when usable.
     pub layer: Option<usize>,
-    /// Its place in its layer, 0 first, when usable: by distance from the
-    /// pixel, nearest first.
+    /// Its place in its layer, 0 first, when usable and not a duplicate: by
+    /// distance from the pixel, nearest first, the duplicates left out.
     pub order: Option<usize>,
-    /// Its label on the bench, when usable ([`nearby_track_label`]).
+    /// Its label on the bench, when usable and not a duplicate
+    /// ([`nearby_track_label`]).
     pub label: Option<String>,
     /// The reconstruction's point it is, for [`NearbySource::Points`]: the
     /// bench takes that point's own track rather than a new one.
@@ -260,6 +261,13 @@ pub struct NearbyTrack {
     /// The track built from its sightings, when usable, not an existing point
     /// and [`BenchTrackOptions::build`] is on; the reason when building failed.
     pub track: Option<Result<EditableTrack, String>>,
+    /// The track, an index into [`NearbyTracks::tracks`], that its built
+    /// track repeats: an existing point whose observations its `in`
+    /// sightings are, or a track earlier in label order whose built track has
+    /// the same `in` sightings, image for image within a pixel. A duplicate
+    /// keeps its layer but has no order or label and does not go on the bench
+    /// ([`NearbyTracks::bench_order`]).
+    pub duplicate_of: Option<usize>,
 }
 
 impl NearbyTrack {
@@ -369,6 +377,9 @@ pub struct NearbyTracksReport {
     pub layers_seconds: f64,
     /// How long building the tracks for the bench took, in seconds.
     pub tracks_seconds: f64,
+    /// How many built tracks repeat another track
+    /// ([`NearbyTrack::duplicate_of`]).
+    pub duplicates: usize,
 }
 
 /// The tracks near a pixel, their depth layers, and what the query did.
@@ -388,12 +399,12 @@ pub struct NearbyTracks {
 }
 
 impl NearbyTracks {
-    /// The usable tracks in the order their labels run: by their layer's rank
-    /// (by the layer's place, nearest first, when the layers are not ranked),
-    /// then by their order in the layer.
+    /// The usable tracks that are not duplicates, in the order their labels
+    /// run: by their layer's rank (by the layer's place, nearest first, when
+    /// the layers are not ranked), then by their order in the layer.
     pub fn bench_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.tracks.len())
-            .filter(|&k| self.tracks[k].layer.is_some())
+            .filter(|&k| self.tracks[k].layer.is_some() && self.tracks[k].duplicate_of.is_none())
             .collect();
         order.sort_by_key(|&k| {
             let t = &self.tracks[k];
@@ -640,9 +651,11 @@ fn image_stem(edited: &EditedReconstruction, image: u32) -> String {
 /// when [`NearbyTrackOptions::far_field_when`] says so, each reading keeping
 /// the range the sweep gave it (or its sightings' range once the refit moved
 /// it). The usable tracks are grouped into depth layers and ranked; each gets
-/// its layer, its order in the layer, its label and, when
-/// [`BenchTrackOptions::build`] is on and it is not an existing point, a
-/// track-stage track built from its sightings.
+/// its layer and, when [`BenchTrackOptions::build`] is on and it is not an
+/// existing point, a track-stage track built from its sightings. A built track
+/// that repeats an existing point or a track before it in label order is
+/// marked a duplicate ([`NearbyTrack::duplicate_of`]); every other usable
+/// track gets its order in the layer and its label.
 ///
 /// `views` and `grey` hold one entry per image of `edited`, in its order.
 /// Nothing is committed.
@@ -841,25 +854,24 @@ pub fn find_nearby_tracks(
     }
     let layers = found.layers;
 
-    let group_label = options
-        .label
-        .clone()
-        .unwrap_or_else(|| nearby_group_label(&image_stem(edited, image), pixel));
-    for (n, layer) in layers.iter().enumerate() {
-        let mut members = layer.members.clone();
-        // A stable sort, so members at one distance keep the layer's order.
-        members.sort_by(|&a, &b| {
-            tracks[a]
-                .distance_px()
-                .partial_cmp(&tracks[b].distance_px())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let rank = layer_rank(&layers, n);
-        for (order, k) in members.into_iter().enumerate() {
-            let t = &mut tracks[k];
-            t.layer = Some(n);
-            t.order = Some(order);
-            t.label = Some(nearby_track_label(&group_label, rank, order, t.point));
+    // Each layer's members by distance from the pixel, nearest first; a
+    // stable sort, so members at one distance keep the layer's order.
+    let placed: Vec<Vec<usize>> = layers
+        .iter()
+        .map(|layer| {
+            let mut members = layer.members.clone();
+            members.sort_by(|&a, &b| {
+                tracks[a]
+                    .distance_px()
+                    .partial_cmp(&tracks[b].distance_px())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            members
+        })
+        .collect();
+    for (n, members) in placed.iter().enumerate() {
+        for &k in members {
+            tracks[k].layer = Some(n);
         }
     }
 
@@ -892,8 +904,34 @@ pub fn find_nearby_tracks(
         for (k, track) in todo.into_iter().zip(built) {
             tracks[k].track = Some(track);
         }
+        // Every track in a layer, in the order the labels run.
+        let mut by_rank: Vec<usize> = (0..layers.len()).collect();
+        by_rank.sort_by_key(|&n| layer_rank(&layers, n));
+        let in_label_order: Vec<usize> = by_rank
+            .into_iter()
+            .flat_map(|n| placed[n].iter().copied())
+            .collect();
+        report.duplicates = mark_duplicates(&mut tracks, &in_label_order);
     }
     report.tracks_seconds = start.elapsed().as_secs_f64();
+
+    let group_label = options
+        .label
+        .clone()
+        .unwrap_or_else(|| nearby_group_label(&image_stem(edited, image), pixel));
+    for (n, members) in placed.iter().enumerate() {
+        let rank = layer_rank(&layers, n);
+        let kept: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|&k| tracks[k].duplicate_of.is_none())
+            .collect();
+        for (order, k) in kept.into_iter().enumerate() {
+            let t = &mut tracks[k];
+            t.order = Some(order);
+            t.label = Some(nearby_track_label(&group_label, rank, order, t.point));
+        }
+    }
 
     Ok(NearbyTracks {
         group_label,
@@ -922,7 +960,70 @@ fn unplaced(
         label: None,
         point,
         track: None,
+        duplicate_of: None,
     }
+}
+
+/// Sightings, `(image, pixel)`.
+type Sightings = Vec<(u32, [f64; 2])>;
+
+/// Mark each built track that repeats another as a duplicate of it, walking
+/// `in_label_order` (every track in a layer, in the order the labels run),
+/// and return how many were marked.
+///
+/// A built track repeats an existing point when its `in` sightings are that
+/// point's observations ([`same_sightings`]), wherever the point sits in the
+/// order, since the reconstruction already has the point; otherwise it repeats
+/// the first track before it whose built track has the same `in` sightings. A
+/// track whose build failed is compared with nothing.
+fn mark_duplicates(tracks: &mut [NearbyTrack], in_label_order: &[usize]) -> usize {
+    let points: Vec<usize> = in_label_order
+        .iter()
+        .copied()
+        .filter(|&k| tracks[k].point.is_some())
+        .collect();
+    // Each built track kept so far, with its `in` sightings.
+    let mut kept: Vec<(usize, Sightings)> = Vec::new();
+    let mut marked = 0;
+    for &k in in_label_order {
+        let Some(Ok(built)) = &tracks[k].track else {
+            continue;
+        };
+        let Some(sightings) = in_sightings(built) else {
+            continue;
+        };
+        let repeats = points
+            .iter()
+            .copied()
+            .find(|&p| same_sightings(tracks[p].sightings(), &sightings))
+            .or_else(|| {
+                kept.iter()
+                    .find(|(_, s)| same_sightings(s, &sightings))
+                    .map(|&(j, _)| j)
+            });
+        match repeats {
+            Some(j) => {
+                tracks[k].duplicate_of = Some(j);
+                marked += 1;
+            }
+            None => kept.push((k, sightings)),
+        }
+    }
+    marked
+}
+
+/// A built track's `in` sightings, `(image, keypoint)`: the pixels a commit
+/// writes. `None` when an `in` observation has no keypoint.
+fn in_sightings(track: &EditableTrack) -> Option<Sightings> {
+    track
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+        .map(|o| {
+            let kp = o.track.as_ref()?.keypoint?;
+            Some((o.image, [f64::from(kp[0]), f64::from(kp[1])]))
+        })
+        .collect()
 }
 
 /// Run the matching source `source`, whose inputs are all present.

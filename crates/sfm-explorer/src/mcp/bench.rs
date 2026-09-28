@@ -486,6 +486,7 @@ pub(super) fn found_nearby_reply(
         "stopped_after",
         json!(r.stopped_after.map(|s| s.name())),
     );
+    insert(&mut reply, "duplicates", json!(r.duplicates));
     insert(
         &mut reply,
         "far_field",

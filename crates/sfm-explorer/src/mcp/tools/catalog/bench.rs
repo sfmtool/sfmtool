@@ -96,7 +96,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           `frame_13@412,230 1a` for the nearest the pixel on the best-ranked \
                           layer, which becomes the active item. An existing point near the pixel \
                           goes on the bench as its own track, as create_bench_track puts it, \
-                          under its label with ` pt <index>` and is never committed. A label \
+                          under its label with ` pt <index>` and is never committed. A track \
+                          whose built track has an existing point's sightings, or those of a \
+                          track before it, is a duplicate: it gets no label, stays off the \
+                          bench, and is counted in duplicates. A label \
                           another item holds takes the \" (2)\" suffix. One undo takes back the \
                           whole find, points and bench items together. The reply carries the \
                           group label, the layers (range, rank, confidence), every usable track \
