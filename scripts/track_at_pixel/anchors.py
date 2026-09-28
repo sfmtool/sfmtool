@@ -153,6 +153,10 @@ DEFAULTS = {
     # `layer_radius_px` read at `layer_samples` distances across the layer's
     # range, in every image it lands in.
     "layer_evidence": True,
+    # How the layers are ranked (`_rank_layers`): "evidence", by the key that
+    # adds the middle of the patch and the anchors' nearness to the pixel's
+    # patch reading, or "score", by the patch reading alone.
+    "layer_rank": "evidence",
     "layer_radius_px": 8.0,
     "layer_samples": 5,
     "inf_peak_margin": 0.02,
@@ -1254,8 +1258,9 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
     whose ranges overlap, nearest first, each with its range and the anchors in
     it. With ``layer_evidence``, each layer also carries what supports it
     (:func:`layer_evidence`), a ``score`` from the pixel's own patch read at the
-    layer's distances, whole and in the middle, and its ``rank`` by that score:
-    the best-supported depth is rank 1.
+    layer's distances, whole and in the middle, a ``key`` that adds the
+    anchors' evidence to it, its ``rank`` by the key (the best-supported depth
+    is rank 1), and a ``confidence`` that it is the pixel's (:func:`_rank_layers`).
 
     The far test, the far-field sweep (:func:`from_farfield`) or with
     ``far_test="infinity"`` the infinity test (:func:`from_infinity`), runs
@@ -1335,13 +1340,73 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
             # The pixel's own patch there, whole and in the middle: the mean
             # of the whole patch's reading and the lesser of the two.
             L["score"] = 0.5 * (e["photo"] + e["photo_both"])
-        order = sorted(range(len(layers)), key=lambda n: -layers[n]["score"])
-        for rank, n in enumerate(order, 1):
-            layers[n]["rank"] = rank
+        _rank_layers(layers, opts["layer_rank"])
         stages.append(
             {"source": "evidence", "found": 0, "seconds": time.perf_counter() - t0}
         )
     return {"anchors": anchors, "layers": layers, "stages": stages}
+
+
+# The layer ranking's key and confidence (:func:`_rank_layers`), fitted on the
+# harness rows of both ground truths, full and empty passes, with every source
+# run and with the default stopping rule: the key by how
+# often the pixel's layer comes first where there are several, the confidence
+# by how well it tells a right first-ranked layer from a wrong one. Fitted on
+# one ground truth and tested on the other, the key ranked the pixel's layer
+# first 94 to 95% of the time against 93 to 94% for the score alone, and the
+# confidence separated right from wrong first layers with an area under the
+# ROC curve of 0.88 to 0.93, against 0.75 to 0.78 for the patch reading. A
+# support term in the key helped with every source run and hurt when the
+# finder stops after the reconstruction's own tracks, whose many views give
+# their layers high support whichever surface they are on; it is left out.
+KEY_NEAREST = 0.05
+CONF_BIAS = -2.0
+CONF_MARGIN = 2.0
+CONF_VOTES = 0.47
+CONF_SUPPORT = 1.5
+CONF_NEAREST = 0.3
+
+
+def _rank_layers(layers, how="evidence"):
+    """Rank ``layers`` in place, and give each a ``key`` and a ``confidence``.
+
+    The ``key`` is the layer's ``score``, the pixel's patch read at its
+    distances, plus the middle of the patch read there alone (``photo_mid``),
+    less ``KEY_NEAREST`` times ``ln(1 + nearest_px)``: the patch says which
+    surface the pixel shows, weighted toward its middle, and a layer found
+    near the pixel is more likely the pixel's than one found further off.
+    ``how="score"`` ranks by the score alone.
+
+    The ``confidence`` is a logistic of the layer's margin over the best other
+    layer's key (1 where it is the only one), ``ln(1 + votes)``,
+    ``ln(1 + support)`` and ``ln(1 + nearest_px)``. It was fitted on the
+    first-ranked layers, as the chance that the first-ranked layer is the
+    pixel's; for a layer ranked below, it is lower, since its margin is
+    negative. The far-field anchors' own metrics did not add to either once
+    support and votes were in.
+    """
+    for L in layers:
+        e = L["evidence"]
+        mid = e["photo_mid"] if e["photo_mid"] is not None else e["photo"]
+        near = e["nearest_px"] if e["nearest_px"] is not None else 0.0
+        L["key"] = L["score"] + mid - KEY_NEAREST * np.log1p(near)
+    by = "score" if how == "score" else "key"
+    order = sorted(range(len(layers)), key=lambda n: -layers[n][by])
+    for rank, n in enumerate(order, 1):
+        layers[n]["rank"] = rank
+    for n, L in enumerate(layers):
+        e = L["evidence"]
+        rest = [M[by] for m, M in enumerate(layers) if m != n]
+        margin = L[by] - max(rest) if rest else 1.0
+        near = e["nearest_px"] if e["nearest_px"] is not None else 0.0
+        z = (
+            CONF_BIAS
+            + CONF_MARGIN * margin
+            + CONF_VOTES * np.log1p(e["votes"])
+            + CONF_SUPPORT * np.log1p(max(e["support"], 0.0))
+            - CONF_NEAREST * np.log1p(near)
+        )
+        L["confidence"] = float(1.0 / (1.0 + np.exp(-z)))
 
 
 def _layers(anchors) -> list[dict]:
@@ -1612,6 +1677,7 @@ def summarize(rows: list[dict]) -> str:
             f"{sum(r[f'{src}_agrees'] for r in ok) / max(checked, 1):6.3f} "
             f"{np.mean(secs):7.3f}"
         )
+    lines.append(_ranking_line(ok))
     lines.append(
         "has: share of queries with an anchor; mean n: anchors a query; bnd: share "
         "of anchors that are usable (bounded or far); at px, right, wrong: share of queries with "
@@ -1620,9 +1686,39 @@ def summarize(rows: list[dict]) -> str:
         "(its range overlaps the true point's), lyr px: median pixels to the nearest "
         "one, l+sup: share with one another anchor supports; chk: share of anchors "
         "with a true point at their own pixel, agree: share of those whose ranges "
-        "overlap; s: mean seconds a query"
+        "overlap; s: mean seconds a query; rank 1: queries whose first-ranked "
+        "layer is the pixel's, of all, and of those with several layers and the "
+        "pixel's among them; confidence AUC: how well the first-ranked layer's "
+        "confidence tells a right one from a wrong one (0.5 is chance)"
     )
     return "\n".join(lines)
+
+
+def _ranking_line(rows) -> str:
+    firsts, several = [], []
+    for r in rows:
+        ranks = [L.get("rank") for L in r["layers"]]
+        if 1 not in ranks:
+            continue
+        n = ranks.index(1)
+        firsts.append((r["layers"][n].get("confidence", 0.0), r["layers_right"][n]))
+        if len(ranks) > 1 and any(r["layers_right"]):
+            several.append(r["layers_right"][n])
+    if not firsts:
+        return "rank 1: no ranked layers"
+    conf = np.array([c for c, _ in firsts])
+    right = np.array([ok for _, ok in firsts])
+    pos, neg = conf[right], conf[~right]
+    auc = (
+        float(np.mean([(p > neg).mean() + 0.5 * (p == neg).mean() for p in pos]))
+        if len(pos) and len(neg)
+        else float("nan")
+    )
+    return (
+        f"rank 1: right {int(right.sum())} of {len(rows)} queries; "
+        f"{np.mean(several) if several else float('nan'):.4f} of the "
+        f"{len(several)} with several layers; confidence AUC {auc:.3f}"
+    )
 
 
 __all__ = [

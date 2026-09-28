@@ -372,11 +372,21 @@ to weigh against the 19 images that read the tree at 91 m.
 
 **Ranking the layers.** Near a pixel the layers are real surfaces, so which
 one the pixel is on takes the pixel's own patch. It is read at each layer's
-distances, whole and in the middle, in every photograph, and the layers are
-ranked by the mean of the whole patch's reading and the lesser of the two. The
-anchors' own features also go with each layer: how many there are, how many
-rest on different photographs, their views and ray angles, and how near the
-pixel the nearest sits.
+distances, whole and in the middle, in every photograph. The layers are ranked
+by that reading, weighted toward the middle of the patch, less a little for
+how far from the pixel the layer's nearest anchor was found. The anchors' own
+features also go with each layer: how many there are, how many rest on
+different photographs, their views and ray angles, and how near the pixel the
+nearest sits.
+
+A pixel can have one layer and have it wrong, and ranking cannot catch that.
+So each layer also carries a **confidence**, from how clearly it beats the
+next layer and how much stands behind it: the photographs that vote for it and
+the anchors that support it, and how near the pixel they are. Fitted on one
+ground truth and tested on the other, it tells a right first layer from a
+wrong one with an area under the ROC curve of 0.83 to 0.94, where the patch
+reading alone gives 0.74 to 0.77. The walk, or whatever consumes the
+anchors, decides what confidence to act on.
 
 The harness measures this step on its own (`harness.py --mode anchors`, with
 [`anchors.py`](../../scripts/track_at_pixel/anchors.py)); its README has the
@@ -397,19 +407,21 @@ infinity a right reading at the pixel, 48 of its 59 whose true point is 300 m
 or more away, and 38 of seoul_bull's 44 at infinity. Its wrong readings are
 candidates like the others; 15 of them rank first on Kerry Park, most from a
 single image with little parallax. Where there are several layers, the
-ranking puts the pixel's first 93 to 94% of the time and in the top two 99%;
-the anchors'
-features alone put it first 82 to 88% of the time. The constellation query
+ranking puts the pixel's first 94% of the time and in the top two 99%; the
+anchors' features alone put it first 82 to 88% of the time. The constellation
+query
 is the one matching source that usually reads the pixel itself, and it is
 the least accurate: on Kerry Park about as many of its readings at the pixel
 are wrong as right, and on seoul_bull a quarter are wrong.
 
 Open for this step:
 
-- **Judging candidates by their evidence.** The layers are ranked by the
-  pixel's patch read at their distances. The far-field anchors' own evidence,
-  how many images agree and with how much parallax, how prominent the peak,
-  does not enter the ranking yet.
+- **What to do with a low confidence.** The confidence says how likely the
+  first layer is the pixel's; whether to walk from it, look further, or give
+  no track is for the next step. The far-field anchors' own evidence, how many
+  images agree with how much parallax and how prominent the peak, added
+  nothing to the ranking or the confidence once votes and support were in,
+  and stays on the anchors.
 - **The pairwise table.** Deciding which images belong by comparing every
   pair costs the square of the images. It is capped at 16 for the far-field
   sweep; the same comparison in place of the bench's blend, for any track,
@@ -423,8 +435,8 @@ Open for this step:
   that leaves two usable anchors within 20 px. Near a depth edge two anchors
   can both be on the wrong surface, so stopping might instead need anchors
   around the pixel on every side, or a reading at the pixel.
-- **The ranking's misses.** Where the ranking puts the wrong layer first, 6 to
-  7% of the queries with several layers, whether the pixel's patch is too
+- **The ranking's misses.** Where the ranking puts the wrong layer first, 5 to
+  6% of the queries with several layers, whether the pixel's patch is too
   large for the edge it sits on, or the layers too close in distance for the
   photographs to tell apart, has not been looked at.
 - **Walking.** How to go from an anchor to the pixel. Sliding the patch there

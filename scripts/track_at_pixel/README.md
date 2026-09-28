@@ -484,8 +484,19 @@ pixel, and the pixel's own patch read at the layer's distances, whole and in
 the middle, in every photograph (five distances across the range, from
 infinity in for a far layer). Its `score` is the mean of the whole patch's
 reading and the lesser of the whole and middle readings, each the mean of the
-three best images, and its `rank` orders the layers by that score. Walking to
-the pixel starts from rank 1 and has the others.
+three best images. Its `key` adds the middle's reading alone and takes off
+0.05 times `ln(1 + nearest_px)`, the distance from the pixel to the layer's
+nearest anchor; `rank` orders the layers by the key (`layer_rank=score` by
+the score alone). Walking to the pixel starts from rank 1 and has the others.
+
+Each layer also carries a `confidence`, the chance that it is the pixel's: a
+logistic of its margin over the best other layer's key (1 when it is the only
+layer), `ln(1 + votes)`, `ln(1 + support)` and `ln(1 + nearest_px)`, with
+coefficients fitted on the first-ranked layers of both ground truths. A
+single layer can be wrong, and nothing ranks it below another; the
+confidence is what a later step can refuse it on. The far-field anchors' own
+metrics added nothing to the key or the confidence once support and votes
+were in, and stay on the anchors.
 
 ### The far-field sweep
 
@@ -677,8 +688,30 @@ where the pixel's layer is ranked first, and in the top two.
 | The pixel's patch, whole | 0.901 | 0.983 | 0.926 | 0.984 |
 | The pixel's patch, middle | 0.926 | 0.988 | 0.899 | 0.980 |
 | The pixel's patch, whole and middle (the `score`) | 0.929 | 0.989 | 0.939 | 0.988 |
+| The `score` with the far-field sweep's candidates | 0.931 | 0.988 | 0.937 | 0.988 |
+| The `key`: the score, the middle, and the nearest anchor's distance (the default) | 0.944 | 0.995 | 0.941 | 0.989 |
 
 A layer chosen at random is first about 39% of the time.
+
+The key was chosen by fitting a ranking over every layer feature on one ground
+truth and testing it on the other; three features carried it, and the
+middle's reading and the nearest anchor's distance carried the same weight
+fitted on either. Adding the anchors' support ranked better with every source
+run and worse with the default stopping rule, which stops after the
+reconstruction's own tracks: their many views give a layer high support
+whichever surface it is on. Queries whose first-ranked layer is the pixel's,
+of all of them:
+
+| Ranked by | Kerry Park, every source, empty | full | default stopping, empty | full | seoul_bull, every source, empty | full | default stopping, empty | full |
+|---|---|---|---|---|---|---|---|---|
+| The `score` | 2943 | 3008 | 2839 | 2103 | 1143 | 1149 | 1108 | 1010 |
+| The `key` (the default) | 2969 | 3059 | 2843 | 2153 | 1146 | 1153 | 1115 | 1005 |
+
+The confidence of the first-ranked layer tells a right one from a wrong one
+with an area under the ROC curve of 0.91 to 0.94 with every source run, and
+0.83 to 0.91 with the default stopping rule; the first layer's score alone
+gives 0.74 to 0.77. Fitted on one ground truth, it gives 0.83 to 0.94 on the
+other. The summary reports both on its `rank 1` line.
 
 Each source's variants alone, empty pass, as the share of queries with an
 anchor from it (which does not depend on the scoring):
@@ -785,8 +818,10 @@ anchor from it (which does not depend on the scoring):
 - **Ranking the layers.** Near a pixel the layers are real surfaces, so which
   one the pixel is on takes its own patch. Read at each layer's distances,
   whole and in the middle, it ranks the pixel's layer first 93 to 94% of the
-  time where there are several. The anchors' own features rank it first 82 to
-  88% of the time.
+  time where there are several, and 94% weighted toward the middle and less a
+  little for the nearest anchor's distance. The anchors' own features rank it
+  first 82 to 88% of the time; they tell instead how far to trust the first
+  layer, which the confidence carries.
 - **The plane sweep at the pixel** reads some depth on 72% of Kerry Park's
   queries, but costs 0.6 s a query, and in the full pass it mostly picks a
   wrong depth. It is kept as an option.
