@@ -264,7 +264,7 @@ jobs:
   # that finished CI last in 61% of runs, at a median of 19.6 min; the Rust half
   # (~6 min: 4.2 to build the test profile, 1.3 to run) needs nothing from the
   # Python half (~14 min), so running it alongside takes it off the critical
-  # path. Each uploads its own lcov.info and Codecov merges the uploads for a
+  # path. Each uploads its own reports and Codecov merges the uploads for a
   # commit; codecov.yml waits for both before it reports.
   #
   # The two build disjoint trees -- `cargo test` fills target/debug, `maturin
@@ -456,7 +456,9 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           use_oidc: true
-          files: lcov.info,python-lcov.info
+          # pyext-lcov.info is the extension's Rust coverage, reported
+          # from target/release (see scripts/coverage.sh).
+          files: pyext-lcov.info,python-lcov.info
           flags: ubuntu-latest
 
       - name: Save Rust target

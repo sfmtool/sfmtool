@@ -36,6 +36,7 @@ __pycache__/
 .coverage
 lcov.info
 python-lcov.info
+pyext-lcov.info
 **/*.profraw
 
 # Build artifacts

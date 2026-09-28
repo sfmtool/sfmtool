@@ -7,16 +7,19 @@
 #
 # Usage: coverage.sh [all|rust|python]
 #
-#   all     (default) both halves below, in one target dir and one report
-#   rust    the Rust test suite only
-#   python  the Python extension build and pytest only
+#   all     (default) both halves below
+#   rust    the Rust test suite only; writes lcov.info
+#   python  the Python extension build and pytest only; writes
+#           pyext-lcov.info (Rust) and python-lcov.info (Python)
+#
+# The halves build different profiles: `cargo test` builds target/debug and
+# `maturin develop --release` builds target/release. `cargo llvm-cov report`
+# reads the objects of one profile, so each half gets its own Rust report, and
+# `all` writes all three files.
 #
 # CI runs `rust` and `python` as two parallel jobs (test-linux-rust and
-# test-linux-python in ci.yml), each uploading its own lcov.info; Codecov merges
-# the uploads for a commit. The halves share nothing: `cargo test` builds
-# target/debug and `maturin develop --release` builds target/release, and
-# neither reads the other's profraw files. Either way, `cargo llvm-cov report`
-# covers whatever objects and counters this invocation produced.
+# test-linux-python in ci.yml), each uploading its own reports; Codecov merges
+# the uploads for a commit.
 
 set -euo pipefail
 
@@ -102,12 +105,16 @@ if [ "$mode" != rust ]; then
   pytest -n "$workers" --cov=sfmtool --cov-report=lcov:python-lcov.info
 fi
 
-# Generate the Rust coverage report
-cargo llvm-cov report --lcov --output-path lcov.info
-
+# Generate the Rust coverage reports, one per profile. Without `--release`, the
+# report reads only target/debug, so it silently drops the counters pytest
+# recorded in the extension, and with no target/debug at all it fails.
 echo ""
-if [ "$mode" = rust ]; then
-  echo "Coverage report written to lcov.info (Rust)"
-else
-  echo "Coverage reports written to lcov.info (Rust) and python-lcov.info (Python)"
+if [ "$mode" != python ]; then
+  cargo llvm-cov report --lcov --output-path lcov.info
+  echo "Rust test coverage written to lcov.info"
+fi
+if [ "$mode" != rust ]; then
+  cargo llvm-cov report --release --lcov --output-path pyext-lcov.info
+  echo "Python extension coverage written to pyext-lcov.info (Rust) and" \
+    "python-lcov.info (Python)"
 fi
