@@ -1732,6 +1732,16 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         assert!(m.seed_shift_px.expect("a peak") < 1.0);
         assert!(m.localizability.expect("a scored tile") > 0.0);
         assert!(m.reprojection_error.expect("a residual") < 1.0);
+        // The parts of the same readings come with them.
+        let grid = m.zncc_grid.expect("a ZNCC grid beside the ZNCC");
+        assert!(grid
+            .iter()
+            .flatten()
+            .all(|z| z.is_nan() || z.abs() <= 1.0 + 1e-9));
+        assert!(grid.iter().flatten().any(|z| z.is_finite()));
+        assert!(m.localizability_middle.expect("a middle score") > 0.0);
+        let sigmas = m.localizability_grid.expect("a localizability grid");
+        assert!(sigmas.iter().flatten().all(|s| s.is_nan() || *s > 0.0));
     }
 
     // The track's own point is where its sightings say it is, and the frame
@@ -2196,6 +2206,10 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         assert!(m.status.is_some());
         assert!(m.position.is_some(), "both members were fitted");
         assert!(m.localizability.expect("a scored tile") > 0.0);
+        // The parts of the same readings come with them.
+        assert!(m.zncc_grid.is_some(), "a ZNCC grid beside the ZNCC");
+        assert!(m.localizability_middle.expect("a middle score") > 0.0);
+        assert!(m.localizability_grid.is_some());
     }
     assert_eq!(
         refined.observations[reference]

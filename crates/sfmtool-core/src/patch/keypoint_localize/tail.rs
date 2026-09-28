@@ -5,15 +5,15 @@
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
-    below_absolute_floor, extract_core, member_is_localizable, middle_zncc, prof, project,
-    render_context, shifted_center, ContextTile, KeypointLocalization, KeypointLocalizeParams,
-    LocalizeError, SearchStrategy, ViewState,
+    below_absolute_floor, extract_core, member_is_localizable, part_zncc, prof, project,
+    render_context, shifted_center, square_consensus, square_core, ContextTile,
+    KeypointLocalization, KeypointLocalizeParams, LocalizeError, SearchStrategy, ViewState,
 };
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     irls_view_weights, weighted_unit_template_into, znormalize_into_kept, ConsensusScratch,
-    ProjectedImage, Support,
+    PartZncc, Parts, ProjectedImage, Support,
 };
 use crate::progress::Progress;
 
@@ -34,8 +34,10 @@ pub(super) struct TailGeometry {
 
 /// Build the final all-basis consensus template into `out` from the surviving
 /// basis members' cores, read at their final integer offsets. Returns the kept
-/// channel count and mask, or `None` when fewer than two basis cores are still
-/// in frame or no channel carries texture (no template to register against).
+/// channel count and mask, and the same consensus over the whole square for
+/// the ZNCC grid ([`square_consensus`]), or `None` when fewer than two basis
+/// cores are still in frame or no channel carries texture (no template to
+/// register against).
 fn basis_template(
     states: &[ViewState],
     caches: &[ContextTile],
@@ -43,11 +45,12 @@ fn basis_template(
     geom: &TailGeometry,
     robust_iters: u32,
     out: &mut Vec<f32>,
-) -> Option<(usize, Vec<bool>)> {
+) -> Option<(usize, Vec<bool>, Vec<f32>)> {
     let r = geom.resolution as usize;
     let n = support.pixels.len();
     let mut raws: Vec<Vec<f32>> = Vec::with_capacity(states.len());
     let mut live_channels: Vec<usize> = Vec::with_capacity(states.len());
+    let mut live_at: Vec<(usize, usize, usize)> = Vec::with_capacity(states.len());
     for (si, st) in states.iter().enumerate() {
         let cache = &caches[si];
         let mut raw = vec![0f32; cache.channels * n];
@@ -56,6 +59,7 @@ fn basis_template(
         if extract_core(cache, support, r, oy, ox, &mut raw) {
             raws.push(raw);
             live_channels.push(cache.channels);
+            live_at.push((si, oy, ox));
         }
     }
     if raws.len() < 2 {
@@ -80,12 +84,22 @@ fn basis_template(
         )
     })?;
     // Same robust consensus as a congealing round, without a holdout.
-    prof::TEMPLATE.time(|| {
+    let weights = prof::TEMPLATE.time(|| {
         let mut sc = ConsensusScratch::default();
         irls_view_weights(&xs, raws.len(), kept_ch, n, robust_iters, None, &mut sc);
         weighted_unit_template_into(&xs, &sc.w, raws.len(), kept_ch, n, out);
+        sc.w
     });
-    Some((kept_ch, keep_mask))
+    // And the same consensus over the whole square, for the ZNCC grid.
+    let squares: Vec<Vec<f32>> = live_at
+        .iter()
+        .map(|&(si, oy, ox)| {
+            square_core(&caches[si], support, r, oy, ox, &keep_mask, kept_ch)
+                .expect("the support was read at this offset")
+        })
+        .collect();
+    let square_template = square_consensus(&squares, &weights);
+    Some((kept_ch, keep_mask, square_template))
 }
 
 /// Whether a view's refined keypoint is close enough to the point's projection
@@ -148,7 +162,7 @@ pub(super) fn register_tail(
     params: &KeypointLocalizeParams,
     progress: &Progress<'_>,
 ) -> Result<(), LocalizeError> {
-    let Some((kept_ch, keep_mask)) = basis_template(
+    let Some((kept_ch, keep_mask, square_template)) = basis_template(
         states,
         caches,
         support,
@@ -198,7 +212,7 @@ pub(super) fn register_tail(
     // The tail cache is centred on the view's seed, so the `(0, 0)` shift reads
     // its core at `margin`.
     let tail_c0 = geom.margin as usize;
-    let middle = support.middle(geom.resolution);
+    let parts = Parts::new(support, geom.resolution);
     prof::count(&prof::N_RENDER, tail.len() as u64);
     // Parallel to `tail`: whether the view cleared the member localizability
     // gate. A view that did not is never searched and never kept, whatever it
@@ -237,7 +251,7 @@ pub(super) fn register_tail(
         if !ok {
             prof::count(&prof::N_DROP_UNLOCALIZABLE, 1);
             st.loo = f64::NAN;
-            st.loo_middle = f64::NAN;
+            st.loo_parts = PartZncc::NAN;
             continue;
         }
         // Score in the channel space this tail tile actually has (see the
@@ -251,7 +265,7 @@ pub(super) fn register_tail(
         if sub_kept == 0 {
             // No channel the template scores on survives in this view.
             st.loo = f64::NAN;
-            st.loo_middle = f64::NAN;
+            st.loo_parts = PartZncc::NAN;
             continue;
         }
         prof::count(&prof::N_SEARCH, 1);
@@ -285,22 +299,23 @@ pub(super) fn register_tail(
                 st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-geom.search_steps, geom.search_steps);
                 st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
                 st.loo = sh.peak;
-                st.loo_middle = middle_zncc(
+                st.loo_parts = part_zncc(
                     &cache,
                     support,
-                    &middle,
+                    &parts,
                     r,
                     (tail_c0 as i64 + sh.iy) as usize,
                     (tail_c0 as i64 + sh.ix) as usize,
                     sub_mask,
                     sub_kept,
                     &search.tmpl,
+                    &square_template,
                 );
             }
             // No scorable window: the view's core is out of frame at its seed.
             None => {
                 st.loo = f64::NAN;
-                st.loo_middle = f64::NAN;
+                st.loo_parts = PartZncc::NAN;
             }
         }
     }
@@ -429,7 +444,8 @@ pub(super) fn finalize(
         out.offsets_px
             .push((kx - st.proj[0]).hypot(ky - st.proj[1]));
         out.loo_zncc.push(st.loo);
-        out.loo_zncc_middle.push(st.loo_middle);
+        out.loo_zncc_middle.push(st.loo_parts.middle);
+        out.loo_zncc_grid.push(st.loo_parts.grid);
         out.is_basis.push(st.is_basis);
     }
     out

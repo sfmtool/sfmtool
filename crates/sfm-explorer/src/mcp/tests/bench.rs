@@ -1985,6 +1985,34 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         .as_f64()
         .unwrap_or_else(|| panic!("no cluster zncc_middle on the wire: {track}"));
     assert!((-1.0..=1.0).contains(&middle), "{track}");
+    // And the grids, as three rows of three.
+    let cluster = &track["observations"][0]["cluster"];
+    for key in ["zncc_grid", "localizability_grid"] {
+        let rows = cluster[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("no cluster {key} on the wire: {track}"));
+        assert_eq!(rows.len(), 3, "{track}");
+        for row in rows {
+            let row = row.as_array().expect("a row of cells");
+            assert_eq!(row.len(), 3, "{track}");
+            assert!(row.iter().all(|cell| cell.is_number() || cell.is_null()));
+        }
+    }
+    assert!(cluster["localizability_middle"].is_number(), "{track}");
+    // And per cell the direction a match could slide, as an `[x, y]` pair.
+    let slides = cluster["localizability_slide"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no cluster localizability_slide on the wire: {track}"));
+    assert_eq!(slides.len(), 3, "{track}");
+    for cell in slides
+        .iter()
+        .flat_map(|row| row.as_array().expect("a row of cells"))
+    {
+        let pair = cell.as_array().expect("an [x, y] pair");
+        assert_eq!(pair.len(), 2, "{track}");
+        let (x, y) = (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap());
+        assert!(x.hypot(y) <= 1.0 + 1e-9, "{track}");
+    }
 
     // The fit is its own step, under its own operation name, and it ends by
     // reading its result: the track stage's two distances are both on the wire
@@ -2024,10 +2052,18 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         "zncc_middle",
         "seed_shift_px",
         "projection_offset_px",
+        "localizability_middle",
     ] {
         assert!(
             measured[column].is_number(),
             "{column} is not on the wire: {track}"
+        );
+    }
+    for key in ["zncc_grid", "localizability_grid"] {
+        assert_eq!(
+            measured[key].as_array().map(Vec::len),
+            Some(3),
+            "{key} is not on the wire: {track}"
         );
     }
     assert!(

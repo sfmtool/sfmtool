@@ -56,12 +56,12 @@ use crate::patch::localizability::{
     patch_localizability, SIGMA_NOISE as LOCALIZABILITY_SIGMA_NOISE,
 };
 use crate::patch::normal_refine::{
-    build_support, weighted_moments_pub, windowed_zncc_at, znorm_write, Support, FLAT_NORM_SQ_EPS,
+    build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };
 use crate::patch::view_selection::AffineCoreMap;
 
 use kernels::{
-    eval_zncc, eval_zncc_middle, grid_bbox, nelder_mead, SupportTables, TemplateKernel, TileCache,
+    eval_zncc, eval_zncc_parts, grid_bbox, nelder_mead, SupportTables, TemplateKernel, TileCache,
 };
 
 pub use consistency::warp_consistency_residuals;
@@ -233,8 +233,10 @@ struct MemberOutcome {
     status: MemberStatus,
     affine: [[f64; 3]; 2],
     zncc: f32,
-    /// The middle ZNCC at the same final map (see [`kernels::eval_zncc_middle`]).
+    /// The middle ZNCC at the same final map (see [`kernels::eval_zncc_parts`]).
     zncc_middle: f32,
+    /// The ZNCC grid at the same final map.
+    zncc_grid: [[f32; 3]; 3],
     shift: f32,
 }
 
@@ -245,8 +247,17 @@ impl Default for MemberOutcome {
             affine: [[0.0; 3]; 2],
             zncc: f32::NAN,
             zncc_middle: f32::NAN,
+            zncc_grid: [[f32::NAN; 3]; 3],
             shift: f32::NAN,
         }
+    }
+}
+
+impl MemberOutcome {
+    /// The part readings in the outcome's own `f32`.
+    fn set_parts(&mut self, parts: PartZncc) {
+        self.zncc_middle = parts.middle as f32;
+        self.zncc_grid = parts.grid.map(|row| row.map(|z| z as f32));
     }
 }
 
@@ -469,20 +480,51 @@ fn build_template(
     if src_channels.is_empty() {
         return None;
     }
+
+    // The same channels over the whole square, for the ZNCC grid. A pixel off
+    // the image is `NaN`, which leaves its cell unread rather than refusing the
+    // template: the square reaches past the support the refinement scores.
+    let square = r * r;
+    let mut square_samples = vec![f32::NAN; src_channels.len() * square];
+    for p in 0..square {
+        let x = lmap.a[0] * (p % r) as f64 + lmap.a[1] * (p / r) as f64 + lmap.a[2] - 0.5;
+        let y = lmap.a[3] * (p % r) as f64 + lmap.a[4] * (p / r) as f64 + lmap.a[5] - 0.5;
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        let (x0, y0) = (x.floor(), y.floor());
+        let (ix, iy) = (x0 as i64, y0 as i64);
+        if ix < 0 || iy < 0 || ix + 1 >= w_img || iy + 1 >= h_img {
+            continue;
+        }
+        let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
+        let base = iy as usize * stride + ix as usize * ch;
+        for (tc, &c) in src_channels.iter().enumerate() {
+            let v00 = data[base + c] as f32;
+            let v10 = data[base + ch + c] as f32;
+            let v01 = data[base + stride + c] as f32;
+            let v11 = data[base + stride + ch + c] as f32;
+            square_samples[tc * square + p] = (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11;
+        }
+    }
     Some(TemplateKernel {
         channels: src_channels.len(),
         src_channels,
         kern,
         kern_sums,
         samples,
+        square_samples,
     })
 }
 
 /// Refine one non-reference member: the shift → similarity → affine
 /// Nelder-Mead cascade on the negated windowed ZNCC. Returns
-/// `(zncc, zncc_middle, shift_px, absolute 2×3 affine)`, where `zncc_middle`
-/// is the same final map read over the middle of the grid only
-/// ([`eval_zncc_middle`]) and the affine's leading 2×2 is the member's
+/// `(zncc, parts, shift_px, absolute 2×3 affine)`, where `parts` is the same
+/// final map read over the middle of the grid and over each cell of the ZNCC
+/// grid ([`eval_zncc_parts`]) and the affine's leading 2×2 is the member's
 /// absolute affine shape `S = W·S_ref`, last column its refined absolute
 /// keypoint position; `None` when the seed support is out of frame (→
 /// `NotEvaluated`).
@@ -497,7 +539,7 @@ fn refine_member(
     step: f64,
     off: f64,
     params: &ClusterRefineParams,
-) -> Option<(f64, f64, f64, [[f64; 3]; 2])> {
+) -> Option<(f64, PartZncc, f64, [[f64; 3]; 2])> {
     let a_ref_inv = inv2(&ref_geo.a);
     let m0 = mul2(&mem_geo.a, &a_ref_inv);
     let num_levels = pyramid.num_levels();
@@ -571,9 +613,9 @@ fn refine_member(
 
     let (t, d) = unpack(&theta, Stage::Affine);
     let zncc = -best_val;
-    // The middle reading, at the map the winning evaluation sampled: one more
+    // The part readings, at the map the winning evaluation sampled: one more
     // pass over the tile that evaluation read.
-    let zncc_middle = {
+    let parts = {
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
         let b = mul2(&mul2(&id, &m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
@@ -582,7 +624,9 @@ fn refine_member(
         let bbox = grid_bbox(&lmap, resolution);
         tiles
             .get_or_build(pyramid, level, bbox)
-            .map_or(f64::NAN, |tile| eval_zncc_middle(&lmap, tile, tables, tmpl))
+            .map_or(PartZncc::NAN, |tile| {
+                eval_zncc_parts(&lmap, tile, tables, tmpl)
+            })
     };
     let shift = (t[0] * t[0] + t[1] * t[1]).sqrt();
     // Absolute affine shape: the refined warp `W = (I + D)·M₀` composed onto
@@ -600,7 +644,7 @@ fn refine_member(
     let p = [mem_geo.pos[0] + t[0], mem_geo.pos[1] + t[1]];
     Some((
         zncc,
-        zncc_middle,
+        parts,
         shift,
         [
             [s_abs[0][0], s_abs[0][1], p[0]],
@@ -750,17 +794,16 @@ fn refine_cluster(
             [ref_geo.a[1][0], ref_geo.a[1][1], ref_geo.pos[1]],
         ],
         zncc: 1.0,
-        // The template against itself: 1 unless its middle is flat.
-        zncc_middle: windowed_zncc_at(
-            &tmpl.samples,
-            &tmpl.samples,
-            tmpl.channels,
-            tables.n,
-            &tables.weights,
-            &tables.middle,
-        ) as f32,
         shift: 0.0,
+        ..MemberOutcome::default()
     };
+    // The template against itself: 1 wherever it is not flat.
+    members[ref_j].set_parts(tables.parts.read(
+        (&tmpl.samples, &tmpl.samples),
+        (&tmpl.square_samples, &tmpl.square_samples),
+        tmpl.channels,
+        &tables.weights,
+    ));
 
     // 5. Refine every other member (in member order) and vet.
     for j in 0..size {
@@ -777,7 +820,7 @@ fn refine_cluster(
             continue;
         }
         prof::count(&prof::N_REFINES, 1);
-        if let Some((zncc, zncc_middle, shift, affine)) = prof::REFINE.time(|| {
+        if let Some((zncc, parts, shift, affine)) = prof::REFINE.time(|| {
             refine_member(
                 pyramids[g.image],
                 &ref_geo,
@@ -801,9 +844,10 @@ fn refine_cluster(
                 status,
                 affine,
                 zncc: zncc as f32,
-                zncc_middle: zncc_middle as f32,
                 shift: shift as f32,
+                ..MemberOutcome::default()
             };
+            members[j].set_parts(parts);
         }
     }
 
@@ -969,6 +1013,7 @@ pub fn refine_cluster_patches_borrowed(
         member_affine_shapes: Array3::zeros((m, 2, 2)),
         member_zncc: vec![f32::NAN; m],
         member_zncc_middle: vec![f32::NAN; m],
+        member_zncc_grid: vec![[[f32::NAN; 3]; 3]; m],
         member_shift_px: vec![f32::NAN; m],
     };
     for (c, out) in outcomes.into_iter().enumerate() {
@@ -979,6 +1024,7 @@ pub fn refine_cluster_patches_borrowed(
             result.member_status[k] = mo.status;
             result.member_zncc[k] = mo.zncc;
             result.member_zncc_middle[k] = mo.zncc_middle;
+            result.member_zncc_grid[k] = mo.zncc_grid;
             result.member_shift_px[k] = mo.shift;
             // The 2×3 the cascade carries splits into the two arrays the
             // format stores: leading 2×2 the absolute shape, last column the

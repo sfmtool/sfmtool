@@ -708,18 +708,19 @@ node is free.
 One row per observation, in index order, with the headings above the scroll
 area. Each heading has hover text over the width of its column saying what the
 column holds; the *ZNCC (%)* heading's says what a ZNCC is, that the first
-number is over the whole patch and the second over its middle half, and what
-the two apart mean.
+number is over the whole patch and the second over its middle half, what the
+two apart mean, and how the grid beside them is coloured. The *σ_pos* heading's
+says the same of its two numbers and its grid.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Verdict | a three-state control, clicked to cycle `in` / `out` / `candidate`; a dot marks a verdict set by hand | same |
 | Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp |
 | Img, Name | as view mode | as view mode |
-| ZNCC (%) | against the reference template, then the middle ZNCC: `92 / 61` | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, then the middle ZNCC: `92 / 61` |
+| ZNCC (%) | against the reference template, then the middle ZNCC: `92 / 61`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, then the middle ZNCC: `92 / 61`, then the ZNCC grid |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
 | Proj. off | absent | how far the keypoint sits from the point's projection, px |
-| σ_pos | the tile's localizability | the same |
+| σ_pos | the tile's localizability, then its middle square's: `0.08 / 0.12`, then the localizability grid | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
 | Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
@@ -746,6 +747,34 @@ a ZNCC and no middle reading prints `-` for the second, as on a track read back
 from a committed point before its first evaluation, since `.sfmr` stores the
 whole-patch score alone. The table has no column sort, so nothing is ordered by
 either reading.
+
+**Beside the two numbers is the ZNCC grid**, drawn as three rows of three
+boxes with a border: the same samples correlated over each ninth of the patch's
+whole square, corners included, with every pixel weighted equally (see
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+ZNCC grid"). The boxes are laid out as the tile is, so each sits over the part
+of the tile it read, and a whole-patch match with one red corner points at the
+corner that disagrees. A box is red at a ZNCC of `0.5` and below, green at
+`1`, and yellow halfway, and grey where the patch is flat over it. The grid is
+absent where the cell prints `-`. Hovering it shows its nine numbers in
+percent, in the same layout.
+
+**The σ_pos cell holds the same pair and a grid of its own.** The first number
+is the tile's localizability, the one the *max σ_pos* bar judges; the second is
+its middle square's alone; the grid is each ninth of the tile scored alone
+(§ "The parts of the localizability" of the same spec). A part has fewer pixels
+than the whole, so it reads higher for the same texture. Each box also carries
+a dark mark saying how many directions that ninth pins, judged by the same bar:
+a `+` when its uncertainty along its weaker axis is at or under the bar, so it
+pins both; a line along the slide when only the stronger axis is under the bar,
+as on a straight edge, where a match could slide along the line; and nothing
+when neither is. The stronger axis's uncertainty is the cell's times
+`sqrt(1 - |slide|)`, so the mark needs nothing beyond `localizability_grid` and
+`localizability_slide`. A box is green at half
+the track's *max σ_pos* bar and below, red at twice the bar and above, and
+yellow at the bar, on a log scale so that each doubling moves the colour the
+same distance; the number prints to two decimals so the pair fits one column.
+Both grids fade with the numbers while an evaluation is on its way.
 
 **The cells follow where the evaluation stands.** While an evaluation of the
 track's current inputs is on its way, the numbers are the previous

@@ -61,6 +61,7 @@ pub struct ClusterRefineResult {
     pub member_affine_shapes: Array3<f64>,    // (M, 2, 2) = S
     pub member_zncc: Vec<f32>,                // (M,), NaN if not evaluated
     pub member_zncc_middle: Vec<f32>,         // (M,), the same over the middle square
+    pub member_zncc_grid: Vec<[[f32; 3]; 3]>, // (M,), the same over each ninth of the grid
     pub member_shift_px: Vec<f32>,            // (M,), NaN if not evaluated
 }
 
@@ -284,6 +285,19 @@ itself unless its middle is flat, and every member reads `NaN` where the
 reference's middle is flat or where the member was not evaluated. The
 `.matches` cluster-patches section does not store it.
 
+**The ZNCC grid.** The member is also read at the same final map over the
+whole `R×R` square, not only the support, and correlated against the
+reference's own samples over the same square, which the template samples
+beside its support. The result is `member_zncc_grid`, one ZNCC per cell of a
+three-by-three split of the square, the rows and columns cut at `R/3` and
+`R - R/3`, `[row][col]` from the top-left cell. Each cell is mean-removed and
+normalized alone, as the middle is, with every pixel weighted equally, so the
+corners the window's disk leaves out are read in full. It is read in the same
+pass as the middle, and no gate reads it. The reference reads `1` in every cell
+it is not flat over. A cell is `NaN` where the reference is flat over it or a
+pixel of it falls off the image, and every cell is `NaN` where the member was
+not evaluated. The `.matches` section does not store it either.
+
 Finally, at most one member per image survives: among provisionally kept members
 sharing an image the highest ZNCC wins, ties to the lowest member index, and the
 rest become `DuplicateImage` — as does any member sharing the reference's own
@@ -477,6 +491,7 @@ The returned dict is member-parallel: `reference_members` `(C,)` uint32
 (`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,
 `member_positions` `(M, 2)` float64, `member_affine_shapes` `(M, 2, 2)`
 float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
+`member_zncc_grid` `(M, 3, 3)` float32,
 `member_shift_px` `(M,)` float32, and
 `member_consistency_residual` `(M,)` float32 — the warp-consistency signal,
 computed inside the same call.

@@ -236,6 +236,13 @@ fn aligned_views_keep_all_and_barely_shift() {
     for &z in &res.loo_zncc_middle {
         assert!(z > 0.8, "aligned views agree in the middle too, {z}");
     }
+    // And in every cell of the ZNCC grid.
+    assert_eq!(res.loo_zncc_grid.len(), res.views.len());
+    for grid in &res.loo_zncc_grid {
+        for &z in grid.iter().flatten() {
+            assert!(z > 0.8, "aligned views agree in every cell, {grid:?}");
+        }
+    }
 }
 
 /// `texture` everywhere but the middle of the patch (`|x|, |y| < HALF_EXTENT /
@@ -284,6 +291,76 @@ fn the_middle_zncc_sees_an_agreement_carried_by_the_surroundings() {
             middle < 0.4 && middle < whole - 0.2,
             "view {k}: whole {whole}, middle {middle}"
         );
+    }
+    // The ZNCC grid places the disagreement: its centre cell lies inside the
+    // views' own middles, and its corner cells lie outside them.
+    for (k, grid) in res.loo_zncc_grid.iter().enumerate() {
+        assert!(grid[1][1] < 0.4, "view {k}: {grid:?}");
+        for (row, col) in [(0, 0), (0, 2), (2, 0), (2, 2)] {
+            assert!(grid[row][col] > 0.8, "view {k}: {grid:?}");
+        }
+    }
+}
+
+/// `texture` inside the window's disk, and past it, in the corners of the
+/// square, a pattern each view has of its own.
+fn texture_with_own_corners(x: f64, y: f64, k: f64) -> f64 {
+    if x.hypot(y) > 1.05 * HALF_EXTENT {
+        127.5 + 70.0 * (x * (23.0 + 13.0 * k) + k).sin() * (y * (17.0 - 5.0 * k) - k).cos()
+    } else {
+        texture(x, y)
+    }
+}
+fn own_corners_0(x: f64, y: f64) -> f64 {
+    texture_with_own_corners(x, y, 0.0)
+}
+fn own_corners_1(x: f64, y: f64) -> f64 {
+    texture_with_own_corners(x, y, 1.0)
+}
+fn own_corners_2(x: f64, y: f64) -> f64 {
+    texture_with_own_corners(x, y, 2.0)
+}
+fn own_corners_3(x: f64, y: f64) -> f64 {
+    texture_with_own_corners(x, y, 3.0)
+}
+
+/// The ZNCC grid reads the whole square, not the window's disk: views that
+/// agree everywhere inside the disk and differ only in the corners past it
+/// have the whole-core ZNCC of an agreement, and corner cells that say where
+/// they differ.
+#[test]
+fn the_zncc_grid_reads_the_corners_the_window_leaves_out() {
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let texs: Vec<fn(f64, f64) -> f64> =
+        vec![own_corners_0, own_corners_1, own_corners_2, own_corners_3];
+    let scene = Scene::new(&centers, &[[0.0; 2]; 4], &texs);
+    let views = scene.views();
+    let res = localize_patch_keypoints(&plane_patch(), &views, &[0, 1, 2, 3], None, &gates_off());
+
+    assert_eq!(res.views.len(), 4, "the gates are off");
+    for (k, (&whole, grid)) in res.loo_zncc.iter().zip(&res.loo_zncc_grid).enumerate() {
+        assert!(whole > 0.8, "view {k}: the disk agrees, whole {whole}");
+        assert!(grid[1][1] > 0.8, "view {k}: {grid:?}");
+        // About half of a corner cell lies past the disk, so the corners fall
+        // well below the centre; the edge cells, inside it, do not. Read over
+        // the disk alone, a corner would agree as fully as the centre.
+        let corners = [(0, 0), (0, 2), (2, 0), (2, 2)].map(|(row, col)| grid[row][col]);
+        for corner in corners {
+            assert!(
+                corner < 0.99,
+                "view {k}: the corner past the disk differs, {grid:?}"
+            );
+        }
+        let mean = corners.iter().sum::<f64>() / 4.0;
+        assert!(mean < grid[1][1] - 0.1, "view {k}: {grid:?}");
+        for (row, col) in [(0, 1), (1, 0), (1, 2), (2, 1)] {
+            assert!(grid[row][col] > 0.95, "view {k}: {grid:?}");
+        }
     }
 }
 

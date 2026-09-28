@@ -418,6 +418,9 @@ pub fn clusters_to_pair_matches(
 ///     says which. ``member_zncc`` (M,) float32, ``member_zncc_middle``
 ///     (M,) float32 (the same samples read over only the middle square of the
 ///     grid, half its width; not stored in the ``.matches`` section),
+///     ``member_zncc_grid`` (M, 3, 3) float32 (the same samples read over each
+///     cell of a three-by-three split of the grid with every pixel weighted
+///     equally, ``[m, row, col]`` from the top-left cell; not stored either),
 ///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more
@@ -573,6 +576,19 @@ pub fn refine_cluster_patches<'py>(
         "member_zncc_middle",
         result.member_zncc_middle.into_pyarray(py),
     )?;
+    let m = result.member_zncc_grid.len();
+    let grid = ndarray::Array3::from_shape_vec(
+        (m, 3, 3),
+        result
+            .member_zncc_grid
+            .iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .collect(),
+    )
+    .expect("nine values per member");
+    dict.set_item("member_zncc_grid", grid.into_pyarray(py))?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     Ok(dict)

@@ -207,7 +207,7 @@ The algorithm returns:
   terms) and **quality signals** — its offset from the point's projection
   (`acc[v]` mapped to source-image px), the final leave-one-out ZNCC against
   the other views' consensus (`loo_zncc`), and beside it the **middle ZNCC**
-  (`loo_zncc_middle`).
+  (`loo_zncc_middle`) and the **ZNCC grid** (`loo_zncc_grid`).
 
 The middle ZNCC is the same reading narrowed to the middle of the core: the
 view's samples at the integer peak the round's search reported, read from the
@@ -221,6 +221,20 @@ of the tile away from the keypoint: a background behind a small near object, the
 far side of a depth edge, or a texture repeating along the epipolar line. No
 gate reads it. It is `NaN` wherever `loo_zncc` is and where the template's middle
 is flat.
+
+The ZNCC grid is the same peak against the same consensus, read over each
+cell of a three-by-three split of the whole `R×R` square of the core, the rows
+and columns cut at `R/3` and `R - R/3`, with every pixel weighted equally,
+`[row][col]` from the top-left cell. It covers the corners of the square the
+window's disk leaves out. The consensus carries to them exactly: the template
+is a weighted sum of the other views' cores, each z-normalized by its own
+windowed moments over the support, so the same weights (the round's
+leave-one-out weights, or the basis weights for a tail view) on each view's
+whole square, normalized the same way, are the same consensus over the whole
+square. The squares are read from the cached context tiles, so nothing is
+rendered again. The grid says where in the tile an agreement or a disagreement
+is. No gate reads it. Every cell is `NaN` wherever `loo_zncc` is, and one cell
+is where the template is flat over it or a pixel of it is out of frame.
 
 ## Implementation
 
@@ -265,7 +279,8 @@ half-vectors).
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
 min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
 min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
-`{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, is_basis}`. Each round renders a
+`{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, loo_zncc_grid, is_basis}`,
+with `loo_zncc_grid` a `(K, 3, 3)` array. Each round renders a
 **context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
 shift search slides without re-warping), z-normalizes the cores into a shared
 compacted channel space (a channel flat in any view is dropped, as in normal

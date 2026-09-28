@@ -219,6 +219,14 @@ pub struct KeypointLocalization {
     /// the keypoint. `NaN` wherever `loo_zncc` is, and where the template's
     /// middle carries no texture.
     pub loo_zncc_middle: Vec<f64>,
+    /// Per kept view, the **ZNCC grid** beside [`loo_zncc`](Self::loo_zncc):
+    /// the same samples at the same integer peak against the same template,
+    /// read over each cell of a three-by-three split of the grid (rows and
+    /// columns cut at `R/3` and `R - R/3`) with every pixel weighted equally,
+    /// `grid[row][col]` from the top-left cell. Parallel to
+    /// [`views`](Self::views). Every cell is `NaN` wherever `loo_zncc` is, and
+    /// one cell is where the template carries no texture over it.
+    pub loo_zncc_grid: Vec<[[f64; 3]; 3]>,
     /// Congealing rounds actually executed (`<= max_iters`; `0` when the input
     /// had fewer than two views and the loop never ran). Diagnostic: lets tests
     /// and callers observe the `convergence_px` early exit directly.

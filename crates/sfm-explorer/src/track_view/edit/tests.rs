@@ -446,6 +446,14 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
     assert_eq!(rows[0].cells[4], "-", "a cluster has no reprojection error");
     assert_eq!(rows[0].cells[5], "-", "a cluster has no ray angle");
+    // Beside the ZNCC and the sigma_pos cells, the row draws their grids.
+    assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
+    assert!(
+        rows[0].grids.sigma.is_some(),
+        "no localizability grid drawn"
+    );
+    assert!(rows[0].grids.slide.is_some(), "no slide lines drawn");
+    assert!(rows[0].cells[3].contains(" / "), "{}", rows[0].cells[3]);
 }
 
 /// A row the reading refused to widen its window for says so in the Status
@@ -1652,4 +1660,79 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     let refusals = super::photometric_refusals(Some("Busy."), whole, StageKind::Cluster);
     assert_eq!(refusals.fit.as_deref(), Some("Busy."));
     assert_eq!(refusals.stage.as_deref(), Some("Busy."));
+}
+
+#[test]
+fn sigma_text_formats_the_whole_and_the_middle() {
+    use super::sigma_text;
+    assert_eq!(sigma_text(Some(0.0812), Some(0.1234)), "0.08 / 0.12");
+    assert_eq!(sigma_text(Some(0.3), None), "0.30 / -");
+    assert_eq!(sigma_text(None, Some(0.3)), "-");
+}
+
+/// The grid colours run red, yellow, green: a ZNCC from 50 to 100, and a
+/// sigma_pos from twice the bar down to half of it. A cell with no reading
+/// has no colour.
+#[test]
+fn grid_cells_run_from_red_to_green() {
+    use super::{sigma_cell_color, zncc_cell_color};
+    let red = egui::Color32::from_rgb(220, 0, 40);
+    let yellow = egui::Color32::from_rgb(220, 200, 40);
+    let green = egui::Color32::from_rgb(0, 200, 40);
+    assert_eq!(zncc_cell_color(0.2), Some(red));
+    assert_eq!(zncc_cell_color(0.5), Some(red));
+    assert_eq!(zncc_cell_color(0.75), Some(yellow));
+    assert_eq!(zncc_cell_color(1.0), Some(green));
+    assert_eq!(zncc_cell_color(f64::NAN), None);
+
+    assert_eq!(sigma_cell_color(0.7, 0.35), Some(red));
+    assert_eq!(sigma_cell_color(0.35, 0.35), Some(yellow));
+    assert_eq!(sigma_cell_color(0.175, 0.35), Some(green));
+    assert_eq!(sigma_cell_color(0.01, 0.35), Some(green));
+    assert_eq!(sigma_cell_color(f64::NAN, 0.35), None);
+    // A bar at 0 still leaves a scale to colour by.
+    assert!(sigma_cell_color(0.1, 0.0).is_some());
+}
+
+/// A localizability cell draws a `+` when it pins both directions, a line
+/// along its slide when it pins only the direction across it, and nothing
+/// when it pins neither.
+#[test]
+fn a_cell_marks_how_many_directions_it_pins() {
+    use super::table::{cell_mark, CellMark};
+    let bar = 0.35;
+    // The weak axis is under the bar, so both are: a +, however one-sided.
+    assert_eq!(cell_mark(0.2, [0.0, 0.9], bar), CellMark::Plus);
+    // An edge: the weak axis is far over the bar, the strong one well under it
+    // (0.8 * sqrt(1 - 0.95) = 0.18), so a line along the slide, here vertical.
+    match cell_mark(0.8, [0.0, -0.95], bar) {
+        CellMark::Line(half) => {
+            assert!(half.x.abs() < 1e-6 && half.y.abs() > 3.0, "{half:?}");
+        }
+        other => panic!("expected a line, got {other:?}"),
+    }
+    // Neither axis pinned: a flat or weak cell draws nothing.
+    assert_eq!(cell_mark(0.8, [0.0, 0.3], bar), CellMark::Nothing);
+    assert_eq!(cell_mark(40.0, [0.0, 0.0], bar), CellMark::Nothing);
+    assert_eq!(cell_mark(f64::NAN, [0.0, 0.0], bar), CellMark::Nothing);
+    // A bar at 0 still leaves one to judge by.
+    assert_eq!(cell_mark(0.2, [0.0, 0.0], 0.0), CellMark::Plus);
+}
+
+#[test]
+fn a_grid_s_hover_text_holds_its_nine_numbers() {
+    use super::table::grid_numbers;
+    let grid = [[0.92, 0.5, f64::NAN], [1.0, -0.2, 0.33], [0.0, 0.07, 0.8]];
+    assert_eq!(
+        grid_numbers(&grid, true),
+        "   92    50     -
+  100   -20    33
+    0     7    80"
+    );
+    assert_eq!(
+        grid_numbers(&[[0.123; 3]; 3], false),
+        " 0.12  0.12  0.12
+ 0.12  0.12  0.12
+ 0.12  0.12  0.12"
+    );
 }

@@ -90,15 +90,20 @@ pub struct TrackMeasurement {
     pub keypoint: Option<[f32; 2]>,
     pub zncc: Option<f64>,
     pub zncc_middle: Option<f64>,            // the same samples over the middle square
+    pub zncc_grid: Option<[[f64; 3]; 3]>,    // and over each ninth of the tile
     pub seed_shift_px: Option<f64>,          // the peak's move from the sighting
     pub projection_offset_px: Option<f64>,   // the sighting's distance from the point
     pub reprojection_error: Option<f64>,
     pub ray_angle_deg: Option<f64>,
     pub localizability: Option<f64>,
+    pub localizability_middle: Option<f64>,  // the tile's middle square scored alone
+    pub localizability_grid: Option<[[f64; 3]; 3]>, // each ninth of it scored alone
+    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>, // and the way each ninth could slide
     pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
     pub walked_to: Option<[f64; 2]>,         // where that walk would have put it
     pub walked_zncc: Option<f64>,            // the ZNCC the localizer scored there
     pub walked_zncc_middle: Option<f64>,     // and its middle reading
+    pub walked_zncc_grid: Option<[[f64; 3]; 3]>, // and its ZNCC grid
     pub reason: Option<Unmeasured>,          // present exactly when zncc is not
 }
 
@@ -766,7 +771,7 @@ spells `duplicate_image`.
 in memory: a **reference** observation, a **radius**, a template cut around the
 reference, and per observation a seed (a position and a 2x2 affine shape in that
 image's pixels), the refined absolute position and shape, the achieved ZNCC and
-its middle reading (`zncc_middle`, § "The middle ZNCC"), the shift from the seed, the observation's own tile localizability and a status in
+its middle reading and ZNCC grid (`zncc_middle` and `zncc_grid`, § "The middle ZNCC" and § "The ZNCC grid"), the shift from the seed, the observation's own tile localizability with its middle and grid, and a status in
 the `member_status` legend. No pose, no position, no normal. It is what a track
 is when it starts from a pixel or from a search hit. The template is `Option`
 because cutting it reads the reference's pixels: a track carries one once an
@@ -1078,6 +1083,64 @@ reference's or consensus's middle is flat, and on a track read back from a
 committed point before it is evaluated, because `.sfmr` stores the whole-patch
 score alone. A row with no middle reading clears the middle bar, the way a row
 with no localizability clears `max_keypoint_uncertainty`.
+
+### The ZNCC grid
+
+Beside `zncc` and `zncc_middle`, every ZNCC a stage measures comes with nine
+more readings of the same samples, `zncc_grid`: one per cell of a
+three-by-three split of the whole square of the patch, the rows and columns
+cut at `R/3` and `R - R/3` (`8 x 8` cells of a `24 x 24` grid). Each cell is
+mean-removed and normalized alone, as the middle is, with every pixel weighted
+equally. The window plays no part: its fall-off would leave a corner cell with
+almost no weight, and its disk would cut a corner cell to half its pixels, so
+the grid reads the corners of the square the whole-patch ZNCC leaves out, and
+every cell is a full `8 x 8`. The grid is `grid[row][col]` from the top-left
+cell, in the layout the patch tile is drawn in, so a cell sits over the part of
+the tile it read.
+
+The consensus a ZNCC is read against is built on the disk, and it carries to
+the whole square exactly. It is a weighted sum of the other views' cores, each
+z-normalized by its own mean and norm over the disk, and those are one affine
+map per view and channel. So the same weights on each view's whole square,
+under the same normalization, are the same consensus over the whole square. At
+the cluster stage the reference is one view, sampled over the whole square
+beside its support.
+
+The middle reading says whether an agreement is carried by the pixel's own
+neighbourhood. The grid says where in the patch an agreement or a disagreement
+is: a depth edge through one side of the patch, an occluder in one corner, a
+moving object across the bottom row. It is computed where the middle reading is
+and from the same samples, with no second render: `ClusterRefineResult::
+member_zncc_grid` at the cluster stage, `KeypointLocalization::loo_zncc_grid`
+at the track stage and `walked_zncc_grid` beside `walked_zncc`. No bar judges
+it. It is `None` wherever `zncc` is, and a single cell is `NaN` where the
+reference or the consensus is flat over it, or where a pixel of it falls out
+of the frame or off the image.
+
+### The parts of the localizability
+
+`localizability` is the `sigma_pos` of an observation's own tile, from the
+structure tensor summed over the whole support (see
+[`patch-localizability.md`](../patch/patch-localizability.md)). Beside it are
+the same tile's parts, each scored alone from the same gradients:
+`localizability_middle` over the middle square under the window weights, and
+`localizability_grid` over each cell of the ZNCC grid's split of the whole
+square with every pixel weighted equally (`score_localizability_parts`). All
+three are in patch-grid pixels, but they are sums over different pixel counts
+under different weights, so a part has less to pin a position with and reads
+higher than the whole for the same texture. A flat part reads very high rather
+than `NaN`, as a flat whole tile does.
+
+Beside each cell is `localizability_slide`: the direction a match could slide
+in there, the unit vector along the structure tensor's weak axis in the grid
+frame (`x` column-right, `y` row-down), scaled by `1 - λ₂/λ₁`. On a straight
+edge the tensor has one strong axis, across the edge, and the vector is nearly
+unit length along the edge. On a corner or a blob both axes are strong and the
+vector is short. A flat cell reads `[0, 0]`. The vector's sign means nothing,
+since a slide goes both ways.
+
+No bar judges any of these; `max_keypoint_uncertainty` judges the whole tile's
+score. All are `None` wherever `localizability` is.
 ## The steps
 
 ### Putting a point on the bench
@@ -1608,10 +1671,12 @@ reading. What lands in each slot is:
 |------|--------------|
 | `zncc` | The leave-one-out agreement at the peak, within `search_px` of where the sighting is. With `seed_shift_px` near zero it is the agreement at the keypoint itself. |
 | `zncc_middle` | The same samples at the same peak against the same consensus, read over the middle square of the tile only (§ "The middle ZNCC"). |
+| `zncc_grid` | The same samples read over each ninth of the tile (§ "The ZNCC grid"). |
 | `seed_shift_px` | How far that peak sits from the observation's own keypoint, in source-image px. The **sighting's** own evidence, and what `max_shift_px` paints on. |
 | `projection_offset_px` | How far the observation's keypoint sits from the point's projection. A statement about the **point**: a mis-triangulated track shows a column of large offsets beside a column of zero shifts. |
 | `reprojection_error`, `ray_angle_deg` | The same residual in px and in degrees, against the position the track carries and the pixel the observation sits at. |
 | `localizability` | The observation's own tile `sigma_pos`, through the frame anchored at its keypoint. |
+| `localizability_middle`, `localizability_grid` | The same tile's middle square, and each ninth of it, scored alone (§ "The parts of the localizability"). |
 | `reason` | Why there is no ZNCC, when there is none. Present exactly when `zncc` is absent. |
 
 The last four rows are filled for every observation that has a pixel at all,
@@ -2027,8 +2092,11 @@ a fit; and
 `reason`, the sentence, exactly when it carries no `zncc`, and `walked_px` and
 `walked_to` (with `walked_zncc` and `walked_zncc_middle` where the localizer
 scored the peak) exactly when the last fit refused to walk that sighting and
-kept its seed. Both stages' dicts carry `zncc_middle` where there is one, and
-`thresholds` and `apply_thresholds` carry `min_zncc_middle`.
+kept its seed, with `walked_zncc_grid` beside them. Both stages' dicts carry
+`zncc_middle`, `localizability_middle`, as `(3, 3)` float64 arrays with
+`NaN` in a cell with no reading `zncc_grid` and `localizability_grid`, and as
+a `(3, 3, 2)` float64 array `localizability_slide`, where there are ones, and `thresholds` and `apply_thresholds` carry
+`min_zncc_middle`.
 
 **The coordinate crosses under the name of whichever it is**, in the reports and
 on the track: `EditableTrack.at_infinity` says which, `position` is the world

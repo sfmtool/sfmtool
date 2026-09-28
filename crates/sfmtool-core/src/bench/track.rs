@@ -122,11 +122,38 @@ pub struct ClusterMeasurement {
     /// not share is carried by the parts of the patch away from its centre.
     /// `None` wherever `zncc` is, and where the template's middle is flat.
     pub zncc_middle: Option<f64>,
+    /// The **ZNCC grid** beside [`Self::zncc`]: the same samples against the
+    /// same template, read over each cell of a three-by-three split of the
+    /// grid (rows and columns cut at `R/3` and `R - R/3`, `8 × 8` cells of a
+    /// `24 × 24` grid) with every pixel weighted equally, `grid[row][col]`
+    /// from the top-left cell. It says where in the grid an agreement or a
+    /// disagreement is. `None` wherever `zncc` is; a single cell is
+    /// `NaN` where the template is flat over it.
+    pub zncc_grid: Option<[[f64; 3]; 3]>,
     /// How far the refinement moved off the seed, in source-image px.
     pub shift_px: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in template-grid
     /// px.
     pub localizability: Option<f64>,
+    /// The localizability of the middle square of the same tile alone, the
+    /// rows and columns `R/4 .. R - R/4`, sigma_pos in template-grid px. Reads higher
+    /// than [`Self::localizability`] for the same texture, because it has
+    /// fewer pixels to pin a position with. `None` wherever `localizability`
+    /// is.
+    pub localizability_middle: Option<f64>,
+    /// The localizability of each cell of the ZNCC grid's three-by-three split
+    /// of the same tile alone, with every pixel weighted equally, sigma_pos in
+    /// template-grid px, `grid[row][col]` from the top-left cell. It says which parts
+    /// of the tile carry the texture that pins a position. `None` wherever
+    /// `localizability` is.
+    pub localizability_grid: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::localizability_grid`], the direction a match
+    /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
+    /// template-grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
+    /// `1` on a straight edge and near `0` where both axes are pinned alike or
+    /// the cell is flat. Its sign means nothing. `None` wherever
+    /// `localizability` is.
+    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>,
     /// The refinement's own verdict on the observation, in the `member_status`
     /// legend.
     pub status: Option<MemberStatus>,
@@ -142,8 +169,12 @@ impl ClusterMeasurement {
             shape: None,
             zncc: None,
             zncc_middle: None,
+            zncc_grid: None,
             shift_px: None,
             localizability: None,
+            localizability_middle: None,
+            localizability_grid: None,
+            localizability_slide: None,
             status: None,
         }
     }
@@ -260,6 +291,14 @@ pub struct TrackMeasurement {
     /// `zncc` is, where the consensus's middle is flat, and on a track read
     /// back from a committed point, which stores the whole-tile score alone.
     pub zncc_middle: Option<f64>,
+    /// The **ZNCC grid** beside [`Self::zncc`]: the same samples against the
+    /// same consensus, read over each cell of a three-by-three split of the
+    /// tile (rows and columns cut at `R/3` and `R - R/3`, `8 × 8` cells of a
+    /// `24 × 24` tile) with every pixel weighted equally, `grid[row][col]`
+    /// from the top-left cell. It says where in the tile an agreement or a
+    /// disagreement is. `None` wherever `zncc` is and on a track read back from a committed point; a single cell is
+    /// `NaN` where the consensus is flat over it.
+    pub zncc_grid: Option<[[f64; 3]; 3]>,
     /// How far that correlation peak sits from the observation's own keypoint,
     /// in source-image px: the observation's own evidence, and what
     /// [`Thresholds::max_shift_px`] paints on.
@@ -278,6 +317,25 @@ pub struct TrackMeasurement {
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
     pub localizability: Option<f64>,
+    /// The localizability of the middle square of the same tile alone, the
+    /// rows and columns `R/4 .. R - R/4`, sigma_pos in grid px. Reads higher
+    /// than [`Self::localizability`] for the same texture, because it has
+    /// fewer pixels to pin a position with. `None` wherever `localizability`
+    /// is.
+    pub localizability_middle: Option<f64>,
+    /// The localizability of each cell of the ZNCC grid's three-by-three split
+    /// of the same tile alone, with every pixel weighted equally, sigma_pos in
+    /// grid px, `grid[row][col]` from the top-left cell. It says which parts
+    /// of the tile carry the texture that pins a position. `None` wherever
+    /// `localizability` is.
+    pub localizability_grid: Option<[[f64; 3]; 3]>,
+    /// For each cell of [`Self::localizability_grid`], the direction a match
+    /// could slide in and how freely: the unit weak-axis vector `[x, y]` in the
+    /// grid frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`, near
+    /// `1` on a straight edge and near `0` where both axes are pinned alike or
+    /// the cell is flat. Its sign means nothing. `None` wherever
+    /// `localizability` is.
+    pub localizability_slide: Option<[[[f64; 2]; 3]; 3]>,
     /// How far the last fit's correlation peak sat from this sighting's seed,
     /// when that was further than [`Thresholds::max_shift_px`] and the seed was
     /// therefore kept, in source-image px.
@@ -314,6 +372,9 @@ pub struct TrackMeasurement {
     /// The middle ZNCC beside [`Self::walked_zncc`], read the way
     /// [`Self::zncc_middle`] is. Set and cleared with [`Self::walked_px`].
     pub walked_zncc_middle: Option<f64>,
+    /// The ZNCC grid beside [`Self::walked_zncc`], read the way
+    /// [`Self::zncc_grid`] is. Set and cleared with [`Self::walked_px`].
+    pub walked_zncc_grid: Option<[[f64; 3]; 3]>,
     /// Why there is no ZNCC, when there is none: an evaluation that could not
     /// read an observation says which of its refusals it was rather than
     /// leaving the row blank.

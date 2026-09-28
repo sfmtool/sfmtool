@@ -49,15 +49,16 @@ use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::localizability::{patch_localizability, SIGMA_NOISE};
 use crate::patch::normal_refine::{
-    build_support, windowed_zncc_at, znormalize_into_kept, ProjectedImage, Sampler, Support,
+    build_support, znormalize_into_kept, PartZncc, Parts, ProjectedImage, Sampler, Support,
+    FLAT_NORM_SQ_EPS,
 };
 use crate::progress::{Cancelled, Progress};
-// Only the reference scorer (`znorm_core`, test-only) needs the moment helper and
-// the flat-norm floor; the reference LOO-template test also needs the window enum.
+// Only the reference scorer (`znorm_core`, test-only) needs the moment helper;
+// the reference LOO-template test also needs the window enum.
 #[cfg(test)]
 use crate::patch::normal_refine::{
     irls_view_weights, weighted_moments_pub, weighted_unit_template_into, ConsensusScratch,
-    PatchWindow, FLAT_NORM_SQ_EPS,
+    PatchWindow,
 };
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::Point3;
@@ -633,34 +634,125 @@ fn template_zncc(core: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
     s / channels as f64
 }
 
-/// The ZNCC of `tile`'s core at window offset `(oy, ox)` against the unit
-/// template `tmpl`, over the grid's middle square only.
+/// `tile`'s whole `R×R` core at window offset `(oy, ox)`, over the channels
+/// `keep_mask` keeps (the first `kept` of them), planar `[kc · R² + p]`.
 ///
-/// The whole-core ZNCC a search reports at its integer peak is read from the
-/// same cached samples, so this is that reading narrowed to `middle` (the
-/// support positions [`Support::middle`] names), with no second render. `tmpl`
-/// is compacted over the channels `keep_mask` keeps, with `√w` folded in;
-/// dividing the fold back out leaves each channel an affine image of the
-/// consensus, which is all a ZNCC needs of it. `kept` is how many of its rows
-/// take part. `NaN` when the core leaves the frame or the template's middle is
-/// flat.
+/// Each channel is mean-removed and divided by the norm of the view's own
+/// core over `support`, under the window weights: the normalization the view
+/// carries into a consensus, extended to the pixels of the square the support
+/// leaves out. A channel flat over the support is all zero, as it is in the
+/// consensus. A pixel out of frame is `NaN`. `None` when a support pixel is
+/// out of frame, where [`extract_core`] refuses too.
 #[allow(clippy::too_many_arguments)]
-fn middle_zncc(
+fn square_core(
     tile: &ContextTile,
     support: &Support,
-    middle: &[usize],
+    resolution: usize,
+    oy: usize,
+    ox: usize,
+    keep_mask: &[bool],
+    kept: usize,
+) -> Option<Vec<f32>> {
+    let square = resolution * resolution;
+    let mut out = vec![0f32; kept * square];
+    let kept_channels = keep_mask
+        .iter()
+        .enumerate()
+        .filter(|&(_, &keep)| keep)
+        .map(|(c, _)| c)
+        .take(kept);
+    for (kc, c) in kept_channels.enumerate() {
+        let at = |p: usize| {
+            let (row, col) = (p / resolution, p % resolution);
+            let valid = tile.valid[(oy + row) * tile.res + (ox + col)];
+            let value = tile.planes[c][(oy + row) * tile.istride + (ox + col)] + tile.means[c];
+            (valid, f64::from(value))
+        };
+        let (mut s1, mut s2) = (0.0, 0.0);
+        for (&p, &w) in support.pixels.iter().zip(&support.weights) {
+            let (valid, v) = at(p);
+            if !valid {
+                return None;
+            }
+            s1 += w * v;
+            s2 += w * v * v;
+        }
+        let mean = s1 / support.total_weight;
+        let norm_sq = s2 - s1 * mean;
+        let dst = &mut out[kc * square..][..square];
+        for (p, d) in dst.iter_mut().enumerate() {
+            let (valid, v) = at(p);
+            *d = if !valid {
+                f32::NAN
+            } else if norm_sq < FLAT_NORM_SQ_EPS {
+                0.0
+            } else {
+                ((v - mean) / norm_sq.sqrt()) as f32
+            };
+        }
+    }
+    Some(out)
+}
+
+/// The consensus of `cores` over the whole square: each [`square_core`]
+/// weighted by the view's consensus weight in `weights`, summed. A view of
+/// weight `0`, the held-out one among them, takes no part, so its out-of-frame
+/// pixels do not reach the sum.
+///
+/// The consensus template over the support is the same weighted sum of the
+/// same views' cores, normalized the same way and with `√w` folded in, so over
+/// the support this is an affine image of that template, and past it the same
+/// sum carried on to the rest of the square.
+fn square_consensus(cores: &[Vec<f32>], weights: &[f64]) -> Vec<f32> {
+    let len = cores.first().map_or(0, Vec::len);
+    let mut out = vec![0f32; len];
+    for (core, &w) in cores.iter().zip(weights) {
+        if w <= 0.0 {
+            continue;
+        }
+        for (o, &v) in out.iter_mut().zip(core) {
+            *o += (w as f32) * v;
+        }
+    }
+    out
+}
+
+/// The ZNCC of `tile`'s core at window offset `(oy, ox)` against the unit
+/// template `tmpl`, over parts of the grid: its middle square and the nine
+/// cells of the ZNCC grid.
+///
+/// The whole-core ZNCC a search reports at its integer peak is read from the
+/// same cached samples, so these are that reading narrowed to each of `parts`,
+/// with no second render. `tmpl` is compacted over the channels `keep_mask`
+/// keeps, with `√w` folded in; dividing the fold back out leaves each channel
+/// an affine image of the consensus, which is all a ZNCC needs of it. `kept`
+/// is how many of its rows take part. The grid is read over the whole square
+/// rather than the support, against `square_template`, the same consensus
+/// carried to the whole square ([`square_consensus`]), `kept` rows of `R²`.
+/// Every reading is `NaN` when the core leaves the frame, and a single one is
+/// where the template is flat over its part or a pixel of it is out of frame.
+#[allow(clippy::too_many_arguments)]
+fn part_zncc(
+    tile: &ContextTile,
+    support: &Support,
+    parts: &Parts,
     resolution: usize,
     oy: usize,
     ox: usize,
     keep_mask: &[bool],
     kept: usize,
     tmpl: &[f32],
-) -> f64 {
+    square_template: &[f32],
+) -> PartZncc {
     let n = support.pixels.len();
     let mut raw = vec![0f32; tile.channels * n];
     if !extract_core(tile, support, resolution, oy, ox, &mut raw) {
-        return f64::NAN;
+        return PartZncc::NAN;
     }
+    let Some(square_sample) = square_core(tile, support, resolution, oy, ox, keep_mask, kept)
+    else {
+        return PartZncc::NAN;
+    };
     let mut sample = vec![0f32; kept * n];
     let mut reference = vec![0f32; kept * n];
     let kept_channels = keep_mask
@@ -675,7 +767,12 @@ fn middle_zncc(
             reference[kc * n + k] = tmpl[kc * n + k] / sw;
         }
     }
-    windowed_zncc_at(&sample, &reference, kept, n, &support.weights, middle)
+    parts.read(
+        (&sample, &reference),
+        (&square_sample, &square_template[..kept * parts.square]),
+        kept,
+        &support.weights,
+    )
 }
 
 /// Sub-sample peak offset in `[-1, 1]` from a 3-point parabola (scores at `-1`,
@@ -723,11 +820,12 @@ struct ViewState {
     /// The latest leave-one-out ZNCC (peak from the round's search); `NaN` until
     /// a round scores it.
     loo: f64,
-    /// The same reading over the middle of the core only: the samples [`Self::loo`]
-    /// was scored on, at the same integer peak and against the same template,
-    /// restricted to the grid's middle square (see [`middle_zncc`]). `NaN`
-    /// wherever `loo` is, and where the template's middle is flat.
-    loo_middle: f64,
+    /// The same reading over parts of the core: the samples [`Self::loo`] was
+    /// scored on, at the same integer peak and against the same template, read
+    /// over the grid's middle square and over each cell of the ZNCC grid (see
+    /// [`part_zncc`]). `NaN` wherever `loo` is, and where the template is flat
+    /// over a part.
+    loo_parts: PartZncc,
 }
 
 impl ViewState {
@@ -959,8 +1057,8 @@ pub fn try_localize_patch_keypoints_with_basis(
 
     // Window support over the R_s×R_s core.
     let support = build_support(params.window, resolution);
-    // The support positions a middle ZNCC is read over.
-    let middle = support.middle(resolution);
+    // The support positions the middle ZNCC and the ZNCC grid are read over.
+    let parts = Parts::new(&support, resolution);
 
     // Dedup the view set order-preserving (a point can carry two observations in
     // one image; refining it twice double-weights that view in the consensus).
@@ -1041,7 +1139,7 @@ pub fn try_localize_patch_keypoints_with_basis(
             residual: [off[0] - off[0].round(), off[1] - off[1].round()],
             proj: [proj.0, proj.1],
             loo: f64::NAN,
-            loo_middle: f64::NAN,
+            loo_parts: PartZncc::NAN,
         });
     }
 
@@ -1220,8 +1318,20 @@ pub fn try_localize_patch_keypoints_with_basis(
         // See `loo_consensus_template`.
         let nv = live.len();
         prof::TEMPLATE_GRAM.time(|| build_loo_gram(&xs, nv, kept_ch * n, &mut loo));
+        // Each live view's core over the whole square, for the ZNCC grid. The
+        // support's pixels were read above, so none is out of frame.
+        let squares: Vec<Vec<f32>> = live
+            .iter()
+            .map(|&si| {
+                let st = &states[si];
+                let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
+                let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
+                square_core(&caches[si], &support, r, oy, ox, &keep_mask, kept_ch)
+                    .expect("the support was read at this offset")
+            })
+            .collect();
         let mut shifts: Vec<Option<ShiftResult>> = vec![None; nv];
-        let mut middles: Vec<f64> = vec![f64::NAN; nv];
+        let mut part_readings: Vec<PartZncc> = vec![PartZncc::NAN; nv];
         for (v, &si) in live.iter().enumerate() {
             // Build the other views' robust consensus template (the
             // leave-one-out reference for view v) from the shared Gram.
@@ -1268,19 +1378,23 @@ pub fn try_localize_patch_keypoints_with_basis(
                     base_x,
                 ),
             });
-            // The middle of the same reading: the peak's samples against the
-            // same template, while `search.tmpl` still holds it.
+            // The same reading over parts of the core: the peak's samples
+            // against the same template, while `search.tmpl` still holds it.
+            // The grid's template is the same consensus over the whole
+            // square, under the weights `loo` still holds for view `v`.
             if let Some(sh) = shifts[v] {
-                middles[v] = middle_zncc(
+                let square_template = square_consensus(&squares, &loo.w);
+                part_readings[v] = part_zncc(
                     &caches[si],
                     &support,
-                    &middle,
+                    &parts,
                     r,
                     (base_y as i64 + sh.iy) as usize,
                     (base_x as i64 + sh.ix) as usize,
                     &keep_mask,
                     kept_ch,
                     &search.tmpl,
+                    &square_template,
                 );
             }
         }
@@ -1307,7 +1421,7 @@ pub fn try_localize_patch_keypoints_with_basis(
                     st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-search_steps, search_steps);
                     st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
                     st.loo = sh.peak;
-                    st.loo_middle = middles[v];
+                    st.loo_parts = part_readings[v];
                     let now = st.offset_steps();
                     shift_sum += (now[0] - prev[0]).hypot(now[1] - prev[1]);
                 }
@@ -1316,7 +1430,7 @@ pub fn try_localize_patch_keypoints_with_basis(
                 // position did not move, so it contributes 0 to the round's shift.
                 None => {
                     st.loo = f64::NAN;
-                    st.loo_middle = f64::NAN;
+                    st.loo_parts = PartZncc::NAN;
                 }
             }
         }

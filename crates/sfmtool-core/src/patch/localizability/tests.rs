@@ -6,7 +6,9 @@
 //! numeric cross-check against the throwaway Python prototype (not in-tree; see
 //! the spec's Evidence section) whose math this scorer ports.
 
-use super::scorer::{patch_localizability, score_localizability_stack, Localizability};
+use super::scorer::{
+    patch_localizability, score_localizability_parts, score_localizability_stack, Localizability,
+};
 use crate::patch::normal_refine::{build_support, PatchWindow};
 
 const R: usize = 24;
@@ -292,3 +294,76 @@ const REF_VAL: [u8; R * R] = [
     166,204,233,245,238,213,177,137,105,87,89,109,143,183,218,241,245,229,198,159,122,95,86,95,
     160,198,227,240,233,208,171,132,100,82,83,104,138,177,213,235,239,224,193,154,117,90,80,90,
 ];
+
+/// Straight edges slide along themselves, and a corner does not slide: the
+/// cells of a vertical edge report a vertical slide, nearly at full length,
+/// and the cells of a textured blob a short one.
+#[test]
+fn a_cell_on_an_edge_slides_along_it() {
+    let (_, parts) = score_localizability_parts(&edge_vertical(), R, C, PatchWindow::Uniform, 3.0);
+    let [dx, dy] = parts.slide[1][1];
+    assert!(dy.abs() > 0.9, "a vertical slide: {:?}", parts.slide[1][1]);
+    assert!(dx.abs() < 0.1, "{:?}", parts.slide[1][1]);
+
+    let (_, parts) = score_localizability_parts(&blob(), R, C, PatchWindow::Uniform, 3.0);
+    let [dx, dy] = parts.slide[1][1];
+    assert!(
+        dx.hypot(dy) < 0.5,
+        "a blob pins both axes: {:?}",
+        parts.slide[1][1]
+    );
+
+    // A flat cell has no direction to slide in.
+    let (_, parts) = score_localizability_parts(&flat(), R, C, PatchWindow::Uniform, 3.0);
+    assert_eq!(parts.slide[1][1], [0.0, 0.0]);
+}
+
+/// A texture in the top-left cell of the grid only, flat everywhere else.
+fn texture_in_top_left_cell() -> Vec<f32> {
+    let gray: Vec<f64> = (0..R * R)
+        .map(|p| {
+            let (row, col) = (p / R, p % R);
+            if row < 8 && col < 8 {
+                128.0 + 60.0 * (row as f64 * 1.3).sin() * (col as f64 * 0.9).cos()
+            } else {
+                128.0
+            }
+        })
+        .collect();
+    rgba_from_gray(&gray)
+}
+
+#[test]
+fn the_parts_share_the_whole_patch_score() {
+    for patch in [corner(), blob(), edge_vertical()] {
+        let (whole, _) =
+            score_localizability_parts(&patch, R, C, PatchWindow::GaussianDisk { sigma: 0.6 }, 3.0);
+        assert_eq!(whole, score(&patch));
+    }
+    let (whole, parts) = score_localizability_parts(&flat()[..0], R, C, PatchWindow::Uniform, 3.0);
+    assert!(whole.sigma_pos_grid.is_nan() && parts.middle.is_nan());
+}
+
+#[test]
+fn the_localizability_grid_says_which_cell_pins_the_position() {
+    let (whole, parts) =
+        score_localizability_parts(&texture_in_top_left_cell(), R, C, PatchWindow::Uniform, 3.0);
+    let textured = parts.grid[0][0];
+    assert!(
+        textured < 1.0,
+        "the textured cell pins a position: {textured}"
+    );
+    // The whole patch holds the same texture, and a cell of it is flat: no
+    // better than the whole, and far worse.
+    assert!(textured >= whole.sigma_pos_grid);
+    for (row, col) in [(0, 2), (1, 1), (2, 0), (2, 2)] {
+        assert!(
+            parts.grid[row][col] > 100.0 * textured,
+            "cell ({row}, {col}) is flat: {:?}",
+            parts.grid
+        );
+    }
+    // The middle square, rows and columns 6 to 18, reaches into the textured
+    // cell by two rows and columns.
+    assert!(parts.middle > textured);
+}

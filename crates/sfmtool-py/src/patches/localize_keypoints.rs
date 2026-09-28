@@ -134,9 +134,12 @@ impl PyPatchCloud {
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
     ///     loo_zncc (float64[K]), loo_zncc_middle (float64[K]),
-    ///     is_basis (bool[K])}`` over the **kept** views. ``loo_zncc_middle`` is
-    ///     the same reading over only the middle square of the grid, half its
-    ///     width.
+    ///     loo_zncc_grid (float64[K, 3, 3]), is_basis (bool[K])}`` over the
+    ///     **kept** views. ``loo_zncc_middle`` is the same reading over only the
+    ///     middle square of the grid, half its width. ``loo_zncc_grid`` is the
+    ///     same reading over each cell of a three-by-three split of the grid with
+    ///     every pixel weighted equally, ``[k, row, col]`` from the top-left
+    ///     cell.
     ///     ``loo_zncc`` is NaN for
     ///     a view no round scored (a lone input view, or a view kept by the two-view
     ///     floor before any consensus was built), so guard before reducing it.
@@ -415,6 +418,17 @@ impl PyPatchCloud {
                 "loo_zncc_middle",
                 res.loo_zncc_middle.clone().into_pyarray(py),
             )?;
+            let grid = ndarray::Array3::from_shape_vec(
+                (res.loo_zncc_grid.len(), 3, 3),
+                res.loo_zncc_grid
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .copied()
+                    .collect(),
+            )
+            .expect("nine values per view");
+            d.set_item("loo_zncc_grid", grid.into_pyarray(py))?;
             d.set_item("is_basis", res.is_basis.clone())?;
             out.push(d);
         }

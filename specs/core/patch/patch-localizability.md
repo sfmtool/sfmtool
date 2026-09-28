@@ -230,6 +230,15 @@ on the member's own tile with the shared `localizability::SIGMA_NOISE`):
    // public batch entry (builds Support internally, rayon-parallel):
    fn score_localizability_stack(patches, num_patches, resolution, channels,
                                  window: PatchWindow, sigma_noise) -> Vec<Localizability>
+   // one patch, whole and by parts:
+   fn score_localizability_parts(patch, resolution, channels,
+                                 window: PatchWindow, sigma_noise)
+       -> (Localizability, LocalizabilityParts)
+   struct LocalizabilityParts {
+       middle: f64,
+       grid: [[f64; 3]; 3],
+       slide: [[[f64; 2]; 3]; 3],
+   }
    ```
 
    Pure and standalone (structure tensor + 2×2 eig). The batch entry scores a
@@ -237,6 +246,23 @@ on the member's own tile with the shared `localizability::SIGMA_NOISE`):
    `normal_refine`. (`patch_localizability` itself is `pub(in crate::patch)` since
    `Support` is crate-private; the batch entry takes a `PatchWindow` and is the
    public surface.)
+
+   `score_localizability_parts` scores one patch as the batch entry does, and
+   also over parts of its grid, each from the same gradients with the tensor
+   summed over that part alone: `middle` over the centred square half the
+   grid's width (rows and columns `R/4 .. R - R/4`) under the window weights,
+   and `grid` over each cell of a three-by-three split of the whole `R×R`
+   square (rows and columns cut at `R/3` and `R - R/3`) with every pixel
+   weighted equally and the window's disk playing no part, `[row][col]` from
+   the top-left cell. The split and the weighting are the ZNCC grid's (see
+   [editable-track.md](../bench/editable-track.md) § "The ZNCC grid"). Every
+   value is in patch-grid px, but a part sums fewer pixels under different
+   weights, so it reads higher than the whole for the same texture, and a flat
+   part reads very high, as a flat patch does. `slide` is, per cell, the unit
+   weak-axis vector `(cos θ, sin θ)` scaled by `1 - λ₂/λ₁`: near unit length
+   along a straight edge, short on a corner or a blob, and `[0, 0]` on a flat
+   cell. The bench reports these beside each observation's own tile score; no
+   gate reads them.
 
 2. **Python binding** — `PatchCloud.score_localizability(recon, patch_bitmaps, …)`
    scores the batch over `patch_bitmaps`, returning per-point

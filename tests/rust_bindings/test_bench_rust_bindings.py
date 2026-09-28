@@ -319,6 +319,14 @@ class TestEvaluating:
             assert entry.get("seed_shift_px", 0.0) >= 0.0
             assert entry.get("projection_offset_px", 0.0) >= 0.0
             assert entry.get("localizability", 1.0) > 0.0
+            # Each score carries its parts: the ZNCC grid and the
+            # localizability of the tile's middle and of each ninth of it.
+            if "zncc" in entry:
+                assert entry["zncc_grid"].shape == (3, 3)
+            if "localizability" in entry:
+                assert entry["localizability_middle"] > 0.0
+                assert entry["localizability_grid"].shape == (3, 3)
+                assert entry["localizability_slide"].shape == (3, 3, 2)
 
     def test_the_reading_takes_its_memory_bounds_as_keyword_arguments(
         self, edited, images, long_track_point

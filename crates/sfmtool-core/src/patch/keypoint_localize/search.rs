@@ -139,7 +139,9 @@ pub(super) struct LooScratch {
     gram: Vec<f64>,
     /// Per-holdout IRLS weights over the **full** live index range; the
     /// held-out view's slot is pinned at `0` so `G·w` sums holdout members only.
-    w: Vec<f64>,
+    /// Read after [`loo_consensus_template`] to carry the same consensus to
+    /// the whole square for the ZNCC grid.
+    pub(super) w: Vec<f64>,
     /// `y = G·w` per live view (only holdout members are read).
     y: Vec<f64>,
     /// Per-holdout-member residuals `‖x_u − x̄‖`, compacted (skip the holdout).

@@ -9,7 +9,7 @@ use super::consensus::{
     sum_sq_diff_scalar,
 };
 use super::obliquity::{fill_kept_obliquity_priors, fronto_prior, OBLIQUITY_PRIOR_FLOOR};
-use super::support::view_render_patch;
+use super::support::{grid_bounds, square_cells, view_render_patch, windowed_zncc_at, zncc_grid};
 use super::znorm::{weighted_moments, weighted_moments_scalar, znorm_write, znorm_write_scalar};
 use super::*;
 use crate::camera::remap::{remap_bilinear, ImageU8, ImageU8Pyramid};
@@ -1644,4 +1644,126 @@ fn the_middle_zncc_follows_the_whole_patch_flat_channel_conventions() {
     );
     assert!(windowed_zncc_at(&textured, &flat, 1, n, &support.weights, &middle).is_nan());
     assert!(windowed_zncc_at(&textured, &textured, 1, n, &support.weights, &[]).is_nan());
+}
+
+// ---- The ZNCC grid -------------------------------------------------------------
+
+#[test]
+fn the_zncc_grid_splits_the_grid_into_symmetric_thirds() {
+    assert_eq!(grid_bounds(24), [0, 8, 16, 24]);
+    // The middle third takes the remainder, so the split stays symmetric.
+    assert_eq!(grid_bounds(25), [0, 8, 17, 25]);
+    assert_eq!(grid_bounds(26), [0, 8, 18, 26]);
+
+    let uniform = build_support(PatchWindow::Uniform, 24);
+    let cells = uniform.grid_cells(24);
+    for row in &cells {
+        for cell in row {
+            assert_eq!(cell.len(), 8 * 8);
+        }
+    }
+    // Row-major from the top-left: the first support pixel is in the top-left
+    // cell and the last in the bottom-right one.
+    assert_eq!(cells[0][0][0], 0);
+    assert_eq!(*cells[2][2].last().unwrap(), 24 * 24 - 1);
+
+    // Under a disk the cells still partition the support, and a corner cell
+    // holds only the part of its square the disk covers.
+    let disk = build_support(PatchWindow::GaussianDisk { sigma: 0.6 }, 24);
+    let cells = disk.grid_cells(24);
+    let mut every: Vec<usize> = cells.iter().flatten().flatten().copied().collect();
+    every.sort_unstable();
+    assert_eq!(every, (0..disk.pixels.len()).collect::<Vec<_>>());
+    assert_eq!(cells[1][1].len(), 8 * 8);
+    assert!(cells[0][0].len() < cells[0][1].len());
+    assert!(!cells[0][0].is_empty());
+}
+
+#[test]
+fn the_zncc_grid_reads_each_cell_unweighted() {
+    let r = 24;
+    let n = r * r;
+    // A steep window, so a weighted reading of a corner cell would differ from
+    // an unweighted one.
+    let support = build_support(PatchWindow::Gaussian { sigma: 0.3 }, r as u32);
+    let uniform = build_support(PatchWindow::Uniform, r as u32);
+    let cells = support.grid_cells(r as u32);
+    let texture =
+        |row: usize, col: usize| (row as f32 * 0.9).sin() * 40.0 + (col as f32 * 1.3).cos() * 30.0;
+    let noise = |row: usize, col: usize| ((row * 7 + col * 13) % 11) as f32 - 5.0;
+    let a = grid(r, |row, col| 100.0 + texture(row, col));
+    // The bottom-right cell holds its own texture; the others are an affine
+    // image of `a` with some noise.
+    let b = grid(r, |row, col| {
+        if row >= 16 && col >= 16 {
+            100.0 + (col as f32 * 2.3 - row as f32 * 0.8).sin() * 40.0
+        } else {
+            50.0 + 2.0 * texture(row, col) + 3.0 * noise(row, col)
+        }
+    });
+    let readings = zncc_grid(&a, &b, 1, n, &cells);
+    for (row, readings_row) in readings.iter().enumerate() {
+        for (col, &z) in readings_row.iter().enumerate() {
+            let unweighted = windowed_zncc_at(&a, &b, 1, n, &uniform.weights, &cells[row][col]);
+            assert_relative_eq!(z, unweighted, epsilon = 1e-9);
+            if (row, col) == (2, 2) {
+                assert!(z.abs() < 0.3, "the cell's own texture does not agree: {z}");
+            } else {
+                assert!(z > 0.9, "cell ({row}, {col}) agrees: {z}");
+            }
+        }
+    }
+    let weighted = windowed_zncc_at(&a, &b, 1, n, &support.weights, &cells[0][0]);
+    assert!((weighted - readings[0][0]).abs() > 1e-6);
+}
+
+#[test]
+fn a_flat_cell_has_no_zncc_grid_reading() {
+    let r = 24;
+    let n = r * r;
+    let support = build_support(PatchWindow::Uniform, r as u32);
+    let cells = support.grid_cells(r as u32);
+    let textured = |row: usize, col: usize| ((row * 3 + col * 5) % 7) as f32;
+    let a = grid(r, textured);
+    // The reference is flat over its top-middle cell only.
+    let b = grid(r, |row, col| {
+        if row < 8 && (8..16).contains(&col) {
+            9.0
+        } else {
+            textured(row, col)
+        }
+    });
+    let readings = zncc_grid(&a, &b, 1, n, &cells);
+    assert!(readings[0][1].is_nan());
+    assert_relative_eq!(readings[1][1], 1.0, epsilon = 1e-9);
+}
+
+#[test]
+fn the_square_s_cells_are_whole_rectangles() {
+    let cells = square_cells(24);
+    for row in &cells {
+        for cell in row {
+            assert_eq!(cell.len(), 8 * 8);
+        }
+    }
+    // Positions of the square itself: the top-left cell starts at the top-left
+    // pixel, and the bottom-right one ends at the last.
+    assert_eq!(cells[0][0][..3], [0, 1, 2]);
+    assert_eq!(cells[0][0][8], 24);
+    assert_eq!(*cells[2][2].last().unwrap(), 24 * 24 - 1);
+}
+
+#[test]
+fn a_cell_with_an_unread_pixel_has_no_zncc_grid_reading() {
+    let r = 24;
+    let n = r * r;
+    let cells = square_cells(r as u32);
+    let textured = |row: usize, col: usize| ((row * 3 + col * 5) % 7) as f32;
+    let a = grid(r, textured);
+    let mut b = a.clone();
+    // A pixel of the bottom-left cell could not be sampled.
+    b[20 * r + 2] = f32::NAN;
+    let readings = zncc_grid(&a, &b, 1, n, &cells);
+    assert!(readings[2][0].is_nan());
+    assert_relative_eq!(readings[2][1], 1.0, epsilon = 1e-9);
 }

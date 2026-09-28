@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use ndarray::Array2;
+use ndarray::{Array2, Array3};
 use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -136,6 +136,19 @@ fn shape_array(shape: [[f64; 2]; 2]) -> Array2<f64> {
     Array2::from_shape_vec((2, 2), shape.concat()).expect("four values in a 2x2")
 }
 
+/// A three-by-three grid as the `(3, 3)` array Python reads it as,
+/// `grid[row, col]` from the top-left cell, with NaN in a cell that has no
+/// reading.
+fn grid_array(grid: [[f64; 3]; 3]) -> Array2<f64> {
+    Array2::from_shape_vec((3, 3), grid.concat()).expect("nine values in a 3x3")
+}
+
+/// A grid of slide vectors as the `(3, 3, 2)` array Python reads it as,
+/// `slide[row, col] = [x, y]` from the top-left cell.
+fn slide_array(slide: [[[f64; 2]; 3]; 3]) -> Array3<f64> {
+    Array3::from_shape_vec((3, 3, 2), slide.concat().concat()).expect("eighteen values in a 3x3x2")
+}
+
 /// The dict form of one observation, with each stage's measurements under its
 /// own key and absent where that stage has not run.
 fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<'py, PyDict>> {
@@ -163,11 +176,23 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         if let Some(v) = m.zncc_middle {
             c.set_item("zncc_middle", v)?;
         }
+        if let Some(g) = m.zncc_grid {
+            c.set_item("zncc_grid", grid_array(g).into_pyarray(py))?;
+        }
         if let Some(v) = m.shift_px {
             c.set_item("shift_px", v)?;
         }
         if let Some(v) = m.localizability {
             c.set_item("localizability", v)?;
+        }
+        if let Some(v) = m.localizability_middle {
+            c.set_item("localizability_middle", v)?;
+        }
+        if let Some(g) = m.localizability_grid {
+            c.set_item("localizability_grid", grid_array(g).into_pyarray(py))?;
+        }
+        if let Some(s) = m.localizability_slide {
+            c.set_item("localizability_slide", slide_array(s).into_pyarray(py))?;
         }
         if let Some(s) = m.status {
             c.set_item("status", format!("{s:?}"))?;
@@ -188,6 +213,8 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("reprojection_error", m.reprojection_error),
             ("ray_angle_deg", m.ray_angle_deg),
             ("localizability", m.localizability),
+            // The middle of the same tile scored alone.
+            ("localizability_middle", m.localizability_middle),
             // Present exactly when the last fit refused the walk and left this
             // sighting at its seed; the number is how far the peak sat, and
             // `walked_zncc` what the localizer scored there.
@@ -198,6 +225,19 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             if let Some(value) = value {
                 t.set_item(key, value)?;
             }
+        }
+        // The same readings over each ninth of the tile, as `(3, 3)` arrays.
+        for (key, grid) in [
+            ("zncc_grid", m.zncc_grid),
+            ("localizability_grid", m.localizability_grid),
+            ("walked_zncc_grid", m.walked_zncc_grid),
+        ] {
+            if let Some(grid) = grid {
+                t.set_item(key, grid_array(grid).into_pyarray(py))?;
+            }
+        }
+        if let Some(s) = m.localizability_slide {
+            t.set_item("localizability_slide", slide_array(s).into_pyarray(py))?;
         }
         // The pixel that walk would have reached: `sight_observation` there
         // accepts it.

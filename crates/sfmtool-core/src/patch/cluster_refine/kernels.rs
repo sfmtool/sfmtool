@@ -19,7 +19,7 @@
 
 use super::prof;
 use crate::camera::remap::{ImageU8, ImageU8Pyramid};
-use crate::patch::normal_refine::{windowed_zncc_at, Support, FLAT_NORM_SQ_EPS};
+use crate::patch::normal_refine::{PartZncc, Parts, Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
 
 /// An integer pixel rectangle in level coordinates, half-open (`[x0, x1) ×
@@ -255,9 +255,12 @@ pub(super) struct SupportTables {
     pub(super) total_weight: f64,
     /// Window weights (f64), unpadded: the middle ZNCC's weights.
     pub(super) weights: Vec<f64>,
-    /// The support positions inside the grid's middle square
-    /// ([`Support::middle`]).
-    pub(super) middle: Vec<usize>,
+    /// The support positions the middle ZNCC is read over, and the square
+    /// positions the ZNCC grid is read over.
+    pub(super) parts: Parts,
+    /// The grid's side `R`: the ZNCC grid reads every pixel of the `R×R`
+    /// square, `p = row · R + col`.
+    pub(super) resolution: usize,
 }
 
 impl SupportTables {
@@ -285,7 +288,8 @@ impl SupportTables {
             w32,
             total_weight: support.total_weight,
             weights: support.weights.clone(),
-            middle: support.middle(resolution),
+            parts: Parts::new(support, resolution),
+            resolution: r,
         }
     }
 }
@@ -307,9 +311,13 @@ pub(super) struct TemplateKernel {
     /// `Σ kern` per channel (f64).
     pub(super) kern_sums: Vec<f64>,
     /// The reference's raw support samples for the surviving channels, planar
-    /// `channels × n`: what [`eval_zncc_middle`] correlates a member against
-    /// over the middle of the grid.
+    /// `channels × n`: what [`eval_zncc_parts`] correlates a member against
+    /// over parts of the grid.
     pub(super) samples: Vec<f32>,
+    /// The reference's raw samples over the whole `R×R` square for the same
+    /// channels, planar `channels × R²`, `NaN` where the square leaves the
+    /// image: what the ZNCC grid correlates a member against.
+    pub(super) square_samples: Vec<f32>,
 }
 
 /// The three per-channel accumulator sums of one fused pass, reduced to f64.
@@ -435,22 +443,21 @@ pub(super) fn eval_zncc_scalar(
     Some(score / tmpl.channels as f64)
 }
 
-/// The middle ZNCC of the member at `map`: its support samples against the
-/// template's, over the middle square of the grid only
-/// ([`SupportTables::middle`]).
+/// The member at `map` read against the template over parts of the grid
+/// ([`SupportTables::parts`]): the middle ZNCC and the ZNCC grid.
 ///
 /// The samples are the ones [`eval_zncc_scalar`] reads at the same map, with
 /// the same taps and the same channel pairing, so at the refinement's final
-/// map this is the whole-patch reading narrowed to the middle. A member
+/// map these are the whole-patch reading narrowed to each part. A member
 /// channel the image lacks reads as flat and contributes `0`, as it does to
-/// the whole-patch reading. `NaN` when a sample leaves the tile or the
-/// template's middle is flat.
-pub(super) fn eval_zncc_middle(
+/// the whole-patch reading. Every reading is `NaN` when a sample leaves the
+/// tile, and a single one is where the template is flat over its part.
+pub(super) fn eval_zncc_parts(
     map: &AffineCoreMap,
     tile: &LevelTile,
     tables: &SupportTables,
     tmpl: &TemplateKernel,
-) -> f64 {
+) -> PartZncc {
     let a = &map.a;
     let al = [
         a[0] as f32,
@@ -460,43 +467,59 @@ pub(super) fn eval_zncc_middle(
         a[4] as f32,
         (a[5] - 0.5 - tile.y0 as f64) as f32,
     ];
-    let n = tables.n;
     let (tw, th) = (tile.w as i64, tile.h as i64);
+    // The bilinear tap at grid position `(col, row)`, `None` off the tile.
+    let tap = |plane: &[f32], col: f32, row: f32| {
+        let gx = al[0] * col + al[1] * row + al[2];
+        let gy = al[3] * col + al[4] * row + al[5];
+        if !gx.is_finite() || !gy.is_finite() {
+            return None;
+        }
+        let x0 = gx.floor();
+        let y0 = gy.floor();
+        let ix = x0 as i64;
+        let iy = y0 as i64;
+        if ix < 0 || iy < 0 || ix + 1 >= tw || iy + 1 >= th {
+            return None;
+        }
+        let fx = gx - x0;
+        let fy = gy - y0;
+        let base = iy as usize * tile.w + ix as usize;
+        Some(
+            (1.0 - fx) * (1.0 - fy) * plane[base]
+                + fx * (1.0 - fy) * plane[base + 1]
+                + (1.0 - fx) * fy * plane[base + tile.w]
+                + fx * fy * plane[base + tile.w + 1],
+        )
+    };
+    let n = tables.n;
+    let r = tables.resolution;
+    let square = r * r;
     let mut sample = vec![0f32; tmpl.channels * n];
+    let mut square_sample = vec![0f32; tmpl.channels * square];
     for (tc, &src_c) in tmpl.src_channels.iter().enumerate() {
         if src_c >= tile.channels {
             continue;
         }
         let plane = tile.plane(src_c);
         for k in 0..n {
-            let gx = al[0] * tables.cols[k] + al[1] * tables.rows[k] + al[2];
-            let gy = al[3] * tables.cols[k] + al[4] * tables.rows[k] + al[5];
-            if !gx.is_finite() || !gy.is_finite() {
-                return f64::NAN;
-            }
-            let x0 = gx.floor();
-            let y0 = gy.floor();
-            let ix = x0 as i64;
-            let iy = y0 as i64;
-            if ix < 0 || iy < 0 || ix + 1 >= tw || iy + 1 >= th {
-                return f64::NAN;
-            }
-            let fx = gx - x0;
-            let fy = gy - y0;
-            let base = iy as usize * tile.w + ix as usize;
-            sample[tc * n + k] = (1.0 - fx) * (1.0 - fy) * plane[base]
-                + fx * (1.0 - fy) * plane[base + 1]
-                + (1.0 - fx) * fy * plane[base + tile.w]
-                + fx * fy * plane[base + tile.w + 1];
+            let Some(v) = tap(plane, tables.cols[k], tables.rows[k]) else {
+                return PartZncc::NAN;
+            };
+            sample[tc * n + k] = v;
+        }
+        // The whole square for the ZNCC grid; a pixel off the tile marks its
+        // cell as unread.
+        for p in 0..square {
+            square_sample[tc * square + p] =
+                tap(plane, (p % r) as f32, (p / r) as f32).unwrap_or(f32::NAN);
         }
     }
-    windowed_zncc_at(
-        &sample,
-        &tmpl.samples,
+    tables.parts.read(
+        (&sample, &tmpl.samples),
+        (&square_sample, &tmpl.square_samples),
         tmpl.channels,
-        n,
         &tables.weights,
-        &tables.middle,
     )
 }
 

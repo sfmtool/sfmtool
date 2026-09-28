@@ -430,6 +430,7 @@ def test_localize_keypoints_basis_cap_keeps_the_contract(
         assert is_basis.shape == views.shape
         assert np.asarray(r["keypoints"]).shape == (len(views), 2)
         assert np.asarray(r["loo_zncc"]).shape == (len(views),)
+        assert np.asarray(r["loo_zncc_grid"]).shape == (len(views), 3, 3)
         assert set(views.tolist()).issubset(set(view_sets[pid]))
         # Kept views stay in the input view-set order.
         order = {v: i for i, v in enumerate(view_sets[pid])}

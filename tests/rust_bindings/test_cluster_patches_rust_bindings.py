@@ -68,6 +68,7 @@ class TestRefineClusterPatches:
             "member_affine_shapes",
             "member_zncc",
             "member_zncc_middle",
+            "member_zncc_grid",
             "member_shift_px",
             "member_consistency_residual",
         }
@@ -80,6 +81,8 @@ class TestRefineClusterPatches:
         assert result["member_affine_shapes"].dtype == np.float64
         assert result["member_affine_shapes"].shape == (2, 2, 2)
         assert result["member_zncc"].dtype == np.float32
+        assert result["member_zncc_grid"].dtype == np.float32
+        assert result["member_zncc_grid"].shape == (2, 3, 3)
         assert result["member_shift_px"].dtype == np.float32
         assert result["member_consistency_residual"].dtype == np.float32
         assert result["member_consistency_residual"].shape == (2,)

@@ -177,6 +177,13 @@ fn run_recovery_case(
         result.member_zncc[other],
     );
     assert_eq!(result.member_zncc_middle[ref_k as usize], 1.0);
+    // And in every cell of the ZNCC grid.
+    for &z in result.member_zncc_grid[other].iter().flatten() {
+        assert!(z > 0.9, "grid {:?}", result.member_zncc_grid[other]);
+    }
+    for &z in result.member_zncc_grid[ref_k as usize].iter().flatten() {
+        assert!((z - 1.0).abs() < 1e-6, "reference grid {z}");
+    }
 
     // Ground truth in the refined direction (reference → other image).
     let (w_true, t_w) = if ref_k == 0 {

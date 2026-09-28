@@ -22,7 +22,9 @@ mod scorer;
 #[cfg(test)]
 mod tests;
 
-pub use scorer::{score_localizability_stack, Localizability};
+pub use scorer::{
+    score_localizability_parts, score_localizability_stack, Localizability, LocalizabilityParts,
+};
 
 pub(in crate::patch) use scorer::patch_localizability;
 

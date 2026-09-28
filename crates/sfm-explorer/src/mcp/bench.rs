@@ -1354,8 +1354,15 @@ fn cluster_measurement(observation: &Observation) -> Value {
         "zncc": finite(measured.zncc),
         // The same samples read over the middle of the patch only.
         "zncc_middle": finite(measured.zncc_middle),
+        // And over each ninth of the patch, rows from the top.
+        "zncc_grid": grid(measured.zncc_grid),
         "shift_px": finite(measured.shift_px),
         "localizability": finite(measured.localizability),
+        // The same tile's middle and each ninth of it, scored alone.
+        "localizability_middle": finite(measured.localizability_middle),
+        "localizability_grid": grid(measured.localizability_grid),
+        // Per cell, the direction a match could slide and how freely.
+        "localizability_slide": slides(measured.localizability_slide),
         "status": measured.status.map(|status| format!("{status:?}")),
     })
 }
@@ -1378,11 +1385,18 @@ fn track_measurement(observation: &Observation) -> Value {
         "zncc": finite(measured.zncc),
         // The same samples read over the middle of the tile only.
         "zncc_middle": finite(measured.zncc_middle),
+        // And over each ninth of the tile, rows from the top.
+        "zncc_grid": grid(measured.zncc_grid),
         "seed_shift_px": finite(measured.seed_shift_px),
         "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
         "localizability": finite(measured.localizability),
+        // The same tile's middle and each ninth of it, scored alone.
+        "localizability_middle": finite(measured.localizability_middle),
+        "localizability_grid": grid(measured.localizability_grid),
+        // Per cell, the direction a match could slide and how freely.
+        "localizability_slide": slides(measured.localizability_slide),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the ZNCC the localizer scored there. Accepting the walk is
@@ -1391,6 +1405,7 @@ fn track_measurement(observation: &Observation) -> Value {
         "walked_to": measured.walked_to,
         "walked_zncc": finite(measured.walked_zncc),
         "walked_zncc_middle": finite(measured.walked_zncc_middle),
+        "walked_zncc_grid": grid(measured.walked_zncc_grid),
         "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }
@@ -1402,4 +1417,16 @@ fn track_measurement(observation: &Observation) -> Value {
 /// what the panel's own `-` says.
 fn finite(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite())
+}
+
+/// A three-by-three grid as three rows of three, top row first, with null in a
+/// cell that has no reading, as [`finite`] has it; or null for no grid.
+fn grid(value: Option<[[f64; 3]; 3]>) -> Option<[[Option<f64>; 3]; 3]> {
+    value.map(|rows| rows.map(|row| row.map(|v| finite(Some(v)))))
+}
+
+/// A grid of slide vectors as three rows of three `[x, y]` pairs, top row
+/// first, with null in place of a cell that has no reading; or null for none.
+fn slides(value: Option<[[[f64; 2]; 3]; 3]>) -> Option<[[Option<[f64; 2]>; 3]; 3]> {
+    value.map(|rows| rows.map(|row| row.map(|v| v.iter().all(|x| x.is_finite()).then_some(v))))
 }

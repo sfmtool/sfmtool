@@ -11,7 +11,7 @@
 
 use rayon::prelude::*;
 
-use crate::patch::normal_refine::{build_support, PatchWindow, Support};
+use crate::patch::normal_refine::{build_support, Parts, PatchWindow, Support};
 
 /// Per-point localizability: the structure-tensor eigenvalues (summed form, the
 /// contrast-carrying raw Shi–Tomasi scale — `λ_sum = W·λ`), the weak-axis
@@ -166,8 +166,30 @@ pub(in crate::patch) fn patch_localizability(
         return Localizability::nan();
     }
     let (grad_row, grad_col) = central_diff_gradient(&gray, resolution);
+    let everything = 0..window.pixels.len();
+    tensor_localizability(
+        &grad_row,
+        &grad_col,
+        window,
+        everything,
+        |k| window.weights[k],
+        sigma_noise,
+    )
+}
+
+/// The [`Localizability`] of the structure tensor summed over the support
+/// positions `at`, position `k` weighted by `weight(k)`.
+fn tensor_localizability(
+    grad_row: &[f64],
+    grad_col: &[f64],
+    window: &Support,
+    at: impl IntoIterator<Item = usize>,
+    weight: impl Fn(usize) -> f64,
+    sigma_noise: f64,
+) -> Localizability {
     let (mut sxx, mut syy, mut sxy) = (0.0f64, 0.0f64, 0.0f64);
-    for (&p, &w) in window.pixels.iter().zip(&window.weights) {
+    for k in at {
+        let (p, w) = (window.pixels[k], weight(k));
         let gx = grad_col[p];
         let gy = grad_row[p];
         sxx += w * gx * gx;
@@ -182,6 +204,110 @@ pub(in crate::patch) fn patch_localizability(
         theta,
         sigma_pos_grid,
     }
+}
+
+/// One patch's weak-axis positional uncertainty over parts of its grid, beside
+/// the whole-patch [`Localizability::sigma_pos_grid`], in patch-grid px.
+///
+/// Each is the structure tensor of the same gradients summed over a part of
+/// the support alone, so it says whether that part pins a position by itself.
+/// A part has fewer pixels than the whole, so its uncertainty reads higher for
+/// the same texture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocalizabilityParts {
+    /// Over the middle square of the grid, the rows and columns `R/4 .. R -
+    /// R/4`, under the window weights.
+    pub middle: f64,
+    /// Over each cell of a three-by-three split of the whole `R×R` square
+    /// (rows and columns cut at `R/3` and `R - R/3`), with every pixel
+    /// weighted equally and the window's disk playing no part, so a corner
+    /// cell is as large as the centre one. `grid[row][col]` from the top-left
+    /// cell. The split and the weighting are the ZNCC grid's.
+    pub grid: [[f64; 3]; 3],
+    /// For each cell of [`Self::grid`], the direction a match could slide in
+    /// and how freely: the unit weak-axis vector `(cos θ, sin θ)` in the grid
+    /// frame (`x` column-right, `y` row-down) scaled by `1 - λ₂/λ₁`. The length
+    /// is near `1` on a straight edge, where the tile pins a position across
+    /// the edge and not along it, and near `0` where both axes are pinned
+    /// alike, as on a corner or a blob; a flat cell carries no direction and
+    /// reads `0`. The sign of the vector means nothing, since a slide goes
+    /// both ways.
+    pub slide: [[[f64; 2]; 3]; 3],
+}
+
+impl Localizability {
+    /// The weak-axis direction scaled by how much weaker that axis is:
+    /// [`LocalizabilityParts::slide`] for one part. `[0, 0]` when the tensor
+    /// is empty, and `NaN` when it was not scored.
+    fn slide(&self) -> [f64; 2] {
+        if self.lam1.is_nan() {
+            return [f64::NAN; 2];
+        }
+        if self.lam1 <= LAM2_FLOOR {
+            return [0.0; 2];
+        }
+        let strength = (1.0 - self.lam2.max(0.0) / self.lam1).clamp(0.0, 1.0);
+        [strength * self.theta.cos(), strength * self.theta.sin()]
+    }
+}
+
+/// Score one `R×R×C` patch as [`score_localizability_stack`] scores it, and
+/// over parts of its grid as well: the whole-patch [`Localizability`] and the
+/// [`LocalizabilityParts`] of the same gradients. Every value is `NaN` for an
+/// empty patch.
+pub fn score_localizability_parts(
+    patch: &[f32],
+    resolution: usize,
+    channels: usize,
+    window: PatchWindow,
+    sigma_noise: f64,
+) -> (Localizability, LocalizabilityParts) {
+    let empty = LocalizabilityParts {
+        middle: f64::NAN,
+        grid: [[f64::NAN; 3]; 3],
+        slide: [[[f64::NAN; 2]; 3]; 3],
+    };
+    if resolution == 0 || patch.len() != resolution * resolution * channels {
+        return (Localizability::nan(), empty);
+    }
+    let support = build_support(window, resolution as u32);
+    let (gray, valid) = luminance_grid(patch, resolution, channels);
+    if !valid {
+        return (Localizability::nan(), empty);
+    }
+    let (grad_row, grad_col) = central_diff_gradient(&gray, resolution);
+    // The whole tile and its middle over the support, under the window
+    // weights; the cells over the whole square, every pixel weighted equally.
+    let square = build_support(PatchWindow::Uniform, resolution as u32);
+    let score = |on: &Support, at: &[usize], weighted: bool| {
+        if at.is_empty() {
+            // A part with no pixels has no reading, not the floor's.
+            return Localizability::nan();
+        }
+        tensor_localizability(
+            &grad_row,
+            &grad_col,
+            on,
+            at.iter().copied(),
+            |k| if weighted { on.weights[k] } else { 1.0 },
+            sigma_noise,
+        )
+    };
+    let parts = Parts::new(&support, resolution as u32);
+    let everything: Vec<usize> = (0..support.pixels.len()).collect();
+    let whole = score(&support, &everything, true);
+    let cells = parts
+        .cells
+        .each_ref()
+        .map(|row| row.each_ref().map(|cell| score(&square, cell, false)));
+    (
+        whole,
+        LocalizabilityParts {
+            middle: score(&support, &parts.middle, true).sigma_pos_grid,
+            grid: cells.map(|row| row.map(|cell| cell.sigma_pos_grid)),
+            slide: cells.map(|row| row.map(|cell| cell.slide())),
+        },
+    )
 }
 
 /// Batch-score a `(P, R, R, C)` consensus stack (flat row-major, `P` patches of

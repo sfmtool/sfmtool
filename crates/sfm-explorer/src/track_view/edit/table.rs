@@ -21,7 +21,10 @@
 use sfmtool_core::bench::{EditableTrack, StageKind, Verdict};
 use sfmtool_core::SfmrReconstruction;
 
-use super::{measurements, provenance_text, TrackEdit, TrackEditResponse};
+use super::{
+    measurements, provenance_text, row_grids, sigma_cell_color, zncc_cell_color, RowGrids,
+    TrackEdit, TrackEditResponse,
+};
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
 
@@ -33,6 +36,11 @@ pub(crate) const TILE_SIZE: f32 = 48.0;
 pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 /// Width of the verdict control.
 const VERDICT_WIDTH: f32 = 72.0;
+/// Side of one cell of a three-by-three grid a row draws: room for the slide
+/// line the localizability grid draws in a cell.
+const GRID_CELL: f32 = 10.0;
+/// Side of a whole grid: three cells and the four lines of its border.
+const GRID_SIDE: f32 = 3.0 * GRID_CELL + 4.0;
 
 /// What one row drew, kept so that a test reads the table the app draws rather
 /// than a second computation of it.
@@ -50,6 +58,8 @@ pub(crate) struct RowSummary {
     pub painted: Verdict,
     /// The seven measurement cells, as printed.
     pub cells: [String; 7],
+    /// The two grids drawn beside the ZNCC and the sigma_pos cells.
+    pub grids: RowGrids,
     /// Whether the row drew a rendered tile, rather than the empty frame that
     /// stands in when there is nothing to render.
     pub tile: bool,
@@ -62,9 +72,11 @@ pub(super) struct ColumnLayout {
     image: f32,
     name: f32,
     zncc: f32,
+    zncc_grid: f32,
     shift: f32,
     offset: f32,
     sigma: f32,
+    sigma_grid: f32,
     error: f32,
     angle: f32,
     status: f32,
@@ -79,11 +91,15 @@ impl ColumnLayout {
         let name = image + 34.0;
         let zncc = name + 130.0;
         // Room for the whole-patch and the middle reading in percent,
-        // `92 / 61`, and for the `ZNCC (%)` heading.
-        let shift = zncc + 64.0;
+        // `100 / 100`, then the ZNCC grid.
+        let zncc_grid = zncc + 64.0;
+        let shift = zncc_grid + GRID_SIDE + 10.0;
         let offset = shift + 62.0;
         let sigma = offset + 62.0;
-        let error = sigma + 56.0;
+        // Room for the whole and the middle sigma_pos, `0.08 / 0.12`, then
+        // the localizability grid.
+        let sigma_grid = sigma + 76.0;
+        let error = sigma_grid + GRID_SIDE + 10.0;
         let angle = error + 54.0;
         let status = angle + 54.0;
         // The status cell holds a sentence at the track stage -- the reason a
@@ -96,9 +112,11 @@ impl ColumnLayout {
             image,
             name,
             zncc,
+            zncc_grid,
             shift,
             offset,
             sigma,
+            sigma_grid,
             error,
             angle,
             status,
@@ -142,6 +160,9 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
     square half the patch's width, read from the same samples. A high first number with a low \
     second one means the match comes from the patch's surroundings rather than from the \
     pixel's own neighbourhood.\n\n\
+    The grid beside them is the same samples read over each ninth of the patch, laid out as the \
+    tile is, with every pixel weighted equally: green at 100, yellow at 75, red at 50 and \
+    below, grey where the patch is flat. Hover it for the numbers.\n\n\
     At the cluster stage the match is against the reference's template. At the track stage it \
     is against the consensus of the other observations, with this one left out.";
 
@@ -154,7 +175,14 @@ const PROJECTION_OFFSET_TIP: &str = "How far the observation sits from where the
 
 const SIGMA_POS_TIP: &str = "How precisely this observation's own tile pins a position, as \
     the positional uncertainty in patch-grid pixels. Lower is better; a flat tile or a single \
-    straight edge scores high. The max \u{3c3}_pos bar judges it.";
+    straight edge scores high. The max \u{3c3}_pos bar judges the first number.\n\n\
+    The second number is the middle of the tile alone, the centred square half its width. The \
+    grid beside them is each ninth of the tile alone, laid out as the tile is: green at half \
+    the bar and below, red at twice the bar and above. A part has fewer pixels than the whole, \
+    so it reads higher for the same texture. A + in a box says that ninth alone pins a position \
+    in both directions as well as the bar asks of a whole tile. A line says it pins one \
+    direction only, and a match could slide along the line, as along an edge. A box with \
+    neither pins nothing. Hover the grid for the numbers.";
 
 const ERROR_TIP: &str = "The reprojection error against the triangulated position, in \
     pixels. Track stage only.";
@@ -276,6 +304,7 @@ impl TrackEdit {
             .copied()
             .unwrap_or(row.verdict);
         let cells = measurements(row, stage, &self.evaluation);
+        let grids = row_grids(row, stage, &self.evaluation);
         let name = recon
             .image_table
             .images
@@ -544,6 +573,50 @@ impl TrackEdit {
         text(cols.status, &status, text_color);
         text(cols.from, &provenance_text(row.provenance), weak);
 
+        // The two grids, faded with the numbers while an evaluation is on its
+        // way. Each is laid out as the tile is, so a cell sits over the part
+        // of the tile it read.
+        let fade = if number_color == weak { 0.45 } else { 1.0 };
+        let bar = track.thresholds.max_keypoint_uncertainty;
+        let drawn = [
+            (
+                cols.zncc_grid,
+                grids.zncc,
+                None,
+                &zncc_cell_color as &dyn Fn(f64) -> Option<egui::Color32>,
+                "zncc",
+            ),
+            (
+                cols.sigma_grid,
+                grids.sigma,
+                grids.sigma.zip(grids.slide).map(|(sigma, slide)| {
+                    std::array::from_fn(|row| {
+                        std::array::from_fn(|col| cell_mark(sigma[row][col], slide[row][col], bar))
+                    })
+                }),
+                &|sigma| sigma_cell_color(sigma, bar),
+                "sigma",
+            ),
+        ];
+        for (x, grid, marks, color, which) in drawn {
+            let Some(grid) = grid else {
+                continue;
+            };
+            let grid_rect = egui::Rect::from_min_size(
+                egui::pos2(x0 + x, cy - GRID_SIDE / 2.0),
+                egui::vec2(GRID_SIDE, GRID_SIDE),
+            );
+            draw_grid(ui, grid_rect, &grid, marks.as_ref(), color, fade);
+            ui.interact(
+                grid_rect,
+                ui.id().with(("track_view_grid", observation, which)),
+                egui::Sense::hover(),
+            )
+            .on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(grid_numbers(&grid, which == "zncc")).monospace());
+            });
+        }
+
         self.rows.push(RowSummary {
             observation,
             image: row.image,
@@ -551,9 +624,122 @@ impl TrackEdit {
             pinned: row.pinned,
             painted,
             cells,
+            grids,
             tile: tile.is_some(),
         });
     }
+}
+
+/// Paint a three-by-three grid into `rect`: a border, and each cell filled
+/// in the colour `color` gives its value, or the faint background where it
+/// gives none. With `marks`, each cell also carries its [`CellMark`], drawn
+/// dark over the colour.
+fn draw_grid(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    grid: &[[f64; 3]; 3],
+    marks: Option<&[[CellMark; 3]; 3]>,
+    color: &dyn Fn(f64) -> Option<egui::Color32>,
+    fade: f32,
+) {
+    let painter = ui.painter();
+    let visuals = ui.visuals();
+    painter.rect_filled(rect, 0.0, visuals.weak_text_color());
+    for (row, values) in grid.iter().enumerate() {
+        for (col, &value) in values.iter().enumerate() {
+            let min = rect.min
+                + egui::vec2(
+                    1.0 + col as f32 * (GRID_CELL + 1.0),
+                    1.0 + row as f32 * (GRID_CELL + 1.0),
+                );
+            let cell = egui::Rect::from_min_size(min, egui::vec2(GRID_CELL, GRID_CELL));
+            let fill = color(value).unwrap_or(visuals.faint_bg_color);
+            painter.rect_filled(cell, 0.0, fill.gamma_multiply(fade));
+            let stroke = egui::Stroke::new(
+                1.5,
+                egui::Color32::from_black_alpha(220).gamma_multiply(fade),
+            );
+            let c = cell.center();
+            match marks.map_or(CellMark::Nothing, |m| m[row][col]) {
+                CellMark::Nothing => {}
+                CellMark::Plus => {
+                    let arm = GRID_CELL / 2.0 - 1.5;
+                    painter
+                        .line_segment([c - egui::vec2(arm, 0.0), c + egui::vec2(arm, 0.0)], stroke);
+                    painter
+                        .line_segment([c - egui::vec2(0.0, arm), c + egui::vec2(0.0, arm)], stroke);
+                }
+                CellMark::Line(half) => {
+                    painter.line_segment([c - half, c + half], stroke);
+                }
+            }
+        }
+    }
+}
+
+/// What a localizability grid cell draws over its colour: whether that ninth
+/// of the tile pins a position in both directions, in one, or in neither.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum CellMark {
+    /// Neither direction is pinned; the colour says so already.
+    Nothing,
+    /// Both directions are pinned.
+    Plus,
+    /// Only the direction across the line is pinned, and a match could slide
+    /// along it: the half line from the cell's centre, in screen points. The
+    /// grid frame's `x` is the screen's right and its `y` the screen's down,
+    /// so the slide is drawn as it is.
+    Line(egui::Vec2),
+}
+
+/// The [`CellMark`] of a cell with localizability `sigma` and slide vector
+/// `slide`, against `bar`, the track's max sigma_pos.
+///
+/// `sigma` is the uncertainty along the cell's weak axis. The strong axis's is
+/// `sigma * sqrt(1 - |slide|)`, since `|slide|` is `1 - λ₂/λ₁` and each
+/// uncertainty goes as one over the root of its eigenvalue. An axis counts as
+/// pinned when its uncertainty is at or under the bar, the bar a whole tile is
+/// judged by: a `+` when the weak axis is pinned, and so both are; a line along
+/// the slide when only the strong axis is; nothing when neither is.
+pub(super) fn cell_mark(sigma: f64, slide: [f64; 2], bar: f64) -> CellMark {
+    let strength = slide[0].hypot(slide[1]);
+    if !sigma.is_finite() || !strength.is_finite() {
+        return CellMark::Nothing;
+    }
+    // A bar at 0 turns every row out; the marks still need one to judge by.
+    let bar = if bar > 0.0 {
+        bar
+    } else {
+        sfmtool_core::bench::Thresholds::default().max_keypoint_uncertainty
+    };
+    if sigma <= bar {
+        return CellMark::Plus;
+    }
+    let strong = sigma * (1.0 - strength.min(1.0)).sqrt();
+    if strong > bar || strength == 0.0 {
+        return CellMark::Nothing;
+    }
+    let along = egui::vec2(slide[0] as f32, slide[1] as f32) / strength as f32;
+    CellMark::Line(along * (GRID_CELL / 2.0 - 1.0))
+}
+
+/// A grid's nine values as its hover text shows them, three to a line: a
+/// ZNCC in percent, a sigma_pos to two decimals, and `-` for a cell with no
+/// reading.
+pub(super) fn grid_numbers(grid: &[[f64; 3]; 3], percent: bool) -> String {
+    grid.iter()
+        .map(|row| {
+            row.iter()
+                .map(|&value| match (value.is_finite(), percent) {
+                    (false, _) => format!("{:>5}", "-"),
+                    (true, true) => format!("{:>5.0}", 100.0 * value),
+                    (true, false) => format!("{value:>5.2}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// What *Accept walk* would do to `row`, as its hover text, or `None` for a row

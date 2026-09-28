@@ -167,6 +167,13 @@ pub struct ClusterRefineResult {
     /// parts of the patch away from its centre. `NaN` if not evaluated, or
     /// where the reference's middle is flat.
     pub member_zncc_middle: Vec<f32>,
+    /// `(M,)` the ZNCC grid beside [`Self::member_zncc`]: the member's samples
+    /// at the same final map against the reference's, read over each cell of
+    /// a three-by-three split of the grid (rows and columns cut at `R/3` and
+    /// `R - R/3`) with every pixel weighted equally, `grid[row][col]` from the
+    /// top-left cell. All `NaN` if not evaluated; one cell is `NaN` where the
+    /// reference is flat over it.
+    pub member_zncc_grid: Vec<[[f32; 3]; 3]>,
     /// `(M,)` translation drift from the SIFT seed, source-image pixels
     /// (`NaN` if not evaluated).
     pub member_shift_px: Vec<f32>,

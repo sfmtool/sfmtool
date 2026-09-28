@@ -933,11 +933,13 @@ An agent that has just made a step reads `evaluating` and the previous numbers,
 and reads again until it says `current`. `get_bench_track` is
 Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
-measurements where they exist -- at both stages `zncc_middle` beside `zncc`
-(the same samples read over the middle square of the patch, § "The middle
-ZNCC" of [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), at the track stage
+measurements where they exist -- at both stages `zncc_middle` and `zncc_grid`
+beside `zncc` (the same samples read over the middle square of the patch and
+over each ninth of it, § "The middle ZNCC" and § "The ZNCC grid" of
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md)), and
+`localizability_middle`, `localizability_grid` and `localizability_slide` beside `localizability`, at the track stage
 the two distances
-(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc` and `walked_zncc_middle` for a row the last fit
+(`seed_shift_px` and `projection_offset_px`), `walked_px`, `walked_to`, `walked_zncc`, `walked_zncc_middle` and `walked_zncc_grid` for a row the last fit
 refused to move (`sight_bench_observation` at `walked_to` accepts that walk), and, for a row the evaluation could
 not score, the `reason` sentence in place of a ZNCC. The track stage's own data
 carries `at_infinity` with the coordinate under `direction` or `position`, the

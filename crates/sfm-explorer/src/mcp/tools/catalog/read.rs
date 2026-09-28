@@ -277,12 +277,27 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           background behind a small near object, the far side of a depth edge, \
                           or a texture that repeats along the epipolar line. zncc_middle is null \
                           where zncc is, where the middle is flat, and on a track read back \
-                          from a committed point before it is evaluated. A track-stage \
+                          from a committed point before it is evaluated. Both blocks also carry \
+                          zncc_grid: the same samples correlated over each cell of a three by \
+                          three split of the patch (8 x 8 cells of a 24 x 24 grid), every pixel \
+                          weighted equally, as three rows of three from the top-left, in the \
+                          layout the patch tile is drawn in. It says where in the patch an \
+                          agreement or a disagreement is; a cell is null where the patch is flat \
+                          over it, and the grid is null where zncc is. Beside localizability \
+                          (sigma_pos of the observation's own tile, in grid px) are \
+                          localizability_middle, the middle square of the same tile scored \
+                          alone, and localizability_grid, each cell of the same split scored \
+                          alone with every pixel weighted equally, and localizability_slide, per \
+                          cell an [x, y] vector (x column-right, y row-down) along which a match \
+                          could slide, of length 1 - lambda2/lambda1: near 1 on a straight edge, \
+                          near 0 on a corner or where the cell is flat. A part has fewer pixels \
+                          than the whole, so it reads higher for the same texture. Both grids \
+                          cover the whole square, corners included. A track-stage \
                           observation the last \
                           fit kept at its seed carries walked_px (how far the fit wanted to move \
                           it), walked_to (the pixel it would have reached), walked_zncc (the \
                           ZNCC scored there, beside the row's own zncc read at the seed) and \
-                          walked_zncc_middle (the middle reading there); \
+                          walked_zncc_middle and walked_zncc_grid (the parts' readings there); \
                           sight_bench_observation with walked_to as the pixel accepts the walk.",
             kind: Read,
             schema: object(

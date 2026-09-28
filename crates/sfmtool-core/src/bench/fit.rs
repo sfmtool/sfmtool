@@ -704,6 +704,7 @@ pub(super) fn fit_track(
         measurement.walked_to = None;
         measurement.walked_zncc = None;
         measurement.walked_zncc_middle = None;
+        measurement.walked_zncc_grid = None;
         measurement.keypoint = match fits.get(&i) {
             Some(fit) => {
                 let walked = seed.map(|s| (fit.keypoint[0] - s[0]).hypot(fit.keypoint[1] - s[1]));
@@ -715,6 +716,7 @@ pub(super) fn fit_track(
                         measurement.walked_to = Some(fit.keypoint);
                         measurement.walked_zncc = fit.zncc;
                         measurement.walked_zncc_middle = fit.zncc_middle;
+                        measurement.walked_zncc_grid = fit.zncc_grid;
                         kept_at_seed += 1;
                         Some([seed[0] as f32, seed[1] as f32])
                     }
@@ -804,6 +806,8 @@ struct Fit {
     zncc: Option<f64>,
     /// The same reading over the middle of the tile, when there is one.
     zncc_middle: Option<f64>,
+    /// The same reading over each cell of the ZNCC grid, when `zncc` is there.
+    zncc_grid: Option<[[f64; 3]; 3]>,
 }
 
 /// Localize and refine one round's observations against `frame`, and record
@@ -886,12 +890,18 @@ fn fit_round(
             .get(slot)
             .copied()
             .filter(|z| zncc.is_some() && z.is_finite());
+        let zncc_grid = localized
+            .loo_zncc_grid
+            .get(slot)
+            .copied()
+            .filter(|_| zncc.is_some());
         fits.insert(
             i,
             Fit {
                 keypoint,
                 zncc,
                 zncc_middle,
+                zncc_grid,
             },
         );
     }

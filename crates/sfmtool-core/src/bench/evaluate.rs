@@ -42,7 +42,7 @@ use crate::patch::keypoint_localize::{
     keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
     KeypointLocalizeParams, LocalizeError,
 };
-use crate::patch::localizability::{score_localizability_stack, SIGMA_NOISE};
+use crate::patch::localizability::{score_localizability_parts, SIGMA_NOISE};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
@@ -629,6 +629,9 @@ pub(super) fn evaluate_cluster(
         });
         measurement.zncc = finite(f64::from(result.member_zncc[k]));
         measurement.zncc_middle = finite(f64::from(result.member_zncc_middle[k]));
+        measurement.zncc_grid = measurement
+            .zncc
+            .map(|_| result.member_zncc_grid[k].map(|row| row.map(f64::from)));
         measurement.shift_px = finite(f64::from(result.member_shift_px[k]));
         measurement.status = Some(status);
         if fitted {
@@ -653,11 +656,14 @@ pub(super) fn evaluate_cluster(
                 measurement.seed_shape,
                 &params,
             );
-            next.observations[i]
+            let next_measurement = next.observations[i]
                 .cluster
                 .as_mut()
-                .expect("the same member")
-                .localizability = sigma;
+                .expect("the same member");
+            next_measurement.localizability = sigma.whole;
+            next_measurement.localizability_middle = sigma.middle;
+            next_measurement.localizability_grid = sigma.grid;
+            next_measurement.localizability_slide = sigma.slide;
         }
         progress_note!(phase, "{} observations", members.len());
     }
@@ -701,6 +707,37 @@ pub(super) fn evaluate_cluster(
     ))
 }
 
+/// One tile's localizability, `sigma_pos` in grid px: over the whole tile and
+/// over its parts.
+#[derive(Default)]
+struct TileSigma {
+    whole: Option<f64>,
+    middle: Option<f64>,
+    grid: Option<[[f64; 3]; 3]>,
+    slide: Option<[[[f64; 2]; 3]; 3]>,
+}
+
+/// Score an `R×R×C` tile, whole and by parts. Every value is `None` when the
+/// whole-tile score is not finite.
+fn score_tile(
+    samples: &[f32],
+    resolution: usize,
+    channels: usize,
+    window: crate::patch::normal_refine::PatchWindow,
+) -> TileSigma {
+    let (whole, parts) =
+        score_localizability_parts(samples, resolution, channels, window, SIGMA_NOISE);
+    match finite(whole.sigma_pos_grid) {
+        Some(sigma) => TileSigma {
+            whole: Some(sigma),
+            middle: finite(parts.middle),
+            grid: Some(parts.grid),
+            slide: Some(parts.slide),
+        },
+        None => TileSigma::default(),
+    }
+}
+
 /// One observation's own tile localizability, `sigma_pos` in template-grid px,
 /// or `None` when the geometry is degenerate or the tile leaves the pyramid.
 fn tile_localizability(
@@ -708,13 +745,13 @@ fn tile_localizability(
     position: [f64; 2],
     shape: [[f64; 2]; 2],
     params: &ClusterRefineParams,
-) -> Option<f64> {
-    let grid = sample_member_grid(pyramid, position, shape, params)?;
+) -> TileSigma {
+    let Some(grid) = sample_member_grid(pyramid, position, shape, params) else {
+        return TileSigma::default();
+    };
     let resolution = params.resolution.max(2) as usize;
     let channels = grid.len() / (resolution * resolution);
-    let scored =
-        score_localizability_stack(&grid, 1, resolution, channels, params.window, SIGMA_NOISE);
-    finite(scored[0].sigma_pos_grid)
+    score_tile(&grid, resolution, channels, params.window)
 }
 
 // ---- The track stage -------------------------------------------------------
@@ -875,6 +912,8 @@ struct Reading {
     zncc: f64,
     /// The same reading over the middle of the tile.
     zncc_middle: f64,
+    /// The same reading over each cell of the ZNCC grid.
+    zncc_grid: [[f64; 3]; 3],
     /// How far that peak sits from the observation's own keypoint, in
     /// source-image px.
     seed_shift_px: f64,
@@ -953,6 +992,7 @@ fn evaluate_track(
             measurement.zncc_middle = measurement
                 .zncc
                 .and(reading.and_then(|r| finite(r.zncc_middle)));
+            measurement.zncc_grid = measurement.zncc.and(reading.map(|r| r.zncc_grid));
             measurement.seed_shift_px = reading.and_then(|r| finite(r.seed_shift_px));
             measurement.reason = match measurement.zncc {
                 Some(_) => None,
@@ -962,6 +1002,9 @@ fn evaluate_track(
             measurement.reprojection_error = None;
             measurement.ray_angle_deg = None;
             measurement.localizability = None;
+            measurement.localizability_middle = None;
+            measurement.localizability_grid = None;
+            measurement.localizability_slide = None;
             if let Some(pixel) = seed_of(observation) {
                 // The offset is measured from the **patch's** projection,
                 // because that is the anchor the localizer renders its tile
@@ -977,8 +1020,11 @@ fn evaluate_track(
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
-                measurement.localizability =
-                    patch_tile_localizability(&frame, view, pixel, resolution, window);
+                let sigma = patch_tile_localizability(&frame, view, pixel, resolution, window);
+                measurement.localizability = sigma.whole;
+                measurement.localizability_middle = sigma.middle;
+                measurement.localizability_grid = sigma.grid;
+                measurement.localizability_slide = sigma.slide;
             }
             if measurement.zncc.is_some() {
                 measured += 1;
@@ -1089,6 +1135,7 @@ fn read_round(
             Reading {
                 zncc,
                 zncc_middle: localized.loo_zncc_middle[slot],
+                zncc_grid: localized.loo_zncc_grid[slot],
                 seed_shift_px: shift,
             },
         );
@@ -1202,21 +1249,20 @@ pub(super) fn observation_metrics(
 
 /// The localizability of what one view shows of the patch at its keypoint:
 /// the tile rendered through the keypoint-anchored frame, scored by the same
-/// kernel the consensus is scored by.
-pub(super) fn patch_tile_localizability(
+/// kernel the consensus is scored by, whole and by parts.
+fn patch_tile_localizability(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: [f64; 2],
     resolution: usize,
     window: crate::patch::normal_refine::PatchWindow,
-) -> Option<f64> {
+) -> TileSigma {
     let anchored = patch.anchored_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let frame = anchored.as_ref().unwrap_or(patch);
     let channels = view.pyramid.level(0).channels() as usize;
     let tile = render_bitmap(frame, view, resolution, channels);
     let samples: Vec<f32> = tile.iter().map(|&v| f32::from(v)).collect();
-    let scored = score_localizability_stack(&samples, 1, resolution, channels, window, SIGMA_NOISE);
-    finite(scored[0].sigma_pos_grid)
+    score_tile(&samples, resolution, channels, window)
 }
 
 /// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame, the

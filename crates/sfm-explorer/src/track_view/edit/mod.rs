@@ -708,6 +708,101 @@ fn zncc_pair(whole: Option<f64>, middle: Option<f64>, unit: &str) -> String {
     }
 }
 
+/// A patch localizability as a table cell prints it, sigma_pos in grid px:
+/// the whole tile's, then its middle square's (`0.08 / 0.12`).
+///
+/// `-` stands for a reading that is not there, as [`zncc_text`] has it. Two
+/// decimals, so the pair fits one column.
+pub(crate) fn sigma_text(whole: Option<f64>, middle: Option<f64>) -> String {
+    let number = |value: f64| {
+        if value.is_finite() {
+            format!("{value:.2}")
+        } else {
+            "NaN".to_string()
+        }
+    };
+    match whole {
+        None => "-".to_string(),
+        Some(whole) => format!(
+            "{} / {}",
+            number(whole),
+            middle.map_or_else(|| "-".to_string(), number)
+        ),
+    }
+}
+
+/// The two three-by-three grids a row draws: the ZNCC grid and the
+/// localizability grid of the measurement its stage carries.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct RowGrids {
+    /// The ZNCC of each cell, `grid[row][col]` from the top-left cell.
+    pub zncc: Option<[[f64; 3]; 3]>,
+    /// The localizability of each cell, sigma_pos in grid px.
+    pub sigma: Option<[[f64; 3]; 3]>,
+    /// Per cell, the direction a match could slide in, scaled by how freely.
+    pub slide: Option<[[[f64; 2]; 3]; 3]>,
+}
+
+/// The grids of `observation` at `stage`, or none while the evaluation is
+/// refused or failed, when the row's cells print `-` too.
+fn row_grids(observation: &Observation, stage: StageKind, evaluation: &Evaluation) -> RowGrids {
+    if matches!(evaluation, Evaluation::Refused(_) | Evaluation::Failed(_)) {
+        return RowGrids::default();
+    }
+    match stage {
+        StageKind::Cluster => observation
+            .cluster
+            .as_ref()
+            .map_or_else(RowGrids::default, |m| RowGrids {
+                zncc: m.zncc_grid,
+                sigma: m.localizability_grid,
+                slide: m.localizability_slide,
+            }),
+        StageKind::Track => observation
+            .track
+            .as_ref()
+            .map_or_else(RowGrids::default, |m| RowGrids {
+                zncc: m.zncc_grid,
+                sigma: m.localizability_grid,
+                slide: m.localizability_slide,
+            }),
+    }
+}
+
+/// The colour a ZNCC grid cell is drawn in: red at `0.5` and below, green at
+/// `1`, through yellow between. `None` for a cell with no reading.
+pub(crate) fn zncc_cell_color(zncc: f64) -> Option<egui::Color32> {
+    zncc.is_finite()
+        .then(|| red_to_green(((zncc - 0.5) / 0.5).clamp(0.0, 1.0)))
+}
+
+/// The colour a localizability grid cell is drawn in, against `bar`, the
+/// track's max sigma_pos: green at half the bar and below, red at twice the
+/// bar and above, through yellow between on a log scale, so each doubling of
+/// the uncertainty moves the colour the same distance. `None` for a cell with
+/// no reading.
+pub(crate) fn sigma_cell_color(sigma: f64, bar: f64) -> Option<egui::Color32> {
+    if !sigma.is_finite() {
+        return None;
+    }
+    // A bar at 0 turns every row out; the colours still need a scale.
+    let bar = if bar > 0.0 {
+        bar
+    } else {
+        Thresholds::default().max_keypoint_uncertainty
+    };
+    let t = ((sigma / bar).max(f64::MIN_POSITIVE).log2() + 1.0) / 2.0;
+    Some(red_to_green(1.0 - t.clamp(0.0, 1.0)))
+}
+
+/// Red at `0`, yellow at `0.5`, green at `1`.
+fn red_to_green(t: f64) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let red = (2.0 * (1.0 - t)).min(1.0);
+    let green = (2.0 * t).min(1.0);
+    egui::Color32::from_rgb((220.0 * red) as u8, (200.0 * green) as u8, 40)
+}
+
 /// The minimum-ZNCC slider's label, in one constant so the tests aim at the
 /// label drawn.
 pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC (%)";
@@ -987,7 +1082,10 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 number(m.and_then(|m| m.shift_px), 2),
                 "-".to_string(),
-                number(m.and_then(|m| m.localizability), 3),
+                sigma_text(
+                    m.and_then(|m| m.localizability),
+                    m.and_then(|m| m.localizability_middle),
+                ),
                 "-".to_string(),
                 "-".to_string(),
                 m.and_then(|m| m.status)
@@ -1000,7 +1098,10 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 7] {
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 number(m.and_then(|m| m.seed_shift_px), 2),
                 number(m.and_then(|m| m.projection_offset_px), 2),
-                number(m.and_then(|m| m.localizability), 3),
+                sigma_text(
+                    m.and_then(|m| m.localizability),
+                    m.and_then(|m| m.localizability_middle),
+                ),
                 number(m.and_then(|m| m.reprojection_error), 2),
                 number(m.and_then(|m| m.ray_angle_deg), 2),
                 // A row without a score says which of the reading's refusals it

@@ -96,6 +96,136 @@ impl Support {
             .map(|(k, _)| k)
             .collect()
     }
+
+    /// The positions in `pixels` that fall in each cell of the grid's
+    /// [`grid_bounds`] three-by-three split, row-major from the top-left cell.
+    /// Over a support that does not cover the square, a corner cell holds only
+    /// the part of its square the support covers; [`square_cells`] is the
+    /// split of the whole square.
+    pub(in crate::patch) fn grid_cells(&self, resolution: u32) -> [[Vec<usize>; 3]; 3] {
+        let r = resolution as usize;
+        let bounds = grid_bounds(resolution);
+        let third = |i: usize| (0..3).find(|&t| i < bounds[t + 1]).unwrap_or(2);
+        let mut cells: [[Vec<usize>; 3]; 3] = Default::default();
+        for (k, &p) in self.pixels.iter().enumerate() {
+            cells[third(p / r)][third(p % r)].push(k);
+        }
+        cells
+    }
+}
+
+/// Where an `R×R` patch grid's rows, and its columns, split into the thirds a
+/// ZNCC grid is read over: `[0, R/3, R - R/3, R]`. Symmetric about the grid's
+/// centre, so when `R` is not a multiple of three the middle third takes the
+/// remainder, and a `24×24` grid splits into `8×8` cells.
+pub(in crate::patch) fn grid_bounds(resolution: u32) -> [usize; 4] {
+    let r = resolution as usize;
+    [0, r / 3, r - r / 3, r]
+}
+
+/// The cells of the [`grid_bounds`] split over the **whole** `R×R` square, as
+/// grid positions `row · R + col`, `cells[row][col]` from the top-left cell.
+/// Every cell is a full rectangle: the window's disk plays no part.
+pub(in crate::patch) fn square_cells(resolution: u32) -> [[Vec<usize>; 3]; 3] {
+    build_support(PatchWindow::Uniform, resolution).grid_cells(resolution)
+}
+
+/// The **ZNCC grid** of two sample sets: one ZNCC per cell of `cells`,
+/// `grid[row][col]` from the top-left cell.
+///
+/// Each cell is read the way [`windowed_zncc_at`] reads a subset, with the
+/// same channel and flat conventions, but with every pixel weighted equally.
+/// `NaN` in a cell where no channel of `reference` carries texture, and in a
+/// cell holding a non-finite value in either set, which is how a caller marks
+/// a pixel it could not sample.
+pub(in crate::patch) fn zncc_grid(
+    sample: &[f32],
+    reference: &[f32],
+    channels: usize,
+    n: usize,
+    cells: &[[Vec<usize>; 3]; 3],
+) -> [[f64; 3]; 3] {
+    let sampled = |at: &[usize]| {
+        (0..channels).all(|c| {
+            at.iter()
+                .all(|&k| sample[c * n + k].is_finite() && reference[c * n + k].is_finite())
+        })
+    };
+    cells.each_ref().map(|row| {
+        row.each_ref().map(|at| {
+            if sampled(at) {
+                zncc_over(sample, reference, channels, n, |_| 1.0, at)
+            } else {
+                f64::NAN
+            }
+        })
+    })
+}
+
+/// The parts of a patch that the readings beside a whole-patch ZNCC are taken
+/// over: the middle square, as positions of a [`Support`], and the nine cells
+/// of the ZNCC grid, as positions of the whole `R×R` square.
+pub(in crate::patch) struct Parts {
+    /// [`Support::middle`].
+    pub middle: Vec<usize>,
+    /// [`square_cells`].
+    pub cells: [[Vec<usize>; 3]; 3],
+    /// `R²`, the length of one channel of a sample set over the square.
+    pub square: usize,
+}
+
+/// The readings of one sample set against a reference over the [`Parts`] of
+/// the grid: the middle ZNCC and the ZNCC grid.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::patch) struct PartZncc {
+    /// The windowed ZNCC over the middle square ([`windowed_zncc_at`]).
+    pub middle: f64,
+    /// The unweighted ZNCC of each cell of the whole square ([`zncc_grid`]).
+    pub grid: [[f64; 3]; 3],
+}
+
+impl PartZncc {
+    /// No reading: every value `NaN`.
+    pub const NAN: PartZncc = PartZncc {
+        middle: f64::NAN,
+        grid: [[f64::NAN; 3]; 3],
+    };
+}
+
+impl Parts {
+    pub(in crate::patch) fn new(support: &Support, resolution: u32) -> Parts {
+        Parts {
+            middle: support.middle(resolution),
+            cells: square_cells(resolution),
+            square: (resolution as usize).pow(2),
+        }
+    }
+
+    /// Read a sample set against a reference over each part. `on_support` is
+    /// the pair over the support's pixels, planar `[c · n + k]` with `n` the
+    /// length of `weights`, the support's window weights; `on_square` is the
+    /// pair over the whole square, planar `[c · R² + p]`, with a non-finite
+    /// value wherever a pixel could not be sampled.
+    pub(in crate::patch) fn read(
+        &self,
+        on_support: (&[f32], &[f32]),
+        on_square: (&[f32], &[f32]),
+        channels: usize,
+        weights: &[f64],
+    ) -> PartZncc {
+        let n = weights.len();
+        PartZncc {
+            middle: windowed_zncc_at(
+                on_support.0,
+                on_support.1,
+                channels,
+                n,
+                weights,
+                &self.middle,
+            ),
+            grid: zncc_grid(on_square.0, on_square.1, channels, self.square, &self.cells),
+        }
+    }
 }
 
 /// The channel-averaged windowed ZNCC of two sample sets over a subset `at` of
@@ -120,19 +250,32 @@ pub(in crate::patch) fn windowed_zncc_at(
     weights: &[f64],
     at: &[usize],
 ) -> f64 {
-    let total: f64 = at.iter().map(|&k| weights[k]).sum();
+    zncc_over(sample, reference, channels, n, |k| weights[k], at)
+}
+
+/// [`windowed_zncc_at`] with the weight of support position `k` given by
+/// `weight(k)`.
+fn zncc_over(
+    sample: &[f32],
+    reference: &[f32],
+    channels: usize,
+    n: usize,
+    weight: impl Fn(usize) -> f64,
+    at: &[usize],
+) -> f64 {
+    let total: f64 = at.iter().map(|&k| weight(k)).sum();
     if at.is_empty() || total <= 0.0 {
         return f64::NAN;
     }
     let moments = |col: &[f32]| {
         let mean = at
             .iter()
-            .map(|&k| weights[k] * f64::from(col[k]))
+            .map(|&k| weight(k) * f64::from(col[k]))
             .sum::<f64>()
             / total;
         let norm_sq = at
             .iter()
-            .map(|&k| weights[k] * (f64::from(col[k]) - mean).powi(2))
+            .map(|&k| weight(k) * (f64::from(col[k]) - mean).powi(2))
             .sum::<f64>();
         (mean, norm_sq)
     };
@@ -151,7 +294,7 @@ pub(in crate::patch) fn windowed_zncc_at(
         }
         let cross: f64 = at
             .iter()
-            .map(|&k| weights[k] * (f64::from(a[k]) - mean_a) * (f64::from(b[k]) - mean_b))
+            .map(|&k| weight(k) * (f64::from(a[k]) - mean_a) * (f64::from(b[k]) - mean_b))
             .sum();
         sum += cross / (norm_a * norm_b).sqrt();
     }
