@@ -423,11 +423,13 @@ def _constellation_at(ctx, image, at, pixel, opts):
 
 def _keypoints_near(ctx, image, pixel, radius_px, skip_px, limit):
     """Rows of ``image``'s keypoints within ``radius_px`` of the pixel and
-    further than ``skip_px``, nearest first."""
+    further than ``skip_px``, nearest first; rows at one distance (SIFT puts
+    two keypoints at one position when it finds two orientations there) keep
+    their order, as the core sources keep them."""
     xy, _ = ctx.keypoints(image)
     d = np.linalg.norm(np.asarray(xy, float) - np.asarray(pixel, float), axis=1)
     rows = np.flatnonzero((d <= radius_px) & (d > skip_px))
-    return rows[np.argsort(d[rows])][:limit]
+    return rows[np.argsort(d[rows], kind="stable")][:limit]
 
 
 def from_constellation(ctx, image, pixel, opts):
@@ -628,13 +630,23 @@ def _rust_tracks(ctx, image, pixel, opts):
 
 
 def _rust_inputs(ctx):
-    """The dataset's ``NearbyTrackSources``, built on first use and kept: the
-    cluster-patches clusters."""
+    """The dataset's ``NearbyTrackSources``, built on first use and kept: every
+    image's keypoints and ``.sift`` descriptors and the cluster-patches
+    clusters."""
     ds = ctx.dataset
     if getattr(ds, "_nearby_sources", None) is None:
         from sfmtool._sfmtool import bench as B
+        from sfmtool.sift.file import get_sift_path_for_image
 
-        ds._nearby_sources = B.NearbyTrackSources(ctx.edited, matches=ds.matches)
+        ds._nearby_sources = B.NearbyTrackSources(
+            ctx.edited,
+            keypoints=[tuple(kp) for kp in ds.keypoints],
+            matches=ds.matches,
+            sift=[
+                str(get_sift_path_for_image(ds.prepared.workspace / name))
+                for name in ds.image_names
+            ],
+        )
     return ds._nearby_sources
 
 
@@ -657,10 +669,35 @@ def _rust_clusters(ctx, image, pixel, opts):
     )
 
 
+def _rust_guided(ctx, image, pixel, opts):
+    """:func:`from_guided` by the core ``guided_matches``."""
+    from sfmtool._sfmtool import bench as B
+
+    return B.guided_matches(
+        ctx.edited,
+        ctx.pyramids,
+        _rust_inputs(ctx),
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        options={
+            "radius_px": float(opts["guided_radius_px"]),
+            "max_keypoints": int(opts["guided_max"]),
+            "skip_px": float(opts["guided_skip_px"]),
+            "epipolar_px": float(opts["guided_epipolar_px"]),
+            "ratio": float(opts["guided_ratio"]),
+            "max_distance": float(opts["guided_max_dist"]),
+            "loose_distance": float(opts["guided_loose_dist"]),
+            "min_views": int(opts["guided_min_views"]),
+            "max_reproj_px": float(opts["max_reproj_px"]),
+        },
+    )
+
+
 # The sources moved into core, by the harness's name for each.
 _RUST_SOURCES = {
     "tracks": _rust_tracks,
     "clusters": _rust_clusters,
+    "guided": _rust_guided,
 }
 
 
@@ -683,7 +720,7 @@ SOURCES = {
     "tracks": _by_impl("tracks", from_tracks),
     "clusters": _by_impl("clusters", from_clusters),
     "constellation": from_constellation,
-    "guided": from_guided,
+    "guided": _by_impl("guided", from_guided),
     "sweep": from_sweep,
 }
 

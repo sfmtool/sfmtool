@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the matching sources of finding the tracks near a pixel:
-``bench.nearby_points``.
+``bench.nearby_points``, ``bench.nearby_cluster_tracks`` and
+``bench.guided_matches``, with ``bench.NearbyTrackSources``.
 
 The capture is the 17-image seoul_bull fixture the other bench tests use. A
 point is deleted from the version and the query is made at one of its pixels,
 the way the track-at-pixel harness holds a point out.
 """
+
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -89,16 +92,23 @@ def test_the_points_near_the_pixel_are_found_without_the_held_out_one(
         bench.nearby_points(edited, pyramids, 99, pixel)
 
 
+def sift_paths(embedded):  # noqa: F811
+    from sfmtool.sift.file import get_sift_path_for_image
+
+    workspace = Path(embedded.workspace_dir)
+    return [str(get_sift_path_for_image(workspace / n)) for n in embedded.image_names]
+
+
 @pytest.fixture(scope="module")
 def sources(embedded):  # noqa: F811
-    from pathlib import Path
-
     from sfmtool._sfmtool.io import MatchesFile
 
     matches = sorted(Path(embedded.workspace_dir).glob("matches/*.matches"))
     assert matches, "the fixture workspace holds a clusters .matches"
     return bench.NearbyTrackSources(
-        EditedReconstruction(embedded), matches=MatchesFile(str(matches[0]))
+        EditedReconstruction(embedded),
+        matches=MatchesFile(str(matches[0])),
+        sift=sift_paths(embedded),
     )
 
 
@@ -131,8 +141,61 @@ def test_the_clusters_near_the_pixel_are_vetted_by_triangulation(
         )
 
 
+def test_the_keypoints_near_the_pixel_are_matched_along_their_rays(
+    pyramids, query, sources
+):
+    edited, image, pixel = query
+    assert sources.has_guided
+    found = bench.guided_matches(edited, pyramids, sources, image, pixel)
+
+    assert found, "the keypoints near the pixel match elsewhere"
+    for a in found:
+        assert set(a) == ANCHOR_KEYS
+        assert a["source"] == "guided"
+        assert a["views"][0][0] == image
+        assert a["query_pixel"] == a["views"][0][1:]
+        assert len({v[0] for v in a["views"]}) == a["n_views"] >= 2
+        assert a["max_reproj_px"] <= 2.0
+        assert a["distance_px"] <= 24.0
+    assert len(found) <= 8
+
+    # Asking for three views leaves out the keypoints matched in one image.
+    three = bench.guided_matches(
+        edited, pyramids, sources, image, pixel, options={"min_views": 3}
+    )
+    assert [a for a in found if a["n_views"] >= 3] == three
+
+
+def test_the_sources_can_read_their_keypoints_from_the_sift_files(
+    embedded,  # noqa: F811
+    pyramids,
+    query,
+    sources,
+):
+    edited, image, pixel = query
+    from sfmtool.sift.file import SiftReader
+
+    paths = sift_paths(embedded)
+    keypoints = []
+    for path in paths:
+        reader = SiftReader(path)
+        xy, affine = reader.read_positions_and_shapes()
+        reader.close()
+        keypoints.append((np.asarray(xy, np.float32), np.asarray(affine, np.float32)))
+    given = bench.NearbyTrackSources(
+        EditedReconstruction(embedded), keypoints=keypoints, sift=paths
+    )
+    assert bench.guided_matches(
+        edited, pyramids, given, image, pixel
+    ) == bench.guided_matches(edited, pyramids, sources, image, pixel)
+    with pytest.raises(ValueError, match="sift has 1 entries"):
+        bench.NearbyTrackSources(EditedReconstruction(embedded), sift=paths[:1])
+
+
 def test_a_source_without_its_input_finds_nothing(embedded, pyramids, query):  # noqa: F811
     edited, image, pixel = query
     empty = bench.NearbyTrackSources(EditedReconstruction(embedded))
     assert not empty.has_clusters
+    assert not empty.has_guided
     assert bench.nearby_cluster_tracks(edited, pyramids, empty, image, pixel) == []
+    assert bench.guided_matches(edited, pyramids, empty, image, pixel) == []

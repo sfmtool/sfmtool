@@ -8,17 +8,24 @@
 //! keys the track-at-pixel harness's anchors carry, so the harness can call it
 //! in place of its own source.
 
+use std::path::PathBuf;
+
+use numpy::{PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
+use rayon::prelude::*;
+use sfmtool_sift_format::read_sift_features;
 
 use sfmtool_core::bench::{
-    nearby_cluster_tracks as core_nearby_cluster_tracks, nearby_points as core_nearby_points,
-    ClusterMembers, ClusterTracksOptions, MatchesClusters, NearbyCandidate, NearbySource,
+    guided_matches as core_guided_matches, nearby_cluster_tracks as core_nearby_cluster_tracks,
+    nearby_points as core_nearby_points, ClusterMembers, ClusterTracksOptions, GuidedOptions,
+    GuidedSource, ImageDescriptors, KeypointRays, MatchesClusters, NearbyCandidate, NearbySource,
     PointsOptions,
 };
+use sfmtool_core::features::kdforest::ImageKeypoints;
 
-use super::views_of;
+use super::{read_keypoints, views_of};
 use crate::io::matches_file::PyMatchesFile;
 use crate::patches::views::{resolve_pyramids, PosedViews, PyramidSet};
 use crate::reconstruction::edited::PyEditedReconstruction;
@@ -27,24 +34,39 @@ use crate::reconstruction::edited::PyEditedReconstruction;
 /// photographs, built once per capture and shared by every query.
 ///
 /// Every input is optional, and a source whose input is missing finds
-/// nothing: the clusters source needs ``matches``.
+/// nothing: the clusters source needs ``matches``, and guided matching the
+/// keypoints and ``sift``.
 ///
 /// Args:
 ///     edited: The reconstruction the inputs are indexed onto; only its image
 ///         names and count are read, so any version of one base will do.
+///     keypoints: One ``(positions, affine_shapes)`` pair per image of the
+///         reconstruction, in its order, as :class:`TrackAtPixelSources` takes
+///         them. Read from ``sift`` when left out and ``sift`` is given.
 ///     matches: A cluster-patches :class:`MatchesFile`. Its images are matched
 ///         to the reconstruction's by name.
+///     sift: One ``.sift`` path per image of the reconstruction, in its order,
+///         whose descriptors are read, row for row with the keypoints.
 #[pyclass(name = "NearbyTrackSources", module = "sfmtool.bench", frozen)]
 pub struct PyNearbyTrackSources {
     image_count: usize,
+    keypoints: Option<Vec<ImageKeypoints>>,
     clusters: Option<MatchesClusters>,
+    descriptors: Option<Vec<ImageDescriptors>>,
+    rays: KeypointRays,
 }
 
 #[pymethods]
 impl PyNearbyTrackSources {
     #[new]
-    #[pyo3(signature = (edited, *, matches = None))]
-    fn new(edited: &PyEditedReconstruction, matches: Option<&PyMatchesFile>) -> PyResult<Self> {
+    #[pyo3(signature = (edited, *, keypoints = None, matches = None, sift = None))]
+    fn new(
+        py: Python<'_>,
+        edited: &PyEditedReconstruction,
+        keypoints: Option<&Bound<'_, PyList>>,
+        matches: Option<&PyMatchesFile>,
+        sift: Option<Vec<PathBuf>>,
+    ) -> PyResult<Self> {
         let names: Vec<&str> = edited
             .inner
             .base
@@ -53,13 +75,68 @@ impl PyNearbyTrackSources {
             .iter()
             .map(|im| im.name.as_str())
             .collect();
+        let image_count = names.len();
+        let count_of = |input: &str, got: usize| {
+            if got == image_count {
+                Ok(())
+            } else {
+                Err(PyValueError::new_err(format!(
+                    "{input} has {got} entries, but the reconstruction has {image_count} images"
+                )))
+            }
+        };
+        let mut keypoints = keypoints
+            .map(|list| {
+                count_of("keypoints", list.len())?;
+                list.iter()
+                    .map(|item| {
+                        let pair = item.cast::<PyTuple>()?;
+                        let positions: PyReadonlyArray2<'_, f32> = pair.get_item(0)?.extract()?;
+                        let shapes: PyReadonlyArray3<'_, f32> = pair.get_item(1)?.extract()?;
+                        read_keypoints(&positions, &shapes)
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
         let clusters = matches
             .map(|m| MatchesClusters::new(m.data(), &names))
             .transpose()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let mut descriptors = None;
+        if let Some(paths) = sift {
+            count_of("sift", paths.len())?;
+            let read = py
+                .detach(|| {
+                    paths
+                        .par_iter()
+                        .map(|path| {
+                            read_sift_features(path).map_err(|e| format!("{}: {e}", path.display()))
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .map_err(PyValueError::new_err)?;
+            if keypoints.is_none() {
+                keypoints = Some(
+                    read.iter()
+                        .map(|f| ImageKeypoints {
+                            positions: f.positions_xy.clone(),
+                            affine_shapes: f.affine_shapes.clone(),
+                        })
+                        .collect(),
+                );
+            }
+            descriptors = Some(
+                read.into_iter()
+                    .map(|f| ImageDescriptors::new(f.descriptors))
+                    .collect(),
+            );
+        }
         Ok(Self {
-            image_count: names.len(),
+            image_count,
+            keypoints,
             clusters,
+            descriptors,
+            rays: KeypointRays::new(image_count),
         })
     }
 
@@ -69,14 +146,32 @@ impl PyNearbyTrackSources {
         self.clusters.is_some()
     }
 
+    /// Whether guided matching has its inputs.
+    #[getter]
+    fn has_guided(&self) -> bool {
+        self.guided().is_some()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "NearbyTrackSources({} images, clusters: {})",
+            "NearbyTrackSources({} images, clusters: {}, guided: {})",
             self.image_count,
             self.clusters
                 .as_ref()
                 .map_or_else(|| "none".into(), |c| c.cluster_count().to_string()),
+            self.has_guided(),
         )
+    }
+}
+
+impl PyNearbyTrackSources {
+    /// What guided matching reads, when every part of it is here.
+    fn guided(&self) -> Option<GuidedSource<'_>> {
+        Some(GuidedSource {
+            keypoints: self.keypoints.as_deref()?,
+            descriptors: self.descriptors.as_deref()?,
+            rays: &self.rays,
+        })
     }
 }
 
@@ -113,6 +208,7 @@ fn harness_name(source: NearbySource) -> &'static str {
         // The harness calls the reconstruction's own points its tracks.
         NearbySource::Points => "tracks",
         NearbySource::Clusters => "clusters",
+        NearbySource::Guided => "guided",
     }
 }
 
@@ -267,10 +363,76 @@ pub(super) fn nearby_cluster_tracks(
     candidate_list(py, &found)
 }
 
+/// The keypoints near ``pixel`` in ``image``, each matched by descriptor along
+/// the rays of every other image's keypoints, as candidate tracks.
+///
+/// A keypoint's match in another image is a keypoint whose ray passes within
+/// ``epipolar_px`` of its own, whose descriptor is the nearest among those and
+/// within ``ratio`` of the second nearest and ``max_distance``. Each keypoint's
+/// matches are triangulated with it, dropping the worst while three or more
+/// remain; a match past ``max_distance`` but within ``loose_distance`` is then
+/// added, most distinct first, when the triangulation with it still meets
+/// every sighting within ``max_reproj_px``.
+///
+/// Args:
+///     edited: The reconstruction; only its cameras are read.
+///     images: As :func:`nearby_points` takes them.
+///     sources: A :class:`NearbyTrackSources`; without keypoints and ``sift``
+///         the result is empty. The rays through its keypoints are built from
+///         the cameras the first time each image is read and kept.
+///     image: The queried image's index.
+///     pixel: ``(x, y)`` in that image.
+///     options: Overrides keyed by the field of the Rust ``GuidedOptions``:
+///         ``radius_px`` (24), ``max_keypoints`` (8), ``skip_px`` (-1),
+///         ``epipolar_px`` (2), ``ratio`` (0.8), ``max_distance`` (250),
+///         ``loose_distance`` (400), ``min_views`` (2) and ``max_reproj_px``
+///         (2). An unknown key is an error.
+///
+/// Returns:
+///     A list of the harness's anchor dicts, as :func:`nearby_points` returns
+///     them, with ``source`` ``"guided"`` and ``id`` the keypoint's row.
+#[pyfunction]
+#[pyo3(signature = (edited, images, sources, image, pixel, *, options = None))]
+pub(super) fn guided_matches(
+    py: Python<'_>,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    sources: &PyNearbyTrackSources,
+    image: u32,
+    pixel: [f64; 2],
+    options: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<PyList>> {
+    let options = with_overrides(GuidedOptions::default(), options, |o, key, value| {
+        match key {
+            "radius_px" => o.radius_px = value.extract()?,
+            "max_keypoints" => o.max_keypoints = value.extract()?,
+            "skip_px" => o.skip_px = value.extract()?,
+            "epipolar_px" => o.epipolar_px = value.extract()?,
+            "ratio" => o.ratio = value.extract()?,
+            "max_distance" => o.max_distance = value.extract()?,
+            "loose_distance" => o.loose_distance = value.extract()?,
+            "min_views" => o.min_views = value.extract()?,
+            "max_reproj_px" => o.max_reproj_px = value.extract()?,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    })?;
+    let Some(source) = sources.guided() else {
+        return Ok(PyList::empty(py).unbind());
+    };
+    let (posed, pyramids) = posed_views(edited, images)?;
+    let views = views_of(&posed, &pyramids);
+    let found = py
+        .detach(|| core_guided_matches(&views, &source, image, pixel, &options))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    candidate_list(py, &found)
+}
+
 /// Register the matching-source bindings on the `sfmtool.bench` submodule.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNearbyTrackSources>()?;
     m.add_function(wrap_pyfunction!(nearby_points, m)?)?;
     m.add_function(wrap_pyfunction!(nearby_cluster_tracks, m)?)?;
+    m.add_function(wrap_pyfunction!(guided_matches, m)?)?;
     Ok(())
 }

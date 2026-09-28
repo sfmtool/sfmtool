@@ -22,6 +22,7 @@ mod candidate;
 mod clusters;
 mod far_field;
 mod grey;
+mod guided;
 mod patch_read;
 mod points;
 mod range;
@@ -39,6 +40,7 @@ pub use far_field::{
     FarFieldReading, FarFieldSweep, Refit, WideAmong,
 };
 pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImages, GREY_BLUR_SIGMA};
+pub use guided::{guided_matches, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays};
 pub use patch_read::{read_patch_along_ray, PatchRead, PatchSamples, RayPatch, PATCH_GRID};
 pub use points::{nearby_points, PointsOptions};
 pub use range::{

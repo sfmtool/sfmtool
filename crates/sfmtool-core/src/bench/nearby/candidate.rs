@@ -22,6 +22,9 @@ pub enum NearbySource {
     /// The cluster-patches clusters near the pixel, vetted by triangulation
     /// ([`super::nearby_cluster_tracks`]).
     Clusters,
+    /// The keypoints near the pixel matched by descriptor along their rays
+    /// ([`super::guided_matches`]).
+    Guided,
 }
 
 impl NearbySource {
@@ -30,6 +33,7 @@ impl NearbySource {
         match self {
             Self::Points => "points",
             Self::Clusters => "clusters",
+            Self::Guided => "guided",
         }
     }
 }
@@ -50,7 +54,8 @@ pub struct NearbyCandidate {
     /// The source that found it.
     pub source: NearbySource,
     /// What the source names it by: the point for [`NearbySource::Points`],
-    /// the cluster for [`NearbySource::Clusters`].
+    /// the cluster for [`NearbySource::Clusters`], the queried image's keypoint
+    /// row for [`NearbySource::Guided`].
     pub id: Option<u32>,
     /// The point, in world coordinates.
     pub position: Vector3<f64>,
@@ -149,6 +154,15 @@ pub enum NearbySourceError {
         /// How many images the reconstruction holds.
         image_count: usize,
     },
+    /// An image's descriptors are not row for row with its keypoints.
+    RowMismatch {
+        /// The image.
+        image: u32,
+        /// How many keypoints it has.
+        keypoints: usize,
+        /// How many descriptors it has.
+        descriptors: usize,
+    },
 }
 
 impl std::fmt::Display for NearbySourceError {
@@ -174,6 +188,14 @@ impl std::fmt::Display for NearbySourceError {
             } => write!(
                 f,
                 "{input} has {got} entries, but the reconstruction has {image_count} images"
+            ),
+            Self::RowMismatch {
+                image,
+                keypoints,
+                descriptors,
+            } => write!(
+                f,
+                "image {image} has {keypoints} keypoints but {descriptors} descriptors"
             ),
         }
     }

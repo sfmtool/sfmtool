@@ -12,8 +12,11 @@ use nalgebra::{Matrix3, Vector3};
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::patch::normal_refine::ProjectedImage;
 
-/// Sightings as `(image, pixel)` pairs, in the order a source found them.
-pub(super) type Sightings = Vec<(u32, [f64; 2])>;
+/// One sighting, `(image, pixel)`.
+pub(super) type Sighting = (u32, [f64; 2]);
+
+/// Sightings in the order a source found them.
+pub(super) type Sightings = Vec<Sighting>;
 
 /// Where a set of sightings' rays meet, and how far each sighting is from
 /// where that point projects.

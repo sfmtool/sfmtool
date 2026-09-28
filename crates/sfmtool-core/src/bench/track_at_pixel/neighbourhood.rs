@@ -124,6 +124,11 @@ impl<'a> ViewCamera<'a> {
         Some([u, v])
     }
 
+    /// A camera-frame direction turned into the world frame.
+    pub(crate) fn world_direction(&self, direction: &Vector3<f64>) -> Vector3<f64> {
+        self.rotation.transpose() * direction
+    }
+
     /// The world-frame unit ray through a pixel.
     pub(crate) fn ray(&self, pixel: [f64; 2]) -> Vector3<f64> {
         let d = self.view.camera.pixel_to_ray(pixel[0], pixel[1]);
