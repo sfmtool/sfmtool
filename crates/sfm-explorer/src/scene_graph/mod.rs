@@ -1105,7 +1105,7 @@ fn show_bench_stage_group(
         for (position, entry) in items {
             let track = entry.item.as_track().expect("filtered to tracks above");
             let selected = active.as_deref() == Some(entry.label.as_str());
-            let (kept, candidates, out_count) = track.verdict_counts();
+            let (kept, out_count) = track.verdict_counts();
             let text = format!("{}  {kept} in", entry.label);
             let row = ui
                 .push_id(("bench_item", entry.label.as_str()), |ui| {
@@ -1113,7 +1113,7 @@ fn show_bench_stage_group(
                 })
                 .inner
                 .on_hover_text(format!(
-                    "{} · the {} stage · {kept} in, {candidates} candidates, {out_count} out",
+                    "{} · the {} stage · {kept} in, {out_count} out",
                     entry.label,
                     track.stage_kind()
                 ));

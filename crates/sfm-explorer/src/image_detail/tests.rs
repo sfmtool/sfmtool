@@ -1308,12 +1308,7 @@ fn collect_bench_paths(shape: &egui::Shape, out: &mut Vec<Vec<egui::Pos2>>) {
 fn collect_bench_segments(shape: &egui::Shape, out: &mut Vec<([egui::Pos2; 2], egui::Color32)>) {
     match shape {
         egui::Shape::LineSegment { points, stroke }
-            if [
-                crate::bench::IN_COLOR,
-                crate::bench::CANDIDATE_COLOR,
-                crate::bench::OUT_COLOR,
-            ]
-            .contains(&stroke.color) =>
+            if [crate::bench::IN_COLOR, crate::bench::OUT_COLOR].contains(&stroke.color) =>
         {
             out.push((*points, stroke.color));
         }
@@ -1332,7 +1327,6 @@ fn is_bench_color(color: &egui::epaint::ColorMode) -> bool {
         egui::epaint::ColorMode::Solid(solid)
             if [
                 crate::bench::IN_COLOR,
-                crate::bench::CANDIDATE_COLOR,
                 crate::bench::OUT_COLOR,
             ]
             .contains(solid)
@@ -1476,7 +1470,6 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
 
     for (verdict, expected) in [
         (Verdict::In, crate::bench::IN_COLOR),
-        (Verdict::Candidate, crate::bench::CANDIDATE_COLOR),
         (Verdict::Out, crate::bench::OUT_COLOR),
     ] {
         let mut judged = track.clone();
@@ -1676,14 +1669,14 @@ fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
 }
 
 /// An image the track observes keeps its own drawing and gets no ghost, and
-/// that holds for a `candidate` or an `out` sighting as much as an `in` one:
+/// that holds for an `out` sighting as much as an `in` one:
 /// any observation makes the image the track's.
 #[test]
 fn a_member_image_draws_its_outline_and_no_ghost_whatever_the_verdict() {
     use sfmtool_core::bench::Verdict;
 
     let (node, track) = bench_track_fixture();
-    for verdict in [Verdict::In, Verdict::Candidate, Verdict::Out] {
+    for verdict in [Verdict::In, Verdict::Out] {
         let mut judged = track.clone();
         for observation in &mut judged.observations {
             observation.verdict = verdict;

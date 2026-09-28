@@ -655,13 +655,15 @@ pub struct AddObservationReport {
     pub image: u32,
 }
 
-/// Add a candidate observation to `track`.
+/// Add an observation to `track`.
 ///
-/// It joins as a `candidate` and unpinned: something proposed it and nobody has
-/// ruled on it, which is what a candidate is. A second observation in an image
+/// It joins `out` and unpinned: nothing has measured it, so the track does not
+/// use it yet, and nobody has ruled on it. The first evaluation that measures
+/// it takes it in when it clears the thresholds
+/// ([`evaluate`](super::evaluate::evaluate)). A second observation in an image
 /// the track already holds is allowed and is scored like any other; what it
-/// cannot do is be turned `in` while the other is
-/// ([`set_verdict`] refuses that).
+/// cannot do is be turned `in` while the other is ([`set_verdict`] refuses
+/// that).
 ///
 /// The seed lands in the cluster slot, which is where a seed means something:
 /// a position and a shape in one image's pixels, with no geometry behind them.
@@ -687,7 +689,7 @@ pub struct AddObservationReport {
 ///
 /// **The seed is not clamped to the photograph here**, unlike the steps a hand
 /// gesture goes through ([`clamp_to_photograph`]). A descriptor search places its
-/// candidates by the warp it found, and a warp can put the patch off the edge of
+/// observations by the warp it found, and a warp can put the patch off the edge of
 /// an image that only half holds it; bringing that seed inside would report a
 /// sighting where the search never said there was one, rather than leaving the
 /// reading to refuse it as
@@ -741,8 +743,9 @@ pub struct VerdictReport {
     pub was: Verdict,
     /// What it is now.
     pub is: Verdict,
-    /// Whether anything changed. A verdict an observation already has, set
-    /// again by hand, pins it and changes nothing else.
+    /// Whether anything changed: the verdict, or the pin. A verdict an
+    /// observation already has, set again by hand, pins it, which is a change
+    /// when it was not pinned and none when it was.
     pub changed: bool,
 }
 
@@ -766,6 +769,7 @@ pub fn set_verdict(
             observation_count: track.observations.len(),
         })?;
     let was = current.verdict;
+    let was_pinned = current.pinned;
     if verdict == Verdict::In {
         if let Some(held) = track.in_observation_of_image(current.image) {
             if held != observation {
@@ -786,7 +790,54 @@ pub fn set_verdict(
             observation,
             was,
             is: verdict,
-            changed: was != verdict,
+            changed: was != verdict || !was_pinned,
+        },
+    ))
+}
+
+/// Hand one observation's verdict back to the thresholds.
+///
+/// The pin [`set_verdict`] set is cleared, and the observation takes the
+/// verdict the thresholds propose from its stored measurements, as
+/// [`apply_thresholds`] would give it: `in` when it clears every bar and no
+/// other `in` observation holds its image, `out` otherwise. An observation
+/// nothing at this stage has measured keeps its verdict until an evaluation
+/// measures it. The report's `changed` is true when the pin or the verdict
+/// moved.
+pub fn unpin_verdict(
+    track: &EditableTrack,
+    observation: usize,
+) -> Result<(EditableTrack, VerdictReport), TrackEditError> {
+    let current = track
+        .observations
+        .get(observation)
+        .ok_or(TrackEditError::NoSuchObservation {
+            observation,
+            observation_count: track.observations.len(),
+        })?;
+    let was = current.verdict;
+    let is = match proposed_verdict(current, track.stage_kind(), &track.thresholds) {
+        None => was,
+        Some(Verdict::In)
+            if track
+                .in_observation_of_image(current.image)
+                .is_none_or(|held| held == observation) =>
+        {
+            Verdict::In
+        }
+        Some(_) => Verdict::Out,
+    };
+    let mut next = track.clone();
+    let target = &mut next.observations[observation];
+    target.verdict = is;
+    target.pinned = false;
+    Ok((
+        next,
+        VerdictReport {
+            observation,
+            was,
+            is,
+            changed: current.pinned || was != is,
         },
     ))
 }
@@ -2272,7 +2323,7 @@ pub struct ThresholdReport {
 ///
 /// One `in` per image survives the painting. Where several unpinned
 /// observations of one image would pass, the one with the best score takes the
-/// `in` and the rest stay candidates, so the painting can never produce a track
+/// `in` and the rest are turned `out`, so the painting can never produce a track
 /// that observes an image twice.
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport) {
     let stage = track.stage_kind();
@@ -2307,39 +2358,83 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
             report.pinned += 1;
             continue;
         }
-        match proposed_verdict(observation, stage, &track.thresholds) {
-            None => report.unmeasured += 1,
-            Some(Verdict::Out) => {
-                if observation.verdict != Verdict::Out {
-                    report.turned_out += 1;
-                }
-                next.observations[i].verdict = Verdict::Out;
+        let Some(proposed) = proposed_verdict(observation, stage, &track.thresholds) else {
+            report.unmeasured += 1;
+            continue;
+        };
+        // An image already spoken for takes no second `in`: the observation is
+        // not taken, and the person turns the other one out first.
+        let verdict = if proposed == Verdict::In && !held.contains(&observation.image) {
+            held.push(observation.image);
+            Verdict::In
+        } else {
+            Verdict::Out
+        };
+        if observation.verdict != verdict {
+            match verdict {
+                Verdict::In => report.turned_in += 1,
+                Verdict::Out => report.turned_out += 1,
             }
-            Some(Verdict::In) => {
-                if held.contains(&observation.image) {
-                    // The image is spoken for. The observation is not refused,
-                    // only not taken: the person turns the other one out first.
-                    next.observations[i].verdict = Verdict::Candidate;
-                } else {
-                    held.push(observation.image);
-                    if observation.verdict != Verdict::In {
-                        report.turned_in += 1;
-                    }
-                    next.observations[i].verdict = Verdict::In;
-                }
-            }
-            Some(Verdict::Candidate) => {}
         }
+        next.observations[i].verdict = verdict;
     }
-    // Every verdict the painting moved, counted rather than inferred from the
-    // three tallies: an observation demoted to `candidate` because its image was
-    // already spoken for is in none of them and is still a change.
-    report.changed = next
+    report.changed = report.turned_in + report.turned_out > 0;
+    (next, report)
+}
+
+/// Turn `in` each unpinned `out` observation that `read` measures for the
+/// first time and that the thresholds would take.
+///
+/// An observation joins a track `out` and unpinned ([`add_observation`]), and
+/// whether it belongs is not known until it is measured. So the evaluation that
+/// first measures it takes it in when it clears every bar and its image is
+/// free. That is the whole of what this does: it never turns anything `out`,
+/// never moves a pinned verdict, and leaves the verdicts of observations that
+/// were measured before where they are until a threshold moves. A track put on
+/// the bench from a point arrives `in` and unmeasured, and its first
+/// evaluation leaves those verdicts alone for the same reason: they were the
+/// point's, and nobody has asked the thresholds about them. `before` is the
+/// track the evaluation read and `read` what it gave back.
+///
+/// The measurements `read` carries were taken with the new observations `out`,
+/// so a turn here changes the next evaluation's input and that evaluation reads
+/// the new `in` set. It has no first readings of its own, so it turns nothing.
+///
+/// One `in` per image holds here as in [`apply_thresholds`]: the best of the
+/// new observations takes a free image's `in`, and an image an `in`
+/// observation already holds takes none.
+pub(super) fn apply_thresholds_to_first_readings(before: &EditableTrack, read: &mut EditableTrack) {
+    let stage = read.stage_kind();
+    let mut fresh: Vec<usize> = (0..read.observations.len())
+        .filter(|&i| {
+            let now = &read.observations[i];
+            !now.pinned
+                && now.verdict == Verdict::Out
+                && before
+                    .observations
+                    .get(i)
+                    .is_some_and(|was| proposed_verdict(was, stage, &before.thresholds).is_none())
+                && proposed_verdict(now, stage, &read.thresholds) == Some(Verdict::In)
+        })
+        .collect();
+    let mut held: Vec<u32> = read
         .observations
         .iter()
-        .zip(&track.observations)
-        .any(|(now, was)| now.verdict != was.verdict);
-    (next, report)
+        .filter(|o| o.verdict == Verdict::In)
+        .map(|o| o.image)
+        .collect();
+    fresh.sort_by(|&a, &b| {
+        score(&read.observations[b], stage)
+            .partial_cmp(&score(&read.observations[a], stage))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for i in fresh {
+        let image = read.observations[i].image;
+        if !held.contains(&image) {
+            held.push(image);
+            read.observations[i].verdict = Verdict::In;
+        }
+    }
 }
 
 /// The ZNCC the painting ranks an observation by at `stage`, or negative

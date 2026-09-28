@@ -1663,15 +1663,23 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
         "{turned}"
     );
 
-    let verdict = call(
-        &mut state,
-        &mut viewer,
-        "set_bench_track_verdict",
-        json!({
-            "reconstruction_label": "run_a", "track": item,
-            "observation": 0, "verdict": "in",
-        }),
-    );
+    // The first call pins the verdict the observation carries, which is a
+    // change; the second finds it pinned already.
+    let verdict_call = |state: &mut _, viewer: &mut _| {
+        call(
+            state,
+            viewer,
+            "set_bench_track_verdict",
+            json!({
+                "reconstruction_label": "run_a", "track": item,
+                "observation": 0, "verdict": "in",
+            }),
+        )
+    };
+    let pinned = verdict_call(&mut state, &mut viewer);
+    assert_eq!(pinned["changed"], json!(true), "{pinned}");
+    assert_eq!(pinned["pinned"], json!(true), "{pinned}");
+    let verdict = verdict_call(&mut state, &mut viewer);
     assert_eq!(verdict["changed"], json!(false), "{verdict}");
     assert!(
         verdict["report"]
@@ -1727,10 +1735,11 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
         "{again}"
     );
 
-    // One version for the one drag that did something, and none for the rest.
+    // One version for the pin and one for the drag that did something, and
+    // none for the rest.
     assert_eq!(
         version_count(&state),
-        before + 1,
+        before + 2,
         "a no-effect step pushed a version"
     );
 }

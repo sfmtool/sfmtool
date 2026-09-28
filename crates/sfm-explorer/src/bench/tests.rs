@@ -187,13 +187,13 @@ fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
             ImageRef::new(id, 0),
             &pixel_seed([124.0, 93.0], None),
         )
-        .expect("a second sighting in one image is a candidate");
+        .expect("a second sighting in one image is allowed");
 
     assert_eq!(versions(&state, id) - before, 2);
     let track = state.bench_track(id, &label).expect("on the bench");
     assert_eq!(track.observations.len(), 2);
     assert_eq!(track.observations[1].image, 0, "the same image as the seed");
-    assert_eq!(track.observations[1].verdict, Verdict::Candidate);
+    assert_eq!(track.observations[1].verdict, Verdict::Out);
 
     let rows = rows(&state);
     assert_eq!(rows.len(), 2, "one row per step: {rows:?}");
@@ -582,11 +582,16 @@ fn a_commit_is_an_edit_row_and_every_other_bench_step_is_a_bench_row() {
 fn a_step_that_changes_nothing_pushes_no_version() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
+    // Setting the verdict observation 0 already carries pins it, which is a
+    // change; setting it again is not.
+    state
+        .set_bench_verdict(id, &label, 0, Verdict::In)
+        .expect("observation 0 is already in");
     let before = versions(&state, id);
 
     state
         .set_bench_verdict(id, &label, 0, Verdict::In)
-        .expect("observation 0 is already in");
+        .expect("observation 0 is already in and pinned");
     state
         .start_bench_stage(id, &label, StageKind::Track)
         .expect("already at the track stage");
@@ -820,7 +825,7 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
     );
     let added = track.observations.last().expect("the search added one");
     assert_eq!(added.image, fixture::FOUND_IMAGE);
-    assert_eq!(added.verdict, sfmtool_core::bench::Verdict::Candidate);
+    assert_eq!(added.verdict, sfmtool_core::bench::Verdict::Out);
     assert_eq!(
         added.provenance,
         sfmtool_core::bench::Provenance::Search {

@@ -264,7 +264,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           radius it reads at. An observation's pixel is where it sits whether or \
                           not anything has measured it: the track-stage keypoint, else the \
                           refined cluster position, else the seed it was proposed at. So a \
-                          candidate a search has just added says where it is without being \
+                          observation a search has just added says where it is without being \
                           evaluated first. An observation is addressed by its position in the \
                           list, which is \
                           stable for the life of the track — observations are appended and never \

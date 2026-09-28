@@ -113,9 +113,9 @@ fn geometry_search_adds_projected_candidate_without_moving_existing_rows() {
         before.observations,
         "a search appends and never edits a row already on the table"
     );
-    let added = grown.observations.last().expect("one candidate");
+    let added = grown.observations.last().expect("one added observation");
     assert_eq!(added.image, 2);
-    assert_eq!(added.verdict, Verdict::Candidate);
+    assert_eq!(added.verdict, Verdict::Out);
     assert!(!added.pinned);
     assert_eq!(added.provenance, Provenance::Sweep);
     let expected = scene.project(2, WORLD);
@@ -316,7 +316,7 @@ fn a_point_put_on_the_bench_is_a_track_with_every_observation_in() {
 
     assert_eq!(track.stage_kind(), StageKind::Track);
     assert_eq!(track.observations.len(), 2);
-    assert_eq!(track.verdict_counts(), (2, 0, 0));
+    assert_eq!(track.verdict_counts(), (2, 0));
     assert!(track.observations.iter().all(|o| !o.pinned));
     assert!(track
         .observations
@@ -365,7 +365,7 @@ fn a_sift_files_point_is_put_on_the_bench_for_inspection() {
     let (bench, label) = bench_with_point(&edited, 0);
     let track = bench.track(&label).expect("just put on");
     assert_eq!(track.stage_kind(), StageKind::Track);
-    assert_eq!(track.verdict_counts(), (2, 0, 0));
+    assert_eq!(track.verdict_counts(), (2, 0));
 }
 
 #[test]
@@ -417,7 +417,7 @@ fn a_cluster_from_a_pixel_is_labelled_by_its_image_and_pixel() {
     assert_eq!(report.observation_count, 1);
     let track = bench.track(&report.label).expect("just put on");
     assert_eq!(track.stage_kind(), StageKind::Cluster);
-    assert_eq!(track.verdict_counts(), (1, 0, 0));
+    assert_eq!(track.verdict_counts(), (1, 0));
     assert_eq!(track.cluster().expect("a cluster").reference, 0);
     assert!(
         track.cluster().expect("a cluster").template.is_none(),
@@ -638,7 +638,7 @@ fn an_added_observation_joins_as_an_unruled_candidate() {
     assert_eq!(report.observation, 2);
     assert_eq!(track.observations.len(), 3);
     let added = &track.observations[2];
-    assert_eq!(added.verdict, Verdict::Candidate);
+    assert_eq!(added.verdict, Verdict::Out);
     assert!(!added.pinned);
     assert_eq!(added.provenance, Provenance::Pixel);
     assert_eq!(
@@ -662,7 +662,7 @@ fn an_observation_added_at_the_track_stage_is_a_keypoint_a_commit_can_write() {
     .expect("a finite pixel");
 
     let added = &track.observations[report.observation];
-    assert_eq!(added.verdict, Verdict::Candidate);
+    assert_eq!(added.verdict, Verdict::Out);
     assert!(!added.pinned);
     let measured = added.track.as_ref().expect("a track slot");
     assert_eq!(
@@ -741,7 +741,7 @@ fn two_observations_in_one_image_cannot_both_be_in() {
     let (track, report) = set_verdict(&track, 2, Verdict::In).expect("image 0 is free now");
     assert!(report.changed);
     assert_eq!(track.in_observation_of_image(0), Some(2));
-    assert_eq!(track.verdict_counts(), (2, 0, 1));
+    assert_eq!(track.verdict_counts(), (2, 1));
 }
 
 #[test]
@@ -780,15 +780,15 @@ fn an_observation_past_the_end_is_refused() {
 
 // ---- The threshold painting ------------------------------------------------
 
-/// The fixture's track with the two stored observations turned into candidates
-/// carrying track-stage scores.
+/// The fixture's track with the two stored observations turned `out`,
+/// unpinned, carrying track-stage scores.
 fn scored_track(zncc: [f64; 2]) -> EditableTrack {
     let scene = Scene::new();
     let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let mut track = track_of(&bench, &label);
     for (observation, score) in track.observations.iter_mut().zip(zncc) {
-        observation.verdict = Verdict::Candidate;
+        observation.verdict = Verdict::Out;
         let measurement = observation.track.as_mut().expect("a track slot");
         measurement.zncc = Some(score);
         measurement.seed_shift_px = Some(0.5);
@@ -803,8 +803,9 @@ fn the_painting_proposes_verdicts_from_the_stored_measurements() {
     let (painted, report) = apply_thresholds(&track);
     assert_eq!(painted.observations[0].verdict, Verdict::In);
     assert_eq!(painted.observations[1].verdict, Verdict::Out);
-    assert_eq!(report.turned_in, 1);
-    assert_eq!(report.turned_out, 1);
+    // The second was `out` already, so only the first moved.
+    assert_eq!((report.turned_in, report.turned_out), (1, 0));
+    assert!(report.changed);
     // Painting is not deciding: nothing it touched is pinned.
     assert!(painted.observations.iter().all(|o| !o.pinned));
 }
@@ -860,6 +861,43 @@ fn the_painting_leaves_a_pinned_verdict_alone() {
     assert_eq!((report.turned_in, report.turned_out), (0, 0));
 }
 
+/// Unpinning hands a verdict back to the thresholds: the pin goes, and the
+/// observation takes what the bars propose, keeping one `in` per image.
+#[test]
+fn unpinning_gives_the_verdict_back_to_the_thresholds() {
+    let track = scored_track([0.95, 0.40]);
+    let (track, _) = set_verdict(&track, 1, Verdict::In).expect("a live observation");
+    let (unpinned, report) = unpin_verdict(&track, 1).expect("a live observation");
+    assert_eq!(
+        unpinned.observations[1].verdict,
+        Verdict::Out,
+        "0.40 clears no bar"
+    );
+    assert!(!unpinned.observations[1].pinned);
+    assert_eq!(
+        (report.was, report.is, report.changed),
+        (Verdict::In, Verdict::Out, true)
+    );
+
+    // Unpinning a verdict the bars agree with still clears the pin.
+    let (track, _) = set_verdict(&track, 0, Verdict::In).expect("a live observation");
+    let (unpinned, report) = unpin_verdict(&track, 0).expect("a live observation");
+    assert_eq!(unpinned.observations[0].verdict, Verdict::In);
+    assert!(report.changed && !unpinned.observations[0].pinned);
+    let (_, again) = unpin_verdict(&unpinned, 0).expect("a live observation");
+    assert!(!again.changed, "nothing is left to move");
+
+    // An image another `in` observation holds takes no second `in`.
+    let mut shared = scored_track([0.95, 0.99]);
+    shared.observations[1].image = 0;
+    let (shared, _) = set_verdict(&shared, 0, Verdict::In).expect("a free image");
+    let (shared, _) = set_verdict(&shared, 1, Verdict::Out).expect("a live observation");
+    let (unpinned, _) = unpin_verdict(&shared, 1).expect("a live observation");
+    assert_eq!(unpinned.observations[1].verdict, Verdict::Out);
+
+    assert!(unpin_verdict(&shared, 9).is_err());
+}
+
 #[test]
 fn the_painting_leaves_an_unmeasured_observation_where_it_is() {
     let scene = Scene::new();
@@ -871,8 +909,9 @@ fn the_painting_leaves_an_unmeasured_observation_where_it_is() {
     )
     .expect("a finite pixel");
     let (painted, report) = apply_thresholds(&track);
-    assert_eq!(painted.observations[2].verdict, Verdict::Candidate);
+    assert_eq!(painted.observations[2].verdict, Verdict::Out);
     assert_eq!(report.unmeasured, 3, "no observation carries a score yet");
+    assert!(!report.changed);
 }
 
 #[test]
@@ -886,8 +925,12 @@ fn the_painting_gives_one_image_one_in() {
         Verdict::In,
         "the better-scoring sighting takes the image"
     );
-    assert_eq!(painted.observations[0].verdict, Verdict::Candidate);
-    assert_eq!(painted.verdict_counts(), (1, 1, 0));
+    assert_eq!(
+        painted.observations[0].verdict,
+        Verdict::Out,
+        "the image is spoken for"
+    );
+    assert_eq!(painted.verdict_counts(), (1, 1));
 }
 
 // ---- Splitting -------------------------------------------------------------
@@ -1807,8 +1850,8 @@ fn an_evaluation_sets_no_verdict_and_leaves_a_pinned_one_alone() {
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = track_of(&bench, &label);
-    // A third sighting, refused by hand: an evaluation scores it like a
-    // candidate and does not move it.
+    // A third sighting, refused by hand: an evaluation scores it like any
+    // other and does not move it.
     let (track, added) = add_observation(
         &track,
         &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
@@ -1818,7 +1861,7 @@ fn an_evaluation_sets_no_verdict_and_leaves_a_pinned_one_alone() {
 
     let (measured, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
     assert_eq!((report.measured, report.unmeasured), (3, 0));
-    assert_eq!(measured.verdict_counts(), (2, 0, 1));
+    assert_eq!(measured.verdict_counts(), (2, 1));
     assert!(measured.observations[2].pinned);
     assert_eq!(measured.observations[2].verdict, Verdict::Out);
     let scored = measured.observations[2]
@@ -1910,6 +1953,41 @@ fn an_evaluation_moves_nothing_it_reads() {
     assert_eq!(read.verdict_counts(), track.verdict_counts());
 }
 
+/// An observation added unmeasured joins `out`, and the evaluation that first
+/// measures it gives it the verdict the thresholds propose. Verdicts measured
+/// before are left where they are.
+#[test]
+fn an_evaluation_gives_a_first_reading_the_proposed_verdict() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (track, added) = add_observation(
+        &track_of(&bench, &label),
+        &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
+    )
+    .expect("a finite pixel");
+    assert_eq!(track.observations[added.observation].verdict, Verdict::Out);
+
+    let (read, _) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    let observation = &read.observations[added.observation];
+    assert_eq!(observation.verdict, Verdict::In, "it clears every bar");
+    assert!(
+        !observation.pinned,
+        "the thresholds proposed it; nobody pinned it"
+    );
+
+    // Measured once, it is not painted again: the bars move it, not a reading.
+    let (out, _) = apply_thresholds(&EditableTrack {
+        thresholds: Thresholds {
+            min_zncc: 1.1,
+            ..read.thresholds.clone()
+        },
+        ..read.clone()
+    });
+    let (again, _) = evaluate_over(&scene, &edited, &out).expect("a framed track");
+    assert_eq!(again.verdict_counts(), out.verdict_counts());
+}
+
 /// A reading has no minimum: one sighting alone is read as one sighting with
 /// nothing to correlate against, which is a measurement rather than a refusal.
 #[test]
@@ -1924,7 +2002,7 @@ fn an_evaluation_of_one_sighting_reports_it_rather_than_refusing() {
     // The `out` row sits in an image of its own, so the two are read together
     // and both come back scored: what one sighting alone cannot do is *fit*.
     assert_eq!(report.measured + report.unmeasured, 2);
-    let (alone, _) = set_verdict(&read, 1, Verdict::Candidate).expect("a live row");
+    let (alone, _) = set_verdict(&read, 1, Verdict::Out).expect("a live row");
     let mut alone = alone;
     alone.observations.truncate(1);
     let (alone, report) = evaluate_over(&scene, &edited, &alone).expect("a framed track");

@@ -333,6 +333,9 @@ impl TabContext<'_> {
             let outcome = self.state.rename_bench_item(id, label, to);
             refuse(self.state, outcome);
         }
+        if response.request_goto_point {
+            self.state.open_goto_point();
+        }
         // The radius is the viewer's rather than a track's, so it applies
         // whichever track is active; moving it evaluates every track again.
         if let Some(search_px) = response.search_px {
@@ -353,6 +356,10 @@ impl TabContext<'_> {
             let outcome = self
                 .state
                 .set_bench_verdict(id, &label, observation, verdict);
+            refuse(self.state, outcome);
+        }
+        if let Some(observation) = response.unpin_verdict {
+            let outcome = self.state.unpin_bench_verdict(id, &label, observation);
             refuse(self.state, outcome);
         }
         if let Some(thresholds) = response.apply_thresholds.as_ref() {

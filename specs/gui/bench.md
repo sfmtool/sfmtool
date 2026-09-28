@@ -225,7 +225,7 @@ impl AppState {
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
         -> Result<(), String>;
     /// Ask the node's SIFT index which other photographs hold the patch
-    /// around one observation, and add each as a candidate.
+    /// around one observation, and add each, unpinned and `out`.
     pub(crate) fn start_bench_descriptor_search(
         &mut self, id: ReconId, label: &str, observation: usize,
         radius_px: Option<f64>, min_inliers: Option<usize>) -> Result<(), String>;
@@ -1293,9 +1293,9 @@ point's exact projection and a photograph cached for every image:
   first item is the same `Arc` throughout;
 - putting a point on the bench twice activates the track it already made;
 - the two gestures the Image Detail context menu carries -- a cluster started at
-  a pixel, then a candidate added at one in the same image -- are one version and
-  one `Bench` row each, the second sighting joining as a candidate, and an undo
-  walks them back one at a time;
+  a pixel, then a sighting added at one in the same image -- are one version and
+  one `Bench` row each, the second sighting joining unpinned and `out`, and an
+  undo walks them back one at a time;
 - a verdict and a stage change are two versions and the evaluations after them
   none, undo retraces them in order and redo replays them;
 - a document edit between two bench steps is a version in its place, and undoing

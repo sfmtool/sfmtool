@@ -387,9 +387,9 @@ impl Layer {
     /// strongest verdict names, with the normal standing out of its centre.
     ///
     /// One outline for the image rather than one per observation, because there
-    /// is one patch: two candidates in a photograph are two readings of where
-    /// it lands, not two squares. Its colour is the strongest verdict among
-    /// them, so an image the track is `in` reads as `in`. It is drawn through
+    /// is one patch: two sightings in a photograph are two readings of where
+    /// it lands, not two squares. Its colour is `in` when either is, so an
+    /// image the track is `in` reads as `in`. It is drawn through
     /// the frame re-anchored on that sighting, as the tile is rendered: the
     /// sighting is where the patch sits in this photograph, and the geometric
     /// projection is where the 3D says it should, which the hollow centre and
@@ -411,15 +411,11 @@ impl Layer {
         view: Option<&(CameraIntrinsics, RigidTransform)>,
         to_panel: &impl Fn([f64; 2]) -> Pos2,
     ) {
-        let strongest = here
-            .iter()
-            .map(|(_, o)| o.verdict)
-            .min_by_key(|v| match v {
-                Verdict::In => 0,
-                Verdict::Candidate => 1,
-                Verdict::Out => 2,
-            })
-            .unwrap_or(Verdict::Candidate);
+        let strongest = if here.iter().any(|(_, o)| o.verdict == Verdict::In) {
+            Verdict::In
+        } else {
+            Verdict::Out
+        };
         let anchor = here
             .iter()
             .find(|(_, o)| o.verdict == strongest)
@@ -508,7 +504,7 @@ impl Layer {
     /// photograph the track has no observation in.
     ///
     /// An image counts as the track's when it holds an observation of any
-    /// verdict, so a `candidate` or an `out` sighting keeps the member drawing
+    /// verdict, so an `out` sighting keeps the member drawing
     /// and only an image with none gets the ghost. What is projected is the
     /// patch **itself**, not a frame re-anchored on a keypoint, because there is
     /// no keypoint here to anchor on: the ghost is where the 3D places the

@@ -267,13 +267,17 @@ fn a_verdict_shows_under_the_same_observation_index() {
 #[test]
 fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // Measure the track, so the rows have numbers for the bars to judge. The
-    // fixture's track is at the track stage, where the leave-one-out ZNCC the
-    // stored column carries is what a fresh bench track arrives with.
+    // Measure the track, so the rows have numbers for the bars to judge.
     state
         .set_bench_verdict(id, &label, 1, Verdict::Out)
         .expect("observation 1 exists");
+    state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel.rows().iter().all(|row| row.painted.is_some()),
+        "every row is measured: {:?}",
+        panel.rows()
+    );
     let pinned_before = panel.rows()[1].verdict;
 
     // A bar nothing can clear: every measured row would be refused.
@@ -281,7 +285,7 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
     run_frame(&mut panel, &ctx, &state);
     let rows = panel.rows();
     assert!(
-        rows.iter().any(|row| row.painted == Verdict::Out),
+        rows.iter().any(|row| row.painted == Some(Verdict::Out)),
         "an unreachable bar painted nothing out: {rows:?}"
     );
     assert_eq!(
@@ -289,7 +293,8 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
         "the painting moved a verdict the person set"
     );
     assert_eq!(
-        rows[1].painted, pinned_before,
+        rows[1].painted,
+        Some(pinned_before),
         "a pinned row is painted as what it is, not as what the bars propose"
     );
 
@@ -300,7 +305,8 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
     run_frame(&mut panel, &ctx, &state);
     for row in panel.rows() {
         assert_eq!(
-            row.verdict, row.painted,
+            Some(row.verdict),
+            row.painted,
             "applying the bars produced a verdict the painting did not show"
         );
     }
@@ -423,11 +429,10 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
 #[test]
 fn the_cells_follow_the_stage_the_track_is_in() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // The eight cells are ZNCC, seed shift, projection offset, sigma_pos,
-    // self-similarity, reprojection error, ray angle, status. At the track
-    // stage the last three
-    // and the projection offset have numbers behind them; at the cluster stage
-    // there is no geometry behind an observation and they are absent.
+    // The six cells are ZNCC, seed shift, projection error, sigma_pos,
+    // self-similarity and status. At the track stage the projection error has
+    // numbers behind it; at the cluster stage there is no geometry behind an
+    // observation and it is absent.
     assert_eq!(panel.rows()[0].cells[2], "-", "nothing has measured it yet");
 
     state
@@ -440,10 +445,17 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     let rows = panel.rows();
     assert_ne!(rows[0].cells[0], "-", "the ZNCC column is unmeasured");
     let (whole, middle) = rows[0].cells[0]
-        .split_once(" / ")
-        .expect("the ZNCC cell shows the whole and the middle reading");
-    assert!(whole.parse::<f64>().is_ok(), "{whole}");
-    assert!(middle.parse::<f64>().is_ok(), "{middle}");
+        .split_once('\n')
+        .expect("the ZNCC cell shows the whole over the middle reading");
+    let percent = |line: &str, part: &str| {
+        let number = line
+            .strip_suffix(part)
+            .and_then(|rest| rest.strip_suffix("% "))
+            .unwrap_or_else(|| panic!("{line:?} is not a percent named {part}"));
+        assert!(number.parse::<f64>().is_ok(), "{line}");
+    };
+    percent(whole, "whole");
+    percent(middle, "mid");
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
     // Beside the ZNCC and the sigma_pos cells, the row draws their grids.
     assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
@@ -452,9 +464,17 @@ fn the_cells_follow_the_stage_the_track_is_in() {
         "no localizability grid drawn"
     );
     assert!(rows[0].grids.slide.is_some(), "no slide lines drawn");
-    assert!(rows[0].cells[3].contains(" / "), "{}", rows[0].cells[3]);
+    assert!(
+        rows[0].cells[3].contains(" px whole\n") && rows[0].cells[3].ends_with(" px mid"),
+        "{}",
+        rows[0].cells[3]
+    );
     // And beside the self-similarity cell, its grid and its slides.
-    assert!(rows[0].cells[4].contains(" / "), "{}", rows[0].cells[4]);
+    assert!(
+        rows[0].cells[4].contains(" px whole\n") && rows[0].cells[4].ends_with(" px mid"),
+        "{}",
+        rows[0].cells[4]
+    );
     assert!(
         rows[0].grids.radius.is_some(),
         "no self-similarity grid drawn"
@@ -834,6 +854,7 @@ fn the_boxes_follow_the_active_track_s_own_thresholds() {
     state
         .apply_bench_thresholds(id, &label, &bars)
         .expect("on the bench");
+    state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
 
     let track = state.bench_track(id, &label).expect("on the bench");
@@ -846,7 +867,7 @@ fn the_boxes_follow_the_active_track_s_own_thresholds() {
             .0
             .observations
             .iter()
-            .map(|o| o.verdict)
+            .map(|o| Some(o.verdict))
             .collect::<Vec<_>>()
     );
 
@@ -1461,7 +1482,7 @@ fn header_text(track: &sfmtool_core::bench::EditableTrack) -> String {
         ..Default::default()
     };
     crate::test_support::painted_texts(&ctx, input, |ui| {
-        super::show_header(ui, "item", track);
+        super::show_header(ui, "item", track, None);
     })
     .join(" | ")
 }
@@ -1564,17 +1585,17 @@ fn the_zncc_cell_shows_the_whole_and_the_middle_reading() {
     };
     assert_eq!(
         super::measurements(&row, StageKind::Cluster, &current)[0],
-        "92 / 61"
+        "92% whole\n61% mid"
     );
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
-        "95 / 20"
+        "95% whole\n20% mid"
     );
     // A committed track read back carries the stored ZNCC and no middle.
     row.track.as_mut().expect("a track slot").zncc_middle = None;
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[0],
-        "95 / -"
+        "95% whole\n- mid"
     );
     row.track.as_mut().expect("a track slot").zncc = None;
     assert_eq!(
@@ -1595,10 +1616,10 @@ fn a_typed_percent_is_read_as_the_fraction_it_stands_for() {
 fn zncc_text_formats_both_readings() {
     use super::zncc_sentence;
     use super::zncc_text;
-    assert_eq!(zncc_text(Some(0.918), Some(0.607)), "92 / 61");
-    assert_eq!(zncc_text(Some(0.5), None), "50 / -");
-    assert_eq!(zncc_text(Some(f64::NAN), Some(0.3)), "NaN / 30");
-    assert_eq!(zncc_text(Some(-0.35), Some(1.0)), "-35 / 100");
+    assert_eq!(zncc_text(Some(0.918), Some(0.607)), "92% whole\n61% mid");
+    assert_eq!(zncc_text(Some(0.5), None), "50% whole\n- mid");
+    assert_eq!(zncc_text(Some(f64::NAN), Some(0.3)), "NaN whole\n30% mid");
+    assert_eq!(zncc_text(Some(-0.35), Some(1.0)), "-35% whole\n100% mid");
     assert_eq!(zncc_text(None, Some(0.3)), "-");
     assert_eq!(zncc_sentence(Some(0.918), Some(0.607)), "92% / 61%");
     assert_eq!(zncc_sentence(Some(0.918), None), "92% / -");
@@ -1674,8 +1695,11 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
 #[test]
 fn sigma_text_formats_the_whole_and_the_middle() {
     use super::sigma_text;
-    assert_eq!(sigma_text(Some(0.0812), Some(0.1234)), "0.08 / 0.12");
-    assert_eq!(sigma_text(Some(0.3), None), "0.30 / -");
+    assert_eq!(
+        sigma_text(Some(0.0812), Some(0.1234)),
+        "0.08 px whole\n0.12 px mid"
+    );
+    assert_eq!(sigma_text(Some(0.3), None), "0.30 px whole\n- mid");
     assert_eq!(sigma_text(None, Some(0.3)), "-");
 }
 
@@ -1758,10 +1782,19 @@ fn a_grid_s_hover_text_holds_its_nine_numbers() {
 #[test]
 fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
     use super::self_similarity_text;
-    assert_eq!(self_similarity_text(Some(0.37), Some(1.44)), "0.4 / 1.4");
-    assert_eq!(self_similarity_text(Some(3.0), Some(2.26)), "3+ / 2.3");
-    assert_eq!(self_similarity_text(Some(1.0), Some(2.96)), "1.0 / 3.0");
-    assert_eq!(self_similarity_text(Some(3.0), None), "3+ / -");
+    assert_eq!(
+        self_similarity_text(Some(0.37), Some(1.44)),
+        "0.4 px whole\n1.4 px mid"
+    );
+    assert_eq!(
+        self_similarity_text(Some(3.0), Some(2.26)),
+        "3+ px whole\n2.3 px mid"
+    );
+    assert_eq!(
+        self_similarity_text(Some(1.0), Some(2.96)),
+        "1.0 px whole\n3.0 px mid"
+    );
+    assert_eq!(self_similarity_text(Some(3.0), None), "3+ px whole\n- mid");
     assert_eq!(self_similarity_text(None, Some(1.0)), "-");
 
     // At both stages, from the fields the measurement carries, beside the
@@ -1787,11 +1820,11 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
     };
     assert_eq!(
         super::measurements(&row, StageKind::Cluster, &current)[4],
-        "3+ / 1.0"
+        "3+ px whole\n1.0 px mid"
     );
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[4],
-        "0.4 / 1.4"
+        "0.4 px whole\n1.4 px mid"
     );
 }
 
@@ -1842,7 +1875,7 @@ fn the_localizability_headings_say_which_score_is_deprecated() {
     let headings = super::table::ColumnLayout::new().headers();
     assert!(headings
         .iter()
-        .any(|&(_, heading, _)| heading == "Self-sim (px)"));
+        .any(|&(_, heading, _)| heading == "Self-similarity"));
     assert!(super::table::SIGMA_POS_TIP.contains("deprecated"));
     let tip = super::table::SELF_SIMILARITY_TIP;
     assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
@@ -1954,16 +1987,16 @@ fn a_ridge_s_contour_runs_to_the_edge_of_the_disk() {
     assert!(!plot.inside.iter().any(|&[_, dy]| dy != 0));
 }
 
-/// The projection error cell prints the error in pixels and then as an angle
-/// in degrees, and says `-` for either that is not there.
+/// The projection error cell prints the error in pixels over the same
+/// residual as an angle in degrees, and says `-` for either that is not there.
 #[test]
 fn the_projection_error_cell_shows_pixels_and_degrees() {
     use super::projection_error_text;
     assert_eq!(
         projection_error_text(Some(0.654), Some(0.081)),
-        "0.65 / 0.08"
+        "0.65 px\n0.08\u{b0}"
     );
-    assert_eq!(projection_error_text(Some(1.5), None), "1.50 / -");
+    assert_eq!(projection_error_text(Some(1.5), None), "1.50 px\n-");
     assert_eq!(projection_error_text(None, None), "-");
 
     // Before the track is triangulated there is no point, so the error is
@@ -1984,7 +2017,7 @@ fn the_projection_error_cell_shows_pixels_and_degrees() {
     };
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[2],
-        "2.25 / -"
+        "2.25 px\n-"
     );
     // Once there is a point, the error to it, with its angle.
     let slot = row.track.as_mut().expect("a track slot");
@@ -1992,6 +2025,149 @@ fn the_projection_error_cell_shows_pixels_and_degrees() {
     slot.ray_angle_deg = Some(0.07);
     assert_eq!(
         super::measurements(&row, StageKind::Track, &current)[2],
-        "0.50 / 0.07"
+        "0.50 px\n0.07\u{b0}"
+    );
+}
+
+/// A row's *Keep* switch turns a kept row out, and the whole cell takes the
+/// click rather than the row behind it.
+#[test]
+fn clicking_the_keep_switch_turns_a_kept_row_out() {
+    let (state, _, _, mut panel, ctx) = on_the_bench();
+    assert_eq!(panel.rows()[1].verdict, Verdict::In);
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    // Left of the switch itself, still in its cell.
+    let response = at_pointer(&mut panel, &ctx, &state, egui::pos2(12.0, y + 8.0), true);
+    assert_eq!(response.set_verdict, Some((1, Verdict::Out)));
+    assert_eq!(
+        response.pick_row, None,
+        "the row behind the switch took the click"
+    );
+}
+
+/// A verdict set by hand is handed back to the thresholds from the switch's
+/// own menu and from the row's.
+#[test]
+fn a_pinned_row_offers_to_unpin_from_the_switch_and_from_the_row() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state
+        .set_bench_verdict(id, &label, 0, Verdict::Out)
+        .expect("observation 0 exists");
+    run_frame(&mut panel, &ctx, &state);
+    assert!(panel.rows()[0].pinned);
+
+    let y = row_y(&mut panel, &ctx, &state, 0);
+    for x in [12.0, 400.0] {
+        let at = egui::pos2(x, y + 8.0);
+        open_row_menu(&mut panel, &ctx, &state, at);
+        let entry = menu_entry_pos(&mut panel, &ctx, &state, super::table::UNPIN_LABEL);
+        let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+        assert_eq!(response.unpin_verdict, Some(0), "from x = {x}");
+    }
+
+    let before = versions(&state, id);
+    state
+        .unpin_bench_verdict(id, &label, 0)
+        .expect("observation 0 exists");
+    assert_eq!(versions(&state, id), before + 1);
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert!(!track.observations[0].pinned);
+    state
+        .unpin_bench_verdict(id, &label, 0)
+        .expect("observation 0 exists");
+    assert_eq!(
+        versions(&state, id),
+        before + 1,
+        "a second unpin is no effect"
+    );
+}
+
+/// The header prints the ID of the point the track came from once: as the
+/// label when the label is that ID, and beside a renamed label otherwise. A
+/// point that is gone from the version is named by its old index instead.
+#[test]
+fn the_header_names_the_point_the_track_came_from() {
+    let mut track = bearing_track();
+    track.origin = Some(sfmtool_core::bench::Origin {
+        version: 1,
+        point: 12,
+    });
+    let ctx = egui::Context::default();
+    let header = |label: &str, id: Option<&str>| {
+        crate::test_support::painted_texts(&ctx, input(Vec::new()), |ui| {
+            super::show_header(ui, label, &track, id);
+        })
+    };
+
+    let same = header("pt3d_ab_12", Some("pt3d_ab_12"));
+    assert_eq!(same.iter().filter(|t| t.contains("pt3d_ab_12")).count(), 1);
+    assert!(!same.iter().any(|t| t.contains("from point")), "{same:?}");
+
+    let renamed = header("my track", Some("pt3d_ab_12"));
+    assert!(renamed.iter().any(|t| t == "pt3d_ab_12"), "{renamed:?}");
+
+    let gone = header("my track", None);
+    assert!(gone.iter().any(|t| t == "\u{b7} from point 12"), "{gone:?}");
+}
+
+/// A track put on the bench from a point knows its point's ID, which is what
+/// the header's copy button copies.
+#[test]
+fn a_track_from_a_point_resolves_the_id_the_header_copies() {
+    let (state, id, label, _, _) = on_the_bench();
+    let node = state.node(id).expect("the node");
+    let track = state.bench_track(id, &label).expect("on the bench");
+    let index = state
+        .resolved_origin(node, track)
+        .expect("the point is live");
+    assert_eq!(crate::scene::point_id(node, index as usize), label);
+}
+
+/// The pin beside the switch pins a verdict the thresholds set, as it stands,
+/// and hands a pinned one back to the thresholds.
+#[test]
+fn the_pin_pins_a_verdict_and_unpins_a_pinned_one() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    let pin = egui::pos2(52.0, y + 8.0);
+    let response = at_pointer(&mut panel, &ctx, &state, pin, true);
+    assert_eq!(response.set_verdict, Some((1, Verdict::In)));
+    assert_eq!(
+        response.pick_row, None,
+        "the row behind the pin took the click"
+    );
+
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::In)
+        .expect("observation 1 exists");
+    let response = at_pointer(&mut panel, &ctx, &state, pin, true);
+    assert_eq!(response.unpin_verdict, Some(1));
+    assert_eq!(response.set_verdict, None);
+}
+
+/// The Name column elides a long name in its middle, and hovering it shows
+/// the name whole.
+#[test]
+fn hovering_a_name_shows_it_whole() {
+    let (state, id, _, mut panel, ctx) = on_the_bench();
+    let node = state.node(id).expect("the node");
+    let name = node.recon().image_table.images[1].name.clone();
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    let at = egui::pos2(190.0, y + 8.0);
+    let response = at_pointer(&mut panel, &ctx, &state, at, false);
+    assert_eq!(response.hovered_image, Some(1), "the row lost its hover");
+    // A tooltip shows after the pointer has rested, so a few more frames.
+    let mut texts = Vec::new();
+    for _ in 0..4 {
+        texts = painted(
+            &mut panel,
+            &ctx,
+            &state,
+            vec![egui::Event::PointerMoved(at)],
+        );
+    }
+    assert!(
+        texts.iter().any(|t| t == &name),
+        "{name:?} not in {texts:?}"
     );
 }

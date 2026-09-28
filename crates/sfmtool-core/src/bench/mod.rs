@@ -94,11 +94,11 @@ pub use steps::{
     add_observation, apply_thresholds, clamp_to_photograph, create_cluster, create_track,
     duplicate, half_width_px, resize_patch, resize_patch_to_pixel, set_verdict, shape_observation,
     sight_observation, spin_patch, split, tilt_patch, translate_patch, translate_patch_to_pixel,
-    AddObservationReport, Axis, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,
-    CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed, ResizeReport,
-    ShapeReport, SightReport, SpinReport, SplitError, SplitReport, ThresholdReport, TiltReport,
-    TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, VerdictReport, Viewpoint,
-    MAX_TILT_DEG,
+    unpin_verdict, AddObservationReport, Axis, ClusterSeed, CreateClusterError, CreateReport,
+    CreateTrackError, CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed,
+    ResizeReport, ShapeReport, SightReport, SpinReport, SplitError, SplitReport, ThresholdReport,
+    TiltReport, TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, VerdictReport,
+    Viewpoint, MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,

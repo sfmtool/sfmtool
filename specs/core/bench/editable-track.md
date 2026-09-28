@@ -123,7 +123,7 @@ pub enum Unmeasured {
     Unscorable,
 }
 
-pub enum Verdict { In, Out, Candidate }
+pub enum Verdict { In, Out }
 
 pub enum Provenance {
     Origin,
@@ -177,6 +177,11 @@ pub fn set_verdict(
     track: &EditableTrack,
     observation: usize,
     verdict: Verdict,
+) -> Result<(EditableTrack, VerdictReport), TrackEditError>;
+
+pub fn unpin_verdict(
+    track: &EditableTrack,
+    observation: usize,
 ) -> Result<(EditableTrack, VerdictReport), TrackEditError>;
 
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
@@ -758,16 +763,19 @@ on: it is what a cluster started on a `.sift` keypoint carries. A search's
 observation sits wherever that image's affine warp puts the pixel that was
 searched from, which is in general no feature at all; what stands behind it is
 the number of correspondences that agreed on the warp, so that is the number
-`Search` carries, and it is what ranks a search's candidates against one
+`Search` carries, and it is what ranks the images a search finds against one
 another.
 
-**A verdict** is `in`, `out` or `candidate`. `in` observations are what the
-kernels run over and what a commit writes. `out` is a sighting the person
-refused, kept in the list so a later search does not propose it again and so the
-refusal stays visible. `candidate` is something proposed and not yet ruled on.
+**A verdict** is `in` or `out`. `in` observations are what the kernels run
+over and what a commit writes. `out` is every other observation: one added and
+not yet measured, one the thresholds did not take, or one the person refused.
+It stays in the list so a later search does not propose it again and so the
+refusal stays visible. **A pin** says the verdict was set by hand, and the
+thresholds leave a pinned verdict where it is; an unpinned `out` is one nobody
+has ruled on.
 
 **One `in` observation per image.** A track cannot observe an image twice. A
-second candidate in an image already held is allowed, and is shown and scored
+second observation in an image already held is allowed, and is shown and scored
 like any other, but turning it `in` while the other is `in` is refused naming
 the observation that holds the image. This is the same rule the cluster kernel
 spells `duplicate_image`.
@@ -1214,8 +1222,9 @@ minted from it.
 
 ### Growing and judging
 
-`add_observation` appends a `candidate`, unpinned, with a cluster seed at the
-named pixel. The shape defaults to the reference observation's own, so a pixel
+`add_observation` appends an `out` observation, unpinned, with a cluster seed
+at the named pixel. The evaluation that first measures it turns it `in` when it
+clears the thresholds (§ "Evaluating"). The shape defaults to the reference observation's own, so a pixel
 gesture on a track that already has a scale needs no radius prompt and lands at
 that track's size. With no reference to copy it is the identity, which is one
 pixel to the keypoint-frame unit: a patch of `[-radius, radius]` pixels, and
@@ -1234,16 +1243,21 @@ keeps no shape of its own per observation and a descriptor search run from that
 row warps the one it carries. At the cluster stage the step writes the seed
 alone: a cluster has no keypoints.
 
-`set_verdict` sets one verdict **by hand** and pins it. `apply_thresholds`
-paints the proposed verdicts from the stored measurements onto the unpinned
-observations, and leaves a pinned one where it is. An observation nothing has
-measured at the track's current stage is left alone: there is no proposal to
-apply. An observation that *was* measured and failed is turned `out`, because a
-measured refusal is something the person should see.
+`set_verdict` sets one verdict **by hand** and pins it. Setting the verdict an
+observation already carries still pins it, which is a change when it was not
+pinned. `unpin_verdict` is the way back: it clears the pin and gives the
+observation the verdict the thresholds propose from its stored measurements,
+`in` only when no other `in` observation holds its image; an observation
+nothing has measured keeps its verdict. `apply_thresholds` paints the proposed
+verdicts from the stored measurements onto the unpinned observations, and
+leaves a pinned one where it is. An observation nothing has measured at the
+track's current stage is left alone: there is no proposal to apply. An
+observation that *was* measured and failed is turned `out`, because a measured
+refusal is something the person should see.
 
 The painting cannot produce a track that observes an image twice. It walks the
 observations best score first, and where several unpinned sightings of one image
-would pass, the best takes the `in` and the rest stay candidates.
+would pass, the best takes the `in` and the rest are turned `out`.
 
 ### Splitting
 
@@ -1592,7 +1606,7 @@ to the consensus, weighted towards the centre
 three-point model RANSAC drew. Both are the cluster stage's own convention (§ "The cluster
 stage's units"), which is what the next evaluation reads at either stage: at the
 cluster stage the refinement registers the seed, and at the track stage the
-candidate's pixel is also its keypoint (§ "Growing and judging") and it is a row
+new observation's pixel is also its keypoint (§ "Growing and judging") and it is a row
 the reading measures and the thresholds propose a verdict for. The step sets no verdict and moves nothing that was already on the track.
 
 **Where the search runs from** is one observation, named by index, and its pixel
@@ -1604,8 +1618,8 @@ at. The shape falls through the same order `add_observation` does: the
 observation's own, else the cluster's reference's, else the identity.
 
 **An image the track already names is left alone**, whatever the verdict on it.
-`out` is a decision the person made and a search does not overturn it; a
-`candidate` is already on the table. Those images are reported rather than
+`out` may be a decision the person made, and a search does not overturn it; an
+unpinned `out` is already on the table. Those images are reported rather than
 dropped, and the count of them is in the report's sentence, so "the search found
 nothing new" and "the search found nothing" read differently.
 
@@ -1641,11 +1655,11 @@ a trustworthy reference appearance. The bar is the editable track's own
 next geometry search by the same rule it changes a batch view selection.
 
 **The row names the appearance being searched from.** Its observation is first
-in the reference basis even when its verdict is `candidate` or `out`; the
+in the reference basis even when its verdict is `out`; the
 track's other `in` observations follow in observation order. Duplicate images
 are removed first-seen, so the selected row wins. Each basis render is anchored
-at that observation's own `site()`, while a candidate has no sighting yet and is
-scored at the patch's projection. This is patch-view selection's anchored
+at that observation's own `site()`, while an image the search considers has no
+sighting yet and is scored at the patch's projection. This is patch-view selection's anchored
 reference mode: the row gesture chooses real source appearance without giving
 up the robust consensus of the observations already accepted.
 
@@ -1654,9 +1668,9 @@ patch centre's projection, which is also its keypoint, as for any observation
 added at the track stage. Its shape is the projected `u`/`v` half-frame,
 converted from the negative-determinant patch-frame convention into the
 positive-determinant cluster/SIFT convention and divided by the cluster radius,
-exactly as a track-to-cluster stage change seeds an observation. The row is a
-`candidate` with `Provenance::Sweep`, carries no measurement, and the next
-evaluation or fit judges it. An image the track already names is reported and
+exactly as a track-to-cluster stage change seeds an observation. The row is an
+unpinned `out` with `Provenance::Sweep`, carries no measurement, and the next
+evaluation turns it `in` when it clears the thresholds. An image the track already names is reported and
 left byte-for-byte alone, including an `out` verdict or a pin; the source image
 and all other reference images are excluded by the selector itself. Repeating
 the same search is therefore idempotent.
@@ -1670,7 +1684,7 @@ does not carry.
 The work reports `build reference`, `score views`, and `add candidates` through
 `Progress`. It polls before and after reference construction and between views
 and additions; cancellation returns no grown track, so a caller never installs
-a partial candidate list. Candidate and report order is deterministic: newly
+a partial list. The order of the added rows and of the report is deterministic: newly
 admitted views are in ascending image index, after the selector's reference
 basis.
 
@@ -1678,10 +1692,20 @@ basis.
 
 `evaluate` fills the measurement slots of every observation at the stage the
 track is in, whatever its verdict, and **moves nothing else**: the position, the
-frame, the bitmap, every keypoint and every verdict come back as they went in.
-An `out` observation is scored the way a candidate is, so a refusal is shown
-beside the number it would have been judged on and a box can propose taking
-it back.
+frame, the bitmap and every keypoint come back as they went in, and so does
+every verdict but one kind. An `out` observation is scored the way an `in` one
+is, so a refusal is shown beside the number it would have been judged on and a
+box can propose taking it back.
+
+**An added observation's first reading can take it in.** An observation that is
+`out`, unpinned, and unmeasured at this stage before the call, and that clears
+every bar once measured, is turned `in`, best score first, when no `in`
+observation holds its image. That is how a row a search or a pixel gesture
+added joins the track without a person turning it in. Nothing is turned `out`,
+so a track put on the bench from a point, which arrives `in` and unmeasured,
+keeps the point's verdicts. The measurements came from the round that read the
+new row `out`, so the next evaluation reads the new `in` set; it has no first
+readings of its own, so it turns nothing and the two settle.
 
 **At the cluster stage** every observation's seed is a member of an in-memory
 `.matches` cluster, and
@@ -1940,7 +1964,7 @@ and every reader of one relies on.
 - **With `in` observations whose provenance names a point** other than the
   origin, those points are deleted as well, because a track cannot observe an
   image twice and a reconstruction should not hold two points for one surface.
-  Only `in` observations count: a candidate or an `out` sighting pulled from a
+  Only `in` observations count: an `out` sighting pulled from a
   point leaves that point alone. This is the merge, and the map becomes a
   `Chain` of the write and a `Removed` of what it absorbed, which is what
   `absorbed()` reads back.
@@ -2098,9 +2122,9 @@ rather than the commit.
 names and the same shape as the Rust ones; `EditableTrack` is a read-only value
 class whose observations cross as dicts, with each stage's measurements under
 `"cluster"` and `"track"` and a key present exactly when something has measured
-it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`,
-`"candidate"`; `"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`,
-`"point"`). Refusals are `ValueError` carrying the core sentence.
+it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`;
+`"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`, `"point"`).
+`EditableTrack.verdict_counts` is `(in, out)`. Refusals are `ValueError` carrying the core sentence.
 
 `create_cluster` takes either `radius_px`, a half-width in that image's pixels,
 or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
@@ -2409,11 +2433,11 @@ one of the sentence's four shapes, and the word `NaN` appears in none of them.
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):
 a patch planted in three images under two warps the test states, written to a
-`.kdf` and reopened, so the seed a candidate takes is a number the assertions
+`.kdf` and reopened, so the seed an added row takes is a number the assertions
 can name rather than merely something that appeared. It covers the searched
-image never being a candidate of its own search; the found image's candidate
-landing at the observation's pixel and shape under the planted warp, as a
-`candidate` with the search's own provenance and inlier count; an image the
+image never being added by its own search; the found image's row landing at the
+observation's pixel and shape under the planted warp, as an unpinned `out` with
+the search's own provenance and inlier count; an image the
 track already names being reported and left exactly as it was, pin and `out`
 verdict included; a bar no image reaches leaving the track untouched; and the
 three refusals -- an observation past the end, one with no place in its
@@ -2427,7 +2451,7 @@ The geometry search is covered in
 [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) over the
 textured-plane scene: a matching third view lands at the exact patch
 projection with positive-chirality seed geometry; existing observations are
-unchanged; repeating the search leaves an `out`, pinned candidate untouched;
+unchanged; repeating the search leaves an `out`, pinned row untouched;
 an explicitly selected `out` row remains part of the reference basis; the
 cluster stage is refused; and the real call reports all three phases and stops
 on cancellation without returning a partial track.

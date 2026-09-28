@@ -72,9 +72,7 @@ pub(crate) use geometry::PatchEdit;
 /// confused at a glance -- and one violet cannot mean `in` in one panel and
 /// something else in the other.
 pub(crate) const IN_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 92, 246);
-/// [`IN_COLOR`]'s companion for an observation nobody has judged yet.
-pub(crate) const CANDIDATE_COLOR: egui::Color32 = egui::Color32::from_rgb(170, 140, 255);
-/// [`IN_COLOR`]'s companion for an observation judged out.
+/// [`IN_COLOR`]'s companion for an observation the track does not keep.
 pub(crate) const OUT_COLOR: egui::Color32 = egui::Color32::from_rgb(130, 104, 150);
 
 /// The distance from `pos` to the segment `a`-`b`, in panel px.
@@ -120,7 +118,6 @@ pub(crate) fn resize_cursor(direction: egui::Vec2) -> egui::CursorIcon {
 pub(crate) fn verdict_color(verdict: Verdict) -> egui::Color32 {
     match verdict {
         Verdict::In => IN_COLOR,
-        Verdict::Candidate => CANDIDATE_COLOR,
         Verdict::Out => OUT_COLOR,
     }
 }
@@ -313,7 +310,7 @@ pub(crate) struct ObservationSite {
 ///
 /// The same order the evaluation's own seeding uses
 /// (`sfmtool_core::bench::evaluate`) -- the measured position wins over the
-/// seed -- so a fresh candidate, which has only a seed, is drawn and reported
+/// seed -- so a fresh observation, which has only a seed, is drawn and reported
 /// where the step that proposed it put it rather than nowhere.
 pub(crate) fn observation_site(observation: &Observation) -> Option<ObservationSite> {
     Some(ObservationSite {
@@ -627,7 +624,7 @@ impl AppState {
         })
     }
 
-    /// Add a candidate observation of the track called `label` in `image`, at
+    /// Add an observation of the track called `label` in `image`, at
     /// the place `seed` names.
     ///
     /// A seed with no shape of its own is added at the track's own scale, which
@@ -690,16 +687,51 @@ impl AppState {
         let name = self.image_name(ImageRef::new(id, image));
         if !report.changed {
             self.no_effect(format!(
-                "Left {name} {verdict} in {label}: no effect, it is {verdict} already"
+                "Left {name} {verdict} in {label}: no effect, it is {verdict} and pinned already"
             ));
             return Ok(());
         }
         let bench = install(&bench, label, next)?;
-        let text = match verdict {
-            Verdict::In => format!("Turned {name} in to {label}"),
-            Verdict::Out => format!("Turned {name} out of {label}"),
-            Verdict::Candidate => format!("Made {name} a candidate of {label}"),
+        let text = match (verdict, report.was == verdict) {
+            (Verdict::In, false) => format!("Turned {name} in to {label}"),
+            (Verdict::Out, false) => format!("Turned {name} out of {label}"),
+            (_, true) => format!("Pinned {name} ({verdict}) in {label}"),
         };
+        self.push_bench_step(index, bench, text);
+        Ok(())
+    }
+
+    /// Hand one observation's verdict back to the thresholds: clear the pin a
+    /// hand verdict set, and give it the verdict the bars propose.
+    ///
+    /// One version, as a hand verdict is; an observation that was not pinned
+    /// and already carries the proposed verdict is a no-effect row instead.
+    pub(crate) fn unpin_bench_verdict(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Result<(), String> {
+        let (index, bench, track) = self.bench_step_target(id, label)?;
+        let image = track
+            .observations
+            .get(observation)
+            .map(|o| o.image as usize)
+            .ok_or_else(|| format!("{label} has no observation {observation}."))?;
+        let (next, report) = bench::unpin_verdict(&track, observation)
+            .map_err(|e| format!("Cannot unpin that verdict: {e}"))?;
+        let name = self.image_name(ImageRef::new(id, image));
+        if !report.changed {
+            self.no_effect(format!(
+                "Left {name} to the thresholds in {label}: no effect, it is not pinned"
+            ));
+            return Ok(());
+        }
+        let bench = install(&bench, label, next)?;
+        let text = format!(
+            "Handed {name} back to the thresholds in {label}: {}",
+            report.is
+        );
         self.push_bench_step(index, bench, text);
         Ok(())
     }

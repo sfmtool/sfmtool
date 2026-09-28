@@ -377,6 +377,13 @@ impl std::fmt::Display for EvaluateReport {
 /// the bitmap: what a reading gives back is the same track with its own account
 /// of itself.
 ///
+/// **An added observation measured for the first time is taken in when it
+/// clears the thresholds**: one that is `out`, unpinned, was unmeasured before
+/// the call, and whose image no `in` observation holds. It joined the track
+/// `out` with nothing measured, and this is the first point at which there is
+/// a proposal to act on. Nothing is turned `out` and every other verdict stays
+/// where it was.
+///
 /// `progress` is where the call names its phases, the names the batch kernels
 /// carry: `refine` and `localizability` at the cluster stage, `localize` and
 /// `localizability` at the track stage. Pass `&Progress::none()` to report
@@ -414,10 +421,12 @@ pub fn evaluate(
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
     check_views(edited, images)?;
     evaluate_preconditions(track)?;
-    match &track.stage {
-        Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress),
-        Stage::Track(payload) => evaluate_track(track, images, payload, options, progress),
-    }
+    let (mut read, report) = match &track.stage {
+        Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress)?,
+        Stage::Track(payload) => evaluate_track(track, images, payload, options, progress)?,
+    };
+    super::steps::apply_thresholds_to_first_readings(track, &mut read);
+    Ok((read, report))
 }
 
 /// Whether `track` can be read at the stage it stands in, judged on the track
@@ -476,8 +485,8 @@ pub(super) fn check_views(
     Ok(())
 }
 
-/// Every observation, in index order. An `out` observation is read like a
-/// candidate, so the person sees the number the refusal stands beside; only the
+/// Every observation, in index order. An `out` observation is read like an
+/// `in` one, so the person sees the number the refusal stands beside; only the
 /// `in` set decides anything.
 pub(super) fn evaluated(track: &EditableTrack) -> Vec<usize> {
     (0..track.observations.len()).collect()

@@ -235,7 +235,7 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
 #[test]
 fn the_marks_carry_their_verdicts_while_the_frame_and_the_normal_stay_in() {
     let (state, id, track) = staged_track();
-    let verdicts = [Verdict::In, Verdict::Candidate, Verdict::Out];
+    let verdicts = [Verdict::In, Verdict::Out];
     assert!(track.observations.len() >= verdicts.len());
 
     let mut judged = track.clone();

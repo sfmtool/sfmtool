@@ -185,6 +185,22 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
 
     // And every step was a version of the node, walked back one at a time.
     assert_eq!(version_count(&state), 4);
+
+    // unpin hands the verdict back to the thresholds: nothing has measured the
+    // row, so it keeps its verdict and loses its pin, as one more version.
+    let unpinned = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": observation,
+            "verdict": "unpin",
+        }),
+    );
+    assert_eq!(unpinned["verdict"], json!("out"), "{unpinned}");
+    assert_eq!(unpinned["pinned"], json!(false), "{unpinned}");
+    assert_eq!(version_count(&state), 5);
 }
 
 /// A copy commits as a **creation**: it carries no origin, so it writes a new

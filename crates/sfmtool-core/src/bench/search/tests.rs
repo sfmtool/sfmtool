@@ -328,7 +328,7 @@ fn the_planted_images_are_found_and_seeded_at_the_warped_pixel_and_shape() {
     assert_eq!(observation, 2);
     let added = &grown.observations[observation];
     assert_eq!(added.image, 1);
-    assert_eq!(added.verdict, Verdict::Candidate);
+    assert_eq!(added.verdict, Verdict::Out);
     assert!(!added.pinned);
     assert_eq!(
         added.provenance,

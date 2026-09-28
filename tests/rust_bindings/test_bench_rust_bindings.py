@@ -34,6 +34,7 @@ from sfmtool._sfmtool.bench import (
     tilt_patch,
     translate_patch,
     translate_patch_to_pixel,
+    unpin_verdict,
 )
 from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
@@ -102,7 +103,7 @@ class TestTheBench:
         assert bench.active_label() == "IMG_0042@142,198"
         assert track.stage == "cluster"
         assert track.observation_count == 1
-        assert track.verdict_counts == (1, 0, 0)
+        assert track.verdict_counts == (1, 0)
         assert track.reference == 0
         assert track.origin is None
 
@@ -189,7 +190,7 @@ class TestTheEditableTrack:
         assert track.stage == "track"
         count = int(embedded.observation_counts[long_track_point])
         assert track.observation_count == count
-        assert track.verdict_counts == (count, 0, 0)
+        assert track.verdict_counts == (count, 0)
         assert track.origin == {"version": 0, "point": long_track_point}
         assert len(bench.labels) == 1
         assert bench.labels[0].startswith("pt3d_")
@@ -215,7 +216,7 @@ class TestTheEditableTrack:
         with pytest.raises(ValueError, match="no live point"):
             create_track(Bench(), edited, 0)
 
-    def test_an_added_observation_is_an_unruled_candidate(
+    def test_an_added_observation_joins_out_and_unpinned(
         self, edited, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
@@ -224,7 +225,8 @@ class TestTheEditableTrack:
         assert report == {"observation": before, "image": 0}
         assert grown.observation_count == before + 1
         added = grown.observation(before)
-        assert added["verdict"] == "candidate"
+        assert added["verdict"] == "out"
+        assert not added["pinned"]
         assert added["provenance"] == {"kind": "pixel"}
         np.testing.assert_allclose(added["cluster"]["seed_position"], [12.5, 30.25])
         # The track the step was called on is unchanged.
@@ -241,7 +243,7 @@ class TestTheEditableTrack:
 
         freed, _ = set_verdict(grown, 0, "out")
         settled, report = set_verdict(freed, freed.observation_count - 1, "in")
-        assert report["was"] == "candidate"
+        assert report["was"] == "out"
         assert report["is"] == "in"
         assert report["changed"]
         assert settled.observation(0)["verdict"] == "out"
@@ -255,6 +257,21 @@ class TestTheEditableTrack:
         painted, report = apply_thresholds(pinned, min_zncc=0.0)
         assert painted.observation(1)["verdict"] == "out"
         assert report["pinned"] == 1
+
+    def test_unpinning_hands_a_verdict_back_to_the_thresholds(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        pinned, _ = set_verdict(track, 1, "out")
+        unpinned, report = unpin_verdict(pinned, 1)
+        assert not unpinned.observation(1)["pinned"]
+        # Nothing has measured it, so there is no proposal and it keeps its
+        # verdict.
+        assert report == {"observation": 1, "was": "out", "is": "out", "changed": True}
+        _, again = unpin_verdict(unpinned, 1)
+        assert not again["changed"]
+        with pytest.raises(ValueError):
+            unpin_verdict(unpinned, 99)
 
     def test_the_painting_leaves_an_unmeasured_observation_where_it_is(
         self, edited, long_track_point
@@ -393,7 +410,7 @@ class TestEvaluating:
     def test_an_evaluation_measures_every_observation_whatever_its_verdict(
         self, edited, images, long_track_point
     ):
-        """An ``out`` row and a candidate are read like every other row.
+        """An ``out`` row and a new row are read like every other row.
 
         Nothing is dropped by a gate, so a refusal stands beside the number it
         would have been judged on and a slider can propose taking it back.
@@ -417,8 +434,15 @@ class TestEvaluating:
                 assert entry["reason"]
         out_row = read.observation(1)["track"]
         assert out_row.get("projection_offset_px", 0.0) >= 0.0
-        assert read.verdict_counts == track.verdict_counts
+        # The pinned ``out`` row stays out, and every row measured before keeps
+        # its verdict. Only the new row, measured for the first time, can be
+        # taken in, and only when it clears the thresholds.
         assert added["observation"] == track.observation_count - 1
+        for i in range(added["observation"]):
+            assert read.observation(i)["verdict"] == track.observation(i)["verdict"]
+        new = read.observation(added["observation"])
+        assert not new["pinned"]
+        assert new["verdict"] in ("in", "out")
 
     def test_a_row_with_nowhere_to_look_is_reported_with_a_reason(
         self, edited, images, long_track_point
@@ -540,7 +564,7 @@ class TestEvaluating:
     def test_a_cluster_from_pixels_refines_upgrades_and_commits(
         self, edited, images, long_track_point
     ):
-        """The whole path a candidate takes: pixels, a refinement, a point.
+        """The whole path a new sighting takes: pixels, a refinement, a point.
 
         The two pixels are a committed track's own sightings, so they are two
         photographs of one surface -- which is what the person pointing at them
@@ -656,7 +680,7 @@ class TestCommitting:
         # A track started from a search rather than from the point has no
         # origin; splitting one off is how a caller reaches that state here.
         # The half taken off is a cluster, so it is upgraded before it can be
-        # written back -- which is the whole path a candidate takes.
+        # written back -- which is the whole path a new sighting takes.
         bench, _ = create_track(Bench(), edited, long_track_point)
         bench, report = split(bench, edited, bench.labels[0], [0, 1])
         half = bench.track(report["label"])
@@ -839,7 +863,7 @@ class TestTheDescriptorSearch:
         assert report["image"] == image
         assert report["constellation"] > 0
         assert report["sentence"].startswith("Searched from observation 0 of")
-        # The searched image is never a candidate of its own search.
+        # The searched image is never added by its own search.
         assert all(m["image"] != image for m in report["matches"])
         assert report["added"] + report["already_in_track"] == len(report["matches"])
         # Nothing is mutated in place: the step hands back the next value,
@@ -864,7 +888,7 @@ class TestTheDescriptorSearch:
                 assert match["found"] == "added"
                 added = grown.observations[match["observation"]]
                 assert added["image"] == match["image"]
-                assert added["verdict"] == "candidate"
+                assert added["verdict"] == "out"
                 assert added["provenance"] == {
                     "kind": "search",
                     "inliers": match["inliers"],
@@ -1195,7 +1219,7 @@ class TestTheNormalHandSteps:
 class TestTheGeometrySearch:
     """``search_geometry`` over the fixture's own photographs."""
 
-    def test_a_search_appends_only_unruled_sweep_candidates(
+    def test_a_search_appends_only_unpinned_out_sweep_rows(
         self, edited, images, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
@@ -1222,7 +1246,8 @@ class TestTheGeometrySearch:
             if match["found"] == "added":
                 assert match["image"] not in held
                 row = grown.observations[match["observation"]]
-                assert row["verdict"] == "candidate"
+                assert row["verdict"] == "out"
+                assert not row["pinned"]
                 assert row["provenance"] == {"kind": "sweep"}
                 np.testing.assert_allclose(
                     row["cluster"]["seed_position"], match["pixel"], atol=1e-9

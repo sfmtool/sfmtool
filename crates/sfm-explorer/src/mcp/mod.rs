@@ -477,7 +477,9 @@ pub(crate) enum Command {
         /// The observation's position in the track's list, which is stable for
         /// the life of the track.
         observation: usize,
-        verdict: sfmtool_core::bench::Verdict,
+        /// The verdict to pin, or `None` to clear the pin and give the
+        /// observation the verdict the thresholds propose.
+        verdict: Option<sfmtool_core::bench::Verdict>,
     },
     /// Set the track's bars and paint the proposed verdicts onto its unpinned
     /// observations, which is the one gesture the panel's button is.
@@ -525,7 +527,7 @@ pub(crate) enum Command {
         stage: sfmtool_core::bench::StageKind,
     },
     /// Ask the node's SIFT index which other photographs hold the patch
-    /// around one observation, and add each as a candidate, on a worker.
+    /// around one observation, and add each `out` and unpinned, on a worker.
     SearchBenchTrackDescriptors {
         reconstruction_label: String,
         track: Option<String>,
@@ -540,7 +542,7 @@ pub(crate) enum Command {
         min_inliers: Option<usize>,
     },
     /// Project the track's patch into every camera of the node and add each
-    /// photometrically admitted photograph as a candidate, on a worker.
+    /// photometrically admitted photograph, `out` and unpinned, on a worker.
     SearchBenchTrackGeometry {
         reconstruction_label: String,
         track: Option<String>,

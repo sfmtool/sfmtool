@@ -61,21 +61,21 @@ pub enum Provenance {
     },
 }
 
-/// What the person has decided about one observation.
+/// Whether the track keeps one observation.
 ///
 /// A measurement is a report and never a decision: the thresholds propose a
-/// verdict and a step applies the proposal, but the verdict itself is always
-/// the person's, and [`Observation::pinned`] says when one was set by hand.
+/// verdict and the steps apply the proposal to the observations nobody has
+/// ruled on by hand, and [`Observation::pinned`] says when one was set by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// The observation belongs to the track. The kernels run over these, and a
     /// commit writes exactly these.
     In,
-    /// The observation was refused. It stays in the list so a search does not
-    /// propose it again and so the refusal is visible.
+    /// The track does not keep the observation: it was added and not yet
+    /// measured, the thresholds did not take it, or the person refused it,
+    /// which a pin says. It stays in the list so a search does not propose it
+    /// again and so the refusal is visible.
     Out,
-    /// Proposed by something and not yet ruled on.
-    Candidate,
 }
 
 impl std::fmt::Display for Verdict {
@@ -83,7 +83,6 @@ impl std::fmt::Display for Verdict {
         match self {
             Verdict::In => write!(f, "in"),
             Verdict::Out => write!(f, "out"),
-            Verdict::Candidate => write!(f, "candidate"),
         }
     }
 }
@@ -481,8 +480,9 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// A candidate in `image`, seeded for the cluster stage at `position` with
-    /// `shape`, measured at neither stage.
+    /// An unpinned `out` observation in `image`, seeded for the cluster stage
+    /// at `position` with `shape`, measured at neither stage. Its first
+    /// evaluation takes it in when it clears the thresholds.
     pub fn seeded(
         image: u32,
         provenance: Provenance,
@@ -492,7 +492,7 @@ impl Observation {
         Self {
             image,
             provenance,
-            verdict: Verdict::Candidate,
+            verdict: Verdict::Out,
             pinned: false,
             cluster: Some(ClusterMeasurement::from_seed(position, shape)),
             track: None,
@@ -504,7 +504,7 @@ impl Observation {
     /// position or the seed it started from, else nothing.
     ///
     /// The same order the evaluation's own seeding walks -- a measured position
-    /// wins over the seed it was measured from -- so a fresh candidate, which
+    /// wins over the seed it was measured from -- so a fresh observation, which
     /// has only a seed, is placed where the step that proposed it put it rather
     /// than nowhere. One rule in one place, because everything that draws,
     /// names or moves a sighting has to agree about where it is. `None` is the
@@ -773,9 +773,9 @@ impl Default for Thresholds {
 /// one; the thresholds are the bars the painting proposes verdicts against.
 ///
 /// One `in` observation per image is the invariant every step that sets a
-/// verdict holds: a track cannot observe an image twice, so a second candidate
-/// in an image already held is shown and scored but cannot be turned `in` until
-/// the other is turned `out`.
+/// verdict holds: a track cannot observe an image twice, so a second
+/// observation in an image already held is shown and scored but cannot be
+/// turned `in` until the other is turned `out`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditableTrack {
     /// The observations, in the order they were added. Never renumbered.
@@ -808,17 +808,14 @@ impl EditableTrack {
         self.stage.kind()
     }
 
-    /// How many observations carry each verdict, as `(in, candidate, out)`.
-    pub fn verdict_counts(&self) -> (usize, usize, usize) {
-        let mut counts = (0, 0, 0);
-        for observation in &self.observations {
-            match observation.verdict {
-                Verdict::In => counts.0 += 1,
-                Verdict::Candidate => counts.1 += 1,
-                Verdict::Out => counts.2 += 1,
-            }
-        }
-        counts
+    /// How many observations carry each verdict, as `(in, out)`.
+    pub fn verdict_counts(&self) -> (usize, usize) {
+        let kept = self
+            .observations
+            .iter()
+            .filter(|o| o.verdict == Verdict::In)
+            .count();
+        (kept, self.observations.len() - kept)
     }
 
     /// The indexes of the `in` observations, ascending.

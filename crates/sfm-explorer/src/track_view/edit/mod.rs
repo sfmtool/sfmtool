@@ -93,9 +93,13 @@ pub struct TrackEditResponse {
     /// A track-stage row's *Find matches by geometry*, carrying the
     /// observation whose appearance is the explicit reference.
     pub search_geometry: Option<usize>,
-    /// A verdict control was clicked: the observation, and the verdict it
-    /// cycled to.
+    /// A row's *Keep* switch was clicked: the observation, and the verdict it
+    /// switched to.
     pub set_verdict: Option<(usize, Verdict)>,
+    /// A row's *Unpin, let the thresholds decide*, carrying the observation.
+    pub unpin_verdict: Option<usize>,
+    /// The header's go-to button: open the *Go to Point* dialog.
+    pub request_goto_point: bool,
     /// A row was clicked -- select this image, as a view-mode row does.
     pub select_image: Option<usize>,
     /// A row was double-clicked -- enter camera view for this image, as a
@@ -127,8 +131,10 @@ pub struct TrackEdit {
     /// in the middle of the drag.
     sliding: bool,
     /// The verdicts the boxes propose for the active track, one per
-    /// observation, which is what the rows are painted by.
-    painted: Vec<Verdict>,
+    /// observation, which is what the rows are painted by: `None` for an
+    /// observation nothing at the track's stage has measured, which has no
+    /// proposal.
+    painted: Vec<Option<Verdict>>,
     /// The item and the exact track value [`TrackEdit::painted`] was computed
     /// from: the label, and the address of the track's `Arc`. A step on the
     /// track gives it a new `Arc`, which is what says the painting is stale.
@@ -334,7 +340,13 @@ impl TrackEdit {
             self.build_refusal = Some((id, state.sift_sources_refusal(id)));
         }
 
-        show_header(ui, &label, track);
+        // The ID of the point the track was read from, where that point is
+        // still in the version at the cursor: what the header's copy button
+        // copies, and what the *Go to Point* dialog takes back.
+        let point_id = state
+            .resolved_origin(node, track)
+            .map(|index| crate::scene::point_id(node, index as usize));
+        response.request_goto_point = show_header(ui, &label, track, point_id.as_deref());
         self.show_toolbar(ui, state, node, &label, track, &mut response);
         // A release applies what the drag left the boxes at. Painted by this
         // frame's value from the next frame on, which is the frame the dock
@@ -360,9 +372,11 @@ impl TrackEdit {
         let id = node.id;
         let busy = state.busy_refusal(id);
         ui.horizontal_wrapped(|ui| {
+            // The arrow is U+23F5, which egui's bundled fonts draw; they have no
+            // glyph for U+2192, which draws as a box.
             let (next, stage_label) = match track.stage_kind() {
-                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{2192} track"),
-                StageKind::Track => (StageKind::Cluster, "Stage: track \u{2192} cluster"),
+                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{23f5} track"),
+                StageKind::Track => (StageKind::Cluster, "Stage: track \u{23f5} cluster"),
             };
             let refusals = photometric_refusals(busy.as_deref(), track, next);
             show_evaluation(ui, &self.evaluation);
@@ -619,7 +633,12 @@ impl TrackEdit {
         let mut with_bars = (**track).clone();
         with_bars.thresholds = self.thresholds.clone();
         let (painted, _) = apply_thresholds(&with_bars);
-        self.painted = painted.observations.iter().map(|o| o.verdict).collect();
+        let stage = track.stage_kind();
+        self.painted = painted
+            .observations
+            .iter()
+            .map(|o| is_measured(o, stage).then_some(o.verdict))
+            .collect();
         self.painted_for = Some(key);
     }
 
@@ -735,35 +754,23 @@ impl TrackEdit {
     }
 }
 
-/// A patch ZNCC as a table cell prints it, in percent under a `ZNCC (%)`
-/// heading: the whole-patch reading, then the middle one (`92 / 61`).
+/// A patch ZNCC as a table cell prints it, in percent: the whole-patch
+/// reading over the middle one (`92% whole` over `61% mid`).
 ///
 /// The middle ZNCC is the same samples read over the middle square of the
 /// patch only, so the pair says whether an agreement is carried by the
 /// pixel's own neighbourhood or by its surroundings. Percent carries the same
-/// two digits as `0.92` in two fewer characters, which keeps the pair narrow
-/// enough for one column. `-` stands for a reading that is not there: no
-/// whole-patch ZNCC at all, or no middle one beside it, as on a track read
-/// back from a committed point. A reading that was taken and came out
-/// non-finite prints `NaN`.
+/// two digits as `0.92` in fewer characters, which keeps the column narrow.
+/// `-` stands for a reading that is not there: no whole-patch ZNCC at all, or
+/// no middle one beside it, as on a track read back from a committed point. A
+/// reading that was taken and came out non-finite prints `NaN`.
 pub(crate) fn zncc_text(whole: Option<f64>, middle: Option<f64>) -> String {
-    zncc_pair(whole, middle, "")
+    stacked(whole, middle, |value| format!("{:.0}%", 100.0 * value))
 }
 
-/// [`zncc_text`] for a sentence, which has no heading to carry the unit, so
-/// each number carries it (`92% / 61%`).
+/// [`zncc_text`] for a sentence, on one line (`92% / 61%`).
 pub(crate) fn zncc_sentence(whole: Option<f64>, middle: Option<f64>) -> String {
-    zncc_pair(whole, middle, "%")
-}
-
-fn zncc_pair(whole: Option<f64>, middle: Option<f64>, unit: &str) -> String {
-    let number = |value: f64| {
-        if value.is_finite() {
-            format!("{:.0}{unit}", 100.0 * value)
-        } else {
-            "NaN".to_string()
-        }
-    };
+    let number = |value: f64| finite_or_nan(value, |v| format!("{:.0}%", 100.0 * v));
     match whole {
         None => "-".to_string(),
         Some(whole) => format!(
@@ -775,42 +782,61 @@ fn zncc_pair(whole: Option<f64>, middle: Option<f64>, unit: &str) -> String {
 }
 
 /// A patch localizability as a table cell prints it, sigma_pos in grid px:
-/// the whole tile's, then its middle square's (`0.08 / 0.12`).
+/// the whole tile's over its middle square's (`0.08 px whole` over
+/// `0.12 px mid`), to two decimals.
 ///
-/// `-` stands for a reading that is not there, as [`zncc_text`] has it. Two
-/// decimals, so the pair fits one column.
+/// `-` stands for a reading that is not there, as [`zncc_text`] has it.
 pub(crate) fn sigma_text(whole: Option<f64>, middle: Option<f64>) -> String {
-    let number = |value: f64| {
-        if value.is_finite() {
-            format!("{value:.2}")
-        } else {
-            "NaN".to_string()
-        }
-    };
-    match whole {
-        None => "-".to_string(),
-        Some(whole) => format!(
-            "{} / {}",
-            number(whole),
-            middle.map_or_else(|| "-".to_string(), number)
-        ),
-    }
+    stacked(whole, middle, |value| format!("{value:.2} px"))
 }
 
 /// A ZNCC self-similarity radius as a table cell prints it, in grid px: the
-/// whole tile's, then its middle square's (`0.4 / 1.4`), to one decimal, and
-/// `3+` for the largest radius the reading searches, which stands for that far
-/// or further.
+/// whole tile's over its middle square's (`0.4 px whole` over `3+ px mid`), to
+/// one decimal, and `3+` for the largest radius the reading searches, which
+/// stands for that far or further.
 ///
 /// `-` stands for a reading that is not there, as [`zncc_text`] has it.
 fn self_similarity_text(whole: Option<f64>, middle: Option<f64>) -> String {
-    match whole {
-        None => "-".to_string(),
-        Some(whole) => format!(
-            "{} / {}",
-            radius_number(whole),
-            middle.map_or_else(|| "-".to_string(), radius_number)
-        ),
+    stacked(whole, middle, |value| {
+        format!("{} px", radius_number(value))
+    })
+}
+
+/// A whole-patch reading over its middle's, as a two-reading cell prints them:
+/// each through `number`, with the name of the part it reads (`93% whole` over
+/// `89% mid`).
+///
+/// A missing whole reading prints `-` alone, since there is nothing to name;
+/// a missing middle beside a whole prints `- mid`, as on a track read back from
+/// a committed point. A reading that was taken and came out non-finite prints
+/// `NaN`.
+fn stacked(whole: Option<f64>, middle: Option<f64>, number: impl Fn(f64) -> String) -> String {
+    let Some(whole) = whole else {
+        return "-".to_string();
+    };
+    let number = |value: f64| finite_or_nan(value, &number);
+    format!(
+        "{} whole\n{} mid",
+        number(whole),
+        middle.map_or_else(|| "-".to_string(), number)
+    )
+}
+
+/// `number(value)` for a finite value, and `NaN` for one that is not.
+fn finite_or_nan(value: f64, number: impl Fn(f64) -> String) -> String {
+    if value.is_finite() {
+        number(value)
+    } else {
+        "NaN".to_string()
+    }
+}
+
+/// Whether anything at `stage` has measured `observation`: whether it carries
+/// the ZNCC the thresholds judge first, without which they propose nothing.
+fn is_measured(observation: &Observation, stage: StageKind) -> bool {
+    match stage {
+        StageKind::Cluster => observation.cluster.as_ref().and_then(|m| m.zncc).is_some(),
+        StageKind::Track => observation.track.as_ref().and_then(|m| m.zncc).is_some(),
     }
 }
 
@@ -1072,17 +1098,55 @@ fn show_evaluation(ui: &mut egui::Ui, evaluation: &Evaluation) {
 }
 
 /// The header: what the active track is, and what the last evaluation of it
-/// made of it.
-fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
-    let (kept, candidates, out) = track.verdict_counts();
+/// made of it. Returns whether its go-to button was clicked.
+///
+/// `point_id` is the ID of the point the track was read from, when that point
+/// is still in the version at the cursor. It carries the copy and the go-to
+/// buttons view mode's header draws beside a point ID, so an ID copied here is
+/// one the *Go to Point* dialog takes back. A track put on the bench from a
+/// point is labelled with that ID unless it was renamed, and the ID is then
+/// printed once, as the label.
+fn show_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    track: &EditableTrack,
+    point_id: Option<&str>,
+) -> bool {
+    use crate::track_view::header_buttons::{copy_button, goto_button};
+    let (kept, out) = track.verdict_counts();
+    let mut goto_clicked = false;
     ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new(label).strong());
+        match point_id {
+            Some(id) if id == label => {
+                ui.label(egui::RichText::new(label).monospace().strong());
+            }
+            Some(id) => {
+                ui.label(egui::RichText::new(label).strong());
+                ui.weak("· point");
+                ui.label(egui::RichText::new(id).monospace());
+            }
+            None => {
+                ui.label(egui::RichText::new(label).strong());
+            }
+        }
+        if let Some(id) = point_id {
+            if copy_button(ui, "Copy Point ID") {
+                ui.ctx().copy_text(id.to_string());
+            }
+            goto_clicked = goto_button(ui);
+        }
         ui.weak(format!("· the {} stage", track.stage_kind()));
-        ui.weak(match track.origin {
-            Some(origin) => format!("· from point {}", origin.point),
-            None => "· new".to_string(),
-        });
-        ui.label(format!("{kept} in · {candidates} candidates · {out} out"));
+        match (track.origin, point_id) {
+            (None, _) => {
+                ui.weak("· new");
+            }
+            // The point is gone from this version: say which it was.
+            (Some(origin), None) => {
+                ui.weak(format!("· from point {}", origin.point));
+            }
+            (Some(_), Some(_)) => {}
+        }
+        ui.label(format!("{kept} kept · {out} out"));
     });
     match &track.stage {
         sfmtool_core::bench::Stage::Cluster(payload) => {
@@ -1122,6 +1186,7 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
             });
         }
     }
+    goto_clicked
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.
@@ -1240,31 +1305,29 @@ fn measurements(
     }
 }
 
-/// A reprojection error as its table cell prints it: in pixels, then as an
-/// angle in degrees, each to two decimals (`0.65 / 0.08`). `-` stands for a
-/// reading that is not there, as [`zncc_text`] has it.
+/// A reprojection error as its table cell prints it: in pixels over the
+/// same residual as an angle in degrees, each to two decimals (`0.65 px` over
+/// `0.08°`). `-` stands for a reading that is not there, as [`zncc_text`] has
+/// it.
 fn projection_error_text(px: Option<f64>, deg: Option<f64>) -> String {
-    let number = |value: f64| {
-        if value.is_finite() {
-            format!("{value:.2}")
-        } else {
-            "NaN".to_string()
-        }
-    };
-    match (px, deg) {
-        (None, None) => "-".to_string(),
-        (px, deg) => format!(
-            "{} / {}",
-            px.map_or_else(|| "-".to_string(), number),
-            deg.map_or_else(|| "-".to_string(), number)
-        ),
+    let px = px.map_or_else(
+        || "-".to_string(),
+        |v| finite_or_nan(v, |v| format!("{v:.2} px")),
+    );
+    let deg = deg.map_or_else(
+        || "-".to_string(),
+        |v| finite_or_nan(v, |v| format!("{v:.2}\u{b0}")),
+    );
+    if px == "-" && deg == "-" {
+        return "-".to_string();
     }
+    format!("{px}\n{deg}")
 }
 
 /// The cells of [`measurements`] for the numbers the track carries.
 fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
-    let number = |value: Option<f64>, digits: usize| match value {
-        Some(v) if v.is_finite() => format!("{v:.digits$}"),
+    let px = |value: Option<f64>| match value {
+        Some(v) if v.is_finite() => format!("{v:.2} px"),
         Some(_) => "NaN".to_string(),
         None => "-".to_string(),
     };
@@ -1273,7 +1336,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
             let m = observation.cluster.as_ref();
             [
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
-                number(m.and_then(|m| m.shift_px), 2),
+                px(m.and_then(|m| m.shift_px)),
                 "-".to_string(),
                 sigma_text(
                     m.and_then(|m| m.localizability_deprecated),
@@ -1291,7 +1354,7 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
             let m = observation.track.as_ref();
             [
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
-                number(m.and_then(|m| m.seed_shift_px), 2),
+                px(m.and_then(|m| m.seed_shift_px)),
                 // One column for the reprojection error: in px to the
                 // triangulated point, or before there is one to the patch's
                 // centre, which is kept on the point once it exists, so the

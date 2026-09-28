@@ -27,6 +27,7 @@
 //! way: the panel holds `&AppState` while it draws.
 
 pub(crate) mod edit;
+mod header_buttons;
 pub(crate) mod view;
 
 #[cfg(test)]

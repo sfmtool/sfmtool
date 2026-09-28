@@ -163,7 +163,7 @@ write, and one writes a file.
 | `rename_bench_item` | write | Give one item a label of your own |
 | `discard_bench_item` | write | Take one item off the bench |
 | `duplicate_bench_item` | write | Put a copy of one item on the bench beside it |
-| `add_bench_track_observation` | write | Add a candidate observation of a bench track, in one camera image; on a track-stage track the pixel is its keypoint, so it commits without a fit |
+| `add_bench_track_observation` | write | Add an observation of a bench track, in one camera image, unpinned and `out` until its first evaluation takes it in; on a track-stage track the pixel is its keypoint, so it commits without a fit |
 | `translate_bench_patch` | write | Move the patch, on its own axes or to a pixel; every sighting follows |
 | `sight_bench_observation` | write | Put one observation's own sighting at a pixel, by hand; the Image Detail dot with Track View's Lock cleared |
 | `shape_bench_observation` | write | Give one cluster sighting its affine shape outright |
@@ -172,7 +172,7 @@ write, and one writes a file.
 | `tilt_bench_patch` | write | Turn the patch to face a new outward normal, no further than its observations can see |
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
-| `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
+| `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; or `unpin`, which hands it back to the thresholds |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
@@ -180,8 +180,8 @@ write, and one writes a file.
 | `set_bench_search_px` | write | Set how far around each observation the bench's evaluation looks, which evaluates every track again at it; the viewer's setting, so no version |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
-| `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
-| `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it as a candidate, on a worker thread |
+| `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
+| `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |
 | `open_index_files` | write | Open one reconstruction's index files, its SIFT index and its cluster patches, from its own paths or from files the caller names |
 | `build_index_files` | write | Build one reconstruction's SIFT index and, from it, its cluster patches, beside its `.sfmr`, and open both, on a worker thread |
 | `close_index_files` | write | Let go of the index files open beside one reconstruction |

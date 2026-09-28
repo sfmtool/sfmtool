@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The observation table: the columns, one row per observation, and the
-//! three-state verdict control each row carries.
+//! *Keep* switch each row carries.
 //!
 //! The columns Track View has come first -- the rendered
 //! patch tile, the image and its name, the reprojection error and the ray angle
-//! -- and what the bench adds follows them: the verdict, the stage's own
+//! -- and what the bench adds follows them: the *Keep* switch, the stage's own
 //! photometric numbers, the kernel's status and where the observation came
 //! from. A reader who knows the view-only panel reads this one.
 //!
@@ -14,9 +14,13 @@
 //! view-only panel's are, so the header and every row stay aligned whatever a
 //! cell prints, and the header can be drawn above the scroll area rather than
 //! as its first row: the offsets are the same either side of that boundary.
-//! The one real widget in a row is the verdict control: the row
-//! rect is registered first and the control after it, so the control wins the
-//! clicks that land on it and the row takes the rest.
+//! The one real widget in a row is the *Keep* switch: the row rect is
+//! registered first and the switch after it, so the switch wins the clicks
+//! that land on it and the row takes the rest.
+//!
+//! A cell with two readings, the whole patch's and its middle's, prints them
+//! on two lines, each with its unit and its name (`93% whole` over `89% mid`),
+//! so the headings carry names alone.
 
 use sfmtool_core::bench::{EditableTrack, StageKind, Verdict};
 use sfmtool_core::SfmrReconstruction;
@@ -35,8 +39,14 @@ use crate::state::AppState;
 pub(crate) const TILE_SIZE: f32 = 48.0;
 /// Height of one observation row.
 pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
-/// Width of the verdict control.
-const VERDICT_WIDTH: f32 = 72.0;
+/// Width of the *Keep* column: the switch, then the pin that marks a verdict
+/// set by hand.
+const KEEP_WIDTH: f32 = 64.0;
+/// Width of the part of the *Keep* cell the switch takes; the pin takes the
+/// rest.
+const SWITCH_CELL_WIDTH: f32 = 40.0;
+/// Size of the *Keep* switch.
+const SWITCH_SIZE: egui::Vec2 = egui::vec2(34.0, 18.0);
 /// Side of one cell of a three-by-three grid a row draws: room for the slide
 /// line the localizability and the self-similarity grids draw in a cell.
 const GRID_CELL: f32 = 10.0;
@@ -59,9 +69,11 @@ pub(crate) struct RowSummary {
     pub verdict: Verdict,
     /// Whether that verdict was set by hand.
     pub pinned: bool,
-    /// What the thresholds propose for it, which is what the row is painted by.
-    pub painted: Verdict,
-    /// The six measurement cells, as printed.
+    /// What the thresholds propose for it, which is what the row is painted
+    /// by, or `None` for a row nothing at this stage has measured.
+    pub painted: Option<Verdict>,
+    /// The six measurement cells, as printed, a cell with two readings
+    /// holding them on two lines.
     pub cells: [String; 6],
     /// The three grids drawn beside the ZNCC, the sigma_pos and the
     /// self-similarity cells.
@@ -75,7 +87,7 @@ pub(crate) struct RowSummary {
 
 /// Fixed column x-offsets, relative to the left edge of the table.
 pub(super) struct ColumnLayout {
-    verdict: f32,
+    keep: f32,
     tile: f32,
     image: f32,
     name: f32,
@@ -94,26 +106,24 @@ pub(super) struct ColumnLayout {
 
 impl ColumnLayout {
     pub(super) fn new() -> Self {
-        let verdict = 0.0;
-        let tile = verdict + VERDICT_WIDTH + 6.0;
+        let keep = 0.0;
+        let tile = keep + KEEP_WIDTH + 6.0;
         let image = tile + TILE_SIZE + 8.0;
         let name = image + 34.0;
         let zncc = name + 130.0;
-        // Room for the whole-patch and the middle reading in percent,
-        // `100 / 100`, then the ZNCC grid.
-        let zncc_grid = zncc + 64.0;
+        // Room for `100% whole`, then the ZNCC grid.
+        let zncc_grid = zncc + 80.0;
         let shift = zncc_grid + GRID_SIDE + 10.0;
+        // Room for `12.25 px`.
         let offset = shift + 62.0;
-        // Room for the error in px and in degrees, `12.65 / 0.08`, and for the
-        // `Proj. err (px / deg)` heading.
-        let sigma = offset + 110.0;
-        // Room for the whole and the middle sigma_pos, `0.08 / 0.12`, then
-        // the localizability grid.
-        let sigma_grid = sigma + 76.0;
+        // Room for the error in px over the same residual in degrees,
+        // `12.65 px` over `0.08°`.
+        let sigma = offset + 66.0;
+        // Room for `0.08 px whole`, then the localizability grid.
+        let sigma_grid = sigma + 94.0;
         let self_similarity = sigma_grid + GRID_SIDE + 10.0;
-        // Room for the whole and the middle radius, `2.3 / 1.4`, then the
-        // self-similarity grid.
-        let self_similarity_grid = self_similarity + 76.0;
+        // Room for `2.3 px whole`, then the self-similarity grid.
+        let self_similarity_grid = self_similarity + 88.0;
         // Then the core's surface plot.
         let self_similarity_plot = self_similarity_grid + GRID_SIDE + 8.0;
         let status = self_similarity_plot + PLOT_SIDE + 10.0;
@@ -122,7 +132,7 @@ impl ColumnLayout {
         // it is given room for one and elided to it.
         let from = status + 270.0;
         Self {
-            verdict,
+            keep,
             tile,
             image,
             name,
@@ -144,37 +154,42 @@ impl ColumnLayout {
     /// hover text that says what the column holds.
     pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 10] {
         [
-            (self.verdict, "Verdict", VERDICT_TIP),
+            (self.keep, "Keep", KEEP_TIP),
             (
                 self.image,
                 "Img",
                 "The image's index in the reconstruction.",
             ),
             (self.name, "Name", "The image's file name."),
-            (self.zncc, "ZNCC (%)", ZNCC_TIP),
+            (self.zncc, "ZNCC", ZNCC_TIP),
             (self.shift, "Seed sh.", SEED_SHIFT_TIP),
-            (self.offset, "Proj. err (px / deg)", PROJECTION_ERROR_TIP),
+            (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
             (self.sigma, "\u{3c3}_pos", SIGMA_POS_TIP),
-            (self.self_similarity, "Self-sim (px)", SELF_SIMILARITY_TIP),
+            (self.self_similarity, "Self-similarity", SELF_SIMILARITY_TIP),
             (self.status, "Status", STATUS_TIP),
             (self.from, "From", FROM_TIP),
         ]
     }
 }
 
-const VERDICT_TIP: &str = "Whether the observation belongs to the track: in, out or \
-    candidate. Click a row's control to cycle it; a dot marks a verdict set by hand, which the \
-    thresholds leave alone. The tile beside it is the patch as this photograph sees it.";
+/// The *Keep* heading's hover text.
+pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A kept observation \
+    is one the evaluation and a fit read the track by, and one a commit writes.\n\n\
+    The thresholds set the switch when an observation is first measured and when a threshold \
+    is moved. Click a switch to set it by hand, which pins it. The pin beside the switch is \
+    solid on a pinned verdict, which the thresholds leave alone, and a faint outline on one \
+    they set. Click the pin to unpin a verdict and let the thresholds decide again, or to pin \
+    one as it stands.\n\n\
+    The tile beside it is the patch as this photograph sees it.";
 
 /// The ZNCC heading's hover text, in one constant so the tests aim at the text
 /// shown.
 pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in percent: how \
     closely this photograph's view of the patch matches, once differences in brightness and \
-    contrast are removed. 100 is an exact match and 0 is no relation.\n\n\
-    The first number is over the whole patch. The second is over its middle only, the centred \
-    square half the patch's width, read from the same samples. A high first number with a low \
-    second one means the match comes from the patch's surroundings rather than from the \
-    pixel's own neighbourhood.\n\n\
+    contrast are removed. 100% is an exact match and 0% is no relation.\n\n\
+    whole is over the whole patch. mid is over its middle only, the centred square half the \
+    patch's width, read from the same samples. A high whole with a low mid means the match \
+    comes from the patch's surroundings rather than from the pixel's own neighbourhood.\n\n\
     The grid beside them is the same samples read over each ninth of the patch, laid out as the \
     tile is, with every pixel weighted equally: green at 100, yellow at 75, red at 50 and \
     below, grey where the patch is flat. Hover it for the numbers.\n\n\
@@ -185,14 +200,13 @@ const SEED_SHIFT_TIP: &str = "How far the correlation peak sits from where the o
     sits, in source-image pixels: the observation's own evidence. The max shift px bar judges it.";
 
 /// The projection error heading's hover text.
-pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels and then \
-    in degrees.\n\n\
-    The first number is how far the observation sits from where the track's point projects \
-    into this image, in pixels. Before the track is triangulated it is measured to where its \
-    patch's centre projects, which is the same place once it is.\n\n\
-    The second is the same residual as an angle: between the observation's ray and the \
-    direction from its camera to the point, in degrees. It is comparable across lenses and \
-    depths, where a pixel is not.\n\n\
+pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels over the \
+    same residual in degrees.\n\n\
+    The pixels are how far the observation sits from where the track's point projects into \
+    this image. Before the track is triangulated it is measured to where its patch's centre \
+    projects, which is the same place once it is.\n\n\
+    The degrees are the angle between the observation's ray and the direction from its camera \
+    to the point. They are comparable across lenses and depths, where a pixel is not.\n\n\
     Large errors on every row beside small seed shifts say the point is off, not the \
     sightings. Track stage only.";
 
@@ -201,9 +215,9 @@ pub(super) const SIGMA_POS_TIP: &str = "The deprecated localizability score, sho
     compared with the self-similarity radius beside it.\n\n\
     How precisely this observation's own tile pins a position, as \
     the positional uncertainty in patch-grid pixels. Lower is better; a flat tile or a single \
-    straight edge scores high. The max \u{3c3}_pos bar judges the first number.\n\n\
-    The second number is the middle of the tile alone, the centred square half its width. The \
-    grid beside them is each ninth of the tile alone, laid out as the tile is: green at half \
+    straight edge scores high. The max \u{3c3}_pos bar judges the whole tile's.\n\n\
+    mid is the middle of the tile alone, the centred square half its width. The grid beside \
+    them is each ninth of the tile alone, laid out as the tile is: green at half \
     the bar and below, red at twice the bar and above. A part has fewer pixels than the whole, \
     so it reads higher for the same texture. A + in a box says that ninth alone pins a position \
     in both directions as well as the bar asks of a whole tile. A line says it pins one \
@@ -218,8 +232,8 @@ pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: h
     Under 1 means a match locks onto this position within a pixel, as on a corner or a busy \
     texture. 3+ means it still matched itself 3 pixels away and may slide further, as along a \
     straight edge or over a flat patch.\n\n\
-    The first number is the whole tile, the second its middle alone, the centred square half \
-    its width. The grid beside them is each ninth of the tile alone, laid out as the tile is: \
+    whole is the whole tile, mid its middle alone, the centred square half its width. The \
+    grid beside them is each ninth of the tile alone, laid out as the tile is: \
     green under 1, yellow from 1 to 2, orange from 2 to 3, red at 3 or more. A line in a box is \
     the direction that ninth can slide in, where its matching shifts line up along one. Hover \
     the grid for the numbers.";
@@ -232,27 +246,138 @@ const FROM_TIP: &str = "Where the observation came from: the point the track was
     from, a detected feature, a descriptor search, a sweep, a pixel placed by hand, or another \
     point.";
 
-/// The verdict the control cycles to from `current`: in, out, candidate, round
-/// again.
-fn next_verdict(current: Verdict) -> Verdict {
-    match current {
-        Verdict::In => Verdict::Out,
-        Verdict::Out => Verdict::Candidate,
-        Verdict::Candidate => Verdict::In,
+/// The label a pinned verdict's menu entry carries.
+pub(super) const UNPIN_LABEL: &str = "Unpin, let the thresholds decide";
+
+/// The *Keep* switch of one row, filling `rect`. The whole of `rect` takes
+/// the click, so the target is the cell and not the switch's own few points.
+/// Returns the click's response.
+fn keep_switch(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, kept: bool) -> egui::Response {
+    let response = ui.interact(rect, id, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), kept, "Keep")
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let switch = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + 2.0, rect.center().y - SWITCH_SIZE.y / 2.0),
+        SWITCH_SIZE,
+    );
+    let visuals = ui.style().interact_selectable(&response, kept);
+    let how_on = ui.ctx().animate_bool_responsive(id, kept);
+    let radius = 0.5 * switch.height();
+    let track_fill = if kept {
+        egui::Color32::from_rgb(56, 150, 76)
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    let painter = ui.painter();
+    painter.rect(
+        switch,
+        radius,
+        track_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let knob_x = egui::lerp((switch.left() + radius)..=(switch.right() - radius), how_on);
+    painter.circle(
+        egui::pos2(knob_x, switch.center().y),
+        0.75 * radius,
+        ui.visuals().strong_text_color(),
+        egui::Stroke::NONE,
+    );
+    response
+}
+
+/// The pin beside a row's *Keep* switch, filling `rect`: a pushpin drawn solid
+/// when the verdict was set by hand and as a faint outline when the thresholds
+/// set it. The whole of `rect` takes the click. Returns the click's response.
+fn pin_toggle(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, pinned: bool) -> egui::Response {
+    let response = ui.interact(rect, id, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), pinned, "Pin")
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let visuals = ui.visuals();
+    let color = match (pinned, response.hovered()) {
+        (true, _) => visuals.strong_text_color(),
+        (false, true) => visuals.text_color(),
+        (false, false) => visuals.weak_text_color().gamma_multiply(0.6),
+    };
+    paint_pushpin(ui.painter(), rect.center(), color, pinned);
+    response
+}
+
+/// A pushpin standing upright at `c`: a cap, a body narrower than the cap, a
+/// collar and the needle below it. Filled when `solid`, outlined otherwise.
+fn paint_pushpin(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32, solid: bool) {
+    let stroke = egui::Stroke::new(1.2, color);
+    let cap = egui::Rect::from_center_size(c + egui::vec2(0.0, -6.0), egui::vec2(8.0, 3.0));
+    let body = egui::Rect::from_min_max(
+        egui::pos2(c.x - 2.5, cap.bottom()),
+        egui::pos2(c.x + 2.5, c.y + 1.5),
+    );
+    let collar = [
+        egui::pos2(c.x - 5.5, c.y + 1.5),
+        egui::pos2(c.x + 5.5, c.y + 1.5),
+    ];
+    for part in [cap, body] {
+        if solid {
+            painter.rect_filled(part, 1.0, color);
+        } else {
+            painter.rect_stroke(part, 1.0, stroke, egui::StrokeKind::Inside);
+        }
+    }
+    painter.line_segment(collar, egui::Stroke::new(1.6, color));
+    painter.line_segment(
+        [egui::pos2(c.x, c.y + 1.5), egui::pos2(c.x, c.y + 8.0)],
+        stroke,
+    );
+}
+
+/// The switch's hover text: what the switch says now, and how to change it.
+fn keep_hover(kept: bool, pinned: bool) -> String {
+    let state = match (kept, pinned) {
+        (true, true) => "Kept, set by hand.",
+        (true, false) => "Kept, as the thresholds propose.",
+        (false, true) => "Not kept, set by hand.",
+        (false, false) => {
+            "Not kept: the thresholds did not take it, or nothing has measured it yet."
+        }
+    };
+    format!("{state} Click to switch it, which pins it.")
+}
+
+/// The pin's hover text: what it says now, and what a click does.
+fn pin_hover(pinned: bool) -> &'static str {
+    if pinned {
+        "Pinned: this verdict was set by hand, and the thresholds leave it alone. Click to \
+         unpin it and let the thresholds decide."
+    } else {
+        "Not pinned: the thresholds set this verdict, and move it when a threshold moves. \
+         Click to pin it as it stands."
     }
 }
 
-/// The word a verdict shows on its control.
-fn verdict_text(verdict: Verdict, pinned: bool) -> String {
-    let word = match verdict {
-        Verdict::In => "in",
-        Verdict::Out => "out",
-        Verdict::Candidate => "candidate",
-    };
+/// The menu entry that hands a pinned verdict back to the thresholds, greyed
+/// on a row whose verdict nobody set by hand.
+fn unpin_entry(ui: &mut egui::Ui, pinned: bool) -> bool {
+    let button = egui::Button::new(UNPIN_LABEL);
     if pinned {
-        format!("{word} \u{2022}")
+        ui.add(button)
+            .on_hover_text(
+                "Clear the verdict set by hand, and give this observation the one the \
+                 thresholds propose",
+            )
+            .clicked()
     } else {
-        word.to_string()
+        ui.add_enabled(false, button).on_disabled_hover_text(
+            "The thresholds already decide this verdict: it is not pinned.",
+        );
+        false
     }
 }
 
@@ -331,11 +456,7 @@ impl TrackEdit {
     ) {
         let row = &track.observations[observation];
         let image = ImageRef::new(id, row.image as usize);
-        let painted = self
-            .painted
-            .get(observation)
-            .copied()
-            .unwrap_or(row.verdict);
+        let painted = self.painted.get(observation).copied().flatten();
         let cells = measurements(row, stage, &self.evaluation);
         let grids = row_grids(row, stage, &self.evaluation);
         let name = recon
@@ -355,9 +476,9 @@ impl TrackEdit {
         // pointer or the split is on is a property of this frame.
         let visuals = ui.visuals();
         let paint = match painted {
-            Verdict::In => egui::Color32::from_rgb(40, 90, 50),
-            Verdict::Out => egui::Color32::from_rgb(96, 44, 44),
-            Verdict::Candidate => visuals.faint_bg_color,
+            Some(Verdict::In) => egui::Color32::from_rgb(40, 90, 50),
+            Some(Verdict::Out) => egui::Color32::from_rgb(96, 44, 44),
+            None => visuals.faint_bg_color,
         };
         ui.painter()
             .rect_filled(rect, 0.0, paint.gamma_multiply(0.7));
@@ -390,9 +511,14 @@ impl TrackEdit {
         // look anywhere else for it, so the row offers the build in its place.
         // The build does not then run the search -- a build over a large
         // capture takes long enough that the person has moved on, and
-        // candidates landing on a track unasked are a surprise.
+        // observations landing on a track unasked are a surprise.
         let sources = self.build_refusal.as_ref().and_then(|(_, why)| why.clone());
         crate::context_menu::on_secondary_click(&row_response).show(|ui| {
+            if unpin_entry(ui, row.pinned) {
+                response.unpin_verdict = Some(observation);
+                ui.close();
+            }
+            ui.separator();
             match state.sift_index_state(id) {
                 crate::index_files::IndexFileState::Current => {
                     let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
@@ -401,7 +527,7 @@ impl TrackEdit {
                             .add(button)
                             .on_hover_text(
                                 "Ask the SIFT index which other photographs hold the patch \
-                                 around this observation, and add each as a candidate",
+                                 around this observation, and add each to the track",
                             )
                             .clicked(),
                         Some(why) => {
@@ -454,7 +580,7 @@ impl TrackEdit {
                         .on_hover_text(
                             "Project this track's patch into the reconstruction's other cameras, \
                              vet their patches against this observation and the accepted views, \
-                             and add each match as a candidate",
+                             and add each match to the track",
                         )
                         .clicked(),
                     Some(why) => {
@@ -510,21 +636,52 @@ impl TrackEdit {
         let x0 = rect.min.x;
         let cy = rect.center().y;
 
-        // The verdict control, registered after the row so it takes the clicks
-        // that land on it. One button cycling in / out / candidate: three
-        // buttons would be three targets for one decision.
-        let verdict_rect = egui::Rect::from_min_size(
-            egui::pos2(x0 + cols.verdict, cy - 10.0),
-            egui::vec2(VERDICT_WIDTH, 20.0),
+        // The *Keep* switch and its pin, registered after the row so they
+        // take the clicks that land on them, each over the whole height of the
+        // row: a two-state decision is one switch, and a cell-sized target is
+        // easy to hit.
+        let keep_rect = egui::Rect::from_min_size(
+            egui::pos2(x0 + cols.keep, rect.min.y),
+            egui::vec2(SWITCH_CELL_WIDTH, ROW_HEIGHT),
         );
-        let mut verdict_ui = ui.new_child(egui::UiBuilder::new().max_rect(verdict_rect));
-        if verdict_ui
-            .add(egui::Button::new(verdict_text(row.verdict, row.pinned)).small())
-            .on_hover_text("Click to cycle in / out / candidate")
-            .clicked()
-        {
-            response.set_verdict = Some((observation, next_verdict(row.verdict)));
+        let pin_rect = egui::Rect::from_min_max(
+            egui::pos2(keep_rect.right(), rect.min.y),
+            egui::pos2(x0 + cols.keep + KEEP_WIDTH, rect.max.y),
+        );
+        let kept = row.verdict == Verdict::In;
+        let keep = keep_switch(
+            ui,
+            keep_rect,
+            ui.id().with(("track_view_keep", observation)),
+            kept,
+        );
+        let pin = pin_toggle(
+            ui,
+            pin_rect,
+            ui.id().with(("track_view_pin", observation)),
+            row.pinned,
+        );
+        // Pinning the verdict a row already carries is `set_verdict` with that
+        // verdict, and unpinning is `unpin_verdict`.
+        if pin.clicked() {
+            if row.pinned {
+                response.unpin_verdict = Some(observation);
+            } else {
+                response.set_verdict = Some((observation, row.verdict));
+            }
         }
+        pin.on_hover_text(pin_hover(row.pinned));
+        if keep.clicked() {
+            response.set_verdict =
+                Some((observation, if kept { Verdict::Out } else { Verdict::In }));
+        }
+        crate::context_menu::on_secondary_click(&keep).show(|ui| {
+            if unpin_entry(ui, row.pinned) {
+                response.unpin_verdict = Some(observation);
+                ui.close();
+            }
+        });
+        keep.on_hover_text(keep_hover(kept, row.pinned));
 
         // The tile: rendered once per observation and kept until the track or
         // the item moves, because a warp per row per frame is a warp per row
@@ -573,6 +730,18 @@ impl TrackEdit {
             })
         });
         text(cols.name, &shown, weak);
+        // The name is elided in its middle to fit the column, so hovering the
+        // column shows it whole.
+        let name_rect = egui::Rect::from_min_max(
+            egui::pos2(x0 + cols.name, rect.min.y),
+            egui::pos2(x0 + cols.zncc - 8.0, rect.max.y),
+        );
+        ui.interact(
+            name_rect,
+            ui.id().with(("track_view_name", observation)),
+            egui::Sense::hover(),
+        )
+        .on_hover_text(&name);
         // While an evaluation of new inputs is on its way the numbers are the
         // last evaluation's, and they are greyed so that they do not read as
         // the numbers of the track as it now stands.
