@@ -217,13 +217,14 @@ fn with_overrides<T>(
 }
 
 /// The name the harness gives a source's anchors.
-fn harness_name(source: NearbySource) -> &'static str {
+pub(super) fn harness_name(source: NearbySource) -> &'static str {
     match source {
         // The harness calls the reconstruction's own points its tracks.
         NearbySource::Points => "tracks",
         NearbySource::Clusters => "clusters",
         NearbySource::Guided => "guided",
         NearbySource::Constellation => "constellation",
+        NearbySource::FarField => "farfield",
     }
 }
 

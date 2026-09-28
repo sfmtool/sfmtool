@@ -3,13 +3,15 @@
 
 //! The building blocks of finding the tracks near a pixel: reading the pixel's
 //! patch along its ray, the far-field sweep built on that read, the distance
-//! range a set of sightings allows along the pixel's ray, and the matching
-//! sources that find candidate tracks near the pixel.
+//! range a set of sightings allows along the pixel's ray, the matching
+//! sources that find candidate tracks near the pixel, and the depth layers
+//! that group and rank what they find.
 //!
 //! `specs/drafts/nearby-tracks.md` is the plan these belong to, and
 //! `specs/core/bench/far-field-sweep.md`,
-//! `specs/core/bench/distance-range.md` and
-//! `specs/core/bench/nearby-sources.md` the design of the pieces here. Like
+//! `specs/core/bench/distance-range.md`,
+//! `specs/core/bench/nearby-sources.md` and
+//! `specs/core/bench/depth-layers.md` the design of the pieces here. Like
 //! the rest of [`super`], nothing here writes the reconstruction: the sweep
 //! reads the photographs and fits bench tracks, the sources read the
 //! reconstruction and its index files, and each returns what it found.
@@ -24,11 +26,14 @@ mod constellation;
 mod far_field;
 mod grey;
 mod guided;
+mod layers;
 mod patch_read;
 mod points;
 mod range;
 mod triangulate;
 
+#[cfg(test)]
+mod layer_tests;
 #[cfg(test)]
 mod source_tests;
 #[cfg(test)]
@@ -43,6 +48,11 @@ pub use far_field::{
 };
 pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImages, GREY_BLUR_SIGMA};
 pub use guided::{guided_matches, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays};
+pub use layers::{
+    depth_layers, DepthLayer, DepthLayerError, DepthLayerOptions, DepthLayers, LayerCandidate,
+    LayerEvidence, LayerRankBy, LayerRanking, CONF_BIAS, CONF_MARGIN, CONF_NEAREST, CONF_SUPPORT,
+    CONF_VOTES, KEY_NEAREST,
+};
 pub use patch_read::{read_patch_along_ray, PatchRead, PatchSamples, RayPatch, PATCH_GRID};
 pub use points::{nearby_points, PointsOptions};
 pub use range::{

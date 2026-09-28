@@ -235,10 +235,20 @@ scoring is left.
    - `constellation_seeds`: the constellation query from the pixel, through
      the existing `seed_cluster_with` and `search_descriptors`, its carried
      positions triangulated.
-4. **Depth layers.** `depth_layers(views, image, pixel, candidates, options)
-   -> Vec<DepthLayer>`: the usable candidates grouped by overlapping ranges,
+4. **Depth layers.** Built; the standing spec is
+   [core/bench/depth-layers.md](../core/bench/depth-layers.md).
+   `depth_layers(views, grey, image, pixel, candidates, options)
+   -> DepthLayers`: the usable candidates grouped by overlapping ranges,
    each layer's evidence read with `read_patch_along_ray`, its key, rank and
-   confidence.
+   confidence, and each candidate's support beside the layers. A candidate
+   enters as a `LayerCandidate`, which borrows a `NearbyCandidate` or a
+   `FarFieldReading` with the range and class the caller gave it, so stage 5
+   passes the sources' and the sweep's output in one list; `NearbySource`
+   gained `FarField` for it. A layer's evidence, score, key, rank and
+   confidence are one `LayerRanking`, absent when the evidence is off, and
+   the harness's per-layer `support` sum is `LayerEvidence::weight`. The
+   `DepthLayer` sketched above differs accordingly: its members are
+   candidate indexes, and stage 5 maps them to its tracks.
 5. **Finding the nearby tracks.** `find_nearby_tracks`, the interface above:
    the sources in order with the stopping rule, the far-field sweep when they
    leave the depth open, the layers, and the tracks built and fitted for the

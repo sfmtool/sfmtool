@@ -176,6 +176,15 @@ DEFAULTS = {
     "layer_rank": "evidence",
     "layer_radius_px": 8.0,
     "layer_samples": 5,
+    # Which implementation computes each anchor's support and the layers, with
+    # their evidence, score and ranking: "rust", the core `depth_layers`
+    # through its binding (`specs/core/bench/depth-layers.md`), or "python",
+    # this module's own (:func:`_layers`, :func:`_layer_reads`,
+    # :func:`layer_evidence`, :func:`_rank_layers`), kept as the reference the
+    # Rust one was measured against. The Rust one takes the anchors of the
+    # sources in core and the far-field sweep, not the `sweep` or `infinity`
+    # sources.
+    "layers_impl": "rust",
     "inf_peak_margin": 0.02,
     "inf_drop": 0.05,
     # Clusters: "kept" uses the reference and kept members, and the queried
@@ -1572,6 +1581,27 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
         )
     ):
         run(opts["far_test"])
+    t0 = time.perf_counter()
+    if opts["layers_impl"] == "python":
+        layers = _python_layers(ctx, image, pixel, anchors, opts)
+    elif opts["layers_impl"] == "rust":
+        layers = _rust_layers(ctx, image, pixel, anchors, opts)
+    else:
+        raise ValueError(
+            f"unknown layers_impl {opts['layers_impl']!r} (expected rust|python)"
+        )
+    if opts["layer_evidence"] and layers:
+        # The support, the layers and their evidence and ranking together.
+        stages.append(
+            {"source": "evidence", "found": 0, "seconds": time.perf_counter() - t0}
+        )
+    return {"anchors": anchors, "layers": layers, "stages": stages}
+
+
+def _python_layers(ctx, image, pixel, anchors, opts) -> list[dict]:
+    """Each anchor's ``support`` and the layers, with their evidence and
+    ranking when ``layer_evidence`` is on: the reference :func:`_rust_layers`
+    was measured against."""
     for a in anchors:
         mine = {int(v[0]) for v in a["views"]}
         a["support"] = sum(
@@ -1586,7 +1616,6 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
         )
     layers = _layers(anchors)
     if opts["layer_evidence"] and layers:
-        t0 = time.perf_counter()
         reads, centre = _layer_reads(ctx, image, pixel, layers, opts)
         for n, L in enumerate(layers):
             L["evidence"] = layer_evidence(anchors, L, reads, n, centre)
@@ -1595,10 +1624,30 @@ def find_anchors(ctx, image: int, pixel, options: dict | None = None) -> dict:
             # of the whole patch's reading and the lesser of the two.
             L["score"] = 0.5 * (e["photo"] + e["photo_both"])
         _rank_layers(layers, opts["layer_rank"])
-        stages.append(
-            {"source": "evidence", "found": 0, "seconds": time.perf_counter() - t0}
-        )
-    return {"anchors": anchors, "layers": layers, "stages": stages}
+    return layers
+
+
+def _rust_layers(ctx, image, pixel, anchors, opts) -> list[dict]:
+    """:func:`_python_layers` by the core ``depth_layers``, which sets each
+    anchor's ``support`` from its result."""
+    from sfmtool._sfmtool import bench as B
+
+    found = B.depth_layers(
+        ctx.edited,
+        ctx.pyramids,
+        int(image),
+        (float(pixel[0]), float(pixel[1])),
+        anchors,
+        options={
+            "evidence": bool(opts["layer_evidence"]),
+            "rank_by": opts["layer_rank"],
+            "radius_px": float(opts["layer_radius_px"]),
+            "samples": int(opts["layer_samples"]),
+        },
+    )
+    for a, support in zip(anchors, found["support"]):
+        a["support"] = support
+    return found["layers"]
 
 
 # The layer ranking's key and confidence (:func:`_rank_layers`), fitted on the

@@ -72,14 +72,15 @@ pub use geometry_search::{
     GeometrySearchReport,
 };
 pub use nearby::{
-    camera_spread, classify_range, constellation_seeds, distance_range, far_field_sweep,
-    guided_matches, nearby_cluster_tracks, nearby_points, read_patch_along_ray,
+    camera_spread, classify_range, constellation_seeds, depth_layers, distance_range,
+    far_field_sweep, guided_matches, nearby_cluster_tracks, nearby_points, read_patch_along_ray,
     triangulate_sightings, ClusterMembers, ClusterTracksOptions, ConstellationAt,
-    ConstellationSeedOptions, DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics,
-    FarFieldOptions, FarFieldReading, FarFieldSweep, GreyImage, GreyImages, GuidedOptions,
-    GuidedSource, ImageDescriptors, KeypointRays, NearbyCandidate, NearbySource, NearbySourceError,
-    PatchRead, PatchSamples, PointsOptions, RangeClass, RangeOptions, RayMeeting, RayPatch, Refit,
-    WideAmong, PATCH_GRID,
+    ConstellationSeedOptions, DepthLayer, DepthLayerError, DepthLayerOptions, DepthLayers,
+    DistanceRangeError, FarFieldError, FarFieldGrouping, FarFieldMetrics, FarFieldOptions,
+    FarFieldReading, FarFieldSweep, GreyImage, GreyImages, GuidedOptions, GuidedSource,
+    ImageDescriptors, KeypointRays, LayerCandidate, LayerEvidence, LayerRankBy, LayerRanking,
+    NearbyCandidate, NearbySource, NearbySourceError, PatchRead, PatchSamples, PointsOptions,
+    RangeClass, RangeOptions, RayMeeting, RayPatch, Refit, WideAmong, PATCH_GRID,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,

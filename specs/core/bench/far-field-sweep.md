@@ -37,7 +37,9 @@ re-exported from `sfmtool_core::bench`. The direction projection is
 `ViewCamera::project_direction` in
 [`track_at_pixel/neighbourhood.rs`](../../../crates/sfmtool-core/src/bench/track_at_pixel/neighbourhood.rs),
 crate-internal, shared with the track-at-pixel members. The sweep is bound as
-`sfmtool._sfmtool.bench.far_field_sweep`.
+`sfmtool._sfmtool.bench.far_field_sweep` and the patch read, in
+[`patch_read.rs`](../../../crates/sfmtool-py/src/bench/patch_read.rs), as
+`sfmtool._sfmtool.bench.read_patch_along_ray`.
 
 ```rust
 pub fn far_field_sweep(
@@ -269,6 +271,18 @@ harness's anchors carry: `source` (`"farfield"`), `id`, `position`, `w`,
 `query_middle`, `refit` and `refit_px`. A reading at the sweep's distance
 carries `disparity` and `range_override`; a moved one `sweep_disparity`
 instead. The harness's `from_farfield` calls it by default (`ff_impl="rust"`).
+
+```python
+read = bench.read_patch_along_ray(edited, images, image, (x, y), 8.0,
+                                  [math.inf, 40.0, 20.0], read_images=None,
+                                  samples=False)
+```
+
+`read_patch_along_ray` reads in every image but the queried one when
+`read_images` is left out, and returns `None` for a flat or off-photograph
+patch, or a dict with `images`, `distances`, `whole` and `middle`
+(`(distances, images)` arrays, `-1` where unread), `centres`, `middle_std`
+and, with `samples`, `template`, `values` and `middle_mask`.
 
 ## Testing
 

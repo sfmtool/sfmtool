@@ -13,7 +13,8 @@ use crate::patch::normal_refine::ProjectedImage;
 
 use super::range::{distance_range, DistanceRangeError};
 
-/// Which matching source found a candidate.
+/// Which source found a candidate: one of the matching sources, or the
+/// far-field sweep, whose readings the depth layers group beside them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NearbySource {
     /// The reconstruction's own points observed near the pixel
@@ -28,6 +29,11 @@ pub enum NearbySource {
     /// The SIFT index's constellation query from the pixel, its seed
     /// positions triangulated ([`super::constellation_seeds`]).
     Constellation,
+    /// The far-field sweep's readings of the pixel's own patch
+    /// ([`super::far_field_sweep`]). Not a matching source and never on a
+    /// [`NearbyCandidate`]; it names a [`super::LayerCandidate`] made from a
+    /// [`super::FarFieldReading`].
+    FarField,
 }
 
 impl NearbySource {
@@ -38,6 +44,7 @@ impl NearbySource {
             Self::Clusters => "clusters",
             Self::Guided => "guided",
             Self::Constellation => "constellation",
+            Self::FarField => "far_field",
         }
     }
 }
