@@ -155,6 +155,15 @@ specs that describe them.
 | **release** | let bundle adjustment move a camera's focal or its lens distortion, chosen per camera: `CameraRelease { focal, distortion }`, `BundleAdjustOptions::releases`, the binding's `releases=`, MCP `bundle_adjust`'s `release_focal` / `release_distortion` and `cameras`, `sfm xform --bundle-adjust cameras=`. A camera with nothing released is **held** | `free`, `unlock`, `refine` for the choice | the kernel's flags and every surface already said *release*; *held* is its opposite in the dialog, the report and the Action Log |
 | **camera_model** | a camera model named anywhere but on a camera itself: MCP arguments and reply fields (`switch_camera_model`'s `camera_model`, `camera_model_before` / `camera_model_after`, `get_camera_intrinsics`'s `camera_model`), report keys (`CameraIntrinsics.refit`'s `camera_model`), request structs (`SwitchCameraModelRequest::camera_model`), error fields (`RefitError`, `BundleAdjustError`) and binding parameters (`CameraIntrinsics.refit(camera_model, …)`, `switch_camera_model(camera_model, …)`). The one place the bare `model` stays is the field of a serialized camera: the `.sfmr` camera JSON, `camera_config.json`, rig configs, `.camrig` and `CameraIntrinsics.to_dict`, where the owner already says camera | `model` | off a camera, a bare `model` does not say which model; an argument list or a report holds more than a camera, so the name has to |
 
+## Widgets on the wire
+
+What `get_widgets` and the input tools report about the viewer's window, in
+`crates/sfm-explorer/src/mcp/` and [gui/mcp-server.md](gui/mcp-server.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **dialog** / **menu** | what is drawn above the dock and its panels, reported in the `dialogs` and `menus` blocks: a **dialog** is one of the viewer's own egui windows (`Go to Point`, `Bundle Adjust`, …), and a **menu** an egui popup, of kind `menu`, `context_menu`, `submenu` or `dropdown` | `overlay`, `layer` | *overlay* already names the Image Detail panel's drawing layers and the viewport HUD, and *layer* names those and a **depth layer**, so by the wire vocabulary rule neither can name these as well |
+
 ## Words with a boundary
 
 

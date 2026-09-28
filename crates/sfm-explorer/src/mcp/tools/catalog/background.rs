@@ -68,12 +68,70 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "minimum": 16,
                             "description":
                                 "Scale the image down so neither side exceeds this many pixels. \
-                                 Omit for the native size of whatever was photographed.",
+                                 Omit for the native size of whatever was photographed. \
+                                 Rectangles in the widget listing are never scaled with it.",
+                        }),
+                    ),
+                    ("crop_px", crop_px_schema("Photograph only this rectangle of the target")),
+                    (
+                        "widgets",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "true adds the get_widgets listing of the same target and crop, \
+                                 taken from the frame the picture is of, as a JSON block after \
+                                 the image. Refused with hud: false, since the render target \
+                                 under the HUD has no widgets on it.",
                         }),
                     ),
                 ],
                 &[],
             ),
         },
+        ToolSpec {
+            name: "get_widgets",
+            description: "Every widget egui drew in the window, or with panel_name in one \
+                          panel's body: its id, role, name, rectangle, enabled and toggled \
+                          state, value, what a click on it can do, and its path of named \
+                          ancestors. Rectangles are rect_px, [x, y, width, height] in physical \
+                          pixels of the target, the same space a screenshot of that target is \
+                          in. The dialogs and menus open above the dock come first, in dialogs \
+                          and menus, each with its own widgets, even when both are empty. The \
+                          dock's tabs are listed as role tab with the panel_name they raise. \
+                          A panel that is closed or behind another tab is refused naming \
+                          show_panel. Answered after the next frame has been laid out.",
+            kind: Read,
+            schema: object(
+                &[
+                    (
+                        "panel_name",
+                        json!({
+                            "type": "string",
+                            "enum": Tab::ALL.map(|tab| tab.wire_name()),
+                            "description":
+                                "List one panel's body instead of the whole window, by the name \
+                                 get_window_layout and the layout file use.",
+                        }),
+                    ),
+                    ("crop_px", crop_px_schema("List only the widgets that overlap this rectangle of the target, each with its whole rectangle")),
+                ],
+                &[],
+            ),
+        },
     ]
+}
+
+/// A rectangle of a tool's target, in its physical pixels.
+fn crop_px_schema(what: &str) -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "integer", "minimum": 0 },
+        "minItems": 4,
+        "maxItems": 4,
+        "description": format!(
+            "{what}: [x, y, width, height] in the target's \
+             physical pixels, the space rect_px is in. A rectangle that reaches outside the \
+             target is refused, and the refusal names the target's size."
+        ),
+    })
 }

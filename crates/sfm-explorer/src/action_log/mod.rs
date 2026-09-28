@@ -139,6 +139,10 @@ pub(crate) enum Kind {
     /// The window itself: the state, size, position and focus one `set_window`
     /// call changed.
     Window,
+    /// Pointer and keyboard input an agent sent into the window: a click, a
+    /// hover, a key or typed text. What that input then does is recorded under
+    /// its own kind, as it is for a person's.
+    Input,
     /// A read-only MCP tool, by name.
     Query(&'static str),
 }
@@ -158,6 +162,7 @@ impl Kind {
             Kind::Animation => "Animation",
             Kind::Layout => "Layout",
             Kind::Window => "Window",
+            Kind::Input => "Input",
             Kind::Query(tool) => tool,
         }
     }
@@ -182,6 +187,7 @@ impl Kind {
             Kind::Animation => "animation",
             Kind::Layout => "layout",
             Kind::Window => "window",
+            Kind::Input => "input",
             Kind::Query(_) => "query",
         }
     }
@@ -416,6 +422,17 @@ impl ActionLog {
         let standing = self.actor;
         self.actor = actor;
         self.record(kind, text);
+        self.actor = standing;
+    }
+
+    /// [`ActionLog::fail`] as `actor`, restoring the standing one afterwards.
+    ///
+    /// The refusal of an MCP input tool, which is reached in the egui pass
+    /// that was to deliver the input, where the standing actor is the person.
+    pub(crate) fn fail_as(&mut self, actor: Actor, kind: Kind, text: impl Into<String>) {
+        let standing = self.actor;
+        self.actor = actor;
+        self.fail(kind, text);
         self.actor = standing;
     }
 

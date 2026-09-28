@@ -46,6 +46,7 @@ mod bench;
 mod display;
 mod edit;
 mod frame;
+mod input;
 mod layout;
 mod logged;
 mod panel_rect;
@@ -53,6 +54,7 @@ mod read;
 pub(crate) mod server;
 pub(crate) mod tools;
 mod view;
+mod widgets;
 pub(crate) mod window;
 mod write;
 
@@ -61,6 +63,7 @@ pub(crate) mod render;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use input::InputQueue;
 pub(crate) use server::serve;
 
 use logged::{query_text, screenshot_size};
@@ -576,11 +579,28 @@ pub(crate) enum Command {
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it anywhere else, because no other panel has a picture
     /// underneath what is drawn on it.
+    ///
+    /// `crop` is a rectangle of the target `[x, y, width, height]` in its
+    /// physical pixels, applied before `max_dimension`. `widgets` adds the
+    /// `get_widgets` listing of the same target and crop, from the frame the
+    /// picture is of; the parse refuses it with `hud: false`.
     Screenshot {
         panel: Option<crate::dock::Tab>,
         hud: bool,
         max_dimension: Option<u32>,
+        crop: Option<[u32; 4]>,
+        widgets: bool,
     },
+    /// Every widget egui drew in the window, or in one panel's body, with the
+    /// dialogs and menus drawn above them.
+    GetWidgets {
+        panel: Option<crate::dock::Tab>,
+        crop: Option<[u32; 4]>,
+    },
+    /// Pointer or keyboard input into the window: `click`, `hover`,
+    /// `press_key` and `type_text`, delivered over the next few frames as the
+    /// events a real mouse and keyboard make.
+    Input(input::InputCommand),
 }
 
 /// How a tool named a camera image: by its index in the reconstruction, or by
@@ -909,6 +929,9 @@ pub(crate) enum ToolOutput {
         /// One line describing what was in frame, for the text block that
         /// accompanies the image.
         caption: String,
+        /// The `get_widgets` listing of the pictured target, from the same
+        /// frame, when the call asked for `widgets: true`.
+        widgets: Option<Value>,
     },
 }
 
@@ -929,10 +952,13 @@ pub(crate) enum Outcome {
 
 /// A command whose answer cannot exist yet.
 ///
-/// Three tools are in here, waiting on different things. `App` holds them until
-/// the readback phase and answers them there, after the frame they were waiting
-/// on has been drawn and presented -- which is also where the `wgpu::Device`
-/// already is, and so what keeps [`apply_with_window`] free of a GPU handle.
+/// Four tools are in here, waiting on different things, and the four input
+/// tools. `App` holds the first four until the readback phase and answers them
+/// there, after the frame they were waiting on has been drawn and presented --
+/// which is also where the `wgpu::Device` already is, and so what keeps
+/// [`apply_with_window`] free of a GPU handle. The input tools wait in
+/// `App::mcp_input` instead, and are answered after the egui pass of their
+/// last frame.
 pub(crate) enum Deferred {
     Screenshot {
         /// Which pixels to read once the frame has been presented.
@@ -942,6 +968,23 @@ pub(crate) enum Deferred {
         /// was still borrowed. Held here so the readback phase does not have to
         /// reach back into `AppState` to describe a picture it already took.
         caption: String,
+        /// A rectangle of the target to crop the picture to, in its pixels.
+        crop: Option<[u32; 4]>,
+        /// Whether the reply carries the widget listing of the same target.
+        widgets: bool,
+        /// The widgets of the frame the picture is of, captured after its
+        /// egui pass. Every screenshot takes one, since the caption leads with
+        /// the dialogs and menus that are open; `None` until that pass.
+        frame: Option<std::sync::Arc<widgets::WidgetFrame>>,
+    },
+    /// A `get_widgets` call waiting for a frame to have been laid out.
+    ///
+    /// Answered after the egui pass that captured `frame`, without waiting
+    /// for the surface copy a screenshot needs.
+    Widgets {
+        panel: Option<crate::dock::Tab>,
+        crop: Option<[u32; 4]>,
+        frame: Option<std::sync::Arc<widgets::WidgetFrame>>,
     },
     /// A background operation this call started, whose answer is either its
     /// result or a handle, whichever the clock reaches first.
@@ -949,6 +992,13 @@ pub(crate) enum Deferred {
     /// A view request the Image Detail panel has not drawn yet, whose answer is
     /// the view the frame that draws it settles on.
     ImageDetailView(PendingView),
+    /// Pointer or keyboard input waiting to be delivered, a step per frame.
+    ///
+    /// The drain hands it to `App::mcp_input` rather than to the other
+    /// deferred calls: input commands run one after another, and the frame
+    /// feeds their events to egui before its pass rather than reading
+    /// anything after it.
+    Input(input::PendingInput),
 }
 
 /// A `set_image_detail_view` call waiting for the panel to draw the photograph
@@ -1609,15 +1659,15 @@ pub(crate) fn apply_with_window(
             panel,
             hud,
             max_dimension,
+            crop,
+            widgets,
         } => {
             // A minimized window renders nothing to photograph, and whether its
             // swapchain still presents at all is platform-dependent — so this
             // is refused rather than attempted, naming the call that fixes it.
             // Checked here, against the window snapshot, so it is under
             // headless test with the rest of the vocabulary.
-            if state.window.as_ref().map(|info| info.state)
-                == Some(crate::window::WindowState::Minimized)
-            {
+            if is_minimized(state) {
                 return done(Err(ToolError::new(MINIMIZED)));
             }
             // A panel that is not drawn cannot be photographed, and both ways
@@ -1626,7 +1676,7 @@ pub(crate) fn apply_with_window(
             // batch satisfies them — and headlessly, since the dock is a plain
             // field.
             if let Some(panel) = panel {
-                if let Err(error) = drawn_panel(state, panel) {
+                if let Err(error) = drawn_panel(state, panel, PanelUse::Photograph) {
                     return done(Err(error));
                 }
             }
@@ -1635,24 +1685,128 @@ pub(crate) fn apply_with_window(
                 (Some(crate::dock::Tab::Viewer3D), false) => ScreenshotSource::ViewportRender,
                 (Some(panel), _) => ScreenshotSource::Panel(panel),
             };
+            // Against the size the target was last laid out at, which is the
+            // size the picture comes back at in every frame but the one that
+            // opened the panel; the readback checks again against the frame.
+            if let Some(crop) = crop {
+                if let Err(error) =
+                    crop_fits(crop, screenshot_size(state, viewer, source, None), panel)
+                {
+                    return done(Err(error));
+                }
+            }
             Outcome::Deferred(Deferred::Screenshot {
                 source,
                 max_dimension,
-                caption: screenshot_caption(state, viewer, source),
+                caption: screenshot_caption(state, viewer, source, crop),
+                crop,
+                widgets,
+                frame: None,
             })
+        }
+        Command::GetWidgets { panel, crop } => {
+            if is_minimized(state) {
+                return done(Err(ToolError::new(MINIMIZED_LISTING)));
+            }
+            if let Some(panel) = panel {
+                if let Err(error) = drawn_panel(state, panel, PanelUse::List) {
+                    return done(Err(error));
+                }
+            }
+            if let Some(crop) = crop {
+                let source = panel.map_or(ScreenshotSource::Window, ScreenshotSource::Panel);
+                if let Err(error) =
+                    crop_fits(crop, screenshot_size(state, viewer, source, None), panel)
+                {
+                    return done(Err(error));
+                }
+            }
+            Outcome::Deferred(Deferred::Widgets {
+                panel,
+                crop,
+                frame: None,
+            })
+        }
+        Command::Input(command) => {
+            // The same checks, against the same snapshot, as the two tools
+            // that read the window: what is not drawn cannot be pointed at.
+            if is_minimized(state) {
+                return done(Err(ToolError::new(MINIMIZED_INPUT)));
+            }
+            let panel = command.panel();
+            if let Some(panel) = panel {
+                if let Err(error) = drawn_panel(state, panel, PanelUse::Point) {
+                    return done(Err(error));
+                }
+            }
+            // Against the size the target was last laid out at; the frame the
+            // pointer is aimed in checks again.
+            if let Some(at) = command.at_px() {
+                let source = panel.map_or(ScreenshotSource::Window, ScreenshotSource::Panel);
+                let size = screenshot_size(state, viewer, source, None);
+                if size[0] > 0 && size[1] > 0 {
+                    if let Err(error) = input::check_inside(at, size, panel) {
+                        return done(Err(error));
+                    }
+                }
+            }
+            Outcome::Deferred(Deferred::Input(input::PendingInput::new(command)))
         }
     }
 }
 
-/// Whether `panel` is on screen to be photographed, or why it is not.
+/// Whether the window snapshot this frame took says the window is minimized.
+fn is_minimized(state: &AppState) -> bool {
+    state.window.as_ref().map(|info| info.state) == Some(crate::window::WindowState::Minimized)
+}
+
+/// A crop checked against the target's last laid-out size.
+///
+/// A size of zero means the target has not been laid out yet (a panel a
+/// `show_panel` in the same batch opened, or no window at all), and the check
+/// is left to the frame, which knows the size.
+fn crop_fits(
+    crop: [u32; 4],
+    size: [u32; 2],
+    panel: Option<crate::dock::Tab>,
+) -> Result<(), ToolError> {
+    if size[0] == 0 || size[1] == 0 {
+        return Ok(());
+    }
+    widgets::check_crop(crop, size, panel)
+}
+
+/// What a tool wanted a panel on screen for, which is what its refusal says
+/// there is nothing of.
+#[derive(Clone, Copy)]
+enum PanelUse {
+    /// `screenshot`.
+    Photograph,
+    /// `get_widgets`.
+    List,
+    /// The input tools.
+    Point,
+}
+
+/// Whether `panel` is on screen to be photographed or listed, or why it is
+/// not.
 ///
 /// Closed and behind-a-sibling are different mistakes with different fixes, so
 /// they get different messages — and a screenshot of a tab that is not in front
 /// would be a picture of the tab that is.
-fn drawn_panel(state: &AppState, panel: crate::dock::Tab) -> Result<(), ToolError> {
+fn drawn_panel(
+    state: &AppState,
+    panel: crate::dock::Tab,
+    purpose: PanelUse,
+) -> Result<(), ToolError> {
+    let nothing = match purpose {
+        PanelUse::Photograph => "to photograph",
+        PanelUse::List => "to list",
+        PanelUse::Point => "to point at",
+    };
     let Some(path) = state.dock.find_tab(&panel) else {
         return Err(ToolError::new(format!(
-            "The {} panel is closed, so there is nothing of it to photograph. Send show_panel \
+            "The {} panel is closed, so there is nothing of it {nothing}. Send show_panel \
              {{ \"panel_name\": \"{}\" }} first.",
             panel.title(),
             panel.wire_name(),
@@ -1665,12 +1819,15 @@ fn drawn_panel(state: &AppState, panel: crate::dock::Tab) -> Result<(), ToolErro
     let front = leaf.tabs.get(leaf.active.0).copied();
     if front != Some(panel) {
         let in_front = front.map(|tab| tab.title()).unwrap_or("another tab");
+        let consequence = match purpose {
+            PanelUse::Photograph => format!("a picture of it would be a picture of {in_front}"),
+            PanelUse::List => format!("a listing of it would be a listing of {in_front}"),
+            PanelUse::Point => format!("the pointer would land on {in_front} instead"),
+        };
         return Err(ToolError::new(format!(
-            "The {} panel is behind {} in its node, so a picture of it would be a picture of {}. \
-             Send show_panel {{ \"panel_name\": \"{}\" }} first.",
+            "The {} panel is behind {in_front} in its node, so {consequence}. Send show_panel \
+             {{ \"panel_name\": \"{}\" }} first.",
             panel.title(),
-            in_front,
-            in_front,
             panel.wire_name(),
         )));
     }
@@ -1683,6 +1840,17 @@ fn drawn_panel(state: &AppState, panel: crate::dock::Tab) -> Result<(), ToolErro
 /// of a shared viewer, so the refusal names the call that makes one possible.
 pub(super) const MINIMIZED: &str =
     "The window is minimized, so nothing is being rendered to photograph. Send \
+     set_window_layout { \"window\": { \"state\": \"normal\" } } first.";
+
+/// Why a `get_widgets` of a minimized window is refused: the same reason, said
+/// of a listing.
+pub(super) const MINIMIZED_LISTING: &str =
+    "The window is minimized, so nothing is being laid out to list. Send \
+     set_window_layout { \"window\": { \"state\": \"normal\" } } first.";
+
+/// Why an input tool is refused while the window is minimized.
+pub(super) const MINIMIZED_INPUT: &str =
+    "The window is minimized, so nothing is laid out to point at or type into. Send \
      set_window_layout { \"window\": { \"state\": \"normal\" } } first.";
 
 fn done(reply: JsonReply) -> Outcome {
@@ -1715,9 +1883,14 @@ fn moved_cursor(state: &mut AppState, viewer: &mut Viewer3D, reply: JsonReply) -
 /// the readback phase runs after the UI has had a whole frame to change things.
 /// The size is the panel's *last* laid-out size, which is the size the picture
 /// comes back at in every frame but the one that opened the panel.
-fn screenshot_caption(state: &AppState, viewer: &Viewer3D, source: ScreenshotSource) -> String {
+fn screenshot_caption(
+    state: &AppState,
+    viewer: &Viewer3D,
+    source: ScreenshotSource,
+    crop: Option<[u32; 4]>,
+) -> String {
     let [width, height] = screenshot_size(state, viewer, source, None);
-    let subject = match source {
+    let mut subject = match source {
         ScreenshotSource::Window => format!("The window, {width}×{height}"),
         ScreenshotSource::ViewportRender => {
             format!("The 3D Viewer panel without its HUD, {width}×{height}")
@@ -1726,6 +1899,11 @@ fn screenshot_caption(state: &AppState, viewer: &Viewer3D, source: ScreenshotSou
             format!("The {} panel, {width}×{height}", panel.title())
         }
     };
+    if let Some([x, y, crop_width, crop_height]) = crop {
+        subject.push_str(&format!(
+            ", cropped to [{x}, {y}, {crop_width}, {crop_height}]"
+        ));
+    }
     // The frame description belongs to the pictures the 3D view is in: for
     // every other panel it would describe something the picture does not show.
     let shows_scene = matches!(

@@ -142,12 +142,107 @@ impl App {
                 Outcome::Done(answer) => {
                     let _ = reply.send(answer);
                 }
+                Outcome::Deferred(Deferred::Input(input)) => self.mcp_input.push(input, reply),
                 Outcome::Deferred(deferred) => self.mcp_deferred.push((deferred, reply)),
             }
             if let Some(status) = self.state.mcp.as_mut() {
                 status.requests += 1;
             }
         }
+    }
+
+    /// Read the widgets of the frame egui has just finished, when a waiting
+    /// call wants them.
+    ///
+    /// Called from the egui pass, after `run_ui` and before
+    /// `handle_platform_output` consumes the AccessKit update, which is the
+    /// one moment the pass's widget rectangles and its tree are both there.
+    /// Nothing is read in a frame with no `get_widgets` or `screenshot`
+    /// waiting, which is nearly all of them. A call that waits past a frame
+    /// that stopped before its present is given the newer frame, so a picture
+    /// and its listing stay of one frame.
+    pub(crate) fn capture_mcp_widgets(&mut self, update: Option<&egui::accesskit::TreeUpdate>) {
+        let wants = |deferred: &Deferred| {
+            matches!(
+                deferred,
+                Deferred::Screenshot { .. } | Deferred::Widgets { .. }
+            )
+        };
+        if !self.mcp_input.wants_frame()
+            && !self
+                .mcp_deferred
+                .iter()
+                .any(|(deferred, _)| wants(deferred))
+        {
+            return;
+        }
+        let window_px = self
+            .wgpu_surface_config
+            .as_ref()
+            .map(|config| [config.width, config.height])
+            .unwrap_or_else(|| {
+                let size = self.egui_ctx.viewport_rect().size() * self.egui_ctx.pixels_per_point();
+                [size.x.round() as u32, size.y.round() as u32]
+            });
+        let captured = Arc::new(super::widgets::WidgetFrame::capture(
+            &self.egui_ctx,
+            update,
+            &self.state.dock,
+            window_px,
+        ));
+        for (deferred, _) in &mut self.mcp_deferred {
+            match deferred {
+                Deferred::Screenshot { frame, .. } | Deferred::Widgets { frame, .. } => {
+                    *frame = Some(captured.clone());
+                }
+                Deferred::Background(_) | Deferred::ImageDetailView(_) | Deferred::Input(_) => {}
+            }
+        }
+        // Every capture, whoever asked for it, so that an id from any listing
+        // can later be named in a refusal. An input step's frame goes to its
+        // command, which is answered here when that was its last frame.
+        self.mcp_input.remember(&captured);
+        self.mcp_input.after_pass(&captured);
+    }
+
+    /// Put the next step of a waiting input call into this frame's input.
+    ///
+    /// Called from the egui pass, straight after `take_egui_input`, so the
+    /// events sit behind whatever the real mouse and keyboard sent this frame,
+    /// as a second person's would. Nothing is added in a frame with no input
+    /// call waiting.
+    pub(crate) fn feed_mcp_input(&mut self, events: &mut Vec<egui::Event>) {
+        if self.mcp_input.is_empty() {
+            return;
+        }
+        let held = self.egui_ctx.input(|input| input.modifiers);
+        events.extend(self.mcp_input.before_pass(&mut self.state, held));
+        // An idle viewer draws nothing of its own accord, and every step and
+        // the reply after the last one needs a frame.
+        if !self.mcp_input.is_empty() {
+            self.egui_ctx.request_repaint();
+        }
+    }
+
+    /// Answer every `get_widgets` whose frame has been laid out.
+    ///
+    /// Straight after the egui pass rather than after the present: a listing
+    /// needs the layout, not the pixels, so it does not wait on the surface.
+    pub(crate) fn resolve_mcp_widgets(&mut self) {
+        let mut waiting = Vec::new();
+        for (deferred, reply) in std::mem::take(&mut self.mcp_deferred) {
+            match deferred {
+                Deferred::Widgets {
+                    panel,
+                    crop,
+                    frame: Some(frame),
+                } => {
+                    let _ = reply.send(frame.listing(panel, crop).map(ToolOutput::Json));
+                }
+                other => waiting.push((other, reply)),
+            }
+        }
+        self.mcp_deferred = waiting;
     }
 
     /// Encode a copy of the surface texture into this frame's encoder, when a
@@ -243,6 +338,9 @@ impl App {
                     source,
                     max_dimension,
                     caption,
+                    crop,
+                    widgets,
+                    frame,
                 } => {
                     let image = match source {
                         ScreenshotSource::ViewportRender => self.viewport_render(device, queue),
@@ -254,9 +352,38 @@ impl App {
                             }
                         }
                     };
-                    let _ =
-                        reply.send(image.and_then(|image| encode(image, max_dimension, caption)));
+                    let panel = match source {
+                        ScreenshotSource::Window => None,
+                        ScreenshotSource::ViewportRender => Some(crate::dock::Tab::Viewer3D),
+                        ScreenshotSource::Panel(panel) => Some(panel),
+                    };
+                    let image = image.and_then(|image| match crop {
+                        Some(crop) => crop_to(image, crop, panel),
+                        None => Ok(image),
+                    });
+                    // What is open over the dock leads the caption, so a
+                    // dialog the human opened is said rather than having to be
+                    // noticed in the picture.
+                    let caption = match frame.as_deref().and_then(|f| f.open_sentence()) {
+                        Some(open) => format!("{open} {caption}"),
+                        None => caption,
+                    };
+                    let listing = match (widgets, frame.as_deref()) {
+                        (false, _) => Ok(None),
+                        (true, Some(frame)) => frame.listing(panel, crop).map(Some),
+                        (true, None) => Err(ToolError::new(
+                            "The frame this picture is of was not laid out with its widgets \
+                             read, so there is no listing to go with it.",
+                        )),
+                    };
+                    let _ = reply.send(
+                        image.and_then(|image| encode(image, max_dimension, caption, listing?)),
+                    );
                 }
+                // Answered by `resolve_mcp_widgets` straight after the egui
+                // pass; one still here is from a frame that stopped before its
+                // pass, and waits for the next.
+                pending @ Deferred::Widgets { .. } => waiting.push((pending, reply)),
                 Deferred::Background(pending) => {
                     match super::edit::background_reply(&self.state, &pending) {
                         Some(answer) => {
@@ -277,6 +404,8 @@ impl App {
                         None => waiting.push((Deferred::ImageDetailView(pending), reply)),
                     }
                 }
+                // Handed to `mcp_input` by the drain; never held here.
+                Deferred::Input(input) => self.mcp_input.push(input, reply),
             }
         }
         let still_waiting = !waiting.is_empty();
@@ -365,8 +494,36 @@ impl App {
 fn reads_the_surface((deferred, _): &(Deferred, tokio::sync::oneshot::Sender<Reply>)) -> bool {
     match deferred {
         Deferred::Screenshot { source, .. } => !matches!(source, ScreenshotSource::ViewportRender),
-        Deferred::Background(_) | Deferred::ImageDetailView(_) => false,
+        Deferred::Widgets { .. }
+        | Deferred::Background(_)
+        | Deferred::ImageDetailView(_)
+        | Deferred::Input(_) => false,
     }
+}
+
+/// Crop a picture of a target to a rectangle of it.
+///
+/// The rectangle was checked against the target's last laid-out size when the
+/// call was applied; this checks it against the picture actually taken, which
+/// can differ in the frame that opened a panel or resized the window.
+fn crop_to(
+    picture: Rgba,
+    crop: [u32; 4],
+    panel: Option<crate::dock::Tab>,
+) -> Result<Rgba, ToolError> {
+    super::widgets::check_crop(crop, [picture.width, picture.height], panel)?;
+    let [x, y, width, height] = crop;
+    let mut pixels = Vec::with_capacity((width * height * BYTES_PER_PIXEL) as usize);
+    for row in y..y + height {
+        let start = ((row * picture.width + x) * BYTES_PER_PIXEL) as usize;
+        let end = start + (width * BYTES_PER_PIXEL) as usize;
+        pixels.extend_from_slice(&picture.pixels[start..end]);
+    }
+    Ok(Rgba {
+        width,
+        height,
+        pixels,
+    })
 }
 
 impl SurfaceCopy {
@@ -454,7 +611,12 @@ fn unpad(
 ///
 /// Shared by both readback paths: what a picture is a picture *of* differs, and
 /// nothing after that does.
-fn encode(picture: Rgba, max_dimension: Option<u32>, caption: String) -> Reply {
+fn encode(
+    picture: Rgba,
+    max_dimension: Option<u32>,
+    mut caption: String,
+    widgets: Option<serde_json::Value>,
+) -> Reply {
     let (source_width, source_height) = (picture.width, picture.height);
     let mut rgba = image::RgbaImage::from_raw(source_width, source_height, picture.pixels)
         .ok_or_else(|| ToolError::new("The captured image was the wrong size."))?;
@@ -473,6 +635,13 @@ fn encode(picture: Rgba, max_dimension: Option<u32>, caption: String) -> Reply {
                 height,
                 image::imageops::FilterType::Lanczos3,
             );
+            // Every `_px` rectangle stays in the unscaled pixels, so a caller
+            // that reads one against this picture scales it once, on its side.
+            caption.push_str(&format!(
+                " Scaled by {:.4} from {source_width}×{source_height} for max_dimension; \
+                 every _px rectangle is in the unscaled pixels.",
+                f64::from(width) / f64::from(source_width)
+            ));
         }
     }
 
@@ -493,6 +662,7 @@ fn encode(picture: Rgba, max_dimension: Option<u32>, caption: String) -> Reply {
         width,
         height,
         caption,
+        widgets,
     })
 }
 

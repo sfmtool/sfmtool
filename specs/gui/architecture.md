@@ -493,14 +493,14 @@ stubbing the driver, and `track_view/view/tests.rs` and
 Everything decidable without an OS is decided there, because it is decidable in
 milliseconds and on every platform.
 
-The **`ui_basic`** integration tests are the other half: a real window, a real
-GPU surface, and the app's own accessibility tree read back out of the OS by
-[xa11y](https://xa11y.dev). They exist for the defects that live below egui and
-that nothing above the window can see — a menu item wired to a command the
-event loop never reads, a HUD checkbox that never reaches the tree, a
-`screenshot` of a frame that was actually presented. They run on all three
-desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
-mutex, so a plain `cargo test` behaves like `--test-threads=1`).
+The **`ui_basic`** integration tests are the other half: a real window and a
+real GPU surface. They exist for the defects that live below egui and that a
+headless frame cannot show — a menu item wired to a command the event loop
+never reads, a HUD check box that never reaches the window, a `screenshot` of a
+frame that was actually presented, a right mouse button that never reaches
+egui. They run on all three desktop platforms via `pixi run ui-test`, one
+window at a time (a process-wide mutex, so a plain `cargo test` behaves like
+`--test-threads=1`).
 
 Because they need a window, they are **off by default**. `ui_basic` is declared
 in [`crates/sfm-explorer/Cargo.toml`](../../crates/sfm-explorer/Cargo.toml) as an
@@ -513,46 +513,88 @@ features are off rather than reporting anything, so every invocation that is
 supposed to see this file — including the clippy gate that type-checks it on
 Linux — names the feature explicitly.
 
-**One locator resolution is one full snapshot of the viewer's accessibility
-subtree**, and that is what the suite is written around. `wait_attached`,
-`press`, `toggle` and `elements` each walk the whole tree — on Windows a single
-`FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation*, not per
-launch, and it is the platform's rather than the viewer's: roughly a tenth of a
-second on a developer's machine, and a launch, attach and teardown together cost
-3.8s on a GitHub-hosted Windows runner. (Only a
-`Locator` method resolves; a `press` on an `Element` a lookup has already handed
-back invokes what it holds and queries nothing.) Three habits follow.
+### Two ways of reading the window
 
-Every locator is rooted at the viewer's **window** rather than at its process,
-and on Windows that is the difference between the platform's own subtree query
-and a generic fallback — see "Where a search starts" below. `attach` resolves
-that window once and hands back an `Attached`, which is what every test holds
-and the only thing that makes a locator.
+**Most of the tests read the window through the viewer's own MCP endpoint.**
+Each launches the viewer with `--mcp 0` (an ephemeral port, since a developer
+running the suite very likely has a viewer of their own on 8787) and reads the
+port it prints. `get_widgets` lists every widget egui drew in a frame, with its
+role, name, rectangle, enabled and toggled state, and reports open dialogs and
+menus as their own blocks; `click` presses a widget by id, the way a person's
+mouse would; `screenshot` and the command vocabulary do the rest
+([mcp-server.md](mcp-server.md) § "`get_widgets`", § "`click` / `hover`").
+That is the information the platform's accessibility tree carries, read inside
+the viewer's process instead of across the operating system's accessibility
+bridge, and the bridge is the expensive part: on a GitHub-hosted Windows runner
+one walk of the viewer's tree takes about 18.6s, and in a run of 19 tests that
+read every widget through it, 33 walks and the search for the viewer's window
+through the accessibility API took about 88% of the 881s the run took.
+Read in-process, the listing also says what the platform trees do not report
+consistently: whether a menu item is enabled (Linux never matched an
+`enabled="false"` selector), which widget owns a context menu, and which items
+open a submenu.
 
-Setup goes
-through the **command line** rather than the accessibility API: `--demo` appends
+An MCP test never attaches through the accessibility API. `McpViewer` waits on
+the endpoint instead: it polls `get_widgets` until the menu bar's `File` button
+is listed, which says the window exists and has drawn a frame, and that point
+ends the test's launch time. Every reply comes after a frame the viewer drew,
+and a `click` reply after the frame in which a menu or dialog it opened
+appears, so a test asserts on a menu straight from the click that opened it.
+Anything that can take more frames — a background load, a layout change —
+is polled for with `McpViewer::wait_for`, a `get_widgets` loop with a deadline.
+Names repeat across roles (the HUD has a `Points` check box, slider and
+label), so lookups take a role and a name. A menu item drawn with a keyboard
+shortcut carries it in its name (`Save Ctrl+S`, `Save ⌘S` on macOS), and a
+shortcut has no space in it, so `menu_item` matches the label alone or the
+label followed by one word, and no test spells a platform's shortcut.
+
+**A smoke set of two tests still reads the tree through the platform, with
+[xa11y](https://xa11y.dev),** because what they check is below the viewer's
+process. `window_appears` checks that the tree reaches the platform with the
+menu bar's four buttons in it, so a published but empty tree fails; this is
+what a screen reader needs and what keeps a broken AccessKit adapter or a
+missing Linux accessibility stack from passing unnoticed.
+`a_real_right_click_opens_the_reconstruction_rows_context_menu` (Windows)
+sends a real right button with `SendInput` and reads the menu back from the
+tree. A synthetic `click` goes into egui's input and never passes through
+winit, so it cannot see a defect in how the operating system's input reaches
+egui — and on Windows `EnableMouseInPointer` once made every mouse button
+arrive as a touch, so no right click reached egui at all. Its MCP twin,
+`the_reconstruction_rows_context_menu_lists_every_entry`, runs on all three
+platforms and asserts what the menu holds.
+
+Setup goes through the **command line** rather than the UI: `--demo` appends
 the node File > Load Demo Data… makes, at the dialog's default point count and
 with the same `None` path, after any files named on the line. Exactly one test
-drives each route a shortcut replaces —
-`the_scene_panel_lists_the_loaded_reconstruction` presses through the menu and
-the dialog, then asserts on what arrived — so the route stays covered.
+drives the route that shortcut replaces —
+`the_scene_panel_lists_the_loaded_reconstruction` clicks through the menu and
+the dialog, then asserts on what arrived — so the route stays covered. Two
+tests start the viewer on a saved default layout file, which is the one piece
+of setup that is not a flag.
 
-**A run of consecutive read-only assertions is one operation, not one each.**
-`wait_all` takes a list of expectations — each a role and an exact name, either
-`Expect::present` or `Expect::absent` — joins their clauses into a single
-comma-separated selector *group*, and polls it: `Locator::elements` resolves the
-whole group, and every expectation is then decided against the `ElementData`
-already in hand, which is a field read rather than a cross-process call. It
-returns the first tick on which they all hold, and hands back the snapshot, so a
-caller that wants an element's `states.checked` takes it from there. The polling
-is what makes the substitution honest: a bare `elements` resolves once and
-returns, so it would trade the cost for flakiness on a runner where a widget
-routinely lands a poll or two after the query that wants it. The five assertions
-in `the_menu_bar_holds_file_edit_go_and_panels` are one operation; across the
-suite the collapse takes `ops` from 38 to 24.
+### The smoke set's tree walks
 
-**Where a search starts decides what it costs, and on Windows by more than an
-order of magnitude.** `App::by_pid` hands back a *synthesized* per-process
+**One locator resolution is one full snapshot of the viewer's accessibility
+subtree.** `Locator::elements` walks the whole tree — on Windows a single
+`FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation*, and it
+is the platform's rather than the viewer's. The smoke set keeps its walks few
+in three ways.
+
+**A run of read-only assertions is one walk, not one each.** `wait_all` takes
+a list of `(role, name)` pairs, joins them into one comma-separated selector
+*group*, and polls it: `Locator::elements` resolves the whole group, and every
+expectation is then decided against the `ElementData` already in hand. It
+returns the first tick on which they all hold, and hands back the matched
+elements, which the right-click test reads the row's bounds from. The polling
+is what makes this honest: a bare `elements` resolves once and returns, so it
+would trade the cost for flakiness on a runner where a widget routinely lands
+a poll or two after the query that wants it. Those elements go stale at the
+next interaction — egui republishes its accessibility tree every frame — so the
+right-click test takes a fresh snapshot after its clicks.
+
+**Every search is rooted at the viewer's window rather than at its process**,
+and on Windows that is the difference between the platform's own subtree query
+and a generic fallback. `App::by_pid` hands back a *synthesized* per-process
 `application` node there, because UI Automation has no process node of its own.
 Nothing live is behind it, so UIA's own subtree query cannot be scoped to it,
 and xa11y answers a search rooted there with a generic descent instead: one
@@ -560,148 +602,81 @@ level-by-level walk fetching each node's properties in its own cross-process
 call, repeated **once per clause** of the selector. A top-level window is a real
 HWND-backed element, so the same search becomes one
 `FindAllBuildCache(TreeScope_Subtree)` that fetches the whole subtree in a
-single COM call and evaluates every clause against it in one pass. Measured on a
-developer's Windows 11 machine against the viewer's empty-state tree (56 nodes),
-alternated to rule out ordering: process-rooted, a one-clause `elements` call
-takes ~0.22s and the five-clause group
-`the_menu_bar_holds_file_edit_go_and_panels` asks takes ~0.88s — a 4.0x clause
-multiplier; window-rooted, ~0.10s and ~0.10s, a multiplier of 1.0. Across the
-suite that takes `op_ms` from ~11.9s to ~4.9s on that machine; on the
-`ui-test-windows` runner, where the same suite spends the bulk of its wall
-clock inside these resolutions, from ~1,075s to ~536s.
+single COM call and evaluates every clause against it in one pass. Measured on
+a developer's Windows 11 machine against the viewer's empty-state tree (56
+nodes): process-rooted, a one-clause `elements` call takes ~0.22s and a
+five-clause group ~0.88s; window-rooted, ~0.10s for either. Scoping to the
+window loses nothing to look at: the viewer runs a single egui viewport, so its
+menus and popups are painted inside that one window. macOS and Linux take the
+generic descent whatever the root is, so there the change is simply a smaller
+subtree.
 
-Scoping to the window loses nothing to look at: the viewer runs a single egui
-viewport, so its menus and popups are painted inside that one HWND rather than
-in native popup windows, and winit's helper windows never register with
-AccessKit — the synthesized application node's only child is the window. macOS
-and Linux take the generic descent whatever the root is, so there the change is
-simply a smaller subtree.
+**Finding that window is its own cost.** `App::windows` is one provider call
+that materializes every top-level window of the process — on Windows a
+desktop-wide `FindAllBuildCache` filtered to this pid, then per window a
+re-acquisition from its HWND, a cache build and a property read, every one a
+cross-process call. It is around 0.1 to 0.2s on a developer's machine and has
+cost around 10s on a GitHub-hosted Windows runner. It is resolved on first use,
+held for the life of the test (a window handle, unlike a widget node, lasts as
+long as the window), and reported as its own `window_ms` field.
 
-**Finding that window is its own cost, and nothing cheaper answers the same
-question.** `App::windows` is one provider call that materializes *every*
-top-level window of the process before anything can look at one, so a limit
-cannot reach it: measured on Windows 11, `App::windows`, `App::children` and
-`app.locator("window").first().element()` — the last of which *does* push a
-limit down into the walk — cost 68, 69 and 67ms, within noise of each other,
-and the process reports exactly one window, so there is nothing to skip. What
-makes it dear on a runner is what it is: a desktop-wide `FindAllBuildCache`
-filtered to this pid, then, per window, re-acquiring it from its HWND — which
-is where AccessKit's UIA provider gets activated — a cache build and a property
-read, every one a cross-process call on a machine that charges hundreds of
-milliseconds for one. `App::by_pid`, which answers with `FindFirstBuildCache`
-and no re-acquisition, costs 10ms against those 68. The same call is around
-~0.2s on that machine when it is the first one after a launch, and around 10s
-on a GitHub-hosted Windows runner.
+**A cross-process call can fail because the tree moved, not because the suite
+was wrong.** `wait_all` retries a bounded number of times when the platform
+returns a specifically *transient* HRESULT (`UIA_E_TIMEOUT`,
+`UIA_E_ELEMENTNOTAVAILABLE`), which is free because resolving a locator twice
+changes nothing. Only those codes: a selector that names something the app does
+not have must still fail on its first attempt rather than spend three budgets
+rediscovering the same absence. A retry prints a `UIPROBE RETRY` line.
 
-So it is **deferred to first use** rather than resolved at attach. Five of the
-suite's nineteen launches never root a search — four of the five MCP tests
-speak only HTTP to the viewer's own endpoint, and `window_min_size` asks the
-process about the window
-node — and those pay nothing. The rest pay once, and it is reported as its own
-`window_ms` field rather than folded into `launch_ms` or `op_ms`; see "the
-suite reports what it costs" below.
-
-The generic descent macOS and Linux take has one consequence the suite
-respects: it matches only
-*descendants* of its root, never the root itself, while a UIA subtree query is
-scoped inclusively. So a window-rooted `window` selector matches on Windows and
-not on the other two, and `window_min_size` — the one test that asks about the
-window node rather than about something in it — keeps the process-rooted form.
-
-Assertions of **absence** ride in those groups rather than being asked
-separately, and that is what makes them sound. An absence means nothing against
-a tree that has not been published yet — an empty tree satisfies every absence
-trivially — so it needs corroboration that the tree is really there. Grouped
-with the expectations that supply the corroboration, it is read off the very
-snapshot that proved them, so there is no ordering between the two left for a
-reader to respect or a later edit to break.
-
-**A snapshot is never reused across an interaction.** egui republishes its
-accessibility tree every frame, and xa11y's `Element` actions invoke the handle
-they captured rather than re-resolving the selector, so a press, a toggle or a
-synthetic click leaves every handle in an earlier snapshot stale —
-`UIA_E_ELEMENTNOTAVAILABLE` on Windows. Only *consecutive* read-only assertions
-collapse; the assertions after an interaction take a fresh snapshot, which is
-why `toggle_hud_layer_checkbox` is still three operations and
-`a_real_right_click_opens_the_reconstruction_rows_context_menu` is two.
-
-The window `Attached` holds is the one snapshot that deliberately outlives
-those interactions, and it is sound because what goes stale across a frame is a
-*widget* node. A top-level window is not republished: on Windows the handle
-resolves to an element acquired from the HWND, on Linux to the AT-SPI object
-path AccessKit registers for the window, on macOS to the AXWindow — all three
-last as long as the window, which is as long as the `Guard` that owns the
-process.
+### What the suite costs
 
 **The suite reports what it costs, in every log.** As each test's `Guard`
 drops — so a panicking test reports too — it prints a line, and after it the
 running total; the last `UIPROBE TOTAL` is the run's:
 
 ```text
-UIPROBE test=file_menu_items launch_ms=675 window_ms=88 ops=2 op_ms=2176 walks=4 walk_ms=2088 total_ms=2951
-UIPROBE TOTAL tests=19 launch_ms=16960 window_ms=1320 ops=24 op_ms=22964 walks=61 walk_ms=21730 total_ms=44699 mean_launch_ms=892 mean_op_ms=956 mean_walk_ms=356
+UIPROBE test=file_menu_items launch_ms=369 window_ms=0 ops=0 op_ms=0 walks=0 walk_ms=0 calls=2 call_ms=12 total_ms=431
+UIPROBE TOTAL tests=20 launch_ms=13401 window_ms=1968 ops=2 op_ms=179 walks=3 walk_ms=249 calls=50 call_ms=594 total_ms=20411 mean_launch_ms=670 mean_op_ms=89 mean_walk_ms=83 mean_call_ms=11
 ```
 
-`launch_ms` is the process spawn, GPU init and accessibility-root registration
-up to the
-first successful attach; `window_ms` is finding the window the locators are
-rooted at, which happens at most once per launch and only in a test that roots
-a search; `ops` is how many resolution *requests* ran under that
-guard, counted by a thin wrapper over the `Locator` methods the suite calls
-(`Element` actions resolve nothing and are not counted) — a request, not a
-tree walk, since one that polls for its condition or retries a transient
-failure spends several walks and is still counted once; `op_ms` is the
-time inside them; `total_ms` is the guard's whole life, teardown included. The
-split is the point, because the costs have different causes and different
-fixes. `launch_ms` is a process spawn, a GPU, and an OS publishing an
-accessibility root — work no change to what the tests *ask* makes
-cheaper, so
-`mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
-only when the tests ask for more or fewer operations. `window_ms` is neither:
-not the machine's speed, and not something a test asked to look at, so folding
-it into `launch_ms` would make the yardstick move for a reason the machine did
-not, and folding it into `op_ms` would charge one test for what every later
-question in it reuses. A cheaper suite shows as
-`ops` falling with `mean_launch_ms` steady. `total_ms` alone distinguishes
-neither, which is why one log now carries all of them — no historical baseline
-required. The counters are process-wide statics reset per guard, which is sound
-only because `UI_TEST_LOCK` keeps exactly one guard alive at a time. All three
-invocations of the suite pass `--nocapture`, since libtest discards a passing
-test's stdout and these lines are wanted on green runs above all.
+`launch_ms` is the process spawn and GPU init up to the point the viewer is
+usable: for a smoke test the first successful attach, for an MCP test the first
+`get_widgets` that lists the menu bar. It is work no change to what the tests
+*ask* makes cheaper, so `mean_launch_ms` moving between two runs means the
+*machine* moved. `window_ms`, `ops`, `op_ms`, `walks` and `walk_ms` are the
+accessibility bridge's share and are zero for every MCP test: `window_ms` is
+finding the window the locators are rooted at; `ops` is how many resolution
+*requests* the smoke set made — one `wait_all` is one op however many ticks it
+polls or retries, so `ops` moves only when the tests change — and `op_ms` the
+time inside them; `walks` is how many calls into the accessibility API those
+requests took, and `walk_ms` the time inside those calls and nothing else, so
+`walk_ms` close to `op_ms` says the platform's query is what costs and a gap
+says the suite was waiting for the app to draw. `calls` and `call_ms` are the
+MCP tool calls a test made after its launch, polls included, and the time spent
+waiting for their replies; each reply follows at least one drawn frame, so
+`mean_call_ms` is close to the price of a few frames. `total_ms` is the guard's
+whole life, teardown included, and alone distinguishes none of this, which is
+why one log carries all of it. The counters are process-wide statics reset per
+guard, which is sound only because `UI_TEST_LOCK` keeps exactly one guard alive
+at a time. All three invocations of the suite pass `--nocapture`, since libtest
+discards a passing test's stdout and these lines are wanted on green runs above
+all.
 
-`walks` and `walk_ms` count the calls *into* the accessibility API and the time
-inside them, and they exist because `op_ms` on its own conflates two unrelated
-things: a tree query that is expensive, and a poll loop asleep waiting for the
-app to finish drawing. One op is one or many walks — a wait that polls three
-ticks walks three times, a `press_revealing` that has to press twice walks four —
-so `walks` is never a second spelling of `ops`. `walk_ms` close to `op_ms` says
-the platform's query is what costs and a cheaper suite means asking for fewer or
-smaller queries; a gap says the suite was waiting on the app and no op-count
-lever would have helped. `mean_walk_ms` is the price of one query. The split is
-exact where the suite owns the loop, which is `wait_all`; `Locator::wait_attached`
-and `Locator::wait_until` poll inside xa11y, so a walk around one of those is a
-whole wait with its sleeps included, and the clean reading of `op_ms − walk_ms` is
-the one taken over a `wait_all`.
-
-`window_appears` prints the denominator those averages need, once per run, since
-it is the one test that otherwise resolves nothing:
+`window_appears` prints the denominator the walk averages need, once per run:
 
 ```text
-UIPROBE TREE nodes=56 depth=4 walk_ms=99
+UIPROBE TREE nodes=52 depth=4 walk_ms=69
 ```
 
 `nodes` and `walk_ms` come from resolving the universal selector `*` — the same
 `Locator::elements` call `wait_all` makes, rooted where `wait_all` roots it, so
-it prices the same work — and
-`depth` from a second recursive descent, since a flat match list has no shape.
-The tree measured is the window's subtree; Windows counts the window itself in
-it and the other two do not, a one-node difference that does not move a per-node
-price.
-`walk_ms / nodes` is the per-node price, and that is the figure that compares
-across three platforms whose trees are the same shape and whose walk costs
-differ by orders of magnitude. It is measured against the viewer's empty state,
-which is what every test that does not load a scene is also walking, and it is
-not a test of its own because another `Guard` is another launch.
+it prices the same work — taken after the menu bar has been seen, against the
+viewer's empty state, and `depth` from a second recursive descent, since a flat
+match list has no shape. Windows counts the window itself among the nodes and
+the other two do not, a one-node difference that does not move a per-node
+price. `walk_ms / nodes` is the figure that compares across three platforms
+whose trees are the same shape and whose walk costs differ by orders of
+magnitude.
 
 The Windows job also brackets the suite with
 [`ci_windows_ui_snapshot.ps1`](../../scripts/ci_windows_ui_snapshot.ps1). Its
@@ -711,44 +686,11 @@ display mode, power plan, effective Defender state, and UI Automation version.
 These are observations rather than setup: an unavailable probe reports itself
 and cannot suppress the tests. The same snapshot after the suite distinguishes
 a runner that arrived slow from resource pressure accumulated by the build.
-This matters because identical `windows-2025-vs2026` images split into fast and
-slow populations while UI Automation performs the same 32 walks; the system
-properties are the evidence needed to tell which host attribute moves with the
-cost.
+Identical `windows-2025-vs2026` images have split into fast and slow
+populations under the same tree walks, and the system properties are the
+evidence needed to tell which host attribute moves with the cost.
 
-**A cross-process call can fail because the tree moved, not because the suite
-was wrong, and the two are guarded differently.** The read-only probes —
-`wait_attached`, `wait_until`, `wait_all` — retry a bounded number of times when
-the platform returns a specifically *transient* HRESULT (`UIA_E_TIMEOUT`,
-`UIA_E_ELEMENTNOTAVAILABLE`), which is free because resolving a locator twice
-changes nothing. Only those codes: a selector that names something the app does
-not have must still fail on its first attempt rather than spend three budgets
-rediscovering the same absence.
-
-A **press is never retried that way**, and the asymmetry is load-bearing. A
-transient error says the call did not complete, not that the press did not
-land, and every press the suite makes is a toggle — a menu button that did open
-its menu closes it again on a second press, so a blind retry converts a
-recovered timeout into a shut menu and a later, more confusing failure. Presses
-are made reliable by being *idempotent by observation* instead: `press_revealing`
-presses, looks for the item the press was supposed to reveal, and presses again
-only if it is absent, so a press that worked while reporting `UIA_E_TIMEOUT`
-succeeds. Every menu this suite opens goes through it. A checkbox has no
-equivalent because it reveals nothing; its callers confirm `states.checked` with
-a `wait_until`, which already fails loudly if the toggle did not land.
-
-**That confirmation is returned, not discarded, and this is what makes the guard
-free.** Confirming costs a full subtree snapshot — the dearest thing this suite does on a Windows runner —
-so `press_revealing` hands the element back and every call site that wants the
-revealed item takes it from there instead of resolving the same selector again.
-A menu opening is therefore one snapshot rather than two, and the sites that
-used to open a menu and then look up the item they had just proven present now
-do strictly less work than before the guard existed.
-
-Retries do not disturb the accounting. One wrapper call is one `op` however many
-platform attempts happen inside it, so `ops` stays a deterministic fingerprint
-of suite *shape* and the retry time lands in `op_ms` where it was spent. A run
-that needed a retry says so with a `UIPROBE RETRY` line instead.
+### What the lock covers
 
 **Whatever a test puts outside its own process is the lock's business too.** The
 `Guard` that holds the mutex owns the viewer process *and* anything the test
@@ -759,25 +701,18 @@ always so: the file used to be restored after the lock was released, which under
 a plain multi-threaded `cargo test` raced the next test's own `rename` of it and
 failed that test with "Access is denied".
 
-The suite attaches the same way everywhere — `App::by_pid` on the viewer it
-launched, which is what keeps it off a viewer the developer already has open,
-and nothing else; the window the locators are rooted at is found separately, on
-first use, for the reason given above.
-What differs per platform is the accessibility API that answers, what the node
-it hands back is, and what has to exist before there is a tree to reach:
+### Platforms
+
+The smoke set attaches the same way everywhere — `App::by_pid` on the viewer
+it launched, which is what keeps it off a viewer the developer already has
+open. What differs per platform is the accessibility API that answers, what the
+node it hands back is, and what has to exist before there is a tree to reach:
 
 | | Accessibility API | Root `by_pid` resolves | What the environment must provide |
 |---|---|---|---|
 | Windows | UI Automation | a per-process `application` node xa11y synthesizes (UIA has none), named after the executable, its windows beneath it | nothing; UIA is always live |
 | macOS | AXUIElement | the AXApplication | the Accessibility (TCC) grant, on the exact test binary |
 | Linux | AT-SPI2 (D-Bus) | the `application` node AccessKit's Unix adapter registers | a display, a session bus, and the AT-SPI daemons on it |
-
-The root `by_pid` resolves is a *process* on all three, so it carries no bounds
-of its own — a process is not a rectangle — and the `window` under it is what
-`window_min_size` locates and reads. Windows only grew that
-shape in xa11y 0.15 — before it, an "app" there was a top-level window, `by_pid`
-landed on one of winit's helper windows rather than the UI, and the suite had to
-match this viewer's window by its title instead.
 
 Linux is the platform where the API has to be stood up rather than merely used,
 and the failure is silent — a query against a missing bus returns an empty tree
@@ -787,14 +722,14 @@ desktop, or an outer harness): `scripts/a11y_env.sh`, which the Linux
 `ui-test` task goes through, and the `xa11y/setup-a11y` action, which the
 `ui-test-linux` CI job uses. A window manager is started alongside the display
 for fidelity to a real desktop rather than out of need: this viewer publishes
-its whole tree under a bare Xvfb.
+its whole tree under a bare Xvfb. The MCP tests need none of that, but they
+share the job with the smoke set.
 
-Two things beyond the tree are platform-bound. The `--mcp` screenshot tests
-speak hand-written HTTP to a viewer's own endpoint and decode the PNG a real
-frame produced, which needs a working GPU surface — on Linux that means a
-Vulkan ICD, per "Linux" above. And the right-click test is Windows-only by
-construction: it drives synthetic mouse input to catch a `WM_POINTER` routing
-defect that exists only there.
+Every test needs a working GPU surface, since each draws real frames and the
+screenshot tests decode the PNG a presented frame produced — on Linux that
+means a Vulkan ICD, per "Linux" above. The right-click test is Windows-only by
+construction: it drives synthetic OS mouse input to catch a `WM_POINTER`
+routing defect that exists only there.
 
 **A test that synthesizes OS input aims first.** `SendInput` presses a button
 wherever the cursor happens to be, on whatever window is under it, and neither
@@ -811,10 +746,10 @@ takes two calls, because the obvious one does not carry: `SetForegroundWindow`
 is refused whenever the caller is not already the foreground process, which a
 test runner launched from a terminal is not, so `aim_at` follows it with a
 `SetWindowPos` to `HWND_TOPMOST` — no such restriction, and Z order is all
-`WindowFromPoint` reads — and lets the left click do the activating. The
-right-click test is the only one that injects input today, and a second one
-goes the same way: a click that lands somewhere else is not a failure anyone
-can read.
+`WindowFromPoint` reads — and lets the left click do the activating. Nothing
+raises a window above a locked session's lock screen, so on a locked desktop
+the aim fails and says which process is on top (`explorer.exe`, whose
+`LockScreenBackstopFrame` covers every monitor).
 
 In CI the three suites are three jobs — `ui-test-windows`, `ui-test-macos`,
 `ui-test-linux` — each passing `--features ui-tests`, and separate from the

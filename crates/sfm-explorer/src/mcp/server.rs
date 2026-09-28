@@ -315,13 +315,23 @@ impl ServerHandler for Viewer {
                 width,
                 height,
                 caption,
-            }) => CallToolResult::success(vec![
-                ContentBlock::text(format!("{width}×{height} px. {caption}")),
-                ContentBlock::image(
-                    base64::engine::general_purpose::STANDARD.encode(&bytes),
-                    "image/png",
-                ),
-            ]),
+                widgets,
+            }) => {
+                let mut blocks = vec![
+                    ContentBlock::text(format!("{width}×{height} px. {caption}")),
+                    ContentBlock::image(
+                        base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        "image/png",
+                    ),
+                ];
+                // The listing of the same frame, after the picture, as JSON
+                // text: a client that surfaces text to its model reads it the
+                // way it reads get_widgets.
+                if let Some(widgets) = widgets {
+                    blocks.push(ContentBlock::text(widgets.to_string()));
+                }
+                CallToolResult::success(blocks)
+            }
             Err(refusal) => CallToolResult::error(vec![ContentBlock::text(refusal.0)]),
         }
         .into())

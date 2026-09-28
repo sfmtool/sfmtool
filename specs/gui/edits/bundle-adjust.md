@@ -224,10 +224,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   directly above `Retriangulate All Points`, reporting the node it was opened
   on; and drawn but dead on a node with no inline keypoints and on a busy one.
 
-The one windowed `ui_basic` check is that the entry is present on the
-reconstruction row's context menu after a real right-click (Windows only), for
-the reason the edits beside it have no more: what a windowed test could assert
-is that a button exists.
+The windowed `ui_basic` checks are that the entry is present on the
+reconstruction row's context menu after a real right-click (Windows only), and,
+over MCP on all three platforms, that it is there and greyed on the demo
+reconstruction. What it does is covered headlessly.
 
 ---
 

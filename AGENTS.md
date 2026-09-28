@@ -265,12 +265,14 @@ backlog and keep them honest as findings get addressed:
   them, and `ui_basic` with them, in `lint`, but does not run them, to keep
   uninstrumented artifacts out of the coverage job's target dir. `ui_basic` has
   a job per platform instead (`ui-test-{windows,macos,linux}`).
-- **`pixi run ui-test` on Linux needs an accessibility stack, and says nothing
-  when it is missing.** xa11y reads the viewer's tree over AT-SPI2, which is a
-  pair of D-Bus services rather than part of the OS, so a headless box needs a
-  display, a session bus and those daemons before there is a tree at all — and
-  a query without them returns an *empty* tree, not an error, so every widget
-  assertion fails while the launch looks healthy. The Linux `ui-test` task
+- **`pixi run ui-test` on Linux needs an accessibility stack, and does not say
+  so when it is missing.** Most of `ui_basic` reads the viewer over its own MCP
+  endpoint, but its smoke test `window_appears` reads the viewer's tree with
+  xa11y over AT-SPI2, which is a pair of D-Bus services rather than part of the
+  OS, so a headless box needs a display, a session bus and those daemons before
+  there is a tree at all — and a query without them returns an *empty* tree,
+  not an error, so that test times out waiting for the menu bar while the
+  launch looks healthy. The Linux `ui-test` task
   routes through `scripts/a11y_env.sh`, which starts only what is missing and
   is a passthrough on a real desktop; CI uses `xa11y/setup-a11y` for the same
   thing. The viewer also needs a Vulkan ICD (`mesa-vulkan-drivers` for

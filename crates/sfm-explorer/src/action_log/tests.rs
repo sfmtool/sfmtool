@@ -366,6 +366,7 @@ fn every_kind_and_actor_has_a_distinct_wire_name() {
         Kind::Animation,
         Kind::Layout,
         Kind::Window,
+        Kind::Input,
         Kind::Query("get_scene"),
     ];
     let names: std::collections::BTreeSet<&str> =

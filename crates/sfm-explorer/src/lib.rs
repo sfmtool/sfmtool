@@ -252,6 +252,8 @@ pub fn run() {
         #[cfg(feature = "mcp")]
         mcp_deferred: Vec::new(),
         #[cfg(feature = "mcp")]
+        mcp_input: mcp::InputQueue::default(),
+        #[cfg(feature = "mcp")]
         surface_readable: false,
         #[cfg(target_os = "windows")]
         early_dm,
@@ -392,6 +394,11 @@ pub(crate) struct App {
     /// where the `wgpu::Device` already is.
     #[cfg(feature = "mcp")]
     pub(crate) mcp_deferred: Vec<(mcp::Deferred, tokio::sync::oneshot::Sender<mcp::Reply>)>,
+    /// The `click`, `hover`, `press_key` and `type_text` calls, run one after
+    /// another: each feeds its events to egui a step per frame before the pass
+    /// and is answered after the pass of its last frame.
+    #[cfg(feature = "mcp")]
+    pub(crate) mcp_input: mcp::InputQueue,
     /// Whether the window surface was configured with `COPY_SRC`, which is what
     /// a screenshot of the window reads back from. Set once, when the surface
     /// is first configured; a platform that refuses the usage leaves it false
@@ -658,7 +665,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // it sit until the caller's timeout: an idle viewer requests no
                 // redraws of its own, so nothing else would come along.
                 #[cfg(feature = "mcp")]
-                if !self.mcp_deferred.is_empty() {
+                if !self.mcp_deferred.is_empty() || !self.mcp_input.is_empty() {
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }

@@ -50,6 +50,59 @@ struct UiParts<'a> {
     intrinsics_detail: &'a mut crate::intrinsics_detail::IntrinsicsDetail,
 }
 
+/// The menu bar, its shortcuts and the dialogs, drawn exactly as
+/// [`App::run_egui_pass`] draws them, for a headless test that drives them with
+/// real egui frames: no GPU and no window, so the panels the menus drop caches
+/// from are held here fresh.
+#[cfg(test)]
+pub(crate) struct Chrome {
+    image_browser: crate::image_browser::ImageBrowser,
+    /// Public so a test that draws the Image Detail panel draws this one, the
+    /// one the menus drop caches from.
+    pub(crate) image_detail: crate::image_detail::ImageDetail,
+    track_view: crate::track_view::TrackView,
+    intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail,
+    /// Whether File ▸ Quit has been pressed.
+    pub(crate) quit_requested: bool,
+}
+
+#[cfg(test)]
+impl Chrome {
+    pub(crate) fn new() -> Self {
+        Self {
+            image_browser: crate::image_browser::ImageBrowser::new(),
+            image_detail: crate::image_detail::ImageDetail::new(),
+            track_view: crate::track_view::TrackView::new(),
+            intrinsics_detail: crate::intrinsics_detail::IntrinsicsDetail::new(),
+            quit_requested: false,
+        }
+    }
+
+    /// Draw the menu bar, read its shortcuts and draw the dialogs, in the
+    /// order the frame does.
+    pub(crate) fn show(
+        &mut self,
+        root_ui: &mut egui::Ui,
+        state: &mut crate::state::AppState,
+        viewer: &mut crate::viewer_3d::Viewer3D,
+        host: &mut dyn crate::window::WindowHost,
+    ) {
+        let mut requests = UiRequests::default();
+        let mut parts = UiParts {
+            app_state: state,
+            viewer_3d: viewer,
+            image_browser: &mut self.image_browser,
+            image_detail: &mut self.image_detail,
+            track_view: &mut self.track_view,
+            intrinsics_detail: &mut self.intrinsics_detail,
+        };
+        menu::show(root_ui, &mut parts, &mut requests, host);
+        menu::shortcuts(root_ui, &mut parts);
+        modals::show(root_ui, &mut parts, &mut requests);
+        self.quit_requested |= requests.quit_requested;
+    }
+}
+
 #[derive(Default)]
 struct UiRequests {
     close_all_requested: bool,
@@ -247,6 +300,11 @@ impl App {
             self.run_egui_pass(&window, &mut egui_winit_state, &phase)
         };
         self.egui_winit_state = Some(egui_winit_state);
+
+        // A widget listing needs this frame's layout and not its pixels, so it
+        // is answered here rather than after the present.
+        #[cfg(feature = "mcp")]
+        self.resolve_mcp_widgets();
 
         // After the pass, which is where this frame's steps were applied: a
         // step that changed an input to a bench track's evaluation starts the
@@ -825,6 +883,12 @@ impl App {
 
         let mut raw_input = egui_winit_state.take_egui_input(window);
 
+        // An agent's `click`, `hover`, `press_key` or `type_text`: the next
+        // step's events, behind the real mouse and keyboard's, before anything
+        // below reads the frame's modifiers.
+        #[cfg(feature = "mcp")]
+        self.feed_mcp_input(&mut raw_input.events);
+
         // Gather gesture events
         #[cfg(target_os = "windows")]
         let (gesture_events, diagnostics) = self
@@ -974,6 +1038,12 @@ impl App {
         });
 
         self.quit_requested |= requests.quit_requested;
+
+        // A waiting `get_widgets` or `screenshot` reads the widgets of this
+        // pass here, before the AccessKit update below is handed to the
+        // platform and consumed. Nothing is read in any other frame.
+        #[cfg(feature = "mcp")]
+        self.capture_mcp_widgets(full_output.platform_output.accesskit_update.as_ref());
 
         egui_winit_state.handle_platform_output(window, full_output.platform_output);
 

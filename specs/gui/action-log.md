@@ -235,8 +235,9 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Layout | — | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
 | Layout | — | MCP | `Set layout` / `Reset layout` — the panel portion of a `set_window_layout`, which `apply_window_layout` leaves to its caller to word |
 | Window | — | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
-| Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` / `get_history {label}` |
-| Query | — | MCP | `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target — every picture taken is its own line |
+| Input | — | MCP | What an input tool delivered, written in the frame that delivers it and before whatever the input then does, which the viewer records as a person's: `click {target} {x},{y}`, with ` right` or ` middle` after `click` for another button, ` twice` for a double click, ` with {modifiers}` and ` on "{name}"` for the name at the point (`click right scene 46,53 on "demo"`); `hover {target} {x},{y}` with the same ` on "{name}"`; `press_key {modifiers}+{key}`, with ` over {panel}` when the pointer was moved there first (`press_key Ctrl+Z`, `press_key I over image_detail`); `type_text {n} characters into the text input in {dialog or panel}`, never the text. `{target}` is a panel's wire name or `window` ([mcp-server.md](mcp-server.md) § "`click` / `hover`", § "`press_key` / `type_text`") |
+| Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` / `get_history {label}` / `get_widgets {target}`, with ` crop {x},{y} {w}×{h}` for a crop |
+| Query | — | MCP | `screenshot {target} {w}×{h}`, with ` crop {x},{y} {w}×{h}` after the target for a crop, ` without HUD` where the picture is the 3D render target and ` with widgets` for a listing — every picture taken is its own line |
 | any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses, except where the `AppState` method it called worded its own refusal (the resection and the adjustment): the drain stands down there rather than writing a second row saying the same thing |
 
 Rules that the table implies:
@@ -474,6 +475,9 @@ pub(crate) enum Kind {
     /// The window itself: the state, size and placement one window layout
     /// changed. See `specs/gui/panel-layout.md`.
     Window,
+    /// Pointer and keyboard input an agent sent into the window. What that
+    /// input then does is recorded under its own kind, as a person's is.
+    Input,
     /// A read-only MCP tool, by name.
     Query(&'static str),
 }

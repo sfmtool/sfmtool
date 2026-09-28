@@ -1389,10 +1389,12 @@ bundle from `retain_nodes` on the next frame.
   Scene panel's rows reach a real window — including the row's solo toggle,
   since a third glyph button squeezed onto a row is exactly the kind of thing
   that lays out correctly under `Context::run_ui` and not in a window. The
-  context-menu check covers the flat entries only, `Bake Transform` among them
-  (greyed on the demo, which is still an entry in the tree): a submenu button
-  (`Align to ▸`, `Tint ▸`) does not surface under the accessibility `button`
-  role, and its contents exist only once opened. The multi-file title case stays
+  context menu is checked twice: after a real right-click on Windows, for the
+  flat entries in the platform's accessibility tree, and over MCP on all three
+  platforms, for every entry in order with its enabled state, `Tint` marked as
+  the one that opens a submenu, and `Align to` and `Bake Transform` greyed on
+  the demo. A submenu's contents exist only once it is opened, and are covered
+  headlessly. The multi-file title case stays
   a lib test: driving it through `ui_basic` would need two real `.sfmr` fixtures
   on disk and a way past the file dialog, for a string `window_title` already
   decides on its own.

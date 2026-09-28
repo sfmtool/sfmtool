@@ -501,8 +501,6 @@ window is created with `with_visible(false)` — it already is, so that AccessKi
 can register its UIAutomation provider first — the file is applied, and the
 window is then made visible. So a saved "maximized on the left monitor" comes up
 that way rather than appearing at 1280 × 720 in the middle and jumping.
-`ui_basic`'s attach path waits for a window with the base title, and a hidden
-window has one.
 
 **`--no-default-layout`** on the viewer's command line skips the startup load —
 for a test that must start from the stock grid whatever the developer has saved,
@@ -1055,8 +1053,8 @@ egui's checkbox rather than anything this spec decides.
 `crates/sfm-explorer/tests/ui_basic.rs` (Windows, macOS and Linux) covers the
 one thing no headless test can: a small default-layout file written to the home
 directory, the viewer launched *without* `--no-default-layout`, and the panel
-that file named found in the accessibility tree — the startup load end to end,
-through a real window. It puts the developer's own file back afterwards. Every other test
+that file named listed by `get_widgets` over the viewer's MCP endpoint — the
+startup load end to end, through a real window. It puts the developer's own file back afterwards. Every other test
 there passes `--no-default-layout`, so a saved layout on the machine running the
 suite cannot make its panel assertions fail.
 

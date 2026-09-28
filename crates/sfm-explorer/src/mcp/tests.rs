@@ -103,6 +103,8 @@ fn screenshot(panel: Option<Tab>, hud: bool, max_dimension: Option<u32>) -> Comm
         panel,
         hud,
         max_dimension,
+        crop: None,
+        widgets: false,
     }
 }
 
@@ -256,12 +258,14 @@ mod bench;
 mod catalog;
 mod display;
 mod edit;
+mod input;
 mod layout;
 mod logged;
 mod read;
 mod render;
 mod server;
 mod view;
+mod widgets;
 mod write;
 
 use bench::*;

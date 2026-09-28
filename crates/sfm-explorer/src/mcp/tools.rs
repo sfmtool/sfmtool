@@ -18,6 +18,7 @@
 use serde_json::{json, Map, Value};
 use sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions;
 
+use super::input::{InputCommand, ModifierKeys, PointerTarget};
 use super::{
     CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
     ViewCommand,
@@ -582,13 +583,70 @@ pub(crate) fn parse(
                      only; the other panels have no picture underneath what is drawn on them.",
                 ));
             }
+            let widgets = args.optional_bool("widgets")?.unwrap_or(false);
+            if widgets && !hud {
+                return Err(args.error(
+                    "takes widgets: true only with the HUD: the render target under it has no \
+                     widgets on it. Leave hud out to list the widgets of the 3D Viewer panel.",
+                ));
+            }
             Command::Screenshot {
                 panel,
                 hud,
                 max_dimension: args
                     .optional_usize("max_dimension")?
                     .map(|d| d.min(u32::MAX as usize) as u32),
+                crop: args.crop("crop_px")?,
+                widgets,
             }
+        }
+        "get_widgets" => Command::GetWidgets {
+            panel: match args.map.get("panel_name") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(args.panel("panel_name")?),
+            },
+            crop: args.crop("crop_px")?,
+        },
+        "click" => Command::Input(InputCommand::Click {
+            target: pointer_target(&args)?,
+            button: args.mouse_button("mouse_button")?,
+            count: match args.optional_usize("count")? {
+                None | Some(1) => 1,
+                Some(2) => 2,
+                Some(_) => {
+                    return Err(args.error(
+                        "wants count to be 1 or 2: a click or a double click. egui reads a \
+                         third click as a triple click, which no widget of this viewer answers.",
+                    ))
+                }
+            },
+            modifiers: args.modifier_keys("modifiers")?,
+        }),
+        "hover" => Command::Input(InputCommand::Hover {
+            target: pointer_target(&args)?,
+        }),
+        "press_key" => {
+            let panel = match args.map.get("panel_name") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(args.panel("panel_name")?),
+            };
+            let at_px = args.optional_numbers::<2>("at_px")?;
+            Command::Input(InputCommand::PressKey {
+                key: args.key("key")?,
+                modifiers: args.modifier_keys("modifiers")?,
+                over: (panel.is_some() || at_px.is_some())
+                    .then_some(PointerTarget::At { panel, at_px }),
+            })
+        }
+        "type_text" => {
+            let text = args.required_string("text")?;
+            if text.is_empty() {
+                return Err(args.error("has nothing to type: text is empty."));
+            }
+            Command::Input(InputCommand::TypeText {
+                text,
+                widget: args.widget("widget")?,
+            })
         }
         other => {
             return Err(ToolError::new(format!(
@@ -1296,6 +1354,31 @@ impl Args<'_> {
         }
     }
 
+    /// A rectangle of a target `[x, y, width, height]`, in whole physical
+    /// pixels, with room in it.
+    ///
+    /// Whether it fits the target is the viewer's question, not the parse's:
+    /// only the viewer knows how big the target is.
+    fn crop(&self, key: &str) -> Result<Option<[u32; 4]>, ToolError> {
+        let Some(numbers) = self.optional_numbers::<4>(key)? else {
+            return Ok(None);
+        };
+        let expected = "[x, y, width, height] in whole pixels, with a width and a height";
+        let mut out = [0u32; 4];
+        for (slot, number) in out.iter_mut().zip(numbers) {
+            if number < 0.0 || number.fract() != 0.0 || number > f64::from(u32::MAX) {
+                return Err(self.error(format!("wants {key} to be {expected}.")));
+            }
+            *slot = number as u32;
+        }
+        if out[2] == 0 || out[3] == 0 {
+            return Err(self.error(format!(
+                "wants {key} to be {expected} — a crop with no area has nothing in it."
+            )));
+        }
+        Ok(Some(out))
+    }
+
     /// A panel argument, by the name the layout file spells it with.
     fn panel(&self, key: &str) -> Result<Tab, ToolError> {
         let name = self.optional_string(key)?.ok_or_else(|| {
@@ -1357,6 +1440,126 @@ fn describe(value: &Value) -> &'static str {
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
     }
+}
+
+/// Where `click` or `hover` aims: `at_px` with an optional `panel_name`, or
+/// `widget`, and never both.
+fn pointer_target(args: &Args<'_>) -> Result<PointerTarget, ToolError> {
+    let widget = args.widget("widget")?;
+    let at_px = args.optional_numbers::<2>("at_px")?;
+    let panel = match args.map.get("panel_name") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(args.panel("panel_name")?),
+    };
+    match (widget, at_px) {
+        (Some(_), Some(_)) => Err(args.error(
+            "was given both widget and at_px. A widget is aimed at its centre and a point is \
+             aimed at itself, so give one.",
+        )),
+        (Some(_), None) if panel.is_some() => Err(args.error(
+            "takes panel_name only with at_px: a widget id already names its place in the \
+             window.",
+        )),
+        (Some(value), None) => Ok(PointerTarget::Widget(value)),
+        (None, Some(at)) => Ok(PointerTarget::At {
+            panel,
+            at_px: Some(at),
+        }),
+        (None, None) => Err(args.error(
+            "needs either at_px, a point [x, y] in the pixels of the window or of panel_name's \
+             body, or widget, an id from get_widgets.",
+        )),
+    }
+}
+
+impl Args<'_> {
+    /// A widget id as a listing spells it: 16 hex digits, as the value of the
+    /// egui id it names.
+    fn widget(&self, key: &str) -> Result<Option<u64>, ToolError> {
+        let Some(text) = self.optional_string(key)? else {
+            return Ok(None);
+        };
+        let hex = text.len() == 16 && text.chars().all(|c| c.is_ascii_hexdigit());
+        hex.then(|| u64::from_str_radix(&text, 16).ok())
+            .flatten()
+            .map(Some)
+            .ok_or_else(|| {
+                self.error(format!(
+                    "wants {key} to be a widget id as get_widgets reports one: 16 hex digits, \
+                     like \"003233f928812d8a\"."
+                ))
+            })
+    }
+
+    /// A mouse button by its wire name, left when the call names none.
+    fn mouse_button(&self, key: &str) -> Result<egui::PointerButton, ToolError> {
+        match self.optional_string(key)?.as_deref() {
+            None | Some("left") => Ok(egui::PointerButton::Primary),
+            Some("middle") => Ok(egui::PointerButton::Middle),
+            Some("right") => Ok(egui::PointerButton::Secondary),
+            Some(other) => Err(self.error(format!(
+                "does not know the mouse button {other:?} — the buttons are left, middle and \
+                 right."
+            ))),
+        }
+    }
+
+    /// The modifier keys a call holds, none when it names none.
+    fn modifier_keys(&self, key: &str) -> Result<ModifierKeys, ToolError> {
+        let names = ModifierKeys::WIRE_NAMES.join(", ");
+        let mut keys = ModifierKeys::default();
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(keys),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, "an array of modifier names", value))?;
+        for element in array {
+            let name = element
+                .as_str()
+                .ok_or_else(|| self.wrong_type(key, "an array of modifier names", value))?;
+            if !keys.add(name) {
+                return Err(self.error(format!(
+                    "does not know the modifier {name:?} — the modifiers are {names}."
+                )));
+            }
+        }
+        Ok(keys)
+    }
+
+    /// A key by egui's name for it, as `egui::Key::from_name` reads one.
+    fn key(&self, key: &str) -> Result<egui::Key, ToolError> {
+        let name = self
+            .optional_string(key)?
+            .ok_or_else(|| self.error(format!("needs {key}: {}", key_names())))?;
+        egui::Key::from_name(&name).ok_or_else(|| {
+            self.error(format!(
+                "does not know the key {name:?}. {} Modifiers go in modifiers, not in {key}.",
+                key_names()
+            ))
+        })
+    }
+}
+
+/// Every key name egui reads, as a sentence: the letters, digits and function
+/// keys as ranges, and every other name in full.
+fn key_names() -> String {
+    let others: Vec<&str> = egui::Key::ALL
+        .iter()
+        .map(|key| key.name())
+        .filter(|name| {
+            let single = name.len() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric());
+            let function = name.len() > 1
+                && name.starts_with('F')
+                && name[1..].chars().all(|c| c.is_ascii_digit());
+            !single && !function
+        })
+        .collect();
+    format!(
+        "The key names are egui's: the letters A to Z, the digits 0 to 9, F1 to F35, and {}.",
+        others.join(", ")
+    )
 }
 
 /// Which of `translate_bench_patch`'s two forms a call made, refusing one that

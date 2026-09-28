@@ -101,9 +101,12 @@ place.
 
 ## The tool surface
 
-Eighty tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-four
-write, and one writes a file.
+Eighty-five tools. Sixteen read -- fifteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-eight
+write, and one writes a file. `get_widgets` and the four input tools, `click`,
+`hover`, `press_key` and `type_text`, read and press the viewer's widgets the
+way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
+`hover`", § "`press_key` / `type_text`").
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -185,15 +188,27 @@ write, and one writes a file.
 | `build_index_files` | write | Build one reconstruction's SIFT index and, from it, its cluster patches, beside its `.sfmr`, and open both, on a worker thread |
 | `close_index_files` | write | Let go of the index files open beside one reconstruction |
 | `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it, with `workspace_path` stating the workspace path it records |
-| `screenshot` | observe | PNG of the window, or of one panel |
+| `screenshot` | observe | PNG of the window, or of one panel, optionally cropped and with its widget listing |
+| `get_widgets` | read | Every widget drawn in the window or one panel, with its rectangle, role, name and state, and the dialogs and menus open above the dock |
+| `click` | write | Press and release a mouse button at a point of the window or a panel, or on a widget from a listing, as a person's mouse does, and report what was under the pointer and the dialogs and menus open after it |
+| `hover` | write | Move the pointer to a point or a widget and leave it there |
+| `press_key` | write | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
+| `type_text` | write | Type a string into the focused text input, or into one named by its widget id |
 
-Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
+Every tool is annotated: the fifteen reads and `screenshot` carry
+`readOnlyHint: true`, the sixty-eight writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
 human can undo), and every one of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
+
+The four input tools are writes by what they do themselves, which is to press
+what a person could press. What they press is the viewer's own: a click on
+File ▸ Save writes the file as a person's click does, File ▸ Quit ends the
+process, and an item that opens a file chooser (`Open...`, `Save As...`, the
+Panels menu's `Save Layout...` and `Load Layout...`) stops the GUI thread until
+the human answers it, so every call waits behind it (§ "Non-goals").
 
 **`save_reconstruction` is the one tool annotated `destructiveHint: true`**, and
 the one whose `ToolKind` is neither read nor write but `Save`. It is the only
@@ -1544,6 +1559,8 @@ the log.
 { "panel_name": "viewer_3d" }                   // one panel's body
 { "panel_name": "image_detail", "max_dimension": 1024 }
 { "panel_name": "viewer_3d", "hud": false }     // the 3D render alone, nothing drawn over it
+{ "panel_name": "scene", "crop_px": [0, 0, 412, 200] }   // a region of the panel
+{ "panel_name": "scene", "widgets": true }              // the picture and its widget listing
 ```
 
 Returns an MCP `ImageContent` block — base64 PNG, `mimeType: "image/png"` — plus
@@ -1553,7 +1570,10 @@ Viewer it keeps the frame description too (which reconstructions are drawn, the
 point and camera-image counts, and the camera image being looked through, if
 any), because those are the pictures the 3D view is in. That caption is built
 during the *apply* phase, while `AppState` is still borrowed, so the picture and
-the description of it are of the same instant.
+the description of it are of the same instant. **The caption leads with the
+dialogs and menus open in the frame** (§ "Dialogs and menus"): *"The Bundle
+Adjust dialog is open. The Scene panel, 412×655."*, so a dialog the human
+opened is said in words rather than left to be noticed in the picture.
 
 **Without `panel_name` it is the window**: the frame the human is looking at, at
 `inner_size` in physical pixels, menu bar and status line included. It is the
@@ -1599,9 +1619,27 @@ GUI's own word for the overlay ([viewport-hud.md](viewport-hud.md)), which is
 why the initialism stands where the vocabulary rule would otherwise want a
 spelled-out word.
 
-**`max_dimension`** applies after the crop, Lanczos3: what a downscaled point
+**`crop_px`** crops the picture to a rectangle `[x, y, width, height]` of the
+target, in the target's physical pixels (§ "The coordinate space"). The target
+is the window, the panel's body, or with `hud: false` the render target. A
+rectangle that reaches outside the target is refused, and the refusal names
+the target's size, so a caller never receives a smaller picture than the one it
+asked for without being told; one with no width or no height is refused at the
+parse. The caption adds `, cropped to [x, y, width, height]` to the target's
+size.
+
+**`widgets: true`** adds the `get_widgets` reply for the same target and crop,
+taken from **the frame the picture is of**, as a JSON text block after the
+image. Two separate calls could return a picture and a listing of different
+frames, and a caller could not tell. It is refused at the parse beside
+`hud: false`, since the render target under the HUD has no widgets on it.
+
+**`max_dimension`** applies after both crops, Lanczos3: what a downscaled point
 cloud is asked to answer is "is this noisy", and a cheap filter's aliasing
-invents exactly that.
+invents exactly that. It scales the PNG only. The rectangles of a listing are
+never scaled with it, and when it has scaled the picture the caption says by
+what factor and that every `_px` rectangle is in the unscaled pixels, so a
+caller scales once, on its own side.
 
 **A minimized window is refused rather than photographed:**
 
@@ -1614,8 +1652,8 @@ of a shared viewer. The check is in `apply_with_window`, against the window
 snapshot's `state` (§ "The window block"), so it is under headless test with
 the rest of the vocabulary rather than only on a machine with a window.
 
-`screenshot` is the one tool that cannot answer during the apply phase
-(§ "Threading").
+`screenshot` cannot answer during the apply phase, since its answer is a frame
+that has not been drawn yet (§ "Threading").
 
 #### Mechanics
 
@@ -1656,12 +1694,496 @@ rather than cropped to nothing. Points become pixels through the frame's own
 `egui::Context::pixels_per_point`, which is the window's scale factor composed
 with egui's zoom and the only number the dock's rectangles are in step with.
 
+**A `crop_px` is checked twice.** When the call is applied it is checked against
+the target's last laid-out size, so a rectangle that is plainly outside is
+refused before a frame is spent on it; a target with no size yet (a panel a
+`show_panel` in the same batch opened) is left to the frame. At readback it is
+checked again against the picture actually taken, which can differ in the frame
+that opened a panel or resized the window, and only then applied.
+
+**Every screenshot captures the frame's widgets**, not only one with
+`widgets: true`, because the caption leads with the dialogs and menus that are
+open. `App::capture_mcp_widgets` reads them after the egui pass
+(§ "`get_widgets`", "Mechanics") and hands the capture to each waiting
+screenshot, and the readback builds the caption and any listing from that
+capture; a screenshot left waiting past a frame that stopped before its present
+is given the newer frame's capture, so a picture and its listing stay of one
+frame.
+
 **In the Action Log** the `Query` text names the target: `screenshot window
 1920×1129`, `screenshot image_detail 640×480`, `screenshot viewer_3d 1280×720
-without HUD`. The size is the size the picture will be, after `max_dimension`;
-for a panel, the crop's size is not known until the frame, so the text records
-the panel's *last* laid-out size, which is the right size in every frame but the
-one that opened it.
+without HUD`, and with a crop and a listing `screenshot window crop 10,20 300×200
+300×200 with widgets`. The size is the size the picture will be, after
+`max_dimension`; for a panel, the crop's size is not known until the frame, so
+the text records the panel's *last* laid-out size, which is the right size in
+every frame but the one that opened it.
+
+### `get_widgets`
+
+Every widget egui drew in a frame, with its rectangle, role, name and state.
+The viewer builds this information inside its own process every frame, and
+the platform's accessibility tree carries the same thing out across the
+operating system's accessibility bridge, where one read of it takes about
+eighteen seconds on a GitHub-hosted Windows runner. Read here, it costs a frame
+([architecture.md](architecture.md) § "Testing"). For an agent working with a
+human it is what makes a screenshot actionable: the agent is told which
+rectangle is the `Bundle Adjust...` item and can press it with `click`.
+
+```jsonc
+{}                                              // every widget in the window
+{ "panel_name": "scene" }                       // one panel's body
+{ "panel_name": "viewer_3d", "crop_px": [0, 0, 400, 200] }
+```
+
+```jsonc
+{
+  "target": { "panel_name": "scene", "size_px": [227, 466] },
+  "dialogs": [],
+  "menus": [],
+  "widgets": [
+    { "widget": "35426b39463b1c83", "role": "button", "name": "👁",
+      "rect_px": [24, 66, 18, 18], "enabled": true, "sense": "click",
+      "path": ["👁"] },
+    { "widget": "003233f928812d8a", "role": null, "name": null,
+      "rect_px": [102, 66, 119, 18], "enabled": true, "sense": "click",
+      "path": [] },
+    { "widget": "6c758eb27bee3e55", "role": "label", "name": "demo",
+      "rect_px": [129, 68, 34, 15], "enabled": true, "sense": "none",
+      "path": ["demo"] }
+    // …
+  ]
+}
+```
+
+That is the demo reconstruction's row in the Scene panel: the row's click
+target is an unnamed `ui.interact` rectangle, and the name `demo` is a separate
+label drawn over it.
+
+`target` is `{ "panel_name": null, "size_px": … }` for the window, and repeats
+`crop_px` when one was given. `dialogs` and `menus` come first in every reply,
+empty or not (§ "Dialogs and menus").
+
+#### The coordinate space
+
+Every rectangle and point this tool, `screenshot` and the input tools exchange
+is in **physical pixels of the presented frame, relative to the target's
+top-left corner**. The target is the window when no `panel_name` is given, and
+the panel's body when one is. That body is the rectangle `screenshot` crops to,
+so a rectangle read from `get_widgets` marks the same pixels in a screenshot of
+the same panel. Rectangles are `[x, y, width, height]` and points `[x, y]`, in
+`_px` fields as elsewhere on the surface (`visible_rect_px`). One coordinate
+space for reading, cropping and clicking is what lets a caller pass a rectangle
+it read straight to `click`. `max_dimension` scales a screenshot's PNG and
+nothing else (§ "`screenshot`").
+
+#### The fields
+
+One entry per widget egui recorded in the frame that is **in the target and
+visible**, in drawing order: back layer first, and within a layer in the order
+egui registered them. A `Ui` with no accessibility node and nothing to click is
+layout and is left out, as is an unnamed generic container that cannot be
+clicked.
+
+- **`widget`**: the widget's id, 16 lowercase hex digits of egui's `Id`, which
+  is also the node's AccessKit id. It stays the same across frames for as long
+  as the widget keeps its egui id, and egui's id hashing is deterministic, so it
+  is also the same across launches of the same build. Tests still address
+  widgets by `name` and `path`, because a change to the code that builds a
+  panel can change an id without changing anything a person sees.
+- **`role`**: the AccessKit role in snake case (`button`, `check_box`,
+  `label`, `text_input`, `slider`, `spin_button`, …). A widget with no
+  accessibility node, or one whose role is `Unknown`, has role `null`: it can
+  still be clicked, but nothing in the tree says what it is. The Scene tree's
+  row rectangles and the dock's tab close buttons are examples.
+- **`name`**: the AccessKit label, or `null`. For a label widget it is the
+  label's text, which egui puts in the node's value.
+- **`rect_px`**: the widget's interaction rectangle after clipping, in the
+  target's pixels, each edge rounded on its own as the panel crop rounds. A
+  widget that is clipped out entirely is left out.
+- **`enabled`**, **`toggled`** (check boxes and radio buttons only; `null`
+  when indeterminate) and **`value`** (text inputs, sliders and drag values
+  only, as a string).
+- **`sense`**: `click`, `drag`, `click_and_drag`, or `none`. It says whether
+  `click` on this widget can do anything. egui's `Sense` has no bit for
+  hovering, so a widget that only shows a tooltip is `none` like text that
+  only displays.
+- **`path`**: the names of the widget's named ancestors in the AccessKit
+  tree, outermost first, ending with its own name. egui gives the widgets
+  inside a panel few named ancestors (a collapsing header is not the parent of
+  its contents), so inside a panel `path` is usually the name alone. It earns
+  its place in dialogs and menus: a dialog's widgets carry its title
+  (`["Go to Point", "Cancel"]`), and a menu's items carry the path of the widget
+  that opened the menu, which the listing puts in front because egui gives a
+  popup no AccessKit link to its opener: `["File", "Quit"]`, and
+  `["Tint", "Orange"]` for a submenu's items. That is how a test tells a menu
+  item from a button elsewhere with the same name. An item drawn with a
+  shortcut beside it carries the shortcut in its name, because AccessKit reads
+  the button's text and its shortcut text into one label, and the platform's
+  tree does the same: `["File", "Save As... Ctrl+Shift+S"]`,
+  `["Go", "Go to Point... Ctrl+G"]` (`⌘` on macOS).
+- **`submenu`**: `true` on a menu item that opens a submenu, and absent
+  otherwise (§ "Dialogs and menus").
+- **`panel_name`**: on a dock tab only, the panel it raises.
+
+**`crop_px`** narrows the listing to the widgets, dialogs and menus that
+overlap a rectangle of the target. A widget that overlaps it only partly is
+listed with its whole rectangle. It is refused outside the target, naming the
+target's size, as `screenshot`'s is.
+
+**What is not in the listing.** Things egui paints without making them
+widgets: the 3D viewport's HUD text, the Move Camera banner, the Image Detail
+overlays, the points in the viewport. A widget listing cannot say whether
+those are right, and the screenshot remains how an agent checks them.
+Tooltips are not listed either (§ "Open questions").
+
+**Dock tabs.** `egui_dock` handles each tab through `ui.interact`, and the
+node AccessKit gets for it has role `Unknown` and no name, so the platform's
+tree gives no way to press a tab. The dock state holds no tab rectangles, but
+`egui_dock` builds each tab's widget id from its surface, node and position in
+the node, so the listing recomputes those ids from the dock state, finds the
+tabs among the frame's widgets, and lists each with role `tab`, the panel's
+title as `name` and `path`, and `panel_name`.
+
+**Refusals** are `screenshot`'s, said of a listing: a panel that is closed or
+behind another tab (*"… so there is nothing of it to list"*, *"… so a listing
+of it would be a listing of Image Browser"*), a minimized window, and a
+`crop_px` outside the target. **In the Action Log** a call is a `Query` row
+naming its target and crop, `get_widgets scene crop 0,0 100×50`.
+
+#### Mechanics
+
+**Where the data comes from.** All of it is public egui API, read after the
+frame's egui pass by `WidgetFrame::capture` in `mcp::widgets`:
+
+- The pass's `WidgetRects` hold every widget by layer: its id, rectangle,
+  interaction rectangle, `Sense` and `enabled`. They are read from
+  `ViewportState::prev_pass`, because `Context::run_ui` swaps the finished pass
+  there when it ends. The rectangles are in layer coordinates, and
+  `Context::layer_transform_to_global` maps them into the window. The layers
+  are put in painting order, by `Order` and then by egui's area order, which is
+  what "drawing order" and "topmost" mean. This is the list of what can be
+  clicked.
+- `PlatformOutput::accesskit_update` is a complete `TreeUpdate` every frame,
+  keyed by `Id::accesskit_id`, so each widget's id finds its node: role, label,
+  toggled state, value, and the parents that make up `path`. The viewer calls
+  `enable_accesskit` unconditionally at startup (`lib.rs`), so the update is
+  always there. The capture reads it before `handle_platform_output` consumes
+  it, which is the one moment the pass's rectangles and its tree are both in
+  hand.
+- egui's area memory says where each dialog and menu is, and which layers are
+  popups is found by id (§ "Dialogs and menus").
+
+**When it is read.** `App::capture_mcp_widgets` captures a frame only when a
+`get_widgets`, a `screenshot` or an input step is waiting for it, and keeps it
+in window points; each request converts it into its own target's pixels, so one
+capture answers every request of that frame whatever it targets. `get_widgets`
+defers through `Outcome::Deferred` like `screenshot`, since the frame has to
+have been laid out, and `App::resolve_mcp_widgets` answers it straight after
+the egui pass: a listing needs the layout, not the pixels, so it does not wait
+for the surface copy.
+
+**Cost when nobody asks.** None. The listing is built only in a frame with a
+request waiting, and the AccessKit update exists either way.
+
+### Dialogs and menus
+
+Anything drawn above the dock and its panels is reported in two blocks at the
+head of every `get_widgets` reply and of every input tool's reply, including
+when both are empty, and the screenshot caption leads with the same
+information. An agent learns about a dialog the human opened, or a menu its own
+click opened, from any of those calls. A call scoped to a panel, or cropped,
+lists the dialogs and menus that overlap its target, so an agent reading the
+Scene panel learns that a menu is over part of it.
+
+```jsonc
+"dialogs": [
+  { "title": "Bundle Adjust", "rect_px": [610, 300, 700, 420],
+    "widgets": [ /* entries as in get_widgets, the dialog's own */ ] }
+],
+"menus": [
+  { "kind": "context_menu",
+    "owner": { "panel_name": "scene", "widget": "003233f928812d8a", "name": null,
+               "at_px": [140, 75] },
+    "rect_px": [64, 60, 190, 212],
+    "widgets": [
+      { "widget": "…", "role": "button", "name": "Select", "enabled": true, … },
+      { "widget": "…", "role": "button", "name": "Align to", "submenu": true, … },
+      { "widget": "…", "role": "button", "name": "Bake Transform", "enabled": false, … }
+    ] },
+  { "kind": "submenu",
+    "owner": { "widget": "…", "name": "Align to" },
+    "rect_px": [254, 150, 160, 60], "widgets": [ … ] }
+]
+```
+
+- **`dialogs`** are the viewer's own egui windows: `Bundle Adjust`, `Unsaved
+  changes`, `Go to Point`, `Refit Spline`, `Save As Minimal` and `Load Demo
+  Data`. None of them is modal: a click outside one reaches whatever is under
+  it, as it does for a person. The operating system's file chooser is not an
+  egui window, and it stops the GUI thread, so it is never in this block
+  (§ "Non-goals"). A floating dock window holds panels, not a dialog, and is
+  not listed here.
+- **`menus`** are egui popups: a `menu` from the menu bar (`File`, `Edit`,
+  `Go`, `Panels`), a `context_menu` opened by a right click, a `submenu` hanging
+  from an item of another menu, and a `dropdown` from a combo box or a menu
+  button inside a panel, such as the Image Detail gear. `owner` is the widget
+  the menu was opened from, with `panel_name` for the panel it is in; for a
+  context menu opened on a widget with no name it also carries `at_px`, the
+  point that was clicked, in the target's pixels. That covers the Image
+  Browser strip, the 3D viewport and the Image Detail photograph, and also the
+  Scene tree's rows, whose click target is an unnamed rectangle under the row's
+  label. A test asks what was under `at_px` to learn which row it was.
+- **`panel_name` is left out of an owner that is in no panel**: a menu bar
+  button, and a submenu's owner, which is an item of another menu and can lie
+  over a panel without being in it.
+- A menu item that opens a submenu has **`submenu: true`**, and the arrow
+  egui draws after its text (`⏵`, which AccessKit reads into the label) is
+  taken off its `name` and off every `path` it appears in. That is read from
+  how egui built the item (the arrow a `SubMenuButton` ends its text with, or
+  an open submenu named after it), not from its role, since the platforms
+  disagree on the role.
+- **Their widgets are not repeated in the main list.** A dialog's and a menu's
+  widgets are in its own `widgets`, with `rect_px` in the same target's pixels.
+
+**How each is recognised.** A menu's owner is the widget whose id gives the
+popup's area id: `egui::Popup` names its area `owner.with("popup")`, as
+`egui::ComboBox` does, and a submenu is named
+`SubMenu::id_from_widget_id(owner)`. Every context menu in the viewer goes
+through `crate::context_menu::on_secondary_click` or
+`on_secondary_click_where`, which build `Popup::menu(response)`, so each
+`Foreground` layer's owner is found over the frame's widgets with nothing added
+at the call sites. A popup egui placed at the pointer is a `context_menu`; one
+hanging from a button is a `dropdown` when the button is in a panel body or a
+floating dock window and a `menu` otherwise. A foreground area no widget of the
+frame opened is not a popup, and its widgets stay in the main list. A menu that
+an item has just closed is still drawn for one more frame as an area with
+nothing in it; it is left out, since a reply listing it would say a menu is
+open that is closing. A dialog is a `Middle`-order area that is not one of the
+dock's floating windows (`egui_dock` names each after its surface) and whose
+area node has role `Window` and a title, the window's AccessKit label. The
+`Tooltip` and `Debug` layers are skipped.
+
+**The two words are chosen against the wire vocabulary rule.** *Overlay*
+already names the Image Detail panel's drawing layers and the viewport HUD, and
+*layer* names those and a depth layer, so neither can also name these
+([../GLOSSARY.md](../GLOSSARY.md)).
+
+### `click` / `hover`
+
+```jsonc
+{ "panel_name": "scene", "at_px": [46, 53] }                          // left click
+{ "panel_name": "scene", "at_px": [46, 53], "mouse_button": "right" }
+{ "widget": "9f03c1a2b7e4d650", "count": 2 }                          // double click on a widget
+{ "at_px": [400, 12], "modifiers": ["control", "shift"] }             // in window pixels
+{ "panel_name": "image_detail", "at_px": [210, 160] }                 // hover only (the hover tool)
+```
+
+`click` takes either `at_px`, with an optional `panel_name`, or `widget`, an
+id from a listing; both, neither, and `panel_name` beside `widget` are refused
+at the parse. `mouse_button` is `left` (the default), `middle` or `right`.
+`count` is 1 or 2, since egui reads a third click as a triple click, which no
+widget of this viewer answers. `modifiers` holds any of `shift`, `control`,
+`alt` and `command`. `hover` takes the same target arguments and nothing else.
+
+**What happens.** The pointer events go into egui's input for the coming
+frames, the same `egui::Event`s `egui_winit` makes from a real mouse:
+
+1. A frame is drawn with no input and its widgets are read. A `widget` id and
+   a point in a panel are resolved against it: the call arrives before the
+   frame's egui pass, and only a frame that has been laid out says where a
+   widget or a panel is.
+2. The pointer moves to the point, and one frame is drawn. egui resolves a
+   press against the widget rectangles of the frame before it, and the 3D
+   viewport's pick read-back also needs a frame over the point, so a press
+   without this frame would miss.
+3. Press and release, in one frame. For `count: 2`, a second press and release
+   follows in the next frame, well inside egui's double-click interval. egui
+   reports a click for each press and a double click on the second, so a
+   widget sees two clicks and one double click, and no triple click.
+4. One more frame is drawn, and the reply is built after it. That frame is the
+   one in which a menu or dialog opened by the click appears, so the reply's
+   `dialogs` and `menus` include it.
+
+The pointer stays at the point afterwards, as a person's does, so a submenu
+opened by hovering stays open and the next `click` inside it lands. `hover`
+is steps 1, 2 and 4.
+
+**With `widget`**, the point is the centre of the widget's rectangle, and the
+press goes through the same hit test as any other click. The click is refused,
+naming what is on top, when something covers that point: a clickable widget
+drawn after it, or a dialog or menu drawn above the one it is in, whose
+background takes a press even where it has no widget. It does not press
+through: a person could not click the widget there either. A widget that
+cannot be clicked drawn over it, such as a Scene row's label, does not cover
+it. A widget's rectangle can reach past its panel's body (a Scene row's label
+runs past a narrow Scene panel), so a caller aiming with `at_px` in a panel
+aims at a part of the widget inside the body.
+
+**The reply**:
+
+```jsonc
+{
+  "at_px": [140, 75],
+  "hit": { "widget": "003233f928812d8a", "role": null, "name": null, "panel_name": "scene" },
+  "dialogs": [],
+  "menus": [ { "kind": "context_menu", … } ]
+}
+```
+
+`hit` is the topmost clickable widget at the point in the frame the press was
+resolved against, which is what egui's hit test takes, or `null` for empty
+space. For a Scene row that is the row's unnamed click target, not the `demo`
+label drawn on it, which cannot be clicked. For `hover` it is the clickable
+widget the pointer arrived over. `panel_name` is `null` for a widget in the
+menu bar, a dialog or a menu. `at_px` is the point in the target's pixels; with
+`widget` the target is the window. `dialogs` and `menus` are those of the
+target the call named, or of the window when it named none or the click closed
+that panel. The reply does not say what the click *did*. What it did changes
+state that the tool already reporting that state can return (`get_scene`,
+`get_window_layout`, `get_action_log`), and the Action Log records it as it
+would for a person.
+
+**Refusals**: a point outside the target, naming the target's size; a panel
+that is closed or behind another tab (the check `screenshot` makes, in words
+about pointing: *"… so there is nothing of it to point at"*, *"… so the pointer
+would land on Image Detail instead"*); a minimized window; a covered widget; and
+a `widget` id that is not in the frame. For that last one the refusal gives the
+name the id had when a listing reported it and the ids that carry that name now
+(*"It was named "Quit" when it was listed, and nothing named "Quit" is drawn
+now"*), or says no listing reported the id. Each refusal is one failed Action
+Log row, `{tool} failed: {reason}`, whether it is reached when the call is
+applied or in the frame that aims it. Nothing has been delivered by then, so no
+refusal leaves a command half done.
+
+**In the Action Log** a click is recorded as actor `MCP`, kind `Input`, with
+its target, e.g. `click right scene 140,75 on "demo"`, written in the frame
+that delivers the press, so it comes before the rows of whatever the click then
+does, which the viewer records as it would a person's. The name after `on` is
+what a person reads at the point: the hit's own name, or where it has none the
+topmost named widget drawn over the point. `click` is followed by ` right` or
+` middle` for another button and ` twice` for a double click, and the
+modifiers follow the point as ` with Ctrl+Shift`, in egui's names for the keys
+on the platform. A `hover` is `hover {target} {x},{y}` with the same
+` on "…"`, written in the frame the pointer moves. `{target}` is a panel's wire
+name or `window`; with `widget` it is `window` and the point is the widget's
+centre.
+
+#### Mechanics
+
+**Remembered names.** Every capture, for whatever call, records the name of
+each named widget under its id (`input::WidgetNames`), which is what lets a
+refusal of an id that has gone name what now carries its name. The record is
+forgotten whole past twenty thousand ids.
+
+**Modifiers.** egui 0.36's `RawInput` carries no modifier state of its own,
+only `ModifiersChanged` events, so a command with modifiers sends a
+`ModifiersChanged` to them with its first press or key and, in the frame after
+its last event, one back to the state egui held before. Each `Key` and
+`PointerButton` event also carries the modifiers itself, as `egui_winit` sets
+them: `command` is `ctrl` and `command` everywhere but macOS, where it is
+`mac_cmd` and `command`.
+
+### `press_key` / `type_text`
+
+```jsonc
+{ "key": "Enter" }                                        // whatever has keyboard focus
+{ "key": "Z", "modifiers": ["command"] }                  // Undo
+{ "key": "I", "panel_name": "image_detail" }              // a shortcut read over a panel
+{ "text": "pt3d_1a2b3c4d_17", "widget": "4be0…" }         // type_text into a text input
+```
+
+**`press_key`** sends one key: a press in one frame and the release in the
+next, with the modifiers held across both, and one more frame, after which the
+reply is built. `key` is egui's name for the key, as `egui::Key::from_name`
+reads it: a letter (`M`), a digit, `Enter`, `Escape`, `Tab`, `Backspace`,
+`Delete`, `Space`, the arrows (`ArrowUp`), `F1` to `F35`, and the punctuation
+names (`Comma`, `Period`, `OpenBracket`). An unknown name is refused at the
+parse, as every malformed argument is, so it is a protocol error with no Action
+Log row; the refusal gives the letters, digits and function keys as ranges and
+every other name in full. `modifiers` is the list `click` takes; `command` is
+Control on Windows and Linux and ⌘ on macOS, which is how the viewer's own
+shortcuts (`Ctrl+Z`, `Ctrl+S`) are declared. A letter is a key and not text:
+`egui_winit` sends a person's letter as a key and a `Text` event, and
+`press_key` sends the key alone, so it does not type into a text input.
+`type_text` types.
+
+A key goes where a person's would. The viewer reads keys in three ways, and
+the tool reaches each:
+
+- **Global shortcuts** from the menu bar (`consume_shortcut` in
+  `app/menu.rs`: Undo, Redo, Save, Delete Point, Go to Point, Duplicate) and
+  the keys a dialog reads while it is open (Enter runs, Escape cancels). These
+  need no target. The 3D viewport's keys (`Z`, `Home`, the fly keys) are read
+  whenever no text input has the keyboard, wherever the pointer is, so they
+  need none either.
+- **Keys read over a panel**: Image Detail's `I`, which it reads while the
+  pointer is over the photograph. With `panel_name` or `at_px`, the pointer
+  moves there for a frame first, as `hover` does, and stays there; with
+  `panel_name` and no `at_px` it goes to the centre of the panel's body. The
+  frame before the move is drawn with no input, as `click`'s first is.
+- **A focused text input**: its own editing keys (`Backspace`, the arrows,
+  `Enter` to confirm). Focus is whatever the last click gave it, as for a
+  person.
+
+**`type_text`** enters a string into a text input as one of egui's `Text`
+events per call, which is what an input method delivers when it commits. With
+`widget`, it clicks the widget first to focus it, and refuses if the widget is
+not a `text_input`, or if the click did not give it focus. The click puts the
+cursor where it lands, as a person's does, so a field that opened with its text
+selected (Go to Point, prefilled with the selected point's id) is typed onto the
+end rather than over the selection; `type_text` without `widget` types over it.
+Without `widget`, a frame is drawn first to read what has focus, the text goes
+to the focused widget, and the call is refused if nothing has focus, or if what
+has focus takes no text, since text sent there would be dropped with no sign.
+Empty text is refused at the parse. It types; it does not press Enter. A dialog
+that confirms on Enter takes a `press_key` after it, so a test can check the
+field's `value` before it confirms.
+
+**The replies** carry `dialogs` and `menus` like the pointer tools, plus
+`focused`: the listing entry of the widget that has keyboard focus afterwards,
+or `null`. A key that opens or closes a dialog (Escape on `Go to Point`) shows
+in the same reply. The listing they are taken from is of `panel_name`'s body
+when the call named one, and of the window otherwise.
+
+**In the Action Log**, kind `Input`: `press_key Ctrl+Z`, `press_key I over
+image_detail` (and `over image_detail 210,160` when the call gave `at_px`),
+`type_text 16 characters into the text input in Go to Point`. A text input
+often has no name of its own, so the row names the dialog or panel it sits in,
+and the input's name as well where it has one. The typed text itself is not
+recorded, because the log is visible to anyone watching the window and the
+text could be a path the person did not mean to show. A `type_text` with
+`widget` writes this one row and no row for the click that focused the input.
+
+### What synthetic input does not exercise
+
+The events go into egui's input and never pass through `winit`. That is the
+intended scope for everything above egui. It also means a click or key over
+MCP cannot catch a defect in how `winit` turns operating-system input into egui
+input: the keyboard layout, dead keys and an input method's composition are
+all resolved before these events, and a synthetic key starts after them. The
+viewer's most serious input bug was there: on Windows, `EnableMouseInPointer`
+makes every mouse button arrive as `WM_POINTER`, which `winit` reports as
+touch, and no right click reached egui until
+`platform::windows::restore_mouse_button` rewrote it. On Windows the real left
+button still arrives through egui's touch emulation, which a synthetic
+`PointerButton` bypasses. The windowed suite keeps one test that sends real
+input for this reason ([architecture.md](architecture.md) § "Testing").
+
+On a real window on Windows, a synthetic left click selects a point in the 3D
+viewport, toggles a HUD check box, opens a menu bar menu and runs its items,
+and a right click opens a Scene row's context menu. What it does not reach
+there is the part of the viewer that reads the operating system's pointer
+rather than egui's. `platform::pointer_in_rect` reads the cursor position the
+window procedure tracks from `WM_POINTER` messages, and
+`platform::windows::mouse_button_state` the buttons, and a synthetic pointer
+moves neither. So on Windows a `hover`, or a `press_key` with `panel_name`,
+does not satisfy the checks built on them: Image Detail's `Z` (reset the view)
+and its scroll, the 3D viewport's scroll, pinch and touchpad gestures, and the
+Image Browser's and Track View's scrolling. Image Detail's `I` is read from
+egui's hover and works; the viewport's keys do not check the pointer at all.
+None of those is a click or a key on a widget, which is what the tools are for.
+On Linux and macOS `pointer_in_rect` reads egui's pointer, and they all follow
+the synthetic one.
 
 ### `get_window_layout`
 
@@ -2961,6 +3483,9 @@ thread, and waits for the answer.
    │                                      ├─ prepare_uploads
    │                                      ├─ render_scene
    │                                      ├─ run_egui_pass
+   │                                      │    ├─ feed_mcp_input ── an input step's events
+   │                                      │    └─ capture_mcp_widgets ── the frame's widgets, if asked for
+   │                                      ├─ resolve_mcp_widgets ── widget listings
    │                                      ├─ encode_screenshot_copy ── the surface, if one was asked for
    │                                      ├─ submit + present
    │                                      ├─ process_pick_readback
@@ -2999,6 +3524,26 @@ Four things this buys, each load-bearing:
   and the present, into the frame's own encoder, and only in a frame that has
   such a screenshot waiting (§ "screenshot", "Mechanics"). Everything after that
   — the map, the crop, the PNG — is still in the readback phase.
+- **Input is the one thing fed into the egui pass.** `click`, `hover`,
+  `press_key` and `type_text` are applied in the drain like every command, which
+  checks what the window snapshot can check (a minimized window, a panel that
+  is closed or behind a tab, a point outside the target's last laid-out size)
+  and queues them on `App::mcp_input` (`mcp::InputQueue`) as a list of
+  per-frame steps, rather than on `App::mcp_deferred` with the other deferred
+  calls. From there each runs a step per frame: `App::feed_mcp_input` appends
+  the step's events to `RawInput.events` straight after `take_egui_input`, so
+  they sit behind whatever the real mouse and keyboard sent that frame and ahead
+  of the gesture events the pass adds; `App::capture_mcp_widgets` reads the
+  widgets of every frame that carried a step and hands them to the command; and
+  the reply is sent from there after the pass of the frame drawn after the last
+  event. Commands run one after another, and a command refused in the frame
+  that aims it is answered in that frame and the next one starts in it. A redraw
+  is requested while any is waiting, since an idle viewer draws nothing of its
+  own accord, and no event is added in a frame with no input call waiting. A
+  real mouse moving over the window in between is not blocked; its events land
+  in the same frames, as they would for two people sharing a mouse. Nothing but
+  the events crosses into the pass: the state the input changes is changed by
+  the panels and menus that read it, as for a person (§ "`click` / `hover`").
 
 **The commands that must reach `winit` go through a trait**,
 `crate::window::WindowHost`, for the same reason `screenshot` leaves through
@@ -3127,7 +3672,9 @@ testable without a window:
 | `display` | The `image_detail_display` document: its render, the parse of a change into `ImageDetailDisplayChange`, and the apply — over the two settings structs and the diff-and-record function in `crate::state` that the toolbar shares, unconditional because the human's changes are logged in every build |
 | `edit` | The editing family: the version list, the three cursor moves, the save, and one function per edit family, each of them one `AppState` call, wrapped in the reply that names the version it pushed |
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
-| `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot |
+| `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot; and the two calls from the egui pass, which feed an input step's events in and read the frame's widgets out |
+| `widgets` | The widget listing of one captured frame, and the lookups the input tools aim with |
+| `input` | The four input tools: the parsed command, the steps each runs a frame at a time, their Action Log rows and replies, and the queue on `App` that runs them one after another |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
@@ -3190,8 +3737,13 @@ pub(crate) enum Command {
                    cameras: Vec<CameraReleaseOverride> },
     SwitchCameraModel { reconstruction_label: String, request: SwitchCameraModelRequest },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
-    /// parse refuses it elsewhere.
-    Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },
+    /// parse refuses it elsewhere, and refuses `widgets: true` beside it.
+    Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32>,
+                 crop: Option<[u32; 4]>, widgets: bool },
+    GetWidgets { panel: Option<Tab>, crop: Option<[u32; 4]> },
+    /// `click`, `hover`, `press_key` and `type_text`, parsed into
+    /// `input::InputCommand`.
+    Input(input::InputCommand),
 }
 
 impl Command {
@@ -3223,7 +3775,10 @@ the wire:
 /// What a tool produced: JSON, or the one tool that answers with a picture.
 pub(crate) enum ToolOutput {
     Json(Value),
-    Png { bytes: Vec<u8>, width: u32, height: u32, caption: String },
+    /// `widgets` is the listing a `widgets: true` screenshot carries, sent as a
+    /// JSON text block after the image.
+    Png { bytes: Vec<u8>, width: u32, height: u32, caption: String,
+          widgets: Option<Value> },
 }
 
 /// A tool's answer: what it produced, or a message for `isError: true`.
@@ -3237,7 +3792,18 @@ pub(crate) enum Outcome {
 
 /// A command whose answer cannot exist yet.
 pub(crate) enum Deferred {
-    Screenshot { source: ScreenshotSource, max_dimension: Option<u32>, caption: String },
+    /// `frame` is the widgets of the frame the picture is of, captured after
+    /// its egui pass for the caption and any listing; `None` until then.
+    Screenshot { source: ScreenshotSource, max_dimension: Option<u32>, caption: String,
+                 crop: Option<[u32; 4]>, widgets: bool,
+                 frame: Option<Arc<widgets::WidgetFrame>> },
+    /// A `get_widgets` call, answered straight after the egui pass that
+    /// captured `frame`.
+    Widgets { panel: Option<Tab>, crop: Option<[u32; 4]>,
+              frame: Option<Arc<widgets::WidgetFrame>> },
+    /// An input command, which the drain hands to `App::mcp_input` rather than
+    /// holding with the others (§ "Threading").
+    Input(input::PendingInput),
     /// A background operation, answered with its result or with a handle,
     /// whichever the clock reaches first (§ "The bench family").
     Background(BackgroundReply),
@@ -3319,7 +3885,9 @@ neither. Splitting the GPU-shaped command out into `Outcome::Deferred` —
 handled in `mcp::frame`, where the device is passed in — and the window-shaped
 one out behind `WindowHost` keeps the whole command vocabulary, its error
 messages and its JSON shapes under headless test, and leaves exactly one tool
-(`screenshot`) needing a window.
+(`screenshot`) needing a GPU. `get_widgets` and the input tools need a drawn
+frame but no GPU, so `mcp::tests::widgets` and `mcp::tests::input` run them
+through `Context::run_ui` frames (§ "Testing").
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
 picture and the other thirty-five answer with JSON; squeezing an image through a
@@ -3328,8 +3896,9 @@ thirty-five return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
-`App` carries three fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
-`mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`, and
+`App` carries four fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
+`mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`, `mcp_input:
+InputQueue` (the input tools waiting their turn, § "Threading"), and
 `surface_readable: bool` — whether the swapchain took `COPY_SRC`, which is what
 a window screenshot's refusal reads. `App::drain_mcp`
 takes the frame's `&Arc<Window>` and hands a clone of it to `apply_as_agent` as
@@ -3466,8 +4035,10 @@ Two levels, and the distinction matters to a client:
   range, an unreadable `.sfmr`, an unknown tint name, a degenerate `set_view`, a
   layout document that does not validate, a size for a window that is maximized,
   a screenshot of a minimized window, of a panel that is not drawn, or of a
-  viewport that has not rendered yet, every edit the state declines, and the
-  10 s apply timeout.
+  viewport that has not rendered yet, a crop outside its target, a listing or
+  an input tool aimed at what is not drawn, a covered or vanished widget, text
+  with nowhere to go, every edit the state declines, and the 10 s apply
+  timeout.
 
 The line is whose problem it is: a request that does not fit the advertised
 schema is the client's, and a request the viewer will not carry out is the
@@ -3496,8 +4067,9 @@ shaped to avoid.
 ## Testing
 
 `crates/sfm-explorer/src/mcp/tests.rs` supplies shared headless fixtures; its
-`tests/` children group the 230 checks by read, display, view, write, log,
-layout, catalog, server, edit, bench, and render concerns. The catalog child
+`tests/` children group the 292 checks by read, display, view, write, log,
+layout, catalog, server, edit, bench, render, widget listing and input
+concerns. The catalog child
 keeps the exact name/classification and schema/parser fixtures together. These
 tests need no GPU or window — which is
 what the `apply_with_window(&mut AppState, &mut Viewer3D, &mut dyn WindowHost,
@@ -3821,11 +4393,53 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty tools**, fifteen of them reads and one of them
+- **The catalog is eighty-five tools**, sixteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
-  advertises `panel_name`, `hud` and `max_dimension`.
+  advertises `panel_name`, `hud`, `max_dimension`, `crop_px` and `widgets`.
+- **A listing says what the frame drew**, in `mcp::tests::widgets`, which
+  captures `Context::run_ui` frames of a viewer-shaped UI with the real Scene
+  panel in a dock, at a scale that is not 1, exactly as
+  `App::capture_mcp_widgets` does: a panel listing's `rect_px`, offset by the
+  body's origin, is the widget's rectangle in the window's listing, and the
+  target's size is the size a screenshot of the panel comes back at; `crop_px`
+  keeps the widgets that overlap it, each whole; each dock tab is a `tab` with
+  its `panel_name`; a right click on a Scene row lists one `context_menu` owned
+  by the row with `at_px`, and its items are not in the main list; a menu bar
+  menu is a `menu` whose items' paths start with its name; a combo box in a
+  panel opens a `dropdown`; a dialog is in `dialogs` and not in `widgets`;
+  `path` tells two buttons of one name in different containers apart; and a
+  point finds the topmost clickable widget, the row rather than its label and
+  the menu once one covers the row. `get_widgets` defers and writes its `Query`
+  row; it and `screenshot` refuse a closed panel, one behind a tab, a minimized
+  window, a crop outside the target naming its size, a crop with no area and
+  `widgets: true` beside `hud: false`; and a screenshot with a crop and a
+  listing defers with both and says so in its caption and its row.
+- **The input tools reach what a person's input reaches**, in `mcp::tests::input`,
+  which runs each call a step per frame through the same `PendingInput` the
+  viewer runs, in real egui passes that draw the viewer's own menu bar,
+  shortcuts and dialogs (`app::Chrome`, the calls `run_egui_pass` makes) and a
+  dock with the real Scene panel and the real Image Detail panel drawing a
+  synthetic photograph: a right click on a Scene row replies with one
+  `context_menu` owned by that row, and a hover on its `Align to` gives a
+  `submenu` owned by it with no `panel_name` on the owner; a menu bar button
+  opens its menu and a click on its `Go to Point...` item runs it, the reply
+  listing the dialog and no menu; a click on a widget under an open menu is
+  refused naming the menu; `count: 2` is two clicks and one double click and no
+  triple click; `command` + `Z` undoes through the menu bar's shortcut, the MCP
+  row before the person's `Undo:` row; Escape closes Go to Point and the reply
+  no longer lists it; `I` over Image Detail toggles its intrinsics layer and
+  elsewhere does not; `type_text` fills the Go to Point field's `value`, a
+  second call types after it, and Enter then selects the point; the modifiers
+  are released afterwards; `type_text` is refused on a widget that is not a text
+  input and with nothing focused; an unknown key is refused with the names; a
+  point outside the target, a closed panel, a panel behind a tab, an unknown
+  widget id (listed before, and never listed) and a minimized window are each
+  refused in the words above as one failed row; the parse refuses no target,
+  two targets, `panel_name` beside `widget`, a third click, an unknown button or
+  modifier, a malformed id and empty text; and every field a listing or an
+  input reply carries is a spelled-out wire name.
 - **Schema and parser cannot drift**: the cached catalog schema supplies the
   accepted top-level argument names to the parser, so a tool has one declaration
   of that vocabulary. The parser also derives accepted names for its three
@@ -3875,7 +4489,14 @@ a panel that is closed or behind a sibling is refused by the real viewer with
 the message the headless tests specify. What the headless tests assert about the
 tool is everything before the pixels: that it defers, what it defers with, that
 it refuses a minimized window, and that its caption is built while the state is
-still borrowed.
+still borrowed. A `screenshot` of the Scene panel with `widgets: true` lists the
+demo row's label inside the picture it came with.
+
+**`get_widgets` and `click` are how the rest of `ui_basic` reads and drives the
+window**: its menu, panel and HUD tests list widgets and click them over the
+same endpoint rather than reading the platform's accessibility tree, which only
+a smoke set of two tests still does ([architecture.md](architecture.md) §
+"Testing").
 
 **One editing test runs against a real viewer too**, in the same file and by the
 same route: load the demo node, delete a point over the wire, read `get_history`
@@ -3975,7 +4596,13 @@ Other candidates, in rough order of value:
 - **No dialogs on an agent's behalf.** `save_reconstruction` takes a path and
   opens no chooser when it has none. A modal `rfd` dialog stops the
   GUI thread pumping, so every queued tool call would time out behind a window
-  only the human can answer.
+  only the human can answer. A `click` can still press a menu item that opens
+  one, as a person's click would, and the same wait follows.
+- **No input below egui.** `click`, `hover`, `press_key` and `type_text` put
+  events into egui's input, so they never pass through `winit`, the keyboard
+  layout or an input method (§ "What synthetic input does not exercise"). The
+  command vocabulary stays the way an agent changes the viewer; the input tools
+  are for what only a widget does and for testing the widgets themselves.
 - **No persistence of what an agent *set*.** The endpoint is not remembered
   between runs, and neither is any display state, arrangement or selection an
   agent set through it. What an agent *edits* is a different thing, and
@@ -4064,3 +4691,21 @@ Other candidates, in rough order of value:
   is where "where is the solve wrong" is answered and its controls are a closed
   set; if the HUD's are exposed, a `viewer_3d_display` document of the same
   shape is the precedent to follow, not more fields on `set_view`.
+- **Held keys.** The 3D viewport's fly keys act for as long as a key is down,
+  and `press_key` holds a key for one frame, so no tool flies the camera. A
+  `hold_ms` argument would cover them. There is none because `set_view` already
+  moves the camera exactly, so only a test of the fly handling itself would need
+  it.
+- **Drag and scroll.** The input tools press, move and type, and do not drag or
+  scroll, which the 3D viewport and Image Detail read. Both panels have
+  command-vocabulary equivalents (`set_view`, `set_image_detail_view`), so an
+  agent does not need them for the viewer's own operations, only to test the
+  pointer handling itself.
+- **Tooltips.** egui draws them on their own `Tooltip` layer after a hover
+  delay, and the listing skips that layer. Listing them as a third kind in
+  `menus` would be easy, but a test would have to wait out the delay.
+- **Whether `get_widgets` should list painted-only text.** The HUD and the
+  Move Camera banner draw text with no accessibility node, so the listing
+  cannot report them. They could register nodes with no interaction, which
+  would help screen readers as well as the listing; that is a change to the
+  panels rather than to the surface.

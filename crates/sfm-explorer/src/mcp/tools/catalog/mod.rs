@@ -11,6 +11,7 @@ use serde_json::{json, Map, Value};
 mod background;
 mod bench;
 mod edit;
+mod input;
 mod read;
 mod viewer;
 
@@ -20,6 +21,7 @@ pub(super) fn build_catalog() -> Vec<ToolSpec> {
     specs.extend(edit::specs());
     specs.extend(bench::specs());
     specs.extend(background::specs());
+    specs.extend(input::specs());
     specs
 }
 

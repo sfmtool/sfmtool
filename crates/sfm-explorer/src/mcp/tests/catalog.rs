@@ -342,6 +342,23 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ("get_background_task", json!({})),
         ("cancel_background_task", json!({})),
         ("screenshot", json!({})),
+        (
+            "get_widgets",
+            json!({ "panel_name": "scene", "crop_px": [0, 0, 100, 50] }),
+        ),
+        (
+            "click",
+            json!({ "panel_name": "scene", "at_px": [10, 10], "mouse_button": "right" }),
+        ),
+        ("hover", json!({ "widget": "003233f928812d8a" })),
+        (
+            "press_key",
+            json!({ "key": "Z", "modifiers": ["command"], "panel_name": "viewer_3d" }),
+        ),
+        (
+            "type_text",
+            json!({ "text": "pt3d", "widget": "003233f928812d8a" }),
+        ),
     ]
 }
 
@@ -634,7 +651,10 @@ fn screenshot_advertises_the_panel_the_hud_and_the_size() {
         .expect("an object schema");
     let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["hud", "max_dimension", "panel_name"]);
+    assert_eq!(
+        keys,
+        ["crop_px", "hud", "max_dimension", "panel_name", "widgets"]
+    );
     // The panel names are the layout file's, so there is no second spelling of
     // them anywhere.
     assert_eq!(
@@ -685,17 +705,18 @@ fn only_the_reads_are_annotated_read_only() {
             "get_bench_track",
             "get_background_task",
             "screenshot",
+            "get_widgets",
         ]
     );
-    // Fifteen reads, sixty-four writes, the one that writes a file, and the one
+    // Sixteen reads, sixty-eight writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 80, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 85, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        64
+        68
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.

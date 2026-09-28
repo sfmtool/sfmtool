@@ -108,6 +108,8 @@ impl Command {
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
+            Command::GetWidgets { .. } => "get_widgets",
+            Command::Input(input) => input.tool_name(),
         }
     }
 
@@ -284,6 +286,7 @@ impl Command {
             | Command::GetBackgroundTask
             | Command::GetBench { .. }
             | Command::GetBenchTrack { .. }
+            | Command::GetWidgets { .. }
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. }
             | Command::CloseReconstruction { .. }
@@ -368,6 +371,9 @@ impl Command {
             | Command::SetImageDetailView { .. }
             | Command::SetTimingDetail { .. } => Kind::Display,
             Command::SetView { .. } => Kind::View,
+            // Its own kind: what the input then does is recorded as it would be
+            // for a person, under whatever kind that is.
+            Command::Input(_) => Kind::Input,
             Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
             // One call, two portions, and a refusal has to be filed somewhere:
             // under the panels when it carried a panel portion — the coarser of
@@ -452,13 +458,20 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             panel,
             hud,
             max_dimension,
+            crop,
+            widgets,
         } => {
             let source = match (panel, hud) {
                 (None, _) => ScreenshotSource::Window,
                 (Some(crate::dock::Tab::Viewer3D), false) => ScreenshotSource::ViewportRender,
                 (Some(panel), _) => ScreenshotSource::Panel(*panel),
             };
-            let [width, height] = screenshot_size(state, viewer, source, *max_dimension);
+            // A crop is the picture's size before `max_dimension` shrinks it,
+            // exactly as a whole target is.
+            let [width, height] = match crop {
+                Some([_, _, width, height]) => scaled_size([*width, *height], *max_dimension),
+                None => screenshot_size(state, viewer, source, *max_dimension),
+            };
             let target = match source {
                 ScreenshotSource::Window => "window",
                 ScreenshotSource::ViewportRender => crate::dock::Tab::Viewer3D.wire_name(),
@@ -469,8 +482,17 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             } else {
                 ""
             };
-            format!("screenshot {target} {width}×{height}{without_hud}")
+            let with_widgets = if *widgets { " with widgets" } else { "" };
+            format!(
+                "screenshot {target}{} {width}×{height}{without_hud}{with_widgets}",
+                crop_text(crop)
+            )
         }
+        Command::GetWidgets { panel, crop } => format!(
+            "get_widgets {}{}",
+            panel.map_or("window", |panel| panel.wire_name()),
+            crop_text(crop)
+        ),
         _ => return None,
     })
 }
@@ -520,6 +542,19 @@ pub(super) fn screenshot_size(
             panel_body_size(&state.dock, panel, scale as f32).unwrap_or([0, 0])
         }
     };
+    scaled_size([width, height], max_dimension)
+}
+
+/// ` crop 0,0 400×200`, or nothing when the call named no crop.
+fn crop_text(crop: &Option<[u32; 4]>) -> String {
+    match crop {
+        Some([x, y, width, height]) => format!(" crop {x},{y} {width}×{height}"),
+        None => String::new(),
+    }
+}
+
+/// A size shrunk by `max_dimension` exactly as the readback shrinks the pixels.
+fn scaled_size([width, height]: [u32; 2], max_dimension: Option<u32>) -> [u32; 2] {
     let Some(limit) = max_dimension else {
         return [width, height];
     };
