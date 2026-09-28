@@ -19,13 +19,17 @@
 //! and `specs/gui/mcp-server.md` § "`get_widgets`", § "`click` / `hover`" and
 //! § "What synthetic input does not exercise" for the tools.
 //!
-//! **A smoke set of two tests still reads the tree through the platform, with
-//! xa11y**, because what they check is below the viewer's process:
-//! [`window_appears`] checks that the accessibility tree reaches the platform
-//! with content in it, and `a_real_right_click_opens_the_reconstruction_rows_context_menu`
-//! (Windows only) checks that a real mouse button, sent with `SendInput`,
+//! **One smoke test still reads the tree through the platform, with xa11y**,
+//! because what it checks is below the viewer's process: [`window_appears`]
+//! checks that the accessibility tree reaches the platform with content in it.
+//! ([`dump_tree`], `#[ignore]`d, prints that tree for a person debugging it.)
+//!
+//! **One test sends real OS input**:
+//! `a_real_right_click_opens_the_reconstruction_rows_context_menu` (Windows
+//! only) presses the right mouse button with `SendInput` and checks that it
 //! reaches egui. A synthetic `click` over MCP goes into egui's input directly
-//! and cannot see a defect in how the operating system's input gets there.
+//! and cannot see a defect in how the operating system's input gets there. It
+//! finds where to press, and reads the menu that opened, over MCP.
 //!
 //! The MCP tests never attach through the accessibility API. They wait on the
 //! endpoint instead, polling `get_widgets` until the window's menu bar is
@@ -808,6 +812,8 @@ fn node_depth(node: &TreeNode) -> usize {
     1 + node.children.iter().map(node_depth).max().unwrap_or(0)
 }
 
+// --- Real OS input, aimed and read back over MCP (Windows) ---
+
 /// Every visible, titled top-level window belonging to `pid`.
 ///
 /// winit keeps helper windows of its own beside the UI — invisible and
@@ -879,8 +885,8 @@ fn aim_at(pid: u32, x: i32, y: i32) {
         let Some(&hwnd) = top_level_windows(pid).first() else {
             continue;
         };
-        // A window that is behind another is still at these screen coordinates
-        // in the accessibility tree, so raising it is part of aiming rather
+        // A window that is behind another still reports these screen
+        // coordinates over MCP, so raising it is part of aiming rather
         // than a courtesy. Two calls, because the obvious one is not reliable:
         // `SetForegroundWindow` is refused whenever the caller is not already
         // the foreground process — which a test runner launched from a terminal
@@ -929,20 +935,62 @@ fn aim_at(pid: u32, x: i32, y: i32) {
     panic!("could not aim at the viewer's own window: {last}");
 }
 
+/// Make this process per-monitor DPI aware, once, and panic if it is not.
+///
+/// `SetCursorPos`, `GetCursorPos` and `WindowFromPoint` take and return
+/// coordinates in the calling process's DPI context. The viewer is per-monitor
+/// aware (its manifest and `sfm_explorer::run` both say so), so the window
+/// block's `inner_position` and a listing's `rect_px` are physical pixels. A
+/// process that is not DPI aware sees a scaled display in logical pixels, and
+/// its cursor would land at a fraction of the point it was given. Setting the
+/// same awareness here makes the two processes' pixels the same pixels.
+///
+/// The call fails when the awareness is already set (by a manifest, or by an
+/// earlier call), so its result is not what decides; the awareness read back
+/// afterwards is.
+#[cfg(windows)]
+fn per_monitor_dpi_aware() {
+    use windows::Win32::UI::HiDpi::{
+        GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        DPI_AWARENESS_PER_MONITOR_AWARE,
+    };
+    static SET: Once = Once::new();
+    SET.call_once(|| {
+        let _ =
+            unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    });
+    let awareness = unsafe { GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()) };
+    assert_eq!(
+        awareness, DPI_AWARENESS_PER_MONITOR_AWARE,
+        "the test process is not per-monitor DPI aware, so its cursor coordinates \
+         are not the viewer's physical pixels"
+    );
+}
+
 /// A real right-click on the Scene panel's reconstruction row opens its context
 /// menu.
 ///
-/// Windows only, and driven by synthetic OS mouse input and read through the
-/// accessibility API, because the defect this guards lives *below* egui and
-/// nothing inside the viewer can see it: `platform::windows::create_manager`
-/// turns on `EnableMouseInPointer` for DirectManipulation, which routes every
-/// mouse button through `WM_POINTER` — and winit 0.30 renders those as `Touch`
-/// events that egui's touch emulation reads as the *primary* button. With that
-/// unhandled, no `secondary_clicked` ever fires anywhere in the app: no context
-/// menu can open, and a right-click on a tree row selects it like a left-click.
-/// A `click` over MCP goes into egui's input directly and would pass;
+/// Windows only, and driven by synthetic OS mouse input, because the defect
+/// this guards lives *below* egui and nothing inside the viewer can see it:
+/// `platform::windows::create_manager` turns on `EnableMouseInPointer` for
+/// DirectManipulation, which routes every mouse button through `WM_POINTER` —
+/// and winit 0.30 renders those as `Touch` events that egui's touch emulation
+/// reads as the *primary* button. With that unhandled, no `secondary_clicked`
+/// ever fires anywhere in the app: no context menu can open, and a right-click
+/// on a tree row selects it like a left-click. A `click` over MCP goes into
+/// egui's input directly and would pass;
 /// [`the_reconstruction_rows_context_menu_lists_every_entry`] is that check,
 /// and asserts on the menu's contents in detail.
+///
+/// The input is real and everything else goes over MCP. The point to press is
+/// the window block's `inner_position` (the drawable area's corner on the
+/// desktop) plus the centre of the `demo` label's `rect_px` in a listing of the
+/// whole window, which is measured from that corner. Both are physical pixels,
+/// and [`per_monitor_dpi_aware`] makes them the pixels `SetCursorPos` takes.
+/// The menu is then read back with `get_widgets`, whose `owner.at_px` is the
+/// point egui received the right button at, so the test also shows that the
+/// press landed on the row it aimed at.
 #[cfg(windows)]
 #[test]
 fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
@@ -979,21 +1027,41 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
         );
     }
 
-    let _guard = Guard::with_args(&["--no-default-layout", "--demo"]);
-    let pid = _guard.child().id();
-    let app = attach(_guard.child());
+    per_monitor_dpi_aware();
+    let viewer = McpViewer::launch_demo();
+    let pid = viewer.guard.child().id();
 
-    // The demo node's row is labelled "demo"; its bounds are screen pixels.
-    let found = app
-        .wait_all(&[("static_text", "demo")], CONTENT_TIMEOUT)
-        .expect("the demo reconstruction row did not appear");
-    let bounds = found
+    // The demo node's row is labelled "demo". Found in the Scene panel, so a
+    // "demo" label elsewhere cannot be taken for it, and then read from a
+    // listing of the whole window, whose rectangles are measured from the
+    // drawable area's corner rather than from the panel's.
+    let id = viewer.wait_for(
+        json!({ "panel_name": "scene" }),
+        "the demo row never appeared",
+        |listing| find_widget(listing, "label", "demo").map(|label| label["widget"].clone()),
+    );
+    let listing = viewer.get_widgets(json!({}));
+    let label = entries(&listing)
         .iter()
-        .find(|element| element.data().name.as_deref() == Some("demo"))
-        .and_then(|row| row.data().bounds)
-        .expect("the row has no bounds");
-    let x = bounds.x + (bounds.width / 2) as i32;
-    let y = bounds.y + (bounds.height / 2) as i32;
+        .find(|widget| widget["widget"] == id)
+        .unwrap_or_else(|| panic!("the demo label {id} is not in the window's listing"))
+        .clone();
+    let rect = label["rect_px"].clone();
+    let window = viewer.ok("get_window_layout", json!({}))["window"].clone();
+    let n = |value: &Value| value.as_i64().expect("a whole number of pixels") as i32;
+    let origin = &window["inner_position"];
+    assert!(
+        origin.is_array(),
+        "the window block has no inner_position to aim from: {window}"
+    );
+    let x = n(&origin[0]) + n(&rect[0]) + n(&rect[2]) / 2;
+    let y = n(&origin[1]) + n(&rect[1]) + n(&rect[3]) / 2;
+    // Where the aim came from, for a failure on a scaled or multi-monitor
+    // desktop.
+    println!(
+        "\nright-click aim: scale_factor={} inner_position={origin} rect_px={rect} at=({x}, {y})",
+        window["scale_factor"]
+    );
 
     // Two moves with a pause: the app repaints on demand, and egui resolves a
     // click against the widget rects of the frame before it.
@@ -1016,23 +1084,42 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     std::thread::sleep(Duration::from_millis(120));
     mouse_event(MOUSEEVENTF_RIGHTUP);
 
-    // "Close" is deliberately not checked: the platform tree has no menu owning
-    // these buttons, and the window's own title-bar close button carries that
-    // name too, so it would pass with no menu at all. The MCP twin checks it.
-    //
-    // One snapshot, taken after the last click: the clicks republish the tree,
-    // and the menu does not exist until they have landed.
-    app.wait_all(
-        &[
-            ("button", "Select"),
-            ("button", "Zoom to Fit"),
-            ("button", "Bundle Adjust..."),
-            ("button", "Bake Transform"),
-        ],
-        CONTENT_TIMEOUT,
-    )
-    .expect("the reconstruction row's context menu did not open on a right-click");
+    // Polled: the right button reaches the viewer through the OS, so no reply
+    // waits for the frame that opens the menu.
+    let menu = viewer.wait_for(
+        json!({}),
+        &format!(
+            "the reconstruction row's context menu did not open on a right-click at ({x}, {y})"
+        ),
+        |listing| {
+            listing["menus"].as_array()?.iter().find_map(|menu| {
+                (menu["kind"] == "context_menu" && menu["owner"]["panel_name"] == "scene")
+                    .then(|| menu.clone())
+            })
+        },
+    );
+    assert!(
+        contains(&rect, &menu["owner"]["at_px"]),
+        "the menu was opened at {} rather than on the demo label at {rect}",
+        menu["owner"]["at_px"]
+    );
+    // A few entries, enough to say this is the reconstruction row's menu. The
+    // MCP twin checks every entry and its state.
+    for label in [
+        "Select",
+        "Zoom to Fit",
+        "Bundle Adjust...",
+        "Bake Transform",
+        "Close",
+    ] {
+        assert!(
+            menu_item(&menu, label).is_some(),
+            "no {label:?} in the context menu: {menu}"
+        );
+    }
 }
+
+// --- Diagnostics ---
 
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).
 #[test]
@@ -1703,10 +1790,9 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
 ///
 /// The MCP twin of `a_real_right_click_opens_the_reconstruction_rows_context_menu`,
 /// on all three platforms. That test proves a real right button reaches egui on
-/// Windows; this one asserts on what the menu holds, which the platform tree
-/// cannot say: which row owns the menu, the `Close` entry (the window's
-/// title-bar button has the same name there), which entries open a submenu,
-/// and which are greyed. With one reconstruction loaded there is nothing to
+/// Windows; this one asserts on everything the menu holds: which row owns it,
+/// every entry in order, which entries open a submenu, and which are greyed.
+/// With one reconstruction loaded there is nothing to
 /// align to, so `Align to` is a greyed entry rather than a submenu; the demo is
 /// drawn in its own frame, so there is no transform to reset or bake. When each
 /// entry is enabled is covered headlessly in `scene_graph/tests.rs`; this test

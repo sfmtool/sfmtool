@@ -957,6 +957,9 @@ fn get_scene_embeds_the_window_block() {
     assert_eq!(window["inner_size"], json!([1920, 1080]));
     assert_eq!(window["outer_size"], json!([1936, 1119]));
     assert_eq!(window["outer_position"], json!([120, 64]));
+    // Where `rect_px` is measured from: the drawable area's corner, inside
+    // the frame.
+    assert_eq!(window["inner_position"], json!([128, 95]));
     // Physical pixels throughout, with the logical size under `derived` next
     // to the scale factor it comes from.
     assert_eq!(
@@ -972,6 +975,23 @@ fn get_scene_embeds_the_window_block() {
         .as_f64()
         .expect("a fraction");
     assert!((fraction - 1936.0 / 3840.0).abs() < 1e-9, "{fraction}");
+}
+
+/// A platform that will not say where the window is (Wayland) reports both
+/// corners as `null` rather than as `[0, 0]`.
+#[test]
+fn a_window_that_cannot_say_where_it_is_reports_null_positions() {
+    let (mut state, mut viewer, _) = windowed(WindowState::Normal);
+    state.window = Some(
+        FakeWindow {
+            position: None,
+            ..FakeWindow::default()
+        }
+        .info(),
+    );
+    let window = ok(&mut state, &mut viewer, Command::GetScene)["window"].clone();
+    assert_eq!(window["outer_position"], Value::Null, "{window}");
+    assert_eq!(window["inner_position"], Value::Null, "{window}");
 }
 
 /// A picture of a window the human cannot see answers nothing an agent asked

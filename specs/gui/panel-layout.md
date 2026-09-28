@@ -265,6 +265,11 @@ and `layout`:
 | `monitor` | `{ "position": [x, y], "size": [width, height] }`, physical px | The monitor the normal rectangle was measured on: the current monitor's rectangle as the window block reports it, without its name or scale factor. Written whenever the snapshot has a monitor; read as § "Fitting a rectangle to the desktop" says. |
 | `focus` | `true` | Wire-only in practice: bring the window to the front. Never written by the viewer; accepted on read so the file and the MCP argument have one parser. `false` is refused. |
 
+The window block's `inner_position` is not a key here: it follows from
+`outer_position` and the platform's frame, so a document places the window by
+`outer_position` alone, and an `inner_position` in a section is refused as an
+unknown key.
+
 Every key is optional. A `window` section that is absent, or `null`, leaves the
 window alone — which is how a file saved by a headless `AppState`, or a
 `set_window_layout` that only carries panels, reads.
@@ -712,7 +717,11 @@ pub(crate) struct MonitorInfo {
 /// The window as last observed: the block a reply renders, minus `monitors`.
 pub(crate) struct WindowInfo {
     state: WindowState, focused: bool, scale_factor: f64,
-    outer_position: Option<[i32; 2]>, outer_size: [u32; 2], inner_size: [u32; 2],
+    outer_position: Option<[i32; 2]>,
+    /// The drawable area's top-left corner. Observed only: no document or
+    /// `WindowChange` carries it.
+    inner_position: Option<[i32; 2]>,
+    outer_size: [u32; 2], inner_size: [u32; 2],
     monitor: Option<MonitorInfo>,
 }
 

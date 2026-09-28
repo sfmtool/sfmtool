@@ -1389,8 +1389,9 @@ bundle from `retain_nodes` on the next frame.
   Scene panel's rows reach a real window — including the row's solo toggle,
   since a third glyph button squeezed onto a row is exactly the kind of thing
   that lays out correctly under `Context::run_ui` and not in a window. The
-  context menu is checked twice: after a real right-click on Windows, for the
-  flat entries in the platform's accessibility tree, and over MCP on all three
+  context menu is checked twice: after a real right-click on Windows, for a
+  context menu owned by the Scene row, opened where the cursor was, holding a
+  few of its entries (read over MCP), and with a synthetic click over MCP on all three
   platforms, for every entry in order with its enabled state, `Tint` marked as
   the one that opens a submenu, and `Align to` and `Bake Transform` greyed on
   the demo. A submenu's contents exist only once it is opened, and are covered

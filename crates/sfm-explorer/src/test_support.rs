@@ -89,6 +89,9 @@ impl FakeWindow {
             focused: self.focused,
             scale_factor: 1.5,
             outer_position: self.position,
+            // Inside a frame 8 px wide at the sides and bottom and 31 px at the
+            // top, which is what the outer size below adds.
+            inner_position: self.position.map(|[x, y]| [x + 8, y + 31]),
             outer_size: [self.inner_size[0] + 16, self.inner_size[1] + 39],
             inner_size: self.inner_size,
             monitor: self.monitors.first().cloned(),

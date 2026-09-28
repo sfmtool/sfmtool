@@ -38,6 +38,7 @@ pub(super) fn block(info: &WindowInfo, monitors: Option<&[MonitorInfo]>) -> Valu
         "focused": info.focused,
         "scale_factor": info.scale_factor,
         "outer_position": info.outer_position,
+        "inner_position": info.inner_position,
         "outer_size": info.outer_size,
         "inner_size": info.inner_size,
         "monitor": info.monitor.as_ref().map(monitor_block),

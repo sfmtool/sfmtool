@@ -132,6 +132,11 @@ pub(crate) struct WindowInfo {
     /// where it is. Reported as `null` rather than as `[0, 0]`, and an
     /// `outer_position` fails there for the same reason.
     pub(crate) outer_position: Option<[i32; 2]>,
+    /// The top-left corner of the drawable area, in physical pixels and desktop
+    /// coordinates: where a widget's `rect_px` is measured from. An
+    /// observation only, never a field of a layout document, and `None` where
+    /// the platform will not say, as for `outer_position`.
+    pub(crate) inner_position: Option<[i32; 2]>,
     pub(crate) outer_size: [u32; 2],
     pub(crate) inner_size: [u32; 2],
     pub(crate) monitor: Option<MonitorInfo>,
@@ -667,6 +672,10 @@ impl WindowHost for std::sync::Arc<winit::window::Window> {
             scale_factor: self.scale_factor(),
             outer_position: self
                 .outer_position()
+                .ok()
+                .map(|position| [position.x, position.y]),
+            inner_position: self
+                .inner_position()
                 .ok()
                 .map(|position| [position.x, position.y]),
             outer_size: size_of(self.outer_size()),

@@ -418,7 +418,7 @@ image's `center` (`SfmrImage::camera_center`) and a point's `position`
 and each is unambiguous inside the object that carries it.
 
 **The window has no GUI word either, so `winit`'s wins**: `outer_position`,
-`outer_size`, `inner_size`, `scale_factor` and `has_focus` are
+`inner_position`, `outer_size`, `inner_size`, `scale_factor` and `has_focus` are
 `winit::window::Window` method names, and an agent reading one on the wire can
 grep for what produced it. The four window states are winit's flags spelled as
 adjectives — `maximized`, `minimized`, `fullscreen` — plus `normal` for none of
@@ -2363,6 +2363,7 @@ it with one addition.
     "focused": true,                  // Window::has_focus
     "scale_factor": 1.5,              // Window::scale_factor — physical px per logical pt
     "outer_position": [120, 64],      // Window::outer_position — physical px, desktop coordinates; null where the platform cannot say
+    "inner_position": [128, 95],      // Window::inner_position — the drawable area's top-left corner, same units; null where outer_position is
     "outer_size": [1936, 1119],       // Window::outer_size — physical px, frame included
     "inner_size": [1920, 1080],       // Window::inner_size — physical px, the drawable area
     "monitor": {                      // Window::current_monitor, or null
@@ -2401,7 +2402,18 @@ reads as not minimized.
 
 **`outer_position` can be `null`.** Wayland does not tell a window where it is.
 The field says so rather than reporting `[0, 0]`, and an `outer_position` in a
-window layout fails on such a platform for the same reason.
+window layout fails on such a platform for the same reason. `inner_position` is
+`null` there too.
+
+**`inner_position` is where the window's `rect_px` are measured from.** A
+widget listing of the whole window (`get_widgets` with no `panel_name`) gives
+rectangles relative to the drawable area's top-left corner, so `inner_position`
+plus a rectangle's centre is that widget's point on the desktop, in the physical
+pixels a per-monitor DPI-aware process gives to `SetCursorPos`. That is how
+`ui_basic`'s real right-click test aims the OS cursor
+([architecture.md](architecture.md) § "Testing"). It is an observation only: a
+layout document's `window` section has no `inner_position`, and a window is
+placed by `outer_position`.
 
 **`derived.monitor_fraction` is the answer to "how much of the desktop"**, per
 axis, with the area under it; both are `null` when there is no current monitor
@@ -4498,8 +4510,10 @@ demo row's label inside the picture it came with.
 **`get_widgets` and `click` are how the rest of `ui_basic` reads and drives the
 window**: its menu, panel and HUD tests list widgets and click them over the
 same endpoint rather than reading the platform's accessibility tree, which only
-a smoke set of two tests still does ([architecture.md](architecture.md) §
-"Testing").
+the `window_appears` smoke test still does. The Windows test that presses a real
+right mouse button aims it with the window block's `inner_position` and a
+listing's `rect_px`, and reads the menu it opened with `get_widgets`
+([architecture.md](architecture.md) § "Testing").
 
 **One editing test runs against a real viewer too**, in the same file and by the
 same route: load the demo node, delete a point over the wire, read `get_history`

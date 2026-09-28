@@ -548,20 +548,37 @@ shortcut carries it in its name (`Save Ctrl+S`, `Save ⌘S` on macOS), and a
 shortcut has no space in it, so `menu_item` matches the label alone or the
 label followed by one word, and no test spells a platform's shortcut.
 
-**A smoke set of two tests still reads the tree through the platform, with
-[xa11y](https://xa11y.dev),** because what they check is below the viewer's
+**One smoke test still reads the tree through the platform, with
+[xa11y](https://xa11y.dev),** because what it checks is below the viewer's
 process. `window_appears` checks that the tree reaches the platform with the
 menu bar's four buttons in it, so a published but empty tree fails; this is
 what a screen reader needs and what keeps a broken AccessKit adapter or a
-missing Linux accessibility stack from passing unnoticed.
+missing Linux accessibility stack from passing unnoticed. The `#[ignore]`d
+`dump_tree` prints the same tree for a person debugging it.
+
+**One test sends real OS input.**
 `a_real_right_click_opens_the_reconstruction_rows_context_menu` (Windows)
-sends a real right button with `SendInput` and reads the menu back from the
-tree. A synthetic `click` goes into egui's input and never passes through
+presses the right mouse button with `SendInput` on the Scene panel's `demo`
+row. A synthetic `click` goes into egui's input and never passes through
 winit, so it cannot see a defect in how the operating system's input reaches
 egui — and on Windows `EnableMouseInPointer` once made every mouse button
-arrive as a touch, so no right click reached egui at all. Its MCP twin,
-`the_reconstruction_rows_context_menu_lists_every_entry`, runs on all three
-platforms and asserts what the menu holds.
+arrive as a touch, so no right click reached egui at all. The input is real;
+where to press and what happened are both read over MCP. The point is the
+window block's `inner_position`, the drawable area's top-left corner on the
+desktop, plus the centre of the row label's `rect_px` in a `get_widgets`
+listing of the whole window, which is measured from that corner
+([mcp-server.md](mcp-server.md) § "The window block"). Both are physical
+pixels. The viewer is per-monitor DPI aware, and `SetCursorPos` takes
+coordinates in the *calling* process's DPI context, so the test makes its own
+process per-monitor aware (`SetProcessDpiAwarenessContext` with
+`DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`) before it aims and checks that the
+awareness took; without that, on a scaled display the cursor would land at the
+logical point rather than the physical one. After the press it polls
+`get_widgets` until a `context_menu` owned by a widget in the `scene` panel is
+listed, checks that the menu's `owner.at_px` (where egui received the button)
+is inside the label it aimed at, and checks a few of the menu's entries. Its
+MCP twin, `the_reconstruction_rows_context_menu_lists_every_entry`, runs on all
+three platforms and asserts everything the menu holds.
 
 Setup goes through the **command line** rather than the UI: `--demo` appends
 the node File > Load Demo Data… makes, at the dialog's default point count and
@@ -577,7 +594,7 @@ of setup that is not a flag.
 **One locator resolution is one full snapshot of the viewer's accessibility
 subtree.** `Locator::elements` walks the whole tree — on Windows a single
 `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per *operation*, and it
-is the platform's rather than the viewer's. The smoke set keeps its walks few
+is the platform's rather than the viewer's. The smoke test keeps its walks few
 in three ways.
 
 **A run of read-only assertions is one walk, not one each.** `wait_all` takes
@@ -585,12 +602,11 @@ a list of `(role, name)` pairs, joins them into one comma-separated selector
 *group*, and polls it: `Locator::elements` resolves the whole group, and every
 expectation is then decided against the `ElementData` already in hand. It
 returns the first tick on which they all hold, and hands back the matched
-elements, which the right-click test reads the row's bounds from. The polling
-is what makes this honest: a bare `elements` resolves once and returns, so it
-would trade the cost for flakiness on a runner where a widget routinely lands
-a poll or two after the query that wants it. Those elements go stale at the
-next interaction — egui republishes its accessibility tree every frame — so the
-right-click test takes a fresh snapshot after its clicks.
+elements. The polling is what makes this honest: a bare `elements` resolves
+once and returns, so it would trade the cost for flakiness on a runner where a
+widget routinely lands a poll or two after the query that wants it. Those
+elements go stale at the next interaction, because egui republishes its
+accessibility tree every frame.
 
 **Every search is rooted at the viewer's window rather than at its process**,
 and on Windows that is the difference between the platform's own subtree query
