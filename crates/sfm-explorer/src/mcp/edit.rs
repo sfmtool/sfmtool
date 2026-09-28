@@ -565,6 +565,14 @@ pub(super) fn background_reply(
                 result,
                 outcome.created_track.as_ref(),
             ),
+            // A Find Nearby Tracks answers with what it found and what became
+            // of each track, whether or not it pushed a version.
+            (super::Answer::FoundNearby(node), result) => super::bench::found_nearby_reply(
+                state,
+                node,
+                result,
+                outcome.found_nearby.as_deref(),
+            ),
             // An operation that finished with a report pushed a version: the
             // three photometric bench steps end in `Finished::BenchTrack` and
             // the two solves in an edit, and a run that was cancelled or refused

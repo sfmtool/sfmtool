@@ -78,6 +78,7 @@ impl Command {
             Command::CreateBenchCluster { .. } => "create_bench_cluster",
             Command::CreateBenchTrack { .. } => "create_bench_track",
             Command::CreateTrackAtPixel { .. } => "create_track_at_pixel",
+            Command::FindNearbyTracks { .. } => "find_nearby_tracks",
             Command::ActivateBenchItem { .. } => "activate_bench_item",
             Command::DeactivateBenchItem { .. } => "deactivate_bench_item",
             Command::RenameBenchItem { .. } => "rename_bench_item",
@@ -316,6 +317,9 @@ impl Command {
             // Its row puts the track on the bench; the commit that follows
             // writes its own `Edit` row.
             | Command::CreateTrackAtPixel { .. }
+            // Its refusals are the bench's; a run that commits writes its row
+            // as an `Edit` itself.
+            | Command::FindNearbyTracks { .. }
             | Command::ActivateBenchItem { .. }
             | Command::DeactivateBenchItem { .. }
             | Command::RenameBenchItem { .. }

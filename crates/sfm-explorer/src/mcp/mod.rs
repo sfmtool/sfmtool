@@ -356,6 +356,19 @@ pub(crate) enum Command {
         /// suffix a taken label gets; `None` mints one.
         label: Option<String>,
     },
+    /// Find the tracks near a pixel of one camera image, put them on the bench
+    /// and commit the new ones, on a worker: Image Detail's *Find Nearby
+    /// Tracks*.
+    FindNearbyTracks {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        /// Where, in that image's own pixels.
+        pixel: [f64; 2],
+        /// Whether the tracks that are not existing points are committed.
+        commit: bool,
+        /// The group label, in place of `<stem>@<x>,<y>`.
+        label: Option<String>,
+    },
     ActivateBenchItem {
         reconstruction_label: String,
         item: String,
@@ -997,6 +1010,9 @@ pub(crate) enum Answer {
     /// version the commit left, or the cascade's refusal with every member's
     /// stage.
     CreatedTrack(ReconId),
+    /// What a *Find Nearby Tracks* found on this node and what became of each
+    /// track, with the version it left.
+    FoundNearby(ReconId),
     /// The reconstruction the open made, as `open_reconstruction` answers, with
     /// whether the path was already open when the call was made.
     Opened { already_open: bool },
@@ -1338,6 +1354,20 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &camera_image,
             pixel,
+            label.as_deref(),
+        ),
+        Command::FindNearbyTracks {
+            reconstruction_label,
+            camera_image,
+            pixel,
+            commit,
+            label,
+        } => bench::find_nearby_tracks(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            pixel,
+            commit,
             label.as_deref(),
         ),
         Command::ActivateBenchItem {

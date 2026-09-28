@@ -2601,6 +2601,219 @@ fn create_track_at_pixel_refuses_with_every_members_stage() {
     assert!(state.background_task().is_none());
 }
 
+// ── Find Nearby Tracks ──────────────────────────────────────────────────
+
+/// The labels of the items on `run_a`'s bench, in order.
+fn bench_items(state: &mut AppState, viewer: &mut Viewer3D) -> Vec<String> {
+    let bench = call(
+        state,
+        viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    bench["items"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|item| item["item"].as_str().expect("a label").to_string())
+        .collect()
+}
+
+/// How many versions `get_history` lists for `run_a`.
+fn history_len(state: &mut AppState, viewer: &mut Viewer3D) -> usize {
+    let history = call(
+        state,
+        viewer,
+        "get_history",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    history["versions"]
+        .as_array()
+        .expect("a version list")
+        .len()
+}
+
+/// `find_nearby_tracks` over the plane capture at the held-out point's pixel:
+/// the eight points around it land on the bench under their labels as one
+/// version, the reply names each with its point, source, layer, rank and
+/// pixel, and one undo takes the bench back.
+#[test]
+fn find_nearby_tracks_lands_the_existing_points_under_their_labels() {
+    let (mut state, mut viewer) = plane_benchable();
+    let pixel = crate::bench::track_at_pixel::tests::textured_pixel();
+    let versions = history_len(&mut state, &mut viewer);
+    let items_before = bench_items(&mut state, &mut viewer);
+
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": pixel }),
+    );
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    let group = reply["group_label"].as_str().expect("a group label");
+    assert!(group.starts_with("image_0@"), "{reply}");
+    assert_eq!(reply["layers"].as_array().map(Vec::len), Some(1), "{reply}");
+    assert_eq!(reply["layers"][0]["rank"], json!(1), "{reply}");
+    let tracks = reply["tracks"].as_array().expect("tracks");
+    assert_eq!(tracks.len(), 8, "{reply}");
+    for (track, letter) in tracks.iter().zip('a'..) {
+        let index = track["point"]["index"].as_u64().expect("an existing point");
+        assert_eq!(
+            track["label"],
+            json!(format!("{group} 1{letter} pt {index}")),
+            "{track}"
+        );
+        assert_eq!(track["item"], track["label"], "{track}");
+        assert_eq!(track["existing"], json!(true), "{track}");
+        assert_eq!(track["committed"], json!(false), "{track}");
+        assert_eq!(track["source"], json!("points"), "{track}");
+        assert_eq!(track["layer"], json!(0), "{track}");
+        assert_eq!(track["rank"], json!(1), "{track}");
+        assert!(track["point"]["id"].is_string(), "{track}");
+        assert_eq!(track["pixel"].as_array().map(Vec::len), Some(2), "{track}");
+    }
+    assert_eq!(reply["sources"][0]["source"], json!("points"), "{reply}");
+    assert_eq!(reply["stopped_after"], json!("points"), "{reply}");
+    assert!(
+        reply["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with("Found 8 nearby tracks in 1 layer at ("),
+        "{reply}"
+    );
+
+    assert_eq!(history_len(&mut state, &mut viewer), versions + 1);
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["active"]["track"], tracks[0]["item"], "{bench}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench_items(&mut state, &mut viewer), items_before);
+}
+
+/// On the far plane the far-field sweep's track is committed as a new point
+/// in the one version, which `get_point` takes back by its id; with `commit`
+/// false the same find commits nothing and puts the track on the bench under
+/// the caller's group label.
+#[test]
+fn find_nearby_tracks_commits_the_new_tracks_unless_told_not_to() {
+    use crate::bench::track_at_pixel::tests::{cache_far_photographs, far_plane_recon, FAR_PIXEL};
+    let far = || {
+        let (mut state, viewer) = benchable_with(far_plane_recon());
+        let id = state.scene[0].id;
+        cache_far_photographs(&mut state, id);
+        (state, viewer)
+    };
+
+    let (mut state, mut viewer) = far();
+    let before = state.scene[0].edited().point_count();
+    let versions = history_len(&mut state, &mut viewer);
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": FAR_PIXEL }),
+    );
+    let tracks = reply["tracks"].as_array().expect("tracks");
+    let committed: Vec<&Value> = tracks
+        .iter()
+        .filter(|t| t["committed"] == json!(true))
+        .collect();
+    assert!(!committed.is_empty(), "{reply}");
+    assert_eq!(committed[0]["source"], json!("far_field"), "{reply}");
+    assert_eq!(reply["far_field"]["trigger"], json!("no_layer"), "{reply}");
+    assert_eq!(
+        state.scene[0].edited().point_count(),
+        before + committed.len()
+    );
+    assert_eq!(history_len(&mut state, &mut viewer), versions + 1);
+    let id = committed[0]["point"]["id"].as_str().expect("an id");
+    let point = call(&mut state, &mut viewer, "get_point", json!({ "point": id }));
+    assert_eq!(point["index"], committed[0]["point"]["index"], "{point}");
+
+    let (mut state, mut viewer) = far();
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": FAR_PIXEL,
+            "commit": false,
+            "label": "sky",
+        }),
+    );
+    assert_eq!(reply["group_label"], json!("sky"), "{reply}");
+    assert_eq!(reply["tracks"][0]["item"], json!("sky 1a"), "{reply}");
+    assert_eq!(reply["tracks"][0]["committed"], json!(false), "{reply}");
+    assert_eq!(reply["tracks"][0]["point"], Value::Null, "{reply}");
+    assert_eq!(state.scene[0].edited().point_count(), before);
+    assert_eq!(bench_items(&mut state, &mut viewer), ["sky 1a"]);
+}
+
+/// A find with nothing usable answers `changed: false` and no tracks, and
+/// pushes no version; an image with no pose and a pixel off the photograph
+/// are refused in the call, with no task.
+#[test]
+fn find_nearby_tracks_answers_an_empty_find_and_refuses_what_cannot_run() {
+    let (mut state, mut viewer) = plane_benchable();
+    let versions = history_len(&mut state, &mut viewer);
+    let pixel = crate::bench::track_at_pixel::tests::lonely_pixel();
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": pixel }),
+    );
+    assert_eq!(reply["changed"], json!(false), "{reply}");
+    assert_eq!(reply["tracks"], json!([]), "{reply}");
+    assert!(
+        reply["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with("Found no nearby tracks at (2.0, 125.0) in image_0.jpg"),
+        "{reply}"
+    );
+    assert_eq!(history_len(&mut state, &mut viewer), versions);
+
+    state.scene[0].recon_mut().image_table.images[1]
+        .translation_xyz
+        .x = f64::NAN;
+    let unposed = refused_call(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1, "pixel": [64.0, 64.0] }),
+    );
+    assert_eq!(
+        unposed.to_string(),
+        crate::bench::track_at_pixel::NOT_POSED,
+        "{unposed}"
+    );
+    let off = refused_call(
+        &mut state,
+        &mut viewer,
+        "find_nearby_tracks",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [-4.0, 10.0] }),
+    );
+    assert!(
+        off.to_string().contains("not on the 128x128 photograph"),
+        "{off}"
+    );
+    assert!(state.background_task().is_none());
+}
+
 // ── The selected observations ───────────────────────────────────────────
 
 /// The selected observations of the named track, as `get_bench_track` reports

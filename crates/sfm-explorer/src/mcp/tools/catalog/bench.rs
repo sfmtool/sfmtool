@@ -80,6 +80,65 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "find_nearby_tracks",
+            description: "Find the tracks the photographs agree on near one pixel of a posed \
+                          camera image, put every usable one on the bench and commit the new \
+                          ones as points, as one version: what Find Nearby Tracks does at the \
+                          window, from Image Detail's context menu. The sources run strongest \
+                          first and stop once two usable tracks lie within 20 px: the \
+                          reconstruction's own points, the node's cluster patches file, guided \
+                          matching over the .sift files, and the node's SIFT index; a far-field \
+                          sweep of the pixel's own patch runs when they leave its distance open. \
+                          Only index files that get_bench reports as current are read, and a \
+                          source whose input is missing is skipped and named in sources. The \
+                          tracks are grouped into depth layers, ranked with a confidence that \
+                          the pixel is on each, and labelled `<group> <rank><letter>`, \
+                          `frame_13@412,230 1a` for the nearest the pixel on the best-ranked \
+                          layer, which becomes the active item. An existing point near the pixel \
+                          goes on the bench as its own track, as create_bench_track puts it, \
+                          under its label with ` pt <index>` and is never committed. A label \
+                          another item holds takes the \" (2)\" suffix. One undo takes back the \
+                          whole find, points and bench items together. The reply carries the \
+                          group label, the layers (range, rank, confidence), every usable track \
+                          (label, item, point by index and id when committed or existing, \
+                          source, layer, rank, confidence, range, pixel in the queried image, \
+                          and error when it could not be built or committed) and what each \
+                          source did. Finding nothing usable pushes no version and replies with \
+                          changed: false and no tracks. Refused in the call for an image that is \
+                          not posed, a pixel off the photograph, and, when committing, a \
+                          reconstruction whose observations are .sift feature indexes. It runs \
+                          on a worker thread and decodes every photograph, so a run still going \
+                          after 200 ms replies with running: true and an operation_id to poll \
+                          with get_background_task.",
+            kind: Write,
+            schema: object(
+                &[
+                    (
+                        "commit",
+                        flag(
+                            "Commit the tracks that are not existing points as new points. \
+                             Default true; false puts every track on the bench and commits \
+                             nothing.",
+                        ),
+                    ),
+                    (
+                        "label",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The group label the tracks' labels start with, in place of \
+                                 `<image stem>@<x>,<y>`. Something other than whitespace.",
+                        }),
+                    ),
+                ],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "activate_bench_item",
             description: "Make one item on the bench the active one, which is the item Track \
                           View is editing and the item a bench tool acts on when it names none. \

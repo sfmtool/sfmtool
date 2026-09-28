@@ -418,6 +418,15 @@ pub(crate) fn parse(
                 .ok_or_else(|| args.error("needs pixel."))?,
             label: args.new_item_label("label")?,
         },
+        "find_nearby_tracks" => Command::FindNearbyTracks {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            camera_image: args.camera_image("camera_image")?,
+            pixel: args
+                .optional_numbers::<2>("pixel")?
+                .ok_or_else(|| args.error("needs pixel."))?,
+            commit: args.optional_bool("commit")?.unwrap_or(true),
+            label: args.new_item_label("label")?,
+        },
         "activate_bench_item" => Command::ActivateBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.required_string("item")?,

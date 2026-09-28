@@ -337,6 +337,176 @@ pub(super) fn created_track_reply(
     }
 }
 
+/// `find_nearby_tracks`: the tracks near a pixel of one camera image found,
+/// put on the bench and the new ones committed, as one version, on a worker.
+///
+/// Image Detail's *Find Nearby Tracks* over the wire, through the same
+/// `AppState` call, with `commit` and the group `label` the entry does not
+/// offer. A refusal in front of the worker (the node busy, the image not
+/// posed, a pixel off the photograph, and with `commit` a `sift_files` node)
+/// is a tool error in the call.
+pub(super) fn find_nearby_tracks(
+    state: &mut AppState,
+    label: &str,
+    selector: &CameraImageSel,
+    pixel: [f64; 2],
+    commit: bool,
+    named: Option<&str>,
+) -> Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    let image = match resolve_camera_image(state, id, selector) {
+        Ok(image) => image,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_find_nearby_tracks(image, pixel, commit, named) {
+        return Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state
+        .background_task()
+        .expect("the step started a background task");
+    Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::FoundNearby(id),
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
+/// What `find_nearby_tracks` answers once its run has landed.
+///
+/// The version the node stands at, `changed` for whether the find pushed one,
+/// and the row's sentence under `report`, as every edit answers; then what was
+/// found: the group label, the layers, every usable track in label order with
+/// what became of it, and what each source did. A distance that is infinite,
+/// the far end of a far layer's range, is `null`.
+pub(super) fn found_nearby_reply(
+    state: &AppState,
+    id: ReconId,
+    outcome: &Result<String, String>,
+    found: Option<&crate::bench::nearby_tracks::FoundNearby>,
+) -> Result<super::ToolOutput, ToolError> {
+    use crate::bench::nearby_tracks::Landing;
+    use sfmtool_core::bench::FarFieldTrigger;
+    let (report, found) = match (outcome, found) {
+        (Ok(report), Some(found)) => (report, found),
+        (Err(message), _) => return Err(ToolError::new(message.clone())),
+        (Ok(report), None) => {
+            return Err(ToolError::new(format!(
+                "The run ended without tracks to report: {report}"
+            )))
+        }
+    };
+    let finite = |x: f64| x.is_finite().then_some(x);
+    let range = |r: [f64; 2]| json!([finite(r[0]), finite(r[1])]);
+    let point_id = |point: u32| {
+        state
+            .node(id)
+            .map(|node| crate::scene::point_id(node, point as usize))
+    };
+    let layers = &found.found.layers;
+    let ranking = |layer: usize| layers.get(layer).and_then(|l| l.ranking.as_ref());
+
+    let mut reply = edit::version_reply(state, id, Some(report.clone()))?;
+    insert(&mut reply, "changed", json!(found.changed));
+    insert(&mut reply, "group_label", json!(found.found.group_label));
+    insert(
+        &mut reply,
+        "layers",
+        Value::Array(
+            layers
+                .iter()
+                .map(|layer| {
+                    json!({
+                        "range": range(layer.range),
+                        "rank": layer.ranking.as_ref().map(|r| r.rank),
+                        "confidence": layer.ranking.as_ref().map(|r| r.confidence),
+                        "members": layer.members.len(),
+                        "nearest_px": layer.nearest_px,
+                    })
+                })
+                .collect(),
+        ),
+    );
+    let tracks: Vec<Value> = found
+        .landed
+        .iter()
+        .map(|(k, landing)| {
+            let t = &found.found.tracks[*k];
+            let layer = t.layer;
+            let mut row = json!({
+                "label": t.label,
+                "item": landing.item(),
+                "point": landing.point().map(|p| json!({ "index": p, "id": point_id(p) })),
+                "existing": matches!(landing, Landing::Existing { .. }),
+                "committed": matches!(landing, Landing::Committed { .. }),
+                "source": t.source().name(),
+                "layer": layer,
+                "rank": layer.and_then(ranking).map(|r| r.rank),
+                "confidence": layer.and_then(ranking).map(|r| r.confidence),
+                "range": range(t.range),
+                "pixel": t.query_pixel(),
+                "distance_px": t.distance_px(),
+                "n_views": t.n_views(),
+            });
+            let error = match landing {
+                Landing::OnBench { why: Some(why), .. } | Landing::NotBuilt { why } => Some(why),
+                _ => None,
+            };
+            if let Some(error) = error {
+                insert(&mut row, "error", json!(error));
+            }
+            row
+        })
+        .collect();
+    insert(&mut reply, "tracks", Value::Array(tracks));
+    let r = &found.found.report;
+    insert(
+        &mut reply,
+        "sources",
+        Value::Array(
+            r.sources
+                .iter()
+                .map(|s| {
+                    json!({
+                        "source": s.source.name(),
+                        "found": s.found,
+                        "skipped": s.skipped,
+                        "seconds": s.seconds,
+                    })
+                })
+                .collect(),
+        ),
+    );
+    insert(
+        &mut reply,
+        "stopped_after",
+        json!(r.stopped_after.map(|s| s.name())),
+    );
+    insert(
+        &mut reply,
+        "far_field",
+        match &r.far_field {
+            None => Value::Null,
+            Some(run) => json!({
+                "trigger": match run.trigger {
+                    FarFieldTrigger::Always => "always",
+                    FarFieldTrigger::NoLayer => "no_layer",
+                    FarFieldTrigger::SeveralLayers => "several_layers",
+                    FarFieldTrigger::NoneAtPixel => "none_at_pixel",
+                },
+                "found": run.report.found,
+                "dropped": run.dropped,
+                "seconds": run.report.seconds,
+            }),
+        },
+    );
+    Ok(super::ToolOutput::Json(reply))
+}
+
 pub(super) fn activate_bench_item(state: &mut AppState, label: &str, item: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let reply = edit::edited(state, id, |state| state.activate_bench_item(id, item))?;
