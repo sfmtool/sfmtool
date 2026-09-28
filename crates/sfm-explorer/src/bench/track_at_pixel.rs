@@ -160,6 +160,24 @@ impl AppState {
     /// file, so a node without them can still have a track built, and a run
     /// they would have helped says so in its own refusal.
     pub(crate) fn create_track_here_refusal(&self, image: ImageRef) -> Option<String> {
+        if let Some(why) = self.posed_image_refusal(image) {
+            return Some(why);
+        }
+        let node = self.node(image.recon)?;
+        if node.edited().has_feature_indexes() {
+            return Some(NOT_EMBEDDED_PATCHES.to_string());
+        }
+        None
+    }
+
+    /// Why a query at a pixel of `image` cannot run, or `None` when it can: the
+    /// node busy or not loaded, no such image, or an image with no pose, which
+    /// has no ray through the pixel.
+    ///
+    /// The part of [`Self::create_track_here_refusal`] that does not depend on
+    /// committing, which *Find Nearby Tracks* shares
+    /// ([`AppState::find_nearby_tracks_refusal`]).
+    pub(crate) fn posed_image_refusal(&self, image: ImageRef) -> Option<String> {
         if let Some(why) = self.busy_refusal(image.recon) {
             return Some(why);
         }
@@ -177,9 +195,6 @@ impl AppState {
         }
         if !is_posed(recon, image.index()) {
             return Some(NOT_POSED.to_string());
-        }
-        if node.edited().has_feature_indexes() {
-            return Some(NOT_EMBEDDED_PATCHES.to_string());
         }
         None
     }

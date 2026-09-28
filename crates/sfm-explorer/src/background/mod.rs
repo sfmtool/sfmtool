@@ -234,6 +234,26 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// The tracks near one pixel of a posed photograph found, put on the
+    /// node's bench and the new ones committed, as one version
+    /// ([`crate::bench::nearby_tracks`]).
+    ///
+    /// Cancellable on either side of the decode and of the reads of the
+    /// `.sift` files and the cluster patches, and inside the search, which
+    /// polls the flag between its sources, in the far-field sweep and in
+    /// front of building the tracks, and hands back
+    /// `NearbyTracksError::Cancelled`. A cancelled run puts nothing on the
+    /// bench.
+    ///
+    /// Its kind is `Bench`, the kind of its refusals; a run that committed
+    /// points writes its row as an `Edit`, since the version it pushed wrote
+    /// the reconstruction.
+    pub(crate) const FIND_NEARBY_TRACKS: Operation = Operation {
+        name: "Find nearby tracks",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
     /// One or more `.sfmr` files read and made nodes, with the columns a file
     /// does not carry filled in for display (`specs/gui/background-tasks.md`
     /// section "Opening a file").
@@ -257,7 +277,7 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 12] = [
+    pub(crate) const ALL: [Operation; 13] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -270,6 +290,7 @@ impl Operation {
         Operation::BENCH_GEOMETRY_SEARCH,
         Operation::BUILD_INDEX_FILES,
         Operation::CREATE_TRACK_AT_PIXEL,
+        Operation::FIND_NEARBY_TRACKS,
     ];
 }
 
@@ -413,6 +434,13 @@ pub(crate) enum Finished {
     /// commits it through the bench's own commit, which writes its own
     /// ([`crate::bench::track_at_pixel`]). A refusal is the failed row alone.
     TrackAtPixel(Box<crate::bench::track_at_pixel::TrackAtPixelRun>),
+    /// A *Find Nearby Tracks* run: the tracks core found near the pixel.
+    ///
+    /// One version when anything usable was found, pushed on the GUI thread:
+    /// every track put on the bench and the new ones committed together
+    /// ([`crate::bench::nearby_tracks`]). A find with nothing usable is its
+    /// row alone.
+    NearbyTracks(Box<crate::bench::nearby_tracks::NearbyTracksRun>),
     /// The files an open read, each with what it filled in for display, and
     /// the ones it could not read.
     ///
@@ -473,6 +501,11 @@ pub(crate) struct FinishedTask {
     /// answers with once it lands. `None` for every other operation.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) created_track: Option<crate::bench::track_at_pixel::CreatedTrack>,
+    /// What a *Find Nearby Tracks* found and what became of each track. What
+    /// `find_nearby_tracks` answers with once it lands. `None` for every other
+    /// operation, and for a run that was refused or cancelled.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) found_nearby: Option<Box<crate::bench::nearby_tracks::FoundNearby>>,
     /// What the whole operation cost, measured from the instant it started.
     ///
     /// Not the entry's `took`, which the frame stamps on settling and which
@@ -795,6 +828,11 @@ impl AppState {
         // A track-at-pixel run that landed a track, to commit once its own row
         // is written: the node, the item and the member that built it.
         let mut to_commit: Option<(ReconId, String, &'static str)> = None;
+        // What a *Find Nearby Tracks* found, the kind its row is written as,
+        // and the point it selects once the row is written.
+        let mut found_nearby = None;
+        let mut kind = operation.kind;
+        let mut to_select = None;
         let outcome = match finished {
             Finished::Produced {
                 value,
@@ -924,6 +962,29 @@ impl AppState {
                     }
                 }
             }
+            // Every track on the bench and the new ones committed, as one
+            // version; the selection follows after the row, below.
+            Finished::NearbyTracks(run) => {
+                match self.scene.iter().position(|n| Some(n.id) == locked) {
+                    None => Err(format!(
+                        "{} of {label} finished, but it is no longer loaded.",
+                        operation.name
+                    )),
+                    Some(index) => {
+                        let landed = {
+                            let _phase = collector.phase("push version");
+                            self.land_nearby_tracks(index, *run)
+                        };
+                        if landed.found.changed {
+                            installed = Some(self.scene[index].id);
+                        }
+                        kind = landed.kind;
+                        to_select = landed.select;
+                        found_nearby = Some(Box::new(landed.found));
+                        landed.outcome
+                    }
+                }
+            }
             // Each file becomes a node in the order it was asked for, and the
             // row names every one; a file the worker could not read is a failed
             // row of its own under the same actor. Nothing is installed into
@@ -962,17 +1023,13 @@ impl AppState {
         let detail = collector.take();
         let took = started.elapsed();
         match &outcome {
-            Ok(text) => {
+            Ok(text) => self
+                .action_log
+                .record_done_as(actor, kind, started, text, detail),
+            Err(message) => {
                 self.action_log
-                    .record_done_as(actor, operation.kind, started, text, detail)
+                    .fail_done_as(actor, kind, started, message.clone(), detail)
             }
-            Err(message) => self.action_log.fail_done_as(
-                actor,
-                operation.kind,
-                started,
-                message.clone(),
-                detail,
-            ),
         }
         // The commit a landed track ends in, as its own version and its own
         // row, after the row that put the track on the bench because that is
@@ -980,12 +1037,22 @@ impl AppState {
         if let Some((node, item, member)) = to_commit {
             created_track = Some(self.commit_created_track(actor, node, item, member));
         }
+        // The active nearby track's point, selected after the row that put it
+        // on the bench, as a commit selects the point it wrote, and as whoever
+        // asked for the run.
+        if let Some(point) = to_select {
+            let standing = self.action_log.actor();
+            self.action_log.set_actor(actor);
+            self.select_point(point);
+            self.action_log.set_actor(standing);
+        }
         self.last_background_task = Some(FinishedTask {
             id,
             operation,
             label,
             opened,
             created_track,
+            found_nearby,
             took,
             detail: kept,
             outcome,

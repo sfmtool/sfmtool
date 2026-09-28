@@ -52,6 +52,7 @@ use crate::state::AppState;
 
 pub(crate) mod geometry;
 pub(crate) mod live;
+pub(crate) mod nearby_tracks;
 pub(crate) mod track_at_pixel;
 
 #[cfg(test)]

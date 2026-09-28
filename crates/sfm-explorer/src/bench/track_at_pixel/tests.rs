@@ -55,23 +55,30 @@ fn pinhole() -> CameraIntrinsics {
 }
 
 /// The plane's texture, in world units: three sinusoids at different periods
-/// and directions, so every patch of it registers in two dimensions.
-fn texture(x: f64, y: f64) -> f64 {
-    127.5 + 55.0 * (x * 17.0).sin() + 45.0 * (y * 23.0).cos() + 25.0 * ((x + y) * 31.0).sin()
+/// and directions, so every patch of it registers in two dimensions. On a
+/// plane at `depth` the periods grow with it, so each photograph shows the
+/// same pattern whatever the depth.
+fn texture(x: f64, y: f64, depth: f64) -> f64 {
+    let s = PLANE_Z / depth;
+    127.5
+        + 55.0 * (x * 17.0 * s).sin()
+        + 45.0 * (y * 23.0 * s).cos()
+        + 25.0 * ((x + y) * 31.0 * s).sin()
 }
 
-/// What a pinhole at `center` looking down world `+z` sees of the plane.
-fn photograph(center: [f64; 3]) -> ImageU8 {
+/// What a pinhole at `center` looking down world `+z` sees of the plane
+/// `z = depth`.
+fn photograph_at(center: [f64; 3], depth: f64) -> ImageU8 {
     let (cx, cy) = (f64::from(IMG_W) / 2.0, f64::from(IMG_H) / 2.0);
     let mut data = Vec::with_capacity((IMG_W * IMG_H) as usize);
     for row in 0..IMG_H {
         for col in 0..IMG_W {
             let dx = (f64::from(col) + 0.5 - cx) / FOCAL;
             let dy = (f64::from(row) + 0.5 - cy) / FOCAL;
-            let lambda = PLANE_Z - center[2];
+            let lambda = depth - center[2];
             let x = center[0] + lambda * dx;
             let y = center[1] + lambda * dy;
-            data.push(texture(x, y).clamp(0.0, 255.0).round() as u8);
+            data.push(texture(x, y, depth).clamp(0.0, 255.0).round() as u8);
         }
     }
     ImageU8::new(IMG_W, IMG_H, 1, data)
@@ -125,7 +132,14 @@ fn grid() -> Vec<Point3<f64>> {
 /// point observed by every image at its exact projection, standing on a patch
 /// that faces the cameras.
 pub(crate) fn plane_recon() -> SfmrReconstruction {
-    let points = grid();
+    plane_recon_with(&grid(), PLANE_Z)
+}
+
+/// The capture's reconstruction holding `points`, on a plane at `depth`: every
+/// point observed by every image at its exact projection, standing on a patch
+/// that faces the cameras and grows with the depth.
+fn plane_recon_with(points: &[Point3<f64>], depth: f64) -> SfmrReconstruction {
+    let half_extent = HALF_EXTENT * depth / PLANE_Z;
     let n = CENTERS.len();
     let mut recon = SfmrReconstruction::demo(1);
     recon.image_table.cameras = vec![pinhole()];
@@ -179,11 +193,11 @@ pub(crate) fn plane_recon() -> SfmrReconstruction {
             center,
             Vector3::new(0.0, 0.0, -1.0),
             Vector3::new(0.0, 1.0, 0.0),
-            [HALF_EXTENT, HALF_EXTENT],
+            [half_extent, half_extent],
         );
         for c in 0..3 {
-            u[[p, c]] = (patch.u_axis[c] * HALF_EXTENT) as f32;
-            v[[p, c]] = (patch.v_axis[c] * HALF_EXTENT) as f32;
+            u[[p, c]] = (patch.u_axis[c] * half_extent) as f32;
+            v[[p, c]] = (patch.v_axis[c] * half_extent) as f32;
         }
     }
     set.patch_u_halfvec_xyz = Some(u);
@@ -199,11 +213,16 @@ pub(crate) fn plane_recon() -> SfmrReconstruction {
 /// Put the capture's photographs in the node's full-resolution cache, so the
 /// run finds them without a file on disk.
 pub(crate) fn cache_photographs(state: &mut AppState, id: ReconId) {
+    cache_photographs_at(state, id, PLANE_Z);
+}
+
+/// [`cache_photographs`] of the plane at `depth`.
+fn cache_photographs_at(state: &mut AppState, id: ReconId, depth: f64) {
     for (i, &center) in CENTERS.iter().enumerate() {
         state.full_res_cache.insert(
             ImageRef::new(id, i),
             Some(Arc::new(ImageU8Pyramid::from_image(
-                photograph(center),
+                photograph_at(center, depth),
                 crate::state::PYRAMID_LEVELS,
             ))),
         );
@@ -218,6 +237,38 @@ pub(crate) fn plane_state() -> (AppState, ReconId) {
     let id = state.selected_recon.expect("a selected reconstruction");
     cache_photographs(&mut state, id);
     (state, id)
+}
+
+/// How far out [`far_plane_state`] puts its plane: far enough past the
+/// cameras' spread that the photographs cannot tell it from infinity.
+pub(crate) const FAR_DEPTH: f64 = 1e7;
+
+/// A state holding the capture of a plane [`FAR_DEPTH`] out, with its
+/// photographs cached, and the pixel of image 0 to query: the middle of the
+/// photograph. The node's one point sits well away from it, past the reach of
+/// the points source, so a find there is the far-field sweep's.
+pub(crate) fn far_plane_state() -> (AppState, ReconId, [f64; 2]) {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(far_plane_recon()));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    cache_far_photographs(&mut state, id);
+    (state, id, FAR_PIXEL)
+}
+
+/// The pixel of image 0 a find on the far plane is made at: the middle of
+/// the photograph.
+pub(crate) const FAR_PIXEL: [f64; 2] = [64.0, 64.0];
+
+/// The reconstruction of [`far_plane_state`]: one point on the far plane, some
+/// eighty pixels from [`FAR_PIXEL`] in image 0.
+pub(crate) fn far_plane_recon() -> SfmrReconstruction {
+    let off = 0.35 * FAR_DEPTH;
+    plane_recon_with(&[Point3::new(off, off, FAR_DEPTH)], FAR_DEPTH)
+}
+
+/// Put the far plane's photographs in the node's full-resolution cache.
+pub(crate) fn cache_far_photographs(state: &mut AppState, id: ReconId) {
+    cache_photographs_at(state, id, FAR_DEPTH);
 }
 
 fn versions(state: &AppState, id: ReconId) -> usize {

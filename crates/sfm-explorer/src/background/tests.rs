@@ -600,6 +600,23 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        "Find nearby tracks" => {
+            let (mut state, id) = crate::bench::track_at_pixel::tests::plane_state();
+            let job = state
+                .find_nearby_tracks_job(
+                    crate::scene::ImageRef::new(id, 0),
+                    crate::bench::track_at_pixel::tests::textured_pixel(),
+                    true,
+                    None,
+                )
+                .expect("the fixture is a posed embedded_patches node");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         other => panic!("{other} has no starter here; add one"),
     }
 }
