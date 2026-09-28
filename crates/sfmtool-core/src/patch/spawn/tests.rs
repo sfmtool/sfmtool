@@ -40,13 +40,17 @@ fn pinhole() -> CameraIntrinsics {
 }
 
 /// Broadband, non-periodic plane texture: the spawned candidate has to find a
-/// unique correlation peak away from the parent's own location.
+/// unique correlation peak away from the parent's own location. The last term
+/// repeats every few patch-grid px, so a patch of it pins a position and
+/// passes the localizer's default member self-similarity gate; the slower
+/// terms alone render a patch smooth enough to match itself 3 px away.
 fn texture(x: f64, y: f64) -> f64 {
     127.5
         + 46.0 * (x * 17.0).sin()
         + 38.0 * (y * 23.0).cos()
         + 22.0 * ((x + y) * 31.0).sin()
         + 14.0 * ((x - 2.0 * y) * 7.3).cos()
+        + 30.0 * (x * 97.0).sin() * (y * 89.0).cos()
 }
 
 /// What a pinhole at `center` (looking down world +z) sees of the textured plane.

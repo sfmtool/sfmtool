@@ -244,7 +244,7 @@ keyword defaults.
 | `min_keypoint_separation_px` | `1.0` | One observation per place |
 | `localize.search` | `6.0` | Search radius, patch-grid px |
 | `localize.resolution` | `24` | Patch grid (a stored bitmap's own grid under `StoredBitmap`) |
-| `localize.max_member_zncc_self_similarity_radius` | `0` (off) | Self-similarity gate: the largest ZNCC self-similarity radius of the new view's core, patch-grid px ([why off](../patch/patch-keypoint-localization.md#the-member-gates-default)) |
+| `localize.max_member_zncc_self_similarity_radius` | `2.5` | Self-similarity gate: the largest ZNCC self-similarity radius of the new view's core, patch-grid px ([why 2.5](../patch/patch-keypoint-localization.md#the-member-gates-default)) |
 | `localize.min_grazing_cos` | `0.1` | Grazing cutoff |
 
 ## Python bindings

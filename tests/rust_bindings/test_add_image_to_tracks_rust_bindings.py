@@ -136,10 +136,12 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
 
 def test_the_self_similarity_gate_refuses_what_is_over_its_bar(without_image, pyramids):
     """Every searched candidate reports its core's ZNCC self-similarity radius,
-    and a bar refuses as ``unlocalizable`` exactly the candidates over it; the
-    default, ``0``, refuses none."""
+    and a bar refuses as ``unlocalizable`` exactly the candidates over it: the
+    default, ``2.5``, as well as a bar the caller sets. ``0`` refuses none."""
     edited = EditedReconstruction(without_image[0])
-    _, off = edited.add_image_to_tracks(IMAGE, pyramids)
+    _, off = edited.add_image_to_tracks(
+        IMAGE, pyramids, max_zncc_self_similarity_radius=0.0
+    )
     radius = np.asarray(off["candidates"]["zncc_self_similarity_radius"])
     refusal = off["candidates"]["refusal"]
     assert "unlocalizable" not in off["refusal_counts"]
@@ -147,21 +149,22 @@ def test_the_self_similarity_gate_refuses_what_is_over_its_bar(without_image, py
     assert searched.any()
     assert np.all((radius[searched] >= 0.0) & (radius[searched] <= 3.0))
 
-    bar = 1.0
-    _, gated = edited.add_image_to_tracks(
-        IMAGE, pyramids, max_zncc_self_similarity_radius=bar
-    )
-    g_refusal = gated["candidates"]["refusal"]
-    for k in range(len(refusal)):
-        if not searched[k]:
-            continue
-        if radius[k] > bar:
-            assert g_refusal[k] == "unlocalizable"
-        else:
-            assert g_refusal[k] != "unlocalizable"
-    assert gated["refusal_counts"]["unlocalizable"] == int(
-        np.sum(radius[searched] > bar)
-    )
+    for bar, kwargs in [
+        (2.5, {}),
+        (1.0, {"max_zncc_self_similarity_radius": 1.0}),
+    ]:
+        _, gated = edited.add_image_to_tracks(IMAGE, pyramids, **kwargs)
+        g_refusal = gated["candidates"]["refusal"]
+        for k in range(len(refusal)):
+            if not searched[k]:
+                continue
+            if radius[k] > bar:
+                assert g_refusal[k] == "unlocalizable"
+            else:
+                assert g_refusal[k] != "unlocalizable"
+        assert gated["refusal_counts"].get("unlocalizable", 0) == int(
+            np.sum(radius[searched] > bar)
+        )
 
 
 def test_bad_arguments_raise(without_image, pyramids):

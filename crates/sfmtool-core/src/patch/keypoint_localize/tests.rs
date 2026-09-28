@@ -1164,8 +1164,10 @@ fn the_member_gate_admits_at_or_under_its_bar_and_fails_nan() {
         assert!(off.admits_member_zncc_self_similarity_radius(f64::NAN));
         assert!(off.admits_member_zncc_self_similarity_radius(3.0));
     }
-    // The default is off (see `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`).
-    assert!(!KeypointLocalizeParams::default().member_self_similarity_gate_is_on());
+    // The default is on, at `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`.
+    let default = KeypointLocalizeParams::default();
+    assert!(default.member_self_similarity_gate_is_on());
+    assert_eq!(default.max_member_zncc_self_similarity_radius, 2.5);
 }
 
 #[test]

@@ -599,7 +599,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              may have, in patch-grid px: how far the tile can slide over itself \
                              and still match, as along a straight edge or over a flat patch. The \
                              radius reads at most 3, which means 3 or more, so 3 turns nothing \
-                             out. The bench's default is 2. An observation with no reading \
+                             out. The bench's default is 2.5. An observation with no reading \
                              clears it.",
                         ),
                     ),

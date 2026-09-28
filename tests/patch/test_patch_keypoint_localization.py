@@ -656,9 +656,9 @@ def test_localize_keypoints_chunked_with_whole_cloud_view_scores(
         assert np.array_equal(np.asarray(r["is_basis"]), np.asarray(c["is_basis"]))
 
 
-# The member self-similarity gate's bar in the flat-member test. The default
-# is off, so the test sets one.
-MEMBER_GATE = 2.0
+# The member self-similarity gate's bar in the flat-member test: the default,
+# set explicitly so the test reads the bar it judges by.
+MEMBER_GATE = 2.5
 
 
 def _healthy_two_view_point(recon, cloud, images) -> tuple[int, list[int]]:

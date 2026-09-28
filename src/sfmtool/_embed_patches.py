@@ -361,7 +361,7 @@ def embed_patches(
     *,
     min_relative_zncc: float = 0.7,
     min_absolute_zncc: float = 0.5,
-    max_member_zncc_self_similarity_radius: float = 0.0,
+    max_member_zncc_self_similarity_radius: float = 2.5,
     patch_size: float = 11.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
@@ -444,7 +444,7 @@ def embed_patches(
             or water crop, or a lone straight edge, matches itself a few pixels
             away, so it is refused before it is scored and never restored by
             the two-view floor. The radius reads at most ``3``, so ``3`` or more
-            turns nothing out; ``0`` (the default) disables it.
+            turns nothing out; ``0`` disables it. Default ``2.5``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the

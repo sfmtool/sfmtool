@@ -73,7 +73,7 @@ class LocalizeKeypointsTransform:
         max_shift_px: float = 3.0,
         min_relative_zncc: float = 0.7,
         min_absolute_zncc: float = 0.5,
-        max_member_zncc_self_similarity_radius: float = 0.0,
+        max_member_zncc_self_similarity_radius: float = 2.5,
         min_grazing_cos: float = 0.1,
         resolution: int = 24,
         window: str = "gaussian_disk",

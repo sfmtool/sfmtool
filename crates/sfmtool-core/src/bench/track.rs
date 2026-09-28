@@ -645,9 +645,9 @@ pub struct Origin {
 /// cluster refinement's `0.85` judges the score it reached by fitting a whole
 /// affine warp, and the track stage's leave-one-out score runs lower on correct
 /// sightings, so that bar turned out sightings a person would keep.
-/// [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`]: the batch passes gate on the
-/// older localizability score, which the self-similarity radius replaces on
-/// the bench.
+/// [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`]: the keypoint localizer's member
+/// gate has the same default, but the bench runs that kernel with its gate off
+/// and judges the radius by this bar instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
@@ -728,13 +728,19 @@ pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
 /// The bench's default [`Thresholds::max_zncc_self_similarity_radius`], in
 /// patch-grid px.
 ///
-/// Under the largest shift the reading searches (`3`), so a tile that still
-/// matches itself at the edge of the search is turned out, and at the radius
-/// where Track View's self-similarity cells turn from yellow to orange: a
-/// corner or a busy texture reads under `1`, and a patch that slides `2` px
-/// along an edge or across a flat area before it stops matching itself does
-/// not pin a position well enough to keep.
-pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.0;
+/// `2.5`, the same bar as the keypoint localizer's member gate
+/// ([`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`](crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS)),
+/// which the user chose from a sweep on seoul_bull and kerry_park. It sits
+/// under the largest shift the reading searches (`3`), so a tile that still
+/// matches itself at the edge of the search, such as a straight edge or a flat
+/// area, is turned out; a corner or a busy texture reads under `1`.
+pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
+
+// The bench and the localizer start from the same bar.
+const _: () = assert!(
+    BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS
+        == crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS
+);
 
 // The middle bar sits no higher than the whole bar, for the reason above.
 const _: () = assert!(BENCH_MIN_ZNCC_MIDDLE <= BENCH_MIN_ZNCC);

@@ -167,19 +167,18 @@ pub struct KeypointLocalizeParams {
 }
 
 /// The default [`KeypointLocalizeParams::max_member_zncc_self_similarity_radius`]:
-/// `0`, the gate off.
+/// `2.5` grid px, the same bar as the bench's
+/// [`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`](crate::bench::BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS).
 ///
-/// Chosen by measurement on seoul_bull and kerry_park (the add-image-to-tracks
-/// harness and the localizer over each ground truth's own tracks; see
+/// The user chose `2.5` from a sweep on seoul_bull and kerry_park (see
 /// `specs/core/patch/patch-keypoint-localization.md`, "The member gate's
-/// default"). Every bar under the largest radius read cost the
-/// add-image-to-tracks harness 10 to 66 points of recall and did not make the
-/// kept sightings more accurate: a sighting
-/// whose core reads the largest radius lands within 1 px of the ground truth
-/// as often as one that reads under 1. The older gate on the localizability
-/// score, at its `0.35` grid px, turned out almost nothing on the same data, so
-/// the gate off is what matches it.
-pub const DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 0.0;
+/// default"). At `2.5` the add-image-to-tracks harness recovers 80.4% of the
+/// known tracks on seoul_bull and 73.8% on kerry_park, against 91.2% and 89.9%
+/// under the older gate on the localizability score, and on kerry_park it adds
+/// 0 bad extra observations and 6 that make a track's largest residual worse,
+/// against 2 and 18. The bar sits under the largest radius read (`3`), so it
+/// turns out flat and edge-only views, which read `3`.
+pub const DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 impl KeypointLocalizeParams {
     /// Whether [`Self::max_member_zncc_self_similarity_radius`] is on: finite

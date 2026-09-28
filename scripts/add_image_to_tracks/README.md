@@ -143,8 +143,10 @@ Against the first default rule at the resected pose:
   and every bar from 1 to 2.9 costs 10 to 66 points of recall for at most a few
   fewer far or bad observations: at 2, 76.8% on seoul_bull and 66.2% on
   kerry_park. The known sightings it would refuse, whose cores read the largest
-  radius, land within 1 px of the ground truth as often as the rest. The gate
-  is off by default; the full sweep is in
+  radius, land within 1 px of the ground truth as often as the rest. The user
+  chose a default bar of 2.5 (80.4% recall on seoul_bull, 73.8% on kerry_park,
+  0 bad and 6 worse extra observations on kerry_park), reading the sightings
+  it refuses as patches that should have been bigger; the full sweep is in
   [patch-keypoint-localization.md](../../specs/core/patch/patch-keypoint-localization.md#the-member-gates-default).
 - **Stored bitmap as the template** (kerry_park only; the seoul_bull ground
   truth is a minimal file with no bitmaps): recall 86.9% against 88.0% rendered,

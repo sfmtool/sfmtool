@@ -185,7 +185,7 @@ impl PyEditedReconstruction {
     ///     search: The search radius in patch-grid pixels.
     ///     max_zncc_self_similarity_radius: The largest ZNCC self-similarity
     ///         radius the new view's own core may have, in patch-grid px; a
-    ///         view over it is refused as ``unlocalizable``. ``0``, the default,
+    ///         view over it is refused as ``unlocalizable``. Default ``2.5``; ``0``
     ///         turns the gate off, and a bar of ``3`` or more, the largest
     ///         radius read, turns nothing out.
     ///     min_grazing_cos: The grazing cutoff.
@@ -230,7 +230,7 @@ impl PyEditedReconstruction {
         ascend_on_edge = false,
         min_keypoint_separation_px = 1.0,
         search = 6.0,
-        max_zncc_self_similarity_radius = 0.0,
+        max_zncc_self_similarity_radius = 2.5,
         min_grazing_cos = 0.1,
         resolution = 24,
     ))]

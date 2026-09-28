@@ -114,7 +114,7 @@ information about whether it registered.
 [Keypoint localization](patch-keypoint-localization.md) has a member gate too,
 but it judges the view's core by its
 [ZNCC self-similarity radius](zncc-self-similarity-radius.md)
-(`max_member_zncc_self_similarity_radius`, off by default), not by this score.
+(`max_member_zncc_self_similarity_radius`, 2.5 by default), not by this score.
 
 The two levels are complementary, not redundant: a point whose members are each
 localizable can still fuse a consensus that slides (the aperture case the

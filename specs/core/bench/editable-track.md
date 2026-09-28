@@ -149,7 +149,7 @@ pub struct Thresholds {
 pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 pub const BENCH_MIN_ZNCC: f64 = 0.7;
 pub const BENCH_MIN_ZNCC_MIDDLE: f64 = 0.7;
-pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.0;
+pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 // Putting one on the bench.
 pub fn create_track(
@@ -1167,18 +1167,18 @@ whose core slides over itself further than the bar and still matches, such as a
 straight edge or a flat patch, is one whose position a match cannot pin, and
 the painting turns it out. The radius reads at most `r`, `3` by default, which
 stands for "that far or further", so a bar of `3` or more turns nothing out. The
-default, `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS` (2 patch-grid px), sits under
-that, so a tile that still matches itself at the edge of the search is turned
-out, and at the radius where Track View's self-similarity cells turn from
-yellow to orange: a corner or a busy texture reads under `1`, and a patch that
-slides 2 px along an edge or across a flat area before it stops matching itself
-does not pin a position well enough to keep. A row with no reading clears the
+default, `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS` (2.5 patch-grid px), sits
+under that, so a tile that still matches itself at the edge of the search, such
+as a straight edge or a flat area, is turned out; a corner or a busy texture
+reads under `1`. It is the same bar as the keypoint localizer's member gate
+(`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`; [its default and
+why](../patch/patch-keypoint-localization.md#the-member-gates-default)), and a
+compile-time check keeps the two equal. A row with no reading clears the
 bar, as a row with no middle reading clears `min_zncc_middle`, and a `NaN`
 reading fails it.
 
-The batch passes gate on the older
-[patch localizability](../patch/patch-localizability.md) score; the bench judges
-the self-similarity radius. The evaluation's cluster refinement therefore runs
+The bench judges the self-similarity radius in its painting and never through a
+kernel's gate. The evaluation's cluster refinement therefore runs
 with its own localizability gate off (`EvaluateOptions::default()` sets
 `cluster.max_keypoint_uncertainty` to `0`), as the track stage's
 `open_localizer` does, so no member of a bench cluster is
@@ -2037,8 +2037,8 @@ consensus the sighting is left out of, reads lower on a correct sighting than
 the refinement's score after it has fitted a whole affine warp; the batch pass
 keeps its `0.85`. `min_zncc_middle` is `BENCH_MIN_ZNCC_MIDDLE` (§ "The middle
 ZNCC"). `max_zncc_self_similarity_radius` is
-`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, because the batch passes gate on the
-older localizability score and the bench judges the self-similarity radius
+`BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`, the keypoint localizer's default
+member bar, which the bench applies in its painting rather than in the kernel
 (§ "The ZNCC self-similarity radius"). A track keeps the bars it was made with: one created under an
 earlier default carries that default until someone moves it.
 
@@ -2047,7 +2047,7 @@ earlier default carries that default until someone moves it.
 | `min_zncc` | `0.7` | The ZNCC an observation has to reach: the achieved template ZNCC at the cluster stage, the leave-one-out ZNCC at the track stage. `BENCH_MIN_ZNCC`, not `ClusterRefineParams::default`'s `0.85`, which stays the batch pass's bar. |
 | `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
-| `max_zncc_self_similarity_radius` | `2.0` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
+| `max_zncc_self_similarity_radius` | `2.5` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
 
 The reading's two memory bounds are not thresholds either: nothing about them is

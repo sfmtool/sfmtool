@@ -45,7 +45,7 @@ from .._cli_utils import timed_command
 @click.option(
     "--max-member-zncc-self-similarity-radius",
     type=float,
-    default=0.0,
+    default=2.5,
     show_default=True,
     help=(
         "Refuse an observation whose OWN patch tile pins no 2D position: its "
@@ -53,7 +53,7 @@ from .._cli_utils import timed_command
         "and still match itself, is above this, in patch-grid pixels. It "
         "throws out a flat sky or water crop, or a lone straight edge, before "
         "it is scored. The radius reads at most 3, so 3 or more turns nothing "
-        "out; 0 (the default) disables it. See "
+        "out; 0 disables it. The default, 2.5, is the bench's bar. See "
         "specs/core/patch/zncc-self-similarity-radius.md."
     ),
 )

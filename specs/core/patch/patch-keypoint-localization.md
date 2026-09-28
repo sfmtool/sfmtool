@@ -60,7 +60,7 @@ recovers it by unprojecting the keypoint onto the patch plane.
   in-loop (below), in two families. The **photometric** gates judge one view's
   pixels on their own and their verdicts stand:
   `max_member_zncc_self_similarity_radius` (the view's own tile pins no 2D
-  position; off by default), `min_absolute_zncc` (its
+  position; 2.5 grid px by default), `min_absolute_zncc` (its
   leave-one-out ZNCC is below a fixed floor), and the grazing cutoff. The
   **positional** gate `max_shift_px` (its keypoint sits too far from the
   projection) and the **relative** gate `min_relative_zncc` (does a view agree
@@ -93,7 +93,7 @@ position of its own — a flat sky or water crop, a lone straight edge — match
 itself a few pixels away, so its ZNCC to anything cannot place it; refusing it
 up front keeps it out of every round's template rather than letting it vote and
 then be judged by the votes. It is read once, on the member's appearance rather
-than the round's, and no later step restores it. The gate is off by default
+than the round's, and no later step restores it. The bar is 2.5 by default
 (see [The member gate's default](#the-member-gates-default)). Then each round:
 
 1. **Render** every view's patch tile from its source image at its accumulated
@@ -263,7 +263,7 @@ existing patch machinery:
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it); `0` disables |
 | `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
-| `max_member_zncc_self_similarity_radius` | 0 (off) | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more turns nothing out; see [The member gate's default](#the-member-gates-default) |
+| `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own tile's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more turns nothing out; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
@@ -300,8 +300,9 @@ itself along the whole search.
 
 ### The member gate's default
 
-The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `0`: the gate
-is off. It was chosen on the seoul_bull and kerry_park ground truths, by two
+The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `2.5` patch-grid
+px, the same bar as the bench's `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The
+user chose it from a sweep on the seoul_bull and kerry_park ground truths: two
 measurements run with the gate off, with the older gate on the localizability
 score (`σ_pos` over `0.35` grid px) it replaced, and with the new gate at bars
 from 1 to 2.9.
@@ -320,7 +321,7 @@ those whose largest residual grew by more than 1 px:
 | radius ≤ 1 | 39.7% | 10 | 50 | 0 | 24.4% | 10 | 299 | 3 | 13 |
 | radius ≤ 1.5 | 66.7% | 17 | 74 | 0 | 46.7% | 12 | 625 | 5 | 15 |
 | radius ≤ 2 | 76.8% | 19 | 94 | 0 | 66.2% | 12 | 846 | 0 | 7 |
-| radius ≤ 2.5 | 80.4% | 19 | 106 | 0 | 73.8% | 12 | 985 | 0 | 6 |
+| **radius ≤ 2.5 (default)** | **80.4%** | **19** | **106** | **0** | **73.8%** | **12** | **985** | **0** | **6** |
 | radius ≤ 2.9 | 81.2% | 19 | 104 | 0 | 75.7% | 13 | 1010 | 0 | 6 |
 
 The localizer over each ground truth's own tracks, every finite point, each view
@@ -333,26 +334,36 @@ truth's observation (1233 observations on seoul_bull, 2193 on kerry_park):
 | off | 97.8% | 0.185 / 0.789 | 35 | 0 | 98.5% | 0.170 / 0.664 | 51 | 1 |
 | radius ≤ 1.5 | 72.5% | 0.156 / 0.692 | 32 | 53 | 58.7% | 0.149 / 0.585 | 32 | 99 |
 | radius ≤ 2 | 83.7% | 0.169 / 0.823 | 41 | 29 | 75.0% | 0.160 / 0.624 | 42 | 54 |
+| **radius ≤ 2.5 (default)** | **87.0%** | **0.173 / 0.796** | **39** | **21** | **82.4%** | **0.161 / 0.602** | **43** | **39** |
 | radius ≤ 2.9 | 88.0% | 0.173 / 0.792 | 39 | 17 | 84.4% | 0.164 / 0.633 | 45 | 33 |
 
-The older gate turned out almost nothing on either capture. Every bar on the
-radius cost 10 to 66 points of recall and a tenth or more of the localized
-views, and the sightings it turned out were as good as the ones it kept: over
-the known tracks the harness's default rule accepts with the gate off, those
-whose new view's core reads the largest radius land within 1 px of the ground
-truth 96.6% (seoul_bull, 119) and 98.7% (kerry_park, 318) of the time, against
-97.9% and 98.5% for a radius under 1. A fifth of seoul_bull's and a third of
-kerry_park's candidates read the largest radius. A likely cause, which these
-runs did not isolate: the radius is in patch-grid px, and a patch grid finer
-than the source pixels it samples renders a smooth tile, which matches itself a
-few grid px away however well the source pins it. Only a gate that turns nothing out matches the older one, so the default is
-off, and a caller that wants to refuse flat or edge-only views sets a bar.
+At 2.5 the harness recovers 80.4% of the known tracks on seoul_bull and 73.8% on
+kerry_park, against 91.2% and 89.9% under the older gate, which turned out
+almost nothing on either capture. On kerry_park it adds 0 bad extra
+observations and 6 that make a track's largest residual worse, against 2 and 18
+under the older gate. Against the current ground truths the sightings it turns
+out are about as accurate as the ones it keeps: over the known tracks the
+harness's default rule accepts with the gate off, those whose new view's core
+reads the largest radius land within 1 px of the ground truth 96.6%
+(seoul_bull, 119) and 98.7% (kerry_park, 318) of the time, against 97.9% and
+98.5% for a radius under 1.
+
+The lost recall is not taken as a reason to loosen the bar. On seoul_bull the
+ground-truth sightings that read over 2.5 are mostly smooth surfaces (the
+bull's bronze) seen where the patch covers only a few image pixels: at a texel
+scale under 0.5 image px per patch-grid px, 48.6% of sightings read over 2.5,
+against about 1% at 0.75 and above. Those patches should have been bigger, and
+the ground truths are to be revised with SfM Explorer showing the radius. The
+radius is measured in patch-grid px, so a grid finer than the image pixels it
+samples renders a smooth tile that matches itself a few grid px away; whether
+a radius read in image px would separate the views better is the open question
+in [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md).
 
 ## Implementation details
 
 `PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
-min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=0.0,
+min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
 min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
 `{point_index, views, keypoints, offsets_px, loo_zncc, loo_zncc_middle, loo_zncc_grid, is_basis}`,
 with `loo_zncc_grid` a `(K, 3, 3)` array. Each round renders a

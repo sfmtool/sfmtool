@@ -683,7 +683,7 @@ bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"). Its label's hover text says so.
 There is no separate search radius.
-*self-sim. px*, the largest self-similarity radius, is in patch-grid px, 2 on a
+*self-sim. px*, the largest self-similarity radius, is in patch-grid px, 2.5 on a
 new track, and takes `0` to `3` to one decimal. It judges the whole tile's
 radius, the upper reading in the *Self-similarity* column; `3`, the largest
 radius read, turns nothing out, and a row with no reading clears it. Its label's

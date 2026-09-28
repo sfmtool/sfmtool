@@ -225,11 +225,22 @@ fn grid_points() -> Vec<Point3<f64>> {
 /// The fixed-bar rule: on a noiseless capture every reference agrees with
 /// every other to the fifth decimal, so a bar drawn from them sits where
 /// rounding decides, and the tests of everything but the rule use a fixed one.
+/// The default options with the member self-similarity gate off. The plane's
+/// texture renders smooth on the patch grid at this capture's scale, so about
+/// half its cores read a radius over the default bar; these tests are about the
+/// search and the rules, and
+/// `the_self_similarity_gate_refuses_what_is_over_its_bar` covers the gate.
+fn gate_off() -> AddImageToTracksOptions {
+    let mut options = AddImageToTracksOptions::default();
+    options.localize.max_member_zncc_self_similarity_radius = 0.0;
+    options
+}
+
 fn fixed() -> AddImageToTracksOptions {
     AddImageToTracksOptions {
         rule: AcceptRule::FixedZncc,
         min_zncc: 0.9,
-        ..AddImageToTracksOptions::default()
+        ..gate_off()
     }
 }
 
@@ -245,6 +256,36 @@ fn run(
         &Progress::none(),
     )
     .unwrap()
+}
+
+#[test]
+fn the_default_self_similarity_gate_refuses_exactly_the_cores_over_its_bar() {
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let cap = capture(&points);
+    let (_, open) = run(&cap, &fixed());
+    let gated_options = AddImageToTracksOptions {
+        rule: AcceptRule::FixedZncc,
+        min_zncc: 0.9,
+        ..AddImageToTracksOptions::default()
+    };
+    let bar = gated_options
+        .localize
+        .max_member_zncc_self_similarity_radius;
+    assert_eq!(bar, 2.5);
+    let (_, gated) = run(&cap, &gated_options);
+    let mut refused = 0;
+    for (o, g) in open.candidates.iter().zip(&gated.candidates) {
+        assert!(o.zncc_self_similarity_radius.is_finite());
+        assert_eq!(o.zncc_self_similarity_radius, g.zncc_self_similarity_radius);
+        if o.zncc_self_similarity_radius > bar {
+            assert_eq!(g.refusal, Some(Refusal::Unlocalizable));
+            refused += 1;
+        } else {
+            assert_eq!(g.refusal, o.refusal);
+        }
+    }
+    assert!(refused > 0, "the scene has cores over the bar");
+    assert!(refused < points.len(), "and cores under it");
 }
 
 #[test]
@@ -321,7 +362,7 @@ fn a_two_observation_track_is_judged_by_the_pair_rule() {
                     factor: 0.95,
                 },
             },
-            ..AddImageToTracksOptions::default()
+            ..gate_off()
         },
     );
     let c = &report.candidates[0];

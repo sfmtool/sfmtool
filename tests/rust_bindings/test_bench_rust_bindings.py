@@ -298,7 +298,7 @@ class TestTheEditableTrack:
             "min_zncc": 0.7,
             "min_zncc_middle": 0.7,
             "max_shift_px": 6.0,
-            "max_zncc_self_similarity_radius": 2.0,
+            "max_zncc_self_similarity_radius": 2.5,
             "min_relative_zncc": 0.7,
         }
 

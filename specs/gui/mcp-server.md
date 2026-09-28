@@ -3244,7 +3244,7 @@ radius is read on the surface at `1 -` that value. Each is null where the tile
 could not be read. The
 `thresholds` block and `apply_bench_track_thresholds` carry the matching bars:
 `min_zncc_middle`, which is `0.7` on a new track, beside `min_zncc`'s `0.7`, and
-off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2` on a
+off at `0`; and `max_zncc_self_similarity_radius`, in patch-grid px and `2.5` on a
 new track, which judges `zncc_self_similarity_radius`: a row whose tile reads
 further is painted `out`, a row with no reading clears it, and at `3`, the
 largest radius read, it turns nothing out.

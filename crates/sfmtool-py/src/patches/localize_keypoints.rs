@@ -66,9 +66,9 @@ impl PyPatchCloud {
     ///         pixels away, so it is refused before it is scored and is never
     ///         restored by the two-view floor. A ``NaN`` radius fails. The
     ///         radius reads at most ``3``, so a bar of ``3`` or more turns
-    ///         nothing out. Default ``0``: the gate is off, since no bar under ``3``
-    ///         kept correct sightings as well as the older localizability gate
-    ///         did (``specs/core/patch/patch-keypoint-localization.md``).
+    ///         nothing out, and ``0`` disables the gate exactly. Default
+    ///         ``2.5`` (see ``specs/core/patch/patch-keypoint-localization.md``,
+    ///         "The member gate's default").
     ///     min_grazing_cos: Grazing cutoff; drop a view whose ray is near-parallel
     ///         to the patch plane (``|d·n|`` below this).
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
@@ -158,7 +158,7 @@ impl PyPatchCloud {
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
-        min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=0.0,
+        min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
