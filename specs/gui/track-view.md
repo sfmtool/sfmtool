@@ -48,7 +48,7 @@ from [metrics/](../../crates/sfm-explorer/src/metrics), at the crate root,
 because the Image Detail overlay and the MCP surface read the same ones.
 [edit/](../../crates/sfm-explorer/src/track_view/edit/) is edit mode: `mod.rs`
 the header, the toolbar and the boxes, `table.rs` the observation table and
-`tile.rs` the tile each row draws. The bench steps it reports are `AppState`
+`tile.rs` the tile each row draws and its hover view. The bench steps it reports are `AppState`
 methods in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock
 applies them in [dock.rs](../../crates/sfm-explorer/src/dock.rs).
 
@@ -146,7 +146,8 @@ if let Some(on) = response.set_edit.or(response.edit_selected_point.then_some(tr
 
 **Two bodies behind one tab, not one body.** The two modes' state is disjoint.
 View mode caches thumbnails and patch tiles per image of a committed point;
-edit mode caches tiles per observation of a bench track keyed on its `Arc`, and
+edit mode caches tiles and their hover views per observation of a bench
+track keyed on its `Arc`, and
 the box seeding, the painting and the commit refusal. Keeping each as the
 struct it is means neither cache learns about the other, and each body's
 headless tests read what that body drew. What the panel adds is the checkbox,
@@ -741,7 +742,7 @@ that is not there prints a bare `-`, with no unit.
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row | same |
-| Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp |
+| Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp; hovering it shows it in context, with the projection |
 | Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
@@ -873,6 +874,45 @@ tile is cut around it, so nothing has to be evaluated for a fresh row to show it
 patch. The photographs are the node's full-resolution cache, which the dock fills
 for the active track's images before edit mode draws; the rendered tiles are kept
 against the track's `Arc` and rebuilt when a step moves it.
+
+**Hovering a tile shows it in context.** The tooltip draws the same picture
+over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
+so a person can see what surrounds the patch and whether it sits on the surface
+they meant. The wider picture is rendered at the tile's own sampling, so the
+tile is its middle third texel for texel: at the track stage the tile's frame,
+re-anchored where the observation sits, is widened three times about its centre
+and warped at three times the tile's resolution; at the cluster stage the kernel's
+sampler reads the member grid over three times the cluster's radius at three
+times its resolution, which keeps the step between samples and the mip level it
+reads. Over the picture are drawn:
+
+- the patch's box, the part of the picture the row's tile shows;
+- a dot at its centre, where the observation sits;
+- at the track stage, a ring where the track's point projects into this
+  photograph, or, before the track is triangulated, where its patch's centre
+  projects: the other end of the distance the *Proj. err* cell reports. The
+  projected pixel is read onto the widened frame's plane
+  (`OrientedPatch::keypoint_plane_offset`, the reading that anchors the tile),
+  so the ring sits on the part of the photograph the picture shows at that
+  pixel;
+- a dashed line from the dot to the ring.
+
+The marks are egui shapes over the picture rather than pixels written into it,
+each a light stroke over a wider dark one so that it reads over bright and dark
+photographs alike, the ring in amber. They are clipped to the picture, so a
+projection outside it shows as the line leaving the edge towards it. A caption
+under the picture says what each mark is and how far the projection is, in the
+photograph's pixels, and that a cluster has no point to project. At the cluster
+stage there is no ring and no line.
+
+The wider picture is rendered the first time the pointer rests on a tile and
+kept per row beside the tiles, dropped with them when a step moves the track,
+since it goes stale exactly when the tile does. The tooltip's hover region
+takes no click, so a click or a double-click on the tile is still the row's.
+The picture itself is `tile::context`, a pure function of the track, the
+observation and the photograph, which returns the picture with the box, the
+keypoint and the projection in its own texels, so the tests check the geometry
+rather than the pixels on screen.
 
 **Each row is painted** by what the boxes propose for it: green for
 would-pass, red for would-not, the panel's faint background for a row nothing
@@ -1088,7 +1128,12 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   an elided name showing it whole, with the row still hovered; the painting
   matching what applying the bars produces and leaving a pinned verdict; the
   cells following the stage; every row's tile at both stages,
-  and a fresh row's cut around its seed; the boxes showing the track's
+  and a fresh row's cut around its seed; a tile's hover view at both stages
+  holding the tile texel for texel in its middle third with the keypoint at the
+  box's centre, its projection mark mapping back through the picture's own frame
+  onto the projected pixel at the row's reprojection error, no mark at the
+  cluster stage, and resting the pointer on a tile showing the view for that
+  row alone while the row keeps its hover and its click; the boxes showing the track's
   bars outside a drag, following them when a step, an undo or a redo moves them,
   and re-seating on another item; a drag of *shift px* pushing exactly one
   version and one row on its release, with the track's bar where it was let go

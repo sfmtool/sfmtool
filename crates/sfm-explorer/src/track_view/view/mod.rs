@@ -39,7 +39,7 @@ mod patch;
 mod prepare;
 mod table;
 
-pub(crate) use patch::patch_color_image;
+pub(crate) use patch::{frame_color_image, patch_color_image, PATCH_RES};
 
 #[cfg(test)]
 mod tests;

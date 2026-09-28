@@ -142,6 +142,12 @@ impl ColumnLayout {
         }
     }
 
+    /// The tile column's offset from the table's left edge.
+    #[cfg(test)]
+    pub(super) fn tile_x(&self) -> f32 {
+        self.tile
+    }
+
     /// The header's cells, each at the offset its column is drawn at, with the
     /// hover text that says what the column holds.
     pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 9] {
@@ -691,6 +697,25 @@ impl TrackEdit {
                 ui.painter()
                     .rect_filled(tile_rect, 2.0, ui.visuals().faint_bg_color);
             }
+        }
+        // Hovering the tile shows it in context: the same picture over a wider
+        // stretch of the photograph, with the patch boxed in it and the
+        // projection the *Proj. err* cell measures to. A hover sense takes no
+        // click, so a click on the tile is still the row's.
+        if tile.is_some() {
+            ui.interact(
+                tile_rect,
+                ui.id().with(("track_view_tile", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_ui(|ui| {
+                match self.ensure_context(ui.ctx(), recon, track, observation, state) {
+                    Some(drawn) => drawn.show(ui),
+                    None => {
+                        ui.label("Nothing around this patch could be rendered.");
+                    }
+                }
+            });
         }
 
         let painter = ui.painter();

@@ -2103,3 +2103,288 @@ fn hovering_a_name_shows_it_whole() {
         "{name:?} not in {texts:?}"
     );
 }
+
+/// The hover view of one observation's tile on the active track, beside the
+/// tile itself, both rendered from the node's cached photograph.
+fn tile_and_context(
+    state: &AppState,
+    id: ReconId,
+    label: &str,
+    observation: usize,
+) -> (egui::ColorImage, super::tile::TileContext) {
+    let track = state.bench_track(id, label).expect("on the bench").clone();
+    let row = &track.observations[observation];
+    let src = state
+        .full_res_cache
+        .get(&ImageRef::new(id, row.image as usize))
+        .and_then(|slot| slot.clone())
+        .expect("a cached photograph");
+    let recon = state.node(id).expect("loaded").recon();
+    let tile = super::tile::image(recon, &track, observation, &src).expect("a tile");
+    let context = super::tile::context(recon, &track, observation, &src).expect("a context");
+    (tile, context)
+}
+
+/// The largest difference in any channel between `tile` and the texels of
+/// `context`'s picture inside its patch box, which must be the tile's size.
+fn largest_difference_in_box(tile: &egui::ColorImage, context: &super::tile::TileContext) -> u8 {
+    let [w, h] = tile.size;
+    let min = context.patch_box.min;
+    assert_eq!(
+        (context.patch_box.width(), context.patch_box.height()),
+        (w as f32, h as f32),
+        "the patch box is not the tile's size in texels"
+    );
+    let side = context.image.size[0];
+    let mut worst = 0u8;
+    for y in 0..h {
+        for x in 0..w {
+            let a = tile.pixels[y * w + x].to_array();
+            let (cx, cy) = (min.x as usize + x, min.y as usize + y);
+            let b = context.image.pixels[cy * side + cx].to_array();
+            for c in 0..3 {
+                worst = worst.max(a[c].abs_diff(b[c]));
+            }
+        }
+    }
+    worst
+}
+
+/// A tile's hover view is the same picture over three times the patch's
+/// width, at the tile's own sampling, at either stage: the picture is three
+/// tiles across, the patch box is its middle third, the keypoint sits at the
+/// box's centre, and the texels inside the box are the tile's.
+#[test]
+fn a_tile_s_hover_view_holds_the_tile_in_its_middle_at_either_stage() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let k = super::tile::CONTEXT_FACTOR as f32;
+    let check = |state: &AppState, stage: &str| {
+        let observations = state
+            .bench_track(id, &label)
+            .expect("on the bench")
+            .observations
+            .len();
+        for observation in 0..observations {
+            let (tile, context) = tile_and_context(state, id, &label, observation);
+            let side = context.image.size[0] as f32;
+            assert_eq!(
+                context.image.size,
+                [tile.size[0] * 3, tile.size[1] * 3],
+                "{stage}: the picture is not three tiles across"
+            );
+            assert_eq!(
+                context.patch_box,
+                egui::Rect::from_min_size(
+                    egui::pos2(side / k, side / k),
+                    egui::vec2(side / k, side / k)
+                ),
+                "{stage}: the patch box is not the middle third"
+            );
+            let keypoint = context.keypoint.expect("the keypoint meets the patch");
+            assert!(
+                keypoint.distance(context.patch_box.center()) < 1e-3,
+                "{stage}: the keypoint {keypoint:?} is not the box's centre"
+            );
+            // The same sample positions, computed along a different sum, so a
+            // bilinear read may round one level apart.
+            let worst = largest_difference_in_box(&tile, &context);
+            assert!(
+                worst <= 2,
+                "{stage}: observation {observation}'s box differs from its tile by {worst}"
+            );
+        }
+    };
+    check(&state, "track stage");
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    check(&state, "cluster stage");
+}
+
+/// At the track stage the hover view marks where the track's point projects,
+/// and it is placed consistently with the row's reprojection error: the
+/// distance it states is the row's error, and its distance from the keypoint in
+/// the picture, turned into the photograph's pixels by the patch's own width in
+/// both, is that error too. A row sitting on its projection has the mark on
+/// the keypoint.
+#[test]
+fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
+    use sfmtool_core::bench::Stage;
+
+    let (mut state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track put on from a point is at the track stage");
+    };
+    let frame = payload.placement.clone().expect("a patch");
+    let position = payload.position.expect("a triangulated point");
+
+    // A sighting of the point in a fourth image, placed a few pixels off
+    // where the point projects.
+    let image = 3;
+    let recon = state.node(id).expect("loaded").recon();
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
+    let projected = crate::bench::geometry::project(&camera, &pose, position.coords, frame.w)
+        .expect("the demo cameras see every point");
+    let off = [4.0, -3.0];
+    state
+        .add_bench_observation(
+            &label,
+            ImageRef::new(id, image),
+            &crate::bench::Seed::Pixel {
+                pixel: [projected[0] + off[0], projected[1] + off[1]],
+                radius_px: None,
+            },
+        )
+        .expect("a pixel on the sensor");
+    state.settle_bench_evaluation();
+
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let added = track.observations.len() - 1;
+    let error = track.observations[added]
+        .track
+        .as_ref()
+        .and_then(|m| m.reprojection_error)
+        .expect("the evaluation measured the new row's error");
+    assert!(
+        (error - 5.0).abs() < 0.05,
+        "the row's error is {error}, not 5 px"
+    );
+
+    let (_, context) = tile_and_context(&state, id, &label, added);
+    assert_eq!(
+        context.projection_of,
+        Some(super::tile::ProjectionOf::Point)
+    );
+    let stated = context.projection_px.expect("a projection distance");
+    assert!(
+        (stated - error).abs() < 1e-6,
+        "the hover view states {stated} px, the row {error} px"
+    );
+    let keypoint = context.keypoint.expect("a keypoint");
+    let mark = context.projection.expect("a projection mark");
+    // The picture's own map back into the photograph: the widened frame the
+    // picture was rendered through, a texel read as `(s, t)` on it, and that
+    // place on the plane projected. The patch is seen at a slant here, so a
+    // single pixels-per-texel scale would not do; the map is what scales an
+    // offset in the picture into the photograph's pixels.
+    let keypoint_px = [projected[0] + off[0], projected[1] + off[1]];
+    let mut wide = frame
+        .anchored_at_keypoint(&camera, &pose, keypoint_px)
+        .expect("the keypoint meets the patch");
+    wide.half_extent = wide
+        .half_extent
+        .map(|h| h * f64::from(super::tile::CONTEXT_FACTOR));
+    let side = f64::from(context.image.size[0] as u32);
+    let to_photograph = |at: egui::Pos2| {
+        let s = 2.0 * f64::from(at.x) / side - 1.0;
+        let t = 1.0 - 2.0 * f64::from(at.y) / side;
+        let (xyz, w) = wide.corner_homogeneous(s, t);
+        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("on the plane")
+    };
+    let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    assert!(
+        distance(to_photograph(keypoint), keypoint_px) < 0.01,
+        "the keypoint in the picture is not the observation's pixel"
+    );
+    assert!(
+        distance(to_photograph(mark), projected) < 0.01,
+        "the mark is not where the point projects"
+    );
+    let measured = distance(to_photograph(keypoint), to_photograph(mark));
+    assert!(
+        (measured - error).abs() < 0.01,
+        "the mark sits {measured} px from the keypoint in the photograph's pixels, \
+         the row says {error}"
+    );
+    // And it is a visible distance in the picture, not a rounding.
+    assert!(
+        keypoint.distance(mark) > 1.0,
+        "a 5 px error drew the mark {} texels off",
+        keypoint.distance(mark)
+    );
+
+    // A row the fixture put at its exact projection has the mark on the dot.
+    let (_, context) = tile_and_context(&state, id, &label, 0);
+    let keypoint = context.keypoint.expect("a keypoint");
+    let mark = context.projection.expect("a projection mark");
+    assert!(
+        keypoint.distance(mark) < 0.05,
+        "a row on its projection has the mark {mark:?} off the keypoint {keypoint:?}"
+    );
+    assert!(context.projection_px.expect("a distance") < 0.01);
+}
+
+/// At the cluster stage there is no point, and the table's projection error
+/// column is empty, so the hover view draws the picture, the box and the
+/// keypoint with no projection mark, and its caption says why.
+#[test]
+fn a_cluster_stage_hover_view_has_no_projection() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    let (_, context) = tile_and_context(&state, id, &label, 0);
+    assert_eq!(context.projection, None);
+    assert_eq!(context.projection_px, None);
+    assert_eq!(context.projection_of, None);
+    let caption = super::tile::context_caption(&context);
+    assert!(
+        caption.contains("no point to project"),
+        "the caption does not say why there is no mark: {caption}"
+    );
+}
+
+/// Resting the pointer on a row's tile shows the hover view, rendered for that
+/// row alone, while the row keeps its hover; and a click on the tile is still
+/// the row's click.
+#[test]
+fn hovering_a_tile_shows_it_in_context_and_keeps_the_row() {
+    let (state, _, _, mut panel, ctx) = on_the_bench();
+    // A tooltip waits out `tooltip_delay` before it shows, which a headless
+    // frame has no wall clock to pass.
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    // Inside the tile: the tile column's left edge plus half a tile, and far
+    // enough below the top of the row to be within the tile's height.
+    let x = super::table::ColumnLayout::new().tile_x() + super::table::TILE_SIZE / 2.0;
+    let at = egui::pos2(x + 8.0, y + 20.0);
+    let response = at_pointer(&mut panel, &ctx, &state, at, false);
+    assert_eq!(response.hovered_image, Some(1), "the row lost its hover");
+    // egui shows a tooltip once the pointer has come to rest, so a few frames
+    // with no movement in them.
+    for _ in 0..12 {
+        run_frame(&mut panel, &ctx, &state);
+    }
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(
+        texts.iter().any(|t| t.starts_with("The patch, boxed")),
+        "no hover view caption in {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("where the track's point projects")),
+        "the caption does not name the projection: {texts:?}"
+    );
+    let rendered: Vec<usize> = panel.contexts.keys().copied().collect();
+    assert_eq!(
+        rendered,
+        vec![1],
+        "hover views rendered for rows not hovered"
+    );
+
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert_eq!(
+        response.pick_row,
+        Some((1, false)),
+        "a click on the tile did not pick the row"
+    );
+}

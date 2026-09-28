@@ -27,7 +27,7 @@ use crate::scene::ImageRef;
 
 /// Render resolution of per-observation patch tiles (rendered crisp at this
 /// resolution, displayed scaled to [`super::PATCH_TILE`]).
-const PATCH_RES: u32 = 64;
+pub(crate) const PATCH_RES: u32 = 64;
 
 impl PointTrackView {
     /// Render the patch tile for one observation if not already cached: warp
@@ -141,7 +141,24 @@ pub(crate) fn patch_color_image(
     src: &ImageU8,
 ) -> egui::ColorImage {
     let frame = render_frame(frame, camera, cam_from_world, keypoint);
-    let map = WarpMap::from_patch(&frame, camera, cam_from_world, PATCH_RES);
+    frame_color_image(&frame, camera, cam_from_world, src, PATCH_RES)
+}
+
+/// `frame` warped out of `src` at `resolution` texels a side, as an RGBA
+/// image: the body of [`patch_color_image`] for a frame that is already where
+/// it should be.
+///
+/// Separate so that a wider frame can be rendered at the same sampling as the
+/// tile -- a frame `k` times as wide at `k` times the resolution -- which is
+/// what the bench's tile shows in its hover view.
+pub(crate) fn frame_color_image(
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    src: &ImageU8,
+    resolution: u32,
+) -> egui::ColorImage {
+    let map = WarpMap::from_patch(frame, camera, cam_from_world, resolution);
     let tile = remap_bilinear(src, &map);
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);

@@ -18,8 +18,8 @@
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
 //! the panel owns is the threshold boxes' values during a drag, the *Lock* box Image Detail reads a
-//! dot drag by, the tiles it has rendered, and the painting the boxes
-//! produce. The last two are cached against the
+//! dot drag by, the tiles it has rendered and their hover views, and the
+//! painting the boxes produce. The last two are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the painting is
 //! `apply_thresholds` run over a copy (and a copy of a track carries its
 //! consensus bitmap) and a tile is a warp of a full-resolution photograph.
@@ -164,6 +164,11 @@ pub struct TrackEdit {
     /// from: the label, and the address of the track's `Arc`. Any step on the
     /// track gives it a new `Arc`, and every step that moves a tile is one.
     tiles_for: Option<(String, usize)>,
+    /// The hover view of each row's tile, by observation index: rendered the
+    /// first time the pointer rests on that tile, and kept and dropped with
+    /// [`TrackEdit::tiles`], since it is the same picture made wider and goes
+    /// stale exactly when the tile does. `None` is cached as the tile's is.
+    contexts: HashMap<usize, Option<tile::DrawnContext>>,
     /// The self-similarity surface plot of each observation, by observation
     /// index, with the surface and tolerance it was drawn from. Checked
     /// against the row's own reading every frame and redrawn when that
@@ -222,6 +227,7 @@ impl TrackEdit {
             renaming: None,
             tiles: HashMap::new(),
             tiles_for: None,
+            contexts: HashMap::new(),
             plots: HashMap::new(),
             rows: Vec::new(),
             build_refusal: None,
@@ -264,6 +270,7 @@ impl TrackEdit {
     pub fn forget_recon(&mut self, id: ReconId) {
         self.tiles.clear();
         self.tiles_for = None;
+        self.contexts.clear();
         if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
             self.showing = None;
         }
@@ -659,6 +666,40 @@ impl TrackEdit {
         texture_id
     }
 
+    /// The hover view of one row's tile, rendering it if this is the first
+    /// frame that has asked for it since the track moved.
+    ///
+    /// Asked for only while the pointer rests on the tile, so a table of many
+    /// rows renders the wider picture for the rows a person looks at and no
+    /// others.
+    fn ensure_context(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+    ) -> Option<&tile::DrawnContext> {
+        if !self.contexts.contains_key(&observation) {
+            let id = self.showing.as_ref().map(|(id, _)| *id)?;
+            let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
+            let drawn = state
+                .full_res_cache
+                .get(&image)
+                .and_then(|slot| slot.as_ref())
+                .and_then(|src| tile::context(recon, track, observation, src))
+                .map(|context| {
+                    tile::DrawnContext::new(
+                        ctx,
+                        context,
+                        format!("bench_tile_context_{}_{observation}", image.index()),
+                    )
+                });
+            self.contexts.insert(observation, drawn);
+        }
+        self.contexts.get(&observation).and_then(Option::as_ref)
+    }
+
     /// The self-similarity surface plot of `observation` for `surface` read
     /// at `tolerance`, drawing it if the row's reading has changed since it
     /// was last drawn, or `None` when the reading has nothing to draw.
@@ -700,6 +741,7 @@ impl TrackEdit {
             return;
         }
         self.tiles.clear();
+        self.contexts.clear();
         self.tiles_for = Some(key);
     }
 }
