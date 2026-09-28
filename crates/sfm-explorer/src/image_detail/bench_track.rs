@@ -18,7 +18,7 @@
 //!   distorting lens really maps that square to. Beside it, each observation's
 //!   keypoint and, for **every** observation and in that observation's own
 //!   verdict colour, the segment from the keypoint to the patch's own
-//!   projection, which is the projection offset the *Proj. off* column
+//!   projection, which is the reprojection error the *Proj. err (px / deg)* column
 //!   reports. Where a sighting sits on the projection the segment has no
 //!   length and is not seen, which is the answer as much as a long one is.
 //!   Out of the outline's centre stands the patch's **normal**, the 3D

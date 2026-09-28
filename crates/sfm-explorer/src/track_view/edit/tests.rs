@@ -428,7 +428,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     // stage the last three
     // and the projection offset have numbers behind them; at the cluster stage
     // there is no geometry behind an observation and they are absent.
-    assert_eq!(panel.rows()[0].cells[5], "-", "nothing has measured it yet");
+    assert_eq!(panel.rows()[0].cells[2], "-", "nothing has measured it yet");
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
@@ -445,8 +445,6 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     assert!(whole.parse::<f64>().is_ok(), "{whole}");
     assert!(middle.parse::<f64>().is_ok(), "{middle}");
     assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
-    assert_eq!(rows[0].cells[5], "-", "a cluster has no reprojection error");
-    assert_eq!(rows[0].cells[6], "-", "a cluster has no ray angle");
     // Beside the ZNCC and the sigma_pos cells, the row draws their grids.
     assert!(rows[0].grids.zncc.is_some(), "no ZNCC grid drawn");
     assert!(
@@ -496,7 +494,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
-    let status = rows.last().expect("the row just added").cells[7].clone();
+    let status = rows.last().expect("the row just added").cells[5].clone();
     assert!(
         status.contains("beyond the 64 px bound"),
         "the cell names the bound the seed passed: {status}"
@@ -556,7 +554,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[7] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[5] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -568,7 +566,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[7] != super::EVALUATING_LABEL),
+            .all(|row| row.cells[5] != super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -582,7 +580,7 @@ fn the_rows_read_evaluating_until_the_evaluation_of_the_current_inputs_lands() {
         panel
             .rows()
             .iter()
-            .all(|row| row.cells[7] == super::EVALUATING_LABEL),
+            .all(|row| row.cells[5] == super::EVALUATING_LABEL),
         "{:?}",
         panel.rows()
     );
@@ -1526,14 +1524,14 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     };
     let current = crate::bench::live::Evaluation::Current;
     let cells = super::measurements(&walked, StageKind::Track, &current);
-    assert_eq!(cells[7], "walked 19 px, kept at seed");
+    assert_eq!(cells[5], "walked 19 px, kept at seed");
     // With the ZNCC the fit scored at the walked peak, where it scored one.
     let mut scored = walked.clone();
     let slot = scored.track.as_mut().expect("a track slot");
     slot.walked_zncc = Some(0.873);
     slot.walked_zncc_middle = Some(0.412);
     assert_eq!(
-        super::measurements(&scored, StageKind::Track, &current)[7],
+        super::measurements(&scored, StageKind::Track, &current)[5],
         "walked 19 px (ZNCC 87% / 41% there), kept at seed"
     );
 
@@ -1541,7 +1539,7 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
     let mut moved = walked.clone();
     moved.track.as_mut().expect("a track slot").walked_px = None;
     assert_eq!(
-        super::measurements(&moved, StageKind::Track, &current)[7],
+        super::measurements(&moved, StageKind::Track, &current)[5],
         "localized"
     );
 }
@@ -1849,7 +1847,7 @@ fn the_localizability_headings_say_which_score_is_deprecated() {
     let headings = super::table::ColumnLayout::new().headers();
     assert!(headings
         .iter()
-        .any(|&(_, heading, _)| heading == "Self-sim."));
+        .any(|&(_, heading, _)| heading == "Self-sim (px)"));
     assert!(super::table::SIGMA_POS_TIP.contains("deprecated"));
     let tip = super::table::SELF_SIMILARITY_TIP;
     assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
@@ -1959,4 +1957,46 @@ fn a_ridge_s_contour_runs_to_the_edge_of_the_disk() {
     let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");
     assert!(plot.inside.contains(&[3, 0]) && plot.inside.contains(&[-3, 0]));
     assert!(!plot.inside.iter().any(|&[_, dy]| dy != 0));
+}
+
+/// The projection error cell prints the error in pixels and then as an angle
+/// in degrees, and says `-` for either that is not there.
+#[test]
+fn the_projection_error_cell_shows_pixels_and_degrees() {
+    use super::projection_error_text;
+    assert_eq!(
+        projection_error_text(Some(0.654), Some(0.081)),
+        "0.65 / 0.08"
+    );
+    assert_eq!(projection_error_text(Some(1.5), None), "1.50 / -");
+    assert_eq!(projection_error_text(None, None), "-");
+
+    // Before the track is triangulated there is no point, so the error is
+    // measured to the patch's centre.
+    use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
+    let current = crate::bench::live::Evaluation::Current;
+    let mut row = Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            projection_offset_px: Some(2.25),
+            ..TrackMeasurement::default()
+        }),
+    };
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[2],
+        "2.25 / -"
+    );
+    // Once there is a point, the error to it, with its angle.
+    let slot = row.track.as_mut().expect("a track slot");
+    slot.reprojection_error = Some(0.5);
+    slot.ray_angle_deg = Some(0.07);
+    assert_eq!(
+        super::measurements(&row, StageKind::Track, &current)[2],
+        "0.50 / 0.07"
+    );
 }

@@ -542,7 +542,7 @@ differs by stage:
   own keypoint as a filled dot and, for **every** observation whatever its
   verdict, in that observation's own colour, the segment from that dot to the
   patch's own projection with a hollow circle at the projection: the gap is
-  the *Proj. off* column, drawn. Where the two coincide the segment has no
+  the *Proj. err (px / deg)* column's first number, drawn. Where the two coincide the segment has no
   length and is not seen, which needs no special casing and is the answer as
   much as a long segment is. It is drawn for a judged observation as well as a
   proposed one because where this image's feature sits relative to the

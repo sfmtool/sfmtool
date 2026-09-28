@@ -1195,25 +1195,46 @@ fn measurements(
     observation: &Observation,
     stage: StageKind,
     evaluation: &Evaluation,
-) -> [String; 8] {
+) -> [String; 6] {
     match evaluation {
         Evaluation::Current => measured(observation, stage),
         Evaluation::Evaluating => {
             let mut cells = measured(observation, stage);
-            cells[7] = EVALUATING_LABEL.to_string();
+            cells[5] = EVALUATING_LABEL.to_string();
             cells
         }
         Evaluation::Refused(_) | Evaluation::Failed(_) => {
-            let mut cells: [String; 8] = Default::default();
-            cells[..7].fill("-".to_string());
-            cells[7] = NOT_EVALUATED.to_string();
+            let mut cells: [String; 6] = Default::default();
+            cells[..5].fill("-".to_string());
+            cells[5] = NOT_EVALUATED.to_string();
             cells
         }
     }
 }
 
+/// A reprojection error as its table cell prints it: in pixels, then as an
+/// angle in degrees, each to two decimals (`0.65 / 0.08`). `-` stands for a
+/// reading that is not there, as [`zncc_text`] has it.
+fn projection_error_text(px: Option<f64>, deg: Option<f64>) -> String {
+    let number = |value: f64| {
+        if value.is_finite() {
+            format!("{value:.2}")
+        } else {
+            "NaN".to_string()
+        }
+    };
+    match (px, deg) {
+        (None, None) => "-".to_string(),
+        (px, deg) => format!(
+            "{} / {}",
+            px.map_or_else(|| "-".to_string(), number),
+            deg.map_or_else(|| "-".to_string(), number)
+        ),
+    }
+}
+
 /// The cells of [`measurements`] for the numbers the track carries.
-fn measured(observation: &Observation, stage: StageKind) -> [String; 8] {
+fn measured(observation: &Observation, stage: StageKind) -> [String; 6] {
     let number = |value: Option<f64>, digits: usize| match value {
         Some(v) if v.is_finite() => format!("{v:.digits$}"),
         Some(_) => "NaN".to_string(),
@@ -1234,8 +1255,6 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 8] {
                     m.and_then(|m| m.zncc_self_similarity_radius),
                     m.and_then(|m| m.zncc_self_similarity_radius_middle),
                 ),
-                "-".to_string(),
-                "-".to_string(),
                 m.and_then(|m| m.status)
                     .map_or_else(|| "not evaluated".to_string(), |s| format!("{s:?}")),
             ]
@@ -1245,7 +1264,15 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 8] {
             [
                 zncc_text(m.and_then(|m| m.zncc), m.and_then(|m| m.zncc_middle)),
                 number(m.and_then(|m| m.seed_shift_px), 2),
-                number(m.and_then(|m| m.projection_offset_px), 2),
+                // One column for the reprojection error: in px to the
+                // triangulated point, or before there is one to the patch's
+                // centre, which is kept on the point once it exists, so the
+                // two are one number wherever both are measured; then the same
+                // residual in degrees.
+                projection_error_text(
+                    m.and_then(|m| m.reprojection_error.or(m.projection_offset_px)),
+                    m.and_then(|m| m.ray_angle_deg),
+                ),
                 sigma_text(
                     m.and_then(|m| m.localizability_deprecated),
                     m.and_then(|m| m.localizability_middle_deprecated),
@@ -1254,8 +1281,6 @@ fn measured(observation: &Observation, stage: StageKind) -> [String; 8] {
                     m.and_then(|m| m.zncc_self_similarity_radius),
                     m.and_then(|m| m.zncc_self_similarity_radius_middle),
                 ),
-                number(m.and_then(|m| m.reprojection_error), 2),
-                number(m.and_then(|m| m.ray_angle_deg), 2),
                 // A row without a score says which of the reading's refusals it
                 // was, in the evaluation's own sentence. An evaluation drops
                 // nothing, so "no ZNCC" always has one of those answers behind

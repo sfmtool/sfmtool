@@ -61,8 +61,8 @@ pub(crate) struct RowSummary {
     pub pinned: bool,
     /// What the thresholds propose for it, which is what the row is painted by.
     pub painted: Verdict,
-    /// The eight measurement cells, as printed.
-    pub cells: [String; 8],
+    /// The six measurement cells, as printed.
+    pub cells: [String; 6],
     /// The three grids drawn beside the ZNCC, the sigma_pos and the
     /// self-similarity cells.
     pub grids: RowGrids,
@@ -88,8 +88,6 @@ pub(super) struct ColumnLayout {
     self_similarity: f32,
     self_similarity_grid: f32,
     self_similarity_plot: f32,
-    error: f32,
-    angle: f32,
     status: f32,
     from: f32,
 }
@@ -106,7 +104,9 @@ impl ColumnLayout {
         let zncc_grid = zncc + 64.0;
         let shift = zncc_grid + GRID_SIDE + 10.0;
         let offset = shift + 62.0;
-        let sigma = offset + 62.0;
+        // Room for the error in px and in degrees, `12.65 / 0.08`, and for the
+        // `Proj. err (px / deg)` heading.
+        let sigma = offset + 110.0;
         // Room for the whole and the middle sigma_pos, `0.08 / 0.12`, then
         // the localizability grid.
         let sigma_grid = sigma + 76.0;
@@ -116,9 +116,7 @@ impl ColumnLayout {
         let self_similarity_grid = self_similarity + 76.0;
         // Then the core's surface plot.
         let self_similarity_plot = self_similarity_grid + GRID_SIDE + 8.0;
-        let error = self_similarity_plot + PLOT_SIDE + 10.0;
-        let angle = error + 54.0;
-        let status = angle + 54.0;
+        let status = self_similarity_plot + PLOT_SIDE + 10.0;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
@@ -137,8 +135,6 @@ impl ColumnLayout {
             self_similarity,
             self_similarity_grid,
             self_similarity_plot,
-            error,
-            angle,
             status,
             from,
         }
@@ -146,7 +142,7 @@ impl ColumnLayout {
 
     /// The header's cells, each at the offset its column is drawn at, with the
     /// hover text that says what the column holds.
-    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 12] {
+    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 10] {
         [
             (self.verdict, "Verdict", VERDICT_TIP),
             (
@@ -157,11 +153,9 @@ impl ColumnLayout {
             (self.name, "Name", "The image's file name."),
             (self.zncc, "ZNCC (%)", ZNCC_TIP),
             (self.shift, "Seed sh.", SEED_SHIFT_TIP),
-            (self.offset, "Proj. off", PROJECTION_OFFSET_TIP),
+            (self.offset, "Proj. err (px / deg)", PROJECTION_ERROR_TIP),
             (self.sigma, "\u{3c3}_pos", SIGMA_POS_TIP),
-            (self.self_similarity, "Self-sim.", SELF_SIMILARITY_TIP),
-            (self.error, "Error", ERROR_TIP),
-            (self.angle, "Angle", ANGLE_TIP),
+            (self.self_similarity, "Self-sim (px)", SELF_SIMILARITY_TIP),
             (self.status, "Status", STATUS_TIP),
             (self.from, "From", FROM_TIP),
         ]
@@ -190,9 +184,17 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
 const SEED_SHIFT_TIP: &str = "How far the correlation peak sits from where the observation \
     sits, in source-image pixels: the observation's own evidence. The max shift px bar judges it.";
 
-const PROJECTION_OFFSET_TIP: &str = "How far the observation sits from where the track's \
-    point projects into this image, in pixels. Large offsets on every row beside small seed \
-    shifts say the point is off, not the sightings. Track stage only.";
+/// The projection error heading's hover text.
+pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels and then \
+    in degrees.\n\n\
+    The first number is how far the observation sits from where the track's point projects \
+    into this image, in pixels. Before the track is triangulated it is measured to where its \
+    patch's centre projects, which is the same place once it is.\n\n\
+    The second is the same residual as an angle: between the observation's ray and the \
+    direction from its camera to the point, in degrees. It is comparable across lenses and \
+    depths, where a pixel is not.\n\n\
+    Large errors on every row beside small seed shifts say the point is off, not the \
+    sightings. Track stage only.";
 
 /// The sigma_pos heading's hover text.
 pub(super) const SIGMA_POS_TIP: &str = "The deprecated localizability score, shown while it is \
@@ -210,9 +212,9 @@ pub(super) const SIGMA_POS_TIP: &str = "The deprecated localizability score, sho
 
 /// The self-similarity heading's hover text.
 pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: how far, in \
-    patch-grid pixels, this observation's own tile can slide over itself by whole pixels and \
-    still match itself as well as a true match between two photographs would: where its \
-    ZNCC against itself, interpolated between whole-pixel shifts, falls through that level. \
+    patch-grid pixels, this observation's own tile can slide over itself and still match \
+    itself as well as a true match between two photographs would: where its ZNCC against \
+    itself, interpolated between whole-pixel shifts, falls through that level. \
     Under 1 means a match locks onto this position within a pixel, as on a corner or a busy \
     texture. 3+ means it still matched itself 3 pixels away and may slide further, as along a \
     straight edge or over a flat patch.\n\n\
@@ -221,13 +223,6 @@ pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: h
     green under 1, yellow from 1 to 2, orange from 2 to 3, red at 3 or more. A line in a box is \
     the direction that ninth can slide in, where its matching shifts line up along one. Hover \
     the grid for the numbers.";
-
-const ERROR_TIP: &str = "The reprojection error against the triangulated position, in \
-    pixels. Track stage only.";
-
-const ANGLE_TIP: &str = "The reprojection error as an angle, in degrees: between the \
-    observation's ray and the direction from its camera to the point. Comparable across lenses \
-    and depths. Track stage only.";
 
 const STATUS_TIP: &str = "What the last evaluation or fit said about the row. At the \
     cluster stage, the refinement's verdict on the member. At the track stage, localized, a \
@@ -591,8 +586,6 @@ impl TrackEdit {
             cols.offset,
             cols.sigma,
             cols.self_similarity,
-            cols.error,
-            cols.angle,
         ]
         .into_iter()
         .zip(cells.iter())
@@ -601,7 +594,7 @@ impl TrackEdit {
         }
         // The status cell is a sentence rather than a number at the track
         // stage, so it is elided to its column the way the image name is.
-        let status = crate::elide::middle(&cells[7], cols.from - cols.status - 8.0, |value| {
+        let status = crate::elide::middle(&cells[5], cols.from - cols.status - 8.0, |value| {
             ui.ctx().fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(value.to_owned(), font.clone(), text_color)

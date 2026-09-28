@@ -1432,7 +1432,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
 
 /// The projection offset is drawn for **every** observation, whatever its
 /// verdict, in that observation's own colour: it runs from the sighting's
-/// keypoint to where the patch projects, which is the number the `Proj. off`
+/// keypoint to where the patch projects, which is the number the `Proj. err (px / deg)`
 /// column carries.
 #[test]
 fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {

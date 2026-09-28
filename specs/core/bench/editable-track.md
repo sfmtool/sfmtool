@@ -890,7 +890,8 @@ the one thing a person looking at the photographs can check -- the rms distance,
 in px, from each sighting to where the candidate projects in its own image,
 which is
 [`observation_metrics`](../../../crates/sfmtool-core/src/bench/evaluate.rs)'
-own first number and so the same residual the *Error* column shows -- and:
+own first number and so the same residual the *Proj. err (px / deg)* column's first
+number shows -- and:
 
 - a **finite** answer stands only where the point's residual comes under
   `residual_margin` of the bearing's **and** under it by more than

@@ -712,8 +712,10 @@ number is over the whole patch and the second over its middle half, what the
 two apart mean, and how the grid beside them is coloured. The *σ_pos* heading's
 says it is the deprecated score, shown while it is compared with the
 self-similarity radius, and then the same of its two numbers and its grid. The
-*Self-sim.* heading's says what the radius is and what its two numbers, its
-colours and its lines mean.
+*Self-sim (px)* heading's says what the radius is and what its two numbers,
+its colours and its lines mean. The *Proj. err (px)* heading's says what the
+error is measured to before and after the track is triangulated, and that the
+second number is the same residual as an angle.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
@@ -722,10 +724,9 @@ colours and its lines mean.
 | Img, Name | as view mode | as view mode |
 | ZNCC (%) | against the reference template, then the middle ZNCC: `92 / 61`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *search px* of the observation, then the middle ZNCC: `92 / 61`, then the ZNCC grid |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
-| Proj. off | absent | how far the keypoint sits from the point's projection, px |
+| Proj. err (px / deg) | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, in px, then the same residual as the ray angle in degrees, comparable across lenses and depths: `0.65 / 0.08` |
 | σ_pos | the tile's deprecated localizability, then its middle square's: `0.08 / 0.12`, then the localizability grid | the same |
-| Self-sim. | the tile's ZNCC self-similarity radius, then its middle square's: `0.4 / 1.4`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
-| Error, Angle | absent | the reprojection error and the ray angle |
+| Self-sim (px) | the tile's ZNCC self-similarity radius, then its middle square's: `0.4 / 1.4`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
 | Status | the kernel's `member_status` | `walked 19 px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
@@ -824,10 +825,19 @@ the toolbar says why.
 
 **The two distances are two columns because they are two questions.** *Seed sh.*
 is the sighting's own evidence, where the correlation would rather sit, and is
-what the `max shift px` bar paints on. *Proj. off* is a statement about the
-point: a mis-triangulated track shows a column of large offsets beside a column
-of near-zero shifts, the picture that says the position is wrong and the
+what the `max shift px` bar paints on. *Proj. err (px / deg)* is a statement about
+the point: a mis-triangulated track shows a column of large errors beside a
+column of near-zero shifts, the picture that says the position is wrong and the
 sightings are not.
+
+**One column holds the reprojection error.** The measurement carries it twice:
+`projection_offset_px`, to where the patch's centre projects, and
+`reprojection_error`, to where the triangulated point projects. The patch's
+centre is kept on the point once there is one, so wherever both are measured
+they are one number, and the column shows the error to the point, or to the
+patch's centre before the track is triangulated. Both fields stay on the wire
+and in the Python dicts. The same residual as an angle, `ray_angle_deg`, is the
+cell's second number, so the error reads in pixels and in degrees together.
 
 **The Status cell names the refusal.** An evaluation drops nothing, so a row without
 a ZNCC has one of core's `Unmeasured` reasons behind it, and the cell prints that
