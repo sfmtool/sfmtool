@@ -2024,7 +2024,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         assert!((0.0..=3.0).contains(&radius), "{track}");
     }
     // The core's ZNCC against itself, seven rows of seven, 1 at the centre
-    // and null outside the disk.
+    // and a number in the corners outside the disk.
     let surface = cluster["zncc_self_similarity_surface"]
         .as_array()
         .unwrap_or_else(|| panic!("no cluster zncc_self_similarity_surface on the wire: {track}"));
@@ -2032,7 +2032,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     assert!(surface
         .iter()
         .all(|row| row.as_array().is_some_and(|row| row.len() == 7)));
-    assert!(surface[0][0].is_null(), "{track}");
+    assert!(surface[0][0].is_number(), "{track}");
     assert!(
         surface[3][3] == json!(1.0) || surface[3][3].is_null(),
         "{track}"

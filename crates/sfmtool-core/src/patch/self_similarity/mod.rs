@@ -88,9 +88,11 @@ pub struct SelfSimilarity {
     /// template with no textured channel, where every shift counts.
     pub tolerance: f64,
     /// The channel-averaged ZNCC `z(d)` for every shift of the `(2r + 1)²`
-    /// square, row-major from `(dx, dy) = (−r, −r)`: `z(0, 0) = 1`, and `NaN`
-    /// for the shifts outside the disk. Every value is `NaN` for a template
-    /// with no textured channel.
+    /// square, row-major from `(dx, dy) = (−r, −r)`, `z(0, 0) = 1`. The
+    /// ringed reading covers the square's corners outside the disk too, which
+    /// the radius and slide leave out, so a display can interpolate to the
+    /// disk's edge; the overlap reading leaves them `NaN`. Every value is `NaN`
+    /// for a template with no textured channel.
     pub surface: Vec<f64>,
 }
 
@@ -482,9 +484,6 @@ impl Prepared {
         for dy in -ri..=ri {
             for dx in -ri..=ri {
                 let d2 = dx * dx + dy * dy;
-                if d2 > ri * ri {
-                    continue;
-                }
                 let index = ((dy + ri) as usize) * side + (dx + ri) as usize;
                 if d2 == 0 {
                     surface[index] = 1.0;

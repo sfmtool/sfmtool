@@ -295,8 +295,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           near 1 long along an edge and near 0 where they spread evenly or there \
                           are none. zncc_self_similarity_surface is the core's ZNCC against \
                           itself at every shift of the 7 x 7 square, seven rows of seven from \
-                          (dx, dy) = (-3, -3), 1 at the centre and null outside the disk of \
-                          radius 3 or where the core is flat, and \
+                          (dx, dy) = (-3, -3), 1 at the centre and null where the core is flat, \
+                          and \
                           zncc_self_similarity_tolerance the ZNCC deficit the core was judged \
                           by, so the radius is read on the surface at 1 - tolerance. The \
                           self-similarity fields are \

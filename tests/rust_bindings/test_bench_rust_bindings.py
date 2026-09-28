@@ -350,7 +350,9 @@ class TestEvaluating:
                 surface = entry["zncc_self_similarity_surface"]
                 assert surface.shape == (7, 7) and surface.dtype == np.float64
                 assert surface[3, 3] == 1.0 or np.isnan(surface).all()
-                assert np.isnan(surface[0, 0])
+                # A reading at every shift of the square, corners included,
+                # or none for a flat core.
+                assert np.isfinite(surface).all() or np.isnan(surface).all()
                 if not np.isnan(surface).all():
                     assert 0.0 < entry["zncc_self_similarity_tolerance"] < 1.0
 

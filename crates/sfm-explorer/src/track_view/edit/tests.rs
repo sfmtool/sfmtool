@@ -1822,18 +1822,12 @@ fn the_self_similarity_heading_says_what_it_shows() {
 
 // ---- The self-similarity surface plot ----------------------------------------
 
-/// A bowl `1 - k (dx² + dy²)` over the `7 × 7` square, `NaN` outside the disk
-/// of radius 3.
+/// A bowl `1 - k (dx² + dy²)` over the `7 × 7` square.
 fn bowl(k: f64) -> Vec<f64> {
     (0..49)
         .map(|i| {
             let (dx, dy) = ((i % 7) as f64 - 3.0, (i / 7) as f64 - 3.0);
-            let d2 = dx * dx + dy * dy;
-            if d2 > 9.0 {
-                f64::NAN
-            } else {
-                1.0 - k * d2
-            }
+            1.0 - k * (dx * dx + dy * dy)
         })
         .collect()
 }
@@ -1845,7 +1839,10 @@ fn the_surface_plot_passes_through_the_measured_shifts() {
     let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");
     let step = (plot.n - 1) / 6;
     for (i, &z) in surface.iter().enumerate() {
-        if !z.is_finite() {
+        let (dx, dy) = ((i % 7) as i32 - 3, (i / 7) as i32 - 3);
+        if f64::from(dx * dx + dy * dy).sqrt() > 3.35 {
+            // The picture is cut to the disk and a margin round it.
+            assert!(plot.values[(i / 7) * step * plot.n + (i % 7) * step].is_nan());
             continue;
         }
         let (x, y) = ((i % 7) * step, (i / 7) * step);
@@ -1914,11 +1911,7 @@ fn a_ridge_s_contour_runs_to_the_edge_of_the_disk() {
     let surface: Vec<f64> = (0..49)
         .map(|i| {
             let (dx, dy) = ((i % 7) as f64 - 3.0, (i / 7) as f64 - 3.0);
-            if dx * dx + dy * dy > 9.0 {
-                f64::NAN
-            } else {
-                1.0 - 0.001 * dx * dx - 0.1 * dy * dy
-            }
+            1.0 - 0.001 * dx * dx - 0.1 * dy * dy
         })
         .collect();
     let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");

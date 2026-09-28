@@ -3250,7 +3250,7 @@ ninth, as three rows of three; `zncc_self_similarity_slide_grid`, per ninth the
 `[x, y]` direction its matching shifts line up in, as three rows of three
 pairs; and `zncc_self_similarity_surface`, the core's ZNCC against itself at
 every shift of the `(2r + 1)²` square as rows of numbers from `(dx, dy) = (-r,
--r)`, with null outside the disk and where the core is flat, beside
+-r)`, with null where the core is flat, beside
 `zncc_self_similarity_tolerance`, the deficit the core was judged by, so the
 radius is read on the surface at `1 -` that value. Each is null where the tile
 could not be read. The

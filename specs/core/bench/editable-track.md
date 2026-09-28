@@ -1157,7 +1157,7 @@ indistinguishable shifts line up in, in the grid frame, near unit length along
 a straight edge and near zero where they spread evenly or there are none.
 `zncc_self_similarity_surface` is the whole core's ZNCC against itself at every
 shift of the `(2r + 1)²` square, row-major from `(dx, dy) = (-r, -r)`, `1` at the
-centre and `NaN` outside the disk `dx² + dy² ≤ r²` or where the core is flat.
+centre and `NaN` where the core is flat.
 `zncc_self_similarity_tolerance` is the deficit `ε + mean_c (n / s_c)²` the core
 was judged by, so the radius is read on the surface at `1 -` that value; it is
 `None` where the core is flat. All are `None` where the tile could not be

@@ -408,14 +408,11 @@ fn parts_agree_with_separate_calls() {
 }
 
 #[test]
-fn the_surface_is_one_at_the_centre_and_nan_outside_the_disk() {
+fn the_surface_is_one_at_the_centre_and_covers_the_whole_square() {
     let s = centred(&edge(18, 30.0), 1, 12, 3);
     assert_eq!(s.surface.len(), 49);
     assert_eq!(surface_at(&s, 3, 0, 0), 1.0);
-    for (dx, dy) in [(-3, -3), (3, -2), (-2, 3), (3, 3)] {
-        assert!(surface_at(&s, 3, dx, dy).is_nan());
-    }
-    assert!(surface_at(&s, 3, 3, 0).is_finite() && surface_at(&s, 3, 2, 2).is_finite());
+    assert!(s.surface.iter().all(|z| z.is_finite()));
 }
 
 #[test]

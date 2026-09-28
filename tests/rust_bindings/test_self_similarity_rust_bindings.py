@@ -36,8 +36,8 @@ def test_the_result_carries_every_part_in_its_shape():
     assert out["slide_grid"].dtype == np.float64
     assert out["surface"].shape == (7, 7)
     assert out["surface"][3, 3] == 1.0
-    # Outside the disk of radius 3, there is no shift.
-    assert np.isnan(out["surface"][0, 0]) and np.isnan(out["surface"][6, 6])
+    # The corners outside the disk of radius 3 are read too.
+    assert np.isfinite(out["surface"]).all()
     # Random texture pins its position: its surface falls through the level
     # within a pixel.
     assert 0.0 < out["radius"] < 1.0

@@ -157,9 +157,9 @@ pub struct ClusterMeasurement {
     /// wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
     /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
-    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre and
-    /// `NaN` outside the disk `dx² + dy² ≤ r²`, all `NaN` when the core has no
-    /// texture. `None` wherever `zncc_self_similarity_radius` is.
+    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
+    /// `NaN` when the core has no texture. `None` wherever
+    /// `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_surface: Option<Vec<f64>>,
     /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the
@@ -356,9 +356,9 @@ pub struct TrackMeasurement {
     /// wherever `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_slide_grid: Option<[[[f64; 2]; 3]; 3]>,
     /// The whole core's ZNCC against itself at every shift of the `(2r + 1)²`
-    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre and
-    /// `NaN` outside the disk `dx² + dy² ≤ r²`, all `NaN` when the core has no
-    /// texture. `None` wherever `zncc_self_similarity_radius` is.
+    /// square, row-major from `(dx, dy) = (-r, -r)`: `1` at the centre, all
+    /// `NaN` when the core has no texture. `None` wherever
+    /// `zncc_self_similarity_radius` is.
     pub zncc_self_similarity_surface: Option<Vec<f64>>,
     /// The tolerance the core was judged by, `ε + mean_c (n / s_c)²`: a shift
     /// whose ZNCC deficit is at or under it is indistinguishable from the

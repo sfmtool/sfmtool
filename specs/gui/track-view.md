@@ -801,7 +801,8 @@ its nine numbers as the cell prints them. The *self-sim. px* bar judges
 
 **Beside the grid is the core's surface plot**: the whole core's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between
-the shifts (Catmull-Rom) and drawn as a disk, with the contour at `1 - τ`, the
+the shifts (Catmull-Rom, repeating the edge value past the square's edge)
+and drawn as a disk, with the contour at `1 - τ`, the
 level the radius is read at, over it. The colour ramp is keyed to that level so
 the region inside the contour reads as one shape: below the level a muted ramp
 from dark to mid slate, and at it a jump to bright amber that lightens towards

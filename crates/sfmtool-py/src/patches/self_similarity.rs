@@ -52,7 +52,7 @@ use sfmtool_core::patch::self_similarity::{
 /// (``(3, 3, 2)`` float64, the same per cell), ``tolerance`` (float, the whole
 /// core's tolerance; infinite for a core with no texture) and ``surface``
 /// (``(2r + 1, 2r + 1)`` float64, the whole core's ZNCC at every shift from
-/// ``(dx, dy) = (-r, -r)``, 1 at the centre and NaN outside the disk).
+/// ``(dx, dy) = (-r, -r)``, 1 at the centre).
 ///
 /// Raises:
 ///     ValueError: If the tile is not a 2-D or 3-D uint8 or float32 array, is

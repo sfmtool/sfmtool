@@ -1604,7 +1604,7 @@ fn slides(value: Option<[[[f64; 2]; 3]; 3]>) -> Option<[[Option<[f64; 2]>; 3]; 3
 }
 
 /// A square ZNCC surface, stored row-major, as rows of numbers from the top
-/// row (`dy = -r`), with null for a shift outside the disk or with no reading;
+/// row (`dy = -r`), with null for a shift with no reading;
 /// or null for no surface.
 fn surface(value: Option<&[f64]>) -> Option<Vec<Vec<Option<f64>>>> {
     let values = value?;

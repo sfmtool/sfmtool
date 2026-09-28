@@ -5,8 +5,8 @@
 //! whole-pixel shift, drawn as a heatmap with the contour the radius is read
 //! at.
 //!
-//! The bench carries the surface as a `(2r + 1)²` square of ZNCC values, `NaN`
-//! outside the disk of shifts the score searches, and the tolerance `τ` the
+//! The bench carries the surface as a `(2r + 1)²` square of ZNCC values
+//! round the disk of shifts the score searches, and the tolerance `τ` the
 //! patch was judged by. A shift is indistinguishable from the true position
 //! where the ZNCC is at or above `1 - τ`, so that level is the one drawn. The
 //! square is interpolated to a finer grid for the picture and the contour, and
@@ -43,8 +43,8 @@ pub(super) struct SurfacePlot {
 
 impl SurfacePlot {
     /// The plot of a measured surface, or `None` when there is nothing to
-    /// draw: a surface that is not a square of odd side, or one with no
-    /// reading away from the centre, as for a core with no texture.
+    /// draw: a surface that is not a square of odd side, or one missing a
+    /// reading, as the `NaN` surface of a core with no texture is.
     pub(super) fn new(surface: &[f64], tolerance: f64) -> Option<SurfacePlot> {
         let side = (surface.len() as f64).sqrt().round() as usize;
         if side * side != surface.len()
@@ -55,20 +55,12 @@ impl SurfacePlot {
             return None;
         }
         let r = side / 2;
-        let finite: Vec<f64> = surface.iter().copied().filter(|z| z.is_finite()).collect();
-        if finite.len() < 2 {
+        if surface.iter().any(|z| !z.is_finite()) {
             return None;
         }
         let level = 1.0 - tolerance;
-        // Outside the disk there is no reading; the lowest reading stands in
-        // there so the interpolation near the disk's edge is not pulled up.
-        let floor = finite.iter().copied().fold(f64::INFINITY, f64::min);
-        let filled: Vec<f64> = surface
-            .iter()
-            .map(|&z| if z.is_finite() { z } else { floor })
-            .collect();
         let n = (side - 1) * SAMPLES_PER_PIXEL + 1;
-        let mut values = upsample(&filled, side, n);
+        let mut values = upsample(surface, side, n);
         let reach = r as f64 + DISK_MARGIN;
         for (k, v) in values.iter_mut().enumerate() {
             let (x, y) = (k % n, k / n);
@@ -158,7 +150,8 @@ pub(super) fn surface_color(z: f64, level: f64) -> egui::Color32 {
 
 /// Catmull-Rom interpolation of a `side × side` square of values to `n × n`
 /// samples spanning the same extent, the first and last samples on the
-/// square's corners. Separable: rows, then columns.
+/// square's corners. A neighbour past the square's edge repeats the edge's
+/// value. Separable: rows, then columns.
 fn upsample(values: &[f64], side: usize, n: usize) -> Vec<f64> {
     let at = |row: &[f64], x: f64| {
         let i = (x.floor() as isize).clamp(0, side as isize - 2) as usize;
