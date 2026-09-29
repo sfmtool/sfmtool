@@ -952,7 +952,7 @@ pub struct SightReport {
 ///   pixel a commit writes and the place every reading is anchored at, and
 ///   drops the rest of that measurement. Everything else in a
 ///   [`TrackMeasurement`] -- the leave-one-out ZNCC, both distances, the
-///   reprojection residual, the localizability, the reason -- was computed
+///   reprojection residual, the self-similarity radii, the reason -- was computed
 ///   *for the old keypoint* and says nothing about the new one, and an
 ///   evaluation recomputes all of it from the track as it stands, so clearing
 ///   is both honest and cheap to undo.

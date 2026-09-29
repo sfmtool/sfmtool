@@ -2600,9 +2600,8 @@ fn empty_view_scores_fall_back_to_the_grazing_rank() {
 
 /// A textureless surface — flat sky or water. Every channel is flat, so the
 /// z-normalization finds no channel to score on and no consensus template can be
-/// built; every gradient is zero too, so the structure tensor's weak eigenvalue
-/// is zero and a member rendering this has an unbounded `σ_pos` (it pins no 2D
-/// position, and its ZNCC to anything is noise).
+/// built; a member rendering this reads the largest ZNCC self-similarity radius
+/// (it pins no 2D position, and its ZNCC to anything is noise).
 fn flat_texture(_x: f64, _y: f64) -> f64 {
     128.0
 }
@@ -2641,7 +2640,7 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
         BasisEvidence::default(),
         &KeypointLocalizeParams {
             max_shift_px: 1e6,
-            // Hold the member localizability gate off: it would refuse these
+            // Hold the member self-similarity gate off: it would refuse these
             // flat tiles outright, and the path under test is the one the
             // *z-normalization* bail reaches.
             max_member_zncc_self_similarity_radius: 0.0,

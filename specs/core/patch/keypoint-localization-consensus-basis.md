@@ -119,7 +119,7 @@ first).
   `R + 2·margin` — it searches one `±margin` window around the seed, so it
   needs no drift headroom (basis caches keep the `R + 4·margin` sizing).
 - **Search + gates.** One shift search (same `search_strategy`) against the
-  basis template — preceded, as in the basis path, by the member localizability
+  basis template — preceded, as in the basis path, by the member self-similarity
   gate on the tail view's own tile at its seed, so a view that pins no 2D
   position is never even searched. The remaining per-view gates apply verbatim:
   drop when the refined keypoint moves `> max_shift_px` from the projection, when
@@ -152,7 +152,7 @@ first).
   cannot be evaluated without a template (and an unknown ZNCC is not "finite and
   below" the absolute floor either), but the positional one still is: a
   seed can already sit further than `max_shift_px` from the projection and
-  nothing downstream would catch it. The member localizability gate needs a
+  nothing downstream would catch it. The member self-similarity gate needs a
   rendered tile and this path renders none — that render is the cost it exists
   to avoid — so it does not apply here. This is *not* the same as the round loop's
   own early exits, whose survivors have at least been read in frame and, past

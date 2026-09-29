@@ -33,7 +33,8 @@ pixi run -e test python scripts/add_image_to_tracks/misses.py     --dataset kerr
 
 The results below were recorded on 2026-09-25. All figures are summed over
 every image of the dataset; measurement: rendered template, sub-pixel step,
-localizability gate on. Until § "Why recall is not 100%", "the default" means the
+the member gate of that date on, which gives the same figures as no member
+gate (§ "Measurement settings"). Until § "Why recall is not 100%", "the default" means the
 first default, the pooled bar alone with the image-MAD positional gate; that
 section's change made the current one.
 
@@ -61,7 +62,7 @@ Datasets:
   them.
 
 All figures are summed over every image of the dataset. Measurement: rendered
-template, sub-pixel step, localizability gate on.
+template, sub-pixel step, the member gate of that date on.
 
 ## seoul_bull, resected pose
 
@@ -129,16 +130,17 @@ Against the first default rule at the resected pose:
 - **Sub-pixel step.** Without it the rejoined keypoints' median error rises from
   0.058 to 0.088 px on seoul_bull and from 0.061 to 0.074 px on kerry_park, and
   the counts move by a few. It stays on.
-- **Localizability gate.** It refuses 0 to 29 candidates per kerry_park image
-  and almost none on seoul_bull. Turning it off adds 3 rejoined and 10 extra
-  observations on kerry_park and 1 extra on seoul_bull, with no change in the
-  far or bad counts: what it refuses mostly fails the photometric rule anyway.
-  It stays on at the localizer's `τ = 0.35`.
-- **The self-similarity gate that replaced it** (recorded 2026-09-28). The
-  member gate now judges the new view's core by its ZNCC self-similarity radius
+- **Member gate of 2026-09-25.** The gate then read an earlier score, the
+  curvature of the core's self-similarity at its peak, since removed. It
+  refused 0 to 29 candidates per kerry_park image and almost none on
+  seoul_bull. Turning it off added 3 rejoined and 10 extra observations on
+  kerry_park and 1 extra on seoul_bull, with no change in the far or bad
+  counts: what it refused mostly failed the photometric rule anyway.
+- **The self-similarity gate** (recorded 2026-09-28). The member gate judges
+  the new view's core by its ZNCC self-similarity radius
   (`max_zncc_self_similarity_radius`, measurements `no_self_similarity_gate`
   and `self_similarity_<bar>`). Under the current default rule, resected pose,
-  the older gate and the new gate off give the same figures (seoul_bull 91.2%
+  the gate of 2026-09-25 and this gate off give the same figures (seoul_bull 91.2%
   recall, 20 over 2 px; kerry_park 89.9% / 90.0%, 14 over 2 px, 2 bad extra),
   and every bar from 1 to 2.9 costs 10 to 66 points of recall for at most a few
   fewer far or bad observations: at 2, 76.8% on seoul_bull and 66.2% on

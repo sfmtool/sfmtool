@@ -303,9 +303,7 @@ itself along the whole search.
 The default, `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, is `2.5` patch-grid
 px, the same bar as the bench's `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The
 user chose it from a sweep on the seoul_bull and kerry_park ground truths: two
-measurements run with the gate off, with the older gate on the localizability
-score (`σ_pos` over `0.35` grid px) it replaced, and with the new gate at bars
-from 1 to 2.9.
+measurements run with the gate off and with the gate at bars from 1 to 2.9.
 
 The [add-image-to-tracks harness](../../../scripts/add_image_to_tracks/README.md),
 default rule, resected pose, summed over every image. *Recall* is the known
@@ -316,7 +314,6 @@ those whose largest residual grew by more than 1 px:
 
 | member gate | seoul recall | > 2 px | extra | x bad | kerry recall | > 2 px | extra | x bad | x worse |
 |---|---|---|---|---|---|---|---|---|---|
-| `σ_pos` ≤ 0.35 (older gate) | 91.2% | 20 | 125 | 0 | 89.9% | 14 | 1419 | 2 | 18 |
 | off | 91.2% | 20 | 126 | 0 | 90.0% | 14 | 1432 | 2 | 18 |
 | radius ≤ 1 | 39.7% | 10 | 50 | 0 | 24.4% | 10 | 299 | 3 | 13 |
 | radius ≤ 1.5 | 66.7% | 17 | 74 | 0 | 46.7% | 12 | 625 | 5 | 15 |
@@ -330,7 +327,6 @@ truth's observation (1233 observations on seoul_bull, 2193 on kerry_park):
 
 | member gate | seoul kept | err med / p90 px | > 2 px | points under 2 views | kerry kept | err med / p90 px | > 2 px | points under 2 views |
 |---|---|---|---|---|---|---|---|---|
-| `σ_pos` ≤ 0.35 (older gate) | 97.8% | 0.185 / 0.789 | 35 | 0 | 98.4% | 0.170 / 0.664 | 50 | 1 |
 | off | 97.8% | 0.185 / 0.789 | 35 | 0 | 98.5% | 0.170 / 0.664 | 51 | 1 |
 | radius ≤ 1.5 | 72.5% | 0.156 / 0.692 | 32 | 53 | 58.7% | 0.149 / 0.585 | 32 | 99 |
 | radius ≤ 2 | 83.7% | 0.169 / 0.823 | 41 | 29 | 75.0% | 0.160 / 0.624 | 42 | 54 |
@@ -338,10 +334,9 @@ truth's observation (1233 observations on seoul_bull, 2193 on kerry_park):
 | radius ≤ 2.9 | 88.0% | 0.173 / 0.792 | 39 | 17 | 84.4% | 0.164 / 0.633 | 45 | 33 |
 
 At 2.5 the harness recovers 80.4% of the known tracks on seoul_bull and 73.8% on
-kerry_park, against 91.2% and 89.9% under the older gate, which turned out
-almost nothing on either capture. On kerry_park it adds 0 bad extra
+kerry_park, against 91.2% and 90.0% with the gate off. On kerry_park it adds 0 bad extra
 observations and 6 that make a track's largest residual worse, against 2 and 18
-under the older gate. Against the current ground truths the sightings it turns
+with the gate off. Against the current ground truths the sightings it turns
 out are about as accurate as the ones it keeps: over the known tracks the
 harness's default rule accepts with the gate off, those whose new view's core
 reads the largest radius land within 1 px of the ground truth 96.6%

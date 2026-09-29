@@ -93,7 +93,7 @@ threshold slider in Track View judge the same numbers.
   bearings") is one the sightings support, and the reprojection residuals are
   small.
 - **Localizable.** The patch has enough texture that its keypoints are pinned
-  to a small uncertainty ([patch-localizability.md](../core/patch/patch-localizability.md)).
+  to a small uncertainty ([zncc-self-similarity-radius.md](../core/patch/zncc-self-similarity-radius.md)).
 - **Well framed.** The patch's size and normal are ones the photographs
   support. A patch that faces the wrong way, or that spans a depth edge,
   registers worse in the oblique views than one that fits the surface.

@@ -594,7 +594,7 @@ refinement measured and which members stand.
   keys record the settings for a reader to see and are not read back:
   `sfm cluster-patches` also writes `min_zncc`, `max_shift_px` and
   `max_member_zncc_self_similarity_radius` (older files carry
-  `max_keypoint_uncertainty`, the bar of the older member gate, in its place)
+  `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place)
 
 #### `cluster_patches/reference_members.{C}.uint32.zst`
 
@@ -626,8 +626,8 @@ refinement measured and which members stand.
     (its ZNCC self-similarity radius is above the member gate's bar), so it was
     excluded before reference selection and refinement (see
     [`cluster-patch-refinement.md`](../core/patch/cluster-patch-refinement.md)).
-    Files written before that gate read the radius hold members refused under
-    the older localizability score with the same status
+    Files written before that gate read the radius hold members refused by
+    an earlier score of the same patch with the same status
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor

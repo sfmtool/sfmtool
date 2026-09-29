@@ -258,7 +258,8 @@ pub enum Refusal {
     BackFacing,
     /// Fewer than two existing observations render in frame in a decoded image.
     TooFewReferences,
-    /// The new view's own core pins no 2D position.
+    /// The new view's own core pins no 2D position: its ZNCC self-similarity
+    /// radius is over the localizer's member bar.
     Unlocalizable,
     /// No shift of the search window could be scored in frame.
     NoPeak,

@@ -50,7 +50,7 @@ and [`../core/patch/cluster-patch-refinement.md`](../core/patch/cluster-patch-re
 (the cluster stage's representation and kernel),
 [`../core/patch/patch-keypoint-localization.md`](../core/patch/patch-keypoint-localization.md),
 [`../core/patch/patch-view-selection.md`](../core/patch/patch-view-selection.md),
-[`../core/patch/patch-localizability.md`](../core/patch/patch-localizability.md)
+[`../core/patch/zncc-self-similarity-radius.md`](../core/patch/zncc-self-similarity-radius.md)
 and [`../core/patch/member-coherence-validation.md`](../core/patch/member-coherence-validation.md)
 (the track stage's kernels), [`../core/patch/candidate-track-spawning.md`](../core/patch/candidate-track-spawning.md)
 (the pipeline an upgrade runs), [`../formats/kdf-file-format.md`](../formats/kdf-file-format.md)

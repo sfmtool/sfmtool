@@ -22,7 +22,7 @@
 //! moves the read position — keeping every read exact). Views that pin no 2D
 //! position of their own, drift too far, leave the frame, or stop agreeing are
 //! dropped in-loop, so the survivors register against a cleaner template. The
-//! per-view gates split into **photometric** verdicts (member localizability,
+//! per-view gates split into **photometric** verdicts (member self-similarity,
 //! the absolute leave-one-out floor), which nothing undoes and which can leave a
 //! point with fewer than two views for the caller's `min_views` cull, and the
 //! **positional** (`max_shift_px`) and **relative** agreement gates, whose
@@ -1492,7 +1492,7 @@ pub fn try_localize_patch_keypoints_with_basis(
         //    two-view floor restores the two best when only that bar, or the
         //    positional `max_shift_px` gate (a verdict on the pose the view was
         //    projected from, not on its pixels), dropped them. `min_absolute_zncc`
-        //    and the member-localizability gate are photometric per-view
+        //    and the member self-similarity gate are photometric per-view
         //    verdicts, so a view they reject is out for good; that is what makes
         //    them bite on a two-view point, where the relative bar reduces to
         //    `min_relative_zncc ×` the same pairwise correlation it is testing.
@@ -1503,8 +1503,8 @@ pub fn try_localize_patch_keypoints_with_basis(
             .collect();
         let med = median_in_place(&mut live_loo);
         // `min_relative_zncc <= 0` (or non-finite) disables the relative bar
-        // exactly, the way `min_absolute_zncc` and the member-localizability
-        // `tau` do. Without that, `0.0` would still bar a view whose
+        // exactly, the way `min_absolute_zncc` and
+        // `max_member_zncc_self_similarity_radius` do. Without that, `0.0` would still bar a view whose
         // leave-one-out ZNCC is *negative*, which is the one case a caller that
         // asked for no gate most wants reported: a reading of a track shows the
         // anti-correlated sighting with its number instead of deleting it.

@@ -456,8 +456,9 @@ pub enum ClusterMemberStatus {
     NotEvaluated = 5,
     /// Rejected: the member's own patch does not pin a position, its ZNCC
     /// self-similarity radius is above the member gate's bar (excluded before
-    /// reference selection and refinement). Files written before that gate
-    /// read the radius used the older localizability score here.
+    /// reference selection and refinement). Files written before the gate
+    /// read the radius set this status from an earlier score of the same
+    /// patch, the curvature of its self-similarity at the peak.
     RejectedUnlocalizable = 6,
 }
 

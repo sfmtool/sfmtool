@@ -707,6 +707,14 @@ Entries worth arguing about:
 > source-image px, the NaN-is-kept rule, the `embedded_patches`-plus-bitmaps
 > requirement and its error message, and a link to `patch-localizability.md`. The flag
 > is also added to the `filter_points_by_mask` row of the Rust-primitives table._
+>
+> _Status (2026-09-28): **Superseded.** The filter is now
+> `--filter-by-zncc-self-similarity-radius`, which judges the ZNCC self-similarity
+> radius, and has its own entry in `xform-command.md` linking
+> `zncc-self-similarity-radius.md`. The localizability score and
+> `patch-localizability.md` were removed; what was still true of that spec (why
+> the curvature at the peak is not used, and its references) moved into
+> `zncc-self-similarity-radius.md` § "Why a curvature is not enough"._
 
 ### `crates/sfmtool-core/src/analysis/point_inspect/`
 **What it does:** Re-derives a point's rays from workspace `.sift` files and reports per-observation residual/angle; drives `sfm inspect`'s point view.

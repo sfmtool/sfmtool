@@ -466,23 +466,20 @@ semantics and needs its own quality study).
 Measured on the clusters the track-at-pixel harness builds from each ground
 truth's own index (`scripts/track_at_pixel/dataset.py`: seoul_bull's 17 images,
 and kerry_park's 48 fisheye frames of candidate `tk113`), with every other
-setting at its default. The older gate is the structure-tensor gate on the
-localizability score at its `0.35` grid px, which the radius replaced.
+setting at its default.
 
 | gate | dataset | refused | refinable clusters | clusters keeping a member | reference + kept | gate CPU per member |
 |---|---|---|---|---|---|---|
-| `σ_pos` ≤ 0.35 (older) | seoul_bull | 0 of 12,506 | 4,942 of 5,071 | 2,183 | 8,169 | 32 µs |
 | off | seoul_bull | 0 | 4,942 | 2,183 | 8,169 | 0 |
 | radius ≤ 2.5 | seoul_bull | 1,466 (11.7%) | 4,360 | 1,747 | 6,851 | 66 µs |
-| `σ_pos` ≤ 0.35 (older) | kerry_park | 52 of 41,620 | 14,274 of 14,515 | 9,277 | 31,042 | 33 µs |
 | off | kerry_park | 0 | 14,288 | 9,294 | 31,091 | 0 |
 | radius ≤ 2.5 | kerry_park | 6,457 (15.5%) | 12,026 | 7,706 | 25,585 | 70 µs |
 
-The older gate turned out almost nothing; the radius at `2.5` refuses about one
-member in eight. Reading the radius costs about twice what the structure tensor
-did (the tile is `(R + 6)²` rather than `R²`, and the reading correlates 29
-shifts), but the members it refuses are never refined, so the kernel as a whole
-spends less CPU (seoul_bull 5.7 → 5.5 CPU-s, kerry_park 22.7 → 20.0) and a full
+The radius at `2.5` refuses about one member in eight. Reading it costs 66 to
+70 µs per member (the tile is `(R + 6)²` and the reading correlates 29 shifts),
+but the members it refuses are never refined. Against the member gate it
+replaced, which refused almost nothing (0 and 52 members) at about half the cost
+per member, the kernel as a whole spends less CPU (seoul_bull 5.7 → 5.5 CPU-s, kerry_park 22.7 → 20.0) and a full
 `sfm cluster-patches` run is no slower (0.39 → 0.37 s and 1.08 → 1.01 s wall,
 i9-14900HX, 32 threads). The resections the add-image-to-tracks harness runs
 over these files move little: at the resected pose its default rule recovers
@@ -628,9 +625,10 @@ at least one member, and that statuses stay inside the enum.
   `max_member_zncc_self_similarity_radius` is in template-grid px, and the
   shifts the reading searches are whole grid px, so the same bar asks for a
   different image-space sharpness as the template is sampled more or less
-  finely. Under the older gate on the localizability score this was measured:
-  on dino_dog_toy, moving from 15 to 31 samples per axis at a fixed `0.35` cut
-  `RejectedUnlocalizable` from 1,913 members to 372. Since `--resolution` is
+  finely. The member gate the radius replaced, whose bar was in grid px too,
+  showed the size of the effect: on dino_dog_toy, moving from 15 to 31 samples
+  per axis at a fixed bar cut `RejectedUnlocalizable` from 1,913 members to
+  372. The radius has not been measured this way. Since `--resolution` is
   freely tunable, one knob moves another gate's strength. Re-expressing the bar
   in a resolution-independent unit (keypoint-frame or source px) would fix it,
   and would change the meaning of the current default.

@@ -1733,8 +1733,7 @@ fn the_self_similarity_cell_shows_the_whole_and_the_middle_radius() {
     assert_eq!(self_similarity_text(Some(3.0), None), "3+ px whole\n- mid");
     assert_eq!(self_similarity_text(None, Some(1.0)), "-");
 
-    // At both stages, from the fields the measurement carries, beside the
-    // deprecated sigma_pos cell.
+    // At both stages, from the fields the measurement carries.
     use sfmtool_core::bench::{ClusterMeasurement, Observation, Provenance, TrackMeasurement};
     let current = crate::bench::live::Evaluation::Current;
     let mut cluster = ClusterMeasurement::from_seed([10.0, 12.0], [[1.0, 0.0], [0.0, 1.0]]);
@@ -1805,16 +1804,13 @@ fn a_self_similarity_cell_marks_its_slide() {
 }
 
 /// The self-similarity heading says what its numbers and grid are, and which
-/// bar judges them; the older localizability score has no column.
+/// bar judges them.
 #[test]
 fn the_self_similarity_heading_says_what_it_shows() {
     let headings = super::table::ColumnLayout::new().headers();
     assert!(headings
         .iter()
         .any(|&(_, heading, _)| heading == "Self-similarity"));
-    assert!(headings
-        .iter()
-        .all(|&(_, heading, _)| !heading.contains('\u{3c3}')));
     let tip = super::table::SELF_SIMILARITY_TIP;
     assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
     assert!(tip.contains(super::MAX_SELF_SIMILARITY_LABEL), "{tip}");

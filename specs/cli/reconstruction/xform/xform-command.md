@@ -221,9 +221,7 @@ same bar, by default 2.5, to each point's round-1 consensus.
 
 This requires a reconstruction *with* per-point patch bitmaps, and reads no source
 images. A reconstruction without them is rejected with a message naming
-`sfm embed-patches` or `sfm xform --add-patch-bitmaps`. The option replaces
-`--filter-by-keypoint-uncertainty`, a bar on the older
-[localizability score](../../../core/patch/patch-localizability.md) in another unit.
+`sfm embed-patches` or `sfm xform --add-patch-bitmaps`.
 
 ```bash
 --filter-by-zncc-self-similarity-radius 2.5
