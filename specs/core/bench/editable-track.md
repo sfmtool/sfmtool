@@ -198,6 +198,16 @@ pub struct UnpinReport {
     pub changed: bool,       // false exactly when none of the rows was pinned
 }
 
+pub fn pin_verdicts(
+    track: &EditableTrack,
+    observations: &[usize],
+) -> Result<(EditableTrack, PinReport), TrackEditError>;
+
+pub struct PinReport {
+    pub pinned: usize,       // pins set; no verdict moves
+    pub changed: bool,       // false exactly when every row was pinned already
+}
+
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
 
 pub fn verdicts_if_unpinned(track: &EditableTrack) -> Vec<Option<Verdict>>;
@@ -1297,7 +1307,23 @@ would decide each while the others were still pinned: of two rows of one image,
 the first unpinned would take the image from the other still pinned `out`,
 whichever scored better. An observation nothing has measured keeps its verdict.
 An unpin none of whose rows is pinned changes nothing and reports
-`changed: false`, so a caller pushes no version for it. `apply_thresholds` paints the proposed
+`changed: false`, so a caller pushes no version for it. `pin_verdicts` is the
+inverse: it pins each named row that is not pinned and keeps its verdict
+exactly as it is, painting nothing, so the verdicts the bars gave are fixed as
+they stand and later evaluations and paintings leave them alone. Since no
+verdict moves, the track keeps its one `in` per image. A pin of rows all pinned
+already changes nothing and reports `changed: false`; like the unpin it refuses
+an index past the end and counts a repeated index once.
+
+```rust
+use sfmtool_core::bench::pin_verdicts;
+
+let every: Vec<usize> = (0..track.observations.len()).collect();
+let (track, report) = pin_verdicts(&track, &every)?;   // fix the bars' verdicts
+println!("pinned {}", report.pinned);
+```
+
+`apply_thresholds` paints the proposed
 verdicts from the stored measurements onto the unpinned observations, and
 leaves a pinned one where it is. An observation nothing has measured at the
 track's current stage is left alone: there is no proposal to apply. An
@@ -2381,11 +2407,14 @@ and a pinned one, `in` or `out`, with and without a competing sighting in its
 image, exactly what unpinning it and applying the thresholds makes it;
 `unpin_verdicts` handing rows back together, so of two rows of one image the
 better-scoring one takes the image whichever is named first, and changing
-nothing when none of its rows is pinned; an evaluation taking in an added row
+nothing when none of its rows is pinned; `pin_verdicts` pinning a mix of `in`
+and `out` rows with neither moving, changing nothing when every row is pinned
+already, and refusing an index past the end; an evaluation taking in an added row
 that clears the bars, turning out an unpinned row moved past the shift bar and
 taking it back in after a fit moves it within the bar, reading a track its own
-repaint marked without repainting it, and leaving a point's pinned rows `in`
-whatever the bars say; a split taking exactly the named
+repaint marked without repainting it, leaving a point's pinned rows `in`
+whatever the bars say, and leaving rows pinned with `pin_verdicts` where they
+stood under bars no reading clears; a split taking exactly the named
 observations, handing the half it takes off back as a cluster, and refusing an
 empty list or all of them; a duplicate carrying every observation and all of the
 stage's data, dropping the origin so its commit creates a point rather than

@@ -31,14 +31,13 @@
 
 use serde_json::{json, Value};
 use sfmtool_core::bench::{
-    Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Verdict,
-    Viewpoint,
+    Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Viewpoint,
 };
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
     CameraImageSel, Deferred, JsonReply, Outcome, ResizeTarget, ThresholdChange, ToolError,
-    TranslateTarget, VerdictRows, ViewpointSel,
+    TranslateTarget, VerdictAction, VerdictRows, ViewpointSel,
 };
 use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
@@ -944,7 +943,7 @@ pub(super) fn set_bench_track_verdict(
     label: &str,
     named: Option<&str>,
     rows: VerdictRows,
-    verdict: Option<Verdict>,
+    verdict: VerdictAction,
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     let observations = match &rows {
@@ -958,15 +957,16 @@ pub(super) fn set_bench_track_verdict(
         }
     };
     let reply = edit::edited(state, id, |state| match (verdict, &rows) {
-        (Some(verdict), VerdictRows::One(observation)) => {
+        (VerdictAction::Set(verdict), VerdictRows::One(observation)) => {
             state.set_bench_verdict(id, &item, *observation, verdict)
         }
-        // The parse lets several rows through only for an unpin.
-        (Some(_), _) => Err("Set in or out one observation at a time.".to_string()),
-        (None, _) => state.unpin_bench_verdicts(id, &item, &observations),
+        // The parse lets several rows through only for a pin or an unpin.
+        (VerdictAction::Set(_), _) => Err("Set in or out one observation at a time.".to_string()),
+        (VerdictAction::Pin, _) => state.pin_bench_verdicts(id, &item, &observations),
+        (VerdictAction::Unpin, _) => state.unpin_bench_verdicts(id, &item, &observations),
     })?;
     // The verdict and the pin each named observation carries now, which for
-    // an unpin is what the thresholds gave it.
+    // an unpin is what the thresholds gave it, and for a pin what it had.
     let now = |observation: usize| {
         state
             .bench_track(id, &item)

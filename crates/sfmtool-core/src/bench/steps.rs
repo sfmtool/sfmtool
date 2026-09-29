@@ -891,6 +891,73 @@ pub fn unpin_verdicts(
     ))
 }
 
+/// What one pin did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinReport {
+    /// How many of the named observations were not pinned, and are now.
+    pub pinned: usize,
+    /// Whether anything changed. False exactly when every named observation
+    /// was pinned already, and then the track comes back as it was.
+    pub changed: bool,
+}
+
+/// Pin the verdicts of `observations` as they stand, in one step.
+///
+/// Each named row that is not pinned becomes pinned and keeps its verdict
+/// exactly as it is: nothing is painted, so an `in` row stays `in` and an `out`
+/// row stays `out` whatever the bars say about it. From then on neither
+/// [`apply_thresholds`] nor an evaluation's repaint moves them, as for a
+/// verdict set by hand with [`set_verdict`]. This is the inverse of
+/// [`unpin_verdicts`]: it fixes the verdicts the bars have given, where the
+/// unpin hands them back.
+///
+/// Pinning changes no verdict, so the track keeps the one `in` per image it
+/// had.
+///
+/// When every one of `observations` is pinned already nothing changes: the
+/// report says `changed: false` and a caller pushes no version for it. An
+/// index past the end is refused, and a repeated index counts once.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{pin_verdicts, EditableTrack};
+/// # fn run(track: &EditableTrack) -> Result<(), Box<dyn std::error::Error>> {
+/// let every: Vec<usize> = (0..track.observations.len()).collect();
+/// let (next, report) = pin_verdicts(track, &every)?;
+/// assert!(next.observations.iter().all(|o| o.pinned));
+/// println!("pinned {} verdicts as they stood", report.pinned);
+/// # Ok(())
+/// # }
+/// ```
+pub fn pin_verdicts(
+    track: &EditableTrack,
+    observations: &[usize],
+) -> Result<(EditableTrack, PinReport), TrackEditError> {
+    let observation_count = track.observations.len();
+    if let Some(&observation) = observations.iter().find(|&&i| i >= observation_count) {
+        return Err(TrackEditError::NoSuchObservation {
+            observation,
+            observation_count,
+        });
+    }
+    let mut next = track.clone();
+    let mut pinned = 0;
+    for &i in observations {
+        if !next.observations[i].pinned {
+            next.observations[i].pinned = true;
+            pinned += 1;
+        }
+    }
+    Ok((
+        next,
+        PinReport {
+            pinned,
+            changed: pinned > 0,
+        },
+    ))
+}
+
 // ---- Placing a sighting, and sizing and turning the patch ------------------
 
 /// One of a patch's two in-plane axes.

@@ -2734,9 +2734,9 @@ fn heading_pin_pos(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState)
 }
 
 /// The pin in the *Keep* heading unpins every pinned row of the track in one
-/// step, and is greyed once nothing is pinned.
+/// step, and once nothing is pinned a click asks to pin every row instead.
 #[test]
-fn the_keep_heading_pin_unpins_every_pinned_row_and_is_greyed_with_none() {
+fn the_keep_heading_pin_unpins_every_pinned_row_then_pins_them_all() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     assert!(
         panel.rows().iter().all(|row| row.pinned),
@@ -2755,9 +2755,10 @@ fn the_keep_heading_pin_unpins_every_pinned_row_and_is_greyed_with_none() {
     run_frame(&mut panel, &ctx, &state);
     assert!(panel.rows().iter().all(|row| !row.pinned));
 
-    // Nothing is pinned now: the pin is greyed and a click asks for nothing.
+    // Nothing is pinned now: a click asks to pin every row.
     let response = at_pointer(&mut panel, &ctx, &state, at, true);
     assert_eq!(response.unpin_verdicts, None);
+    assert_eq!(response.pin_verdicts, Some(vec![0, 1, 2]));
     // And an unpin of rows none of which is pinned pushes no version.
     state
         .unpin_bench_verdicts(id, &label, &[0, 1, 2])
@@ -2765,22 +2766,118 @@ fn the_keep_heading_pin_unpins_every_pinned_row_and_is_greyed_with_none() {
     assert_eq!(versions(&state, id), before + 1);
 }
 
-/// The heading pin's hover text counts the pins, and says why it is greyed.
-/// A headless frame shows no tooltip, so the text is asked of the function
-/// that writes it.
+/// With no row pinned, the heading pin pins every row at the verdict it has
+/// now, in one step with one Action Log row, and a second click unpins them
+/// all again.
+#[test]
+fn the_keep_heading_pin_pins_every_row_as_it_stands() {
+    let (mut state, id, label, mut panel, ctx) = measured_on_the_bench();
+    state
+        .unpin_bench_verdicts(id, &label, &[0, 1, 2])
+        .expect("the rows exist");
+    // A whole-ZNCC bar just over the lowest reading turns that row out and
+    // leaves the rest to the other bars: a mix of `in` and `out` with nothing
+    // pinned.
+    let lowest = (0..3)
+        .map(|i| zncc_readings(&state, id, &label, i).0)
+        .fold(f64::INFINITY, f64::min);
+    let mut bars = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .thresholds
+        .clone();
+    bars.min_zncc = lowest + 0.001;
+    state
+        .apply_bench_thresholds(id, &label, &bars)
+        .expect("on the bench");
+    run_frame(&mut panel, &ctx, &state);
+    let verdicts: Vec<Verdict> = panel.rows().iter().map(|row| row.verdict).collect();
+    assert!(verdicts.contains(&Verdict::In) && verdicts.contains(&Verdict::Out));
+    assert!(panel.rows().iter().all(|row| !row.pinned));
+
+    let at = heading_pin_pos(&mut panel, &ctx, &state);
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    let rows = response
+        .pin_verdicts
+        .expect("the pin asks to pin every row");
+    assert_eq!(rows, vec![0, 1, 2]);
+    assert_eq!(response.unpin_verdicts, None);
+
+    let before = versions(&state, id);
+    state.action_log.clear();
+    state
+        .pin_bench_verdicts(id, &label, &rows)
+        .expect("the rows exist");
+    assert_eq!(versions(&state, id), before + 1, "one step, one version");
+    let log: Vec<String> = state.action_log.entries().map(|e| e.text.clone()).collect();
+    let (kept, out) = (
+        verdicts.iter().filter(|&&v| v == Verdict::In).count(),
+        verdicts.iter().filter(|&&v| v == Verdict::Out).count(),
+    );
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].starts_with(&format!(
+            "Pinned 3 verdicts in {label}: {kept} in, {out} out"
+        )),
+        "{log:?}"
+    );
+    run_frame(&mut panel, &ctx, &state);
+    assert!(panel.rows().iter().all(|row| row.pinned));
+    assert_eq!(
+        panel
+            .rows()
+            .iter()
+            .map(|row| row.verdict)
+            .collect::<Vec<_>>(),
+        verdicts,
+        "every verdict stands as it was"
+    );
+    // Pinning rows that are all pinned pushes nothing.
+    state
+        .pin_bench_verdicts(id, &label, &rows)
+        .expect("the rows exist");
+    assert_eq!(versions(&state, id), before + 1);
+
+    // One undo takes the pins off again.
+    state.undo(id).expect("the pin step undoes");
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert!(track.observations.iter().all(|o| !o.pinned));
+    state.redo(id).expect("and redoes");
+    run_frame(&mut panel, &ctx, &state);
+
+    // Now every row is pinned, so the same click unpins them all.
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert_eq!(response.unpin_verdicts, Some(vec![0, 1, 2]));
+    assert_eq!(response.pin_verdicts, None);
+}
+
+/// The heading pin's hover text says what a click does, with the count, and
+/// why it is greyed. A headless frame shows no tooltip, so the text is asked of
+/// the function that writes it.
 #[test]
 fn the_heading_pin_hover_counts_the_pins() {
-    use super::table::unpin_all_hover;
+    use super::table::{heading_pin_hover, heading_pin_name};
     assert_eq!(
-        unpin_all_hover(12, None),
+        heading_pin_hover(12, 20, None),
         "Unpin all 12 pinned verdicts and let the bars decide"
     );
     assert_eq!(
-        unpin_all_hover(1, None),
+        heading_pin_hover(1, 20, None),
         "Unpin the 1 pinned verdict and let the bars decide"
     );
-    assert_eq!(unpin_all_hover(4, Some("busy")), "busy");
-    assert!(unpin_all_hover(0, Some("busy")).starts_with("No verdict is pinned"));
+    assert_eq!(
+        heading_pin_hover(0, 12, None),
+        "Pin all 12 verdicts as they stand"
+    );
+    assert_eq!(
+        heading_pin_hover(0, 1, None),
+        "Pin the 1 verdict as it stands"
+    );
+    assert_eq!(heading_pin_hover(4, 20, Some("busy")), "busy");
+    assert_eq!(heading_pin_hover(0, 20, Some("busy")), "busy");
+    assert!(heading_pin_hover(0, 0, None).contains("no observations"));
+    assert_eq!(heading_pin_name(3), "Unpin all");
+    assert_eq!(heading_pin_name(0), "Pin all");
 }
 
 /// The header counts the pinned rows beside the kept and the turned out.

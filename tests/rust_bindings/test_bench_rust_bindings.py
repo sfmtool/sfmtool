@@ -23,6 +23,7 @@ from sfmtool._sfmtool.bench import (
     duplicate,
     evaluate,
     fit,
+    pin_verdict,
     resize_patch,
     resize_patch_to_pixel,
     set_stage,
@@ -306,6 +307,38 @@ class TestTheEditableTrack:
             unpin_verdict(track, "some")
         with pytest.raises(ValueError):
             unpin_verdict(track, [0, 99])
+
+    def test_a_pin_keeps_each_verdict_as_it_stands(self, edited, long_track_point):
+        _, track = create_track(Bench(), edited, long_track_point)
+        count = track.observation_count
+        # Nothing measured, so the unpins keep the verdicts: every row `in`
+        # but row 1, and none pinned.
+        track, _ = unpin_verdict(track, "all")
+        track, _ = set_verdict(track, 1, "out")
+        track, _ = unpin_verdict(track, 1)
+        verdicts = [o["verdict"] for o in track.observations]
+        assert verdicts[:2] == ["in", "out"]
+        assert not any(o["pinned"] for o in track.observations)
+
+        one, report = pin_verdict(track, 1)
+        assert report == {"pinned": 1, "changed": True}
+        assert one.observation(1)["pinned"]
+        assert not one.observation(0)["pinned"]
+
+        some, report = pin_verdict(one, [0, 1, 1])
+        assert report == {"pinned": 1, "changed": True}
+
+        every, report = pin_verdict(some, "all")
+        assert report == {"pinned": count - 2, "changed": True}
+        assert all(o["pinned"] for o in every.observations)
+        assert [o["verdict"] for o in every.observations] == verdicts
+
+        _, report = pin_verdict(every, "all")
+        assert report == {"pinned": 0, "changed": False}
+        with pytest.raises(ValueError, match="unknown observations"):
+            pin_verdict(track, "some")
+        with pytest.raises(ValueError):
+            pin_verdict(track, [0, 99])
 
     def test_the_painting_leaves_an_unmeasured_observation_where_it_is(
         self, edited, long_track_point

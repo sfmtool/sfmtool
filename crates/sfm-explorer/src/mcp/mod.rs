@@ -478,11 +478,10 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
         /// The observations the call rules on: one for `in` and `out`, and one,
-        /// several or all of them for an unpin.
+        /// several or all of them for a pin or an unpin.
         rows: VerdictRows,
-        /// The verdict to pin, or `None` to clear the pins and give the
-        /// observations the verdicts the thresholds propose.
-        verdict: Option<sfmtool_core::bench::Verdict>,
+        /// What the call does to them.
+        verdict: VerdictAction,
     },
     /// Set the track's bars and paint the proposed verdicts onto its unpinned
     /// observations, which is the one gesture the panel's button is.
@@ -793,11 +792,23 @@ pub(crate) enum TranslateTarget {
     },
 }
 
+/// What `set_bench_track_verdict` does to the observations it names: the
+/// wire's `verdict` word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VerdictAction {
+    /// `in` or `out`: set the verdict by hand, which pins it.
+    Set(sfmtool_core::bench::Verdict),
+    /// `pin`: pin the verdicts as they stand, moving none.
+    Pin,
+    /// `unpin`: clear the pins and let the bars decide the rows together.
+    Unpin,
+}
+
 /// Which observations `set_bench_track_verdict` names.
 ///
 /// `in` and `out` rule on one observation at a time, since each is a hand
-/// ruling on one sighting; an unpin may name several, or all of them, because
-/// the bars decide the rows it hands back together.
+/// ruling on one sighting; a pin or an unpin may name several, or all of them,
+/// because it moves the pins of the rows together in one step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VerdictRows {
     /// One observation, by its position in the track's list.

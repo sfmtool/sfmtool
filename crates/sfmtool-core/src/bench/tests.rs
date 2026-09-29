@@ -985,6 +985,64 @@ fn unpinning_rows_that_are_not_pinned_changes_nothing() {
     assert!(!report.changed);
 }
 
+/// Pinning fixes the verdicts as they stand: an `in` row and an `out` row are
+/// both pinned and neither moves, whatever the bars say about them.
+#[test]
+fn pinning_keeps_each_verdict_as_it_stands() {
+    // Out of step with the bars both ways: 0.95 clears every bar and is `out`,
+    // 0.40 clears none and is `in`.
+    let mut track = scored_track([0.95, 0.40]);
+    track.observations[1].verdict = Verdict::In;
+    let (pinned, report) = pin_verdicts(&track, &[0, 1, 1]).expect("live observations");
+    assert_eq!(
+        report,
+        PinReport {
+            pinned: 2,
+            changed: true,
+        },
+        "a repeated index counts once"
+    );
+    assert!(pinned.observations.iter().all(|o| o.pinned));
+    assert_eq!(pinned.observations[0].verdict, Verdict::Out);
+    assert_eq!(pinned.observations[1].verdict, Verdict::In);
+    // The painting now leaves both where they are.
+    let (painted, report) = apply_thresholds(&pinned);
+    assert_eq!(painted, pinned);
+    assert_eq!(report.pinned, 2);
+
+    // Pinning one row leaves the other unpinned.
+    let (one, report) = pin_verdicts(&track, &[1]).expect("a live observation");
+    assert_eq!(report.pinned, 1);
+    assert!(!one.observations[0].pinned && one.observations[1].pinned);
+}
+
+/// A pin of rows that are all pinned already changes nothing, and an index
+/// past the end is refused.
+#[test]
+fn pinning_rows_that_are_pinned_changes_nothing() {
+    let track = scored_track([0.95, 0.40]);
+    let (track, _) = set_verdict(&track, 0, Verdict::In).expect("a live observation");
+    let (same, report) = pin_verdicts(&track, &[0]).expect("a live observation");
+    assert_eq!(
+        report,
+        PinReport {
+            pinned: 0,
+            changed: false,
+        }
+    );
+    assert_eq!(same, track);
+    let (_, report) = pin_verdicts(&track, &[]).expect("nothing named");
+    assert!(!report.changed);
+
+    assert_eq!(
+        pin_verdicts(&track, &[1, 9]),
+        Err(TrackEditError::NoSuchObservation {
+            observation: 9,
+            observation_count: 2,
+        })
+    );
+}
+
 /// Rows unpinned together are decided together: of two rows of one image
 /// that both clear every bar, the one that scores better takes the image,
 /// whichever of them is named first.
@@ -2425,6 +2483,33 @@ fn a_point_on_the_bench_keeps_its_pinned_rows_through_evaluations() {
     assert_eq!((report.turned_in, report.turned_out), (0, 0));
     let (again, _) = evaluate_over(&scene, &edited, &read).expect("a framed track");
     assert_eq!(again.verdict_counts(), (2, 0));
+}
+
+/// Rows the bars decided and a person then pinned as they stood keep those
+/// verdicts through later evaluations, even under bars no reading clears.
+#[test]
+fn an_evaluation_leaves_rows_pinned_as_they_stood_alone() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (track, _) = three_rows_the_bars_decide(&scene);
+    let (read, _) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!(read.verdict_counts(), (3, 0));
+
+    let (pinned, report) = pin_verdicts(&read, &[0, 1, 2]).expect("live rows");
+    assert_eq!(report.pinned, 3);
+    let pinned = EditableTrack {
+        thresholds: Thresholds {
+            min_zncc: 1.1,
+            ..Thresholds::default()
+        },
+        ..pinned
+    };
+    for _ in 0..2 {
+        let (again, report) = evaluate_over(&scene, &edited, &pinned).expect("a framed track");
+        assert_eq!(again.verdict_counts(), (3, 0));
+        assert!(again.observations.iter().all(|o| o.pinned));
+        assert_eq!((report.turned_in, report.turned_out), (0, 0));
+    }
 }
 
 /// A reading has no minimum: one sighting alone is read as one sighting with

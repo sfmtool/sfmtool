@@ -175,7 +175,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `tilt_bench_patch` | write | Turn the patch to face a new outward normal, no further than its observations can see |
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
-| `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; or `unpin`, which hands one observation, a list of them or `"all"` back to the thresholds as one version |
+| `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; `pin`, which pins one observation, a list of them or `"all"` at the verdicts they have; or `unpin`, which hands them back to the thresholds; each one version |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
@@ -3073,19 +3073,23 @@ the same reason: a commit selects the point it wrote
 ([edits/commit-track.md](edits/commit-track.md)), which is where the call left
 the viewer looking rather than what the call did.
 
-**An unpin names one observation or several.** `set_bench_track_verdict` with
-`"verdict": "unpin"` takes `observation`, one index, or in its place
-`observations`, a list of indexes or `"all"`, and hands every pinned one of them
-back to the thresholds in one step (core's `unpin_verdicts`), so the bars decide
-them together and the history gains one version. Its reply then carries
-`observations`, one `{observation, verdict, pinned}` entry per named row, where
-the single form carries `observation`, `verdict` and `pinned` as before. `in`
-and `out` rule on one observation at a time; `observations` with either is
-refused, as is a call carrying both `observation` and `observations`.
+**A pin or an unpin names one observation or several.**
+`set_bench_track_verdict` with `"verdict": "unpin"` takes `observation`, one
+index, or in its place `observations`, a list of indexes or `"all"`, and hands
+every pinned one of them back to the thresholds in one step (core's
+`unpin_verdicts`), so the bars decide them together and the history gains one
+version. `"verdict": "pin"` takes the same forms and pins every named row that
+is not pinned at the verdict it has now, moving none, in one step (core's
+`pin_verdicts`); it is what Track View's *Keep* heading pin does when no row is
+pinned. The reply to either then carries `observations`, one
+`{observation, verdict, pinned}` entry per named row, where the single form
+carries `observation`, `verdict` and `pinned` as before. `in` and `out` rule on
+one observation at a time; `observations` with either is refused, as is a call
+carrying both `observation` and `observations`.
 
 **A step that had no effect answers successfully, with `changed: false`.**
 Setting the verdict an observation already has, unpinning rows none of which is
-pinned, dragging the patch to the pixel
+pinned, pinning rows all of which are pinned already, dragging the patch to the pixel
 it already sits under, painting the verdicts the track already carries,
 committing a track the point it wrote already holds: the
 history is not moved, `serial` and `cursor` are the version the node still stands
@@ -4343,7 +4347,9 @@ where a test hands no host over.
   add reported; a point's rows arrive pinned, an unpin of a list and of
   `"all"` is one version each with an entry per named row, a second unpin of
   all is no version, and `observations` with `in`, with `observation` too, or
-  naming an index past the end is refused; an observation reports where it sits whether or not anything has
+  naming an index past the end is refused; a pin of one row, of a list and of
+  `"all"` is one version each and keeps every verdict, a second pin of all is
+  no version, and a pin naming an index past the end is refused; an observation reports where it sits whether or not anything has
   read it -- the seed for a candidate the wire has just added, the keypoint for
   an observation a reading wrote; an affine seed keeps the shape it was given;
   the three seed

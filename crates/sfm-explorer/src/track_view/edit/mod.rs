@@ -97,6 +97,9 @@ pub struct TrackEditResponse {
     /// its *Unpin, let the thresholds decide*, the row menu's unpin of a
     /// selection, or the *Keep* heading's pin, which names every pinned row.
     pub unpin_verdicts: Option<Vec<usize>>,
+    /// Verdicts pinned as they stand in one step: the *Keep* heading's pin
+    /// when no row is pinned, which names every row.
+    pub pin_verdicts: Option<Vec<usize>>,
     /// The header's go-to button: open the *Go to Point* dialog.
     pub request_goto_point: bool,
     /// A row was clicked -- select this image, as a view-mode row does.

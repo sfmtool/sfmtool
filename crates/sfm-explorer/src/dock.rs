@@ -356,6 +356,10 @@ impl TabContext<'_> {
             let outcome = self.state.unpin_bench_verdicts(id, &label, observations);
             refuse(self.state, outcome);
         }
+        if let Some(observations) = response.pin_verdicts.as_deref() {
+            let outcome = self.state.pin_bench_verdicts(id, &label, observations);
+            refuse(self.state, outcome);
+        }
         if let Some(thresholds) = response.apply_thresholds.as_ref() {
             let outcome = self.state.apply_bench_thresholds(id, &label, thresholds);
             refuse(self.state, outcome);

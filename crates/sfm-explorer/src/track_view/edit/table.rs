@@ -198,7 +198,8 @@ pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A ke
     beside the switch is solid on a pinned verdict, which the thresholds leave alone, and a \
     faint outline on one they set. Click the pin to unpin a verdict and let the thresholds \
     decide again, or to pin one as it stands. The pin in this heading unpins every pinned \
-    verdict of the track at once.\n\n\
+    verdict of the track at once, and when none is pinned it pins every verdict as it \
+    stands.\n\n\
     The cell is green when the bars propose keeping the observation and red when they \
     propose turning it out, as they would were its verdict unpinned, so a switch that is on \
     in a red cell is a hand ruling against the bars. Hover a switch for the reason.\n\n\
@@ -273,17 +274,27 @@ pub(super) fn unpin_selection_label(count: usize) -> String {
     format!("Unpin {count} {noun}, let the thresholds decide")
 }
 
-/// The accessible name of the *Keep* heading's pin.
-pub(super) const UNPIN_ALL_NAME: &str = "Unpin all";
+/// The accessible name of the *Keep* heading's pin, which says what a click
+/// does: unpin every pinned row when any is pinned, pin every row when none is.
+pub(super) fn heading_pin_name(pinned: usize) -> &'static str {
+    if pinned > 0 {
+        "Unpin all"
+    } else {
+        "Pin all"
+    }
+}
 
 /// The *Keep* heading's pin's hover text: what a click does, with the count,
-/// or why there is nothing to do.
-pub(super) fn unpin_all_hover(pinned: usize, busy: Option<&str>) -> String {
-    match (pinned, busy) {
-        (0, _) => "No verdict is pinned: the thresholds decide every row.".to_string(),
-        (_, Some(why)) => why.to_string(),
-        (1, None) => "Unpin the 1 pinned verdict and let the bars decide".to_string(),
-        (n, None) => format!("Unpin all {n} pinned verdicts and let the bars decide"),
+/// or why there is nothing to do. `pinned` is how many rows are pinned and
+/// `rows` how many the track has.
+pub(super) fn heading_pin_hover(pinned: usize, rows: usize, busy: Option<&str>) -> String {
+    match (pinned, rows, busy) {
+        (_, 0, _) => "The track has no observations to pin.".to_string(),
+        (_, _, Some(why)) => why.to_string(),
+        (1, _, None) => "Unpin the 1 pinned verdict and let the bars decide".to_string(),
+        (0, 1, None) => "Pin the 1 verdict as it stands".to_string(),
+        (0, n, None) => format!("Pin all {n} verdicts as they stand"),
+        (n, _, None) => format!("Unpin all {n} pinned verdicts and let the bars decide"),
     }
 }
 
@@ -511,18 +522,25 @@ fn unpin_entry(ui: &mut egui::Ui, label: &str, enabled: bool, why_not: &str) -> 
 const NOT_PINNED: &str = "The thresholds already decide this verdict: it is not pinned.";
 
 /// The pin in the *Keep* heading, filling `rect`: solid when any row is pinned
-/// and an outline when none is, greyed when there is nothing to unpin or the
-/// node is busy. Returns whether it was clicked while it could act.
-fn unpin_all_pin(ui: &mut egui::Ui, rect: egui::Rect, pinned: usize, busy: Option<&str>) -> bool {
-    let enabled = pinned > 0 && busy.is_none();
+/// and an outline when none is, greyed when the track has no rows or the node
+/// is busy. Returns whether it was clicked while it could act; the caller
+/// unpins every pinned row when any is pinned, and pins every row otherwise.
+fn heading_pin(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    pinned: usize,
+    rows: usize,
+    busy: Option<&str>,
+) -> bool {
+    let enabled = rows > 0 && busy.is_none();
     let sense = if enabled {
         egui::Sense::click()
     } else {
         egui::Sense::hover()
     };
-    let response = ui.interact(rect, ui.id().with("track_view_unpin_all"), sense);
+    let response = ui.interact(rect, ui.id().with("track_view_heading_pin"), sense);
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, UNPIN_ALL_NAME)
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, heading_pin_name(pinned))
     });
     if ui.is_rect_visible(rect) {
         let visuals = ui.visuals();
@@ -534,7 +552,7 @@ fn unpin_all_pin(ui: &mut egui::Ui, rect: egui::Rect, pinned: usize, busy: Optio
         paint_pushpin(ui.painter(), rect.center(), color, pinned > 0);
     }
     let clicked = enabled && response.clicked();
-    response.on_hover_text(unpin_all_hover(pinned, busy));
+    response.on_hover_text(heading_pin_hover(pinned, rows, busy));
     clicked
 }
 
@@ -571,8 +589,19 @@ impl TrackEdit {
         let pinned: Vec<usize> = (0..track.observations.len())
             .filter(|&i| track.observations[i].pinned)
             .collect();
-        if draw_header(ui, &cols, pinned.len(), state.busy_refusal(id).as_deref()) {
-            response.unpin_verdicts = Some(pinned);
+        let rows = track.observations.len();
+        if draw_header(
+            ui,
+            &cols,
+            pinned.len(),
+            rows,
+            state.busy_refusal(id).as_deref(),
+        ) {
+            if pinned.is_empty() {
+                response.pin_verdicts = Some((0..rows).collect());
+            } else {
+                response.unpin_verdicts = Some(pinned);
+            }
         }
 
         let mut scroll_area = egui::ScrollArea::vertical().auto_shrink([false, false]);
@@ -1226,9 +1255,17 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
 /// scroll area so it stays put while the rows move under it.
 ///
 /// The *Keep* heading carries a pin over the rows' pin column, which unpins
-/// every pinned verdict of the track; `pinned` is how many there are and
-/// `busy` the node's busy refusal. Returns whether that pin was clicked.
-fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout, pinned: usize, busy: Option<&str>) -> bool {
+/// every pinned verdict of the track, or pins every verdict as it stands when
+/// none is pinned; `pinned` is how many are pinned, `rows` how many
+/// observations the track has and `busy` the node's busy refusal. Returns
+/// whether that pin was clicked.
+fn draw_header(
+    ui: &mut egui::Ui,
+    cols: &ColumnLayout,
+    pinned: usize,
+    rows: usize,
+    busy: Option<&str>,
+) -> bool {
     let available = ui.available_rect_before_wrap();
     // Body-sized, as the cells under them are, and in the weak colour, so
     // they still read as headings.
@@ -1264,5 +1301,5 @@ fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout, pinned: usize, busy: Opti
         egui::pos2(rect.min.x + cols.keep + SWITCH_CELL_WIDTH, rect.min.y),
         egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
     );
-    unpin_all_pin(ui, pin_rect, pinned, busy)
+    heading_pin(ui, pin_rect, pinned, rows, busy)
 }

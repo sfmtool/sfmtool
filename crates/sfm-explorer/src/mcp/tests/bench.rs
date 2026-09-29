@@ -3130,7 +3130,7 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
             "verdict": "in",
         }),
     );
-    assert!(several.0.contains("only to unpin them"), "{several}");
+    assert!(several.0.contains("only to pin or unpin them"), "{several}");
     let both = refused_call(
         &mut state,
         &mut viewer,
@@ -3151,6 +3151,112 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
             "reconstruction_label": "run_a",
             "observations": [0, 99],
             "verdict": "unpin",
+        }),
+    );
+    assert!(past.0.contains("no observation 99"), "{past}");
+}
+
+/// A pin names one observation, a list of them, or `"all"`, and pins each
+/// named row at the verdict it has, as one version; a pin of rows all pinned
+/// already is no version.
+#[test]
+fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let rows = |state: &mut AppState, viewer: &mut Viewer3D| {
+        let track = call(
+            state,
+            viewer,
+            "get_bench_track",
+            json!({ "reconstruction_label": "run_a" }),
+        );
+        track["observations"]
+            .as_array()
+            .expect("the observations")
+            .iter()
+            .map(|row| (row["verdict"].clone(), row["pinned"] == json!(true)))
+            .collect::<Vec<_>>()
+    };
+    let verdict = |state: &mut AppState, viewer: &mut Viewer3D, body: Value| {
+        let mut args = json!({ "reconstruction_label": "run_a" });
+        for (key, value) in body.as_object().expect("an object") {
+            args[key] = value.clone();
+        }
+        call(state, viewer, "set_bench_track_verdict", args)
+    };
+    verdict(
+        &mut state,
+        &mut viewer,
+        json!({ "observations": "all", "verdict": "unpin" }),
+    );
+    let unpinned = rows(&mut state, &mut viewer);
+    assert!(unpinned.iter().all(|(_, p)| !p), "{unpinned:?}");
+
+    let before = version_count(&state);
+    let one = verdict(
+        &mut state,
+        &mut viewer,
+        json!({ "observation": 0, "verdict": "pin" }),
+    );
+    assert_eq!(one["item"], json!(item), "{one}");
+    assert_eq!(one["changed"], json!(true), "{one}");
+    assert_eq!(one["observation"], json!(0), "{one}");
+    assert_eq!(one["pinned"], json!(true), "{one}");
+    assert_eq!(one["verdict"], unpinned[0].0, "{one}");
+    assert_eq!(version_count(&state), before + 1);
+
+    let listed = verdict(
+        &mut state,
+        &mut viewer,
+        json!({ "observations": [0, 1], "verdict": "pin" }),
+    );
+    assert_eq!(listed["changed"], json!(true), "{listed}");
+    let named = listed["observations"]
+        .as_array()
+        .expect("one entry per row");
+    assert_eq!(named.len(), 2, "{listed}");
+    assert_eq!(named[1]["pinned"], json!(true), "{listed}");
+    assert!(
+        listed["report"]
+            .as_str()
+            .expect("a sentence")
+            .starts_with("Pinned "),
+        "{listed}"
+    );
+    assert_eq!(version_count(&state), before + 2);
+
+    let all = verdict(
+        &mut state,
+        &mut viewer,
+        json!({ "observations": "all", "verdict": "pin" }),
+    );
+    assert_eq!(all["changed"], json!(true), "{all}");
+    assert_eq!(version_count(&state), before + 3);
+    let now = rows(&mut state, &mut viewer);
+    assert!(now.iter().all(|(_, p)| *p), "{now:?}");
+    assert_eq!(
+        now.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>(),
+        unpinned.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>(),
+        "every verdict stands as it was"
+    );
+
+    // Everything is pinned now, so another pin of all is no version.
+    let again = verdict(
+        &mut state,
+        &mut viewer,
+        json!({ "observations": "all", "verdict": "pin" }),
+    );
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert_eq!(version_count(&state), before + 3);
+
+    let past = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a",
+            "observations": [0, 99],
+            "verdict": "pin",
         }),
     );
     assert!(past.0.contains("no observation 99"), "{past}");

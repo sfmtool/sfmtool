@@ -109,6 +109,7 @@ pub struct TrackEditResponse {
     pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
     pub set_verdict: Option<(usize, Verdict)>, // a row's Keep switch, or its pin pinning
     pub unpin_verdicts: Option<Vec<usize>>,    // a pin, Unpin in a menu, or the Keep heading's pin
+    pub pin_verdicts: Option<Vec<usize>>,      // the Keep heading's pin when no row is pinned
     pub request_goto_point: bool,              // the header's go-to button
     pub select_image: Option<usize>,
     pub request_camera_view: Option<usize>,
@@ -734,14 +735,20 @@ what a kept observation is used for, when the thresholds set the switch, what a
 click on the switch, on the pin and on the heading's own pin does, and what the
 cell's colour means.
 
-**The *Keep* heading carries a pin** over the rows' pin column. Clicking it
-unpins every pinned row of the active track in one step
-(`AppState::unpin_bench_verdicts`, core's `unpin_verdicts`), one version and one
-`Bench` row. It is drawn solid while any row is pinned and as an outline when
-none is, and its hover text counts them: *Unpin all 12 pinned verdicts and let
-the bars decide*. It is greyed with nothing pinned, and while the node is busy
-with the same busy sentence the threshold boxes carry, since the step would be
-refused. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
+**The *Keep* heading carries a pin** over the rows' pin column, and it
+toggles. While any row of the active track is pinned, clicking it unpins every
+pinned row in one step (`AppState::unpin_bench_verdicts`, core's
+`unpin_verdicts`). While none is, clicking it pins every row at the verdict it
+has now (`AppState::pin_bench_verdicts`, core's `pin_verdicts`), moving no
+verdict, so a person can fix what the bars decided and undo an *Unpin all*.
+Either is one version and one `Bench` row, such as *Pinned 12 verdicts in
+{label}: 5 in, 7 out*. It is drawn solid while any row is pinned and as an
+outline when none is, its accessible name is *Unpin all* or *Pin all* to
+match, and its hover text says what a click does with the count: *Unpin all 12
+pinned verdicts and let the bars decide*, or *Pin all 12 verdicts as they
+stand*. It is greyed on a track with no observations, and while the node is
+busy with the same busy sentence the threshold boxes carry, since the step
+would be refused. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
 whole patch and `mid` over its middle half, what the two apart mean, and how
 the grid beside them is coloured. The *Self-similarity* heading's
 says what the radius is and what its two readings, its colours and its lines
@@ -1183,8 +1190,10 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   and the row's, a second unpin being no effect; the row menu on a row of a
   multi-row selection unpinning every pinned selected row with the count in its
   label, while the switch's menu names its row alone; the *Keep* heading's pin
-  unpinning every pinned row as one version and asking for nothing once none is
-  pinned, and its hover text counting the pins; the header counting kept, out
+  unpinning every pinned row as one version, and with none pinned asking to pin
+  every row, which pins them as one version with one log row and keeps each
+  verdict, undoes in one step, and makes the next click unpin them all again;
+  its hover text in both states and its accessible name; the header counting kept, out
   and pinned rows; the header printing the point's
   ID once, beside a renamed label, and the old index for a point that is gone,
   and a track from a point resolving the ID its copy button copies; a hover on

@@ -26,7 +26,7 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, duplicate as core_duplicate, evaluate as core_evaluate,
-    fit as core_fit, resize_patch as core_resize_patch,
+    fit as core_fit, pin_verdicts as core_pin_verdicts, resize_patch as core_resize_patch,
     resize_patch_to_pixel as core_resize_patch_to_pixel,
     search_descriptors as core_search_descriptors, search_geometry as core_search_geometry,
     set_stage as core_set_stage, set_verdict as core_set_verdict,
@@ -811,8 +811,9 @@ fn set_verdict(
     ))
 }
 
-/// The observations an unpin names: one index, a list of them, or ``"all"``.
-fn unpin_targets(track: &EditableTrack, observations: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+/// The observations a pin or an unpin names: one index, a list of them, or
+/// ``"all"``.
+fn verdict_targets(track: &EditableTrack, observations: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
     if let Ok(word) = observations.extract::<String>() {
         if word == "all" {
             return Ok((0..track.observations.len()).collect());
@@ -850,12 +851,43 @@ fn unpin_verdict(
     track: &PyEditableTrack,
     observations: &Bound<'_, PyAny>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let targets = unpin_targets(&track.inner, observations)?;
+    let targets = verdict_targets(&track.inner, observations)?;
     let (next, report) = core_unpin_verdicts(&track.inner, &targets).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("unpinned", report.unpinned)?;
     d.set_item("turned_in", report.turned_in)?;
     d.set_item("turned_out", report.turned_out)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Pin the verdicts of `observations` as they stand, in one step: each named
+/// observation that is not pinned becomes pinned and keeps its verdict, so
+/// :func:`apply_thresholds` and :func:`evaluate` leave it where it is. The
+/// inverse of :func:`unpin_verdict`.
+///
+/// `observations` is one index, a list of indices, or ``"all"`` for every
+/// observation of the track. When every one of them is pinned already nothing
+/// changes and the report says ``changed: False``.
+///
+/// Returns ``(EditableTrack, report)``. The report carries ``pinned`` (how
+/// many pins were set) and ``changed``. Raises ``ValueError`` for an index past
+/// the end.
+#[pyfunction]
+fn pin_verdict(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observations: &Bound<'_, PyAny>,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let targets = verdict_targets(&track.inner, observations)?;
+    let (next, report) = core_pin_verdicts(&track.inner, &targets).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("pinned", report.pinned)?;
     d.set_item("changed", report.changed)?;
     Ok((
         PyEditableTrack {
@@ -2118,6 +2150,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(unpin_verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(pin_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(translate_patch_to_pixel, m)?)?;
     m.add_function(wrap_pyfunction!(translate_patch, m)?)?;
     m.add_function(wrap_pyfunction!(tilt_patch, m)?)?;

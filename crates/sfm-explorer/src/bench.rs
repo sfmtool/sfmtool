@@ -748,6 +748,81 @@ impl AppState {
         Ok(())
     }
 
+    /// Pin the verdicts of `observations` as they stand
+    /// (`sfmtool_core::bench::pin_verdicts`): no verdict moves, and the bars
+    /// leave the rows alone from then on.
+    ///
+    /// One version for all of them, as an unpin is one; a call all of whose
+    /// rows are pinned already is a no-effect row instead. The log names the
+    /// image when one row is named, and otherwise counts the rows it pinned
+    /// and how many of those are `in` and `out`.
+    pub(crate) fn pin_bench_verdicts(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observations: &[usize],
+    ) -> Result<(), String> {
+        let (index, bench, track) = self.bench_step_target(id, label)?;
+        if let Some(&missing) = observations
+            .iter()
+            .find(|&&i| i >= track.observations.len())
+        {
+            return Err(format!("{label} has no observation {missing}."));
+        }
+        let (next, report) = bench::pin_verdicts(&track, observations)
+            .map_err(|e| format!("Cannot pin those verdicts: {e}"))?;
+        let one = match observations {
+            [observation] => Some((
+                *observation,
+                self.image_name(ImageRef::new(
+                    id,
+                    track.observations[*observation].image as usize,
+                )),
+            )),
+            _ => None,
+        };
+        if !report.changed {
+            self.no_effect(match &one {
+                Some((_, name)) => {
+                    format!("Left {name} pinned in {label}: no effect, it is pinned already")
+                }
+                None => format!(
+                    "Left the verdicts pinned in {label}: no effect, every one of them is \
+                     pinned already"
+                ),
+            });
+            return Ok(());
+        }
+        let text = match &one {
+            Some((observation, name)) => format!(
+                "Pinned {name} ({}) in {label}",
+                next.observations[*observation].verdict
+            ),
+            None => {
+                // The rows this step pinned: pinned now and not before.
+                let kept = track
+                    .observations
+                    .iter()
+                    .zip(&next.observations)
+                    .filter(|(was, is)| !was.pinned && is.pinned && is.verdict == Verdict::In)
+                    .count();
+                format!(
+                    "Pinned {} {} in {label}: {kept} in, {} out",
+                    report.pinned,
+                    if report.pinned == 1 {
+                        "verdict"
+                    } else {
+                        "verdicts"
+                    },
+                    report.pinned - kept
+                )
+            }
+        };
+        let bench = install(&bench, label, next)?;
+        self.push_bench_step(index, bench, text);
+        Ok(())
+    }
+
     /// Apply one hand edit of a track's geometry: a sighting placed, the
     /// patch resized or turned, or one cluster-stage sighting's shape set.
     ///
