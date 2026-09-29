@@ -20,9 +20,13 @@ STATUS_REJECTED_UNLOCALIZABLE = 6
 def _texture(w: int, h: int) -> np.ndarray:
     """Deterministic texture (no clipping).
 
-    The two fine terms (periods near 6 px) make a member's own patch pin a
-    position under the member gate; the smooth terms alone match themselves
-    3 template-grid px away and every member would be refused at the default.
+    The three fine terms (periods near 5 to 7 px) make a member's own patch
+    pin a position under the member gate; the smooth terms alone match
+    themselves 3 template-grid px away and every member would be refused at
+    the default. With only the first two fine terms, the second member's patch
+    matches itself at the template-grid shift (-2, 3) on the edge of the
+    square the gate searches, and reads 3; the third, in a third direction,
+    removes that near-repeat.
     """
     y, x = np.mgrid[0:h, 0:w].astype(np.float64)
     x += 0.5
@@ -34,6 +38,7 @@ def _texture(w: int, h: int) -> np.ndarray:
         + 20.0 * np.sin(0.17 * x + 0.13 * y + 2.9)
         + 15.0 * np.sin(0.83 * x + 0.47 * y + 0.2)
         + 12.0 * np.sin(-0.52 * x + 0.88 * y + 1.1)
+        + 10.0 * np.sin(0.61 * x - 0.71 * y + 2.3)
     )
     return np.clip(np.round(v), 0, 255).astype(np.uint8)
 
