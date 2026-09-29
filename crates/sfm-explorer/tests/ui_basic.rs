@@ -6,23 +6,24 @@
 //! The viewer's windowed tests: what only a real window, on a real desktop,
 //! can be asked.
 //!
-//! **The tests read the window in one of two ways, and most of them read it
-//! through the viewer's own MCP endpoint.** A viewer launched with `--mcp 0`
-//! answers `get_widgets` with every widget egui drew in a frame (role, name,
-//! rectangle, enabled and toggled state) and the dialogs and menus drawn above
-//! the dock, and `click` presses a widget the way a person's mouse would. That
-//! is the same information the platform's accessibility tree carries, read in
-//! the viewer's process instead of across the operating system's
-//! accessibility bridge, which is the expensive part: on a GitHub-hosted
-//! Windows runner one walk of the viewer's tree takes about 18.6s. See
-//! `specs/gui/architecture.md` § "Testing" for how the suite reads the window,
-//! and `specs/gui/mcp-server.md` § "`get_widgets`", § "`click` / `hover`" and
-//! § "What synthetic input does not exercise" for the tools.
+//! **The tests read the window through the viewer's own MCP endpoint.** A
+//! viewer launched with `--mcp 0` answers `get_widgets` with every widget egui
+//! drew in a frame (role, name, rectangle, enabled and toggled state) and the
+//! dialogs and menus drawn above the dock, and `click` presses a widget the way
+//! a person's mouse would. That is the same information the platform's
+//! accessibility tree carries, read in the viewer's process instead of across
+//! the operating system's accessibility bridge, which is the expensive part: on
+//! a GitHub-hosted Windows runner one walk of the viewer's tree through that
+//! bridge took about 18.6s. See `specs/gui/architecture.md` § "Testing" for how
+//! the suite reads the window, and `specs/gui/mcp-server.md` § "`get_widgets`",
+//! § "`click` / `hover`" and § "What synthetic input does not exercise" for the
+//! tools.
 //!
-//! **One smoke test still reads the tree through the platform, with xa11y**,
-//! because what it checks is below the viewer's process: [`window_appears`]
-//! checks that the accessibility tree reaches the platform with content in it.
-//! ([`dump_tree`], `#[ignore]`d, prints that tree for a person debugging it.)
+//! **One smoke test reads the tree through the platform, on Windows only**:
+//! `window_appears` asks UI Automation for the viewer's window subtree and
+//! checks that the menu bar's buttons are in it. What it checks is outside the
+//! viewer's process, so MCP cannot show it. Its doc says why it runs on Windows
+//! alone.
 //!
 //! **One test sends real OS input**:
 //! `a_real_right_click_opens_the_reconstruction_rows_context_menu` (Windows
@@ -31,10 +32,10 @@
 //! and cannot see a defect in how the operating system's input gets there. It
 //! finds where to press, and reads the menu that opened, over MCP.
 //!
-//! The MCP tests never attach through the accessibility API. They wait on the
-//! endpoint instead, polling `get_widgets` until the window's menu bar is
-//! listed (see [`McpViewer::launched`]), and anything else that has to wait
-//! for state polls an MCP read with a deadline.
+//! The MCP tests wait on the endpoint, polling `get_widgets` until the window's
+//! menu bar is listed (see [`McpViewer::launched`]), and anything else that has
+//! to wait for state polls an MCP read with a deadline. ([`dump_widgets`],
+//! `#[ignore]`d, prints the whole window's listing for a person debugging one.)
 //!
 //! Setup goes through the **command line** where it can: `--demo` in place of
 //! driving File > Load Demo Data… and its dialog.
@@ -45,24 +46,22 @@
 //! its [`Guard`] drops, which is how a reader of one CI log tells a slow runner
 //! apart from an expensive suite. See [`Guard::report`] for the fields.
 
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::Cell;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, Once};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use xa11y::{App, AppExt, Element, ElementData, Locator, TreeNode};
 
 /// Serializes the UI tests so at most one `sfm-explorer` window is alive at a
 /// time. `cargo test` runs tests on multiple threads by default, and several
-/// viewers plus concurrent accessibility tree walks make the Windows UI
-/// Automation backend fail with `E_UNEXPECTED` (0x8000FFFF, "Catastrophic
-/// failure"). Two tests also share one on-disk file, the default layout (see
-/// [`DefaultLayoutFile`]), and the Windows-only right-click test drives the
-/// real cursor, which belongs to whichever window is in front. Each test holds
-/// this lock for its whole body, so a plain `cargo test` behaves the same as
-/// `--test-threads=1` without the caller having to remember the flag.
+/// viewers at once compete for one desktop and one GPU. Two tests also share
+/// one on-disk file, the default layout (see [`DefaultLayoutFile`]), and the
+/// Windows-only right-click test drives the real cursor, which belongs to
+/// whichever window is in front. Each test holds this lock for its whole body,
+/// so a plain `cargo test` behaves the same as `--test-threads=1` without the
+/// caller having to remember the flag.
 static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn ui_test_lock() -> MutexGuard<'static, ()> {
@@ -77,23 +76,23 @@ fn ui_test_lock() -> MutexGuard<'static, ()> {
 // --- What the suite costs, as the suite sees it ---
 //
 // Costs with different causes are added together in a job's wall clock:
-// launching a viewer (process spawn, GPU init, the first frame), resolving a
-// locator (a cross-process snapshot of the whole accessibility subtree), and
-// the MCP calls the tests make. A log that reports only the total cannot tell
-// them apart, nor tell a change that made the *suite* cheaper from a run that
-// happened to land on a faster machine. So each is counted and printed
-// separately; see `Guard::report`.
+// launching a viewer (process spawn, GPU init, the first frame), querying the
+// platform's accessibility tree (a cross-process snapshot of the window's
+// subtree), and the MCP calls the tests make. A log that reports only the total
+// cannot tell them apart, nor tell a change that made the *suite* cheaper from
+// a run that happened to land on a faster machine. So each is counted and
+// printed separately; see `Guard::report`.
 
-/// Locator resolutions run since the current [`Guard`] was made.
+/// Waits on the accessibility tree run since the current [`Guard`] was made.
 static OPS: AtomicU64 = AtomicU64::new(0);
-/// Nanoseconds spent inside those resolutions.
+/// Nanoseconds spent inside those waits.
 static OP_NANOS: AtomicU64 = AtomicU64::new(0);
-/// Calls into the accessibility API run since then, and the nanoseconds spent
-/// inside them — the *platform's* share of `OP_NANOS`. See [`walked`].
+/// UI Automation subtree queries run since then, and the nanoseconds spent
+/// inside them — the *platform's* share of `OP_NANOS`. See `walked`.
 static WALKS: AtomicU64 = AtomicU64::new(0);
 static WALK_NANOS: AtomicU64 = AtomicU64::new(0);
-/// Nanoseconds spent finding the window every locator is rooted at, which is
-/// neither of the above and is reported on its own. See [`Attached::window`].
+/// Nanoseconds spent getting a UI Automation element for the viewer's window,
+/// which is neither of the above and is reported on its own. See `UiaWindow`.
 static WINDOW_NANOS: AtomicU64 = AtomicU64::new(0);
 /// MCP tool calls made since then, polls included, and the nanoseconds spent
 /// waiting for their replies. See [`McpViewer::call`].
@@ -117,11 +116,11 @@ static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
 /// spawning the viewer, and nothing else does.
 ///
 /// **Process-wide counters are sound here only because of [`UI_TEST_LOCK`].**
-/// The instrumented calls go through [`App`] and the MCP endpoint, which know
-/// nothing about the guard, so the counters cannot hang off one — but every
-/// test holds that lock for its whole body, so exactly one guard is ever alive
-/// and "the operations since the last reset" and "this test's operations" are
-/// the same set.
+/// The instrumented calls go through UI Automation and the MCP endpoint, which
+/// know nothing about the guard, so the counters cannot hang off one — but
+/// every test holds that lock for its whole body, so exactly one guard is ever
+/// alive and "the operations since the last reset" and "this test's
+/// operations" are the same set.
 fn begin_accounting() -> Instant {
     for counter in [
         &OPS,
@@ -137,14 +136,14 @@ fn begin_accounting() -> Instant {
     Instant::now()
 }
 
-/// Run one locator resolution, counting it and timing it.
+/// Run one wait on the accessibility tree, counting it and timing it.
 ///
-/// **One call here is one `op`, however many platform attempts happen inside
+/// **One call here is one `op`, however many subtree queries happen inside
 /// it.** That keeps `ops` a deterministic fingerprint of suite *shape* rather
-/// than of how a particular run went: a run that needed a retry reports the
-/// same `ops` as one that did not, and pays for it in `op_ms` where the time
-/// actually went. Retries announce themselves on stdout instead; see
-/// [`retrying_transient`].
+/// than of how a particular run went: a run that had to poll three times
+/// reports the same `ops` as one that did not, and pays for it in `op_ms`
+/// where the time actually went.
+#[cfg(windows)]
 fn measured<T>(op: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let out = op();
@@ -153,18 +152,19 @@ fn measured<T>(op: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Run one call into the accessibility API, counting it and timing it.
+/// Run one UI Automation subtree query, counting it and timing it.
 ///
-/// **A different counter from [`measured`], asking a different question.** An
+/// **A different counter from `measured`, asking a different question.** An
 /// `op` is what a *test* asked for; a `walk` is what the *platform* was asked
 /// to do to service it, and moves with the run. One op is one or many walks —
-/// a [`Attached::wait_all`] that waits three ticks for a widget walks three
-/// times — so `walks` is never a second spelling of `ops`.
+/// a wait that polls three times for the menu bar walks three times — so
+/// `walks` is never a second spelling of `ops`.
 ///
-/// Bracketing only the call, never the `sleep` between two of them, makes
+/// Bracketing only the query, never the `sleep` between two of them, makes
 /// `walk_ms` the platform's share and `op_ms − walk_ms` the suite's own
 /// waiting — the difference between a tree query that is expensive and an app
 /// that is slow to draw.
+#[cfg(windows)]
 fn walked<T>(query: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let out = query();
@@ -173,238 +173,15 @@ fn walked<T>(query: impl FnOnce() -> T) -> T {
     out
 }
 
-// --- Transient platform failures ---
-//
-// The accessibility APIs are cross-process, and a call can fail because the
-// tree was being rebuilt underneath it rather than because the suite asked for
-// the wrong thing. Those two look identical to `expect`, so the ones that are
-// recoverable are named here and nothing else is retried: a genuine selector
-// mistake must still fail on its first attempt, loudly, instead of spending
-// three budgets discovering the same absence.
-
-/// `UIA_E_TIMEOUT` — the UI Automation layer gave up on a cross-process call.
-/// Says nothing about the app; the call can simply be made again.
-const UIA_E_TIMEOUT: u32 = 0x8013_1505;
-
-/// `UIA_E_ELEMENTNOTAVAILABLE` — the element went away mid-call, which for an
-/// egui app means the frame that owned that node has been replaced. The same
-/// "the tree moved under me" story as a timeout.
-const UIA_E_ELEMENTNOTAVAILABLE: u32 = 0x8004_0201;
-
-/// How many extra attempts a read-only probe gets. Bounded deliberately: a
-/// condition that survives three snapshots is not transient.
-const TRANSIENT_ATTEMPTS: u32 = 3;
-
-/// Whether an error is the platform losing its footing rather than the suite
-/// being wrong.
-///
-/// Compared on the low 32 bits because `code` is an `i64` carrying an HRESULT,
-/// and which of the two spellings of a high-bit-set HRESULT arrives -- the
-/// sign-extended `-2146233083` a failing run printed, or a raw
-/// `0x0000_0000_8013_1505` -- is a detail of how the backend widened it. Both
-/// truncate to the same `u32`.
-fn is_transient(error: &xa11y::Error) -> bool {
-    matches!(
-        error,
-        xa11y::Error::Platform { code, .. }
-            if matches!(*code as u32, UIA_E_TIMEOUT | UIA_E_ELEMENTNOTAVAILABLE)
-    )
-}
-
-/// Re-run a **side-effect-free** probe when the platform reports a transient
-/// failure.
-///
-/// Safe because the probe has no side effects: resolving a locator twice costs
-/// two snapshots and changes nothing. It must not be extended to a press, which
-/// can land even when the call reports a failure. A retry is announced on
-/// stdout so a run that needed one says so, and is *not* counted as a second
-/// `op`; see [`measured`].
-fn retrying_transient<T>(
-    what: &str,
-    mut attempt: impl FnMut() -> xa11y::Result<T>,
-) -> xa11y::Result<T> {
-    for tries in 1..TRANSIENT_ATTEMPTS {
-        match attempt() {
-            Err(error) if is_transient(&error) => {
-                println!(
-                    "UIPROBE RETRY op={what} attempt={} of {TRANSIENT_ATTEMPTS} after {error}",
-                    tries + 1
-                );
-                // The tree is mid-rebuild by assumption, so give the next frame
-                // a chance to land rather than racing the same one again.
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            outcome => return outcome,
-        }
-    }
-    attempt()
-}
-
-/// The attached viewer, for the smoke set: its process root, and — once
-/// something asks for it — its window.
-///
-/// **Searches are rooted at the window rather than the process, which on
-/// Windows is the difference between one COM call and one per node.**
-/// `App::by_pid` there hands back a *synthesized* per-process `application`
-/// node with no live UI Automation element behind it, so a search scoped to it
-/// falls back to a generic descent that fetches every node's properties one
-/// cross-process call at a time, once per clause of the selector. A top-level
-/// window is a real HWND-backed element, so the same search becomes one
-/// `FindAllBuildCache(TreeScope_Subtree)`. Measured on Windows 11 against the
-/// empty-state tree (56 nodes): process-rooted, one clause ~0.22s and a
-/// five-clause group ~0.88s; window-rooted, ~0.10s for either.
-///
-/// Scoping to the window loses nothing to look at: the viewer runs a single
-/// egui viewport, so its menus and popups are painted inside that one window.
-struct Attached {
-    app: App,
-    /// The viewer's window, resolved by [`Self::window`] the first time
-    /// anything roots a search at it, and held for the life of the test.
-    ///
-    /// Unlike a widget node, which AccessKit republishes every frame, a
-    /// top-level window handle stays valid for as long as the window does,
-    /// which is as long as the [`Guard`] that owns the process.
-    window: OnceCell<Element>,
-}
-
-impl Attached {
-    /// The window every [`Self::locator`] is rooted at, found on first use.
-    ///
-    /// Reported as its own `window_ms` rather than folded into `launch_ms` or
-    /// `op_ms`: `App::windows` materializes every top-level window of the
-    /// process, which on a GitHub-hosted Windows runner has cost around 10s,
-    /// and that is neither the machine's launch speed nor a question a test
-    /// asked. See [`Guard::report`].
-    ///
-    /// Panics if the window never appears, which for a viewer whose process is
-    /// already attached is a viewer that never drew one.
-    fn window(&self) -> &Element {
-        self.window.get_or_init(|| {
-            let started = Instant::now();
-            let found = window_of(&self.app, ATTACH_TIMEOUT);
-            WINDOW_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            found.unwrap_or_else(|e| panic!("{e}"))
-        })
-    }
-
-    /// A locator for `selector`, rooted at the window rather than at the
-    /// process; see [`Attached`] for why.
-    fn locator(&self, selector: &str) -> Locator {
-        let window = self.window();
-        Locator::new(
-            std::sync::Arc::clone(window.provider()),
-            Some(window.data().clone()),
-            selector,
-        )
-    }
-
-    /// Wait until a node of each `(role, name)` in `expected` is in a
-    /// **single** snapshot of the tree, and hand back what that snapshot
-    /// matched.
-    ///
-    /// The clauses are joined into one selector *group*, which
-    /// `Locator::elements` resolves in one walk, and each expectation is then
-    /// decided against the `ElementData` already in hand. Polling, because a
-    /// widget routinely lands in the tree a poll or two after the query that
-    /// wants it on a slow runner.
-    ///
-    /// Counted as **one** op however many ticks that takes, and however many
-    /// times [`retrying_transient`] re-runs it: see [`measured`].
-    ///
-    /// **The elements go stale the moment the app is touched.** egui
-    /// republishes its accessibility tree every frame, so read what is needed
-    /// from them before the next interaction.
-    fn wait_all(
-        &self,
-        expected: &[(&str, &str)],
-        timeout: Duration,
-    ) -> xa11y::Result<Vec<Element>> {
-        assert!(!expected.is_empty(), "wait_all needs a node to wait for");
-        let matches = |data: &ElementData, (role, name): (&str, &str)| {
-            data.role.to_snake_case() == role && data.name.as_deref() == Some(name)
-        };
-        let group = expected
-            .iter()
-            .map(|(role, name)| format!(r#"{role}[name="{name}"]"#))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let locator = self.locator(&group);
-        measured(|| {
-            retrying_transient("wait_all", || {
-                let started = Instant::now();
-                loop {
-                    let found = walked(|| locator.elements())?;
-                    let unmet: Vec<String> = expected
-                        .iter()
-                        .filter(|want| !found.iter().any(|e| matches(e.data(), **want)))
-                        .map(|(role, name)| format!(r#"{role}[name="{name}"] never appeared"#))
-                        .collect();
-                    if unmet.is_empty() {
-                        return Ok(found);
-                    }
-                    let elapsed = started.elapsed();
-                    if elapsed >= timeout {
-                        return Err(xa11y::Error::Timeout {
-                            elapsed,
-                            diagnosis: Some(Box::new(
-                                xa11y::Diagnosis::new()
-                                    .condition("every expectation in one snapshot")
-                                    .selector(group.clone())
-                                    .last_observed(unmet.join("; "))
-                                    .candidates(found.iter().map(|element| {
-                                        let data = element.data();
-                                        format!("{} {:?}", data.role, data.name)
-                                    })),
-                            )),
-                        });
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            })
-        })
-    }
-}
-
-/// xa11y (since 0.9) no longer hardcodes a 5s default; an unset default means
-/// single-attempt, no-polling. Set one process-wide before any locator runs.
-///
-/// macOS gets a much larger budget: a freshly launched app's deep widget
-/// subtree isn't queryable over the AX API for several seconds after launch,
-/// even though the app and window nodes register quickly.
-fn init() {
-    static SET_TIMEOUT: Once = Once::new();
-    #[cfg(target_os = "macos")]
-    let default = Duration::from_secs(60);
-    #[cfg(not(target_os = "macos"))]
-    let default = Duration::from_secs(5);
-    SET_TIMEOUT.call_once(|| xa11y::set_default_timeout(default));
-}
-
-/// Launch the viewer with the given arguments.
+/// The viewer's command line with the given arguments, not yet spawned.
 ///
 /// Every test but the two that start on a saved layout passes
 /// `--no-default-layout`: a developer who has saved a layout of their own to
 /// `~/.sfm-explorer-default-layout.json` must not have this suite's panel
 /// assertions fail on their machine.
-fn launch_with(args: &[&str]) -> Child {
-    command(args).spawn().expect("failed to spawn sfm-explorer")
-}
-
-/// The viewer's command line, not yet spawned.
 fn command(args: &[&str]) -> Command {
-    #[allow(unused_mut)] // `cmd` is only mutated on macOS (see below)
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
     cmd.args(args);
-    // Keep egui rendering so its AccessKit tree stays fresh for queries — an
-    // idle window can be inspected before the tree is fully published. Only
-    // needed on macOS; Windows attaches to a window that already repaints
-    // enough, and forcing ControlFlow::Poll there would disturb its
-    // DirectManipulation timer. Linux needs it as little as Windows does:
-    // AccessKit's Unix adapter pushes the tree onto the AT-SPI bus, where it
-    // stays readable after the viewer goes idle. An MCP request wakes the
-    // viewer's loop on every platform.
-    #[cfg(target_os = "macos")]
-    cmd.env("SFMTOOL_EXPLORER_FORCE_REPAINT", "1");
     cmd
 }
 
@@ -419,23 +196,14 @@ fn command(args: &[&str]) -> Command {
 /// one path in the developer's home directory — so releasing the lock while
 /// either is still in flight hands the next test a machine that is not yet the
 /// one it asked for.
-///
-/// `child` sits behind a `RefCell` because [`attach`] replaces it: a launch
-/// that never becomes discoverable is retried once, in place, so the guard
-/// still owns (and on drop still kills) whichever process is current.
 struct Guard {
     /// When the viewer was spawned, and how long it took to become usable —
     /// the two halves of the `UIPROBE` line's `launch_ms`, filled in by
-    /// [`ChildHandle::attached`] or [`McpViewer::launched`]. Neither owns
-    /// anything, so neither takes part in the drop order described above.
+    /// [`McpViewer::launched`] or by `window_appears`. Neither owns anything,
+    /// so neither takes part in the drop order described above.
     started: Instant,
     launch: Cell<Option<Duration>>,
-    child: RefCell<Child>,
-    /// The viewer's command line, kept so a stuck launch can be respawned the
-    /// same way. `None` marks a guard whose process cannot simply be
-    /// re-spawned — the MCP viewer, whose endpoint line has already been read
-    /// off its stdout — and [`ChildHandle::relaunch`] declines to retry it.
-    args: Option<Vec<String>>,
+    child: Child,
     /// The default layout file this test wrote, for the two tests that start
     /// the viewer on one. Held here so that it is restored *under* the lock:
     /// restored after the lock was released, it raced the next test's own
@@ -445,50 +213,54 @@ struct Guard {
 }
 
 impl Guard {
-    /// Acquire the serialization lock, then launch the app under it.
+    /// Acquire the serialization lock, then launch the viewer under it with no
+    /// MCP endpoint, for the smoke test that reads it through the platform.
+    #[cfg(windows)]
     fn new() -> Self {
-        Guard::with_args(&["--no-default-layout"])
-    }
-
-    /// The same, with the viewer's command line spelled out.
-    fn with_args(args: &[&str]) -> Self {
         let lock = ui_test_lock();
         let started = begin_accounting();
         Guard {
             started,
             launch: Cell::new(None),
-            child: RefCell::new(launch_with(args)),
-            args: Some(args.iter().map(|a| (*a).to_string()).collect()),
+            child: command(&["--no-default-layout"])
+                .spawn()
+                .expect("failed to spawn sfm-explorer"),
             _layout_file: None,
             _lock: lock,
         }
+    }
+
+    /// The viewer's process id.
+    #[cfg(windows)]
+    fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     /// Print this test's `UIPROBE` line, and the running `UIPROBE TOTAL`.
     ///
     /// ```text
     /// UIPROBE test=file_menu_items launch_ms=369 window_ms=0 ops=0 op_ms=0 walks=0 walk_ms=0 calls=2 call_ms=12 total_ms=431
-    /// UIPROBE TOTAL tests=20 launch_ms=13401 window_ms=1968 ops=2 op_ms=179 walks=3 walk_ms=249 calls=50 call_ms=594 total_ms=20411 mean_launch_ms=670 mean_op_ms=89 mean_walk_ms=83 mean_call_ms=11
+    /// UIPROBE TOTAL tests=20 launch_ms=10438 window_ms=16 ops=1 op_ms=35 walks=2 walk_ms=67 calls=54 call_ms=660 total_ms=13672 mean_launch_ms=521 mean_op_ms=35 mean_walk_ms=33 mean_call_ms=12
     /// ```
     ///
     /// `launch_ms` is the runner-speed yardstick: spawning a process, waiting
     /// for the GPU and for the viewer to become usable is work the suite cannot
     /// make cheaper, so `mean_launch_ms` moving between two runs means the
-    /// *machine* moved. For a smoke test "usable" is the OS publishing an
-    /// accessibility root; for an MCP test it is `get_widgets` listing the menu
-    /// bar.
+    /// *machine* moved. For the smoke test "usable" is the viewer's window
+    /// becoming visible, which it does only once its UI Automation provider is
+    /// registered; for an MCP test it is `get_widgets` listing the menu bar.
     ///
     /// `window_ms`, `ops`, `op_ms`, `walks` and `walk_ms` are the
-    /// accessibility bridge's share, and are zero for every test but the smoke
-    /// set. `window_ms` is finding the window the locators are rooted at (see
-    /// [`Attached::window`]). `ops` is how many *resolution requests* the tests
-    /// made, which only a change to the tests moves; `walks` is how many whole
-    /// tree walks the platform did to service them, and `walk_ms` the time
-    /// inside those calls — so `walk_ms` near `op_ms` says the platform's
-    /// query is what costs, and a gap says the suite was waiting for the app to
-    /// draw. `mean_walk_ms` is the price of one tree query, which against a
-    /// tree size (see [`window_appears`], which prints one) gives a per-node
-    /// figure comparable across platforms. See [`walked`].
+    /// accessibility bridge's share, and are zero for every test but the
+    /// Windows smoke test. `window_ms` is getting a UI Automation element for
+    /// the viewer's window (see `UiaWindow::of`). `ops` is how many *waits* on
+    /// the tree the tests made, which only a change to the tests moves; `walks`
+    /// is how many UI Automation subtree queries serviced them, and `walk_ms`
+    /// the time inside those calls — so `walk_ms` near `op_ms` says the
+    /// platform's query is what costs, and a gap says the suite was waiting for
+    /// the app to draw. `mean_walk_ms` is the price of one tree query, which
+    /// against a tree size (see `window_appears`, which prints one) gives a
+    /// per-node figure. See `walked`.
     ///
     /// `calls` and `call_ms` are the MCP tool calls a test made after the
     /// launch, polls included, and the time spent waiting for their replies.
@@ -503,14 +275,12 @@ impl Guard {
     /// here panics — reports too, which is when the numbers are most wanted.
     /// The test's name comes from its thread, which libtest names after it
     /// even under `--test-threads=1`. A guard whose viewer never became usable
-    /// reports `launch_ms=0`, as does the `#[ignore]`d [`dump_tree`], which
-    /// resolves the app itself rather than through [`attach`].
+    /// reports `launch_ms=0`.
     ///
     /// None of this reaches a green CI log without `--nocapture`: libtest
-    /// captures a passing test's stdout and discards it. All three invocations
-    /// of this suite pass the flag — the `ui-test` task in `pixi.toml`, its
-    /// Linux override, and the `ui-test-macos` job, which runs the built
-    /// binary directly.
+    /// captures a passing test's stdout and discards it. Both invocations of
+    /// this suite pass the flag — the `ui-test` task in `pixi.toml` and its
+    /// Linux override, which every `ui-test-*` CI job runs.
     fn report(&self) {
         let total = self.started.elapsed();
         let launch = self.launch.get().unwrap_or_default();
@@ -573,17 +343,12 @@ impl Guard {
         );
     }
 
-    fn child(&self) -> ChildHandle<'_> {
-        ChildHandle { guard: self }
-    }
-
     /// Wait up to `budget` for the app to exit on its own. Returns whether it
     /// did — `false` means it was still running when the budget ran out.
     fn wait_for_exit(&mut self, budget: Duration) -> bool {
         let deadline = Instant::now() + budget;
-        let child = self.child.get_mut();
         loop {
-            match child.try_wait() {
+            match self.child.try_wait() {
                 Ok(Some(_)) => return true,
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(100))
@@ -597,219 +362,214 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        let child = self.child.get_mut();
-        child.kill().ok();
-        child.wait().ok();
+        self.child.kill().ok();
+        self.child.wait().ok();
         // Last, so `total_ms` covers the teardown the test also pays for.
         self.report();
-    }
-}
-
-/// A borrow of the process a [`Guard`] currently owns: its pid, and the one
-/// operation [`attach`] needs beyond reading that — replacing it.
-#[derive(Clone, Copy)]
-struct ChildHandle<'a> {
-    guard: &'a Guard,
-}
-
-impl ChildHandle<'_> {
-    /// The pid of the process the guard owns *now* — re-read after a relaunch.
-    fn id(&self) -> u32 {
-        self.guard.child.borrow().id()
-    }
-
-    /// Stop the launch clock: the app is discoverable, so everything from the
-    /// spawn to here is launch cost and everything after it is the test's.
-    ///
-    /// Only the first attach counts. A relaunch happens *inside* that first
-    /// one and is honestly part of what the launch cost.
-    fn attached(&self) {
-        if self.guard.launch.get().is_none() {
-            self.guard.launch.set(Some(self.guard.started.elapsed()));
-        }
-    }
-
-    /// Kill and reap the current process, then spawn a replacement with the
-    /// same command line, leaving the guard owning the new one. Returns
-    /// whether a replacement was launched; `false` for a guard that recorded
-    /// no command line, whose caller must report the original failure.
-    fn relaunch(&self) -> bool {
-        let Some(args) = self.guard.args.as_deref() else {
-            return false;
-        };
-        {
-            let mut child = self.guard.child.borrow_mut();
-            child.kill().ok();
-            child.wait().ok();
-        }
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        *self.guard.child.borrow_mut() = launch_with(&args);
-        true
     }
 }
 
 // Generous timeout: the first launch on a cold CI runner pays wgpu
 // adapter/shader init (and, on Windows, AV scanning of the fresh binary),
 // which has been observed to exceed 15s. Healthy launches are ready in ~1s.
-const ATTACH_TIMEOUT: Duration = Duration::from_secs(60);
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Budget for a widget to appear in, or change within, a listing or the
 /// accessibility tree. Polls return as soon as the condition holds, so healthy
 /// cases stay fast; only a genuine failure waits the full budget.
 ///
-/// macOS needs a much larger budget for the smoke set: a freshly launched
-/// app's deep widget subtree isn't queryable over the AX API for several
-/// seconds after launch. Windows needs more than a nominal one too: a lookup
-/// straight after loading the demo scene pays the scene renderer's wgpu
-/// pipeline init on a cold CI runner, and at 5s that timed out with the widget
-/// appearing just past the budget.
-#[cfg(target_os = "macos")]
-const CONTENT_TIMEOUT: Duration = Duration::from_secs(60);
-#[cfg(not(target_os = "macos"))]
+/// More than a nominal budget: a lookup straight after loading the demo scene
+/// pays the scene renderer's wgpu pipeline init on a cold CI runner, and at 5s
+/// that timed out on Windows with the widget appearing just past the budget.
 const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Attach to the launched viewer, relaunching it once if it never becomes
-/// discoverable, and panicking with both failures if the relaunch is no better.
+// --- The smoke test: the accessibility tree, read through UI Automation ---
+
+/// The viewer's window, as UI Automation sees it, and what a subtree query
+/// against it needs.
 ///
-/// The retry is for the runner, not the product: over 400 CI runs, three
-/// `ui-test-windows` launches never registered with UI Automation inside the
-/// full [`ATTACH_TIMEOUT`], while every other test in the same job attached
-/// normally, and a re-run of the same commit passed. One retry only, so a real
-/// regression still fails fast and reports what it saw both times.
-///
-/// **This resolves the process and nothing else.** The window the locators are
-/// rooted at is found on first use instead, by [`Attached::window`].
-fn attach(child: ChildHandle<'_>) -> Attached {
-    init();
-    let first = match try_attach(child) {
-        Ok(attached) => {
-            child.attached();
-            return attached;
-        }
-        Err(e) => e,
-    };
-    assert!(
-        child.relaunch(),
-        "sfm-explorer window did not appear: {first}"
-    );
-    match try_attach(child) {
-        Ok(attached) => {
-            child.attached();
-            attached
-        }
-        Err(second) => panic!(
-            "sfm-explorer window did not appear, on the original launch or on \
-             one relaunch: {first}; after relaunching: {second}"
-        ),
-    }
+/// The query is rooted at the window's own element, from `ElementFromHandle`,
+/// so a `FindAllBuildCache(TreeScope_Subtree)` fetches the window and every
+/// node beneath it in one cross-process call, with the two properties the test
+/// reads (name and control type) cached on each node. The viewer runs a single
+/// egui viewport, so its menus and popups are inside that one window.
+#[cfg(windows)]
+struct UiaWindow {
+    root: windows::Win32::UI::Accessibility::IUIAutomationElement,
+    everything: windows::Win32::UI::Accessibility::IUIAutomationCondition,
+    request: windows::Win32::UI::Accessibility::IUIAutomationCacheRequest,
 }
 
-/// A process has one accessibility root on all three platforms, and the pid
-/// resolves it directly: the AXApplication on macOS, the `application` node
-/// AccessKit's Unix adapter registers on Linux, and — since xa11y 0.15 — a
-/// synthesized per-process `application` node on Windows, whose children are
-/// the process's top-level windows. Addressing by pid picks out *this* viewer
-/// when the developer running the suite has one of their own open.
-fn try_attach(child: ChildHandle<'_>) -> Result<Attached, String> {
-    let app = App::by_pid(child.id(), ATTACH_TIMEOUT).map_err(|e| format!("{e:?}"))?;
-    Ok(Attached {
-        app,
-        window: OnceCell::new(),
-    })
-}
+/// One node of a subtree query: its UI Automation control type and its name.
+#[cfg(windows)]
+type UiaNode = (
+    windows::Win32::UI::Accessibility::UIA_CONTROLTYPE_ID,
+    String,
+);
 
-/// The viewer's window, waiting for the OS to register it.
-///
-/// The first window is the one, and there is only ever one: the viewer runs a
-/// single egui viewport, and winit's helper windows are not reported here.
-/// Polling rather than asking once, because the application node can exist
-/// before its window does — most visibly on macOS.
-fn window_of(app: &App, budget: Duration) -> Result<Element, String> {
-    let deadline = Instant::now() + budget;
-    loop {
-        let last = match app.windows() {
-            Ok(mut windows) if !windows.is_empty() => return Ok(windows.remove(0)),
-            Ok(_) => "the process has no top-level window yet".to_string(),
-            Err(e) => format!("{e:?}"),
+#[cfg(windows)]
+impl UiaWindow {
+    /// The UI Automation element for `hwnd`, with a true condition and a cache
+    /// request for name and control type ready for [`Self::walk`].
+    ///
+    /// Joins this thread to the multithreaded apartment, which is what UI
+    /// Automation recommends for a client. libtest runs each test on a thread
+    /// of its own, so the thread has no apartment yet; `S_FALSE`, for a thread
+    /// already in the MTA, is a success too.
+    fn of(hwnd: windows::Win32::Foundation::HWND) -> windows::core::Result<UiaWindow> {
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
         };
-        if Instant::now() >= deadline {
-            return Err(format!("no window under the sfm-explorer app node: {last}"));
-        }
-        std::thread::sleep(Duration::from_millis(100));
+        use windows::Win32::UI::Accessibility::{
+            CUIAutomation, IUIAutomation, UIA_ControlTypePropertyId, UIA_NamePropertyId,
+        };
+        let started = Instant::now();
+        let window = unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+            let request = automation.CreateCacheRequest()?;
+            request.AddProperty(UIA_NamePropertyId)?;
+            request.AddProperty(UIA_ControlTypePropertyId)?;
+            UiaWindow {
+                root: automation.ElementFromHandle(hwnd)?,
+                everything: automation.CreateTrueCondition()?,
+                request,
+            }
+        };
+        WINDOW_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        Ok(window)
+    }
+
+    /// Every node in the window's subtree, the window itself included. One
+    /// cross-process call, counted as one walk.
+    fn walk(&self) -> windows::core::Result<Vec<UiaNode>> {
+        use windows::Win32::UI::Accessibility::TreeScope_Subtree;
+        walked(|| unsafe {
+            let found =
+                self.root
+                    .FindAllBuildCache(TreeScope_Subtree, &self.everything, &self.request)?;
+            (0..found.Length()?)
+                .map(|i| {
+                    let node = found.GetElement(i)?;
+                    Ok((node.CachedControlType()?, node.CachedName()?.to_string()))
+                })
+                .collect()
+        })
     }
 }
 
-// --- The smoke set: the accessibility tree, read through the platform ---
+/// Whether `nodes` holds a button named exactly `name`.
+#[cfg(windows)]
+fn has_button(nodes: &[UiaNode], name: &str) -> bool {
+    use windows::Win32::UI::Accessibility::UIA_ButtonControlTypeId;
+    nodes
+        .iter()
+        .any(|(kind, text)| *kind == UIA_ButtonControlTypeId && text == name)
+}
 
-/// The viewer's accessibility tree reaches the platform, with content in it.
+/// The viewer's accessibility tree reaches UI Automation, with content in it.
 ///
 /// The one test that checks the platform can read the viewer at all, which is
 /// what a screen reader needs and what nothing inside the process can see. It
-/// asks for the menu bar's four buttons rather than only the window, so a tree
-/// that is published but empty fails here. The rest of the suite reads widgets
-/// over MCP, so this is also what keeps a broken AccessKit adapter or a missing
-/// Linux accessibility stack from passing unnoticed.
+/// waits for the viewer's window, then polls a UI Automation subtree query of
+/// that window until the menu bar's four buttons are in one snapshot, so a tree
+/// that is published but empty fails here; the same snapshot must hold no
+/// `View` button.
+///
+/// **Windows only, because the viewer's own accessibility logic is.** The
+/// viewer creates its window hidden and shows it only after AccessKit has
+/// registered its UI Automation provider (`sfm_explorer::run`), and that
+/// ordering is what this checks. On macOS and Linux the AccessKit adapters are
+/// egui-winit's, with no code of the viewer's around them. On every platform
+/// the MCP tests already show that the tree has content, because
+/// `get_widgets` reads the same AccessKit update the adapters publish.
+#[cfg(windows)]
 #[test]
 fn window_appears() {
-    let _guard = Guard::new();
-    let app = attach(_guard.child());
-    app.wait_all(
-        &[
-            ("button", "File"),
-            ("button", "Edit"),
-            ("button", "Go"),
-            ("button", "Panels"),
-        ],
-        CONTENT_TIMEOUT,
-    )
-    .expect("the menu bar's buttons did not reach the platform's accessibility tree");
-    report_tree_size(&app);
+    let guard = Guard::new();
+    let pid = guard.pid();
+
+    // The window becomes visible only once the UI Automation provider is
+    // registered, so that is where the launch ends.
+    let deadline = Instant::now() + LAUNCH_TIMEOUT;
+    let hwnd = loop {
+        if let Some(&hwnd) = top_level_windows(pid).first() {
+            break hwnd;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sfm-explorer never showed a window"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    guard.launch.set(Some(guard.started.elapsed()));
+
+    let window = UiaWindow::of(hwnd)
+        .unwrap_or_else(|e| panic!("no UI Automation element for the viewer's window: {e}"));
+    let menu_bar = ["File", "Edit", "Go", "Panels"];
+    let snapshot = measured(|| {
+        let deadline = Instant::now() + CONTENT_TIMEOUT;
+        loop {
+            let last = match window.walk() {
+                Ok(nodes) => {
+                    let missing: Vec<&str> = menu_bar
+                        .iter()
+                        .copied()
+                        .filter(|name| !has_button(&nodes, name))
+                        .collect();
+                    if missing.is_empty() {
+                        break nodes;
+                    }
+                    format!("no {missing:?} button among {} nodes", nodes.len())
+                }
+                Err(e) => format!("the subtree query failed: {e}"),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "the menu bar's buttons did not reach UI Automation: {last}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    assert!(
+        !has_button(&snapshot, "View"),
+        "UI Automation lists a View button in the menu bar"
+    );
+    report_tree_size(&window);
 }
 
 /// Print the `UIPROBE TREE` line: how big the tree a walk crosses actually is.
 ///
 /// ```text
-/// UIPROBE TREE nodes=56 depth=4 walk_ms=99
+/// UIPROBE TREE nodes=52 walk_ms=31
 /// ```
 ///
 /// `mean_walk_ms` says what one tree query costs and says nothing about why,
 /// because the two candidate whys — a tree with a lot of nodes in it, and a
 /// platform that is slow per node — are indistinguishable without the
 /// denominator. This is the denominator: `walk_ms / nodes` is the per-node
-/// price, which compares across three platforms whose trees are the same shape
-/// and whose walk costs differ by orders of magnitude.
+/// price.
 ///
-/// Taken after [`window_appears`] has seen the menu bar, so the count is of a
-/// published tree, and against the viewer's empty state. `nodes` and `walk_ms`
-/// come from resolving the universal selector, rooted where
-/// [`Attached::wait_all`] roots its group, so it prices the same work; `depth`
-/// comes from a second, recursive descent, since a flat match list has no
-/// shape, and is not counted as a [`walked`] call. Windows counts the window
-/// itself among the nodes and the other two do not, a one-node difference that
-/// does not move a per-node price.
-fn report_tree_size(app: &Attached) {
+/// Taken after `window_appears` has seen the menu bar, so the count is of a
+/// published tree, and against the viewer's empty state. It is one more
+/// [`UiaWindow::walk`], so it prices the same work the wait did, and counts the
+/// window itself among the nodes.
+#[cfg(windows)]
+fn report_tree_size(window: &UiaWindow) {
     let started = Instant::now();
-    let nodes = walked(|| app.locator("*").elements()).map(|found| found.len());
+    let nodes = window.walk().map(|found| found.len());
     let walk = started.elapsed();
-    let depth = app.window().tree(None).map(|root| node_depth(&root));
-    match (nodes, depth) {
-        (Ok(nodes), Ok(depth)) => println!(
-            "\nUIPROBE TREE nodes={nodes} depth={depth} walk_ms={}",
-            walk.as_millis()
-        ),
+    match nodes {
+        Ok(nodes) => println!("\nUIPROBE TREE nodes={nodes} walk_ms={}", walk.as_millis()),
         // Not an assertion: this line is a measurement the suite reports, and
         // a test named for whether the window appears must not start failing
-        // over the shape of the tree inside it.
-        (nodes, depth) => println!(
-            "\nUIPROBE TREE unavailable: nodes={nodes:?} depth={depth:?} walk_ms={}",
+        // over a second query of the tree inside it.
+        Err(e) => println!(
+            "\nUIPROBE TREE unavailable: {e} walk_ms={}",
             walk.as_millis()
         ),
     }
-}
-
-/// How many levels `node` spans, counting itself as one.
-fn node_depth(node: &TreeNode) -> usize {
-    1 + node.children.iter().map(node_depth).max().unwrap_or(0)
 }
 
 // --- Real OS input, aimed and read back over MCP (Windows) ---
@@ -955,7 +715,7 @@ fn per_monitor_dpi_aware() {
         SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         DPI_AWARENESS_PER_MONITOR_AWARE,
     };
-    static SET: Once = Once::new();
+    static SET: std::sync::Once = std::sync::Once::new();
     SET.call_once(|| {
         let _ =
             unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
@@ -1029,7 +789,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
 
     per_monitor_dpi_aware();
     let viewer = McpViewer::launch_demo();
-    let pid = viewer.guard.child().id();
+    let pid = viewer.guard.pid();
 
     // The demo node's row is labelled "demo". Found in the Scene panel, so a
     // "demo" label elsewhere cannot be taken for it, and then read from a
@@ -1121,17 +881,16 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
 
 // --- Diagnostics ---
 
-/// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).
+/// Diagnostic: print the whole window's `get_widgets` listing at the empty
+/// state, as the MCP tests see it (run with `-- --ignored --nocapture`).
 #[test]
 #[ignore]
-fn dump_tree() {
-    let _guard = Guard::new();
-    let pid = _guard.child().id();
-    let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
+fn dump_widgets() {
+    let viewer = McpViewer::launch();
+    let listing = viewer.get_widgets(json!({}));
     println!(
         "{}",
-        app.dump(Some(5))
-            .unwrap_or_else(|e| format!("dump error: {e}"))
+        serde_json::to_string_pretty(&listing).expect("a listing is JSON")
     );
 }
 
@@ -1200,11 +959,7 @@ impl McpViewer {
         let guard = Guard {
             started,
             launch: Cell::new(None),
-            child: RefCell::new(child),
-            // No recorded command line: this viewer's endpoint is read off
-            // the stdout of *this* process, so a respawn would be a viewer on
-            // a different port that nothing is listening to.
-            args: None,
+            child,
             _layout_file: layout_file,
             _lock: lock,
         };
@@ -1218,7 +973,7 @@ impl McpViewer {
             let _ = tx.send(line);
         });
         let line = rx
-            .recv_timeout(ATTACH_TIMEOUT)
+            .recv_timeout(LAUNCH_TIMEOUT)
             .expect("the viewer never printed its MCP endpoint");
         let address = line
             .trim()
@@ -1234,7 +989,7 @@ impl McpViewer {
         // Not counted as calls: this is the launch. A request that times out
         // (a first frame slower than the read timeout) is asked again.
         let body = tool_body("get_widgets", json!({}));
-        let deadline = Instant::now() + ATTACH_TIMEOUT;
+        let deadline = Instant::now() + LAUNCH_TIMEOUT;
         loop {
             let last = match try_rpc(&viewer.address, &body) {
                 Ok(response) => {

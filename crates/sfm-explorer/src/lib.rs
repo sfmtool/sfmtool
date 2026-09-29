@@ -117,17 +117,6 @@ impl From<egui_winit::accesskit_winit::Event> for UserEvent {
     }
 }
 
-/// Whether the UI tests asked us to render continuously. The harness sets
-/// `SFMTOOL_EXPLORER_FORCE_REPAINT` on the spawned process: without it the app
-/// renders a couple of frames and goes idle, and the accessibility tree can be
-/// queried before egui has fully published it. Kept out of normal runs so the
-/// idle viewer doesn't spin the CPU.
-fn force_repaint_for_tests() -> bool {
-    use std::sync::OnceLock;
-    static FORCE: OnceLock<bool> = OnceLock::new();
-    *FORCE.get_or_init(|| std::env::var_os("SFMTOOL_EXPLORER_FORCE_REPAINT").is_some())
-}
-
 /// Entry point for the SfM Explorer GUI application.
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -683,15 +672,6 @@ impl ApplicationHandler<UserEvent> for App {
         #[cfg(target_os = "windows")]
         if let Some(next) = self.next_dm_update {
             event_loop.set_control_flow(ControlFlow::WaitUntil(next));
-        }
-        // Under UI tests, keep drawing so egui continuously republishes its
-        // AccessKit tree; otherwise the tree may be queried before the idle app
-        // has fully populated it.
-        if force_repaint_for_tests() {
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
         }
     }
 

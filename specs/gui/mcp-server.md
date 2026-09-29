@@ -4510,7 +4510,7 @@ demo row's label inside the picture it came with.
 **`get_widgets` and `click` are how the rest of `ui_basic` reads and drives the
 window**: its menu, panel and HUD tests list widgets and click them over the
 same endpoint rather than reading the platform's accessibility tree, which only
-the `window_appears` smoke test still does. The Windows test that presses a real
+the Windows `window_appears` smoke test does, through UI Automation. The Windows test that presses a real
 right mouse button aims it with the window block's `inner_position` and a
 listing's `rect_px`, and reads the menu it opened with `get_widgets`
 ([architecture.md](architecture.md) § "Testing").

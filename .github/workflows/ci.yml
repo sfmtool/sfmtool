@@ -845,13 +845,9 @@ jobs:
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
         run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
-  # macOS accessibility UI tests. Same xa11y-driven suite as the
-  # ui-test-windows job, but macOS gates the AX API behind a TCC grant
-  # (kTCCServiceAccessibility) that must target the *exact* on-disk binary.
-  # The cargo test binary's path is content-hashed, so we build it first,
-  # resolve that path, grant TCC to it, then execute it directly — running it
-  # back through `cargo test` could rebuild and move the hash out from under
-  # the grant.
+  # macOS UI tests. The same suite as the ui-test-windows job, run the same
+  # way. It drives the viewer over its MCP endpoint and reads nothing through
+  # the macOS accessibility API, so it needs no Accessibility (TCC) grant.
   ui-test-macos:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -898,34 +894,8 @@ jobs:
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
-      # Compile the test binary (and the sfm-explorer bin it launches) without
-      # running, then resolve the test binary's hashed path from cargo's JSON
-      # stream. `fromjson?` skips any non-JSON lines pixi may interleave.
-      # `--features ui-tests` because `ui_basic` is gated behind it; without the
-      # flag cargo would build no such target and `jq` would resolve nothing.
-      - name: Build UI test binary
-        id: build
-        run: |
-          set -euo pipefail
-          bin=$(pixi run -e ui cargo test -p sfm-explorer --features ui-tests --test ui_basic --no-run --message-format=json \
-            | jq -rR 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "ui_basic") | .executable // empty' \
-            | tail -n1)
-          test -x "$bin"
-          echo "Resolved UI test binary: $bin"
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-
-      # Grant the Accessibility (TCC) permission to that exact binary so it can
-      # read sfm-explorer's accessibility tree via AXUIElement.
-      - name: Grant accessibility permission
-        uses: xa11y/setup-a11y@v1
-        with:
-          macos-tcc-client: ${{ steps.build.outputs.bin }}
-
-      # `--nocapture` for the same reason the `ui-test` task in pixi.toml
-      # passes it: libtest discards a passing test's stdout, and the suite's
-      # own `UIPROBE` cost lines are wanted on green runs above all.
       - name: UI tests
-        run: "${{ steps.build.outputs.bin }} --test-threads=1 --nocapture"
+        run: pixi run -e ui ui-test
 
       - name: Save Rust target
         # Main only, and only a new generation (the cache-hit guard): a PR's
@@ -952,22 +922,18 @@ jobs:
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
         run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
-  # Linux accessibility UI tests. The same xa11y-driven suite as the Windows
-  # and macOS jobs, but Linux is where the accessibility API has to be *stood
-  # up* rather than merely used: AT-SPI2 is a pair of D-Bus services, and a
-  # bare runner has neither them, nor a session bus to put them on, nor a
-  # display to open a window on. setup-a11y installs and starts all of that.
-  # `setup-window-manager` is off by default and turned on here as insurance
-  # rather than a proven need: the action's docs flag egui/AccessKit as a
-  # toolkit whose tree can depend on a window being mapped and activated, but
-  # this viewer publishes its whole tree under a bare Xvfb and the suite passes
-  # without a WM. Starting fluxbox costs a second, so it stays on.
+  # Linux UI tests. The same suite as the Windows and macOS jobs, run through
+  # the same pixi task. A bare runner has no display, so the task's
+  # `scripts/display_env.sh` wrapper starts Xvfb when `DISPLAY` is unset; this
+  # job installs it. It also installs the X client libraries winit loads at
+  # run time (`libxkbcommon-x11-0` for the keyboard, and the Xlib extensions)
+  # so the job does not depend on what the runner image happens to carry.
   #
-  # `mesa-vulkan-drivers` is ours to add rather than the action's: the viewer's
-  # wgpu build carries only the Vulkan backend on Linux (see sfm-explorer's
-  # Cargo.toml), so with the loader present but no ICD behind it every launch
-  # panics on `Failed to create wgpu surface` before there is a window to read
-  # a tree from. lavapipe, which this package carries, renders the suite fine.
+  # `mesa-vulkan-drivers` is there because the viewer's wgpu build carries
+  # only the Vulkan backend on Linux (see sfm-explorer's Cargo.toml), so with
+  # the loader present but no ICD behind it every launch panics on
+  # `Failed to create wgpu surface` before a window opens. lavapipe, which
+  # this package carries, renders the suite fine.
   ui-test-linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -1014,15 +980,13 @@ jobs:
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
-      - name: Set up accessibility environment
-        uses: xa11y/setup-a11y@v1
-        with:
-          setup-window-manager: true
-          extra-packages: mesa-vulkan-drivers
+      - name: Install display and Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xvfb mesa-vulkan-drivers \
+            libxkbcommon-x11-0 libx11-xcb1 libxcursor1 libxrandr2 libxi6
 
-      # DISPLAY, the session bus and the AT-SPI daemons are live in the job env
-      # by now, so the `scripts/a11y_env.sh` wrapper the Linux `ui-test` task
-      # goes through finds everything already running and is a passthrough.
       - name: UI tests
         run: pixi run -e ui ui-test
 

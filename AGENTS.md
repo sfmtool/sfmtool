@@ -176,7 +176,9 @@ empty-handed". Name the thing and say what it does.
   two matrix jobs that share nothing and so run in parallel — `test-os-rust`
   (`cargo test --workspace`) and `test-os-python` (`maturin develop --release`
   then `pytest`); the windowed `ui_basic` suite gets a job per platform —
-  `ui-test-windows`, `ui-test-macos`, `ui-test-linux`; the Rust build is
+  `ui-test-windows`, `ui-test-macos`, `ui-test-linux`, each running
+  `pixi run -e ui ui-test` (the Linux one apt-installs Xvfb and lavapipe
+  first); the Rust build is
   cached, saved and pruned by `main` only — the "Rust caches" comment above
   `prune-caches` says why. Two things there are easy to get wrong: a **target**
   cache is keyed on `hashFiles('Cargo.lock', 'Cargo.toml',
@@ -265,17 +267,11 @@ backlog and keep them honest as findings get addressed:
   them, and `ui_basic` with them, in `lint`, but does not run them, to keep
   uninstrumented artifacts out of the coverage job's target dir. `ui_basic` has
   a job per platform instead (`ui-test-{windows,macos,linux}`).
-- **`pixi run ui-test` on Linux needs an accessibility stack, and does not say
-  so when it is missing.** Most of `ui_basic` reads the viewer over its own MCP
-  endpoint, but its smoke test `window_appears` reads the viewer's tree with
-  xa11y over AT-SPI2, which is a pair of D-Bus services rather than part of the
-  OS, so a headless box needs a display, a session bus and those daemons before
-  there is a tree at all — and a query without them returns an *empty* tree,
-  not an error, so that test times out waiting for the menu bar while the
-  launch looks healthy. The Linux `ui-test` task
-  routes through `scripts/a11y_env.sh`, which starts only what is missing and
-  is a passthrough on a real desktop; CI uses `xa11y/setup-a11y` for the same
-  thing. The viewer also needs a Vulkan ICD (`mesa-vulkan-drivers` for
+- **`pixi run ui-test` on Linux needs a display and a Vulkan driver.** The
+  Linux `ui-test` task routes through `scripts/display_env.sh`, which starts
+  Xvfb when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set and is a
+  passthrough on a desktop; the `ui-test-linux` job apt-installs `xvfb` for
+  it. The viewer also needs a Vulkan ICD (`mesa-vulkan-drivers` for
   lavapipe): Vulkan is the only wgpu backend compiled in for Linux, so without
   one it panics at surface creation. See `specs/gui/architecture.md` §
   "Testing".

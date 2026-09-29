@@ -32,11 +32,11 @@ name = "winit_wgpu_directmanipulation"
 path = "examples/winit_wgpu_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
-# The windowed accessibility suite. Declared explicitly rather than left to
+# The windowed suite. Declared explicitly rather than left to
 # autodiscovery because `required-features` only applies to a target the
 # manifest names, and the point of the gate is that a plain
 # `cargo test --workspace` builds and runs everything *but* this: it needs a
-# real window, a live accessibility stack and `--test-threads=1`, so it has its
+# real window, a GPU surface and `--test-threads=1`, so it has its
 # own CI jobs (`ui-test-{windows,macos,linux}`) and the `ui-test` pixi task,
 # which pass `--features ui-tests`.
 #
@@ -178,22 +178,20 @@ sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 # `.kdf` over them, and want the directory gone when the test ends.
 tempfile = "3"
 
-# The smoke set in `ui_basic` reads the accessibility tree through the platform,
-# which xa11y does on all three desktop platforms: Windows (UI Automation),
-# macOS (AXUIElement), Linux (AT-SPI2 over D-Bus). Linux is the one whose API has to be brought up rather than merely
-# used: AT-SPI2 is a pair of D-Bus services, so a headless box needs a display,
-# a session bus and those daemons started before there is any tree to read, and
-# a missing piece reads as an empty tree rather than an error.
-# `scripts/a11y_env.sh` stands that up locally; `xa11y/setup-a11y` does it in
-# CI. Not target-gated: `ui_basic` is `cfg`'d to those three targets, so a
-# fourth compiles it away and never reaches this dependency.
-xa11y = "0.15"
-# The rest of `ui_basic` speaks MCP to a real viewer and decodes the PNG a real
-# frame produced. An integration test sees only dev-dependencies, so the three
-# the crate already builds with are named again here.
+# `ui_basic` speaks MCP to a real viewer and decodes the PNG a real frame
+# produced. An integration test sees only dev-dependencies, so the three the
+# crate already builds with are named again here.
 base64 = "0.23"
 image = "0.25"
 serde_json = "1"
+
+# `ui_basic`'s Windows smoke test reads the viewer's window through UI
+# Automation. Named here rather than in the crate's own `windows` features
+# because the crate's code does not use it; `accesskit_windows` already turns
+# the same feature on for the one `windows` version in the tree, so this adds
+# nothing to what is compiled.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_UI_Accessibility"] }
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]
