@@ -631,7 +631,15 @@ fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
                 a.radius,
                 b.radius
             );
-            for (x, y) in a.surface.iter().zip(&b.surface) {
+            let side = 2 * r + 1;
+            for (k, (x, y)) in a.surface.iter().zip(&b.surface).enumerate() {
+                let (dx, dy) = ((k % side) as i64 - r as i64, (k / side) as i64 - r as i64);
+                if dx * dx + dy * dy > (r * r) as i64 {
+                    // The ringed reading keeps the corners outside the disk,
+                    // and the overlap reading leaves them NaN.
+                    assert!(x.is_finite() && y.is_nan(), "{what}: {x} vs {y}");
+                    continue;
+                }
                 assert!(
                     x.is_nan() && y.is_nan() || (x - y).abs() < 1e-5,
                     "{what}: {x} vs {y}"
