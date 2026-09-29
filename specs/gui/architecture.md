@@ -145,7 +145,7 @@ sfmtool/
 │   │       │   ├── input.rs          # Pan / zoom / hover dispatch
 │   │       │   └── overlay.rs        # Feature + reprojection overlays
 │   │       ├── track_view/           # Track View: the Edit checkbox and its two bodies
-│   │       │   ├── mod.rs            # The box, the dispatch, the selection notice
+│   │       │   ├── mod.rs            # The box and the dispatch on it
 │   │       │   ├── view/             # View mode: the selected point's track
 │   │       │   │   ├── mod.rs        # Body state and per-frame `show`
 │   │       │   │   ├── prepare.rs    # Per-observation data for a new selection

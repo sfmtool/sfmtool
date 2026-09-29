@@ -608,7 +608,14 @@ would be seen, not a claim that nothing stands in front of it.
 Clicking a mark selects that observation's row in Track View's edit mode
 ([`track-view.md`](track-view.md) § "Edit mode"): the mark and the row are one observation, so
 clicking either is the one gesture. The layer is on top, so a click it catches
-does not also select a feature underneath.
+does not also select a feature underneath. That holds for every handle below,
+the ones that are no observation's mark included (an outline's corner or edge
+past the marks, the normal's arrowhead, the ghost's centre): a click whose press
+a handle took selects no feature's point, and a double-click on a handle is
+neither *Edit on Bench* nor the zoom. A feature of another point under a handle
+is therefore not selected by a click on the handle, which would unfocus the
+item being edited ([`track-view.md`](track-view.md) § "The selection and the
+focused item").
 
 ##### The handles
 

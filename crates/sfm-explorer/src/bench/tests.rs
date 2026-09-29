@@ -465,18 +465,329 @@ fn a_busy_node_does_not_refuse_focusing_or_unfocusing() {
 
     state.focus_bench_item(id, &label).expect("not a step");
     assert!(state.focused_item().is_some());
-    // Ticking Edit over the point the item came from focuses it too.
+    // Ticking Edit over the point the item came from focuses it too, and so
+    // does a tick with no point selected, which goes back to the item.
     state.unfocus_bench_item();
-    state
-        .set_editing(id, true)
-        .expect_err("no point is selected, so the tick has nothing to put on");
-    state.select_point(PointRef::new(id, POINT as usize));
-    state.set_editing(id, true).expect("a focus, not a put");
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, POINT as usize))
+    );
+    state.set_editing(id, true).expect("focusing, not a put");
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.unfocus_bench_item();
+    state.deselect_point();
+    state.set_editing(id, true).expect("focusing, not a put");
     assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
     state.set_editing(id, false).expect("an unfocus");
     assert!(state.focused_item().is_none());
 
     state.finish_background_task();
+}
+
+// ── The selection rules ─────────────────────────────────────────────────
+//
+// While an item is focused, the selected node is its node and the selected
+// point its origin followed to the cursor, or no point. Each test below is a
+// row of the transitions table in `specs/gui/track-view.md`.
+
+/// A cluster started on `id` at a pixel of image 0, focused, and its label.
+fn start_cluster(state: &mut AppState, id: ReconId) -> String {
+    state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
+        .expect("a pixel on the sensor")
+        .label
+}
+
+/// A second node, appended and so selected, and its id.
+fn second_node(state: &mut AppState) -> ReconId {
+    state.append_node(SceneNode::demo(projected_embedded_demo(12)))
+}
+
+#[test]
+fn selecting_another_point_unfocuses_with_one_row_and_no_version() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let before = versions(&state, id);
+    state.action_log.clear();
+
+    state.select_point(PointRef::new(id, 0));
+    assert!(state.focused_item().is_none(), "another point kept it");
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 0)));
+    assert_eq!(versions(&state, id), before, "a selection pushed a version");
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        rows[0],
+        (Kind::Selection, format!("Stopped editing {label}"))
+    );
+    assert!(rows[1].1.starts_with("Selected point "), "{rows:?}");
+}
+
+#[test]
+fn selecting_the_origin_clearing_the_point_or_an_image_of_the_node_keeps_it() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let origin = PointRef::new(id, POINT as usize);
+    assert_eq!(
+        state.selected_point,
+        Some(origin),
+        "the put selected no origin"
+    );
+
+    state.select_point(origin);
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.select_image(Some(ImageRef::new(id, 1)));
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.select_camera(Some(crate::scene::CameraRef::new(id, 0)));
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.select_recon(id);
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.deselect_point();
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.clear_selection();
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+}
+
+#[test]
+fn any_selection_on_another_node_unfocuses() {
+    let (mut state, a) = state();
+    let label = put_on_bench(&mut state, a);
+    let b = second_node(&mut state);
+    assert!(
+        state.focused_item().is_none(),
+        "opening b kept the item on a"
+    );
+
+    let refocus = |state: &mut AppState| {
+        state
+            .focus_bench_item(a, &label)
+            .expect("on the bench of a");
+        assert_eq!(state.selected_recon, Some(a), "focusing did not select a");
+    };
+    refocus(&mut state);
+    state.select_image(Some(ImageRef::new(b, 0)));
+    assert!(state.focused_item().is_none(), "an image of b kept it");
+    refocus(&mut state);
+    state.select_camera(Some(crate::scene::CameraRef::new(b, 0)));
+    assert!(state.focused_item().is_none(), "a camera of b kept it");
+    refocus(&mut state);
+    state.select_point(PointRef::new(b, POINT as usize));
+    assert!(state.focused_item().is_none(), "a point of b kept it");
+    refocus(&mut state);
+    state.select_recon(b);
+    assert!(state.focused_item().is_none(), "the node row of b kept it");
+    assert_eq!(state.selected_recon, Some(b));
+}
+
+#[test]
+fn focusing_selects_the_node_and_the_origin_or_clears_the_point() {
+    let (mut state, a) = state();
+    let point = put_on_bench(&mut state, a);
+    let cluster = start_cluster(&mut state, a);
+    let b = second_node(&mut state);
+    state.select_point(PointRef::new(b, 0));
+
+    // A track with an origin: its node and origin.
+    state
+        .focus_bench_item(a, &point)
+        .expect("on the bench of a");
+    assert_eq!(state.selected_recon, Some(a));
+    assert_eq!(state.selected_point, Some(PointRef::new(a, POINT as usize)));
+
+    // An item with no point: its node, no point, and an image of that node
+    // kept.
+    state.select_image(Some(ImageRef::new(a, 1)));
+    state
+        .focus_bench_item(a, &cluster)
+        .expect("on the bench of a");
+    assert_eq!(state.selected_recon, Some(a));
+    assert_eq!(state.selected_point, None);
+    assert_eq!(state.selected_image, Some(ImageRef::new(a, 1)));
+    // While it is focused, any point is another point.
+    state.select_point(PointRef::new(a, POINT as usize));
+    assert!(state.focused_item().is_none());
+}
+
+#[test]
+fn every_put_selects_what_it_focused() {
+    let (mut state, id) = state();
+    state.select_image(Some(ImageRef::new(id, 0)));
+    let put = put_on_bench(&mut state, id);
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, POINT as usize))
+    );
+
+    start_cluster(&mut state, id);
+    assert_eq!(state.selected_point, None, "a cluster has no point");
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 0)));
+
+    state.focus_bench_item(id, &put).expect("on the bench");
+    let copy = state.duplicate_bench_item(id, &put).expect("on the bench");
+    assert_eq!(focused(&state, id).as_deref(), Some(copy.as_str()));
+    assert_eq!(state.selected_point, None, "a duplicate has no origin");
+
+    state.focus_bench_item(id, &put).expect("on the bench");
+    let split = state
+        .split_bench_track(id, &put, &[2])
+        .expect("three observations, one moved");
+    assert_eq!(focused(&state, id).as_deref(), Some(split.as_str()));
+    assert_eq!(state.selected_point, None, "a split has no origin");
+}
+
+#[test]
+fn clearing_edit_and_discarding_select_the_origin_or_clear_the_point() {
+    let (mut state, id) = state();
+    let put = put_on_bench(&mut state, id);
+    let origin = PointRef::new(id, POINT as usize);
+
+    state.deselect_point();
+    state.set_editing(id, false).expect("an unfocus");
+    assert_eq!(state.selected_point, Some(origin));
+    assert_eq!(state.selected_recon, Some(id));
+
+    state.focus_bench_item(id, &put).expect("on the bench");
+    state.deselect_point();
+    state.discard_bench_item(id, &put).expect("on the bench");
+    assert!(state.focused_item().is_none());
+    assert_eq!(
+        state.selected_point,
+        Some(origin),
+        "the discard left no origin"
+    );
+
+    let cluster = start_cluster(&mut state, id);
+    state.set_editing(id, false).expect("an unfocus");
+    assert_eq!(state.selected_point, None);
+    assert_eq!(state.selected_recon, Some(id));
+    state.focus_bench_item(id, &cluster).expect("on the bench");
+    state
+        .discard_bench_item(id, &cluster)
+        .expect("on the bench");
+    assert_eq!(state.selected_point, None);
+    assert_eq!(state.selected_recon, Some(id));
+}
+
+#[test]
+fn an_item_whose_origin_was_deleted_is_focused_with_no_point() {
+    let (mut state, id) = state();
+    let put = put_on_bench(&mut state, id);
+    // The deletion's map carries the selected origin to nothing, which is the
+    // selection following the map and not a selection: the item stays focused.
+    state
+        .delete_point(PointRef::new(id, POINT as usize))
+        .expect("a live point");
+    assert_eq!(state.selected_point, None);
+    assert_eq!(focused(&state, id).as_deref(), Some(put.as_str()));
+
+    state.unfocus_bench_item();
+    state.select_point(PointRef::new(id, 0));
+    state.focus_bench_item(id, &put).expect("on the bench");
+    assert_eq!(state.selected_point, None);
+    state.set_editing(id, false).expect("an unfocus");
+    assert_eq!(state.selected_point, None);
+}
+
+#[test]
+fn a_commit_keeps_the_item_focused_and_its_undo_leaves_no_point() {
+    let (mut state, id) = state();
+    let put = put_on_bench(&mut state, id);
+    let written = state.commit_bench_track(id, &put).expect("a track stage");
+    assert_eq!(focused(&state, id).as_deref(), Some(put.as_str()));
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, written.point as usize))
+    );
+    state.undo(id).expect("the commit");
+    assert_eq!(focused(&state, id).as_deref(), Some(put.as_str()));
+
+    // A duplicate has no origin, and gains one by its commit.
+    let copy = state.duplicate_bench_item(id, &put).expect("on the bench");
+    assert_eq!(state.selected_point, None);
+    let written = state.commit_bench_track(id, &copy).expect("a track stage");
+    assert_eq!(written.replaced, None, "a copy creates a point");
+    assert_eq!(focused(&state, id).as_deref(), Some(copy.as_str()));
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, written.point as usize))
+    );
+    // Clearing Edit now selects the written point.
+    state.set_editing(id, false).expect("an unfocus");
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, written.point as usize))
+    );
+    state.focus_bench_item(id, &copy).expect("on the bench");
+
+    // The undo takes the point and the copy's origin back: still focused,
+    // and no point selected.
+    state.undo(id).expect("the commit");
+    assert_eq!(focused(&state, id).as_deref(), Some(copy.as_str()));
+    assert_eq!(state.selected_point, None);
+}
+
+#[test]
+fn an_undo_past_the_put_unfocuses_and_leaves_the_selection_alone() {
+    let (mut state, id) = state();
+    state.select_image(Some(ImageRef::new(id, 1)));
+    put_on_bench(&mut state, id);
+    let selected = (state.selected_point, state.selected_image);
+    state.undo(id).expect("the put");
+    assert!(state.focused_item().is_none());
+    assert_eq!((state.selected_point, state.selected_image), selected);
+}
+
+#[test]
+fn the_recent_items_are_most_recent_first_once_each_and_pruned_on_close() {
+    let (mut state, a) = state();
+    let point = put_on_bench(&mut state, a);
+    let cluster = start_cluster(&mut state, a);
+    state
+        .focus_bench_item(a, &point)
+        .expect("on the bench of a");
+    state
+        .focus_bench_item(a, &cluster)
+        .expect("on the bench of a");
+    state
+        .focus_bench_item(a, &point)
+        .expect("on the bench of a");
+    let labels = |state: &AppState| -> Vec<String> {
+        state
+            .recent_items
+            .iter()
+            .filter_map(|recent| {
+                state
+                    .bench(recent.node)
+                    .and_then(|bench| bench.label_of(recent.item))
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    assert_eq!(labels(&state), [point.clone(), cluster.clone()]);
+    assert_eq!(state.most_recent_item(), Some((a, point.clone())));
+
+    // Not on the bench at the cursor: passed over, and back after the undo.
+    state
+        .discard_bench_item(a, &point)
+        .expect("on the bench of a");
+    assert_eq!(state.most_recent_item(), Some((a, cluster.clone())));
+    state.undo(a).expect("the discard");
+    assert_eq!(state.most_recent_item(), Some((a, point.clone())));
+
+    // An item on a second node goes first; closing its node drops it.
+    let b = second_node(&mut state);
+    let on_b = put_on_bench(&mut state, b);
+    assert_eq!(state.most_recent_item(), Some((b, on_b)));
+    state.close_node(b).expect("nothing is running");
+    assert_eq!(state.recent_items.len(), 2);
+    assert_eq!(state.most_recent_item(), Some((a, point)));
+
+    state.close_all().expect("nothing is running");
+    assert!(state.recent_items.is_empty());
 }
 
 // ── Undo, redo and the document edit between two bench steps ────────────

@@ -406,6 +406,9 @@ impl ImageDetail {
         image_rect: egui::Rect,
         effective_scale: f32,
         response: &mut ImageDetailResponse,
+        // Set when the button came up this frame on a press a handle had
+        // taken: the click, if egui calls it one, is the handle's.
+        released: &mut bool,
     ) -> Option<bench_track::Handle> {
         // A drag that outlives the image it started in, or the track it was
         // editing, is dropped: its handle names something that is not up.
@@ -481,6 +484,7 @@ impl ImageDetail {
         // under it and leaves the track alone.
         if !down {
             if let Some(drag) = self.bench_drag.take() {
+                *released = true;
                 if drag.moved {
                     response.bench_edit = bench_track::Layer::edit(image_table, track, &drag, lock);
                 }
@@ -691,7 +695,11 @@ impl ImageDetail {
         //
         // A drag that began on a handle is an edit of the track and must not
         // also pan the photograph: the pointer can only mean one of the two,
-        // and what it means was decided where the button went down.
+        // and what it means was decided where the button went down. A click
+        // on a handle is the handle's in the same way: it selects no point
+        // under it and stages none, so a click on the focused item's own
+        // outline cannot pick a feature of another point and so unfocus it.
+        let mut handle_released = false;
         let hovered_handle = self.update_bench_drag(
             ui,
             &interact_response,
@@ -703,13 +711,14 @@ impl ImageDetail {
             image_rect,
             effective_scale,
             &mut response,
+            &mut handle_released,
         );
 
         // What a double-click means, settled before the view input runs and
         // against the geometry the gesture was made on: on a feature that
         // observes a point it is Edit on Bench, and anywhere else it is the
-        // zoom `handle_input` applies.
-        let double_click_point = (interact_response.double_clicked() && !chord)
+        // zoom `handle_input` applies. On a handle it is neither.
+        let double_click_point = (interact_response.double_clicked() && !chord && !handle_released)
             .then(|| self.point_under_pointer(ui, image_rect, effective_scale))
             .flatten();
         response.edit_on_bench = double_click_point;
@@ -727,7 +736,7 @@ impl ImageDetail {
             self.bench_drag.is_some(),
             // A Control+Shift double-click is two requests for a track, the
             // second refused while the first runs; it is not also a zoom.
-            double_click_point.is_some() || chord,
+            double_click_point.is_some() || chord || handle_released,
         );
 
         // Recompute image rect after pan/zoom changes from input
@@ -793,6 +802,11 @@ impl ImageDetail {
             intrinsics_readout.as_deref(),
             &mut response,
         );
+        // A click a handle took selects no feature's point: the handle is on
+        // top, and one click is one answer.
+        if handle_released {
+            response.select_point = None;
+        }
 
         // What the entries drawn on later frames act at. Recorded after the
         // draw, so an entry clicked on the frame the menu opened at reads the

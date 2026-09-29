@@ -672,8 +672,10 @@ fn a_single_click_on_a_bench_row_selects_its_node_only() {
     let (mut state, id, point, cluster) = benched_behind_another();
     let (mut panel, ctx) = settled(&mut state);
     let before = versions(&state, id);
-    let active = state.focused_item_label(id).map(str::to_string);
-    assert_eq!(active.as_deref(), Some(cluster.as_str()));
+    // Selecting the other node unfocused the cluster, so nothing is focused.
+    let active = state.focused_item().copied();
+    assert_eq!(active, None);
+    assert!(state.bench(id).is_some_and(|b| b.id(&cluster).is_some()));
 
     let response = click(
         &mut panel,
@@ -692,8 +694,8 @@ fn a_single_click_on_a_bench_row_selects_its_node_only() {
 
     assert_eq!(versions(&state, id), before, "a click pushed a version");
     assert_eq!(
-        state.focused_item_label(id),
-        active.as_deref(),
+        state.focused_item().copied(),
+        active,
         "a click changed the focused item"
     );
 }

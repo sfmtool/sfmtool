@@ -1,8 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for Track View: the Edit checkbox, the dispatch on it and the
-//! selection notice.
+//! Headless tests for Track View: the Edit checkbox and the dispatch on it.
 //!
 //! What each body draws is tested in its own module (`view/tests.rs` and
 //! `edit/tests.rs`). What is tested here is what the merge adds: that the box
@@ -10,7 +9,7 @@
 //! are the bench steps they report, and which body a frame draws. The frames
 //! run through `Context::run_ui`, which needs neither a GPU nor a window.
 
-use super::{TrackView, TrackViewResponse, EDIT_IT_LABEL, EDIT_LABEL, VIEW_LABEL};
+use super::{TrackView, TrackViewResponse, EDIT_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::AppState;
 
@@ -242,9 +241,9 @@ fn clearing_the_box_unfocuses_and_shows_the_selected_point() {
     );
 }
 
-/// With no point selected and nothing focused the box is greyed, so a click on
-/// it reports nothing, and the refusal names the three ways in. The empty state
-/// underneath carries the bench line.
+/// With no point selected and no item focused this session the box is greyed,
+/// so a click on it reports nothing, and the refusal names the three ways in.
+/// The empty state underneath carries the bench line.
 #[test]
 fn with_nothing_to_edit_the_box_is_greyed_and_names_the_ways_in() {
     let (state, _id) = state();
@@ -270,14 +269,15 @@ fn with_nothing_to_edit_the_box_is_greyed_and_names_the_ways_in() {
     );
 }
 
-/// With items on the bench and none focused, the empty state says how many and
-/// where to go to edit one.
+/// With items on the bench, none focused and none focused this session, the
+/// empty state says how many and where to go to edit one.
 #[test]
 fn the_empty_state_says_what_the_bench_holds() {
     let (mut state, id) = state();
     crate::bench::tests::put_on_bench(&mut state, id);
     state.unfocus_bench_item();
-    assert_eq!(state.selected_point, None);
+    state.deselect_point();
+    state.recent_items.clear();
     let (mut panel, ctx) = settled(&state);
     let texts = painted(&mut panel, &ctx, &state);
     assert!(
@@ -348,52 +348,106 @@ fn edit_mode_on_a_cluster_draws_the_cluster_headline() {
     );
 }
 
-/// The selection notice is drawn exactly when the selected point is not the
-/// edited track's origin, and its two buttons report their two gestures.
+/// Every string painted with the pointer resting at `pos`, the tooltip it
+/// raises included. The delays go to zero first, since a headless frame has
+/// no wall clock to pass.
+fn hover_texts_at(
+    panel: &mut TrackView,
+    ctx: &egui::Context,
+    state: &AppState,
+    pos: egui::Pos2,
+) -> Vec<String> {
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    painted(panel, ctx, state)
+}
+
+/// A point selected while an item is focused leaves edit mode: the next frame
+/// draws that point's committed track, and no version was pushed. The
+/// selection notice this replaced is gone, since the selection can no longer
+/// part from the item.
 #[test]
-fn the_selection_notice_appears_when_the_selection_parts_from_the_item() {
+fn selecting_another_point_while_editing_shows_that_point() {
     let (mut state, id) = state();
     state.select_point(PointRef::new(id, POINT));
     crate::bench::tests::put_on_bench(&mut state, id);
     let (mut panel, ctx) = settled(&state);
-    let notice = |texts: &[String]| texts.iter().any(|t| t.starts_with("Selected: "));
-    assert!(
-        !notice(&painted(&mut panel, &ctx, &state)),
-        "a notice while the selection is the item's origin"
-    );
+    assert!(!panel.edit_body().rows().is_empty());
 
-    // Editing is sticky: another point selected leaves the panel on the item.
     let other = 0;
     assert!(state.scene[0].edited().point(other as u32).is_some());
+    let before = versions(&state, id);
     state.select_point(PointRef::new(id, other));
-    let versions_before = versions(&state, id);
-    run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert_eq!(versions(&state, id), before, "a selection pushed a version");
+    assert_eq!(focused(&state, id), None);
+    let response = run_frame(&mut panel, &ctx, &state, Vec::new());
+    assert!(response.view.is_some() && response.edit.is_none());
     let texts = painted(&mut panel, &ctx, &state);
-    let expected = format!(
-        "Selected: {}, not the track being edited.",
-        point_id(&state, id, other)
+    let id_text = point_id(&state, id, other);
+    assert!(texts.contains(&id_text), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.starts_with("Selected: ")),
+        "a selection notice was drawn: {texts:?}"
     );
-    assert!(texts.contains(&expected), "{texts:?}");
-    assert_eq!(
-        versions(&state, id),
-        versions_before,
-        "a selection pushed a version"
+}
+
+/// With no point selected and an item focused earlier, the box is live, its
+/// hover text names the item, the empty state says the same, and the tick
+/// applied focuses it and selects its origin.
+#[test]
+fn ticking_the_box_with_no_point_selected_focuses_the_most_recent_item() {
+    let (mut state, id) = state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    state.unfocus_bench_item();
+    state.deselect_point();
+    let (mut panel, ctx) = settled(&state);
+
+    let at = painted_at(&mut panel, &ctx, &state, EDIT_LABEL);
+    let texts = hover_texts_at(&mut panel, &ctx, &state, at);
+    let hint = super::again_hint(&label);
+    assert_eq!(hint, format!("Tick to edit {label} again"));
+    assert!(texts.contains(&hint), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with(&format!("Tick {EDIT_LABEL} to edit {label} again"))),
+        "the empty state does not name the item: {texts:?}"
     );
-    assert!(!panel.edit_body().rows().is_empty(), "the edit was dropped");
 
-    let response = click_text(&mut panel, &ctx, &state, VIEW_LABEL);
-    assert_eq!(response.set_edit, Some(false));
-    assert!(!response.edit_selected_point);
-    let response = click_text(&mut panel, &ctx, &state, EDIT_IT_LABEL);
-    assert!(response.edit_selected_point);
-    assert_eq!(response.set_edit, None);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, Some(true), "the box was greyed");
+    let before = versions(&state, id);
+    state.set_editing(id, true).expect("an item to go back to");
+    assert_eq!(versions(&state, id), before, "focusing pushed a version");
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    assert_eq!(state.selected_point, Some(PointRef::new(id, POINT)));
+}
 
-    // *Edit it* applied puts the selected point on the bench, and the notice
-    // goes, since the selection is the new item's origin.
-    state.set_editing(id, true).expect("a selected point");
-    assert_eq!(state.bench(id).expect("a bench").len(), 2);
-    run_frame(&mut panel, &ctx, &state, Vec::new());
-    assert!(!notice(&painted(&mut panel, &ctx, &state)));
+/// The tick with no point selected focuses the most recent item on any
+/// loaded node, selecting that node, and passes over an item discarded since.
+#[test]
+fn the_tick_goes_back_to_an_item_on_another_node_and_skips_a_discarded_one() {
+    let (mut state, a) = state();
+    let on_a = crate::bench::tests::put_on_bench(&mut state, a);
+    let b = state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let on_b = crate::bench::tests::put_on_bench(&mut state, b);
+    // Both were focused, b's last; b's item is then discarded.
+    state.discard_bench_item(b, &on_b).expect("on b's bench");
+    state.deselect_point();
+    assert_eq!(state.selected_recon, Some(b));
+    assert_eq!(state.most_recent_item(), Some((a, on_a.clone())));
+
+    let (mut panel, ctx) = settled(&state);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, Some(true));
+    state.set_editing(b, true).expect("a's item to go back to");
+    assert_eq!(state.selected_recon, Some(a), "the tick did not select a");
+    assert_eq!(focused(&state, a).as_deref(), Some(on_a.as_str()));
 }
 
 /// A task holding the node greys the box only where a tick would put a point
@@ -429,6 +483,12 @@ fn a_busy_node_greys_the_box_only_for_a_put() {
     let (mut panel, ctx) = settled(&state);
     let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
     assert_eq!(response.set_edit, None, "the put was not greyed");
+
+    // With no point selected: the tick focuses the most recent item.
+    state.deselect_point();
+    let (mut panel, ctx) = settled(&state);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, Some(true), "going back was greyed");
 
     state.finish_background_task();
 }

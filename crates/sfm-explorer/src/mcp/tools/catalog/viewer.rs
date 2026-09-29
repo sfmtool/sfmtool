@@ -102,7 +102,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Select a 3D point, and with it the reconstruction that owns it. A \
                           qualified pt3d_<hash>_<index> id names its own reconstruction, so this \
                           can move the selection to a different one. The selected point's track \
-                          rays are drawn in orange.",
+                          rays are drawn in orange. A point other than the focused bench item's \
+                          origin unfocuses that item (no version); bench calls can name their \
+                          track instead.",
             kind: Write,
             schema: object(&[], &[("point", point_schema())]),
         },

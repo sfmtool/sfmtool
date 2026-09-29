@@ -17,12 +17,15 @@
 //! The two bodies keep their own state, because what each caches is disjoint:
 //! one caches thumbnails and patch tiles per image of a committed point, the
 //! other caches tiles, painting and the commit refusal against a bench track's
-//! `Arc`. What this module adds is the checkbox, the dispatch on it, the
-//! selection notice that says the selection and the edited track have parted,
-//! and the line about the bench under view mode's empty state.
+//! `Arc`. What this module adds is the checkbox, the dispatch on it, and the
+//! line about the bench under view mode's empty state.
 //!
-//! The panel decides nothing. Ticking the box, clearing it and the notice's two
-//! buttons land in [`TrackViewResponse`], and the dock applies them through
+//! While an item is focused, the selected point is its origin or no point
+//! (`AppState::select_point` unfocuses the item on any other), so edit mode
+//! never shows one track while the selection names another.
+//!
+//! The panel decides nothing. Ticking the box and clearing it land in
+//! [`TrackViewResponse`], and the dock applies them through
 //! `AppState`, for the reason every panel's response works that way: the panel
 //! holds `&AppState` while it draws.
 
@@ -34,7 +37,6 @@ pub(crate) mod view;
 mod tests;
 
 use crate::platform::{self, GestureEvent};
-use crate::scene::SceneNode;
 use crate::state::AppState;
 
 pub(crate) use edit::{TrackEdit, TrackEditResponse};
@@ -66,10 +68,8 @@ pub(crate) fn infinity_mark(ui: &mut egui::Ui) {
 #[derive(Default)]
 pub(crate) struct TrackViewResponse {
     /// The box was ticked (`true`, from view mode) or cleared (`false`, from
-    /// edit mode), or the selection notice's *View* was pressed (`false`).
+    /// edit mode).
     pub set_edit: Option<bool>,
-    /// The selection notice's *Edit it*: put the selected point on the bench.
-    pub edit_selected_point: bool,
     /// What view mode reported, when it was the mode drawn.
     pub view: Option<PointTrackViewResponse>,
     /// What edit mode reported, when it was the mode drawn.
@@ -145,22 +145,25 @@ impl TrackView {
         // The box. Only a tick over a point not yet on the bench is a bench
         // step, so only that is greyed by a task holding the node, with the
         // node's own sentence; focusing an item already on the bench and
-        // unfocusing push no version. With nothing to edit and nothing to put
-        // on, it says what the ways in are.
+        // unfocusing push no version. With no point selected the tick focuses
+        // the most recent item still on a bench, and only with none is the
+        // box greyed, saying what the ways in are.
+        let recent = state.most_recent_item();
         let refusal = if editing {
             None
         } else {
             match selected_point {
-                None => Some(nothing_to_edit()),
+                None => recent.is_none().then(nothing_to_edit),
                 Some(point) => put_refusal(state, crate::scene::PointRef::new(id, point)),
             }
         };
         let mut checked = editing;
-        let hint = if editing {
-            "Stop editing this track: it stays on the bench, and the panel shows the \
-             selected point's committed track"
-        } else {
-            "Put the selected point's track on the bench and edit it"
+        let hint = match (editing, selected_point, &recent) {
+            (true, _, _) => "Stop editing this track: it stays on the bench, and the panel \
+                             shows the point it came from, when it has one"
+                .to_string(),
+            (false, None, Some((_, label))) => again_hint(label),
+            (false, _, _) => "Put the selected point's track on the bench and edit it".to_string(),
         };
         let checkbox = ui.add_enabled(
             refusal.is_none(),
@@ -175,12 +178,11 @@ impl TrackView {
         }
         ui.separator();
 
-        if let Some(label) = focused {
-            let track = bench.track(label).expect("the focused label names a track");
-            self.show_selection_notice(ui, state, node, track, selected_point, &mut response);
+        if editing {
             response.edit = Some(self.edit.show(ui, state));
         } else {
-            let note = bench_note(bench.len());
+            let recent_label = recent.as_ref().map(|(_, label)| label.as_str());
+            let note = bench_note(bench.len(), recent_label);
             let point_id = selected_point
                 .map(|index| crate::scene::point_id(node, index))
                 .unwrap_or_default();
@@ -201,58 +203,7 @@ impl TrackView {
         }
         response
     }
-
-    /// The line drawn in edit mode when the node has a selected point that is
-    /// not the one the edited track came from, followed to the cursor.
-    ///
-    /// Editing is sticky: selecting another point moves the selection and
-    /// leaves the panel on the item, so this line is what says the two have
-    /// parted, and its two buttons are the two things wanted next.
-    fn show_selection_notice(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &AppState,
-        node: &SceneNode,
-        track: &sfmtool_core::bench::EditableTrack,
-        selected_point: Option<usize>,
-        response: &mut TrackViewResponse,
-    ) {
-        let Some(point) = selected_point else {
-            return;
-        };
-        if state.resolved_origin(node, track) == Some(point as u32) {
-            return;
-        }
-        let busy = put_refusal(state, crate::scene::PointRef::new(node.id, point));
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "Selected: {}, not the track being edited.",
-                crate::scene::point_id(node, point)
-            ));
-            let view = ui
-                .button(VIEW_LABEL)
-                .on_hover_text("Stop editing, and show the selected point's committed track");
-            if view.clicked() {
-                response.set_edit = Some(false);
-            }
-            let edit_it = ui.add_enabled(busy.is_none(), egui::Button::new(EDIT_IT_LABEL));
-            let edit_it = match &busy {
-                Some(why) => edit_it.on_disabled_hover_text(why),
-                None => edit_it.on_hover_text("Put the selected point on the bench and edit it"),
-            };
-            if edit_it.clicked() {
-                response.edit_selected_point = true;
-            }
-        });
-        ui.separator();
-    }
 }
-
-/// The selection notice's button that clears *Edit*.
-pub(crate) const VIEW_LABEL: &str = "View";
-
-/// The selection notice's button that puts the selected point on the bench.
-pub(crate) const EDIT_IT_LABEL: &str = "Edit it";
 
 /// Why ticking *Edit* over `point` is refused, or `None`: a task holding the
 /// node, when the tick would put the point on the bench. A point an item on
@@ -264,8 +215,9 @@ fn put_refusal(state: &AppState, point: crate::scene::PointRef) -> Option<String
     state.busy_refusal(point.recon)
 }
 
-/// The ticked box's refusal with no point selected and nothing focused: the
-/// three ways in, the last quoted from the Image Detail entry's own constant.
+/// The ticked box's refusal with no point selected and no item to go back to:
+/// the three ways in, the last quoted from the Image Detail entry's own
+/// constant.
 pub(crate) fn nothing_to_edit() -> String {
     format!(
         "Nothing to edit: select a point, double-click an item in the Scene tree's \
@@ -274,9 +226,23 @@ pub(crate) fn nothing_to_edit() -> String {
     )
 }
 
-/// The line under view mode's empty state: what the bench holds when it holds
-/// anything, and otherwise the way to start a track from a pixel.
-fn bench_note(items: usize) -> String {
+/// The box's hover text with no point selected, naming the item a tick
+/// focuses, so a panel with no room to show it elsewhere still says what the
+/// tick does.
+pub(crate) fn again_hint(label: &str) -> String {
+    format!("Tick to edit {label} again")
+}
+
+/// The line under view mode's empty state: the item a tick of *Edit* goes back
+/// to when there is one, else what the bench holds when it holds anything, and
+/// otherwise the way to start a track from a pixel.
+fn bench_note(items: usize, recent: Option<&str>) -> String {
+    if let Some(label) = recent {
+        return format!(
+            "Tick {EDIT_LABEL} to edit {label} again, or double-click an item in the Scene \
+             tree's Bench groups."
+        );
+    }
     match items {
         0 => format!(
             "To work on a track from a pixel: right-click it in the Image Detail panel \

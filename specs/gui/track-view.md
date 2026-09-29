@@ -39,8 +39,8 @@ change, both searches and the index build run), and
 ## The interface
 
 The panel is [track_view/](../../crates/sfm-explorer/src/track_view/):
-[mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox,
-the dispatch on it and the selection notice, and the two bodies it is made of
+[mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox
+and the dispatch on it, and the two bodies it is made of
 are its children. [view/](../../crates/sfm-explorer/src/track_view/view/) is
 view mode, split into `prepare` (the per-observation data, built when the
 selection changes), `header`, `table` and `patch`; the numbers it displays come
@@ -76,10 +76,8 @@ impl TrackView {
 }
 
 pub(crate) struct TrackViewResponse {
-    /// The box ticked (`true`) or cleared (`false`), or the notice's *View*.
+    /// The box ticked (`true`) or cleared (`false`).
     pub set_edit: Option<bool>,
-    /// The selection notice's *Edit it*.
-    pub edit_selected_point: bool,
     /// What view mode reported, on a frame it was drawn.
     pub view: Option<PointTrackViewResponse>,
     /// What edit mode reported, on a frame it was drawn.
@@ -121,17 +119,26 @@ pub struct TrackEditResponse {
 
 impl AppState {
     /// What the Edit box asks: `true` puts the selected point on the bench
-    /// (focusing the item already from it), `false` unfocuses.
+    /// (focusing the item already from it), or with no point selected focuses
+    /// the most recent item; `false` unfocuses.
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String>;
-    /// The item Track View edits, one for the viewer; no version, one
-    /// `Selection` row ([`bench.md`](bench.md) § "The focused item").
+    /// The item Track View edits, one for the viewer, and its node and origin
+    /// selected; no version, one `Selection` row ([`bench.md`](bench.md)
+    /// § "The focused item").
     pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
-    /// Leave no item focused, every item staying on its bench. No version.
+    /// Leave no item focused, every item staying on its bench, and select the
+    /// item's origin or clear the point selection. No version.
     pub(crate) fn unfocus_bench_item(&mut self);
     /// The focused item's label on `id`'s bench, which the box reads.
     pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str>;
-    /// A Scene tree double-click on a Bench row: select the node, focus the
-    /// item, raise Track View.
+    /// The focused item's origin followed to the cursor, which is the one
+    /// point a selection may name while the item stays focused.
+    pub(crate) fn focused_origin(&self) -> Option<PointRef>;
+    /// The first entry of `recent_items` on its node's bench at the cursor:
+    /// what a tick with no point selected focuses.
+    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)>;
+    /// A Scene tree double-click on a Bench row: focus the item, which
+    /// selects its node, and raise Track View.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize);
     /// Image Detail's *Start cluster on the bench here*, raising Track View.
     pub(crate) fn start_cluster_here(&mut self, image: ImageRef, pixel: [f32; 2]);
@@ -142,7 +149,7 @@ A frame in the dock is one call and three applications:
 
 ```rust
 let response = track_view.show(ui, state, gesture_events, scroll_input);
-if let Some(on) = response.set_edit.or(response.edit_selected_point.then_some(true)) {
+if let Some(on) = response.set_edit {
     state.set_editing(id, on)?;         // a put is a bench step, refused in its own words
 }
 // then the view or the edit response, whichever was drawn
@@ -156,8 +163,8 @@ edit mode caches tiles and their hover views per observation of a bench
 track keyed on its `Arc`, and
 the box seeding, the bars' judgement and the commit refusal. Keeping each as the
 struct it is means neither cache learns about the other, and each body's
-headless tests read what that body drew. What the panel adds is the checkbox,
-the dispatch on it and the notice.
+headless tests read what that body drew. What the panel adds is the checkbox
+and the dispatch on it.
 
 **The mode is derived from the focused item, so nothing about it is stored in
 the panel.** A panel flag would have to be set by each of the places that can
@@ -173,7 +180,7 @@ one body is drawn on a frame, and a response from the body that was not drawn
 would be a set of defaults pretending to be a report.
 
 **The response keeps both bodies' types.** The dock already knows how to apply
-each; the merged response adds only the two gestures that are the panel's own.
+each; the merged response adds only the gesture that is the panel's own.
 
 **The file chooser is the dock's, not the panel's.** A search's build remedy
 reports the gesture and nothing else. That keeps `show` a pure egui function a
@@ -247,30 +254,55 @@ being edited leaves the track on the bench, unfocused.
 
 ### Transitions
 
+The rules keep one invariant: **while an item is focused, the selected node is
+the focused item's node, and the selected point is the item's origin followed
+to the cursor, or no point.** An item with no origin (a cluster, a duplicate, a
+split, a track whose origin was deleted) is focused with no point selected.
+
 | From | Gesture | What happens | Then shown |
 |---|---|---|---|
 | Viewing a selected point | Tick Edit | `put_point_on_bench(selected point)`: a new item, focused, in one version; or, when an item on the bench already came from that point, that item is focused instead, with no version | Edit mode, on that item |
-| Viewing, no point selected, nothing focused | Tick Edit | Nothing: the box is greyed, its hover text naming the ways in | Unchanged |
-| Editing an item | Clear Edit | `unfocus_bench_item`: the item stays on the bench and nothing is focused, with no version | View mode, on the selection |
-| Either | Double-click a Bench row in the Scene tree | That item is focused, its node is selected, and the panel is raised | Edit mode, on that item |
-| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | As the ticked box from that point, then the panel is raised | Edit mode |
-| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench, focused, and the panel is raised | Edit mode, on the cluster |
-| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench, focused, and committed; the point it wrote is selected. No panel is raised | Edit mode, on the new item |
-| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused | Edit mode, on the new item |
-| Editing | *Discard* | The item leaves the bench and is unfocused | View mode |
-| Editing | *Commit* | The point is written and selected; the item stays on the bench and stays focused | Edit mode, on the same item |
-| Either | Undo or Redo | The item stays focused while the version landed on holds it, and is unfocused when it does not | Edit mode on the item, or view mode |
+| Viewing, no point selected | Tick Edit | The most recently focused item still on a bench at the cursor is focused, with no version, and its node selected; with none, the box is greyed, its hover text naming the ways in | Edit mode, on that item |
+| Editing | Clear Edit | `unfocus_bench_item`: the item stays on the bench and nothing is focused, with no version. Its origin is selected when it resolves at the cursor; otherwise the point selection is cleared. The node stays selected | View mode, on the origin, or the empty state |
+| Editing | Select another point: a click in the 3D viewer or Image Detail, *Go to Point*, the wire's `select_point` | The item is unfocused, with no version, and the new point is selected | View mode, on that point |
+| Editing | Select the item's own origin | Nothing changes | Edit mode, same item |
+| Editing | Clear the point selection (a click on empty space) | The item stays focused | Edit mode, same item |
+| Editing | Select an image or a camera of the focused item's node (a row click, a thumbnail, a frustum) | The item stays focused | Edit mode, same item |
+| Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | View mode, on the new selection |
+| Either | Double-click a Bench row in the Scene tree | That item is focused, its node and its origin are selected (or the point selection cleared), and the panel is raised | Edit mode, on that item |
+| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised | Edit mode |
+| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised | Edit mode, on the cluster |
+| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edit mode, on the new item |
+| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused; it has no origin, so the point selection is cleared | Edit mode, on the new item |
+| Editing | *Discard* | The item leaves the bench (a version) and is unfocused, and the selection is left as a cleared box leaves it, from the origin as it resolved before the discard | View mode, on the origin, or the empty state |
+| Editing | *Commit* | The origin is re-seated on the written point and that point selected, so the item stays on the bench and focused | Edit mode, on the same item |
+| Either | Undo or Redo | The item stays focused while the version landed on holds it, and is unfocused, with the selection unchanged, when it does not | Edit mode on the item, or view mode |
 
 The box is greyed while a background task holds the node, with the node's own
 busy sentence, only when ticking it would put a point on the bench, since that
-is a bench step and a bench step is refused then. Clearing it, and ticking it
-over a point an item on the bench already came from, push no version and are
-never greyed for a busy node. With no point selected and nothing focused, its
-refusal is one
-sentence naming the three ways in: *"Nothing to edit: select a point,
-double-click an item in the Scene tree's Bench groups, or right-click a pixel in
-Image Detail and choose "Start cluster on the bench here"."*, the last quoted
-from that entry's own constant (`track_view::nothing_to_edit`).
+is a bench step and a bench step is refused then. Clearing it, ticking it over
+a point an item on the bench already came from, and ticking it with no point
+selected push no version and are never greyed for a busy node.
+
+**Ticking Edit with no point selected** focuses the first entry of the recent
+list whose item is on its node's bench at the cursor
+(`AppState::most_recent_item`), on any loaded node, and selects that node. The
+box's hover text names it: *"Tick to edit pt3d_a1b2c3d4_1207 again"*
+(`track_view::again_hint`). It is greyed only when no entry is on a bench, and
+its refusal is then one sentence naming the three ways in: *"Nothing to edit:
+select a point, double-click an item in the Scene tree's Bench groups, or
+right-click a pixel in Image Detail and choose "Start cluster on the bench
+here"."*, the last quoted from that entry's own constant
+(`track_view::nothing_to_edit`).
+
+**The recent list** is `AppState::recent_items`: every item focused this
+session, most recently focused first and each once. Every focus, whether a
+gesture, a wire call or a step that put the item on, moves the item to the
+front. An entry is dropped when its node is closed, and the list is emptied by
+*Close All*. An entry whose item is not on its node's bench at the cursor is
+skipped by a reader rather than dropped, so an undo of a discard brings it back.
+The list is not cut to any length. It is session state: not in a version, not
+saved, and not on the wire.
 
 ### Why each transition is the one it is
 
@@ -293,19 +325,57 @@ one put on, which is what `put_point_on_bench` does for every way in. Two items
 for one point are two answers to one question, and with no list of items in the
 panel a second one would be easy not to notice.
 
+**Selecting another point leaves edit mode.** A click on a point in the 3D
+viewer is a request to look at that point, and a panel that went on showing a
+different track would answer another question. Because focusing and unfocusing
+push no version, the exit costs nothing: an undo after it takes back the last
+step on the bench, not the exit. The rule lives in `AppState::select_point`,
+which every point selection gesture goes through, so none of them needs one of
+its own. The selection that follows the point maps after an edit assigns the
+selected point directly rather than through `select_point`, so an edit that
+moves the selection (a deletion of the origin, a commit's undo) leaves the item
+focused.
+
+**Selecting the item's origin, clearing the point, or selecting an image or a
+camera of its node keeps it focused.** None of these names another track. An
+image of the node is how a person moves between the photographs an item is
+being worked on in, and a row click in the table is one.
+
+**Anything on another node unfocuses.** There is one focused item for the
+viewer, and the selected node is its node while it is focused, so a selection
+on another node is a selection away from it.
+
+**Focusing selects the item's node and origin**, or clears the point selection
+when it has none, and **clearing Edit selects the origin**, or clears the point
+selection. Either way the invariant holds after the gesture, and the panel
+shows next what the person was just working on: the committed point the item
+came from, or the empty state for an item with no point. The item is focused
+before its origin is selected, so the exit rule sees the origin as the focused
+item's.
+
 **Discarding the focused item unfocuses it**, so the panel returns to view
 mode. Focusing a neighbour instead would switch the panel to an item the person
-did not ask for, and nothing on screen would say which one arrived. An undo of
-the discard puts the item back without focusing it.
+did not ask for, and nothing on screen would say which one arrived. The
+selection is what a cleared box leaves, with the origin resolved before the
+discard. An undo of the discard puts the item back without focusing it.
 
 **Commit leaves edit mode on**, the item on the bench and focused and the written
-point selected. A person commonly commits and keeps going, the written point is
-one Edit-clear away, and clearing on commit would make Commit two bench steps.
+point selected. The commit re-seats the item's origin on the point it wrote
+before it selects it, so the selection is the origin and the item stays focused,
+including an item that had no origin before. A person commonly commits and keeps
+going, the written point is one Edit-clear away, and clearing on commit would
+make Commit two bench steps. An undo of the commit takes the point and the
+origin back; the selection follows the map to no point, and the item stays
+focused.
 
-**With no point selected and nothing focused, the box is greyed** rather than
-bringing back the last focused item or the last item on the bench. "The last one"
-is not recorded anywhere a person can see, and the Scene tree double-click names
-the item exactly.
+**An undo or redo that unfocuses leaves the selection alone.** The item left
+because the version no longer holds it, not because of a gesture about the
+selection, and the selection has already followed the version's map.
+
+**With no point selected, the tick goes back to the most recent item** rather
+than being greyed. The Scene tree names every item, but the one a person has
+just left is the one most often wanted, and the hover text names it before the
+tick.
 
 **Start cluster on the bench here raises Track View.** It turns edit mode on,
 which makes it the same kind of gesture as *Edit on Bench*, and that one raises
@@ -317,34 +387,29 @@ because a track staged into a panel nobody can see is a gesture with no answer.
 
 The **selection** is the viewer's selected point, image and camera, which every
 panel reads and which clicking in the 3D viewer or Image Detail moves. The
-**focused item** is held beside it, outside every version. The two are
-independent, and the box decides which one Track View shows: view mode shows the
-selection, edit mode shows the focused item.
+**focused item** is held beside it, outside every version, and the box decides
+which one Track View shows: view mode shows the selection, edit mode shows the
+focused item.
 
-**Editing is sticky.** Selecting another point while editing moves the
-selection, and with it the 3D viewer's track rays, the Image Browser's borders
-and Image Detail's highlighted feature, but it does not change what Track View
-shows and pushes no version. The person may be clicking around the scene to see
-what else the patch covers, and a panel that dropped the edit on every click
-would make that impossible.
+**The two cannot disagree about the point.** While an item is focused the
+selected point is its origin or no point (§ "Transitions"), so edit mode never
+shows one track while the 3D viewer's track rays, the Image Browser's borders
+and Image Detail's highlighted feature show another. A selection that would
+name another point unfocuses the item first, and the panel shows that point in
+view mode.
 
-**The selection notice** is what says the two have parted. It is one line under
-the box, drawn in edit mode exactly when the node has a live selected point that
-is not the focused item's origin followed to the cursor: *"Selected:
-pt3d_a1b2c3d4_5120, not the track being edited."*, with *View*, which clears
-Edit, and *Edit it*, which puts that point on the bench as the ticked box does.
-*Edit it* greys with the busy sentence while a task holds the node and the
-point is not on the bench yet; *View* is never greyed for it.
+**Go to Point** selects the point and raises Track View. It goes through
+`AppState::select_point`, so a point other than the focused item's origin
+unfocuses the item by the ordinary rule, and the panel shows the point jumped
+to. The jump pushes no version.
 
-**The common case keeps them together without asking.** Every way into editing
-from a point selects that point first, and a commit selects the point it wrote,
-so for a track that came from a point the selection and the item's origin agree
-until the person clicks somewhere else, and the notice is absent.
-
-**Go to Point** moves the selection and raises Track View. In edit mode the panel
-stays on the item and the notice names the point jumped to, with *View* one click
-away. The dialog does not clear Edit on its own: it is a selection gesture, and a
-dialog that pushes no version stays one that pushes none.
+**A click on a bench-layer handle is the handle's.** In Image Detail and in the
+3D viewer, a press a handle of the focused item's figure takes owns the whole
+gesture: its release selects no point under the handle and stages none, so a
+click on the item's own outline, corner, edge, normal or ghost cannot pick a
+feature of another point and so unfocus the item
+([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
+layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 
 ---
 
@@ -360,11 +425,14 @@ View mode reads the reconstruction and never the bench.
 
 **No point selected**: `No point selected` above a **Go to Point...** button,
 which is where a person with an ID in hand and no idea how to feed it in looks
-([goto-point.md](goto-point.md)). Under the button one line says what the bench
-holds when it holds anything, *"3 items on the bench: double-click one in the
-Scene tree's Bench groups to edit it."*, and otherwise names the pixel gesture:
-*"To work on a track from a pixel: right-click it in the Image Detail panel and
-choose "Start cluster on the bench here"."*.
+([goto-point.md](goto-point.md)). Under the button one line names the item a
+tick of *Edit* goes back to when there is one, *"Tick Edit to edit
+pt3d_a1b2c3d4_1207 again, or double-click an item in the Scene tree's Bench
+groups."*; otherwise it says what the bench holds when it holds anything, *"3
+items on the bench: double-click one in the Scene tree's Bench groups to edit
+it."*, and otherwise names the pixel gesture: *"To work on a track from a
+pixel: right-click it in the Image Detail panel and choose "Start cluster on
+the bench here"."*.
 
 **What it reads.** Everything about the point, including its position, colour
 and error, its whole track, each observation's keypoint, its patch frame and
@@ -1247,14 +1315,42 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   focusing the existing item and pushing no version; clearing it reporting
   `set_edit`, no version and one `Selection` row `Stopped editing ...`, and the
   next frame drawing the selected point's header; the box greyed with no point
-  selected and nothing focused, a click on it reporting nothing, the refusal
-  naming the three ways in and the empty state carrying the bench line; a busy
-  node greying the box only over a point not on the bench; the empty state
-  counting the items on a bench with none focused; a discard of the focused
-  item returning to view mode; edit mode on a cluster drawing the cluster
-  headline; the selection notice drawn exactly when the selected point is not the
-  item's origin, with *View* and *Edit it* reporting their two gestures; and no
+  selected and no item focused this session, a click on it reporting nothing,
+  the refusal naming the three ways in and the empty state carrying the bench
+  line; with no point selected and an earlier item, the box live, its hover
+  text `Tick to edit {label} again`, the empty state naming the item, and the
+  tick focusing it and selecting its origin with no version; the tick going
+  back to an item on another node, selecting that node, and passing over a
+  discarded item; a busy node greying the box only over a point not on the
+  bench; the empty state counting the items on a bench with none focused and
+  none recent; a discard of the focused item returning to view mode; edit mode
+  on a cluster drawing the cluster headline; a point selected while editing
+  drawing that point in view mode with no version; and no
   reconstruction drawing no box.
+- **The selection rules**,
+  [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs) § "The
+  selection rules": another point selected unfocusing with one `Stopped
+  editing` row and no version; the origin, a cleared point, an image or a
+  camera of the node, the node row and a cleared selection keeping the item
+  focused; an image, a camera, a point or the node row of another node
+  unfocusing; focusing selecting the node and the origin, or clearing the point
+  and keeping an image of that node for an item with no point; every put
+  (from a point, a cluster, a duplicate, a split) selecting what it focused;
+  clearing Edit and a discard selecting the origin or clearing the point, the
+  node staying selected; an item whose origin was deleted staying focused
+  through the deletion and focused with no point; a commit keeping the item
+  focused, a duplicate gaining an origin by its commit, and the undo of that
+  commit leaving it focused with no point selected; an undo past the put
+  unfocusing with the selection unchanged; and the recent list most recent
+  first, once each, skipping an item not on the bench and bringing it back on
+  the undo, pruned when its node closes and emptied by *Close All*. The wire's
+  half is in [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs)
+  (`select_point` unfocusing with no version, `focus_bench_item` and
+  `unfocus_bench_item` selecting the origin). The handle's claim on a click is
+  in [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs)
+  (a click on the ghost's centre over a feature of another point selecting no
+  point) and [viewer_3d/tests.rs](../../crates/sfm-explorer/src/viewer_3d/tests.rs)
+  (a click on the dot, a corner or an edge requesting no point pick).
 - **View mode**,
   [view/tests.rs](../../crates/sfm-explorer/src/track_view/view/tests.rs):
   preparing one row per observation and re-preparing on a selection change; the

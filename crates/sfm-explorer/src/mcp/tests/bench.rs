@@ -1768,6 +1768,79 @@ fn focus_pushes_no_version_and_get_bench_reports_the_focused_item() {
     assert_eq!(bench["focused_item"], Value::Null, "{bench}");
 }
 
+/// The selection rules on the wire: `select_point` of any point but the focused
+/// item's origin unfocuses it and pushes no version, `select_point` of the
+/// origin keeps it, `unfocus_bench_item` selects the origin, and
+/// `focus_bench_item` selects the item's node and origin.
+#[test]
+fn select_point_unfocuses_and_focusing_and_unfocusing_select_the_origin() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let id = state.scene[0].id;
+    let origin = crate::scene::PointRef::new(id, BENCH_POINT as usize);
+    assert_eq!(
+        state.selected_point,
+        Some(origin),
+        "the put selected no origin"
+    );
+    let before = version_count(&state);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    assert!(state.focused_item().is_some(), "the origin unfocused it");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": 0 }),
+    );
+    assert!(state.focused_item().is_none(), "another point kept it");
+    assert_eq!(
+        state.selected_point,
+        Some(crate::scene::PointRef::new(id, 0))
+    );
+    assert_eq!(
+        version_count(&state),
+        before,
+        "a selection pushed a version"
+    );
+    let texts: Vec<&str> = state
+        .action_log
+        .entries()
+        .rev()
+        .take(2)
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert_eq!(texts[1], format!("Stopped editing {item}"), "{texts:?}");
+    assert!(texts[0].starts_with("Selected point "), "{texts:?}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "focus_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
+    );
+    assert_eq!(state.selected_point, Some(origin), "focusing kept point 0");
+
+    state.deselect_point();
+    assert!(
+        state.focused_item().is_some(),
+        "clearing the point unfocused"
+    );
+    call(&mut state, &mut viewer, "unfocus_bench_item", json!({}));
+    assert_eq!(
+        state.selected_point,
+        Some(origin),
+        "the unfocus left no origin"
+    );
+    assert_eq!(version_count(&state), before);
+}
+
 /// The tools the focus pair replaced are gone from the catalog and from the
 /// dispatch, so a call under an old name is the ordinary unknown-tool error.
 #[test]

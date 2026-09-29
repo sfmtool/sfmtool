@@ -262,9 +262,11 @@ On a query that resolves:
    so the jump has something to show for itself; closed, it is re-opened at its
    home. Without this the only visible effect of a successful jump could be a
    recoloured splat somewhere in the 3D viewport. The jump is a selection
-   gesture and not a bench step: in edit mode Track View stays on the item being
-   edited, and its selection notice names the point jumped to, with *View* one
-   click away ([track-view.md](track-view.md) § "The selection notice").
+   gesture and not a bench step, so it pushes no version. Because it goes
+   through `select_point`, a point other than the focused item's origin
+   unfocuses the item by the ordinary rule, and Track View shows the point
+   jumped to ([track-view.md](track-view.md) § "The selection and the focused
+   item").
 3. The dialog closes.
 
 Everything else follows from the ordinary selection propagation: track rays

@@ -1125,6 +1125,34 @@ fn edit_of(dragged: &Dragged) -> PatchEdit {
     }
 }
 
+/// A click on a handle of the bench figure is the figure's: it requests no
+/// point pick, so it cannot select a point under the handle and so unfocus the
+/// item. The same click off the figure does request one.
+#[test]
+fn a_click_on_a_handle_requests_no_point_pick() {
+    let mut staged = staged();
+    let track = staged.track();
+    for press in [dot(&staged), corner(&staged, 0), edge_mid(&staged, 1)] {
+        staged.viewer.pending_click = None;
+        let clicked = gesture(&mut staged, &track, false, press, &[], false);
+        assert!(clicked.gesture.is_none(), "a click edited the track");
+        assert!(
+            staged.viewer.pending_click.is_none(),
+            "a click on a handle at {press:?} reached the point pick"
+        );
+    }
+    assert_eq!(
+        staged.state.focused_item_label(staged.id),
+        Some(staged.label.as_str())
+    );
+
+    gesture(&mut staged, &track, false, EMPTY, &[], false);
+    assert!(
+        staged.viewer.pending_click.is_some(),
+        "a click off the figure requested no pick"
+    );
+}
+
 #[test]
 fn a_press_on_an_edge_resizes_and_orbits_nothing_while_the_same_motion_off_it_orbits() {
     let mut staged = staged();

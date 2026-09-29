@@ -226,7 +226,10 @@ though the viewport still does not orbit until the button comes up, because what
 the pointer means was decided where it went down. A drag that ends where it
 started pushes nothing, the way a verdict an observation already holds does. A
 press that never moves is a click, which on an observation's circle selects that
-row in Track View and anywhere else on the figure does nothing. A gesture that
+row in Track View and anywhere else on the figure does nothing; either way it
+requests no point pick, so it cannot select a point under the handle and unfocus
+the item ([`track-view.md`](track-view.md) § "The selection and the focused
+item"). A gesture that
 outlives the node it was editing, or that is caught by a background task, is
 dropped.
 
@@ -628,7 +631,8 @@ the release point with the far edge held; a corner dragged onto its neighbour is
 a quarter turn and one version; a dot drag is one version whose label names the
 move; Escape leaves no edit and a drag that ends where it started pushes
 nothing; an edge-on view takes no press and a busy node takes none either; a
-click on an observation's circle selects its row; the three plane handles of a
+click on an observation's circle selects its row; a click on the dot, a corner
+or an edge requests no point pick while the same click off the figure does; the three plane handles of a
 track at infinity move the bearing, the tangent size and the spin; a corner
 turns the cursor along its arc where an edge lies across itself; a normal drag
 moves the patch along its normal and orbits nothing; a view down the normal

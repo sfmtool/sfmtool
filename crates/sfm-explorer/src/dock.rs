@@ -876,13 +876,10 @@ impl TabContext<'_> {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        // The box and the selection notice (`AppState::set_editing`): a put
-        // is a bench step, refused in its own words; focusing an item already
-        // on the bench and unfocusing are not.
-        let on = response
-            .set_edit
-            .or(response.edit_selected_point.then_some(true));
-        if let Some(on) = on {
+        // The box (`AppState::set_editing`): a put is a bench step, refused in
+        // its own words; focusing an item already on the bench and unfocusing
+        // are not.
+        if let Some(on) = response.set_edit {
             if let Err(why) = self.state.set_editing(id, on) {
                 self.state.action_log.fail(Kind::Bench, why);
             }

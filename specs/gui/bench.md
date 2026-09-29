@@ -254,11 +254,18 @@ impl AppState {
     /// The focused item's label on `id`'s bench at the cursor; `None` when
     /// nothing is focused, it is on another node, or it is not on that bench.
     pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str>;
-    /// No version; one `Selection` row. Refused when nothing on the bench is
-    /// called `label`, and never for a busy node.
+    /// No version; one `Selection` row. Selects the item's node and its
+    /// origin, or clears the point selection. Refused when nothing on the
+    /// bench is called `label`, and never for a busy node.
     pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
-    /// No version; one `Selection` row, or a no-effect row with nothing focused.
+    /// No version; one `Selection` row, or a no-effect row with nothing
+    /// focused. Selects the item's origin, or clears the point selection.
     pub(crate) fn unfocus_bench_item(&mut self);
+    /// The focused item's origin followed to the cursor.
+    pub(crate) fn focused_origin(&self) -> Option<PointRef>;
+    /// The first entry of `AppState::recent_items` on its node's bench at
+    /// the cursor, as its node and label.
+    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)>;
 }
 
 // The selected observations, held in `AppState::bench_rows`
@@ -545,25 +552,62 @@ is put on the bench and keeps it across a rename and every step that replaces
 the item's value ([`../core/bench/bench.md`](../core/bench/bench.md)), so a
 rename leaves the item focused under its new label.
 
+**It keeps the selection with it.** While an item is focused, the selected node
+is its node and the selected point is its origin followed to the cursor
+(`AppState::focused_origin`), or no point. Focusing and unfocusing move the
+selection to keep that true, and a selection that would break it unfocuses the
+item ([`track-view.md`](track-view.md) § "Transitions").
+
 What changes it:
 
-- **focusing** it: ticking *Edit* over a point an item already came from, a
-  Scene tree double-click on a Bench row, and the wire's `focus_bench_item`.
-  Focusing an item on one node unfocuses whatever was focused on another;
-- **unfocusing**: clearing *Edit*, the selection notice's *View*, and the
-  wire's `unfocus_bench_item`;
-- **a step that puts an item on the bench** focuses the item it put on, with
-  no row of its own beside the step's: a put from a point, *Start cluster*,
-  *Create Track Here*, *Find Nearby Tracks* (its `1a`), *Duplicate* and
-  *Split*;
+- **focusing** it: ticking *Edit* over a point an item already came from,
+  ticking it with no point selected (the most recent item, below), a Scene tree
+  double-click on a Bench row, and the wire's `focus_bench_item`. Focusing an
+  item on one node unfocuses whatever was focused on another. **Focusing
+  selects**: the item's node, and its origin when that resolves at the cursor,
+  or else the point selection is cleared; a selected image stays when it belongs
+  to that node. The item is focused before its origin is selected, so the
+  selection rule below sees the origin as the focused item's. These selection
+  changes write no rows of their own;
+- **unfocusing**: clearing *Edit* and the wire's `unfocus_bench_item`.
+  **Unfocusing selects**: the item's origin when it resolves at the cursor, or
+  else the point selection is cleared; the node stays selected. No rows beyond
+  the `Stopped editing` one;
+- **a selection that leaves the item**: `AppState::select_point` of any point
+  but the focused item's origin, and `select_point`, `select_image`,
+  `select_camera` or `select_recon` naming another node, unfocus it with its
+  `Stopped editing` row before the selection's own, and push no version. The
+  selection is what that gesture made it. Clearing the point selection, and an
+  image or a camera of the item's node, keep it focused. The selection that
+  follows the point maps after an edit assigns the point directly and does not
+  unfocus;
+- **a step that puts an item on the bench** focuses the item it put on, and
+  selects as focusing does, with no row of its own beside the step's: a put from
+  a point, *Start cluster*, *Create Track Here*, *Find Nearby Tracks* (its
+  `1a`), *Duplicate* and *Split*. A cluster, a duplicate and a split have no
+  origin, so the point selection is cleared. *Create Track Here* then commits
+  the item, and a commit re-seats the item's origin on the point it wrote
+  before selecting it, so the item stays focused;
 - **a step that takes the focused item off the bench**, a discard or *Clear
   the Bench*, unfocuses it, so Track View returns to view mode instead of
-  switching to an item nobody asked for;
+  switching to an item nobody asked for. The selection is then what an unfocus
+  leaves, from the origin as it resolved before the step;
 - **undo, redo and a jump** leave it focused while the version landed on holds
   it, and unfocus it when that version does not (an undo past its put, a redo
-  past its discard), with no row beyond the move's own. They never focus an
-  item: an undo of a discard puts the item back unfocused;
+  past its discard), with no row beyond the move's own and the selection left
+  as the move's map left it. They never focus an item: an undo of a discard puts
+  the item back unfocused;
 - **closing its node** unfocuses it.
+
+**The recent items.** `AppState::recent_items` lists every item focused this
+session, most recently focused first and each once: `set_focused_item`, the
+one place the focused item changes, moves a newly focused item to the front.
+An entry is dropped when its node is closed and the list emptied by *Close
+All*; an entry whose item is not on its node's bench at the cursor is skipped
+by `most_recent_item` rather than dropped, so an undo of a discard brings it
+back. It is session state, outside every version, and what ticking *Edit* with
+no point selected focuses the first resolving entry of
+([`track-view.md`](track-view.md) § "Transitions").
 
 ---
 

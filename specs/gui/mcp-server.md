@@ -765,6 +765,14 @@ selections:
   those intrinsics.
 - `select_reconstruction` drops finer selections belonging to other
   reconstructions.
+- While a bench item is focused, `select_point` of any point but that item's
+  origin unfocuses it, and `select_reconstruction`, `select_camera_image`,
+  `select_camera_intrinsics` or `select_point` naming another reconstruction
+  unfocuses it, each with a `Stopped editing` row and no version. An image or
+  intrinsics of the item's own reconstruction, the origin, and
+  `clear_selection` keep it focused ([track-view.md](track-view.md)
+  § "Transitions"). An agent that selects points while working on a track names
+  the track on every bench call, which the bench tools allow.
 
 The joint states are reached by composing calls. A camera image and a point can
 be selected together when they belong to one reconstruction:
@@ -3056,8 +3064,12 @@ none is focused. Neither is a step: each pushes no version, writes one
 `Selection` row, is not refused while a task holds the node, and answers as the
 selection tools do, with what it left rather than a version -- the
 `reconstruction_label` and `item` it focused or unfocused (both `null` from an
-unfocus with nothing focused) and `changed`. A discard of the focused item
-unfocuses it too. So `get_bench`'s `focused_item` is `null` over a bench that
+unfocus with nothing focused) and `changed`. **Both move the selection** as
+the panel's gestures do: `focus_bench_item` selects the item's reconstruction
+and its origin followed to the cursor, or clears the point selection when it
+has none, and `unfocus_bench_item` selects the origin, or clears the point
+selection, leaving the reconstruction selected. A discard of the focused item
+unfocuses it too, and selects as `unfocus_bench_item` does. So `get_bench`'s `focused_item` is `null` over a bench that
 has items, and also over every bench but the focused item's, and a reader that
 took "non-empty" to mean "something is being edited" reads the wrong thing. A
 track tool that names no `track` while no item on that bench is focused is
@@ -4406,7 +4418,10 @@ where a test hands no host over.
   no version, each writes one `Selection` row, a second unfocus is a no-effect
   reply naming no item, a focus is not refused while a task holds the node,
   `get_bench` reports the focused item on its node and `null` on another, and
-  `activate_bench_item` and `deactivate_bench_item` are unknown tools.
+  `activate_bench_item` and `deactivate_bench_item` are unknown tools;
+  `select_point` of the origin keeps the item focused and of another point
+  unfocuses it with a `Stopped editing` row and no version, `focus_bench_item`
+  selects the origin, and `unfocus_bench_item` selects it too.
 - **`set_view` aims at a point and at a bench observation**: `point` puts the
   point's world position at the orbit target, leaves camera view and moves no
   selection, and is refused beside `fov_short_axis_deg` or a second form;

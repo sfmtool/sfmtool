@@ -367,6 +367,11 @@ impl AppState {
     /// `Selection` row, `Editing {label}`; an item already focused writes a
     /// no-effect row instead. A focused item on another node is unfocused,
     /// since there is one for the viewer.
+    ///
+    /// The item's node is selected with it, and its origin when that resolves
+    /// at the cursor, or else the point selection is cleared
+    /// ([`Self::select_focused_item`]). Those selection changes write no rows
+    /// of their own: the `Editing` row is the one gesture.
     pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
         let bench = self.bench(id).ok_or(crate::state::NOT_LOADED)?;
         let item = bench
@@ -381,6 +386,7 @@ impl AppState {
             return Ok(());
         }
         self.set_focused_item(Some(next));
+        self.select_focused_item();
         self.action_log
             .record_run(Kind::Selection, FOCUS_RUN, format!("Editing {label}"));
         Ok(())
@@ -390,13 +396,28 @@ impl AppState {
     /// Track View's *Edit* box does, and the wire's `unfocus_bench_item`.
     ///
     /// Pushes no version and writes one `Selection` row, `Stopped editing
-    /// {label}`; with nothing focused it writes a no-effect row instead.
+    /// {label}`; with nothing focused it writes a no-effect row instead. The
+    /// item's origin is selected when it resolves at the cursor, and otherwise
+    /// the point selection is cleared; the node stays selected. Neither
+    /// writes a row of its own.
     pub(crate) fn unfocus_bench_item(&mut self) {
-        let Some(focused) = self.focused_item else {
+        if self.focused_item.is_none() {
             self.action_log.record(
                 Kind::Selection,
                 "Stopped editing: no effect, no item is being edited",
             );
+            return;
+        }
+        let origin = self.focused_origin();
+        self.leave_focused_item();
+        self.select_left_origin(origin);
+    }
+
+    /// Unfocus the focused item and write its `Stopped editing` row, leaving
+    /// the selection alone: what a selection that moves away from the item
+    /// does, since the selection is what that gesture made it.
+    pub(crate) fn leave_focused_item(&mut self) {
+        let Some(focused) = self.focused_item else {
             return;
         };
         let text = match self.focused_item_label(focused.node) {
@@ -407,19 +428,85 @@ impl AppState {
         self.action_log.record_run(Kind::Selection, FOCUS_RUN, text);
     }
 
+    /// The selection an unfocus leaves: `origin`, the unfocused item's origin
+    /// as it resolved before the item was unfocused (or discarded), or no
+    /// point when it had none. Writes no row.
+    fn select_left_origin(&mut self, origin: Option<PointRef>) {
+        self.action_log.mute();
+        match origin {
+            Some(point) => self.select_point(point),
+            None => self.selected_point = None,
+        }
+        self.action_log.unmute();
+    }
+
+    /// The focused item's origin followed to the cursor, as a point of the
+    /// item's node, or `None` when nothing is focused, the item has no origin,
+    /// or the point it names is gone.
+    ///
+    /// What the selection rules compare a point selection with: while an item
+    /// is focused, the selected point is this or nothing.
+    pub(crate) fn focused_origin(&self) -> Option<PointRef> {
+        let focused = self.focused_item?;
+        let node = self.node(focused.node)?;
+        let bench = node.history.current_bench();
+        let track = bench.track(bench.label_of(focused.item)?)?;
+        let point = self.resolved_origin(node, track)?;
+        Some(PointRef::new(focused.node, point as usize))
+    }
+
+    /// Select what the focused item stands for: its node, and its origin when
+    /// that resolves at the cursor, or no point. A selected image stays when
+    /// it belongs to the node. Writes no row.
+    ///
+    /// The focused item is set before this is called, so the selection rules
+    /// in [`AppState::select_point`] and [`AppState::select_recon`] see the
+    /// origin as the focused item's and keep it focused.
+    fn select_focused_item(&mut self) {
+        let Some(focused) = self.focused_item else {
+            return;
+        };
+        self.action_log.mute();
+        if self.selected_recon != Some(focused.node) {
+            self.select_recon(focused.node);
+        }
+        match self.focused_origin() {
+            Some(origin) => self.select_point(origin),
+            None => self.selected_point = None,
+        }
+        self.action_log.unmute();
+    }
+
     /// Focus the item called `label` on `id`'s bench and write no row: what a
     /// step that puts an item on the bench does after it, since the step's own
-    /// row says what happened.
+    /// row says what happened. The item's node and origin are selected as
+    /// [`Self::focus_bench_item`] selects them.
     pub(crate) fn focus_put_item(&mut self, id: ReconId, label: &str) {
         if let Some(item) = self.bench(id).and_then(|bench| bench.id(label)) {
             self.set_focused_item(Some(FocusedItem { node: id, item }));
+            self.select_focused_item();
         }
+    }
+
+    /// The most recently focused item that is on its node's bench at the
+    /// cursor, as its node and its label there: what ticking Track View's
+    /// *Edit* box with no point selected focuses.
+    ///
+    /// The first entry of [`AppState::recent_items`] that resolves, so an item
+    /// discarded since it was focused is passed over for the next, and comes
+    /// back when an undo puts it on the bench again.
+    pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)> {
+        self.recent_items.iter().find_map(|recent| {
+            let label = self.bench(recent.node)?.label_of(recent.item)?;
+            Some((recent.node, label.to_string()))
+        })
     }
 
     /// Unfocus the focused item when it is on `id` and no longer on that
     /// node's bench at the cursor: after a discard, a clear, an undo past its
     /// put or a redo past its discard. It writes no row, since the step or the
-    /// move that took the item away wrote its own.
+    /// move that took the item away wrote its own, and it leaves the selection
+    /// alone.
     pub(crate) fn settle_focused_item(&mut self, id: ReconId) {
         let Some(focused) = self.focused_item.filter(|focused| focused.node == id) else {
             return;
@@ -433,11 +520,28 @@ impl AppState {
     }
 
     /// The one place the focused item changes, so the selected observations
-    /// go with it: they are indexes into the item that was focused.
+    /// go with it: they are indexes into the item that was focused. A newly
+    /// focused item moves to the front of [`AppState::recent_items`].
     pub(crate) fn set_focused_item(&mut self, next: Option<FocusedItem>) {
         if self.focused_item != next {
             self.focused_item = next;
             self.bench_rows = None;
+        }
+        if let Some(next) = next {
+            self.recent_items.retain(|recent| *recent != next);
+            self.recent_items.insert(0, next);
+        }
+    }
+
+    /// Unfocus the focused item when a selection moves to `node` and the
+    /// item is on another: the node rule every selection setter keeps, since
+    /// the selected node is the focused item's while one is focused.
+    pub(crate) fn unfocus_off_node(&mut self, node: ReconId) {
+        if self
+            .focused_item
+            .is_some_and(|focused| focused.node != node)
+        {
+            self.leave_focused_item();
         }
     }
 
@@ -1262,20 +1366,27 @@ impl AppState {
     ///
     /// Ticked (`true`), the selected point is put on the bench and focused, or
     /// the item already there is focused when one came from that point
-    /// ([`Self::put_point_on_bench`]); the selection notice's *Edit it* is the
-    /// same call. The first is a bench step and the second is not. Cleared
-    /// (`false`), nothing is focused and every item stays on the bench
-    /// ([`Self::unfocus_bench_item`]), which is no step.
+    /// ([`Self::put_point_on_bench`]). The first is a bench step and the
+    /// second is not. With no point selected on `id`, the tick focuses the
+    /// most recently focused item still on a bench ([`Self::most_recent_item`]),
+    /// which may be on another node and selects it, and is refused with the
+    /// ways in when there is none. Cleared (`false`), nothing is focused and
+    /// every item stays on the bench ([`Self::unfocus_bench_item`]), which is
+    /// no step.
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String> {
         if !on {
             self.unfocus_bench_item();
             return Ok(());
         }
-        let point = self
-            .selected_point
-            .filter(|point| point.recon == id)
-            .ok_or_else(crate::track_view::nothing_to_edit)?;
-        self.put_point_on_bench(point, None).map(|_| ())
+        match self.selected_point.filter(|point| point.recon == id) {
+            Some(point) => self.put_point_on_bench(point, None).map(|_| ()),
+            None => {
+                let (node, label) = self
+                    .most_recent_item()
+                    .ok_or_else(crate::track_view::nothing_to_edit)?;
+                self.focus_bench_item(node, &label)
+            }
+        }
     }
 
     /// *Start cluster on the bench here*, chosen in the Image Detail panel at
@@ -1298,14 +1409,13 @@ impl AppState {
         }
     }
 
-    /// Focus the item at `position` on `id`'s bench, select the node it is on,
-    /// and raise Track View on it: a Scene tree double-click on a Bench row.
+    /// Focus the item at `position` on `id`'s bench, which selects the node it
+    /// is on, and raise Track View on it: a Scene tree double-click on a Bench
+    /// row.
     ///
-    /// The node is selected because Track View shows the selected node's bench,
-    /// and a raise onto another node's bench would show the wrong item. An item
-    /// already focused writes no row: the gesture asked for the panel, and the
-    /// panel is what it gets. Applied by `app.rs` once the dock is back in the
-    /// state, since the raise is a layout operation.
+    /// An item already focused writes no row: the gesture asked for the panel,
+    /// and the panel is what it gets. Applied by `app.rs` once the dock is
+    /// back in the state, since the raise is a layout operation.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize) {
         let Some(label) = self
             .bench(id)
@@ -1314,9 +1424,6 @@ impl AppState {
         else {
             return;
         };
-        if self.selected_recon != Some(id) {
-            self.select_recon(id);
-        }
         if self.focused_item_label(id) != Some(label.as_str()) {
             if let Err(why) = self.focus_bench_item(id, &label) {
                 self.action_log.fail(Kind::Selection, why);
@@ -1331,7 +1438,9 @@ impl AppState {
     /// No confirmation anywhere that calls this: a discard is a version, and an
     /// undo puts the item back where it was. Discarding the focused item
     /// unfocuses it, so Track View returns to view mode rather than switching
-    /// to an item nobody asked for; the undo does not focus it again.
+    /// to an item nobody asked for; the undo does not focus it again. The
+    /// selection is then what clearing *Edit* leaves: the item's origin when
+    /// it resolved before the discard, and otherwise no point.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
@@ -1342,8 +1451,25 @@ impl AppState {
             .discard(label)
             .map_err(|e| format!("Cannot discard that item: {e}"))?;
         let text = format!("Discarded {label} from the bench");
+        let left = self.focused_on(id).then(|| self.focused_origin());
         self.push_bench_step(index, next, text);
+        self.select_after_discard(left);
         Ok(())
+    }
+
+    /// Whether the focused item is on `id`'s bench.
+    fn focused_on(&self, id: ReconId) -> bool {
+        self.focused_item.is_some_and(|focused| focused.node == id)
+    }
+
+    /// The selection after a step that may have taken the focused item off
+    /// the bench. `left` is `Some` when the item was on that bench, holding
+    /// its origin as it resolved before the step; when the step unfocused
+    /// the item, that origin is selected, or the point selection cleared.
+    fn select_after_discard(&mut self, left: Option<Option<PointRef>>) {
+        if let (Some(origin), None) = (left, self.focused_item) {
+            self.select_left_origin(origin);
+        }
     }
 
     /// Take every item off the bench, the points and the clusters alike.
@@ -1351,7 +1477,8 @@ impl AppState {
     /// The two Scene tree groups are one bench, so *Clear the Bench* on either
     /// clears both. Like a discard it is one version and asks for no
     /// confirmation: an undo puts every item back. The focused item, when it
-    /// was on this bench, is unfocused. Clearing an empty bench is no step.
+    /// was on this bench, is unfocused, and the selection is left as a discard
+    /// of it leaves it. Clearing an empty bench is no step.
     pub(crate) fn clear_bench(&mut self, id: ReconId) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
@@ -1365,7 +1492,9 @@ impl AppState {
         let count = bench.len();
         let items = if count == 1 { "item" } else { "items" };
         let text = format!("Cleared the bench of {count} {items}");
+        let left = self.focused_on(id).then(|| self.focused_origin());
         self.push_bench_step(index, Bench::new(), text);
+        self.select_after_discard(left);
         Ok(())
     }
 
@@ -1430,6 +1559,9 @@ impl AppState {
     /// work out. That replaces the map-following every other edit does here:
     /// the map carries a selection that was already on the origin to the same
     /// row this puts it on, and says nothing about one that was elsewhere.
+    /// The track is re-seated on the written point before the selection moves,
+    /// so the written point is its origin and a focused track stays focused,
+    /// including one that had no origin before the commit.
     ///
     /// **A commit onto a point that already holds exactly this track pushes no
     /// version**, and says so in the no-effect row every bench step answers a
