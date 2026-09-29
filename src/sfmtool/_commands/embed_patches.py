@@ -197,20 +197,21 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
-    "--max-keypoint-uncertainty",
+    "--max-zncc-self-similarity-radius",
     type=click.FloatRange(min=0.0),
-    default=0.35,
+    default=2.5,
     show_default=True,
     help=(
-        "Cull points whose predicted keypoint position uncertainty (patch-grid px) "
-        "exceeds this, EARLY — right after round 1's localize + sub-pixel refine, "
-        "before the multi-round refinement. Scores each point's cross-view "
-        "consensus (patch localizability): the noise-normalized structure-tensor "
-        "uncertainty that catches the aperture/flat blind spot the agreement gate "
-        "misses. The grid-px unit lets a fixed value transfer across "
-        "resolutions. A conservative tail cut that self-limits — removing egregious "
-        "points where a dataset has them and little where it doesn't. `0` disables "
-        "the cull. See specs/core/patch/patch-localizability.md."
+        "Cull points whose cross-view consensus bitmap pins no 2D position, "
+        "EARLY — right after round 1's localize + sub-pixel refine, before the "
+        "multi-round refinement: its ZNCC self-similarity radius, how far the "
+        "bitmap can slide over itself and still match itself, is above this, in "
+        "patch-grid pixels. It removes points on a straight edge or a flat "
+        "patch, which the agreement gate lets through. The bitmap has no ring "
+        "around it, so each shift is correlated over the samples the bitmap "
+        "holds on both sides. The radius reads at most 3, so 3 or more turns "
+        "nothing out; 0 disables the cull. The default, 2.5, is the member "
+        "gate's. See specs/core/patch/zncc-self-similarity-radius.md."
     ),
 )
 @click.option(
@@ -280,7 +281,7 @@ def embed_patches_command(
     obliquity_weight_power,
     fronto_prior_weight,
     refine_max_views,
-    max_keypoint_uncertainty,
+    max_zncc_self_similarity_radius,
     localize_search_strategy,
     localize_basis_views,
     sampler,
@@ -392,7 +393,7 @@ def embed_patches_command(
             obliquity_weight_power=obliquity_weight_power,
             fronto_prior_weight=fronto_prior_weight,
             max_refine_views=refine_max_views,
-            max_keypoint_uncertainty=max_keypoint_uncertainty,
+            max_zncc_self_similarity_radius=max_zncc_self_similarity_radius,
             localize_search_strategy=localize_search_strategy,
             localize_basis_views=localize_basis_views,
             sampler=sampler,
@@ -421,7 +422,7 @@ def embed_patches_command(
                 "min_relative_zncc": min_relative_zncc,
                 "min_absolute_zncc": min_absolute_zncc,
                 "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
-                "max_keypoint_uncertainty": max_keypoint_uncertainty,
+                "max_zncc_self_similarity_radius": max_zncc_self_similarity_radius,
                 "max_obliquity_deg": max_obliquity_deg,
                 "obliquity_weight_power": obliquity_weight_power,
                 "fronto_prior_weight": fronto_prior_weight,

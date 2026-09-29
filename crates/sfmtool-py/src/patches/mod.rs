@@ -4,20 +4,19 @@
 //! Bindings for the patch (surfel) pipeline: the `OrientedPatch` and
 //! `PatchCloud` types, the `CameraViews`/`ImagePyramidSet` scene inputs, the
 //! photometric RANSAC refiner, the consensus-atlas compositor, candidate
-//! track spawning, and the ZNCC self-similarity radius of one tile.
+//! track spawning, and the ZNCC self-similarity radius of one tile or of a
+//! stack of bitmaps.
 //!
 //! `PatchCloud`'s heavy per-point kernels each live in their own module as an
 //! additional `#[pymethods]` block (enabled by pyo3's `multiple-pymethods`
 //! feature): `refine_normals`, `select_views`, `localize_keypoints`,
-//! `refine_keypoints`, `render_bitmaps`, `localizability`, and
-//! `member_coherence`.
+//! `refine_keypoints`, `render_bitmaps`, and `member_coherence`.
 
 use pyo3::prelude::*;
 
 pub mod args;
 pub mod cloud;
 pub mod consensus_atlas;
-pub mod localizability;
 pub mod localize_keypoints;
 pub mod member_coherence;
 pub mod oriented_patch;
@@ -54,5 +53,15 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         self_similarity::zncc_self_similarity_parts,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        self_similarity::zncc_self_similarity_parts_overlap_stack,
+        m
+    )?)?;
+    // The default bar on the ZNCC self-similarity radius, shared by the member
+    // gates, the bench and the batch culls on a point's consensus bitmap.
+    m.add(
+        "DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS",
+        sfmtool_core::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
+    )?;
     Ok(())
 }

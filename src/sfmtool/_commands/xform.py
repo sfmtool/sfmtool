@@ -213,13 +213,14 @@ from ..xform._arg_parser import (
     help="Remove points with reprojection error > threshold (e.g., '2.0')",
 )
 @click.option(
-    "--filter-by-keypoint-uncertainty",
+    "--filter-by-zncc-self-similarity-radius",
     multiple=True,
     help=(
-        "Remove points whose predicted keypoint position uncertainty (patch-grid "
-        "px) > threshold (e.g., '0.35'). Scores each point's cross-view consensus "
-        "patch (patch localizability); grid px transfers across resolutions. Needs "
-        "an embedded_patches recon with patch bitmaps."
+        "Remove points whose consensus patch bitmap can slide over itself further "
+        "than this and still match itself, in patch-grid px from 0 to 3 (e.g., "
+        "'2.5'): the ZNCC self-similarity radius, which reads under 1 for a "
+        "corner or texture and 3 for an edge or a flat patch. 0 turns it off. "
+        "Needs a reconstruction with patch bitmaps."
     ),
 )
 @click.option(
@@ -321,7 +322,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
-      --filter-by-keypoint-uncertainty val  Remove points with keypoint position uncertainty > threshold (patch-grid px)
+      --filter-by-zncc-self-similarity-radius val  Remove points whose consensus bitmap slides over itself > val (patch-grid px)
       --filter-by-patch-size MULT         Remove points with world-space patch size > MULT x median
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 
@@ -474,7 +475,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
-            "--filter-by-keypoint-uncertainty, --filter-by-patch-size, "
+            "--filter-by-zncc-self-similarity-radius, --filter-by-patch-size, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "

@@ -503,20 +503,21 @@ def test_embed_patches_cli_localize_basis_views_forwards(
 def test_embed_patches_cli_absolute_localizer_gates_forward(
     monkeypatch, seoul_bull_workspace, tmp_path
 ):
-    """`--min-absolute-zncc` and `--max-member-zncc-self-similarity-radius` parse and
-    reach `embed_patches` as their matching kwargs, and the written file records
-    them in its own `tool_options` (the merge would otherwise leave only the
-    upstream operation's options there)."""
+    """`--min-absolute-zncc`, `--max-member-zncc-self-similarity-radius` and
+    `--max-zncc-self-similarity-radius` parse and reach `embed_patches` as their
+    matching kwargs, and the written file records them in its own `tool_options`
+    (the merge would otherwise leave only the upstream operation's options
+    there)."""
     captured: dict = {}
     real = ep.embed_patches
+    keys = (
+        "min_absolute_zncc",
+        "max_member_zncc_self_similarity_radius",
+        "max_zncc_self_similarity_radius",
+    )
 
     def spy(recon, images, **kwargs):
-        captured.update(
-            {
-                k: kwargs.get(k)
-                for k in ("min_absolute_zncc", "max_member_zncc_self_similarity_radius")
-            }
-        )
+        captured.update({k: kwargs.get(k) for k in keys})
         return real(recon, images, **{**kwargs, "resolution": 12})
 
     monkeypatch.setattr(ep, "embed_patches", spy)
@@ -530,6 +531,8 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
         "0.25",
         "--max-member-zncc-self-similarity-radius",
         "0.5",
+        "--max-zncc-self-similarity-radius",
+        "2.75",
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
@@ -537,9 +540,46 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
     assert captured == {
         "min_absolute_zncc": 0.25,
         "max_member_zncc_self_similarity_radius": 0.5,
+        "max_zncc_self_similarity_radius": 2.75,
     }
 
     reloaded = SfmrReconstruction.load(str(out))
     opts = reloaded.metadata()["tool_options"]
     assert opts["min_absolute_zncc"] == 0.25
     assert opts["max_member_zncc_self_similarity_radius"] == 0.5
+    assert opts["max_zncc_self_similarity_radius"] == 2.75
+    assert "max_keypoint_uncertainty" not in opts
+
+
+def test_embed_patches_self_similarity_cull_defaults_to_the_member_gates_bar():
+    """The consensus cull's bar defaults to 2.5 on the command line and in
+    `embed_patches`, the member gates' bar, and the old flag is gone."""
+    import inspect
+
+    command = main.commands["embed-patches"]
+    options = {p.name: p for p in command.params}
+    assert options["max_zncc_self_similarity_radius"].default == 2.5
+    assert "max_keypoint_uncertainty" not in options
+    signature = inspect.signature(ep.embed_patches)
+    assert signature.parameters["max_zncc_self_similarity_radius"].default == 2.5
+
+
+def test_embed_patches_self_similarity_cull_drops_flat_and_edge_points():
+    """The early cull drops the points whose round-1 consensus reads over the
+    bar (a flat and an edge bitmap at the default), keeps a textured one and one
+    with no consensus, and drops nothing at 0 or 3."""
+    rng = np.random.default_rng(2)
+    r = 12
+    bitmaps = np.zeros((4, r, r, 4), np.uint8)
+    bitmaps[0, ..., :3] = 128  # flat
+    bitmaps[1, ..., :3] = np.where(np.arange(r) < r // 2, 50, 200)[None, :, None]
+    bitmaps[2, ..., :3] = rng.integers(0, 256, (r, r, 3))  # texture
+    bitmaps[:3, ..., 3] = 255  # row 3: no consensus
+    locs = [{"point_index": p} for p in range(4)]
+
+    kept, culled = ep._cull_by_zncc_self_similarity_radius(bitmaps, locs, 2.5)
+    assert [loc["point_index"] for loc in kept] == [2, 3]
+    assert culled == 2
+    for bar in (0.0, 3.0):
+        kept, culled = ep._cull_by_zncc_self_similarity_radius(bitmaps, locs, bar)
+        assert len(kept) == 4 and culled == 0, bar

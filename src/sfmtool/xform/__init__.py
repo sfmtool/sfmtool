@@ -14,9 +14,11 @@ from ._filter_by_image_range import (
     IncludeGlobFilter,
     IncludeRangeFilter,
 )
-from ._filter_by_localizability import FilterByLocalizabilityTransform
 from ._filter_by_patch_size import FilterByPatchSizeTransform
 from ._filter_by_reprojection_error import FilterByReprojectionErrorTransform
+from ._filter_by_zncc_self_similarity_radius import (
+    FilterByZnccSelfSimilarityRadiusTransform,
+)
 from ._heavy_columns import (
     AddPatchBitmapsTransform,
     AddThumbnailsTransform,
@@ -59,7 +61,7 @@ __all__ = [
     "RemoveIsolatedPointsFilter",
     "RemoveLargeFeaturesFilter",
     "FilterByReprojectionErrorTransform",
-    "FilterByLocalizabilityTransform",
+    "FilterByZnccSelfSimilarityRadiusTransform",
     "FilterByPatchSizeTransform",
     "FindPointsAtInfinityTransform",
     "ClassifyPointsAtInfinityTransform",

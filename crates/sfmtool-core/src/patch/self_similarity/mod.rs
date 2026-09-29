@@ -17,17 +17,26 @@
 //! square and the nine cells of the ZNCC grid's split from one tile, sharing
 //! the cross sums between them.
 //!
+//! A stored bitmap has no ring of pixels around it for the shifted windows to
+//! read. [`zncc_self_similarity_radius_overlap`] and
+//! [`zncc_self_similarity_parts_overlap`] read one the overlap way: at each
+//! shift, only the samples inside the bitmap on both sides, and carrying data
+//! on both sides, are correlated.
+//!
 //! The tile is centred by its own mean per channel before the kernels run, so
 //! the `f32` cross sums keep their precision; the window moments come from
 //! per-channel summed-area tables in `f64`, and the combine, the tolerance
 //! test and the slide run in `f64`.
 
 mod kernels;
+mod overlap;
 
 #[cfg(test)]
 mod tests;
 
 use crate::patch::normal_refine::{grid_bounds, middle_span, FLAT_NORM_SQ_EPS};
+
+pub use overlap::{zncc_self_similarity_parts_overlap, zncc_self_similarity_radius_overlap};
 
 /// The template spread, in grey levels, under which a channel carries no
 /// texture: it is left out of the channel average, and a template with no
@@ -139,6 +148,40 @@ impl<'a> PatchTile<'a> {
             }
         }
         (planes, colour)
+    }
+
+    /// Which samples of an interleaved `height × width × C` patch carry data,
+    /// for the overlap reading: with a fourth channel (alpha), the samples
+    /// whose alpha is above 0; without one, every sample, returned as `None`.
+    ///
+    /// A fused consensus bitmap writes alpha 0 where no view covered the
+    /// sample, where only one view did, and where the views disagree so much
+    /// that the confidence rounds to 0; its colour there is zero or one view's
+    /// reading, so none of those samples is treated as data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `patch.len() != width * height * channels` or `channels` is 0.
+    pub fn data_from_interleaved(
+        patch: &[f32],
+        width: usize,
+        height: usize,
+        channels: usize,
+    ) -> Option<Vec<bool>> {
+        assert!(channels > 0, "data_from_interleaved: no channels");
+        assert_eq!(
+            patch.len(),
+            width * height * channels,
+            "data_from_interleaved: a {width}×{height}×{channels} patch has {} values, not {}",
+            width * height * channels,
+            patch.len()
+        );
+        (channels >= 4).then(|| {
+            patch
+                .chunks_exact(channels)
+                .map(|pixel| pixel[3] > 0.0)
+                .collect()
+        })
     }
 
     /// Check the tile's own shape: one to three channels and a value for
@@ -435,10 +478,7 @@ impl Prepared {
         let tolerance = params.relative_tolerance + noise_term;
 
         let ri = r as i64;
-        let inner = (ri - 1) * (ri - 1);
         let mut surface = vec![f64::NAN; shifts];
-        let mut saturated = false;
-        let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
         for dy in -ri..=ri {
             for dx in -ri..=ri {
                 let d2 = dx * dx + dy * dy;
@@ -467,26 +507,48 @@ impl Prepared {
                     .sum::<f64>()
                     / textured.len() as f64;
                 surface[index] = z;
-                if 1.0 - z <= tolerance {
-                    saturated |= d2 > inner;
-                    let (fx, fy) = (dx as f64, dy as f64);
-                    sxx += fx * fx;
-                    sxy += fx * fy;
-                    syy += fy * fy;
-                }
             }
         }
-        let radius = if saturated {
-            r as f64
-        } else {
-            crossing_radius(&surface, r, 1.0 - tolerance)
-        };
-        SelfSimilarity {
-            radius,
-            slide: slide_of(sxx, sxy, syy),
-            tolerance,
-            surface,
+        read_surface(surface, r, tolerance)
+    }
+}
+
+/// The reading of a filled surface judged by `tolerance`: the radius, `r` when
+/// an indistinguishable shift lies in the disk's outer ring and otherwise where
+/// the surface crosses `1 − tolerance`, and the slide of the indistinguishable
+/// shifts. The centre does not count as a shift.
+fn read_surface(surface: Vec<f64>, r: usize, tolerance: f64) -> SelfSimilarity {
+    let side = 2 * r + 1;
+    let ri = r as i64;
+    let inner = (ri - 1) * (ri - 1);
+    let mut saturated = false;
+    let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
+    for dy in -ri..=ri {
+        for dx in -ri..=ri {
+            let d2 = dx * dx + dy * dy;
+            if d2 == 0 || d2 > ri * ri {
+                continue;
+            }
+            let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
+            if 1.0 - z <= tolerance {
+                saturated |= d2 > inner;
+                let (fx, fy) = (dx as f64, dy as f64);
+                sxx += fx * fx;
+                sxy += fx * fy;
+                syy += fy * fy;
+            }
         }
+    }
+    let radius = if saturated {
+        r as f64
+    } else {
+        crossing_radius(&surface, r, 1.0 - tolerance)
+    };
+    SelfSimilarity {
+        radius,
+        slide: slide_of(sxx, sxy, syy),
+        tolerance,
+        surface,
     }
 }
 

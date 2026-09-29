@@ -2,7 +2,7 @@
 
 A keypoint is only worth keeping if matching can find it again: when the patch around it is compared with another photograph, the best match should sit at one place and nothing else nearby. The ZNCC self-similarity radius measures that from a single image. It slides the patch over itself by whole pixels, up to a small maximum distance, and asks how far it can move while still looking as much like itself as a true match between two views would. A corner or a busy texture stops matching itself within a pixel and scores 0 or 1. A straight edge keeps matching itself along its own length and scores the maximum, and so does a flat sky, whose only texture is noise and rounding. Alongside the distance, the score reports the direction the patch can slide in, and the patch's ZNCC with itself at every shift it tried. It is computed for the whole patch, its middle, and each ninth of it, like the bench's other patch readings.
 
-It sits beside the older [patch localizability](patch-localizability.md), the curvature of the same surface at its peak, whose code names carry a `_deprecated` suffix while the two are compared (see [Renamed names of the localizability score](#renamed-names-of-the-localizability-score)). The bench judges the radius, with its `max_zncc_self_similarity_radius` bar, and reads the localizability score nowhere. The keypoint localizer's member gate, `max_member_zncc_self_similarity_radius`, Add Image to Tracks, which uses the same gate, and cluster-patch refinement's member gate, `ClusterRefineParams::max_member_zncc_self_similarity_radius`, also judge the radius, with a default bar of 2.5 patch-grid px, the bench's default bar too. The other batch gates (the `embed-patches` consensus cull and the `xform` filter) judge the localizability score.
+It sits beside the older [patch localizability](patch-localizability.md), the curvature of the same surface at its peak, whose code names carry a `_deprecated` suffix while the two are compared (see [Renamed names of the localizability score](#renamed-names-of-the-localizability-score)). The bench judges the radius, with its `max_zncc_self_similarity_radius` bar, and reads the localizability score nowhere. The keypoint localizer's member gate, `max_member_zncc_self_similarity_radius`, Add Image to Tracks, which uses the same gate, and cluster-patch refinement's member gate, `ClusterRefineParams::max_member_zncc_self_similarity_radius`, also judge the radius, with a default bar of 2.5 patch-grid px, the bench's default bar too. So do the two culls on a point's stored consensus bitmap, `embed-patches --max-zncc-self-similarity-radius` and `xform --filter-by-zncc-self-similarity-radius`, which read a bitmap that has no ring around it by [the overlap reading](#the-overlap-reading). Nothing in the pipeline reads the localizability score any more.
 
 ## What it measures
 
@@ -29,9 +29,34 @@ The **slide** is the direction of the indistinguishable shifts. With `C = Σ d d
 
 The **surface** is `z(d)` itself over the `(2r + 1)²` square of shifts, row-major from `(dx, dy) = (−r, −r)`, with `1` at the centre and `NaN` for the shifts outside the disk. It is what the radius and the slide are read from, returned so a display can draw it.
 
+## The overlap reading
+
+The reading above needs `r` pixels of the tile around the template for the moved windows to read. A caller that renders the patch renders it wider, but a point's stored consensus bitmap (the `.sfmr` `patch_bitmaps_y_x_rgba` row, or the round-1 consensus `embed-patches` fuses) is exactly `R × R`, and the pixels past its edge were never rendered. The **overlap reading** scores such a bitmap as it is, using the full bitmap as the template: at each shift `d`, only the samples that have data on both sides are correlated.
+
+- **The overlap.** At shift `d` the overlap `O_d` is the set of samples `k` of the template where `k` and `k + d` both lie inside the bitmap and both carry data. The per-channel ZNCC `z_c(d)` is the formula above with every sum over `O_d` instead of `Ω`, and with the template's mean and spread, and the moved window's, both taken over `O_d`, so every `z(d)` is a proper ZNCC on the same scale as the ringed reading's. At `d = 0` the overlap is the template's samples that carry data.
+- **Data.** A sample carries data when its alpha (the fourth channel) is above 0; a bitmap with no fourth channel has data at every sample. The consensus fuse writes alpha 0 where no view covered the sample, where only one view did, and where the views disagree so much that the confidence rounds to 0, and its colour there is zero or one view's reading, so all of those drop out, as a sample off the edge does. A row for a point with no consensus is zero throughout, alpha included.
+- **Channels.** The channels judged are those whose spread over the template's samples with data (`O_0`) is at or above the flat floor. At each other shift a channel whose template spread over `O_d` falls under the floor is also left out of that shift's average, and a moved window with no variance in a channel scores 0 in it, as in the ringed reading. A shift whose overlap leaves no channel, or has no sample at all, scores 0: nothing there matches the template.
+- **The tolerance.** `τ` uses the spread `s_c` of the whole template, over `O_0`, not the spread over each shift's overlap. `τ` is the deficit a true match of this template between two views would show, which is a property of the template at its true position, where the overlap is the whole template. It also has to be one level for the whole surface: the radius is read where the surface, interpolated between neighbouring shifts, falls through `1 − τ`, and a level that changed from shift to shift would have no single crossing to interpolate. The overlaps are at least `(R − r)/R` of the template on each axis, so their spreads differ from the template's by a few per cent on a textured bitmap.
+- **The rest is the ringed reading's.** The radius is read from the surface by the same linear interpolation along grid edges, an indistinguishable shift in the outer ring reads `r` or more, the slide and the surface are formed the same way, and a template with no textured channel at `d = 0` scores `r` with an infinite tolerance. A template with no sample carrying data has **no reading**: its radius, slide, tolerance and surface are all `NaN`.
+- **The parts.** The middle square and the nine cells use the same rule, with the rest of the bitmap as their ring: at each shift a cell's sample counts when its moved sample lies inside the bitmap and both carry data. Where the moved window stays inside the bitmap, which is always the case for the middle (a margin of `R/4 ≥ r` at `R ≥ 12`) and the centre cell (`R/3 ≥ r`), and every sample carries data, the overlap is the whole part and the reading is exactly the ringed one; an edge or corner cell loses the rows and columns its moved window would read past the bitmap. One rule covers both cases, so there is no separate ringed path inside the bitmap.
+
+On the patches it was checked against, the overlap reading of the whole bitmap reads slightly shorter than the ringed reading of the same core. On embed-patches runs over the seoul_bull and kerry_park solves (765 and 1,795 points), each point's patch was rendered at `R + 2r = 30` with its frame grown by `30/24`; the ringed reading of that tile's `24 × 24` core was compared with the overlap reading of the same core cut out, and with the overlap reading of the file's own stored `24 × 24` bitmap:
+
+| | seoul_bull | kerry_park |
+|---|---|---|
+| Correlation, ringed vs overlap, same core (every sample as data) | 0.982 | 0.987 |
+| Mean overlap − ringed | −0.050 | −0.052 |
+| Verdict at 2.5 differs, same core (every sample as data) | 22 (2.9%) | 52 (2.9%) |
+| of which ringed fails and overlap passes | 21 | 47 |
+| Correlation, ringed vs overlap of the stored bitmap | 0.979 | 0.976 |
+| Verdict at 2.5 differs, stored bitmap | 22 (2.9%) | 65 (3.6%) |
+| Middle square, same core | identical | identical (2 verdicts differ when alpha is read: samples with alpha 0) |
+
+Most of the disagreements are bitmaps the ringed reading sends to `3` through one shift in the outer ring that clears the level by a hundredth or two, such as `(2, 1)` at 0.956 against a level of 0.946; on the overlap the same shift falls just under the level and the radius reads between 1.9 and 2.5. Samples with alpha 0 are rare in consensus bitmaps: 0% on seoul_bull and 0.16% on kerry_park.
+
 ## Rust API
 
-The operation lives in [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`mod.rs` for the API, `kernels.rs` for the scalar and AVX2 kernels, `tests.rs`), as `sfmtool_core::patch::self_similarity`, a sibling of [`patch::localizability`](../../../crates/sfmtool-core/src/patch/localizability/). The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine/mod.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool._sfmtool.patches.zncc_self_similarity_parts` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
+The operation lives in [self_similarity/](../../../crates/sfmtool-core/src/patch/self_similarity/) (`mod.rs` for the API, `kernels.rs` for the scalar and AVX2 kernels, `overlap.rs` for the overlap reading, `tests.rs`), as `sfmtool_core::patch::self_similarity`, a sibling of [`patch::localizability`](../../../crates/sfmtool-core/src/patch/localizability/). The bench reads it in [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the keypoint localizer's member gate in [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs) (`member_self_similarity_radius`), cluster-patch refinement's member gate in [cluster_refine/mod.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/mod.rs) (`member_zncc_self_similarity_radius`), and it is bound as `sfmtool._sfmtool.patches.zncc_self_similarity_parts` in [patches/self_similarity.rs](../../../crates/sfmtool-py/src/patches/self_similarity.rs).
 
 ```rust
 /// The template spread, in grey levels, under which a channel carries no
@@ -96,6 +121,16 @@ impl<'a> PatchTile<'a> {
         height: usize,
         channels: usize,
     ) -> (Vec<f32>, usize);
+
+    /// Which samples of an interleaved `height × width × C` patch carry
+    /// data: with a fourth channel, those whose alpha is above 0; without
+    /// one, every sample (`None`).
+    pub fn data_from_interleaved(
+        patch: &[f32],
+        width: usize,
+        height: usize,
+        channels: usize,
+    ) -> Option<Vec<bool>>;
 }
 
 /// One template `Ω = (x, y, w, h)` inside `tile`, with `max_radius`
@@ -114,9 +149,28 @@ pub fn zncc_self_similarity_parts(
     resolution: usize,
     params: &SelfSimilarityParams,
 ) -> SelfSimilarityParts;
+
+/// One template inside `tile`, read the overlap way: at each shift, only
+/// the template samples whose moved sample lies inside the tile, and where
+/// both carry data, are correlated. `data` is one flag per sample, row-major;
+/// `None` means every sample carries data.
+pub fn zncc_self_similarity_radius_overlap(
+    tile: &PatchTile<'_>,
+    data: Option<&[bool]>,
+    template: [usize; 4],
+    params: &SelfSimilarityParams,
+) -> SelfSimilarity;
+
+/// A whole `R×R` bitmap with no ring, its middle and its nine cells, each
+/// read the overlap way with the rest of the bitmap as its ring.
+pub fn zncc_self_similarity_parts_overlap(
+    bitmap: &PatchTile<'_>,
+    data: Option<&[bool]>,
+    params: &SelfSimilarityParams,
+) -> SelfSimilarityParts;
 ```
 
-Both functions panic, with a message naming the sizes, on a malformed tile (no channels, more than three, or a value count that does not match), on an empty template, on a template with less than `max_radius` pixels of tile on some side, and, for the parts, on a tile that is not `resolution + 2·max_radius` square or a `resolution` under 3. These are caller errors: the bench and the binding size the tile from the same parameters they pass.
+The ringed functions panic, with a message naming the sizes, on a malformed tile (no channels, more than three, or a value count that does not match), on an empty template, on a template with less than `max_radius` pixels of tile on some side, and, for the parts, on a tile that is not `resolution + 2·max_radius` square or a `resolution` under 3. The overlap functions panic on a malformed tile, on `data` with the wrong number of flags, on an empty template or one that does not fit in the tile, and, for the parts, on a bitmap that is not square or is under `3 × 3`. These are caller errors: the bench and the bindings size the tile from the same parameters they pass.
 
 **Why this shape.** The template is a rectangle inside a larger tile rather than a whole patch because the shifted windows need pixels past the template's edge; a caller that renders the patch renders it `r` pixels wider on every side, and the score never reads outside what it was given. The parts function exists because its eleven templates share one tile and one set of window sums, and computing them together is several times cheaper than eleven calls (see [Implementation notes](#implementation-notes)). The result carries `tolerance` so a display or a test can say why a shift counted, and `surface` because the kernel computes every `z(d)` anyway and a display can draw the surface the radius was read from. The surface is a `Vec` because its size follows `max_radius`. The parameters are a struct and not constants because a caller may need other values than the defaults, and the defaults of `ε` and `n` are not yet calibrated on real pairs of views (see [Open questions](#open-questions)).
 
@@ -132,6 +186,22 @@ let parts = zncc_self_similarity_parts(&tile, 24, &SelfSimilarityParams::default
 if parts.whole.radius < 1.5 {
     // Matching locks onto this patch within one pixel, diagonals included.
 }
+```
+
+The overlap functions are siblings with an `_overlap` suffix rather than a flag on the ringed ones, because they answer for a different input: a bitmap whose edge is the edge of what exists, which the ringed functions refuse. The suffix names what differs, which is what the shifted windows read, and not the kind of input, since the ringed functions read bitmaps too, rendered wider. They take the data flags as a separate slice rather than reading a fourth channel of the tile, because `PatchTile` holds colour planes only; `data_from_interleaved` derives the flags from an RGBA bitmap in the same layout `planes_from_interleaved` reads.
+
+```rust
+use sfmtool_core::patch::self_similarity::{
+    zncc_self_similarity_parts_overlap, PatchTile, SelfSimilarityParams,
+};
+
+// `bitmap` is a stored 24 × 24 × 4 consensus row: no ring, alpha 0 where no
+// view covered the sample.
+let (planes, channels) = PatchTile::planes_from_interleaved(&bitmap, 24, 24, 4);
+let data = PatchTile::data_from_interleaved(&bitmap, 24, 24, 4);
+let tile = PatchTile { values: &planes, channels, width: 24, height: 24 };
+let parts = zncc_self_similarity_parts_overlap(&tile, data.as_deref(), &SelfSimilarityParams::default());
+let passes = parts.whole.radius <= 2.5; // NaN (no data) is judged by the caller
 ```
 
 ## Theory
@@ -185,12 +255,15 @@ The cost is the cross sums, one set per channel. With the template centred, `Σ_
 - **Scalar reference.** For each template pixel, each shift row `dy` and each `dx`, accumulate `I(k) · I(k + d)`. It is the oracle for the AVX2 kernel, the fallback on other CPUs and architectures, and the path for `2r + 1 > 8`.
 - **AVX2.** Lanes run across the `2r + 1 ≤ 8` horizontal shifts, so one 8-lane register holds a whole shift row of the square that bounds the disk, and `2r + 1` registers hold the window (7 at `r = 3`); the kernel is monomorphized on that count, so the accumulators stay in registers. Per template pixel it broadcasts `I(k)` and, for each shift row, loads the 8 plane values starting at `k + (−r, dy)` and fuses a multiply-add. The lanes past `2r + 1`, and the shifts outside the disk, are computed and discarded: masking them would cost more than the multiply-adds it saves. The padding columns keep every load inside its row's storage, and the bounds that guarantee it are asserted before the kernel runs. It is dispatched at run time on `is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")`, as the localizer's search kernels are ([keypoint-localization-search-cache.md](keypoint-localization-search-cache.md)), and compiled only on `x86_64`. The two kernels agree to `f32` rounding, not bit for bit, since the scalar one rounds each product before adding it.
 - **Parts together.** The nine cells tile the core, so the parts function runs the kernel once per cell and sums the cells' `f64` totals into the core's; each part's centred sums then come from its own template mean and the summed-area table. The middle square is not a union of cells and gets its own pass. That is about 35,000 multiply-adds per channel per tile at `R = 24`, `r = 3`, about 105,000 for a colour tile. The AVX2 cross sums take a few microseconds per colour tile, several times less than the scalar ones, and the summed-area tables and the combine over the eleven templates cost more than the cross sums do.
+- **The overlap reading.** Its window moments change with the overlap, so a summed-area table of the tile does not give them; for each shift it walks the samples of each part directly and accumulates, per channel, `Σ t`, `Σ u`, `Σ t²`, `Σ u²` and `Σ t u` over the samples where both sides carry data, in `f64`, with each channel first centred by its mean over the samples that carry data. The five sums and the count add, so the nine cells' sums make the whole bitmap's, and the middle gets its own pass. That is about 720 samples per shift at `R = 24`, 29 shifts, and 16 sums per sample for a colour bitmap: roughly 0.4 ms of one core per bitmap, and 12.6 µs per bitmap of wall time for a stack of 17,950 on 32 cores, against 3.8 µs for the older localizability score of the same stack. It has no AVX2 kernel: a mask in the inner loop does not map onto the unmasked cross-sum kernel, and at this cost a batch cull over a whole reconstruction takes well under a second.
 
 ## Where it runs
 
 The [keypoint localizer](patch-keypoint-localization.md#the-member-self-similarity-gate) reads the whole core's radius of each view's own tile at its seed offset, from the context tile it has already rendered when that tile has `r` px of ring around the core and from a tile of `R + 2r` rendered for it otherwise, and its member gate, `KeypointLocalizeParams::max_member_zncc_self_similarity_radius`, drops a view whose radius is over the bar. A `NaN` radius fails the gate, `0` turns it off, and the default is `2.5`, chosen by the user from a sweep on seoul_bull and kerry_park ([The member gate's default](patch-keypoint-localization.md#the-member-gates-default)). [Add Image to Tracks](../reconstruction/add-image-to-tracks.md) reads the same radius for the new view's core at the point's projection, reports it per candidate as `zncc_self_similarity_radius`, and refuses a candidate over the same gate as `unlocalizable`.
 
 [Cluster-patch refinement](cluster-patch-refinement.md#which-member-anchors-and-which-members-are-eligible) reads the whole core's radius of each member's own template grid at its SIFT seed geometry, from `sample_member_self_similarity_tile`: the member grid sampled with its half-width grown by `(R + 2r) / R` at resolution `R + 2r`. Its member gate, `ClusterRefineParams::max_member_zncc_self_similarity_radius` (`sfm cluster-patches --max-member-zncc-self-similarity-radius`), refuses a member over the bar as `rejected_unlocalizable` before reference selection, with the localizer's pass rule and its default of `2.5`.
+
+Two batch culls read a point's **consensus bitmap** by the [overlap reading](#the-overlap-reading), through `sfmtool._sfmtool.patches.zncc_self_similarity_parts_overlap_stack` and the shared Python pass rule `points_passing_zncc_self_similarity_radius` in [_filter_by_zncc_self_similarity_radius.py](../../../src/sfmtool/xform/_filter_by_zncc_self_similarity_radius.py): `sfm embed-patches --max-zncc-self-similarity-radius` (`embed_patches(max_zncc_self_similarity_radius=)`) on each point's round-1 consensus, before round 2 ([embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md)), and `sfm xform --filter-by-zncc-self-similarity-radius` (`FilterByZnccSelfSimilarityRadiusTransform`) on a reconstruction's stored `patch_bitmaps` ([xform-command.md](../../cli/reconstruction/xform/xform-command.md)). A point passes at or under the bar and fails on a `NaN` radius; a bitmap with no sample carrying data has no reading and passes, as the bench's painting passes a row with no reading, so a point with no consensus is left to the pipeline's other rules. `0` turns the cull off, `3` or more turns nothing out, and the default is `2.5`, the member gates' `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`, which the bindings export under that name. At the default, on the embed-patches runs of the table above, the embed-patches cull drops 59 of 837 points on seoul_bull and 292 of 1,886 on kerry_park, where the older cull on the localizability score at `0.35` dropped 0 and 4; the xform filter over those runs' stored bitmaps, written with the cull off, removes 69 of 765 and 316 of 1,795, where the older filter at `0.35` removed 0 and 4.
 
 The bench computes it at both stages, for every observation that has a pixel (see [editable-track.md](../bench/editable-track.md) § "The ZNCC self-similarity radius"):
 
@@ -211,9 +284,9 @@ While the two are compared, the localizability score's names say it is the one o
 | `score_localizability_stack_deprecated` | `score_localizability_stack` |
 | `score_localizability_parts_deprecated` | `score_localizability_parts` |
 | `LocalizabilityDeprecated`, `LocalizabilityPartsDeprecated` | `Localizability`, `LocalizabilityParts` |
-| `PatchCloud.score_localizability_deprecated` (Python) | `PatchCloud.score_localizability` |
+| `PatchCloud.score_localizability_deprecated` (Python) | `PatchCloud.score_localizability`; removed with `PatchCloud.window_weights` once the two batch culls moved to the radius and nothing else called it |
 
-What names a gate on the deprecated score or appears in a file or on a command line keeps its name, because renaming it would change a file format or a command-line interface for users of the batch pipeline: `embed-patches`' `max_keypoint_uncertainty` parameter and `--max-keypoint-uncertainty` flag, `--filter-by-keypoint-uncertainty`, and `SIGMA_NOISE`. Those gates call the deprecated scorer. A gate moved onto the radius is renamed, since its bar changes unit: the localizer's `max_member_keypoint_uncertainty` (and `embed-patches`' `--max-member-keypoint-uncertainty`) is now `max_member_zncc_self_similarity_radius` (`--max-member-zncc-self-similarity-radius`), Add Image to Tracks' `max_keypoint_uncertainty` keyword is `max_zncc_self_similarity_radius`, its per-candidate `sigma_pos` is `zncc_self_similarity_radius`, and `ViewSearch::sigma_pos` is `ViewSearch::zncc_self_similarity_radius`. Cluster refinement's `ClusterRefineParams::max_keypoint_uncertainty` (`sfm cluster-patches --max-keypoint-uncertainty`, and the `refine_options` key it wrote into a `.matches` file) is now `max_member_zncc_self_similarity_radius` (`--max-member-zncc-self-similarity-radius`); nothing reads the `refine_options` key back, so a file that carries the old key reads as before. The `unlocalizable` refusal, the `.matches` member status `rejected_unlocalizable` and the localizer's `N_DROP_UNLOCALIZABLE` counter keep their names, since they name what was refused, not the score. The module stays `patch::localizability`, and [patch-localizability.md](patch-localizability.md) names the deprecated identifiers and links this spec.
+Every gate that judged the deprecated score has moved to the radius and been renamed, since its bar changed unit; renaming it rather than keeping the older name with a new unit means a caller that set the old bar gets an error rather than a gate that means something else. The localizer's `max_member_keypoint_uncertainty` (and `embed-patches`' `--max-member-keypoint-uncertainty`) is now `max_member_zncc_self_similarity_radius` (`--max-member-zncc-self-similarity-radius`), Add Image to Tracks' `max_keypoint_uncertainty` keyword is `max_zncc_self_similarity_radius`, its per-candidate `sigma_pos` is `zncc_self_similarity_radius`, and `ViewSearch::sigma_pos` is `ViewSearch::zncc_self_similarity_radius`. Cluster refinement's `ClusterRefineParams::max_keypoint_uncertainty` (`sfm cluster-patches --max-keypoint-uncertainty`, and the `refine_options` key it wrote into a `.matches` file) is now `max_member_zncc_self_similarity_radius` (`--max-member-zncc-self-similarity-radius`). The `embed-patches` consensus cull's `max_keypoint_uncertainty` parameter and `--max-keypoint-uncertainty` flag, and the `tool_options` key it recorded in the written `.sfmr`, are now `max_zncc_self_similarity_radius` (`--max-zncc-self-similarity-radius`), without `member`, since it judges the point's consensus rather than one view's tile; `xform --filter-by-keypoint-uncertainty` is `--filter-by-zncc-self-similarity-radius`, and its `FilterByLocalizabilityTransform` in `_filter_by_localizability.py` is `FilterByZnccSelfSimilarityRadiusTransform` in `_filter_by_zncc_self_similarity_radius.py`. Nothing reads the `refine_options` or `tool_options` keys back, so a file that carries an old key reads as before. The `unlocalizable` refusal, the `.matches` member status `rejected_unlocalizable` and the localizer's `N_DROP_UNLOCALIZABLE` counter keep their names, since they name what was refused, not the score. The module stays `patch::localizability`, with its `SIGMA_NOISE`, and [patch-localizability.md](patch-localizability.md) names the deprecated identifiers and links this spec.
 
 ## Parameters
 
@@ -237,6 +310,15 @@ out = zncc_self_similarity_parts(tile_30x30x3_uint8, 24)
 out["radius"], out["radius_grid"], out["surface"][3, 3]  # 1.0 at the centre
 ```
 
+`sfmtool._sfmtool.patches.zncc_self_similarity_parts_overlap_stack(bitmaps, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` reads each bitmap of an `(N, R, R, C)` uint8 or float32 stack by the [overlap reading](#the-overlap-reading), in parallel over the bitmaps, a fourth channel read as the data flags (alpha above 0), and returns a dict of per-bitmap arrays: `radius` (`(N,)` float64), `radius_middle` (`(N,)`), `radius_grid` (`(N, 3, 3)`), `slide` (`(N, 2)`), `tolerance` (`(N,)`), the whole bitmap's where not said otherwise, and `covered` (`(N,)` bool), false for a bitmap with no sample carrying data, whose values are `NaN`. A stack of another dtype or rank, of bitmaps that are not square or under `3 × 3`, or with more than four channels, raises `ValueError`. It is a module function rather than a `PatchCloud` method because it reads the bitmaps alone: no geometry, no views. `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` (`2.5`) is exported beside it.
+
+```python
+from sfmtool._sfmtool.patches import zncc_self_similarity_parts_overlap_stack
+
+out = zncc_self_similarity_parts_overlap_stack(recon.patch_bitmaps)
+passes = ~out["covered"] | (out["radius"] <= 2.5)
+```
+
 ## Testing
 
 In [self_similarity/tests.rs](../../../crates/sfmtool-core/src/patch/self_similarity/tests.rs):
@@ -248,12 +330,13 @@ In [self_similarity/tests.rs](../../../crates/sfmtool-core/src/patch/self_simila
 - The surface is 1 at its centre and `NaN` outside the disk.
 - The parts function agrees with separate calls on each part's template.
 - A tile with too little margin around the template, and a parts tile of the wrong size, are refused with a panic message naming the sizes.
+- The overlap reading: a corner locks (under 1); a straight edge at 0°, 30°, 45° and 90° reads 3 with its slide along the edge; a flat bitmap and an 8-bit ramp read 3; samples without data drop out, so what they hold does not change the reading, which equals that of the covered columns cut out on their own, and a cell with no data, or a bitmap with none, has no reading; on a bitmap cut from a larger textured tile, the middle and the centre cell read as the ringed reading of the larger tile does and the whole bitmap within 0.25 of it, with the same tolerance; the parts agree with separate calls; the wrong number of data flags is refused; and `data_from_interleaved` reads alpha.
 
-The bench's track and cluster evaluations fill every field for each observation with a pixel, the painting turns out a row whose radius is over the bar, keeps a row with no reading, and turns out nothing with the bar at the largest radius searched, and the default bar sits under that radius ([bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)); the viewer's tests cover the column's text, colours, marks and heading ([track_view/edit/tests.rs](../../../crates/sfm-explorer/src/track_view/edit/tests.rs)) and the wire fields ([mcp/tests/bench.rs](../../../crates/sfm-explorer/src/mcp/tests/bench.rs)); and [test_self_similarity_rust_bindings.py](../../../tests/rust_bindings/test_self_similarity_rust_bindings.py) covers the binding. The localizer's tests ([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)) check that its member gate drops a flat and an edge view and keeps textured ones at a bar of 2, drops nothing at `0` or at `r`, gives the same verdicts when the search is too narrow for the ring, passes at or under the bar and fails `NaN`, is on at 2.5 by default, and that a reference search reports the radius; [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py) checks that a bar refuses as `unlocalizable` exactly the candidates whose radius is over it. Cluster refinement's tests ([cluster_refine/tests.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/tests.rs)) check that a textured member reads well under the bar and a flat, an edge and a smooth member over it, that the tile's core is the member grid, that at the default a flat and an edge member are refused and a textured one kept, that `0` and `3` refuse nobody, and the pass rule.
+The bench's track and cluster evaluations fill every field for each observation with a pixel, the painting turns out a row whose radius is over the bar, keeps a row with no reading, and turns out nothing with the bar at the largest radius searched, and the default bar sits under that radius ([bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs)); the viewer's tests cover the column's text, colours, marks and heading ([track_view/edit/tests.rs](../../../crates/sfm-explorer/src/track_view/edit/tests.rs)) and the wire fields ([mcp/tests/bench.rs](../../../crates/sfm-explorer/src/mcp/tests/bench.rs)); and [test_self_similarity_rust_bindings.py](../../../tests/rust_bindings/test_self_similarity_rust_bindings.py) covers the binding. The localizer's tests ([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)) check that its member gate drops a flat and an edge view and keeps textured ones at a bar of 2, drops nothing at `0` or at `r`, gives the same verdicts when the search is too narrow for the ring, passes at or under the bar and fails `NaN`, is on at 2.5 by default, and that a reference search reports the radius; [test_add_image_to_tracks_rust_bindings.py](../../../tests/rust_bindings/test_add_image_to_tracks_rust_bindings.py) checks that a bar refuses as `unlocalizable` exactly the candidates whose radius is over it. Cluster refinement's tests ([cluster_refine/tests.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/tests.rs)) check that a textured member reads well under the bar and a flat, an edge and a smooth member over it, that the tile's core is the member grid, that at the default a flat and an edge member are refused and a textured one kept, that `0` and `3` refuse nobody, and the pass rule. [test_filter_by_zncc_self_similarity_radius.py](../../../tests/xform/test_filter_by_zncc_self_similarity_radius.py) checks the overlap binding on a flat, an edge, a textured and an empty bitmap, the shared pass rule (the default culls the flat and the edge point and keeps the textured and the empty one, `0` and `3` keep every point), and the xform filter on those bitmaps and on real ones; [test_embed_patches_command.py](../../../tests/patch/test_embed_patches_command.py) checks the embed-patches cull on the same four kinds, its default of 2.5, and that its flag reaches `embed_patches` and the written `tool_options`.
 
 ## Non-goals
 
-- The radius does not replace the deprecated score in the `embed-patches` consensus cull or the `xform` filter; those keep `σ_pos`. The bench's painting, the keypoint localizer's member gate and cluster-patch refinement's member gate judge the radius.
+- The overlap reading is not used where a ring can be rendered: the bench and the member gates render the tile `r` px wider and read it the ringed way.
 - It does not measure sub-pixel precision, which the deprecated score and the sub-pixel refinement already cover.
 - It does not change any file format.
 

@@ -4,7 +4,7 @@
 //! The `PatchCloud` type: construction, indexing, and accessors. The heavy
 //! per-point kernels live in sibling modules as additional `#[pymethods]`
 //! blocks (refine_normals, select_views, localize_keypoints, refine_keypoints,
-//! localizability).
+//! render_bitmaps, member_coherence).
 
 use nalgebra::{Point3, Vector3};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};

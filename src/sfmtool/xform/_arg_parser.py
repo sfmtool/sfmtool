@@ -38,9 +38,9 @@ from . import (
     DropThumbnailsTransform,
     ExcludeGlobFilter,
     ExcludeRangeFilter,
-    FilterByLocalizabilityTransform,
     FilterByPatchSizeTransform,
     FilterByReprojectionErrorTransform,
+    FilterByZnccSelfSimilarityRadiusTransform,
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
     IncludeRangeFilter,
@@ -613,13 +613,13 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
             FilterByReprojectionErrorTransform,
         ),
     ),
-    "--filter-by-keypoint-uncertainty": (
+    "--filter-by-zncc-self-similarity-radius": (
         "required",
         lambda p, _: _parse_scalar(
             p,
-            "--filter-by-keypoint-uncertainty",
+            "--filter-by-zncc-self-similarity-radius",
             float,
-            FilterByLocalizabilityTransform,
+            FilterByZnccSelfSimilarityRadiusTransform,
             catch_constructor=True,
         ),
     ),

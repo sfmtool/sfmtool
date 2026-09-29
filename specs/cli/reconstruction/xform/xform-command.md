@@ -198,32 +198,35 @@ well-defined and a high-error point at infinity is removed like any other.
 --filter-by-reprojection-error 2.0
 ```
 
-#### `--filter-by-keypoint-uncertainty <threshold>`
+#### `--filter-by-zncc-self-similarity-radius <threshold>`
 
-Removes 3D points whose predicted keypoint position uncertainty `σ_pos` exceeds the
-threshold. `σ_pos` is the noise-normalized weak-axis structure-tensor uncertainty of
-the point's cross-view consensus patch — see
-[patch-localizability.md](../../../core/patch/patch-localizability.md) — and it grades
-how well *conditioned* a keypoint's localization is (corner vs. edge vs. flat),
-independently of whether the views agree. That is the aperture blind spot the
-reprojection and agreement gates cannot see: an edge-like patch slides freely along
-the edge while every view keeps agreeing.
+Removes 3D points whose stored consensus bitmap pins no 2D position: its
+[ZNCC self-similarity radius](../../../core/patch/zncc-self-similarity-radius.md),
+how far the bitmap can slide over itself and still match itself as well as a true
+match between two views would, is over the threshold. A corner or a busy texture
+reads under 1; a straight edge, which slides along itself, and a flat patch read 3.
+That is the case the reprojection and agreement gates cannot see: an edge-like
+patch slides along the edge while every view keeps agreeing.
 
-The threshold is in **patch-grid px**, the intrinsic resolution-independent unit, not
-source-image px. Grid px transfers across datasets of different resolution; the
-source-px form folds in a per-point focal/depth scale, so one fixed threshold would
-cull wildly different fractions of two clouds. A point that cannot be scored at all
-(empty consensus, `σ_pos` = NaN) is **kept** — the filter only removes points it has
-positive evidence about. `threshold` must be positive.
+The threshold is in **patch-grid px**, from 0 to 3. A stored bitmap has no ring of
+pixels around it, so the radius is read
+[the overlap way](../../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading):
+at each shift, only the samples inside the bitmap on both sides, and whose alpha is
+above 0 on both sides, are correlated. A point passes when its radius is at or below
+the threshold and fails when the radius is `NaN`; a point whose bitmap has no sample
+carrying data (a zero row, no consensus) has no reading and is **kept**. `0` turns
+the filter off, and since the radius reads at most 3, a threshold of 3 or more
+removes nothing; a negative threshold is an error. `sfm embed-patches` applies the
+same bar, by default 2.5, to each point's round-1 consensus.
 
-This requires an `embedded_patches` reconstruction *with* per-point patch bitmaps: the
-consensus is what gets scored, and it is computed on demand from the stored consensus
-and geometry, reading no source images. A reconstruction missing either the bitmaps or
-the patch frames is rejected with a message naming `sfm embed-patches` or
-`sfm xform --refine-keypoints bitmaps=true`.
+This requires a reconstruction *with* per-point patch bitmaps, and reads no source
+images. A reconstruction without them is rejected with a message naming
+`sfm embed-patches` or `sfm xform --add-patch-bitmaps`. The option replaces
+`--filter-by-keypoint-uncertainty`, a bar on the older
+[localizability score](../../../core/patch/patch-localizability.md) in another unit.
 
 ```bash
---filter-by-keypoint-uncertainty 0.35
+--filter-by-zncc-self-similarity-radius 2.5
 ```
 
 #### `--filter-by-patch-size <multiplier>`
@@ -894,7 +897,7 @@ which returns a new reconstruction:
 |-----------|---------|-----------|
 | `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. Per-image depth statistics scale with the transform's scale (the four observed lengths and the histogram bounds, six multiplications per image), and the histogram counts are carried, which is exact: equal buckets between scaled bounds hold every scaled depth in the bucket it was in. They are not re-derived, because the re-derivation also overwrites every per-point normal. The metadata block, `world_space_unit` included, passes through. The viewer's `Bake Transform` is this same call ([bake-transform.md](../../../gui/edits/bake-transform.md)). |
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. `sift_files` reconstructions only. |
-| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-keypoint-uncertainty`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
+| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-zncc-self-similarity-radius`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
 A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
 performs the same mask-filter-and-remap on bare track columns (no

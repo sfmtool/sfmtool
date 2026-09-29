@@ -442,3 +442,258 @@ fn planes_from_interleaved_drops_alpha() {
         vec![0.0, 4.0, 8.0, 12.0, 1.0, 5.0, 9.0, 13.0, 2.0, 6.0, 10.0, 14.0]
     );
 }
+
+// ---- The overlap reading -------------------------------------------------
+
+/// The overlap reading of a whole `size × size` bitmap with no ring.
+fn overlap_whole(
+    values: &[f32],
+    channels: usize,
+    size: usize,
+    data: Option<&[bool]>,
+) -> SelfSimilarity {
+    zncc_self_similarity_radius_overlap(
+        &tile(values, channels, size),
+        data,
+        [0, 0, size, size],
+        &params(3),
+    )
+}
+
+/// Whether two readings are the same bit for bit, a `NaN` matching a `NaN`.
+fn same_reading(a: &SelfSimilarity, b: &SelfSimilarity) -> bool {
+    let same = |x: f64, y: f64| x.to_bits() == y.to_bits();
+    same(a.radius, b.radius)
+        && same(a.tolerance, b.tolerance)
+        && a.slide.iter().zip(&b.slide).all(|(&x, &y)| same(x, y))
+        && a.surface.iter().zip(&b.surface).all(|(&x, &y)| same(x, y))
+}
+
+/// A rough three-channel texture over a `size × size` tile: random values
+/// smoothed a little, so a shift of a pixel or more decorrelates.
+fn rough_texture(size: usize, seed: u64) -> Vec<f32> {
+    let mut rng = Lcg(seed);
+    let raw: Vec<f64> = (0..3 * size * size)
+        .map(|_| 255.0 * rng.next_f32() as f64)
+        .collect();
+    let last = size as f64 - 1.0;
+    tile_of(size, 3, |c, x, y| {
+        let at = |xx: f64, yy: f64| {
+            let (xx, yy) = (xx.min(last), yy.min(last));
+            raw[(c * size + yy as usize) * size + xx as usize]
+        };
+        (2.0 * at(x, y) + at(x + 1.0, y) + at(x, y + 1.0)) / 4.0
+    })
+}
+
+#[test]
+fn overlap_a_corner_locks() {
+    let size = 24;
+    let corner = tile_of(
+        size,
+        1,
+        |_, x, y| if x >= 12.0 && y >= 12.0 { 200.0 } else { 50.0 },
+    );
+    let s = overlap_whole(&corner, 1, size, None);
+    assert!(s.radius > 0.0 && s.radius < 1.0, "{s:?}");
+}
+
+#[test]
+fn overlap_an_edge_slides_along_itself() {
+    for angle in [0.0f64, 30.0, 45.0, 90.0] {
+        let size = 24;
+        let s = overlap_whole(&edge(size, angle), 1, size, None);
+        assert_eq!(s.radius, 3.0, "angle={angle}: {s:?}");
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let len = s.slide[0].hypot(s.slide[1]);
+        let along = (s.slide[0] * cos + s.slide[1] * sin).abs() / len;
+        assert!(
+            len > 0.5 && along > 0.95,
+            "angle={angle}: slide {:?}",
+            s.slide
+        );
+    }
+}
+
+#[test]
+fn overlap_a_flat_patch_reads_r() {
+    let size = 24;
+    let flat = tile_of(size, 3, |_, _, _| 128.0);
+    let s = overlap_whole(&flat, 3, size, None);
+    assert_eq!(s.radius, 3.0);
+    assert_eq!(s.slide, [0.0, 0.0]);
+    assert_eq!(s.tolerance, f64::INFINITY);
+    assert!(s.surface.iter().all(|v| v.is_nan()));
+
+    let ramp = tile_of(size, 1, |_, x, y| (100.0 + 0.3 * x + 0.2 * y).round());
+    assert_eq!(overlap_whole(&ramp, 1, size, None).radius, 3.0);
+}
+
+#[test]
+fn overlap_samples_without_data_drop_out() {
+    let size = 24;
+    let texture = rough_texture(size, 21);
+    // The left third carries no data; what it holds must not matter.
+    let data: Vec<bool> = (0..size * size).map(|k| k % size >= 8).collect();
+    let mut zeroed = texture.clone();
+    let mut junk = texture.clone();
+    let mut rng = Lcg(3);
+    for c in 0..3 {
+        for (k, &has) in data.iter().enumerate() {
+            if !has {
+                zeroed[c * size * size + k] = 0.0;
+                junk[c * size * size + k] = 255.0 * rng.next_f32();
+            }
+        }
+    }
+    let a = overlap_whole(&zeroed, 3, size, Some(&data));
+    let b = overlap_whole(&junk, 3, size, Some(&data));
+    assert!(same_reading(&a, &b), "{a:?} vs {b:?}");
+    assert!(a.radius < 1.0, "{a:?}");
+    // The reading is the one of the covered columns cut out as a bitmap of
+    // their own.
+    let covered: Vec<f32> = (0..3 * size)
+        .flat_map(|row| texture[row * size + 8..(row + 1) * size].iter().copied())
+        .collect();
+    let covered_tile = PatchTile {
+        values: &covered,
+        channels: 3,
+        width: size - 8,
+        height: size,
+    };
+    let c = zncc_self_similarity_radius_overlap(
+        &covered_tile,
+        None,
+        [0, 0, size - 8, size],
+        &params(3),
+    );
+    assert!((a.radius - c.radius).abs() < 1e-9, "{a:?} vs {c:?}");
+    for (x, y) in a.surface.iter().zip(&c.surface) {
+        assert!(x.is_nan() && y.is_nan() || (x - y).abs() < 1e-9);
+    }
+    let pa = zncc_self_similarity_parts_overlap(&tile(&zeroed, 3, size), Some(&data), &params(3));
+    let pb = zncc_self_similarity_parts_overlap(&tile(&junk, 3, size), Some(&data), &params(3));
+    assert!(same_reading(&pa.whole, &pb.whole) && same_reading(&pa.middle, &pb.middle));
+    for (row_a, row_b) in pa.grid.iter().zip(&pb.grid) {
+        for (a, b) in row_a.iter().zip(row_b) {
+            assert!(same_reading(a, b), "{a:?} vs {b:?}");
+        }
+    }
+    // The left column of cells has no data at all: no reading.
+    for row in &pa.grid {
+        let cell = &row[0];
+        assert!(cell.radius.is_nan() && cell.tolerance.is_nan(), "{cell:?}");
+        assert!(cell.slide.iter().all(|v| v.is_nan()));
+        assert!(cell.surface.iter().all(|v| v.is_nan()));
+    }
+}
+
+#[test]
+fn overlap_a_bitmap_with_no_data_has_no_reading() {
+    let size = 12;
+    let texture = rough_texture(size, 4);
+    let data = vec![false; size * size];
+    let s = overlap_whole(&texture, 3, size, Some(&data));
+    assert!(s.radius.is_nan() && s.tolerance.is_nan());
+    let parts =
+        zncc_self_similarity_parts_overlap(&tile(&texture, 3, size), Some(&data), &params(3));
+    assert!(parts.whole.radius.is_nan() && parts.middle.radius.is_nan());
+}
+
+/// On a bitmap cut from a larger textured image, the middle and the centre
+/// cell have ring from the rest of the bitmap and read exactly as the ringed
+/// reading of the larger image does; the whole bitmap, whose shifted windows
+/// lose up to `r` rows and columns, reads close to it.
+#[test]
+fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
+    let (resolution, r) = (24usize, 3usize);
+    let wide = resolution + 2 * r;
+    for seed in [1u64, 2, 3] {
+        // A smooth part and a rough part, so the parts read differently.
+        let rough = rough_texture(wide, seed);
+        let values = tile_of(wide, 3, |c, x, y| {
+            let k = (c * wide + y as usize) * wide + x as usize;
+            let smooth = 60.0 * (0.25 * x + 0.1 * y + c as f64).sin();
+            let fine = if x > 15.0 { 0.4 } else { 0.05 };
+            120.0 + smooth + fine * f64::from(rough[k] - 128.0)
+        });
+        let ringed = zncc_self_similarity_parts(&tile(&values, 3, wide), resolution, &params(3));
+        let mut core = Vec::with_capacity(3 * resolution * resolution);
+        for c in 0..3 {
+            for y in 0..resolution {
+                let row = (c * wide + y + r) * wide + r;
+                core.extend_from_slice(&values[row..row + resolution]);
+            }
+        }
+        let overlap =
+            zncc_self_similarity_parts_overlap(&tile(&core, 3, resolution), None, &params(3));
+        let same = |a: &SelfSimilarity, b: &SelfSimilarity, what: &str| {
+            assert!(
+                (a.radius - b.radius).abs() < 1e-4 && (a.tolerance - b.tolerance).abs() < 1e-9,
+                "seed {seed} {what}: {} vs {}",
+                a.radius,
+                b.radius
+            );
+            for (x, y) in a.surface.iter().zip(&b.surface) {
+                assert!(
+                    x.is_nan() && y.is_nan() || (x - y).abs() < 1e-5,
+                    "{what}: {x} vs {y}"
+                );
+            }
+        };
+        same(&ringed.middle, &overlap.middle, "middle");
+        same(&ringed.grid[1][1], &overlap.grid[1][1], "centre cell");
+        assert!(
+            (ringed.whole.tolerance - overlap.whole.tolerance).abs() < 1e-9,
+            "the tolerance is the whole template's either way"
+        );
+        assert!(
+            (ringed.whole.radius - overlap.whole.radius).abs() < 0.25,
+            "seed {seed}: whole {} vs {}",
+            ringed.whole.radius,
+            overlap.whole.radius
+        );
+    }
+}
+
+#[test]
+fn overlap_parts_agree_with_separate_calls() {
+    let size = 24;
+    let values = rough_texture(size, 8);
+    let data: Vec<bool> = (0..size * size).map(|k| (k * 7) % 11 != 0).collect();
+    let t = tile(&values, 3, size);
+    let p = params(3);
+    let parts = zncc_self_similarity_parts_overlap(&t, Some(&data), &p);
+    let check = |part: &SelfSimilarity, rect: [usize; 4]| {
+        let alone = zncc_self_similarity_radius_overlap(&t, Some(&data), rect, &p);
+        assert!((part.radius - alone.radius).abs() < 1e-9, "{rect:?}");
+        assert!((part.tolerance - alone.tolerance).abs() < 1e-9, "{rect:?}");
+        for (a, b) in part.surface.iter().zip(&alone.surface) {
+            assert!(a.is_nan() && b.is_nan() || (a - b).abs() < 1e-9, "{rect:?}");
+        }
+    };
+    check(&parts.whole, [0, 0, size, size]);
+    check(&parts.middle, [6, 6, 12, 12]);
+    for row in 0..3 {
+        for col in 0..3 {
+            check(&parts.grid[row][col], [8 * col, 8 * row, 8, 8]);
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "a 12×12 tile needs 144 data flags, not 10")]
+fn overlap_refuses_the_wrong_number_of_data_flags() {
+    let values = vec![0.0f32; 12 * 12];
+    overlap_whole(&values, 1, 12, Some(&[true; 10]));
+}
+
+#[test]
+fn data_from_interleaved_reads_alpha() {
+    let patch = [1.0f32, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 9.0];
+    assert_eq!(
+        PatchTile::data_from_interleaved(&patch, 2, 1, 4),
+        Some(vec![false, true])
+    );
+    assert_eq!(PatchTile::data_from_interleaved(&patch[..6], 2, 1, 3), None);
+}

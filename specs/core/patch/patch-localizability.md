@@ -6,9 +6,9 @@ sharply the patch's correlation with itself falls off as you slide it — which 
 the classic structure tensor, measured here in the pipeline's own correlation
 metric. It grades the **conditioning** of a keypoint's position (corner vs edge
 vs flat) independently of whether the views that see it happen to agree, and it
-is used to score and cull points whose keypoints are free to drift. One scorer
-serves a crate function, a Python binding, an `xform` filter, and an
-`embed-patches` cull.
+was built to score and cull points whose keypoints are free to drift. Nothing
+in the pipeline calls it now: the crate functions below are called only by this
+module's own tests.
 
 The score is the surface's curvature at its peak, so it does not say how far a
 patch can slide over itself before it stops matching, which is what decides
@@ -17,18 +17,19 @@ here. A bounded score of that distance is the ZNCC self-similarity radius,
 [zncc-self-similarity-radius.md](zncc-self-similarity-radius.md). While the two
 are compared, this score's code names carry a `_deprecated` suffix:
 `patch_localizability_deprecated`, `score_localizability_stack_deprecated`,
-`score_localizability_parts_deprecated`, `LocalizabilityDeprecated`,
-`LocalizabilityPartsDeprecated` and `PatchCloud.score_localizability_deprecated`.
-The names of the gates built on it, their parameters and flags
-(`embed-patches`' `max_keypoint_uncertainty`, `--filter-by-keypoint-uncertainty`),
-`SIGMA_NOISE` and the module `patch::localizability` keep their names, and
-those gates keep calling this score. The [editable track](../bench/editable-track.md)
-does not read it: the bench judges a sighting's tile by its ZNCC
-self-similarity radius. Nor do the member gates of the
+`score_localizability_parts_deprecated`, `LocalizabilityDeprecated` and
+`LocalizabilityPartsDeprecated`; `SIGMA_NOISE` and the module
+`patch::localizability` keep their names. Every gate that read this score now
+judges the radius instead, under a new name: the
+[editable track](../bench/editable-track.md)'s painting, the member gates of the
 [keypoint localizer](patch-keypoint-localization.md) and of
-[cluster-patch refinement](cluster-patch-refinement.md): both,
-`max_member_zncc_self_similarity_radius`, judge a member's own tile by the
-ZNCC self-similarity radius.
+[cluster-patch refinement](cluster-patch-refinement.md)
+(`max_member_zncc_self_similarity_radius`), and the two culls on a point's
+consensus bitmap, `embed-patches --max-zncc-self-similarity-radius` (was
+`--max-keypoint-uncertainty`) and `xform --filter-by-zncc-self-similarity-radius`
+(was `--filter-by-keypoint-uncertainty`). The Python binding
+`PatchCloud.score_localizability_deprecated`, and `PatchCloud.window_weights`
+beside it, were removed when those culls moved, since nothing else called them.
 
 ## Problem
 
@@ -213,9 +214,12 @@ well-textured low-resolution sets and ~7–12 % on a high-resolution set with a
 smooth-texture tail. The tool reports the `σ_pos` distribution to help fine-tune
 `τ`; it never auto-derives one.
 
-`embed-patches` uses a **conservative default `τ = 0.35` grid px** (overridable) —
-a safe tail cut in the spirit of the reprojection filter's default. It self-limits,
-so it will not hurt datasets that have no poorly-localized tail. (Grid px is
+The culls that read this score used a **conservative default `τ = 0.35` grid
+px** — a safe tail cut in the spirit of the reprojection filter's default. It
+self-limits: on the seoul_bull and kerry_park solves it culled 0 of 837 and 4 of
+1,886 points, where the ZNCC self-similarity radius at its default bar of 2.5
+culls 59 and 292 (see
+[zncc-self-similarity-radius.md](zncc-self-similarity-radius.md#where-it-runs)). (Grid px is
 relative to the patch grid `R`, so `τ` is calibrated for the default `R = 24`; a
 run that changes `resolution` should re-pick `τ` — it does not rescale
 automatically.)
@@ -223,12 +227,10 @@ automatically.)
 ## Surfaces
 
 The scorer lives in
-[localizability/](../../../crates/sfmtool-core/src/patch/localizability/), bound
-as `PatchCloud.score_localizability_deprecated`, with the reconstruction-level filter in
-[_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
-
-One scorer, three entry points (no member gate calls it; see
-[The per-member counterpart](#the-per-member-counterpart)):
+[localizability/](../../../crates/sfmtool-core/src/patch/localizability/), as
+crate functions only; it has no Python binding and no command-line surface
+(see [Culling in `embed-patches` and `xform`](#culling-in-embed-patches-and-xform)
+for where its culls went).
 
 1. **Crate function** (a submodule sibling of `keypoint_localize` /
    `normal_refine`):
@@ -276,29 +278,24 @@ One scorer, three entry points (no member gate calls it; see
    cell. No gate reads them, and nothing outside this module's tests calls
    the function.
 
-2. **Python binding** — `PatchCloud.score_localizability_deprecated(recon, patch_bitmaps, …)`
-   scores the batch over `patch_bitmaps`, returning per-point
-   `{lam1, lam2, theta, sigma_pos_grid, sigma_pos_px}`. `sigma_pos_grid` is the cull
-   quantity; `sigma_pos_px` (source px, via the recon-geometry grid→px map, median
-   over views) is a diagnostic. No images required.
+   Nothing outside this module's tests calls the batch entry either. Its
+   source-px form, `σ_pos_grid` mapped per view by the projected scale
+   `half_extent / (R/2) · f / depth` and reduced by the median over the
+   point's views, went with the removed Python binding.
 
-3. **`xform` filter** — exposed as `--filter-by-keypoint-uncertainty <grid-px>`
-   (the same "keypoint uncertainty" wording as the embed flag), implemented by
-   `FilterByLocalizabilityTransform` in
-   `src/sfmtool/xform/_filter_by_localizability.py` (the internal class keeps the
-   `localizability` concept name), wired like
-   [`--filter-by-reprojection-error`](../../cli/reconstruction/xform/xform-command.md): compute per-point
-   `σ_pos` (grid px) from the recon's `patch_bitmaps`, keep-mask `σ_pos ≤ τ`,
-   delegate to `recon.filter_points_by_mask(...)`. Runs offline on any
-   `embedded_patches` recon (no images), composes in the pipeline, and is the
-   **re-runnable home of the cull policy** — retune `τ` without re-embedding.
-   Errors if the recon has no `patch_bitmaps` (needs a consensus to score).
+## Culling in `embed-patches` and `xform`
 
-## `embed-patches` integration
-
-`embed-patches` culls poorly-localized points **by default, early** — after the
-first round's localization + sub-pixel refine, before the multi-round refinement
-that dominates cost (see the [pipeline](../../../src/sfmtool/_embed_patches.py)).
+The `embed-patches` early cull and the `xform` filter were designed on this
+score and now judge a point's consensus bitmap by the
+[ZNCC self-similarity radius](zncc-self-similarity-radius.md#the-overlap-reading)
+instead, as `--max-zncc-self-similarity-radius` and
+`--filter-by-zncc-self-similarity-radius`. The placement and the reasoning below
+carry over unchanged, since the radius too depends on the point's own bitmap
+alone. `embed-patches` culls **by default, early** — after the first round's
+localization + sub-pixel refine, before the multi-round refinement that
+dominates cost (see the [pipeline](../../../src/sfmtool/_embed_patches.py)),
+and the `xform` filter is the re-runnable home of the same cull, run offline on
+a reconstruction's stored `patch_bitmaps` without re-embedding.
 
 **Why early culling is safe here.** Localizability is **intrinsic and per-point
 independent**: a point's score depends only on its own consensus appearance, and
@@ -308,23 +305,21 @@ early cull has **no feedback effects** — it simply removes doomed points from 
 working set, and the truly-unlocalizable cases (flat / edge) are intrinsic and
 will not be rescued by further normal/keypoint refinement.
 
-**Placement (v1).** In `embed_patches`, right after the round-1 sub-pixel pass:
+**Placement.** In `embed_patches`, right after the round-1 sub-pixel pass:
 
-1. Render the round-1 fused consensus bitmaps (enable `render_bitmaps` at round 1;
-   today they are only rendered on the final round for a multi-round run).
-2. Score `σ_pos` per point on those bitmaps (the same scorer the `xform` filter
-   uses).
-3. **Drop `σ_pos > τ` points from the `localizations` list** before rounds 2..N
-   (and before the final compaction for a single-round run). The compaction
+1. Render the round-1 fused consensus bitmaps (`render_bitmaps` at round 1,
+   which a multi-round run otherwise renders only on the final round).
+2. Read each point's score on those bitmaps (the same reading the `xform`
+   filter uses).
+3. **Drop the points over the bar from the `localizations` list** before rounds
+   2..N (and before the final compaction for a single-round run). The compaction
    renumbers survivors, so removing a point from `localizations` propagates
    cleanly — no separate mask plumbing. Culled points are then absent from every
    subsequent refinement pass **and** the output.
 
-A `--max-keypoint-uncertainty` CLI option carries `τ` (the largest predicted
-keypoint position uncertainty, in **grid px**, to keep — default `0.35`,
-overridable; `0`/disabled opts out). The final `compact_to_embedded_patches`
-keeps its existing `min_views` / validity cull unchanged; **no second
-localizability cull is needed** — the early one is authoritative.
+The final `compact_to_embedded_patches` keeps its existing `min_views` /
+validity cull unchanged; **no second cull is needed** — the early one is
+authoritative.
 
 **Cost — measured net-neutral to favourable.** Enabling round-1 bitmaps adds one
 render pass over the full point set (~+1.6 s / round-1 render + a sub-second score
@@ -352,7 +347,6 @@ the round-1-vs-final mis-cull delta is measured.
 | `resolution` (R) | 24 | patch grid the tensor is computed on (matches the consensus) |
 | `window` | `gaussian_disk` | scoring window (shared with the rest of the pipeline) |
 | `sigma_noise` | ~3 gray levels (global constant) | sets the absolute px scale of `σ_pos`; only the *ranking* is scale-free |
-| `max_keypoint_uncertainty` (`τ`) | `0.35` grid px | drop points with `σ_pos > τ` (**grid px** — transfers across resolution, see [Threshold](#threshold)); conservative self-limiting tail cut |
 
 ## Evidence (prototype)
 

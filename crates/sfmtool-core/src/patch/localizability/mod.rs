@@ -13,9 +13,9 @@
 //!
 //! `patch_localizability_deprecated` is the pure per-patch
 //! scorer (structure tensor + 2×2 eig); [`score_localizability_stack_deprecated`] batches it
-//! over a `(P, R, R, C)` consensus stack in parallel. The grid→source-px mapping
-//! that turns `sigma_pos_grid` into a source-pixel `σ_pos` lives at the binding /
-//! Python layer (it needs recon geometry, not the consensus).
+//! over a `(P, R, R, C)` consensus stack in parallel. Nothing outside this
+//! module's tests calls either: every gate and cull that read this score now
+//! judges the ZNCC self-similarity radius (`patch::self_similarity`).
 
 mod scorer;
 
@@ -30,15 +30,14 @@ pub use scorer::{
 use crate::patch::normal_refine::{window_weights as kernel_window_weights, PatchWindow};
 
 /// Global photometric-noise constant `σ_noise` (intensity units), the value
-/// that sets the absolute px scale of `σ_pos`. It matches the
-/// `score_localizability_deprecated` binding's / `embed-patches`' default (see
+/// that sets the absolute px scale of `σ_pos` (see
 /// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)").
-/// No gate in this crate reads it any more: the member gates of cluster
-/// refinement and the keypoint localizer read the ZNCC self-similarity radius.
+/// No gate reads it any more: the member gates and the consensus culls read
+/// the ZNCC self-similarity radius.
 pub const SIGMA_NOISE: f64 = 3.0;
 
 /// The scorer's `R×R` window weights (row-major) for `window` — the shared patch
-/// kernel, exposed so callers (the Python binding, tests) score against the same
+/// kernel, exposed so callers (the tests) score against the same
 /// window the scorer uses rather than reimplementing it.
 pub fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
     kernel_window_weights(window, resolution)

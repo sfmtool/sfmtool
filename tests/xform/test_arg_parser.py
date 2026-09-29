@@ -28,7 +28,7 @@ from sfmtool.xform._arg_parser import (
         "--align-to",
         "--remove-large-features",
         "--filter-by-reprojection-error",
-        "--filter-by-keypoint-uncertainty",
+        "--filter-by-zncc-self-similarity-radius",
         "--filter-by-patch-size",
         "--include-range",
         "--exclude-range",
