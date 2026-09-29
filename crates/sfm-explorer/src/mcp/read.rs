@@ -635,9 +635,8 @@ pub(super) fn point_observation_xy(
 /// The pixel one observation sits at, from whichever source this
 /// reconstruction stores it in.
 ///
-/// `(0, 0)` when the `.sift` file could not be read — the same fallback
-/// `track_view::view::prepare` uses, so the two panels and this tool agree on
-/// what an unreadable feature looks like rather than each inventing an answer.
+/// `(0, 0)` when the `.sift` file could not be read, so an unreadable feature
+/// reads as one fixed place rather than as whatever the cache last held.
 fn observation_xy(
     state: &AppState,
     recon: crate::scene::ReconId,

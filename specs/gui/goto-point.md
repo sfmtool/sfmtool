@@ -333,6 +333,7 @@ frame — which is also the first frame the field is focused, leaving no window 
 which the user could type into an unselected field.
 
 Track View reports its button through
-`PointTrackViewResponse::request_goto_point`, which `dock.rs` turns into
+`TrackBodyResponse::request_goto_point`, from its header or its empty state,
+which `dock.rs` turns into
 `state.open_goto_point()` — the same shape every other cross-panel action in
 that response uses.

@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for Track View's edit mode.
+//! Headless tests for Track View's body, most of them in Edited mode; the
+//! Viewed-mode tests are in `tests/viewed.rs`.
 //!
 //! egui needs no GPU to lay out a frame, so the whole body runs through
 //! `Context::run_ui` here: `show` really does draw the header, the toolbar,
@@ -12,7 +13,7 @@
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 
-use super::{TrackEdit, TrackEditResponse, LOCK_LABEL};
+use super::{TrackBody, TrackBodyResponse, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::tests::projected_embedded_demo;
 use crate::state::AppState;
@@ -61,17 +62,17 @@ fn cache_photographs(state: &mut AppState, id: ReconId) {
 }
 
 /// Drive one frame of the panel and hand back what it reported.
-fn run_frame(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> TrackEditResponse {
+fn run_frame(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState) -> TrackBodyResponse {
     run_frame_with(panel, ctx, state, Vec::new())
 }
 
 /// The same frame, with `events` delivered to egui.
 fn run_frame_with(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &AppState,
     events: Vec<egui::Event>,
-) -> TrackEditResponse {
+) -> TrackBodyResponse {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
         events,
@@ -89,12 +90,12 @@ fn run_frame_with(
 /// egui resolves hover and clicks against the rects the previous pass
 /// registered, so a single frame reports no interaction.
 fn at_pointer(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &AppState,
     pos: egui::Pos2,
     click: bool,
-) -> TrackEditResponse {
+) -> TrackBodyResponse {
     let mut response = None;
     for frame in 0..2 {
         let mut events = vec![egui::Event::PointerMoved(pos)];
@@ -117,7 +118,7 @@ fn at_pointer(
 /// down the panel: what sits above the table is the header, the toolbar and
 /// the boxes, and a hard-coded offset would go stale the moment
 /// one of them gains a line.
-fn row_y(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, image: usize) -> f32 {
+fn row_y(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState, image: usize) -> f32 {
     for step in 0..(VIEWPORT.y as usize / 8) {
         let y = step as f32 * 8.0;
         let response = at_pointer(panel, ctx, state, egui::pos2(400.0, y), false);
@@ -139,7 +140,7 @@ fn input(events: Vec<egui::Event>) -> egui::RawInput {
 
 /// The strings one frame of the panel painted, with `events` delivered.
 fn painted(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &AppState,
     events: Vec<egui::Event>,
@@ -151,8 +152,8 @@ fn painted(
 
 /// A panel and a context that have laid the table out once, so the pointer has
 /// rects to resolve against.
-fn settled(state: &AppState) -> (TrackEdit, egui::Context) {
-    let mut panel = TrackEdit::new();
+fn settled(state: &AppState) -> (TrackBody, egui::Context) {
+    let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, state);
     (panel, ctx)
@@ -162,7 +163,7 @@ fn settled(state: &AppState) -> (TrackEdit, egui::Context) {
 ///
 /// Three frames: one to register the rows, one that right-clicks, and one
 /// more, because the menu's entries are laid out on a later frame.
-fn open_row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, at: egui::Pos2) {
+fn open_row_menu(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState, at: egui::Pos2) {
     for frame in 0..3 {
         let mut events = vec![egui::Event::PointerMoved(at)];
         if frame == 1 {
@@ -180,7 +181,7 @@ fn open_row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, a
 }
 
 /// The strings the first table row's context menu painted.
-fn row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> Vec<String> {
+fn row_menu(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState) -> Vec<String> {
     let y = row_y(panel, ctx, state, 0);
     let at = egui::pos2(400.0, y);
     open_row_menu(panel, ctx, state, at);
@@ -189,7 +190,7 @@ fn row_menu(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> Vec
 
 /// Where an open menu drew the entry called `text`.
 fn menu_entry_pos(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &AppState,
     text: &str,
@@ -205,28 +206,28 @@ fn menu_entry_pos(
 }
 
 /// Put [`POINT`] on the bench and draw one frame over it.
-fn on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
+fn on_the_bench() -> (AppState, ReconId, String, TrackBody, egui::Context) {
     let (mut state, id) = state();
     let label = state
         .put_point_on_bench(PointRef::new(id, POINT as usize), None)
         .expect("a live point");
-    let mut panel = TrackEdit::new();
+    let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
     (state, id, label, panel, ctx)
 }
 
-/// With nothing focused the body draws nothing: Track View is in view mode
-/// then, and the ways in are its empty state's.
+/// With nothing focused and no viewed track the body draws nothing: Track View
+/// draws its empty state then, and the ways in are that state's.
 #[test]
 fn with_nothing_active_the_body_draws_no_rows_and_no_text() {
     let (state, _) = state();
-    let mut panel = TrackEdit::new();
+    let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
     let response = run_frame(&mut panel, &ctx, &state);
 
     assert!(panel.rows().is_empty());
-    assert_eq!(response, TrackEditResponse::default());
+    assert_eq!(response, TrackBodyResponse::default());
     let texts = painted(&mut panel, &ctx, &state, Vec::new());
     assert!(texts.is_empty(), "{texts:?}");
 }
@@ -403,22 +404,12 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let sfmr_image = &recon.image_table.images[row.image as usize];
     let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
-    let at_the_seed = crate::track_view::view::patch_color_image(
-        &frame,
-        camera,
-        &cam_from_world,
-        Some(site),
-        src.level(0),
-    );
+    let at_the_seed =
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), src.level(0));
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
-    let at_the_projection = crate::track_view::view::patch_color_image(
-        &frame,
-        camera,
-        &cam_from_world,
-        None,
-        src.level(0),
-    );
+    let at_the_projection =
+        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, src.level(0));
     assert_ne!(
         drawn, at_the_projection,
         "the tile is the point's own projection rather than the sighting's place"
@@ -606,7 +597,7 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
         .history
         .push_bench(std::sync::Arc::new(bench), "Put a bearing on the bench");
     state.focus_put_item(id, "bearing");
-    let mut panel = TrackEdit::new();
+    let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
 
     let texts = painted(&mut panel, &ctx, &state, Vec::new());
@@ -618,7 +609,7 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
     assert!(texts.contains(&why), "the reason is not drawn: {texts:?}");
 }
 
-/// Edit mode draws the focused item and nothing else on the bench: no row of
+/// Edited mode draws the focused item and nothing else on the bench: no row of
 /// item tabs, so the labels of the other items appear nowhere in what the frame
 /// painted. The bench as a list is the Scene tree's.
 #[test]
@@ -650,7 +641,7 @@ fn edit_mode_draws_the_focused_item_and_no_item_tabs() {
         .expect("a pixel on the sensor")
         .label;
     state.focus_bench_item(id, &second).expect("on the bench");
-    let mut panel = TrackEdit::new();
+    let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
 
@@ -713,7 +704,7 @@ fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
     assert_eq!(state.selected_bench_observations(id, &label), [0]);
 }
 
-/// A double-click on a row enters camera view for its image, as a view-mode
+/// A double-click on a row enters camera view for its image, as a Viewed-mode
 /// row's does: the rows of both modes are observations of one track. The
 /// row's observation goes with it, for the view to turn toward.
 #[test]
@@ -753,7 +744,7 @@ fn double_clicking_a_row_asks_for_camera_view() {
 #[test]
 fn the_lock_starts_ticked_and_toggling_it_pushes_no_version() {
     let (state, id, _, mut panel, ctx) = on_the_bench();
-    assert!(TrackEdit::new().lock(), "a new panel starts locked");
+    assert!(TrackBody::new().lock(), "a new panel starts locked");
     assert!(panel.lock());
     let versions = state.node(id).expect("loaded").history.versions().len();
 
@@ -761,10 +752,11 @@ fn the_lock_starts_ticked_and_toggling_it_pushes_no_version() {
     let response = at_pointer(&mut panel, &ctx, &state, at, true);
     assert!(!panel.lock(), "a click on the box clears it");
     assert_eq!(
-        TrackEditResponse {
+        TrackBodyResponse {
+            mode: Some(super::BodyMode::Edited),
             has_pointer: response.has_pointer,
             hovered_image: response.hovered_image,
-            ..TrackEditResponse::default()
+            ..TrackBodyResponse::default()
         },
         response,
         "toggling the lock asked the dock for a step",
@@ -900,13 +892,13 @@ fn drag_frames(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
 /// The box is found from its label: the label comes first and the box one
 /// gap to its right.
 fn drag_max_shift(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &mut AppState,
     id: ReconId,
     label: &str,
     by: f32,
-) -> Vec<TrackEditResponse> {
+) -> Vec<TrackBodyResponse> {
     let texts = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
         panel.show(ui, state);
     });
@@ -1139,7 +1131,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
     // above that viewport is one that cannot scroll out of it. The name cell
     // is the row text furthest from any widget, so it is the one asked.
     let name = find("image_000.jpg");
-    for (_, heading, _) in super::table::ColumnLayout::new().headers() {
+    for (_, heading, _) in super::table::ColumnLayout::new().headers(super::BodyMode::Edited) {
         let painted = find(heading);
         assert!(
             painted.clip != name.clip,
@@ -1158,7 +1150,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
 /// its two numbers are.
 #[test]
 fn every_heading_carries_hover_text() {
-    for (_, heading, tip) in super::table::ColumnLayout::new().headers() {
+    for (_, heading, tip) in super::table::ColumnLayout::new().headers(super::BodyMode::Edited) {
         assert!(!tip.is_empty(), "the {heading:?} heading has no hover text");
     }
     let tip = super::table::ZNCC_TIP;
@@ -1476,7 +1468,7 @@ fn header_text(track: &sfmtool_core::bench::EditableTrack) -> String {
         ..Default::default()
     };
     crate::test_support::painted_texts(&ctx, input, |ui| {
-        super::show_header(ui, "item", track, None);
+        super::show_header(ui, "item", track, None, None);
         super::show_headline(ui, track);
     })
     .join(" | ")
@@ -1531,7 +1523,7 @@ fn the_track_s_patch_sits_left_of_the_toolbar() {
         matches!(panel.track_patch, Some(Some(_))),
         "the track's patch was not uploaded"
     );
-    let size = crate::track_view::view::STORED_PATCH_SIZE;
+    let size = crate::track_view::body::STORED_PATCH_SIZE;
     let x_of = |text: &str| {
         painted
             .iter()
@@ -1595,7 +1587,7 @@ fn a_stored_patch_image_reads_any_channel_count() {
 
     let image = |channels: usize, fill: &[u8]| {
         let bitmap = Array3::from_shape_fn((2, 3, channels), |(_, _, c)| fill[c]);
-        crate::track_view::view::stored_patch_image(bitmap.view())
+        super::patch::stored_patch_image(bitmap.view())
     };
     let grey = image(1, &[40]).expect("a grey patch");
     assert_eq!(grey.size, [3, 2]);
@@ -1944,7 +1936,7 @@ fn a_self_similarity_cell_marks_its_slide() {
 /// bar judges them.
 #[test]
 fn the_self_similarity_heading_says_what_it_shows() {
-    let headings = super::table::ColumnLayout::new().headers();
+    let headings = super::table::ColumnLayout::new().headers(super::BodyMode::Edited);
     assert!(headings
         .iter()
         .any(|&(_, heading, _)| heading == "Self-similarity"));
@@ -2159,7 +2151,7 @@ fn the_header_names_the_point_the_track_came_from() {
     let ctx = egui::Context::default();
     let header = |label: &str, id: Option<&str>| {
         crate::test_support::painted_texts(&ctx, input(Vec::new()), |ui| {
-            super::show_header(ui, label, &track, id);
+            super::show_header(ui, label, &track, id, None);
         })
     };
 
@@ -2532,7 +2524,7 @@ fn hovering_a_tile_shows_it_in_context_and_keeps_the_row() {
 /// track's bars with `change` applied, and held there for the next frame, which
 /// is drawn.
 fn with_boxes(
-    panel: &mut TrackEdit,
+    panel: &mut TrackBody,
     ctx: &egui::Context,
     state: &AppState,
     id: ReconId,
@@ -2552,7 +2544,7 @@ fn with_boxes(
 
 /// [`POINT`] on the bench with its first evaluation landed, so every row has
 /// readings for the bars to judge.
-fn measured_on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
+fn measured_on_the_bench() -> (AppState, ReconId, String, TrackBody, egui::Context) {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
@@ -2820,7 +2812,7 @@ fn the_crop_and_patch_columns_come_first_under_their_headings() {
         cols.keep_x() >= cols.tile_x() + size,
         "the Keep column overlaps the patch"
     );
-    let headers = cols.headers();
+    let headers = cols.headers(super::BodyMode::Edited);
     let firsts: Vec<(f32, &str)> = headers[..3].iter().map(|&(x, h, _)| (x, h)).collect();
     assert_eq!(
         firsts,
@@ -2851,7 +2843,7 @@ fn the_headings_are_as_large_as_the_cells() {
 
 /// Where the *Keep* heading's pin is drawn: over the rows' pin column, on the
 /// heading's line.
-fn heading_pin_pos(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> egui::Pos2 {
+fn heading_pin_pos(panel: &mut TrackBody, ctx: &egui::Context, state: &AppState) -> egui::Pos2 {
     let keep = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
         panel.show(ui, state);
     })
@@ -3435,3 +3427,98 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
         "the cluster caption does not say why there is no ring"
     );
 }
+
+// ── The tile's frame, and the name column ───────────────────────────────────
+
+/// A row's tile is rendered through the point's frame re-anchored so that its
+/// centre projects onto the observation's own keypoint, even when the keypoint
+/// sits pixels off where the geometric frame lands; with no keypoint the
+/// geometric frame is used as it is.
+#[test]
+fn the_tile_frame_is_anchored_on_the_observation_s_own_keypoint() {
+    let (state, id) = state();
+    let node = state.node(id).expect("loaded");
+    let view = node.edited().point(POINT).expect("a live point");
+    let frame = view.placement().expect("the point has a frame");
+    for (k, obs) in view.observations().iter().enumerate() {
+        let (camera, pose) =
+            crate::bench::geometry::view_of(&node.recon().image_table, obs.image_index as usize)
+                .expect("a posed image");
+        let stored = view.keypoint_xy(k).expect("a stored keypoint");
+        // Displaced from the projection, so the two anchors differ.
+        let keypoint = [f64::from(stored[0]) + 6.0, f64::from(stored[1]) - 4.0];
+        let centre = |frame: &sfmtool_core::patch::cloud::OrientedPatch| {
+            crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
+                .expect("the centre projects")
+        };
+        let geometric = centre(&frame);
+        let miss = (geometric[0] - keypoint[0]).hypot(geometric[1] - keypoint[1]);
+        assert!(miss > 1.0, "the geometric frame missed by only {miss} px");
+
+        let anchored = super::patch::render_frame(&frame, &camera, &pose, Some(keypoint));
+        let landed = centre(&anchored);
+        assert!(
+            (landed[0] - keypoint[0]).abs() < 1e-6 && (landed[1] - keypoint[1]).abs() < 1e-6,
+            "the anchored frame is centred at {landed:?}, not {keypoint:?}"
+        );
+
+        // With no keypoint to anchor on, the stored frame is drawn as it is.
+        let unanchored = super::patch::render_frame(&frame, &camera, &pose, None);
+        assert_eq!(unanchored.center, frame.center);
+    }
+}
+
+/// A keypoint whose ray cannot meet the patch -- here a direction patch
+/// pointing behind the camera -- leaves the tile on the stored frame rather
+/// than on no frame at all.
+#[test]
+fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_frame() {
+    use nalgebra::{Point3, Vector3};
+    let (state, id) = state();
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&state.node(id).expect("loaded").recon().image_table, 0)
+            .expect("a posed image");
+    let behind = sfmtool_core::patch::cloud::OrientedPatch::from_infinity_direction(
+        Point3::from(-(pose.to_rotation_matrix().transpose() * Vector3::new(0.0, 0.0, -1.0))),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+    assert!(behind
+        .anchored_at_keypoint(&camera, &pose, [320.0, 240.0])
+        .is_none());
+    let rendered = super::patch::render_frame(&behind, &camera, &pose, Some([320.0, 240.0]));
+    assert_eq!(rendered.center, behind.center);
+    assert_eq!(rendered.w, behind.w);
+}
+
+/// An image name too long for its column is cut in its middle, so the start of
+/// the path and the end of the file name both stay in view.
+#[test]
+fn a_long_image_name_is_cut_in_its_middle() {
+    let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
+    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+        image.name =
+            format!("images/a_capture_directory_with_a_long_name/fisheye_left/image_{i:03}.jpg");
+    }
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(recon));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    state
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
+        .expect("a live point");
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    let cut: Vec<&String> = texts
+        .iter()
+        .filter(|t| t.starts_with("images/") && t.contains('\u{2026}'))
+        .collect();
+    assert_eq!(cut.len(), 3, "not one cut name per row: {texts:?}");
+    for (i, name) in cut.iter().enumerate() {
+        assert!(name.ends_with(&format!("_{i:03}.jpg")), "{name}");
+    }
+}
+
+// ── Viewed mode ─────────────────────────────────────────────────────────────
+
+mod viewed;

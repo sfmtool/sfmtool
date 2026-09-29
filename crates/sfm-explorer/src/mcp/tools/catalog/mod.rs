@@ -156,7 +156,7 @@ fn new_item_label_schema() -> Value {
 }
 
 /// The track a bench tool acts on, which is optional: a call that names none
-/// acts on the focused item, as a gesture in Track View's edit mode does.
+/// acts on the focused item, as a gesture in Track View's Edited mode does.
 fn bench_track_schema() -> Value {
     json!({
         "type": "string",

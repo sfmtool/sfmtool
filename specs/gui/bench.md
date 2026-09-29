@@ -589,7 +589,7 @@ What changes it:
   the item, and a commit re-seats the item's origin on the point it wrote
   before selecting it, so the item stays focused;
 - **a step that takes the focused item off the bench**, a discard or *Clear
-  the Bench*, unfocuses it, so Track View returns to view mode instead of
+  the Bench*, unfocuses it, so Track View leaves Edited mode instead of
   switching to an item nobody asked for. The selection is then what an unfocus
   leaves, from the origin as it resolved before the step;
 - **undo, redo and a jump** leave it focused while the version landed on holds
@@ -614,7 +614,7 @@ no point selected focuses the first resolving entry of
 ## The selected observations
 
 The bench carries a selection of the focused item's observations: the rows
-highlighted in Track View's edit mode. *Split off N rows* takes them, and when
+highlighted in Track View's Edited mode. *Split off N rows* takes them, and when
 exactly one is selected the 3D viewer's bench figure draws its mark larger
 ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)). It is held in
 `AppState::bench_rows` as a `BenchRows`, which names the node and the track's
@@ -860,7 +860,7 @@ each publishes the half
 of its own refusal that reads no photograph, so a caller can refuse in front of
 the decode. The geometry search reads photographs and cancels the same way, but
 its refusals are the panel's and the wire's
-([`track-view.md`](track-view.md) § "Edit mode"), not a published
+([`track-view.md`](track-view.md) § "Row gestures"), not a published
 core precondition, because what it needs of a track -- the track stage, a
 fitted patch, and a sighting to search from -- the viewer already holds.
 
@@ -1150,7 +1150,7 @@ verdict, split or commit a version in the history the human is looking at.
 Every tool takes `reconstruction_label`. The item tools take `item`; the track
 tools take `track`, and **a call that names no track acts on the focused
 item**, resolved with `focused_item_label`, which is what a gesture in Track
-View's edit mode means when it names no item. When the focused item is on
+View's Edited mode means when it names no item. When the focused item is on
 another node's bench, or nothing is focused, such a call is refused: *"No item
 on bull's bench is focused. Name one with track, focus one with
 focus_bench_item, or put one on with create_bench_track or
@@ -1261,7 +1261,7 @@ refused or failed, `running` for whether an evaluation of the current inputs is
 on a worker now rather than waiting to start.
 An agent that has just made a step reads `evaluating` and the previous numbers,
 and reads again until it says `current`. `get_bench_track` is
-Track View's edit-mode table: the stage and its data, the origin, the thresholds, and
+Track View's Edited-mode table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at both stages `zncc_middle` and `zncc_grid`
 beside `zncc` (the same samples read over the middle square of the patch and
@@ -1565,8 +1565,8 @@ on a node after another in the scene; and a rename keeps an evaluated track
 current.
 
 The unfocus is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds no version
-and one `Selection` row with the item still on the bench, a focus bringing edit mode back, and a
-discard of the focused item leaving view mode; [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs) calls
+and one `Selection` row with the item still on the bench, a focus bringing Edited mode back, and a
+discard of the focused item leaving Edited mode; [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs) calls
 `unfocus_bench_item` twice, no version and then a no-effect reply, with `get_bench`
 reporting a `null` `focused_item` in between, and `focus_bench_item` pushes no
 version while a task holds the node, `get_bench` reporting the item on its node

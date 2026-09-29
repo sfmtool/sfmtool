@@ -850,7 +850,7 @@ field and at some readable off-axis angle, which is the point of composing them.
 
 The panel is
 [`intrinsics_detail/`](../../crates/sfm-explorer/src/intrinsics_detail/mod.rs),
-split the way `track_view/view/` is: `mod.rs` owns the state and the one
+split the way `track_view/body/` is: `mod.rs` owns the state and the one
 frame, with `derived`, `header`, `parameters`, `extrinsics`, `format` and
 `projection_plot` under it.
 
@@ -1290,7 +1290,7 @@ Two caveats remain, both named in the tests rather than left implicit:
   spelling of the ideal map can match every one of them exactly.
 
 **`sfm-explorer` lib tests** (headless, `Context::run_ui`, the
-`track_view/view/tests.rs` pattern):
+`track_view/body/tests.rs` pattern):
 - The selection coupling, one test per row of the truth table, driven through
   `AppState::select_image` / `select_camera` with no UI at all.
 - `scene_graph/tests.rs`: the group renders with the right label and count; a

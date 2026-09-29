@@ -7,28 +7,29 @@ list sighting by sighting: where each one sits, how far it lies from where the
 point projects, and whether the patch of surface it shows looks like the
 others. Sometimes the answer is that the track is wrong, and then it has to be
 worked on: sightings tried, measured, turned out, and the result written back.
-Track View is the one panel of the SfM Explorer where both happen. With its
-**Edit** box clear it shows the selected point's committed track and changes
-nothing. With the box ticked it shows the one track the viewer is editing, which
-is held beside the reconstruction on the **bench** until it is committed,
-together with the controls that fit it and commit it, and the measurements that
-are kept current as it changes.
+Track View is the one panel of the SfM Explorer where both happen, in one body
+drawn in two modes. With its **Edit** box clear it shows the selected point read
+as a track, measured the way the bench measures a track, and changes nothing.
+With the box ticked it shows the one track the viewer is editing, which is held
+beside the reconstruction on the **bench** until it is committed, together with
+the controls that fit it and commit it, and the measurements that are kept
+current as it changes.
 
 The panel has an explicit mode so that it always says which of the two things is
 on screen, and it does not list the bench: the Scene tree already lists each
 node's bench in two groups that say which stage each item is at, and a
 double-click there is the way into editing an item.
 
-Related specs: [`bench.md`](bench.md) (the bench, the versions its steps push
-and the Scene tree groups), [`edits/commit-track.md`](edits/commit-track.md)
-(the Commit button's edit), [`scene-graph.md`](scene-graph.md) (the Bench rows'
-gestures), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the
-Image Detail panel, which carries the gestures that name a pixel and draws the
-focused item as its bench layer),
-[`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) (the same track in the 3D
-viewer), [`../core/bench/bench.md`](../core/bench/bench.md) and
-[`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the value
-edit mode shows and every step it calls), [`panel-layout.md`](panel-layout.md)
+Related specs: [`bench.md`](bench.md) (the bench, the versions its steps push,
+the viewed track and the Scene tree groups),
+[`edits/commit-track.md`](edits/commit-track.md) (the Commit button's edit),
+[`scene-graph.md`](scene-graph.md) (the Bench rows' gestures),
+[`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image Detail
+panel, which carries the gestures that name a pixel and draws the focused item
+as its bench layer), [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) (the
+same track in the 3D viewer), [`../core/bench/bench.md`](../core/bench/bench.md)
+and [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the
+value the body shows and every step it calls), [`panel-layout.md`](panel-layout.md)
 (its tab and its home), [`goto-point.md`](goto-point.md) (the dialog both modes
 reach), [`background-tasks.md`](background-tasks.md) (where Fit, the stage
 change, both searches and the index build run), and
@@ -39,37 +40,29 @@ change, both searches and the index build run), and
 ## The interface
 
 The panel is [track_view/](../../crates/sfm-explorer/src/track_view/):
-[mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox
-and the dispatch on it, and the two bodies it is made of
-are its children. [view/](../../crates/sfm-explorer/src/track_view/view/) is
-view mode, split into `prepare` (the per-observation data, built when the
-selection changes), `header`, `table` and `patch`; the numbers it displays come
-from [metrics/](../../crates/sfm-explorer/src/metrics), at the crate root,
-because the Image Detail overlay and the MCP surface read the same ones.
-[edit/](../../crates/sfm-explorer/src/track_view/edit/) is edit mode: `mod.rs`
-the header, the toolbar and the boxes, `table.rs` the observation table,
-`tile.rs` the tile each row draws and its hover view, and `crop.rs` the crop
-of the photograph beside the tile and its hover view. The bench steps it reports are `AppState`
-methods in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock
-applies them in [dock.rs](../../crates/sfm-explorer/src/dock.rs).
+[mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox,
+the empty state and the choice between them and the body, and
+[body/](../../crates/sfm-explorer/src/track_view/body/) is the one body that
+draws both modes: `mod.rs` the header, the toolbar and the boxes, `table.rs` the
+observation table, `tile.rs` the tile each row draws and its hover view,
+`crop.rs` the crop of the photograph beside the tile and its hover view,
+`surface_plot.rs` the self-similarity surface plot, and `patch.rs` the warp a
+track-stage tile is rendered through and the stored bitmap's conversion. The
+viewed track is [bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs).
+The bench steps the body reports are `AppState` methods in
+[bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock applies them in
+[dock.rs](../../crates/sfm-explorer/src/dock.rs).
 
 ```rust
 pub(crate) struct TrackView {
-    view: PointTrackView, // view mode's state
-    edit: TrackEdit,      // edit mode's state
+    body: TrackBody,
 }
 
 impl TrackView {
     pub(crate) fn new() -> Self;
-    pub(crate) fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &AppState,
-        gesture_events: &[GestureEvent],
-        scroll_input: &ScrollInput,
-    ) -> TrackViewResponse;
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackViewResponse;
     pub(crate) fn forget_recon(&mut self, id: ReconId);
-    /// Whether edit mode's *Lock* box is ticked: what the dock hands Image
+    /// Whether Edited mode's *Lock* box is ticked: what the dock hands Image
     /// Detail, whose track-stage dot slides the patch when it is and moves one
     /// sighting's keypoint when it is not.
     pub(crate) fn lock(&self) -> bool;
@@ -78,29 +71,27 @@ impl TrackView {
 pub(crate) struct TrackViewResponse {
     /// The box ticked (`true`) or cleared (`false`).
     pub set_edit: Option<bool>,
-    /// What view mode reported, on a frame it was drawn.
-    pub view: Option<PointTrackViewResponse>,
-    /// What edit mode reported, on a frame it was drawn.
-    pub edit: Option<TrackEditResponse>,
+    /// What the body reported, or the empty state in its place; `None` only
+    /// with no reconstruction selected.
+    pub body: Option<TrackBodyResponse>,
 }
 
-pub struct PointTrackViewResponse {
-    pub select_image: Option<usize>,
-    pub reveal_feature: Option<[f32; 2]>,
-    pub request_camera_view: Option<usize>,
-    pub hovered_image: Option<usize>,
-    pub has_pointer: bool,
-    pub request_goto_point: bool,
+pub(crate) enum BodyMode {
+    Viewed, // the viewed track, Edit clear
+    Edited, // the focused item, Edit ticked
 }
 
-pub struct TrackEditResponse {
+pub struct TrackBodyResponse {
+    pub mode: Option<BodyMode>,               // the mode drawn; None for the empty state
+    pub viewed_thresholds: Option<Thresholds>, // Viewed: a box moved the read-only bars
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,
     pub set_stage: Option<StageKind>,
-    pub apply_thresholds: Option<Thresholds>, // a threshold box released
+    pub apply_thresholds: Option<Thresholds>, // Edited: a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
     pub split: Option<Vec<usize>>,
+    pub pick_row: Option<(usize, bool)>,      // Edited: a row click, and whether it extends
     pub duplicate: bool,
     pub commit: bool,
     pub build_index_files: bool,           // a row's Build/Rebuild Index Files
@@ -109,7 +100,7 @@ pub struct TrackEditResponse {
     pub set_verdict: Option<(usize, Verdict)>, // a row's Keep switch, or its pin pinning
     pub unpin_verdicts: Option<Vec<usize>>,    // a pin, Unpin in a menu, or the Keep heading's pin
     pub pin_verdicts: Option<Vec<usize>>,      // the Keep heading's pin when no row is pinned
-    pub request_goto_point: bool,              // the header's go-to button
+    pub request_goto_point: bool,              // the header's go-to button, or the empty state's
     pub select_image: Option<usize>,
     pub request_camera_view: Option<usize>,
     pub reveal_feature: Option<[f32; 2]>,
@@ -137,6 +128,11 @@ impl AppState {
     /// The first entry of `recent_items` on its node's bench at the cursor:
     /// what a tick with no point selected focuses.
     pub(crate) fn most_recent_item(&self) -> Option<(ReconId, String)>;
+    /// Build or take from its cache the viewed track for the selected point,
+    /// which Viewed mode draws ([`bench.md`](bench.md) § "The viewed track").
+    pub(crate) fn refresh_viewed_track(&mut self);
+    /// The read-only bars Viewed mode's boxes hold, session state.
+    pub(crate) fn set_viewed_thresholds(&mut self, bars: Thresholds);
     /// A Scene tree double-click on a Bench row: focus the item, which
     /// selects its node, and raise Track View.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize);
@@ -145,26 +141,30 @@ impl AppState {
 }
 ```
 
-A frame in the dock is one call and three applications:
+A frame in the dock asks for the viewed track, draws, and applies what came back
+by the mode that was drawn:
 
 ```rust
-let response = track_view.show(ui, state, gesture_events, scroll_input);
+state.refresh_viewed_track();
+let response = track_view.show(ui, state);
 if let Some(on) = response.set_edit {
     state.set_editing(id, on)?;         // a put is a bench step, refused in its own words
 }
-// then the view or the edit response, whichever was drawn
+match response.body.and_then(|b| b.mode) {
+    Some(BodyMode::Edited) => { /* each step on the focused item */ }
+    _ => { /* selection, hover, Go to Point, set_viewed_thresholds */ }
+}
 ```
 
 ### Why it is shaped this way
 
-**Two bodies behind one tab, not one body.** The two modes' state is disjoint.
-View mode caches thumbnails and patch tiles per image of a committed point;
-edit mode caches tiles and their hover views per observation of a bench
-track keyed on its `Arc`, and
-the box seeding, the bars' judgement and the commit refusal. Keeping each as the
-struct it is means neither cache learns about the other, and each body's
-headless tests read what that body drew. What the panel adds is the checkbox
-and the dispatch on it.
+**One body, drawn in two modes, rather than two bodies.** The two modes show the
+same kind of thing, one track, and a person comparing a committed point with its
+bench copy should be comparing two tracks, not two layouts. Reading the
+committed point as an editable track also measures it the way the bench
+measures a track, so its numbers mean what the same column means once the point
+is put on. The differences between the modes are what can be changed, and they
+are branches on the mode in one body.
 
 **The mode is derived from the focused item, so nothing about it is stored in
 the panel.** A panel flag would have to be set by each of the places that can
@@ -175,12 +175,9 @@ label each frame costs one lookup on the bench.
 **The panel decides nothing.** `show` takes `&AppState` and every gesture lands
 in the response; the dock applies each through the `AppState` method that pushes
 the version, as every other panel's response is applied, because the panel holds
-the state immutably while it draws. `view` and `edit` are `Option`s because only
-one body is drawn on a frame, and a response from the body that was not drawn
-would be a set of defaults pretending to be a report.
-
-**The response keeps both bodies' types.** The dock already knows how to apply
-each; the merged response adds only the gesture that is the panel's own.
+the state immutably while it draws. The response carries the mode, and the dock
+applies a Viewed frame's response by the few gestures that mode has, so a
+field only Edited mode sets can never act on a track that is on no bench.
 
 **The file chooser is the dock's, not the panel's.** A search's build remedy
 reports the gesture and nothing else. That keeps `show` a pure egui function a
@@ -261,22 +258,22 @@ split, a track whose origin was deleted) is focused with no point selected.
 
 | From | Gesture | What happens | Then shown |
 |---|---|---|---|
-| Viewing a selected point | Tick Edit | `put_point_on_bench(selected point)`: a new item, focused, in one version; or, when an item on the bench already came from that point, that item is focused instead, with no version | Edit mode, on that item |
-| Viewing, no point selected | Tick Edit | The most recently focused item still on a bench at the cursor is focused, with no version, and its node selected; with none, the box is greyed, its hover text naming the ways in | Edit mode, on that item |
-| Editing | Clear Edit | `unfocus_bench_item`: the item stays on the bench and nothing is focused, with no version. Its origin is selected when it resolves at the cursor; otherwise the point selection is cleared. The node stays selected | View mode, on the origin, or the empty state |
-| Editing | Select another point: a click in the 3D viewer or Image Detail, *Go to Point*, the wire's `select_point` | The item is unfocused, with no version, and the new point is selected | View mode, on that point |
-| Editing | Select the item's own origin | Nothing changes | Edit mode, same item |
-| Editing | Clear the point selection (a click on empty space) | The item stays focused | Edit mode, same item |
-| Editing | Select an image or a camera of the focused item's node (a row click, a thumbnail, a frustum) | The item stays focused | Edit mode, same item |
-| Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | View mode, on the new selection |
-| Either | Double-click a Bench row in the Scene tree | That item is focused, its node and its origin are selected (or the point selection cleared), and the panel is raised | Edit mode, on that item |
-| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised | Edit mode |
-| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised | Edit mode, on the cluster |
-| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edit mode, on the new item |
-| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused; it has no origin, so the point selection is cleared | Edit mode, on the new item |
-| Editing | *Discard* | The item leaves the bench (a version) and is unfocused, and the selection is left as a cleared box leaves it, from the origin as it resolved before the discard | View mode, on the origin, or the empty state |
-| Editing | *Commit* | The origin is re-seated on the written point and that point selected, so the item stays on the bench and focused | Edit mode, on the same item |
-| Either | Undo or Redo | The item stays focused while the version landed on holds it, and is unfocused, with the selection unchanged, when it does not | Edit mode on the item, or view mode |
+| Viewing a selected point | Tick Edit | `put_point_on_bench(selected point)`: a new item, focused, in one version; or, when an item on the bench already came from that point, that item is focused instead, with no version | Edited mode, on that item |
+| Viewing, no point selected | Tick Edit | The most recently focused item still on a bench at the cursor is focused, with no version, and its node selected; with none, the box is greyed, its hover text naming the ways in | Edited mode, on that item |
+| Editing | Clear Edit | `unfocus_bench_item`: the item stays on the bench and nothing is focused, with no version. Its origin is selected when it resolves at the cursor; otherwise the point selection is cleared. The node stays selected | Viewed mode, on the origin, or the empty state |
+| Editing | Select another point: a click in the 3D viewer or Image Detail, *Go to Point*, the wire's `select_point` | The item is unfocused, with no version, and the new point is selected | Viewed mode, on that point |
+| Editing | Select the item's own origin | Nothing changes | Edited mode, same item |
+| Editing | Clear the point selection (a click on empty space) | The item stays focused | Edited mode, same item |
+| Editing | Select an image or a camera of the focused item's node (a row click, a thumbnail, a frustum) | The item stays focused | Edited mode, same item |
+| Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | Viewed mode, on the new selection |
+| Either | Double-click a Bench row in the Scene tree | That item is focused, its node and its origin are selected (or the point selection cleared), and the panel is raised | Edited mode, on that item |
+| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised | Edited mode |
+| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised | Edited mode, on the cluster |
+| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edited mode, on the new item |
+| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused; it has no origin, so the point selection is cleared | Edited mode, on the new item |
+| Editing | *Discard* | The item leaves the bench (a version) and is unfocused, and the selection is left as a cleared box leaves it, from the origin as it resolved before the discard | Viewed mode, on the origin, or the empty state |
+| Editing | *Commit* | The origin is re-seated on the written point and that point selected, so the item stays on the bench and focused | Edited mode, on the same item |
+| Either | Undo or Redo | The item stays focused while the version landed on holds it, and is unfocused, with the selection unchanged, when it does not | Edited mode on the item, or Viewed mode |
 
 The box is greyed while a background task holds the node, with the node's own
 busy sentence, only when ticking it would put a point on the bench, since that
@@ -325,7 +322,7 @@ one put on, which is what `put_point_on_bench` does for every way in. Two items
 for one point are two answers to one question, and with no list of items in the
 panel a second one would be easy not to notice.
 
-**Selecting another point leaves edit mode.** A click on a point in the 3D
+**Selecting another point leaves Edited mode.** A click on a point in the 3D
 viewer is a request to look at that point, and a panel that went on showing a
 different track would answer another question. Because focusing and unfocusing
 push no version, the exit costs nothing: an undo after it takes back the last
@@ -353,13 +350,13 @@ came from, or the empty state for an item with no point. The item is focused
 before its origin is selected, so the exit rule sees the origin as the focused
 item's.
 
-**Discarding the focused item unfocuses it**, so the panel returns to view
+**Discarding the focused item unfocuses it**, so the panel leaves Edited
 mode. Focusing a neighbour instead would switch the panel to an item the person
 did not ask for, and nothing on screen would say which one arrived. The
 selection is what a cleared box leaves, with the origin resolved before the
 discard. An undo of the discard puts the item back without focusing it.
 
-**Commit leaves edit mode on**, the item on the bench and focused and the written
+**Commit leaves Edited mode on**, the item on the bench and focused and the written
 point selected. The commit re-seats the item's origin on the point it wrote
 before it selects it, so the selection is the origin and the item stays focused,
 including an item that had no origin before. A person commonly commits and keeps
@@ -377,7 +374,7 @@ than being greyed. The Scene tree names every item, but the one a person has
 just left is the one most often wanted, and the hover text names it before the
 tick.
 
-**Start cluster on the bench here raises Track View.** It turns edit mode on,
+**Start cluster on the bench here raises Track View.** It turns Edited mode on,
 which makes it the same kind of gesture as *Edit on Bench*, and that one raises
 because a track staged into a panel nobody can see is a gesture with no answer.
 
@@ -388,15 +385,15 @@ because a track staged into a panel nobody can see is a gesture with no answer.
 The **selection** is the viewer's selected point, image and camera, which every
 panel reads and which clicking in the 3D viewer or Image Detail moves. The
 **focused item** is held beside it, outside every version, and the box decides
-which one Track View shows: view mode shows the selection, edit mode shows the
+which one Track View shows: Viewed mode shows the selection, Edited mode shows the
 focused item.
 
 **The two cannot disagree about the point.** While an item is focused the
-selected point is its origin or no point (§ "Transitions"), so edit mode never
+selected point is its origin or no point (§ "Transitions"), so Edited mode never
 shows one track while the 3D viewer's track rays, the Image Browser's borders
 and Image Detail's highlighted feature show another. A selection that would
 name another point unfocuses the item first, and the panel shows that point in
-view mode.
+Viewed mode.
 
 **Go to Point** selects the point and raises Track View. It goes through
 `AppState::select_point`, so a point other than the focused item's origin
@@ -419,15 +416,11 @@ layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 
 `No reconstruction loaded`, centred, and no checkbox.
 
-### View mode
+### No point selected
 
-View mode reads the reconstruction and never the bench. While the panel is
-drawn with no item focused, the dock also asks for the selected point's viewed
-track, which the live evaluation keeps evaluated and `get_point` reports
-([bench.md](bench.md) § "The viewed track"); view mode's body does not draw it.
-
-**No point selected**: `No point selected` above a **Go to Point...** button,
-which is where a person with an ID in hand and no idea how to feed it in looks
+With *Edit* clear and no point selected on the selected node, the panel draws
+its empty state: `No point selected` above a **Go to Point...** button, which is
+where a person with an ID in hand and no idea how to feed it in looks
 ([goto-point.md](goto-point.md)). Under the button one line names the item a
 tick of *Edit* goes back to when there is one, *"Tick Edit to edit
 pt3d_a1b2c3d4_1207 again, or double-click an item in the Scene tree's Bench
@@ -437,17 +430,80 @@ it."*, and otherwise names the pixel gesture: *"To work on a track from a
 pixel: right-click it in the Image Detail panel and choose "Start cluster on
 the bench here"."*.
 
-**What it reads.** Everything about the point, including its position, colour
-and error, its whole track, each observation's keypoint, its patch frame and
-stored bitmap, and its triangulation diagnostics, is read through the version's
-overlay accessor rather than off the base, so a point an edit modified shows the
-track it holds now. An index the version has deleted resolves to nothing and the
-panel takes its empty state, even though the base still has a row at that index
-([document-model.md](document-model.md)).
+A selected index the version at the cursor does not hold -- a point an edit
+deleted, or an index past the end of the points -- is no selection here, and
+the panel takes the same empty state, even though the base may still have a row
+at that index ([document-model.md](document-model.md)).
+
+### One body in two modes
+
+Below the box the panel draws one body, `TrackBody`, in one of two modes
+(`BodyMode`):
+
+- **Viewed**, with *Edit* clear and a point selected: the **viewed track**, the
+  selected point read as an editable track and held off every bench. Nothing
+  about it can be changed.
+- **Edited**, with *Edit* ticked: the focused item, and every step that acts on
+  it.
+
+Every column, tile, crop, reading and hover view is drawn the same way in both,
+so a committed point and its copy on the bench are read in one layout with one
+set of numbers. The differences are these:
+
+| Part | Edited (the focused item) | Viewed (the viewed track) |
+|---|---|---|
+| Header label | the item's label, then the point ID when it differs | the point's portable ID, with copy and *Go to Point* |
+| Header summary | stage, `N kept · K out · P pinned`; at the track stage error, track length, max pair angle, depth z and cond from the track's own position | the point's colour swatch, `xyzw` with *Copy coordinates*, error, track length, max pair angle, depth z, cond |
+| Under the header | the stage's headline | how to change the track, or the item on the bench from this point |
+| Toolbar | evaluation state; *Fit*, *Stage*, *Split*, *Duplicate*, *Commit*, *Discard*; *Lock*, *Rename* | evaluation state only |
+| Threshold boxes | the item's bars; a release applies them as one version | the session's read-only bars; they judge the readings and the *Verdict* column and change nothing |
+| Verdict column | *Keep*: switch and pin, tinted by what the bars propose | *Verdict*: `in` or `out` in a cell tinted green or red, the verdict the bars give the row |
+| Heading pin | on the *Keep* heading | absent |
+| Row click | select image, reveal, pick into the split selection | select image, reveal |
+| Row double-click | camera view toward the observation | same |
+| Row context menu | searches, *Accept walk*, unpin | absent |
+| *From* column | provenance | absent: every row came from the point |
+
+**The viewed track** is core's `create_track` applied to the selected point in
+the version at the cursor, held in `AppState` rather than on the bench
+([`bench.md`](bench.md) § "The viewed track"). It is built as a put builds a
+bench track, labelled with the point's portable ID, so its rows arrive `in` and
+pinned and the leave-one-out ZNCC is read back from the point's stored
+confidence column, and the live evaluation keeps it evaluated as it keeps a
+bench track, so every number in the table means the same thing in both modes.
+It is never written anywhere: it is in no version, the Scene tree does not list
+it, the bench layers do not draw it, and no step accepts it. Ticking *Edit* over
+it puts the same point on the bench, and the bench track starts from what the
+panel was showing. The panel is handed `&AppState` and cannot build it, so the
+dock asks for it before drawing the panel (`AppState::refresh_viewed_track`).
+
+**What Viewed mode reads.** Everything about the point, including its position,
+colour and error, its whole track, each observation's keypoint, its patch frame
+and stored bitmap, and its triangulation diagnostics, is read through the
+version's overlay accessor rather than off the base, so a point an edit modified
+shows the track it holds now.
+
+**A cluster and a track are the same body at two stages** in Edited mode: the
+header's headline, the table's cells and the row menu follow the stage, and
+there is no separate cluster layout. What differs is outside the panel: a
+cluster has no geometry, so the 3D viewer's bench layer draws nothing for it and
+Image Detail draws its parallelograms rather than an outline, and no ghost
+outline in the images it has no sighting in. A cluster has no committed point
+behind it and so no Viewed mode, and the way back to a cluster after Edit has
+been cleared is its row under *Bench Clusters*. A gesture in Edited mode that
+names no item means the focused item, and the panel shows the focused item and
+nothing else on the bench: the bench as a list is the Scene tree's.
+
+**Almost no state lives in the body.** The bench is the node's, at its cursor,
+and the viewed track and its bars are `AppState`'s, so a step taken anywhere, in
+this panel, in the Scene tree or by an undo, shows here on the next frame. What
+the body owns is about looking rather than about the track: where the boxes
+stand during a drag, whether *Lock* is ticked, the tiles and crops it has
+rendered, the header's summary, and the bars' judgement of each row.
 
 #### The header
 
-A compact bar of the point's summary:
+In **Viewed mode** the header is a compact bar of the point's summary:
 
 ```
 [RGB] pt3d_a1b2c3d4_12345 [copy][->] | xyzw: (1.234, -0.567, 2.891, 1) [copy] | error: 0.42px | track: 7 obs | max pair angle: 12.3° | depth z: 41.0 | cond: 12
@@ -458,15 +514,34 @@ A compact bar of the point's summary:
 | Colour | A swatch of the point's RGB. |
 | Infinity mark | ∞, left of the ID, for a point at infinity (`w` is `0`); absent otherwise. Its hover text says the point is a direction and its numbers a unit bearing. |
 | Point ID | The copyable `pt3d_{hash}_{index}` ID, in monospace, with *Copy Point ID* and the *Go to Point* arrow beside it. |
-| Position | `xyzw`, with *Copy coordinates*; *at infinity* follows when `w` is `0`. |
-| Error | RMS reprojection error in pixels. |
+| Position | `xyzw`, with *Copy coordinates*; *at infinity* follows the track length when `w` is `0`. |
+| Error | The point's stored RMS reprojection error in pixels. |
 | Track length | The number of observing images. |
 | Max pair angle | The largest angle between any pair of observation rays, the main indicator of triangulation quality; shown when greater than zero. |
 | Depth z | The inverse-depth z-score `depth / σ_depth`, a scale-free observability diagnostic that stays correct near infinity; shown when finite. |
 | Cond | The condition number of the triangulation's normal matrix; shown when finite. |
 
-The max angle, depth z and condition number are computed once per selection
-change and cached on the body.
+In **Edited mode** the header is the focused item's label, its stage as a word,
+and `N kept · K out · P pinned`. When the point the track was read from is
+still in the version at the cursor, its portable Point ID follows the label with
+the same two icon buttons, copy it and open *Go to Point*, so an ID copied here
+is one that dialog takes back. A track put on from a point is labelled with
+that ID until it is renamed, and the ID is then printed once, as the label. A
+track whose point is gone says `from point N`, the index it had, and a track
+with no origin says `new`. At the track stage the same summary follows, from the
+error on, read from the track's own position and its `in` observations, so the
+header reads the same either way: the error is the root mean square of the kept
+rows' measured reprojection errors, `error: -` before a reading has measured
+one, since a bench track carries no stored error; the track length counts the
+kept rows; and the angle and the two diagnostics are computed from the rays of
+the kept rows' cameras to the position, and left out where the track has no
+position yet. A cluster has no position and shows none of them.
+
+The metrics are [metrics/](../../crates/sfm-explorer/src/metrics), at the crate
+root, because the Image Detail overlay and `get_point` read the same numbers.
+The summary is computed once per key and cached on the body, since the
+diagnostics triangulate: for the viewed track per point and document serial,
+for a bench track per track `Arc` and version.
 
 **The Point ID** uniquely references the point across `.sfmr` files and
 sessions, which a raw index cannot. It uses only `[a-zA-Z0-9_]`, so it selects
@@ -476,168 +551,25 @@ the content the point sits in on disk when its identity reaches that version,
 and the oldest content its identity reaches otherwise ([goto-point.md](goto-point.md)
 § "The ID forms and the version graph"), so in the ordinary case the ID copied
 out of this header is one a reader of the file on disk resolves as it stands.
-The caller mints it and hands it in, because the body sees one reconstruction
-value and not the node behind it, and it is **recomputed every frame**: an edit,
-an undo or a save can change which content the ID names without the selection
+The body mints it through `crate::scene::point_id` **every frame**: an edit, an
+undo or a save can change which content the ID names without the selection
 moving. The format is the
 [sfmr file format spec's](../formats/sfmr-file-format.md#point-id-portable-3d-point-references).
 The copy button and the Go to Point arrow sit together because they are the two
 halves of one round trip: copy an ID out of this header, paste it back here, in a
 later session, or after `sfm xform` produced a new file.
 
-**The stored-patch tile.** On an embedded-patches reconstruction that stores
-patch bitmaps, a second row shows the point's stored RGBA bitmap at a fixed
-64 px square with nearest-neighbour filtering, the alpha channel forced opaque.
-The row is absent when the reconstruction has no bitmaps or the point's bitmap is
-all zero.
+**Under the Viewed header one line says how to change the track**: *"Tick Edit
+to work on this track."* When an item on the bench came from this point (an item
+whose origin, followed to the cursor, is this point; `AppState::bench_item_from_point`),
+the line names it instead: *"On the bench as pt3d_a1b2c3d4_1207. Tick Edit to
+open it."* The two can differ, and this is the only place a person looking at a
+point learns that a changed copy of it is waiting.
 
-#### The observation table
-
-One row per observing image, in image-index order (the Image Browser's order).
-The column headings sit above the scroll area, so they stay put while the rows
-scroll under them.
-
-```
-+-----+-------+-----------------+--------+-----------+--------+-------+----------------+
-|     | Image | Name            | Feat # | Size      | Error  | Angle | Feature (x, y) |
-+-----+-------+-----------------+--------+-----------+--------+-------+----------------+
-| [t] |     3 | image_003.jpg   |    847 |   8.4x8.2 | 0.21px | 0.03° | (1024.3, 512.7)|
-| [t] |    12 | image_012.jpg   |   1247 |   7.6x7.4 | 0.38px | 0.05° | ( 983.1, 498.2)|
-+-----+-------+-----------------+--------+-----------+--------+-------+----------------+
-```
-
-| Column | Content |
-|--------|---------|
-| Thumbnail | The image's display thumbnail (the file's own, or the row the open built from its `.sift` or photograph; see [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail loading"), with a dot at the feature position tinted by that observation's reprojection error. An image with no picture draws the placeholder and is not cached. |
-| Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-resolution image (below). Absent, with the following columns keeping their offsets, when the point has no patch frame. |
-| Image | The image index. |
-| Name | The image file name, shortened by a cut out of the **middle** so the directory and the file name both survive (`images/seatt…yard_13.jpg`); the full path on hover. A path with a directory above its parent keeps a leading `…/` for what was left out. |
-| Feat # | The feature index in the image's SIFT file, or the observation index for an embedded-keypoint reconstruction with no SIFT file. |
-| Size | The feature's two full extents in pixels (below); `N/A` when there is no shape. |
-| Error | The observation's reprojection error, `‖project(R_i P + t_i) - x_i‖`; `N/A` when undefined. A point at infinity has one too: its unit direction rotates into camera space without translating and projects like any homogeneous coordinate. The projection is of the ray, through the camera's own model, so a fisheye observation more than 90° off the axis has an error like any other; it is undefined only where the model has no pixel for the ray, which for a perspective model means a point or direction behind the camera. |
-| Angle | The angle at the camera centre between the observation ray and the direction to the point, in degrees; for a point at infinity, to its direction. |
-| Feature (x, y) | The feature position in image pixels. |
-
-**The thumbnail dot's colour** is `colormap::error_color`, the green to yellow
-to red ramp the Image Detail error overlay draws, over a **fixed 0 to 2 px**.
-Fixed rather than fitted to the track, because the dots are read against each
-other and against the number in the Error column, and a range fitted to seven
-observations would paint a sub-pixel track in full red. An observation with no
-error to show is grey, off the ramp: "no measurement" is not a position on a
-green-to-red scale.
-
-**Size** doubles the column norms of the observation's affine shape (the
-columns are the projected patch half-vectors) and prints the two full extents as
-`<larger>x<smaller>` with one decimal each (`20.3x7.7`, a circular feature
-`14.0x14.0`), so an obliquely viewed patch reads as foreshortened rather than
-smaller. It is the span the viewport's patch quad covers and the diameter
-convention `embed-patches --patch-size` uses. The shape is the cached SIFT
-`affine_shapes` for a SIFT observation and the patch frame projected into the
-image for an embedded keypoint. An edge-on shape shows its collapse
-(`9.0x0.0`).
-
-**The Patch column** is drawn when the reconstruction stores patch frames and
-the point's `u` half-vector is non-zero. Each tile is the point's oriented patch
-re-rendered from that observation's full-resolution image: the stored
-half-vectors become an `OrientedPatch` (marked `w = 0` for a point at infinity),
-and the image is warped through it with `WarpMap::from_patch` and
-`remap_bilinear` at 64 by 64, shown at the thumbnail's 48 px with nearest
-filtering. Tiles are rendered lazily and cached per image; a patch not visible
-in a view warps to an all-black tile, which is cached and drawn as such. Stored
-bitmaps are not needed for this column, only the frame.
-
-**The frame is re-anchored on the observation's stored keypoint**
-(`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
-the patch centre slides within its own plane, on its tangent sphere for a point
-at infinity, until it projects onto the keypoint this observation carries. This
-is a photometric comparison, so it is anchored where the keypoint localizer
-aligned the pixels rather than at the point's geometric projection. The tiles of
-a well-localized track then match each other whatever discrepancy the geometry
-carries, and that discrepancy is what the Error column reports: a column of
-matching tiles beside a large error is a well-aligned patch whose position or
-pose is off, not a bad match. The geometric frame is used as stored when the
-reconstruction has no keypoints or the keypoint's ray cannot meet the patch. The
-render is `patch_color_image` in
-[view/patch.rs](../../crates/sfm-explorer/src/track_view/view/patch.rs), and
-edit mode draws its track-stage tiles through it too, so a committed track and
-the editable copy of it cannot show one surface two ways.
-
-**The photographs** come from `AppState::full_res_cache`, the decoded
-full-resolution images shared with the Image Detail panel, so no image is
-decoded more than once. An entry is the `ImageU8Pyramid` built when the image
-was decoded, whose level 0 is the photograph: the photometric readers sample
-the lower levels. A failed decode is remembered as `None` so a missing file is
-not reopened every frame. The dock fills the cache for every observing image of
-the selected point before view mode draws, when the reconstruction carries patch
-frames, and fills the SIFT cache for them on a `sift_files` reconstruction. The
-cache has no eviction: it holds every image decoded in the session, with its
-pyramid, until the reconstruction is closed.
-
-#### Gestures
-
-- **Click a row**: select that image, which the 3D viewer, the Image Browser and
-  Image Detail follow. A row is an observation, so the click also **reveals the
-  feature**: its pixel rides along in `reveal_feature`, and Image Detail pans
-  (never zooms) to centre it when its current view is not showing it
-  ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Revealing a
-  feature named by another panel").
-- **Double-click a row**: enter camera view for that image, and turn the view
-  until the row's feature is inside the middle 1/2 of the viewport on both axes
-  (`Viewer3D::look_through_toward_feature`), in one animated transition. A
-  double-click on a frustum or a thumbnail enters camera view the same way but
-  names no feature, and looking straight through the camera can leave the
-  feature near the edge of a photograph wider than the viewport, or off it; the
-  row names an observation, so the view it opens shows where it is. The turn
-  starts from the view the other double-clicks land on (the camera's own pose,
-  or when already in camera view the relative orientation a switch keeps), is
-  level with that view's up, and uses the ray the lens model maps the feature's
-  pixel from. A feature already inside the middle 1/2 turns nothing. The result
-  is camera view looked around in, as a free look leaves it.
-- **Hover a row**: set the cross-panel hover, which brightens the frustum and
-  outlines the thumbnail. The body produces no point hover, since every row is
-  about the one selected point, so owning the pointer clears it.
-- **Copy Point ID** and **Copy coordinates**: copy the ID
-  (`pt3d_a1b2c3d4_12345`) or the coordinates (`1.234, -0.567, 2.891`).
-- **Go to Point**, from the header arrow or the empty state's button: open the
-  dialog.
-
-### Edit mode
-
-Edit mode shows the focused item and nothing else on the bench; the bench as a
-list is the Scene tree's. A gesture in it that names no item means the focused
-item. **A cluster and a track are the same body at two stages**: the header's
-headline, the table's cells and the row menu follow the stage, and there is no
-separate cluster layout. What differs is outside the panel: a cluster has no
-geometry, so the 3D viewer's bench layer draws nothing for it and Image Detail
-draws its parallelograms rather than an outline, and no ghost outline in the
-images it has no sighting in. A cluster has no view mode
-either, since there is no committed point behind it, so the way back to a
-cluster after Edit has been cleared is its row under *Bench Clusters*.
-
-Almost no state lives in the body. The bench is the node's, at its cursor, so a
-step taken anywhere, in this panel, in the Scene tree or by an undo, shows here on
-the next frame. What the body owns is about looking rather than about the track:
-where the boxes stand, whether *Lock* is ticked, which rows are selected, the
-tiles it has rendered, and the bars' judgement of each row.
-
-#### The header
-
-The focused item's label, its stage as a word, and `N kept · K out · P
-pinned`. When the
-point the track was read from is still in the version at the cursor, its
-portable Point ID follows the label with the two icon buttons view mode's
-header draws beside an ID: copy it, and open *Go to Point*, so an ID copied
-here is one that dialog takes back. A track put on from a point is labelled with
-that ID until it is renamed, and the ID is then printed once, as the label. A
-track whose point is gone says `from point N`, the index it had, and a track
-with no origin says `new`. Under it the stage's own headline: at
-the cluster stage the reference observation and whether a template has been cut,
-and at the track stage the coordinate with the last triangulation's condition
-number, or the sentence saying nothing has triangulated it yet. The header is not
-joined by view mode's summary: the label of an item put on from a point already
-is the portable Point ID, the committed track is one Edit-clear away, and two
-modes that both showed the point's summary would be harder to tell apart at a
-glance.
+**Under the Edited header is the stage's own headline**: at the cluster stage
+the reference observation and whether a template has been cut, and at the track
+stage the coordinate with the last triangulation's condition number, or the
+sentence saying nothing has triangulated it yet.
 
 **The word in front of the coordinate says which coordinate it is.** A track at
 infinity carries a unit direction where a finite one carries a place
@@ -645,37 +577,37 @@ infinity carries a unit direction where a finite one carries a place
 points and bearings"), and the same three numbers under the wrong rule read as a
 point a metre from the world origin. So the line is `Bearing (x, y, z), at
 infinity` for a bearing and `Position (x, y, z)` otherwise, *at infinity* being
-view mode's word for the same thing. It comes from the track's own `at_infinity`
-and not from its patch's `w`, so a point put on the bench from a reconstruction
-with no patch frames reads as the bearing it is. A fit that crosses the boundary
-changes the header's first word, which is how a person sees that it crossed.
-The same flag puts **an infinity mark** (∞, U+221E, which egui's bundled fonts
-draw) left of the label, as view mode puts one left of its Point ID
-(`track_view::infinity_mark`), so the header's first glyph says a direction
-before any number is read; its hover text says the point is a direction and
-its numbers a unit bearing.
+the Viewed header's word for the same thing. It comes from the track's own
+`at_infinity` and not from its patch's `w`, so a point put on the bench from a
+reconstruction with no patch frames reads as the bearing it is. A fit that
+crosses the boundary changes the headline's first word, which is how a person
+sees that it crossed. The same flag puts **an infinity mark** (∞, U+221E, which
+egui's bundled fonts draw) left of the label, as the Viewed header puts one left
+of its Point ID (`track_view::infinity_mark`), so the header's first glyph says
+a direction before any number is read.
 
-**The track's own patch stands at the left, under the label**, at view mode's
-stored-patch size (64 points) with nearest filtering and no label, since the
-picture says what it is. The headline, both rows of the toolbar and the
+**The track's own patch stands at the left, under the header**, 64 points
+square (`STORED_PATCH_SIZE`) with nearest filtering and no label, since the
+picture says what it is. The line under the header, the toolbar and the
 threshold boxes stand to its right, and the table's separator runs directly
-under it. At the track stage it is the consensus bitmap the observations were
-fused into (`TrackPayload::bitmap`), the bitmap a commit writes as the point's
-stored patch, so a *Fit* that re-fuses the track changes it and a person sees
-what the commit would store before committing. At the cluster stage it is the
-template every member registers onto, once an evaluation has cut one. With
-neither -- a track not yet fused, as one put on from a reconstruction that
-stores no bitmaps is until its first *Fit*, or a cluster with no template -- the
-slot is an empty frame of the same size, so the controls beside it do not move
-when a step fills it. Its hover text says which of the two it is, or what would
-fill it. The bitmap is converted by view mode's own `stored_patch_image`, so the
-two modes draw one stored patch one way: one channel repeated across RGB, three
-as RGB, and a fourth, the confidence, dropped for an opaque alpha. The upload is
-kept against the track's `Arc` and dropped with the tiles.
+under it. At the track stage it is the consensus bitmap
+(`TrackPayload::bitmap`): for the viewed track that is the point's stored patch,
+and for a bench track the bitmap a commit writes as the point's stored patch,
+so a *Fit* that re-fuses the track changes it and a person sees what the commit
+would store before committing. At the cluster stage it is the template every
+member registers onto, once an evaluation has cut one. With neither -- a point
+that stores no patch, a track not yet fused, or a cluster with no template --
+the slot is an empty frame of the same size, so the controls beside it do not
+move when a step fills it. Its hover text says which it is, or what would fill
+it. The bitmap is converted by `patch::stored_patch_image`: one channel repeated
+across RGB, three as RGB, and a fourth, the confidence, dropped for an opaque
+alpha, and an all-zero bitmap, which is how a point with no stored patch is
+written, is not drawn. The upload is kept against the track's `Arc` and dropped
+with the tiles.
 
 #### The toolbar
 
-Two rows. The first opens with where the focused item's evaluation stands, and
+In Edited mode, two rows. The first opens with where the focused item's evaluation stands, and
 then acts on the track: *Fit*, the *Stage* toggle (which names the stage it
 would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
 second is the *Lock* box and *Rename*, which opens a field in place and commits
@@ -690,11 +622,17 @@ whose only act would be to decode a dozen images and fail. The commit refusal is
 cached against the track's `Arc` and the node's version, since asking it builds
 a point record.
 
+In **Viewed mode** the toolbar is the evaluation state alone. The viewed track
+is on no bench, so there is nothing for *Fit*, *Stage*, *Split*, *Duplicate*,
+*Commit*, *Discard*, *Lock* or *Rename* to act on, and ticking *Edit* is the way
+to them.
+
 **There is no *Evaluate* button, because evaluation is live.** Every change to
-an input of the evaluation evaluates the track again on a worker, and a track
-put on the bench is evaluated first ([`bench.md`](bench.md) § "Live
-evaluation"). What the panel owes the person is which state the numbers below
-are in, and the head of the toolbar says it: *Evaluated* when they are the
+an input of the evaluation evaluates the track again on a worker; the viewed
+track is evaluated first while *Edit* is clear, and the focused item first while
+it is ticked ([`bench.md`](bench.md) § "Live evaluation"). What the panel owes
+the person is which state the numbers below are in, in either mode, and the
+head of the toolbar says it: *Evaluated* when they are the
 evaluation of the track as it stands; a spinner and *Evaluating…* while an
 evaluation of the current inputs is running or waiting to start; and, when core's
 `evaluate_preconditions` refuses the track or the evaluation failed, that
@@ -705,8 +643,8 @@ one"* -- in place of any state.
 **Commit leaves the point it wrote selected.** The write is
 [`edits/commit-track.md`](edits/commit-track.md)'s; the panel's part is that the
 point the commit produced becomes the selection, whether it replaced a point or
-created one, so the viewport's track rays, the observing frustums and view mode
-all look at what was just written. The dock drops what the panels cached about
+created one, so the viewport's track rays and the observing frustums look at what
+was just written. The dock drops what the panels cached about
 the node's points in the same breath. **A commit of a track the point already
 holds writes nothing**, and the button is not greyed for it: the press pushes no
 version and records the no-effect row *"Committed bull-nose: no effect, point
@@ -763,7 +701,7 @@ rather than in the panel ([bench.md](bench.md) § "The selected observations"),
 so a click on a mark in either bench layer and the wire's
 `select_bench_observations` set the rows the panel highlights, and
 `get_bench_track` reports the rows a person clicked. A row click reports itself
-as `TrackEditResponse::pick_row` and the dock applies it through
+as `TrackBodyResponse::pick_row` and the dock applies it through
 `AppState::pick_bench_observation`. It is not a version: undo, redo, a jump and
 a change of focused item clear it; a rename keeps it. *Split off N rows* takes it; a split names its
 observations explicitly, because `out` says a sighting does not belong here and
@@ -816,40 +754,67 @@ would be refused.
 
 **The colours are the core's judgement run over a copy** carrying the boxes'
 bars: `bar_checks` for each reading and `verdicts_if_unpinned` for each row's
-*Keep* cell ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+verdict cell ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Growing and judging"). For an unpinned row the proposal is what `apply_thresholds`, the
 step a release applies, gives it, so a row can never be shown one way and turned
 the other way when the box is released; for a pinned row it is what unpinning
 it would give, which a release does not apply, since the painting leaves a
-pinned verdict unchanged. It is recomputed when the track's `Arc` or the bars
-move, and not per frame, because a copy of a track carries its consensus
-bitmap.
+pinned verdict unchanged. Every row of the viewed track is pinned, so its
+proposals are what unpinning each row would give, which is the verdict the
+bench's own evaluation would give the row once the point is on the bench and
+the row unpinned. The judgement is kept on the body against the mode, the
+track's `Arc` and the bars, and recomputed when one of them moves rather than
+per frame, because a copy of a track carries its consensus bitmap. An
+evaluation of the viewed track landing gives it a new `Arc`, which is one such
+move.
 
-**The boxes show the focused item's own bars**, copied from it on every frame
-no box is being dragged, so whatever moved them -- a release here,
-`apply_bench_track_thresholds` over the wire, an undo or redo of either, another
-item focused -- the boxes follow. Only during a drag do they hold a value
-the track does not.
+**The boxes show the focused item's own bars** in Edited mode, copied from it
+on every frame no box is being dragged, so whatever moved them -- a release
+here, `apply_bench_track_thresholds` over the wire, an undo or redo of either,
+another item focused -- the boxes follow. Only during a drag do they hold a
+value the track does not.
+
+**In Viewed mode the boxes are drawn and editable, and change only what is
+drawn.** They hold the **read-only bars**, `AppState::viewed_thresholds`, which
+are session state: they start at the bench's default bars, keep their values
+across selection changes, and are not saved. Dragging a box or typing into it
+moves the bar, and every judged reading and every *Verdict* cell is recoloured
+live, as a drag recolours the table in Edited mode. The body reports the new
+bars on every frame a box moves them (`TrackBodyResponse::viewed_thresholds`)
+and the dock sets them (`AppState::set_viewed_thresholds`). Nothing else
+happens, on the drag or on its release: the viewed track's verdicts stay `in`,
+no version is pushed and no Action Log row is written, and the busy state does
+not grey the boxes. So a person can set a strict bar and click through points
+to see which observations each one would lose. Their hover text says that they
+judge and change nothing, and that a point put on the bench from here takes
+them: a put of the viewed point carries the read-only bars onto the new track
+when they differ from the defaults ([`bench.md`](bench.md) § "The viewed
+track").
 
 #### The observation table
 
 One row per observation, in index order, with the headings above the scroll
 area. The crop of the photograph around the patch's outline is the first
 column, at the table's left edge, under *Crop*; the rendered tile is the
-second, under *Patch*; and *Keep* follows them. The crop comes first because it
+second, under *Patch*; and the verdict column follows them, *Keep* in Edited
+mode and *Verdict* in Viewed mode. The crop comes first because it
 is the photograph as it is, and the tile beside it is that patch warped square,
 so the eye reads from the raw pixels to the picture the numbers are read from.
+The columns stand at the same offsets in both modes, and Viewed mode has no
+*From* column, since every row of a committed point came from the point.
 The headings are drawn at the cells' own body size, in the weak text colour so
 they still read as headings. Each heading has hover text over the width of its
 column, running to where the next heading starts, saying what the column holds:
 the *Crop* heading's says what the crop shows and what its hover view adds, the
 *Patch* heading's what the tile is at each stage and that the numbers are read
-from it, and the *Keep* heading's says
+from it, the *Keep* heading's says
 what a kept observation is used for, when the thresholds set the switch, what a
 click on the switch, on the pin and on the heading's own pin does, and what the
-cell's colour means.
+cell's colour means, and the *Verdict* heading's says what the column shows,
+that nothing here changes a verdict of the point, and that ticking *Edit* is the
+way to work on it.
 
-**The *Keep* heading carries a pin** over the rows' pin column, and it
+**The *Keep* heading carries a pin**, in Edited mode, over the rows' pin column, and it
 toggles. While any row of the focused item is pinned, clicking it unpins every
 pinned row in one step (`AppState::unpin_bench_verdicts`, core's
 `unpin_verdicts`). While none is, clicking it pins every row at the verdict it
@@ -882,15 +847,16 @@ that is not there prints a bare `-`, with no unit.
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Crop | the photograph around the observation's parallelogram, with the parallelogram over it; hovering it shows it in context, with the patch's two axes in pixels | the photograph around the patch's outline as Image Detail draws it, with the outline over it; hovering it shows it in context, with the projection and the patch's two axes in pixels |
-| Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp; hovering it shows it in context, with the projection |
-| Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
-| Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
+| Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through `patch::patch_color_image`; hovering it shows it in context, with the projection |
+| Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
+| Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
+| Img, Name | the image's index, and its file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Self-similarity | the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within *shift px*, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
-| From | the provenance | the provenance |
+| From (Edited) | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which says the difference
 between a number a round produced and a round that has not been run.
@@ -999,23 +965,50 @@ seed, so the two numbers a person weighs the walk by sit on one row.
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is what a person can judge. So each row draws what its
 stage registers, through the code that registers it: at the track stage the
-patch warped into this view and re-anchored where the observation sits, by view
-mode's own warp; at the cluster stage the grid the refinement kernel samples
+patch warped into this view and re-anchored where the observation sits
+(`patch::patch_color_image`, `WarpMap::from_patch` and `remap_bilinear` at 64 by
+64, shown at 48 points with nearest filtering); at the cluster stage the grid the
+refinement kernel samples
 (`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that place and
 shape, over the cluster's own radius
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 cluster stage's units"), on the template's resolution once one has been cut. A
 row with nothing to render draws an empty frame of the same size, so the columns
-beside it never shift.
+beside it never shift. A patch not visible in a view warps to an all-black tile,
+which is drawn as such.
+
+**The track-stage frame is re-anchored on the observation's keypoint**
+(`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
+the patch centre slides within its own plane, on its tangent sphere for a point
+at infinity, until it projects onto the keypoint this observation carries. The
+tile is a photometric comparison, so it is anchored where the keypoint localizer
+aligned the pixels rather than at the point's geometric projection. The tiles of
+a well-localized track then match each other whatever discrepancy the geometry
+carries, and that discrepancy is what the *Proj. err* column reports: a column
+of matching tiles beside a large error is a well-aligned patch whose position or
+pose is off, not a bad match. The stored frame is used as it is when the
+observation has no keypoint or the keypoint's ray cannot meet the patch
+(`patch::render_frame`).
 
 **Where the observation sits is one rule** at either stage: the track-stage
 keypoint, else the refined cluster position, else the seed it was proposed
 at (`crate::bench::observation_site`, which the marks, the reveal and the wire
 read too). A row a search has just added carries only that seed, and its
 tile is cut around it, so nothing has to be evaluated for a fresh row to show its
-patch. The photographs are the node's full-resolution cache, which the dock fills
-for the focused item's images before edit mode draws; the rendered tiles are kept
-against the track's `Arc` and rebuilt when a step moves it.
+patch. The rendered tiles are kept against the track's `Arc` and rebuilt when a
+step moves it.
+
+**The photographs** come from `AppState::full_res_cache`, the decoded
+full-resolution images shared with the Image Detail panel and read by the
+evaluations, so no image is decoded more than once. An entry is the
+`ImageU8Pyramid` built when the image was decoded, whose level 0 is the
+photograph: the photometric readers sample the lower levels. A failed decode is
+remembered as `None` so a missing file is not reopened every frame. Before the
+body draws, the dock fills the cache for every image the drawn track observes:
+the focused item's in Edited mode, and in Viewed mode the selected point's, when
+the reconstruction carries patch frames, with the SIFT cache for them on a
+`sift_files` reconstruction. The cache has no eviction: it holds every image
+decoded in the session, with its pyramid, until the reconstruction is closed.
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
 over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
@@ -1094,7 +1087,14 @@ photograph pixels and the patch's two axes, the one across the tile and the one 
 lengths in the photograph's pixels. At the track stage each axis is measured
 along its projection through the lens, from one edge's midpoint through the
 centre to the opposite edge's, so a bent axis is measured along its bend; at
-the cluster stage it is the shape's column times the template's width. The
+the cluster stage it is the shape's column times the template's width. A last
+line gives the pixel the observation sits at and its feature index
+(`crop_caption`): the `.sift` feature a row put on by index names, or, for a
+row read from the point the track came from, that point's feature in the same
+image; on a reconstruction that stores its keypoints there is no `.sift` feature
+behind them, and the index given is the observation's place in the point's
+track. A row a search, the view sweep or a hand placed has no feature index,
+and the line says which of them placed it. The
 crop and its hover view are cached per row beside the tiles and dropped with
 them, and the hover view is rendered the first time the pointer rests on the
 crop. Its hover region takes no click, so a click on the crop is the row's.
@@ -1131,6 +1131,21 @@ over the bar`, `Self-similarity whole is over the bar`), or, for a row that
 clears every bar and is still proposed `out`, that another sighting in the same
 image is kept, naming the image.
 
+**In Viewed mode the *Verdict* column takes the *Keep* column's place.** A
+committed point's observations are all in its track, so a switch there would
+say the same thing on every row, and nothing in Viewed mode could change it.
+The column shows instead what the read-only bars say about each observation:
+the word `in` in a green cell where the row clears every bar and holds its
+image, `out` in a red cell where it does not, and an untinted `-` where nothing
+has measured the row yet, or where the viewed track's evaluation was refused or
+failed. It is the proposal the *Keep* cell is tinted by, in the same green and
+red, which for the viewed track's pinned rows is the verdict the bench's own
+evaluation would give each row once the point is on the bench and the row
+unpinned. Its hover text is the *Keep* switch's second half: that the row
+clears every bar, which bars it fails, named as above, or which other sighting
+holds its image. The cell takes the pointer for its hover text and no click, so
+a click on it is the row's. There is no switch, no pin and no heading pin.
+
 **The Keep switch is the verdict.** On is `in`: the evaluation and a fit read
 the track by the observation, and a commit writes it. Off is `out`. The
 thresholds set it for every unpinned row when a threshold box is let go and on
@@ -1159,15 +1174,35 @@ something was marked, and the control sits where the state is shown.
 
 #### Row gestures
 
-- **Click a row**: select its image and **reveal** the observation, at the pixel
-  the Image Detail bench layer draws its mark at, and take the row into the split
-  selection; Ctrl-click or Shift-click extends the selection.
-- **Double-click a row**: enter camera view for its image, turned toward the
-  row's observation at the pixel the bench layer draws its mark at, as a
-  view-mode row's double-click does. An observation nothing has placed yet has
-  no pixel, and its double-click enters camera view without the turn. The rows of both modes are observations of one track in one
-  table position, and a gesture that worked in one mode and did nothing in the
-  other would be a trap.
+In both modes:
+
+- **Click a row**: select its image, which the 3D viewer, the Image Browser and
+  Image Detail follow, and **reveal** the observation: its pixel, where the
+  Image Detail bench layer draws its mark, rides along in `reveal_feature`, and
+  Image Detail pans (never zooms) to centre it when its current view is not
+  showing it ([multi-panel-image-browser.md](multi-panel-image-browser.md) §
+  "Revealing a feature named by another panel"). In Edited mode the click also
+  takes the row into the split selection; Ctrl-click or Shift-click extends the
+  selection. The viewed track has no row selection, since there is no step it
+  could be taken to.
+- **Double-click a row**: enter camera view for its image, and turn the view
+  until the row's observation is inside the middle 1/2 of the viewport on both
+  axes (`Viewer3D::look_through_toward_feature`), in one animated transition. A
+  double-click on a frustum or a thumbnail enters camera view the same way but
+  names no feature, and looking straight through the camera can leave the
+  observation near the edge of a photograph wider than the viewport, or off it;
+  the row names an observation, so the view it opens shows where it is. An
+  observation nothing has placed yet has no pixel, and its double-click enters
+  camera view without the turn.
+- **Hover a row**: set the cross-panel hover, which brightens the frustum and
+  outlines the thumbnail. The body produces no point hover, since every row is
+  about the one track, so owning the pointer clears it.
+- **Copy Point ID**, **Copy coordinates** and **Go to Point**, in the header,
+  and in the empty state *Go to Point...*: copy the ID or the coordinates
+  (`1.234, -0.567, 2.891, 1`), or open the dialog.
+
+In Edited mode only:
+
 - **Click the Keep switch**: turn the observation `in` or `out` by hand, which
   pins it (`AppState::set_bench_verdict`). The row rect is registered first and
   the switch after it, so the switch keeps its own click. Turning a row `in`
@@ -1184,7 +1219,6 @@ something was marked, and the control sits where the state is shown.
   decide* unpins every pinned row among the selected in one step, so the bars
   decide them together, and is greyed when none of them is pinned. The *Keep*
   switch's own menu stays with its row.
-- **Hover a row**: set the cross-panel hover.
 - **Right-click a row**: the searches the stage offers. *Find matches by SIFT
   query* runs the descriptor search from that observation
   ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
@@ -1222,6 +1256,24 @@ draws the circle of the one selected row larger.
 
 Track View asks the node to look for its SIFT index whenever it draws, in either
 mode, so a session finds the index the last one built without anyone asking.
+
+#### A point with no patch frame
+
+A reconstruction whose points carry no patch frame, which is the usual case for
+a `sift_files` reconstruction imported from COLMAP, is drawn as any other, and
+what that shows is less than the rest of this section describes. `create_track`
+builds a track-stage track with no frame, and core's `evaluate_preconditions`
+refuses it, so the toolbar shows the refusal sentence (*"Cannot evaluate
+pt3d_…: the track carries no patch frame to read against; …"*) and every
+number cell reads `-`, the reprojection error and ray angle included, and every
+*Verdict* cell `-`. The *Crop* and *Patch* cells are empty frames, and there is
+no crop hover view to carry the pixel and the feature index. The header still
+carries the point's summary (its colour, `xyzw`, error, track length, max pair
+angle, depth z and cond), which reads the point and needs no frame. So for such
+a point the panel shows its header and no per-observation readings. Which
+readings a frameless evaluation should produce, what the *Crop* cell would show
+without a frame, and how the cluster stage, which a frameless track is taken
+through to get a frame, fits in are left to a later draft.
 
 #### The gestures that name a pixel
 
@@ -1310,8 +1362,9 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 
 - **The panel**,
   [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs),
-  headless through `Context::run_ui`: the box reads the focused item, edit mode
-  drawn with a focused item and view mode without one, and following an
+  headless through `Context::run_ui`, each frame asking for the viewed track
+  first as the dock does: the box reads the focused item, Edited mode
+  drawn with a focused item and Viewed mode on the origin without one, and following an
   unfocus and a focus made outside the panel with no panel call in between;
   ticking it over a selected point reporting `set_edit`, and applied, one
   version putting the point on the bench, with a second tick after a clear
@@ -1326,9 +1379,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   back to an item on another node, selecting that node, and passing over a
   discarded item; a busy node greying the box only over a point not on the
   bench; the empty state counting the items on a bench with none focused and
-  none recent; a discard of the focused item returning to view mode; edit mode
+  none recent; the empty state's *Go to Point...* asking for the dialog and an
+  idle frame not asking; a deleted and an out-of-range point taking the empty
+  state; a discard of the focused item leaving Edited mode; Edited mode
   on a cluster drawing the cluster headline; a point selected while editing
-  drawing that point in view mode with no version; and no
+  drawing that point in Viewed mode with no version; and no
   reconstruction drawing no box.
 - **The selection rules**,
   [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs) § "The
@@ -1354,18 +1409,28 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   (a click on the ghost's centre over a feature of another point selecting no
   point) and [viewer_3d/tests.rs](../../crates/sfm-explorer/src/viewer_3d/tests.rs)
   (a click on the dot, a corner or an edge requesting no point pick).
-- **View mode**,
-  [view/tests.rs](../../crates/sfm-explorer/src/track_view/view/tests.rs):
-  preparing one row per observation and re-preparing on a selection change; the
-  extents; the name column; the max pair angle; per-row hover; a row click
-  selecting and revealing, a double-click entering camera view with the
-  feature; the Go to Point way in from the empty state and the header; the infinity mark left of a point at infinity's ID and absent for a finite point; the
-  pointer ownership; the cached
-  thumbnails; the patch column's presence, its tiles rendered once per image and
-  anchored on the observation's keypoint, with the geometric frame where there is
-  no keypoint; a deleted or out-of-range index taking the empty state.
-- **Edit mode**,
-  [edit/tests.rs](../../crates/sfm-explorer/src/track_view/edit/tests.rs), with
+- **Viewed mode**,
+  [body/tests/viewed.rs](../../crates/sfm-explorer/src/track_view/body/tests/viewed.rs):
+  the body drawing the point's ID, the line saying how to change the track, no
+  toolbar button and no *Lock*, and a click on the verdict cell being the row's
+  with no verdict step; the headings matching Edited mode's with *Verdict* in
+  place of *Keep* and no *From*; each *Verdict* cell `in` or `out` as
+  `verdicts_if_unpinned` gives it, tinted to match, with the failing bar in its
+  hover text under strict bars, and `-` untinted on an unmeasured row; a drag
+  of each of the five boxes reporting the bars, recolouring the ZNCC readings
+  and the *Verdict* cells, and leaving every verdict `in`, the viewed track
+  unchanged, no version and no row; the bars surviving a selection change; the
+  "On the bench as …" line when an item from the point exists; the header's
+  summary for the viewed track and for a bench item at the track stage, and
+  none for a cluster; the crop caption's pixel and feature index, and the
+  `.sift` feature a row put on by index names; a frameless point drawn with its
+  refusal sentence and its header, empty *Crop* and *Patch* frames and `-`
+  cells; *Evaluating…* until the viewed evaluation lands and *Evaluated* after;
+  a row click selecting and revealing with no row pick, a double-click asking
+  for camera view; the header's go-to button; and the infinity mark left of a
+  point at infinity's ID and absent for a finite point.
+- **Edited mode**,
+  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs), with
   what the table drew recorded unconditionally so the assertions read the table
   the app draws: nothing drawn with nothing focused; **no *Evaluate* button**,
   the toolbar reading *Evaluating…* until the evaluation of a track just put on
@@ -1435,7 +1500,10 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   double-click asking for camera view with the pixel; *Lock* starting ticked, a
   click clearing it and a second ticking it again with no version pushed and no
   gesture reported, and the box drawn greyed at the cluster stage, where a click
-  leaves it as it was.
+  leaves it as it was; the tile's frame re-anchored on each observation's own keypoint
+  and kept as stored with no keypoint and where the keypoint's ray cannot meet
+  the patch; and a long image name cut in its middle, keeping the start of the
+  path and the end of the file name.
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a
@@ -1458,8 +1526,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 ## Non-goals
 
 - **Showing a committed track and its bench copy side by side.** The panel shows
-  one or the other; clearing and ticking Edit flips between them, and each flip
-  is a version. A second Track View is not possible, since a panel is a
+  one or the other in one layout; clearing and ticking Edit flips between them,
+  and no flip is a version. A second Track View is not possible, since a panel is a
   singleton.
 - **Listing the bench in the panel.** The Scene tree's two Bench groups are the
   list, per node, with the stage each item is at.
@@ -1473,6 +1541,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Editing the patch by hand in this panel.** The hand edits that move it are
   the two bench layers' handles and the wire's patch tools
   ([`bench.md`](bench.md) § "The wire").
-- **Crops for a `sift_files` reconstruction**, which carries no patch frame to
-  define one; the stored bitmap's alpha channel as a tile; a per-row highlight of
+- **Per-observation readings for a point with no patch frame** (§ "A point with
+  no patch frame"); a projected outline of the viewed track in Image Detail or
+  a figure of it in the 3D viewer, which would need its own way of reading as
+  not editable; the stored bitmap's alpha channel as a tile; a per-row highlight of
   the track ray in the 3D viewer; and a positional uncertainty display.

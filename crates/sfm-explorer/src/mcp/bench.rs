@@ -119,7 +119,7 @@ pub(super) fn index_files(state: &AppState, id: ReconId) -> Value {
     })
 }
 
-/// `get_bench_track`: one track's table, which is Track View's edit-mode
+/// `get_bench_track`: one track's table, which is Track View's Edited-mode
 /// reading of it.
 ///
 /// An observation is addressed by its position in `observations`, and that

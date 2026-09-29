@@ -604,8 +604,8 @@ pub struct AppState {
 
     /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
     /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
-    /// ImageDetail (builds its GPU texture from level 0) and PointTrackView
-    /// (CPU-samples it to render per-observation patch tiles). Cleared when the
+    /// ImageDetail (builds its GPU texture from level 0) and Track View
+    /// (CPU-samples it to render per-observation tiles and crops). Cleared when the
     /// scene changes.
     ///
     /// A [`ImageU8Pyramid`] rather than the bare photograph because the

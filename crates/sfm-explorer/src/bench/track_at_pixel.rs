@@ -431,7 +431,7 @@ impl AppState {
                     let middle = Some(middle).filter(|m| m.is_finite());
                     text.push_str(&format!(
                         ": {in_views} observations in, median ZNCC {}",
-                        crate::track_view::edit::zncc_sentence(Some(zncc), middle)
+                        crate::track_view::body::zncc_sentence(Some(zncc), middle)
                     ));
                 }
                 if !report.refusals.is_empty() {

@@ -200,7 +200,6 @@ impl AppState {
     /// Set the read-only bars Track View's threshold boxes hold while the
     /// panel shows the viewed track. Pushes no version, writes no row, and
     /// changes no verdict of the viewed track.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_viewed_thresholds(&mut self, bars: Thresholds) {
         self.viewed_thresholds = bars;
     }

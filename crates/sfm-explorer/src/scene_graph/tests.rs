@@ -5,7 +5,7 @@
 //! behind it.
 //!
 //! egui needs no GPU to lay out a frame, so the panel tests run the real thing
-//! through `Context::run_ui` (the `track_view/view/tests.rs` pattern): the
+//! through `Context::run_ui` (the `track_view/body/tests.rs` pattern): the
 //! tree is really built, `CollapsingState` really stores its expansion under
 //! [`row_id`], and clicks are really delivered by pointer events. Clicks aim at
 //! the rects the panel recorded on the previous frame

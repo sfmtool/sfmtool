@@ -101,7 +101,7 @@ and the track back to the half it had before.
 
 **The written point becomes the selection**, through `AppState::select_point`
 like any other, so the 3D viewport puts the track rays on it, Track View
-shows it in view mode once *Edit* is cleared, and the images that observe it light up. That holds
+shows it in Viewed mode once *Edit* is cleared, and the images that observe it light up. That holds
 wherever the selection was standing and whether the commit replaced a point or
 created one: a commit is a gesture about one point, and the index it landed at
 is the one thing the person who asked for it cannot work out.

@@ -10,13 +10,13 @@
 //! numbers describe the version on screen rather than the base under it.
 //! They live at the crate root rather than under a panel
 //! because three different surfaces read the same numbers: Track View's
-//! table tabulates them, the Image Detail overlay colours features by
+//! header quotes them, the Image Detail overlay colours features by
 //! them, and the MCP `get_point` tool reports them to an agent. A figure an
 //! agent is told and a figure the human beside it reads off a panel have to be
 //! the same figure, and that is easier to keep true when there is one
 //! definition and no panel owns it.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use sfmtool_core::{ImageTable, Point3D, PointView};
 
 #[cfg(test)]
@@ -32,10 +32,9 @@ mod tests;
 /// has no pixel for the ray (a perspective model and a point behind the camera,
 /// or a ray past a model's valid domain), returns `(NaN, NaN)`.
 ///
-/// Crate-visible because the MCP surface reports the same number in a point
-/// track (`mcp::read::get_point`), and an agent told one figure while the human
-/// beside it reads another off this panel is the failure that boundary exists
-/// to avoid.
+/// Read by the MCP surface's point track (`mcp::read::get_point`), which is
+/// why it goes unused in a build without the `mcp` feature.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 pub(crate) fn compute_observation_metrics(
     point: &Point3D,
     image: &sfmtool_core::SfmrImage,
@@ -88,24 +87,44 @@ pub(crate) fn compute_point_diagnostics(
     image_table: &ImageTable,
     view: &PointView<'_>,
 ) -> (f32, f32) {
-    use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
-
     let pt = view.point();
     if pt.is_at_infinity() {
         return (f32::NAN, f32::NAN);
     }
-    let observations = view.observations();
-    let noise = (pt.error as f64).max(1.0);
-    let mut dirs = Vec::with_capacity(observations.len());
-    let mut centers = Vec::with_capacity(observations.len());
-    let mut sigma = Vec::with_capacity(observations.len());
-    for obs in observations {
-        let img_idx = obs.image_index as usize;
+    let images = view
+        .observations()
+        .iter()
+        .map(|obs| obs.image_index as usize);
+    compute_position_diagnostics(image_table, &pt.position, f64::from(pt.error), images)
+}
+
+/// [`compute_point_diagnostics`] for a finite `position` seen from `images`,
+/// with `error_px` the reprojection error the per-ray noise is scaled by
+/// (floored at one pixel): what Track View's header reads a bench track's own
+/// position and kept observations by, where there is no stored point to hand
+/// in. Returns `(NaN, NaN)` with fewer than two usable rays.
+pub(crate) fn compute_position_diagnostics(
+    image_table: &ImageTable,
+    position: &Point3<f64>,
+    error_px: f64,
+    images: impl IntoIterator<Item = usize>,
+) -> (f32, f32) {
+    use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
+
+    let noise = if error_px.is_finite() {
+        error_px.max(1.0)
+    } else {
+        1.0
+    };
+    let mut dirs = Vec::new();
+    let mut centers = Vec::new();
+    let mut sigma = Vec::new();
+    for img_idx in images {
         let Some(image) = image_table.images.get(img_idx) else {
             continue;
         };
         let center = image.camera_center();
-        let dir = pt.position - center;
+        let dir = position - center;
         let len = dir.norm();
         if len > 1e-12 {
             dirs.push(dir / len);
@@ -124,6 +143,31 @@ pub(crate) fn compute_point_diagnostics(
         tris[0].condition_number as f32,
         dus[0].inverse_depth_z as f32,
     )
+}
+
+/// The unit rays from each of `images`' camera centres to `position`, in
+/// world space, which [`compute_max_pairwise_angle`] reads. A point at
+/// infinity is seen along the same stored direction from every camera, so its
+/// rays are that direction each time and the angle between them is zero.
+pub(crate) fn observation_rays(
+    image_table: &ImageTable,
+    position: &Point3<f64>,
+    at_infinity: bool,
+    images: impl IntoIterator<Item = usize>,
+) -> Vec<[f64; 3]> {
+    images
+        .into_iter()
+        .filter_map(|img_idx| {
+            if at_infinity {
+                let d = position.coords;
+                return Some([d.x, d.y, d.z]);
+            }
+            let image = image_table.images.get(img_idx)?;
+            let dir = position - image.camera_center();
+            let len = dir.norm();
+            (len > 1e-12).then(|| [dir.x / len, dir.y / len, dir.z / len])
+        })
+        .collect()
 }
 
 /// Compute the maximum angle (in degrees) between any pair of world-space rays.

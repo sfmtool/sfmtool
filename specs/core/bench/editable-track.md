@@ -859,7 +859,7 @@ read a `w` off, and a bearing it came from is still a bearing: a reader that wen
 to the frame would call it a place one unit from the world origin, publish it
 under `position`, and commit it back at `w = 1`. So `create_track` takes the
 point's own `w`, `fit` takes the classification's, and everything that states
-which of the two it is holding -- Track View's edit-mode header word, the wire's choice
+which of the two it is holding -- Track View's Edited-mode header word, the wire's choice
 of `direction` over `position`, the commit's `w`, the reading's report -- reads
 the flag. Where a frame exists the two agree, and every step that writes one
 writes both.

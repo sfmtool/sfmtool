@@ -144,18 +144,15 @@ sfmtool/
 │   │       │   ├── mod.rs            # Panel state and per-frame `show`
 │   │       │   ├── input.rs          # Pan / zoom / hover dispatch
 │   │       │   └── overlay.rs        # Feature + reprojection overlays
-│   │       ├── track_view/           # Track View: the Edit checkbox and its two bodies
-│   │       │   ├── mod.rs            # The box and the dispatch on it
-│   │       │   ├── view/             # View mode: the selected point's track
-│   │       │   │   ├── mod.rs        # Body state and per-frame `show`
-│   │       │   │   ├── prepare.rs    # Per-observation data for a new selection
-│   │       │   │   ├── header.rs     # Point summary bar + stored-patch tile
-│   │       │   │   ├── table.rs      # Observation table, rows, thumbnails
-│   │       │   │   └── patch.rs      # Oriented-patch frames and textures
-│   │       │   └── edit/             # Edit mode: the focused item
-│   │       │       ├── mod.rs        # Body state, header, toolbar, sliders
-│   │       │       ├── table.rs      # Observation table, rows, verdict controls
-│   │       │       └── tile.rs       # Per-observation tiles
+│   │       ├── track_view/           # Track View: the Edit checkbox and its one body
+│   │       │   ├── mod.rs            # The box, the empty state, and the choice of mode
+│   │       │   └── body/             # One track, Viewed (Edit clear) or Edited (Edit ticked)
+│   │       │       ├── mod.rs        # Body state, header, toolbar, threshold boxes
+│   │       │       ├── table.rs      # Observation table, rows, Keep or Verdict column
+│   │       │       ├── tile.rs       # Per-observation tiles
+│   │       │       ├── crop.rs       # Per-observation crops of the photograph
+│   │       │       ├── surface_plot.rs # Self-similarity surface plots
+│   │       │       └── patch.rs      # The tile's warp and the stored bitmap's picture
 │   │       ├── bench.rs              # Every bench step as a version of the node
 │   │       ├── bench/live.rs         # The live evaluation of every bench track
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
@@ -202,7 +199,7 @@ sfmtool/
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, a right click that opens the image menu on a thumbnail, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
 | `image_menu.rs` | The image menu: `show`, which lays out an image's context-menu entries (`Resect Image`, `Add Image to Tracks`, `Move Camera`, `Delete Image`) with their greyed states and gives back the one chosen, and `AppState::image_menu` / `resect_image_refusal`, which say why `Resect Image` is greyed. A Scene tree image row and an Image Browser thumbnail both call `show`, and the dock carries the entry out through one function. See [scene-graph.md](scene-graph.md) § "Image menu". |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom that persists across image and reconstruction switches, and 7 overlay modes. |
-| `track_view/` | Track View ([track-view.md](track-view.md)). `mod.rs` draws the *Edit* checkbox, which reads the focused item, and dispatches to one of two bodies. `view/` is the selected 3D point's committed track: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures. `edit/` is the focused item of the selected node's bench: its observation table with a verdict per row, the threshold sliders that paint it, and the toolbar that says where the track's evaluation stands, fits, moves the stage, splits and commits. The numbers themselves are `metrics.rs`, at the crate root. |
+| `track_view/` | Track View ([track-view.md](track-view.md)). `mod.rs` draws the *Edit* checkbox, which reads the focused item, and the empty state, and hands the rest to `body/`, the one body that draws a track in two modes: with *Edit* clear the viewed track, the selected point read as an editable track off every bench, read-only, with the point's summary in the header and a *Verdict* column the session's read-only bars colour; with *Edit* ticked the focused item of the selected node's bench, with its verdict switches, the threshold boxes that apply to it, and the toolbar that fits, moves the stage, splits and commits. Both show the crop, the rendered tile, the ZNCC and self-similarity readings and the evaluation's state. `table.rs` draws the table, `tile.rs` and `crop.rs` the two pictures per row and their hover views, `patch.rs` the warp and the stored bitmap's conversion. The header's triangulation numbers are `metrics.rs`, at the crate root. |
 | `bench.rs` | Every step on a node's bench, as a version of that node: the `AppState` methods that call the pure `sfmtool_core::bench` steps, push one version and write one Action Log row, and the two that read photographs as background tasks. `bench/live.rs` keeps every track evaluated against its current inputs, on a worker of its own, with no version and no row. See [bench.md](bench.md). |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
 | `save_minimal_prompt.rs` | The workspace path `File > Save As Minimal...` asks about once its file dialog has named a file: a `SaveMinimalPrompt` holding the chosen file and the text of the field, prefilled with the path the save would measure, and reporting a `SaveMinimalAnswer` for the caller to write with rather than writing anything itself. See [saving.md](saving.md) § "The workspace path prompt". |
@@ -485,8 +482,8 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 The crate's tests split by what they need underneath them. The **lib** tests
 are headless and run anywhere: `scene_renderer/upload/tests.rs` drives real
 `wgpu` uploads on the `noop` backend, which validates in wgpu-core while
-stubbing the driver, and `track_view/view/tests.rs` and
-`track_view/edit/tests.rs` run whole egui frames through `Context::run_ui`.
+stubbing the driver, and `track_view/tests.rs` and
+`track_view/body/tests.rs` run whole egui frames through `Context::run_ui`.
 Everything decidable without an OS is decided there, because it is decidable in
 milliseconds and on every platform.
 

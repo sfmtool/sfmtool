@@ -1,9 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The two icon buttons both of Track View's headers draw beside a point ID:
-//! copy it, and go to a point by ID. Shared so the view-only header and the
-//! bench header offer the same controls in the same place.
+//! The two icon buttons the body's header draws beside a point ID in either
+//! mode: copy it, and go to a point by ID. Shared so the Viewed header and the
+//! Edited header offer the same controls in the same place.
 
 /// A small "go to point" button drawn as a right-pointing arrow into a bar.
 /// Returns true if clicked.

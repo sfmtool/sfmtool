@@ -1222,7 +1222,7 @@ when more than one is contributing:
 | **Scene Graph** | New (this spec). |
 | **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. A thumbnail's right click opens the image menu for that image of the selected reconstruction. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
-| **Track View** | Selection-driven via `PointRef` in view mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
+| **Track View** | Selection-driven via `PointRef` in Viewed mode, and through the focused item, which names its node, in Edited mode. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
 Cross-panel selection semantics are otherwise untouched: clicking a frustum in
 the 3D view selects that image, which selects its reconstruction (switching
@@ -1277,7 +1277,7 @@ bundle from `retain_nodes` on the next frame.
 ## Testing
 
 - **Scene panel** lib tests run whole egui frames via `Context::run_ui`
-  (the `track_view/view/tests.rs` pattern): tree structure, expansion
+  (the `track_view/body/tests.rs` pattern): tree structure, expansion
   state via explicit `CollapsingState` IDs, row click → response mapping,
   selection auto-scroll, eye and interaction-cursor toggles,
   selected-reconstruction marking, `Align to` menu gating (point mode

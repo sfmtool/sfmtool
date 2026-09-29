@@ -2,28 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The observation table: the columns, one row per observation, and the
-//! *Keep* switch each row carries.
+//! verdict cell each row carries.
 //!
 //! The crop of the photograph around the patch's outline comes first, at the
-//! table's left edge, then the rendered patch tile, then the *Keep* switch,
+//! table's left edge, then the rendered patch tile, then the verdict cell,
 //! then the image and its name, the stage's own photometric numbers and the
-//! reprojection error, the kernel's status and where the
+//! reprojection error, the kernel's status and, in Edited mode, where the
 //! observation came from.
 //!
-//! Rows are painted at fixed x-offsets rather than laid out by egui, as the
-//! view-only panel's are, so the header and every row stay aligned whatever a
-//! cell prints, and the header can be drawn above the scroll area rather than
-//! as its first row: the offsets are the same either side of that boundary.
-//! The one real widget in a row is the *Keep* switch: the row rect is
-//! registered first and the switch after it, so the switch wins the clicks
-//! that land on it and the row takes the rest.
+//! The verdict cell is the one column the two modes draw differently. In
+//! Edited mode it is *Keep*: a switch and a pin, the row's own verdict. In
+//! Viewed mode it is *Verdict*: the word `in` or `out`, the verdict the
+//! read-only bars give the row, since every observation of a committed point
+//! is in its track and nothing here could change that.
+//!
+//! Rows are painted at fixed x-offsets rather than laid out by egui, so the
+//! header and every row stay aligned whatever a cell prints, and the header
+//! can be drawn above the scroll area rather than as its first row: the
+//! offsets are the same either side of that boundary. The one real widget in
+//! a row is the *Keep* switch: the row rect is registered first and the switch
+//! after it, so the switch wins the clicks that land on it and the row takes
+//! the rest.
 //!
 //! A cell with two readings, the whole patch's and its middle's, prints them
 //! on two lines, each with its unit and its name (`93% whole` over `89% mid`),
 //! so the headings carry names alone.
 //!
 //! Each reading a bar judges is drawn green when it clears the bar and red when
-//! it does not, and the *Keep* cell is tinted by what the bars propose for the
+//! it does not, and the verdict cell is tinted by what the bars propose for the
 //! row. Both come from the core's own judgement (`bar_checks` and
 //! `verdicts_if_unpinned`), so the colours and the verdicts a release applies
 //! cannot disagree.
@@ -33,7 +39,8 @@ use sfmtool_core::SfmrReconstruction;
 
 use super::{
     measurements, provenance_text, radius_number, row_grids, row_radius, row_surface,
-    self_similarity_cell_color, zncc_cell_color, Judgement, RowGrids, TrackEdit, TrackEditResponse,
+    self_similarity_cell_color, zncc_cell_color, BodyMode, Judgement, RowGrids, TrackBody,
+    TrackBodyResponse,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -75,12 +82,22 @@ pub(crate) struct RowSummary {
     /// Whether that verdict was set by hand.
     pub pinned: bool,
     /// What the thresholds propose for it were its verdict unpinned, which is
-    /// what its *Keep* cell is tinted by, or `None` for a row nothing at this
-    /// stage has measured, whose cell is not tinted.
+    /// what its verdict cell is tinted by, or `None` for a row nothing at this
+    /// stage has measured, whose cell is not tinted. In Viewed mode this is
+    /// the row's *Verdict*.
     pub proposal: Option<Verdict>,
-    /// The *Keep* cell's hover text: what the switch and the pin say, and why
-    /// the bars propose what they do.
+    /// The verdict cell's hover text: in Edited mode what the switch and the
+    /// pin say and why the bars propose what they do, in Viewed mode why the
+    /// bars give the row the verdict they do.
     pub keep_hover: String,
+    /// The *Verdict* cell as printed, `in`, `out` or `-`, in Viewed mode;
+    /// `None` in Edited mode, which draws a switch there.
+    pub verdict_text: Option<String>,
+    /// The colour the verdict cell was tinted, or `None` for an untinted one.
+    pub tint: Option<egui::Color32>,
+    /// The line the crop's hover view adds under the picture: the pixel and
+    /// the feature index. `None` where no crop was drawn.
+    pub crop_caption: Option<String>,
     /// The five measurement cells, as printed, a cell with two readings
     /// holding them on two lines.
     pub cells: [String; 5],
@@ -181,13 +198,19 @@ impl ColumnLayout {
         self.keep
     }
 
-    /// The header's cells, each at the offset its column is drawn at, with the
-    /// hover text that says what the column holds.
-    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 11] {
-        [
+    /// The header's cells for `mode`, each at the offset its column is drawn
+    /// at, with the hover text that says what the column holds: *Keep* and
+    /// *From* in Edited mode, *Verdict* in *Keep*'s place and no *From* in
+    /// Viewed mode.
+    pub(super) fn headers(&self, mode: BodyMode) -> Vec<(f32, &'static str, &'static str)> {
+        let verdict = match mode {
+            BodyMode::Edited => (self.keep, "Keep", KEEP_TIP),
+            BodyMode::Viewed => (self.keep, "Verdict", VERDICT_TIP),
+        };
+        let mut headers = vec![
             (self.crop, "Crop", CROP_TIP),
             (self.tile, "Patch", PATCH_TIP),
-            (self.keep, "Keep", KEEP_TIP),
+            verdict,
             (
                 self.image,
                 "Img",
@@ -199,10 +222,22 @@ impl ColumnLayout {
             (self.self_similarity, "Self-similarity", SELF_SIMILARITY_TIP),
             (self.shift, "Shift", SHIFT_TIP),
             (self.status, "Status", STATUS_TIP),
-            (self.from, "From", FROM_TIP),
-        ]
+        ];
+        if mode == BodyMode::Edited {
+            headers.push((self.from, "From", FROM_TIP));
+        }
+        headers
     }
 }
+
+/// The *Verdict* heading's hover text, in Viewed mode.
+pub(super) const VERDICT_TIP: &str = "What the thresholds say about the observation: in where \
+    it clears every bar and holds its image, out where it does not, and - where nothing has \
+    measured it yet. It is the verdict the bench's own evaluation would give the row once the \
+    point is on the bench and the row unpinned.\n\n\
+    Every observation of a committed point is in its track, and nothing here changes that: \
+    the threshold boxes recolour this column and the readings. Tick Edit to work on the \
+    track. Hover a cell for the reason.";
 
 /// The *Keep* heading's hover text.
 pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A kept observation \
@@ -224,8 +259,8 @@ pub(super) const CROP_TIP: &str = "The photograph itself around the patch's outl
     It shows how the lens and the view bend the patch, which the square patch beside it \
     hides.\n\n\
     Hover a crop to see it in three times its width of the photograph, with a dot where the \
-    observation sits, a ring where the track's point projects, and the patch's two axes in \
-    the photograph's pixels.";
+    observation sits, a ring where the track's point projects, the patch's two axes in the \
+    photograph's pixels, and the pixel the observation sits at with its feature index.";
 
 /// The *Patch* heading's hover text.
 pub(super) const PATCH_TIP: &str = "The patch as this photograph sees it, warped square: at \
@@ -369,6 +404,45 @@ fn keep_switch(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, kept: bool) ->
     response
 }
 
+/// A row's *Verdict* cell, in Viewed mode: the word `in` or `out` for the
+/// verdict the read-only bars give the row, or `-` where nothing has measured
+/// it, in the cell the caller has tinted. The cell takes the pointer for its
+/// hover text and no click, so a click on it is still the row's. Returns the
+/// hover text and the word.
+fn draw_verdict(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    cols: &ColumnLayout,
+    observation: usize,
+    judged: Option<&Judgement>,
+    image: u32,
+) -> (String, String) {
+    let cell = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x + cols.keep, rect.min.y),
+        egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
+    );
+    let text = match judged.map(|j| j.proposal) {
+        Some(Verdict::In) => "in",
+        Some(Verdict::Out) => "out",
+        None => "-",
+    };
+    ui.painter().text(
+        egui::pos2(cell.min.x + 6.0, cell.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    let hover = proposal_reason(judged, image);
+    ui.interact(
+        cell,
+        ui.id().with(("track_view_verdict", observation)),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(&hover);
+    (hover, text.to_string())
+}
+
 /// The pin beside a row's *Keep* switch, filling `rect`: a pushpin drawn solid
 /// when the verdict was set by hand and as a faint outline when the thresholds
 /// set it. The whole of `rect` takes the click. Returns the click's response.
@@ -484,7 +558,10 @@ fn check_color(visuals: &egui::Visuals, check: BarCheck, plain: egui::Color32) -
 
 /// The tint of a row's *Keep* cell by what the bars propose for the row, or
 /// `None` for a row they propose nothing for.
-fn proposal_tint(visuals: &egui::Visuals, proposal: Option<Verdict>) -> Option<egui::Color32> {
+pub(super) fn proposal_tint(
+    visuals: &egui::Visuals,
+    proposal: Option<Verdict>,
+) -> Option<egui::Color32> {
     Some(match (proposal?, visuals.dark_mode) {
         (Verdict::In, true) => egui::Color32::from_rgb(34, 78, 44),
         (Verdict::Out, true) => egui::Color32::from_rgb(88, 40, 40),
@@ -586,7 +663,7 @@ fn heading_pin(
     clicked
 }
 
-impl TrackEdit {
+impl TrackBody {
     /// Draw the observation table and record what it drew.
     pub(super) fn show_table(
         &mut self,
@@ -595,20 +672,23 @@ impl TrackEdit {
         id: ReconId,
         state: &AppState,
         track: &EditableTrack,
-        response: &mut TrackEditResponse,
+        response: &mut TrackBodyResponse,
     ) {
         let cols = ColumnLayout::new();
         let stage = track.stage_kind();
+        let mode = self.mode().unwrap_or(BodyMode::Viewed);
         let hovered = state
             .hovered_image
             .filter(|i| i.recon == id)
             .map(ImageRef::index);
-        let label = self
-            .showing
-            .as_ref()
-            .map(|(_, label)| label.clone())
-            .unwrap_or_default();
-        let selected = state.selected_bench_observations(id, &label);
+        // Only a bench track has selected rows: the viewed track has no row
+        // selection, since there is no step it could be taken to.
+        let selected: &[usize] = match (mode, self.showing.as_ref()) {
+            (BodyMode::Edited, Some(showing)) => {
+                state.selected_bench_observations(id, &showing.label)
+            }
+            _ => &[],
+        };
         self.rows.clear();
 
         // Above the scroll area, not inside it: at the bottom of a long track
@@ -623,6 +703,7 @@ impl TrackEdit {
         if draw_header(
             ui,
             &cols,
+            mode,
             pinned.len(),
             rows,
             state.busy_refusal(id).as_deref(),
@@ -648,6 +729,7 @@ impl TrackEdit {
                     track,
                     observation,
                     stage,
+                    mode,
                     hovered,
                     selected,
                     &cols,
@@ -658,78 +740,28 @@ impl TrackEdit {
         self.scroll_offset_y = Some(output.state.offset.y);
     }
 
-    /// One observation: its painting, its verdict control, its tile and its
-    /// cells.
+    /// The row's own menu, in Edited mode: what a search runs *from* is one
+    /// observation, so the gesture is on the row rather than in the toolbar,
+    /// exactly as the two gestures that name a pixel are in the Image Detail
+    /// menu rather than here. Registered on the row's rect, so a right-click
+    /// anywhere in it opens the menu for that observation.
     #[allow(clippy::too_many_arguments)]
-    fn draw_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        recon: &SfmrReconstruction,
-        id: ReconId,
+    fn row_menu(
+        &self,
+        row_response: &egui::Response,
         state: &AppState,
+        id: ReconId,
         track: &EditableTrack,
         observation: usize,
         stage: StageKind,
-        hovered: Option<usize>,
         selected: &[usize],
-        cols: &ColumnLayout,
-        response: &mut TrackEditResponse,
+        response: &mut TrackBodyResponse,
     ) {
         let row = &track.observations[observation];
-        let image = ImageRef::new(id, row.image as usize);
-        let judged = self.judged.get(observation).copied().flatten();
-        let proposal = judged.map(|j| j.proposal);
-        let cells = measurements(row, stage, &self.evaluation);
-        let checks = cell_checks(judged.as_ref(), &self.evaluation);
-        let grids = row_grids(row, stage, &self.evaluation);
-        let name = recon
-            .image_table
-            .images
-            .get(image.index())
-            .map(|im| im.name.clone())
-            .unwrap_or_else(|| format!("#{}", row.image));
-
-        let available = ui.available_rect_before_wrap();
-        let rect =
-            egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
-        let row_response = ui.allocate_rect(rect, egui::Sense::click());
-
-        // The *Keep* cell's tint first, then the selection and the hover over
-        // the whole row: what the bars propose is a property of the numbers,
-        // and which row the pointer or the split is on is a property of this
-        // frame. Only the *Keep* cell is tinted, so the switch in it reads as
-        // the person's decision set against the bars' proposal.
-        let visuals = ui.visuals();
-        let keep_cell = egui::Rect::from_min_max(
-            egui::pos2(rect.min.x + cols.keep, rect.min.y),
-            egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
-        );
-        if let Some(tint) = proposal_tint(visuals, proposal) {
-            ui.painter().rect_filled(keep_cell, 0.0, tint);
-        }
-        if selected.contains(&observation) {
-            ui.painter()
-                .rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.45));
-        }
-        if row_response.hovered() || hovered == Some(image.index()) {
-            ui.painter().rect_filled(
-                rect,
-                0.0,
-                visuals.widgets.hovered.bg_fill.gamma_multiply(0.4),
-            );
-        }
-        if row_response.hovered() {
-            response.hovered_image = Some(image.index());
-        }
-        // The row's own menu: what a search runs *from* is one observation, so
-        // the gesture is on the row rather than in the toolbar, exactly as the
-        // two gestures that name a pixel are in the Image Detail menu rather
-        // than here. Registered on the row's rect, so a right-click anywhere in
-        // it opens the menu for that observation.
         let label = self
             .showing
             .as_ref()
-            .map(|(_, label)| label.clone())
+            .map(|showing| showing.label.clone())
             .unwrap_or_default();
         // When the node's index is absent or out of date the entry itself is
         // the remedy: a person who finds the search greyed has no reason to
@@ -760,7 +792,7 @@ impl TrackEdit {
             };
             (UNPIN_LABEL.to_string(), rows, NOT_PINNED)
         };
-        crate::context_menu::on_secondary_click(&row_response).show(|ui| {
+        crate::context_menu::on_secondary_click(row_response).show(|ui| {
             if unpin_entry(ui, &unpin_label, !unpin_rows.is_empty(), why_not) {
                 response.unpin_verdicts = Some(unpin_rows.clone());
                 ui.close();
@@ -862,31 +894,24 @@ impl TrackEdit {
                 }
             }
         });
+    }
 
-        if row_response.clicked() {
-            response.select_image = Some(image.index());
-            // With the image, where in it this observation sits, so the Image
-            // Detail panel can bring it into view: the same position its bench
-            // layer draws the mark at.
-            response.reveal_feature = crate::bench::observation_pixel(row);
-            let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
-            response.pick_row = Some((observation, extend));
-        }
-        // Camera view for the row's image, as a view-mode row's double-click
-        // enters it: the rows of both modes are observations of one track.
-        // The observation goes with it, so the view turns to show it.
-        if row_response.double_clicked() {
-            response.request_camera_view = Some(image.index());
-            response.reveal_feature = crate::bench::observation_pixel(row);
-        }
-
+    /// A row's *Keep* switch and its pin, in Edited mode, registered after the
+    /// row so they take the clicks that land on them, each over the whole
+    /// height of the row: a two-state decision is one switch, and a cell-sized
+    /// target is easy to hit. Returns the switch's hover text.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_keep(
+        &self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        cols: &ColumnLayout,
+        row: &sfmtool_core::bench::Observation,
+        observation: usize,
+        judged: Option<&Judgement>,
+        response: &mut TrackBodyResponse,
+    ) -> String {
         let x0 = rect.min.x;
-        let cy = rect.center().y;
-
-        // The *Keep* switch and its pin, registered after the row so they
-        // take the clicks that land on them, each over the whole height of the
-        // row: a two-state decision is one switch, and a cell-sized target is
-        // easy to hit.
         let keep_rect = egui::Rect::from_min_size(
             egui::pos2(x0 + cols.keep, rect.min.y),
             egui::vec2(SWITCH_CELL_WIDTH, ROW_HEIGHT),
@@ -928,8 +953,132 @@ impl TrackEdit {
                 ui.close();
             }
         });
-        let keep_hover = keep_hover(kept, row.pinned, judged.as_ref(), row.image);
-        keep.on_hover_text(&keep_hover);
+        let hover = keep_hover(kept, row.pinned, judged, row.image);
+        keep.on_hover_text(&hover);
+        hover
+    }
+
+    /// One observation: its painting, its verdict control, its tile and its
+    /// cells.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        recon: &SfmrReconstruction,
+        id: ReconId,
+        state: &AppState,
+        track: &EditableTrack,
+        observation: usize,
+        stage: StageKind,
+        mode: BodyMode,
+        hovered: Option<usize>,
+        selected: &[usize],
+        cols: &ColumnLayout,
+        response: &mut TrackBodyResponse,
+    ) {
+        let edited = mode == BodyMode::Edited;
+        let row = &track.observations[observation];
+        let image = ImageRef::new(id, row.image as usize);
+        let judged = self.judged.get(observation).copied().flatten();
+        // A viewed track that cannot be evaluated prints no reading, and its
+        // *Verdict* cells say nothing either: what the bars would give a row
+        // is a statement about its readings.
+        let refused = matches!(
+            self.evaluation,
+            crate::bench::live::Evaluation::Refused(_) | crate::bench::live::Evaluation::Failed(_)
+        );
+        let judged = judged.filter(|_| edited || !refused);
+        let proposal = judged.map(|j| j.proposal);
+        let cells = measurements(row, stage, &self.evaluation);
+        let checks = cell_checks(judged.as_ref(), &self.evaluation);
+        let grids = row_grids(row, stage, &self.evaluation);
+        let name = recon
+            .image_table
+            .images
+            .get(image.index())
+            .map(|im| im.name.clone())
+            .unwrap_or_else(|| format!("#{}", row.image));
+
+        let available = ui.available_rect_before_wrap();
+        let rect =
+            egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
+        let row_response = ui.allocate_rect(rect, egui::Sense::click());
+
+        // The verdict cell's tint first, then the selection and the hover
+        // over the whole row: what the bars propose is a property of the
+        // numbers, and which row the pointer or the split is on is a property
+        // of this frame. Only the verdict cell is tinted, so a *Keep* switch
+        // in it reads as the person's decision set against the bars' proposal.
+        let visuals = ui.visuals();
+        let keep_cell = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + cols.keep, rect.min.y),
+            egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
+        );
+        let tint = proposal_tint(visuals, proposal);
+        if let Some(tint) = tint {
+            ui.painter().rect_filled(keep_cell, 0.0, tint);
+        }
+        if selected.contains(&observation) {
+            ui.painter()
+                .rect_filled(rect, 0.0, visuals.selection.bg_fill.gamma_multiply(0.45));
+        }
+        if row_response.hovered() || hovered == Some(image.index()) {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                visuals.widgets.hovered.bg_fill.gamma_multiply(0.4),
+            );
+        }
+        if row_response.hovered() {
+            response.hovered_image = Some(image.index());
+        }
+        // The row's own menu, in Edited mode only: every entry in it is a
+        // step on the track.
+        if edited {
+            self.row_menu(
+                &row_response,
+                state,
+                id,
+                track,
+                observation,
+                stage,
+                selected,
+                response,
+            );
+        }
+
+        if row_response.clicked() {
+            response.select_image = Some(image.index());
+            // With the image, where in it this observation sits, so the Image
+            // Detail panel can bring it into view: the same position its bench
+            // layer draws the mark at.
+            response.reveal_feature = crate::bench::observation_pixel(row);
+            // Only a bench track has a row selection, which *Split* reads.
+            if edited {
+                let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                response.pick_row = Some((observation, extend));
+            }
+        }
+        // Camera view for the row's image, in either mode. The observation
+        // goes with it, so the view turns to show it.
+        if row_response.double_clicked() {
+            response.request_camera_view = Some(image.index());
+            response.reveal_feature = crate::bench::observation_pixel(row);
+        }
+
+        let x0 = rect.min.x;
+        let cy = rect.center().y;
+
+        let (keep_hover, verdict_text) = if edited {
+            (
+                self.draw_keep(ui, rect, cols, row, observation, judged.as_ref(), response),
+                None,
+            )
+        } else {
+            let (hover, text) =
+                draw_verdict(ui, rect, cols, observation, judged.as_ref(), row.image);
+            (hover, Some(text))
+        };
 
         // The tile: rendered once per observation and kept until the track or
         // the item moves, because a warp per row per frame is a warp per row
@@ -991,6 +1140,14 @@ impl TrackEdit {
             }
             None => false,
         };
+        // The pixel and the feature index, under the hover view's own caption.
+        let crop_caption = if cropped {
+            let origin = self.showing.as_ref().and_then(|showing| showing.origin);
+            crate::scene::node_by_id(&state.scene, id)
+                .and_then(|node| super::crop_caption(node.edited(), origin, row))
+        } else {
+            None
+        };
         if cropped {
             ui.interact(
                 crop_rect,
@@ -1003,6 +1160,9 @@ impl TrackEdit {
                     None => {
                         ui.label("Nothing around this crop could be rendered.");
                     }
+                }
+                if let Some(caption) = &crop_caption {
+                    ui.label(caption);
                 }
             });
         }
@@ -1096,7 +1256,9 @@ impl TrackEdit {
             })
         });
         text(cols.status, &status, text_color);
-        text(cols.from, &provenance_text(row.provenance), weak);
+        if edited {
+            text(cols.from, &provenance_text(row.provenance), weak);
+        }
 
         // The two grids, faded with the numbers while an evaluation is on its
         // way. Each is laid out as the tile is, so a cell sits over the part
@@ -1173,6 +1335,9 @@ impl TrackEdit {
             pinned: row.pinned,
             proposal,
             keep_hover,
+            verdict_text,
+            tint,
+            crop_caption,
             cells,
             checks,
             grids,
@@ -1319,7 +1484,7 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
 /// The header row, at the same offsets the rows draw at, drawn once above the
 /// scroll area so it stays put while the rows move under it.
 ///
-/// The *Keep* heading carries a pin over the rows' pin column, which unpins
+/// In Edited mode the *Keep* heading carries a pin over the rows' pin column, which unpins
 /// every pinned verdict of the track, or pins every verdict as it stands when
 /// none is pinned; `pinned` is how many are pinned, `rows` how many
 /// observations the track has and `busy` the node's busy refusal. Returns
@@ -1327,6 +1492,7 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
 fn draw_header(
     ui: &mut egui::Ui,
     cols: &ColumnLayout,
+    mode: BodyMode,
     pinned: usize,
     rows: usize,
     busy: Option<&str>,
@@ -1339,7 +1505,7 @@ fn draw_header(
     ui.allocate_rect(rect, egui::Sense::hover());
     let font = egui::TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().weak_text_color();
-    let headers = cols.headers();
+    let headers = cols.headers(mode);
     for (k, &(x, label, tip)) in headers.iter().enumerate() {
         ui.painter().text(
             egui::pos2(rect.min.x + x, rect.center().y),
@@ -1360,6 +1526,9 @@ fn draw_header(
             egui::Sense::hover(),
         )
         .on_hover_text(tip);
+    }
+    if mode != BodyMode::Edited {
+        return false;
     }
     // After the headings, so it takes the pointer over its own few points.
     let pin_rect = egui::Rect::from_min_max(

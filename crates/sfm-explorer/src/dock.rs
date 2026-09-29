@@ -21,7 +21,7 @@ use crate::platform;
 use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
-use crate::track_view::TrackView;
+use crate::track_view::{TrackBodyResponse, TrackView};
 use crate::viewer_3d::Viewer3D;
 
 #[cfg(test)]
@@ -37,7 +37,7 @@ pub(crate) enum Tab {
     Viewer3D,
     ImageBrowser,
     ImageDetail,
-    /// The selected point's committed track, or the focused item
+    /// The selected point read as a track, or the focused item
     /// while its *Edit* box is ticked. See [`crate::track_view`].
     TrackView,
     IntrinsicsDetail,
@@ -301,7 +301,7 @@ impl TabContext<'_> {
         }
     }
 
-    /// Apply what Track View's edit mode asked for: each step on the focused
+    /// Apply what Track View asked for in Edited mode: each step on the focused
     /// item.
     ///
     /// Applied here rather than in the panel for the reason the Edit History
@@ -312,7 +312,7 @@ impl TabContext<'_> {
         &mut self,
         ui: &egui::Ui,
         id: ReconId,
-        response: crate::track_view::TrackEditResponse,
+        response: TrackBodyResponse,
     ) {
         if response.build_index_files {
             // A refusal to begin is logged by the starter, in the words its own
@@ -422,7 +422,7 @@ impl TabContext<'_> {
             self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
         }
         // After the steps, because ending a held camera move needs the state
-        // mutably, as it does for a view-mode row. The row's observation comes
+        // mutably, as it does for a Viewed-mode row. The row's observation comes
         // with it, so the view turns to show where that observation is.
         if let Some(image) = response.request_camera_view {
             self.look_through_toward(ui, ImageRef::new(id, image), response.reveal_feature);
@@ -595,7 +595,7 @@ impl TabContext<'_> {
     /// Decode the photographs the focused bench track's rows draw their tiles
     /// from, into the node's shared full-resolution cache.
     ///
-    /// Here rather than in the panel for the reason view mode's pre-cache is
+    /// Here rather than in the panel for the reason the viewed track's pre-cache is
     /// here: filling the cache needs `&mut AppState` and
     /// the panel is handed `&AppState` while it draws. The images are the ones
     /// that track's observations name, each decoded once for the whole viewer.
@@ -834,7 +834,7 @@ impl TabContext<'_> {
                 }
             }
             // A click on one of the bench layer's marks selects that row in
-            // Track View's edit mode, which is the same gesture as clicking the row
+            // Track View's Edited mode, which is the same gesture as clicking the row
             // there: the mark and the row are one observation.
             if let Some(observation) = detail_response.select_bench_row {
                 if let Some(label) = &bench_label {
@@ -857,15 +857,15 @@ impl TabContext<'_> {
         }
     }
 
-    /// The Track View tab: the Edit box, and whichever of the two bodies it
-    /// says is on screen, with each gesture applied after the draw.
+    /// The Track View tab: the Edit box and the body in whichever mode the box
+    /// says, with each gesture applied after the draw.
     fn show_track_view(&mut self, ui: &mut egui::Ui) {
-        self.cache_track_view_images();
         // The viewed track, built or taken from its cache here because the
         // panel is handed `&AppState`. With an item focused there is none. The
         // frame cleared it before the dock drew, so a frame that does not draw
         // this tab leaves none (`crate::bench::viewed`).
         self.state.refresh_viewed_track();
+        self.cache_track_view_images();
         // The node's index files, opened on sight in either mode: a `.kdf`
         // opens without decoding a tree or a descriptor block and the
         // cluster-patches file is read for its image table alone, so a session
@@ -875,9 +875,7 @@ impl TabContext<'_> {
         if let Some(id) = self.state.selected_recon {
             self.state.refresh_index_files(id);
         }
-        let response = self
-            .track_view
-            .show(ui, self.state, self.gesture_events, self.scroll_input);
+        let response = self.track_view.show(ui, self.state);
         let Some(id) = self.state.selected_recon else {
             return;
         };
@@ -889,16 +887,23 @@ impl TabContext<'_> {
                 self.state.action_log.fail(Kind::Bench, why);
             }
         }
-        if let Some(view) = response.view {
-            self.apply_point_track_view_response(ui, id, view);
-        }
-        if let Some(edit) = response.edit {
-            self.apply_track_edit_response(ui, id, edit);
+        let Some(body) = response.body else {
+            return;
+        };
+        match body.mode {
+            Some(crate::track_view::BodyMode::Edited) => {
+                self.apply_track_edit_response(ui, id, body)
+            }
+            // The viewed track, or the empty state in its place: the same
+            // selection, hover and dialog gestures and nothing that steps.
+            Some(crate::track_view::BodyMode::Viewed) | None => {
+                self.apply_viewed_response(ui, id, body)
+            }
         }
     }
 
-    /// Decode what the mode Track View is about to draw reads from: in view
-    /// mode the selected point's `.sift` positions and photographs, in edit
+    /// Decode what the mode Track View is about to draw reads from: in Viewed
+    /// mode the selected point's `.sift` positions and photographs, in Edited
     /// mode the focused item's photographs.
     ///
     /// Here rather than in the panel because filling the caches needs
@@ -915,9 +920,12 @@ impl TabContext<'_> {
         }
     }
 
-    /// Decode what view mode's rows draw for the selected point: the `.sift`
-    /// positions of every observing image and, where the reconstruction carries
-    /// patch frames, the full-resolution photographs its tiles are warped from.
+    /// Decode what the viewed track reads for the selected point: the `.sift`
+    /// positions of every observing image and, where the reconstruction
+    /// carries patch frames, the full-resolution photographs its tiles and
+    /// crops are cut from and its evaluation reads. A frameless point is
+    /// refused by the evaluation and draws no tile, so its photographs are not
+    /// decoded.
     fn cache_selected_point_images(&mut self, id: ReconId) {
         let Some(node) = crate::scene::node_by_id(&self.state.scene, id) else {
             return;
@@ -944,10 +952,6 @@ impl TabContext<'_> {
                 );
             }
         }
-        // Pre-cache full-res images for every observing image of the selected
-        // point so the body can render per-observation patch tiles from an
-        // immutable cache reference. Only needed when the recon carries patch
-        // frames (the tiles are gated on them).
         if recon.point_set.patch_u_halfvec_xyz.is_some() {
             for img_idx in node.edited().track_image_indices(pt_idx as u32) {
                 crate::state::ensure_full_res_cached(
@@ -959,32 +963,33 @@ impl TabContext<'_> {
         }
     }
 
-    /// Apply what Track View's view mode asked for: the image selection and
-    /// the camera view its rows report, the hover, and the Go to Point dialog.
-    fn apply_point_track_view_response(
-        &mut self,
-        ui: &egui::Ui,
-        id: ReconId,
-        track_response: crate::track_view::PointTrackViewResponse,
-    ) {
-        let new_selection = track_response
+    /// Apply what Track View asked for in Viewed mode or from its empty state:
+    /// the image selection and the camera view its rows report, the hover,
+    /// the Go to Point dialog, and the read-only bars its boxes moved.
+    fn apply_viewed_response(&mut self, ui: &egui::Ui, id: ReconId, response: TrackBodyResponse) {
+        let new_selection = response
             .select_image
-            .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
-        let requested_view = track_response
+            .map(|img_idx| (ImageRef::new(id, img_idx), response.reveal_feature));
+        let requested_view = response
             .request_camera_view
-            .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
-        if track_response.has_pointer {
+            .map(|img_idx| (ImageRef::new(id, img_idx), response.reveal_feature));
+        if response.has_pointer {
             // Track View owns hover state when it has the pointer.
-            self.state.hovered_image = track_response.hovered_image.map(|i| ImageRef::new(id, i));
-            // Clear point hover from other panels since view mode doesn't
-            // produce hovered_point.
+            self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
+            // Clear point hover from other panels, since the panel produces
+            // no hovered point.
             self.state.hovered_point = None;
         }
-        if track_response.request_goto_point {
+        if response.request_goto_point {
             self.state.open_goto_point();
         }
-        // The row names an observation, so the selection carries the feature's
-        // pixel with it and the Image Detail panel brings it into view when the
+        // No version, no row: the bars judge the viewed track's readings and
+        // nothing else.
+        if let Some(bars) = response.viewed_thresholds {
+            self.state.set_viewed_thresholds(bars);
+        }
+        // The row names an observation, so the selection carries its pixel
+        // with it and the Image Detail panel brings it into view when the
         // image arrives zoomed in on somewhere else.
         if let Some((image, pixel)) = new_selection {
             match pixel {
@@ -993,7 +998,8 @@ impl TabContext<'_> {
             }
         }
         // Last, because ending a held camera move needs the state mutably. The
-        // row's feature comes with the image, so the view turns to show it.
+        // row's observation comes with the image, so the view turns to show
+        // it.
         if let Some((image, feature)) = requested_view {
             self.look_through_toward(ui, image, feature);
         }

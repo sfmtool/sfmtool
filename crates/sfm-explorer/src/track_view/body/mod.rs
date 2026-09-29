@@ -1,45 +1,61 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Track View's edit mode: the focused item, and the steps that act on
-//! it.
+//! Track View's body: one track, drawn in one of two modes.
 //!
-//! See `specs/gui/track-view.md`. This body is drawn while Track View's *Edit*
-//! box is ticked, which is while the selected node's bench ([`crate::bench`])
-//! has the focused item, and every gesture in it names that track. It shows
-//! the focused item and nothing else on the bench: the bench as a list is the Scene
-//! tree's. The table carries view mode's columns first, so a reader who knows
-//! one reads the other.
+//! See `specs/gui/track-view.md`. The body draws an `EditableTrack` with a
+//! header, a toolbar, the threshold boxes and a table of its observations, in
+//! one of two modes ([`BodyMode`]):
 //!
-//! The body decides nothing. Each gesture lands in [`TrackEditResponse`] and
+//! - **Viewed**, while Track View's *Edit* box is clear: the viewed track
+//!   ([`crate::bench::viewed`]), the selected point read as an editable track
+//!   and held off every bench. Nothing about it can be changed. The header
+//!   carries the point's own summary, the toolbar only where its evaluation
+//!   stands, the boxes judge the readings by the session's read-only bars, and
+//!   the *Keep* column is a *Verdict* column saying what those bars give each
+//!   row.
+//! - **Edited**, while the box is ticked: the focused item on the selected
+//!   node's bench ([`crate::bench`]), with every step that acts on it.
+//!
+//! Every column, tile, crop and reading is drawn the same way in both modes,
+//! so a committed point and its copy on the bench are read in one layout with
+//! one set of numbers. The differences are branches on the mode.
+//!
+//! The body decides nothing. Each gesture lands in [`TrackBodyResponse`] and
 //! the dock applies it through the `AppState` method that pushes the version,
-//! for the reason every other panel's response works that way: the panel holds
-//! `&AppState` while it draws, and a step needs it mutably.
+//! or in Viewed mode moves the selection, for the reason every other panel's
+//! response works that way: the panel holds `&AppState` while it draws, and a
+//! step needs it mutably.
 //!
-//! Almost no state lives here. The bench is the node's, at its cursor, so what
-//! the panel owns is the threshold boxes' values during a drag, the *Lock* box Image Detail reads a
-//! dot drag by, the tiles it has rendered and their hover views, and the
-//! judgement the boxes produce. The last two are cached against the
+//! Almost no state lives here. The bench is the node's, at its cursor, and the
+//! viewed track and its bars are `AppState`'s, so what the panel owns is the
+//! threshold boxes' values during a drag, the *Lock* box Image Detail reads a
+//! dot drag by, the tiles it has rendered and their hover views, the header's
+//! summary, and the judgement the boxes produce. These are cached against the
 //! track's own `Arc` rather than recomputed per frame, because the judgement is
 //! `verdicts_if_unpinned` run over a copy (and a copy of a track carries its
 //! consensus bitmap) and a tile is a warp of a full-resolution photograph.
 //! The row selection is not the panel's: it is the bench's, in
-//! `AppState::bench_rows`, and a row click reports through
-//! [`TrackEditResponse::pick_row`].
+//! `AppState::bench_rows`, and a row click in Edited mode reports through
+//! [`TrackBodyResponse::pick_row`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sfmtool_core::bench::{
-    bar_checks, verdicts_if_unpinned, BarChecks, EditableTrack, Observation, Provenance, StageKind,
-    Thresholds, Verdict,
+    bar_checks, verdicts_if_unpinned, BarChecks, EditableTrack, Observation, Provenance, Stage,
+    StageKind, Thresholds, Verdict,
 };
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::{EditedReconstruction, Point3D, SfmrReconstruction};
 
 use crate::bench::live::Evaluation;
-use crate::scene::{ImageRef, ReconId, SceneNode};
+use crate::bench::viewed::ViewedTrack;
+use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
+use crate::track_view::EDIT_LABEL;
 
 mod crop;
+mod patch;
 mod surface_plot;
 mod table;
 mod tile;
@@ -49,13 +65,78 @@ mod tests;
 
 pub(crate) use table::RowSummary;
 
-/// What one frame of the panel asks the dock to do.
+/// Display size of the track's own patch, left of the toolbar.
+const STORED_PATCH_SIZE: f32 = 64.0;
+
+/// Which of the two ways the body draws a track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum BodyMode {
+    /// The viewed track: the selected point, read-only. *Edit* is clear.
+    Viewed,
+    /// The focused item on the bench, with the steps that act on it. *Edit*
+    /// is ticked.
+    Edited,
+}
+
+/// What the body is drawing: the node, the mode, the track's label, and the
+/// point the track was read from where that point is live at the cursor.
+#[derive(Debug, Clone, PartialEq)]
+struct Showing {
+    node: ReconId,
+    mode: BodyMode,
+    label: String,
+    /// The origin followed to the cursor, which is the viewed point itself in
+    /// Viewed mode: what the crop's hover caption reads a feature index
+    /// through.
+    origin: Option<u32>,
+}
+
+/// The whole-track numbers the header prints beside the label: the error, the
+/// track's length and the triangulation diagnostics, and for the viewed track
+/// the point's own record, whose colour and homogeneous coordinates the header
+/// shows.
+#[derive(Debug, Clone, PartialEq)]
+struct HeaderSummary {
+    /// The point's stored record, for the viewed track only.
+    point: Option<Point3D>,
+    /// The reprojection error in pixels: the point's stored RMS error for the
+    /// viewed track, the RMS of the kept rows' measured errors for a bench
+    /// track. `None` where nothing has measured one.
+    error_px: Option<f64>,
+    /// How many observations the track keeps.
+    track_length: usize,
+    /// Whether the track is a direction rather than a place.
+    at_infinity: bool,
+    /// The largest angle between two observing rays, in degrees: `0` for a
+    /// point at infinity or a single ray.
+    max_angle_deg: f32,
+    /// Inverse-depth z-score (`depth / σ_depth`); NaN when undefined.
+    depth_z: f32,
+    /// Condition number of the triangulation's normal matrix; NaN when
+    /// undefined.
+    condition: f32,
+}
+
+/// What a [`HeaderSummary`] was computed from: the mode, the node, the label,
+/// the address of the track's `Arc` (zero for the viewed track, whose summary
+/// reads the point and not the track) and the serial it was read at (the
+/// document serial for the viewed track, the version serial for a bench one).
+type SummaryKey = (BodyMode, ReconId, String, usize, u64);
+
+/// What one frame of the body asks the dock to do.
 ///
 /// Every field is one gesture, and at most one of them is set on a frame: the
 /// entries that push a version are buttons and box releases, and each is
-/// made once.
+/// made once. In Viewed mode only the selection and hover fields,
+/// `request_goto_point` and `viewed_thresholds` are ever set.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct TrackEditResponse {
+pub struct TrackBodyResponse {
+    /// The mode the body drew in, or `None` when it drew no track.
+    pub mode: Option<BodyMode>,
+    /// Viewed mode: a threshold box moved, carrying the read-only bars the
+    /// boxes now stand at, for `AppState::set_viewed_thresholds`. Set on every
+    /// frame of a drag, since the bars change nothing but what is drawn.
+    pub viewed_thresholds: Option<Thresholds>,
     /// The toolbar's *Discard*.
     pub discard: Option<String>,
     /// *Rename* was committed: the item, and the label it should take.
@@ -101,12 +182,12 @@ pub struct TrackEditResponse {
     /// Verdicts pinned as they stand in one step: the *Keep* heading's pin
     /// when no row is pinned, which names every row.
     pub pin_verdicts: Option<Vec<usize>>,
-    /// The header's go-to button: open the *Go to Point* dialog.
+    /// The header's go-to button, or the empty state's *Go to Point...*: open
+    /// the *Go to Point* dialog.
     pub request_goto_point: bool,
-    /// A row was clicked -- select this image, as a view-mode row does.
+    /// A row was clicked -- select this image.
     pub select_image: Option<usize>,
-    /// A row was double-clicked -- enter camera view for this image, as a
-    /// view-mode row's double-click does.
+    /// A row was double-clicked -- enter camera view for this image.
     pub request_camera_view: Option<usize>,
     /// The clicked row's observation, in that image's own pixels: the place the
     /// Image Detail panel is asked to bring into view along with the image.
@@ -118,33 +199,39 @@ pub struct TrackEditResponse {
     pub has_pointer: bool,
 }
 
-/// Track View's edit-mode state.
-pub struct TrackEdit {
+/// Track View's body state.
+pub struct TrackBody {
     /// Where the threshold boxes stand.
     ///
-    /// The **focused item's own bars**, copied from it on every frame no box
-    /// is being dragged, so an undo, a redo, a step over the wire or a change
-    /// of focused item moves the boxes with it. Only during a drag does this
-    /// hold a value the track does not: the drag repaints the table live, and
-    /// its release applies the bars to the track as one version. The panel
-    /// therefore never holds bars a *Fit* would not use.
+    /// In Edited mode, the **focused item's own bars**, copied from it on
+    /// every frame no box is being dragged, so an undo, a redo, a step over
+    /// the wire or a change of focused item moves the boxes with it. Only
+    /// during a drag does this hold a value the track does not: the drag
+    /// repaints the table live, and its release applies the bars to the track
+    /// as one version. The panel therefore never holds bars a *Fit* would not
+    /// use.
+    ///
+    /// In Viewed mode, the session's read-only bars
+    /// (`AppState::viewed_thresholds`), copied from the state every frame; a
+    /// box that moves reports the new bars through
+    /// [`TrackBodyResponse::viewed_thresholds`].
     thresholds: Thresholds,
-    /// Whether a threshold box was being dragged on the last frame, which is
-    /// what keeps [`TrackEdit::thresholds`] from being reset to the track's bars
-    /// in the middle of the drag.
+    /// Whether a threshold box was being dragged on the last frame in Edited
+    /// mode, which is what keeps [`TrackBody::thresholds`] from being reset to
+    /// the track's bars in the middle of the drag.
     sliding: bool,
-    /// What the boxes say about each observation of the focused item, which
-    /// is what its readings and its *Keep* cell are coloured by: `None` for an
-    /// observation nothing at the track's stage has measured, which the bars
-    /// do not judge.
+    /// What the boxes say about each observation of the track drawn, which is
+    /// what its readings and its *Keep* or *Verdict* cell are coloured by:
+    /// `None` for an observation nothing at the track's stage has measured,
+    /// which the bars do not judge.
     judged: Vec<Option<Judgement>>,
-    /// The item, the exact track value and the bars [`TrackEdit::judged`] was
-    /// computed from: the label, the address of the track's `Arc`, and the
-    /// boxes. A step on the track gives it a new `Arc`, which is what says the
-    /// judgement is stale.
-    judged_for: Option<(String, usize, Thresholds)>,
+    /// The mode, the track's label, the address of its `Arc` and the bars
+    /// [`TrackBody::judged`] was computed from. A step on the track, or an
+    /// evaluation of the viewed track landing, gives it a new `Arc`, which is
+    /// what says the judgement is stale.
+    judged_for: Option<(BodyMode, String, usize, Thresholds)>,
     /// Why the focused item cannot be committed, or `None` when it can, as of
-    /// the value and the track [`TrackEdit::commit_refusal_for`] last asked.
+    /// the value and the track [`TrackBody::commit_refusal_for`] last asked.
     ///
     /// Cached rather than asked per frame: the question is
     /// `sfmtool_core::bench::commit` itself, asked of the very track the button
@@ -152,12 +239,16 @@ pub struct TrackEdit {
     /// builds a point record. It is stale exactly when the track's `Arc` or the
     /// node's version moves, which is what the key below holds.
     commit_refusal: Option<String>,
-    /// The item, the track's `Arc` and the version [`TrackEdit::commit_refusal`]
+    /// The item, the track's `Arc` and the version [`TrackBody::commit_refusal`]
     /// was asked at.
     commit_refusal_for: Option<(String, usize, u64)>,
-    /// The node and the item the panel last drew, which the row menus and the
-    /// tiles are read against.
-    showing: Option<(ReconId, String)>,
+    /// What the panel last drew, which the row menus, the tiles and the crop
+    /// captions are read against.
+    showing: Option<Showing>,
+    /// The header's summary, and what it was computed from. Computed once per
+    /// key rather than per frame, because the triangulation diagnostics
+    /// triangulate.
+    summary: Option<(SummaryKey, Option<HeaderSummary>)>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
     /// The rendered tile of each observation, by observation index.
@@ -166,28 +257,28 @@ pub struct TrackEdit {
     /// name one image and they are two pictures: at the cluster stage each has
     /// its own position and shape. A tile is a warp of a full-resolution
     /// photograph, so it is rendered once and kept; what says it is stale is
-    /// [`TrackEdit::tiles_for`].
+    /// [`TrackBody::tiles_for`].
     tiles: HashMap<usize, Option<egui::TextureHandle>>,
-    /// The item and the exact track value [`TrackEdit::tiles`] was rendered
+    /// The track and the exact track value [`TrackBody::tiles`] was rendered
     /// from: the label, and the address of the track's `Arc`. Any step on the
     /// track gives it a new `Arc`, and every step that moves a tile is one.
     tiles_for: Option<(String, usize)>,
     /// The hover view of each row's tile, by observation index: rendered the
     /// first time the pointer rests on that tile, and kept and dropped with
-    /// [`TrackEdit::tiles`], since it is the same picture made wider and goes
+    /// [`TrackBody::tiles`], since it is the same picture made wider and goes
     /// stale exactly when the tile does. `None` is cached as the tile's is.
     contexts: HashMap<usize, Option<tile::DrawnContext>>,
     /// The crop of each row's photograph around the patch's outline, by
-    /// observation index, kept and dropped with [`TrackEdit::tiles`]: it moves
+    /// observation index, kept and dropped with [`TrackBody::tiles`]: it moves
     /// exactly when the tile does. `None` is cached as the tile's is.
     crops: HashMap<usize, Option<crop::DrawnCrop>>,
     /// The hover view of each row's crop, rendered the first time the pointer
-    /// rests on that crop and dropped with [`TrackEdit::crops`].
+    /// rests on that crop and dropped with [`TrackBody::crops`].
     crop_contexts: HashMap<usize, Option<crop::DrawnCrop>>,
     /// The track's own patch drawn left of the toolbar, uploaded, or `None`
     /// until it has been asked for since the track moved. The inner `None` is
     /// a track with nothing to show, cached as the tile's is. Dropped with
-    /// [`TrackEdit::tiles`], since a step that moves the track gives it a new
+    /// [`TrackBody::tiles`], since a step that moves the track gives it a new
     /// `Arc`.
     track_patch: Option<Option<egui::TextureHandle>>,
     /// The self-similarity surface plot of each observation, by observation
@@ -210,7 +301,7 @@ pub struct TrackEdit {
     /// refusal is asked every frame, in front of this, because that one is free
     /// and does move.
     build_refusal: Option<(ReconId, Option<String>)>,
-    /// Where the focused item's evaluation stood when this frame drew it:
+    /// Where the drawn track's evaluation stood when this frame drew it:
     /// what the status at the head of the toolbar says, and how the rows print
     /// their numbers.
     evaluation: Evaluation,
@@ -229,13 +320,13 @@ pub struct TrackEdit {
     scroll_offset_y: Option<f32>,
 }
 
-impl Default for TrackEdit {
+impl Default for TrackBody {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TrackEdit {
+impl TrackBody {
     pub fn new() -> Self {
         Self {
             thresholds: Thresholds::default(),
@@ -245,6 +336,7 @@ impl TrackEdit {
             commit_refusal: None,
             commit_refusal_for: None,
             showing: None,
+            summary: None,
             renaming: None,
             tiles: HashMap::new(),
             tiles_for: None,
@@ -273,10 +365,19 @@ impl TrackEdit {
         &self.thresholds
     }
 
-    /// Where the focused item's evaluation stood when the panel last drew it.
+    /// Where the drawn track's evaluation stood when the panel last drew it.
     #[cfg(test)]
     pub(crate) fn evaluation(&self) -> &Evaluation {
         &self.evaluation
+    }
+
+    /// The header's summary as the panel last drew it, or `None` when the
+    /// track it drew has none (a cluster).
+    #[cfg(test)]
+    fn summary(&self) -> Option<&HeaderSummary> {
+        self.summary
+            .as_ref()
+            .and_then(|(_, summary)| summary.as_ref())
     }
 
     /// Whether the *Lock* box is ticked: a track-stage dot drag in Image Detail
@@ -298,9 +399,14 @@ impl TrackEdit {
         self.crops.clear();
         self.crop_contexts.clear();
         self.track_patch = None;
-        if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
+        if self
+            .showing
+            .as_ref()
+            .is_some_and(|showing| showing.node == id)
+        {
             self.showing = None;
         }
+        self.summary = None;
         self.judged_for = None;
         self.commit_refusal_for = None;
         self.build_refusal = None;
@@ -309,43 +415,85 @@ impl TrackEdit {
         self.rows.clear();
     }
 
-    /// Draw the focused item and report what the user did with it.
-    ///
-    /// Track View calls this only while an item on the selected node's bench
-    /// is focused; with none, or with no node selected, it draws nothing and
-    /// forgets the rows it drew.
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackEditResponse {
-        let mut response = TrackEditResponse::default();
+    /// Forget what the last frame drew, for a frame that draws no track.
+    pub(crate) fn draw_nothing(&mut self) {
+        self.rows.clear();
+        self.showing = None;
+    }
+
+    /// Draw the track Track View shows and report what the user did with it:
+    /// the focused item in Edited mode when one is focused on the selected
+    /// node, and otherwise the viewed track in Viewed mode. With neither, or
+    /// with no node selected, it draws nothing and forgets the rows it drew.
+    pub fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackBodyResponse {
+        let mut response = TrackBodyResponse::default();
         let panel_rect = ui.available_rect_before_wrap();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
             response.has_pointer = panel_rect.contains(pos);
         }
 
         let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
-            self.rows.clear();
+            self.draw_nothing();
             return response;
         };
         let id = node.id;
-        let bench = node.history.current_bench();
+        if let Some(label) = state.focused_item_label(id).map(str::to_string) {
+            let track = Arc::clone(
+                node.history
+                    .current_bench()
+                    .track(&label)
+                    .expect("the focused label names a track"),
+            );
+            response.mode = Some(BodyMode::Edited);
+            self.show_edited(ui, state, node, &label, &track, &mut response);
+        } else if let Some(viewed) = state.viewed_track().filter(|viewed| viewed.node == id) {
+            response.mode = Some(BodyMode::Viewed);
+            self.show_viewed(ui, state, node, viewed, &mut response);
+        } else {
+            self.draw_nothing();
+        }
+        response
+    }
 
-        let focused = state.focused_item_label(id).map(str::to_string);
-        let Some(label) = focused else {
-            self.rows.clear();
-            self.showing = None;
-            return response;
-        };
-        let track = bench
-            .track(&label)
-            .expect("the focused label names a track");
-
-        self.showing = Some((id, label.clone()));
-        self.reseat_thresholds(track);
-        self.evaluation = state
-            .bench_evaluation(id, &label)
-            .unwrap_or(Evaluation::Evaluating);
-        self.rejudge_if_stale(&label, track);
-        self.recheck_commit_if_stale(&label, track, node);
+    /// What both modes do before drawing: record what is shown, and bring the
+    /// judgement and the tiles up to the track.
+    fn enter(&mut self, showing: Showing, track: &Arc<EditableTrack>, evaluation: Evaluation) {
+        let (mode, label) = (showing.mode, showing.label.clone());
+        self.showing = Some(showing);
+        self.evaluation = evaluation;
+        self.rejudge_if_stale(mode, &label, track);
         self.retile_if_stale(&label, track);
+    }
+
+    /// Edited mode: the focused item, its steps, and its bars.
+    fn show_edited(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        label: &str,
+        track: &Arc<EditableTrack>,
+        response: &mut TrackBodyResponse,
+    ) {
+        let id = node.id;
+        self.reseat_thresholds(track);
+        // The ID of the point the track was read from, where that point is
+        // still in the version at the cursor: what the header's copy button
+        // copies, and what the *Go to Point* dialog takes back.
+        let origin = state.resolved_origin(node, track);
+        self.enter(
+            Showing {
+                node: id,
+                mode: BodyMode::Edited,
+                label: label.to_string(),
+                origin,
+            },
+            track,
+            state
+                .bench_evaluation(id, label)
+                .unwrap_or(Evaluation::Evaluating),
+        );
+        self.recheck_commit_if_stale(label, track, node);
 
         // Why an index cannot be built beside this node, cached against the
         // node: every row's menu asks it, and the question stats files.
@@ -353,22 +501,30 @@ impl TrackEdit {
             self.build_refusal = Some((id, state.sift_sources_refusal(id)));
         }
 
-        // The ID of the point the track was read from, where that point is
-        // still in the version at the cursor: what the header's copy button
-        // copies, and what the *Go to Point* dialog takes back.
-        let point_id = state
-            .resolved_origin(node, track)
-            .map(|index| crate::scene::point_id(node, index as usize));
-        response.request_goto_point = show_header(ui, &label, track, point_id.as_deref());
+        let key: SummaryKey = (
+            BodyMode::Edited,
+            id,
+            label.to_string(),
+            Arc::as_ptr(track) as usize,
+            node.history.current_version().serial.as_u64(),
+        );
+        if self.summary.as_ref().map(|(of, _)| of) != Some(&key) {
+            self.summary = Some((key, track_summary(node.recon(), track)));
+        }
+        let summary = self.summary.as_ref().and_then(|(_, s)| s.clone());
+
+        let point_id = origin.map(|index| crate::scene::point_id(node, index as usize));
+        response.request_goto_point =
+            show_header(ui, label, track, point_id.as_deref(), summary.as_ref());
         // The track's own patch at the left, under the title, and the stage's
         // line, the toolbar and the boxes beside it, so the table's separator
         // runs straight under the patch.
-        let patch = self.ensure_track_patch(ui.ctx(), &label, track);
+        let patch = self.ensure_track_patch(ui.ctx(), label, track);
         ui.horizontal_top(|ui| {
-            show_track_patch(ui, patch, track.stage_kind());
+            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Edited);
             ui.vertical(|ui| {
                 show_headline(ui, track);
-                self.show_toolbar(ui, state, node, &label, track, &mut response);
+                self.show_toolbar(ui, state, node, label, track, response);
                 // A release applies what the drag left the boxes at. Painted
                 // by this frame's value from the next frame on, which is the
                 // frame the dock has applied it by.
@@ -376,8 +532,71 @@ impl TrackEdit {
             });
         });
         ui.separator();
-        self.show_table(ui, node.recon(), id, state, track, &mut response);
-        response
+        self.show_table(ui, node.recon(), id, state, track, response);
+    }
+
+    /// Viewed mode: the viewed track, read-only, with the point's own summary
+    /// and the read-only bars.
+    fn show_viewed(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        node: &SceneNode,
+        viewed: &ViewedTrack,
+        response: &mut TrackBodyResponse,
+    ) {
+        let id = node.id;
+        let track = &viewed.track;
+        // The session's bars, every frame: the dock applies what a box
+        // reports at the end of the frame, so the next frame reads it back.
+        self.thresholds = state.viewed_thresholds.clone();
+        self.sliding = false;
+        self.enter(
+            Showing {
+                node: id,
+                mode: BodyMode::Viewed,
+                label: viewed.label.clone(),
+                origin: Some(viewed.point),
+            },
+            track,
+            viewed.evaluation.clone(),
+        );
+
+        let key: SummaryKey = (
+            BodyMode::Viewed,
+            id,
+            viewed.label.clone(),
+            0,
+            viewed.document.as_u64(),
+        );
+        if self.summary.as_ref().map(|(of, _)| of) != Some(&key) {
+            self.summary = Some((key, point_summary(node.edited(), viewed.point)));
+        }
+        let summary = self.summary.as_ref().and_then(|(_, s)| s.clone());
+
+        // Minted every frame rather than kept from the build: an edit or an
+        // undo can change which content the earliest rule mints against
+        // without moving the selection, and the header must show the ID that
+        // resolves now.
+        let point_id = crate::scene::point_id(node, viewed.point as usize);
+        response.request_goto_point = show_viewed_header(ui, &point_id, summary.as_ref());
+        let on_bench = state.bench_item_from_point(PointRef::new(id, viewed.point as usize));
+        let patch = self.ensure_track_patch(ui.ctx(), &viewed.label, track);
+        ui.horizontal_top(|ui| {
+            show_track_patch(ui, patch, track.stage_kind(), BodyMode::Viewed);
+            ui.vertical(|ui| {
+                ui.weak(bench_line(on_bench.as_deref()));
+                ui.horizontal_wrapped(|ui| show_evaluation(ui, &self.evaluation));
+                response.viewed_thresholds = self.show_viewed_thresholds(ui, state);
+            });
+        });
+        ui.separator();
+        self.show_table(ui, node.recon(), id, state, track, response);
+    }
+
+    /// The mode the body last drew in, or `None` when it drew no track.
+    fn mode(&self) -> Option<BodyMode> {
+        self.showing.as_ref().map(|showing| showing.mode)
     }
 
     /// The toolbar: every step that acts on the focused item, each greyed with
@@ -389,7 +608,7 @@ impl TrackEdit {
         node: &SceneNode,
         label: &str,
         track: &EditableTrack,
-        response: &mut TrackEditResponse,
+        response: &mut TrackBodyResponse,
     ) {
         let id = node.id;
         let busy = state.busy_refusal(id);
@@ -488,7 +707,7 @@ impl TrackEdit {
         ui: &mut egui::Ui,
         label: &str,
         busy: Option<String>,
-        response: &mut TrackEditResponse,
+        response: &mut TrackBodyResponse,
     ) {
         match self.renaming.as_mut() {
             None => {
@@ -525,78 +744,30 @@ impl TrackEdit {
         busy: Option<String>,
         track: &EditableTrack,
     ) -> Option<Thresholds> {
-        let enabled = busy.is_none();
-        let mut sliding = false;
-        let mut released = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Thresholds");
-            let bars = &mut self.thresholds;
-            // Each bar is a label and a box that is dragged left and right to
-            // change it, or clicked to type into: a slider's rail beside the
-            // box would say nothing the box does not. The ZNCC bars read in
-            // percent, as the table's ZNCC column does; the track stores them
-            // on the 0 to 1 scale.
-            let boxes = [
-                (
-                    MIN_ZNCC_LABEL,
-                    percent(egui::DragValue::new(&mut bars.min_zncc)),
-                ),
-                // The bar on the middle reading; 0 turns it off.
-                (
-                    MIN_ZNCC_MIDDLE_LABEL,
-                    percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
-                ),
-                // In patch-grid px, and also the radius the evaluation looks
-                // for each peak within.
-                (
-                    MAX_SHIFT_LABEL,
-                    egui::DragValue::new(&mut bars.max_shift_px)
-                        .range(0.0..=24.0)
-                        .speed(0.05)
-                        .max_decimals(1),
-                ),
-                // In patch-grid px, the unit of the self-similarity column; at
-                // the largest radius read it turns nothing out.
-                (
-                    MAX_SELF_SIMILARITY_LABEL,
-                    egui::DragValue::new(&mut bars.max_zncc_self_similarity_radius)
-                        .range(0.0..=max_self_similarity_radius())
-                        .speed(0.02)
-                        .max_decimals(1),
-                ),
-                // The fourth bar of `Thresholds`, which view selection scores a
-                // candidate by as a fraction of the track's own self-agreement:
-                // a bar with no box is a bar only the wire can move.
-                (
-                    MIN_RELATIVE_ZNCC_LABEL,
-                    percent(egui::DragValue::new(&mut bars.min_relative_zncc)),
-                ),
-            ];
-            for (label, value) in boxes {
-                let named = ui.add_enabled(enabled, egui::Label::new(label));
-                if label == MAX_SHIFT_LABEL {
-                    named.on_hover_text(MAX_SHIFT_TIP);
-                } else if label == MAX_SELF_SIMILARITY_LABEL {
-                    named.on_hover_text(MAX_SELF_SIMILARITY_TIP);
-                }
-                // A typed value lands when the field is left, not per
-                // keystroke, so typing "90" is one version and not two.
-                let r = ui.add_enabled(enabled, value.update_while_editing(false));
-                let r = match &busy {
-                    Some(why) => r.on_disabled_hover_text(why),
-                    None => r.on_hover_text(
-                        "Applies to the track when released: one version, which Undo reverses",
-                    ),
-                };
-                sliding |= r.dragged();
-                // A drag ends in its release; a typed value or an arrow key
-                // changes the value with no drag at all.
-                released |= r.drag_stopped() || (r.changed() && !r.dragged());
-            }
-        });
-        self.sliding = sliding;
-        (released && !sliding && self.thresholds != track.thresholds)
+        let hover = match &busy {
+            Some(why) => BoxHover::Refused(why),
+            None => BoxHover::Tip(
+                "Applies to the track when released: one version, which Undo reverses",
+            ),
+        };
+        let moved = threshold_boxes(ui, &mut self.thresholds, hover);
+        self.sliding = moved.sliding;
+        (moved.released && !moved.sliding && self.thresholds != track.thresholds)
             .then(|| self.thresholds.clone())
+    }
+
+    /// The threshold boxes in Viewed mode: drawn and editable, and holding the
+    /// session's read-only bars. A drag or a typed value recolours the
+    /// readings and the *Verdict* column and changes nothing else, so they are
+    /// never greyed. Returns the new bars on any frame a box moved them, which
+    /// the dock hands to `AppState::set_viewed_thresholds`.
+    fn show_viewed_thresholds(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+    ) -> Option<Thresholds> {
+        threshold_boxes(ui, &mut self.thresholds, BoxHover::Tip(VIEWED_BARS_TIP));
+        (self.thresholds != state.viewed_thresholds).then(|| self.thresholds.clone())
     }
 
     /// Put the boxes where the focused item's own bars are, unless a box
@@ -607,8 +778,9 @@ impl TrackEdit {
     /// box's release here, `apply_bench_track_thresholds` over the wire, an
     /// undo or redo of either, another item focused -- the boxes follow.
     fn reseat_thresholds(&mut self, track: &EditableTrack) {
-        if !self.sliding {
+        if !self.sliding || self.mode() != Some(BodyMode::Edited) {
             self.thresholds = track.thresholds.clone();
+            self.sliding = false;
         }
     }
 
@@ -619,11 +791,15 @@ impl TrackEdit {
     /// unpinned row what applying the bars would do -- the same core step a
     /// box's release applies, so a row can never be shown one way and turned
     /// another when the box is let go -- and a pinned row what unpinning it
-    /// would. Both run with the boxes' bars, so they follow a drag live.
-    fn rejudge_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
+    /// would. Both run with the boxes' bars, so they follow a drag live. The
+    /// viewed track's rows are all pinned, so its proposals are exactly the
+    /// verdicts its *Verdict* column shows: what the bench's own evaluation
+    /// would give each row once the point is on the bench and unpinned.
+    fn rejudge_if_stale(&mut self, mode: BodyMode, label: &str, track: &Arc<EditableTrack>) {
         let key = (
+            mode,
             label.to_string(),
-            std::sync::Arc::as_ptr(track) as usize,
+            Arc::as_ptr(track) as usize,
             self.thresholds.clone(),
         );
         if self.judged_for.as_ref() == Some(&key) {
@@ -691,7 +867,7 @@ impl TrackEdit {
         if let Some(cached) = self.tiles.get(&observation) {
             return cached.as_ref().map(|texture| texture.id());
         }
-        let id = self.showing.as_ref().map(|(id, _)| *id)?;
+        let id = self.showing.as_ref().map(|showing| showing.node)?;
         let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
         let tile = state
             .full_res_cache
@@ -727,7 +903,7 @@ impl TrackEdit {
         state: &AppState,
     ) -> Option<&tile::DrawnContext> {
         if !self.contexts.contains_key(&observation) {
-            let id = self.showing.as_ref().map(|(id, _)| *id)?;
+            let id = self.showing.as_ref().map(|showing| showing.node)?;
             let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
             let drawn = state
                 .full_res_cache
@@ -759,7 +935,7 @@ impl TrackEdit {
         let texture = self.track_patch.get_or_insert_with(|| {
             let image = match &track.stage {
                 sfmtool_core::bench::Stage::Track(payload) => {
-                    crate::track_view::view::stored_patch_image(payload.bitmap.as_ref()?.view())
+                    patch::stored_patch_image(payload.bitmap.as_ref()?.view())
                 }
                 sfmtool_core::bench::Stage::Cluster(payload) => {
                     let samples = &payload.template.as_ref()?.samples;
@@ -826,7 +1002,7 @@ impl TrackEdit {
         state: &AppState,
         in_context: bool,
     ) -> Option<crop::DrawnCrop> {
-        let id = self.showing.as_ref().map(|(id, _)| *id)?;
+        let id = self.showing.as_ref().map(|showing| showing.node)?;
         let row = track.observations.get(observation)?;
         let image = ImageRef::new(id, row.image as usize);
         let src = state.full_res_cache.get(&image)?.as_ref()?;
@@ -1144,6 +1320,102 @@ fn parse_percent(text: &str) -> Option<f64> {
     number.parse::<f64>().ok().map(|v| v / 100.0)
 }
 
+/// What the boxes' value fields say when hovered: the mode's own hint, or the
+/// sentence they are greyed with.
+enum BoxHover<'a> {
+    /// Enabled, with this hint.
+    Tip(&'a str),
+    /// Greyed, with this refusal.
+    Refused(&'a str),
+}
+
+/// How the boxes moved on one frame.
+struct BoxesMoved {
+    /// A box is being dragged.
+    sliding: bool,
+    /// A drag ended, or a typed value or an arrow key changed a box.
+    released: bool,
+}
+
+/// The five threshold boxes over `bars`, in one wrapped row after the word
+/// *Thresholds*: drawn the same in both modes, and greyed when `hover` is a
+/// refusal.
+fn threshold_boxes(ui: &mut egui::Ui, bars: &mut Thresholds, hover: BoxHover<'_>) -> BoxesMoved {
+    let enabled = matches!(hover, BoxHover::Tip(_));
+    let mut moved = BoxesMoved {
+        sliding: false,
+        released: false,
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Thresholds");
+        // Each bar is a label and a box that is dragged left and right to
+        // change it, or clicked to type into: a slider's rail beside the box
+        // would say nothing the box does not. The ZNCC bars read in percent,
+        // as the table's ZNCC column does; the track stores them on the 0 to 1
+        // scale.
+        let boxes = [
+            (
+                MIN_ZNCC_LABEL,
+                percent(egui::DragValue::new(&mut bars.min_zncc)),
+            ),
+            // The bar on the middle reading; 0 turns it off.
+            (
+                MIN_ZNCC_MIDDLE_LABEL,
+                percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
+            ),
+            // In patch-grid px, and also the radius the evaluation looks for
+            // each peak within.
+            (
+                MAX_SHIFT_LABEL,
+                egui::DragValue::new(&mut bars.max_shift_px)
+                    .range(0.0..=24.0)
+                    .speed(0.05)
+                    .max_decimals(1),
+            ),
+            // In patch-grid px, the unit of the self-similarity column; at the
+            // largest radius read it turns nothing out.
+            (
+                MAX_SELF_SIMILARITY_LABEL,
+                egui::DragValue::new(&mut bars.max_zncc_self_similarity_radius)
+                    .range(0.0..=max_self_similarity_radius())
+                    .speed(0.02)
+                    .max_decimals(1),
+            ),
+            // The fifth bar of `Thresholds`, which view selection scores a
+            // candidate by as a fraction of the track's own self-agreement.
+            (
+                MIN_RELATIVE_ZNCC_LABEL,
+                percent(egui::DragValue::new(&mut bars.min_relative_zncc)),
+            ),
+        ];
+        for (label, value) in boxes {
+            let named = ui.add_enabled(enabled, egui::Label::new(label));
+            if label == MAX_SHIFT_LABEL {
+                named.on_hover_text(MAX_SHIFT_TIP);
+            } else if label == MAX_SELF_SIMILARITY_LABEL {
+                named.on_hover_text(MAX_SELF_SIMILARITY_TIP);
+            }
+            // A typed value lands when the field is left, not per keystroke,
+            // so typing "90" is one change and not two.
+            let r = ui.add_enabled(enabled, value.update_while_editing(false));
+            let r = match hover {
+                BoxHover::Refused(why) => r.on_disabled_hover_text(why),
+                BoxHover::Tip(tip) => r.on_hover_text(tip),
+            };
+            moved.sliding |= r.dragged();
+            // A drag ends in its release; a typed value or an arrow key
+            // changes the value with no drag at all.
+            moved.released |= r.drag_stopped() || (r.changed() && !r.dragged());
+        }
+    });
+    moved
+}
+
+/// The hover text of a box in Viewed mode.
+const VIEWED_BARS_TIP: &str = "Judges the readings and the Verdict column by this bar, and \
+    changes nothing on the point. The bars are kept for the session, and a point put on the \
+    bench from here takes them.";
+
 /// The shift box's label: the bar the painting judges a shift by, the radius
 /// the evaluation looks for each peak within, and the bound on how far a fit
 /// may move a sighting.
@@ -1170,7 +1442,7 @@ const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a
 /// walk would have taken it.
 pub(crate) const ACCEPT_WALK_LABEL: &str = "Accept walk";
 
-/// The edit-mode checkbox that says whether Image Detail's dot drag moves the
+/// The Edited-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.
 pub(crate) const LOCK_LABEL: &str = "Lock";
 
@@ -1227,12 +1499,13 @@ fn show_evaluation(ui: &mut egui::Ui, evaluation: &Evaluation) {
     }
 }
 
-/// The header: what the focused item is, and what the last evaluation of it
-/// made of it. Returns whether its go-to button was clicked.
+/// The header in Edited mode: what the focused item is, what the last
+/// evaluation of it made of it, and at the track stage its summary. Returns
+/// whether its go-to button was clicked.
 ///
 /// `point_id` is the ID of the point the track was read from, when that point
 /// is still in the version at the cursor. It carries the copy and the go-to
-/// buttons view mode's header draws beside a point ID, so an ID copied here is
+/// buttons the Viewed header draws beside a point ID, so an ID copied here is
 /// one the *Go to Point* dialog takes back. A track put on the bench from a
 /// point is labelled with that ID unless it was renamed, and the ID is then
 /// printed once, as the label.
@@ -1241,13 +1514,14 @@ fn show_header(
     label: &str,
     track: &EditableTrack,
     point_id: Option<&str>,
+    summary: Option<&HeaderSummary>,
 ) -> bool {
     use crate::track_view::header_buttons::{copy_button, goto_button};
     let (kept, out) = track.verdict_counts();
     let pinned = track.observations.iter().filter(|o| o.pinned).count();
     let mut goto_clicked = false;
     ui.horizontal_wrapped(|ui| {
-        if matches!(&track.stage, sfmtool_core::bench::Stage::Track(p) if p.at_infinity) {
+        if matches!(&track.stage, Stage::Track(p) if p.at_infinity) {
             crate::track_view::infinity_mark(ui);
         }
         match point_id {
@@ -1281,8 +1555,199 @@ fn show_header(
             (Some(_), Some(_)) => {}
         }
         ui.label(format!("{kept} kept · {out} out · {pinned} pinned"));
+        if let Some(summary) = summary {
+            show_summary(ui, summary);
+        }
     });
     goto_clicked
+}
+
+/// The header in Viewed mode: the point's colour, its ID with the copy and
+/// go-to buttons, its homogeneous coordinates with their own copy button, and
+/// its summary. Returns whether the go-to button was clicked.
+fn show_viewed_header(ui: &mut egui::Ui, point_id: &str, summary: Option<&HeaderSummary>) -> bool {
+    use crate::track_view::header_buttons::{copy_button, goto_button};
+    let point = summary.and_then(|summary| summary.point.as_ref());
+    let mut goto_clicked = false;
+    ui.horizontal_wrapped(|ui| {
+        if let Some(point) = point {
+            let [r, g, b] = point.color;
+            let (rect, swatch) =
+                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
+            ui.painter().rect_stroke(
+                rect,
+                2.0,
+                egui::Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
+                egui::StrokeKind::Outside,
+            );
+            swatch.on_hover_text(format!("rgb({r}, {g}, {b})"));
+            if point.w == 0.0 {
+                crate::track_view::infinity_mark(ui);
+            }
+        }
+        ui.label(egui::RichText::new(point_id).monospace().strong());
+        if copy_button(ui, "Copy Point ID") {
+            ui.ctx().copy_text(point_id.to_string());
+        }
+        // Beside Copy, because these are the two halves of one round trip:
+        // copy an ID out of this header, paste it back into the dialog this
+        // button opens -- here, or in another session entirely.
+        goto_clicked = goto_button(ui);
+        if let Some(point) = point {
+            ui.label("|");
+            // Homogeneous, because `w` is the whole difference between a
+            // position and a direction: it is `1` for a finite point and `0`
+            // for one at infinity, whose `position` is then a unit direction
+            // rather than a place.
+            let coords = format!(
+                "{:.3}, {:.3}, {:.3}, {:.0}",
+                point.position.x, point.position.y, point.position.z, point.w
+            );
+            ui.label(format!("xyzw: ({coords})"));
+            if copy_button(ui, "Copy coordinates") {
+                ui.ctx().copy_text(coords);
+            }
+        }
+        if let Some(summary) = summary {
+            show_summary(ui, summary);
+        }
+    });
+    goto_clicked
+}
+
+/// The summary's readings, each after a `|`: the error, the track's length,
+/// `at infinity` for a direction, and the three triangulation diagnostics,
+/// each left out where it is not defined.
+fn show_summary(ui: &mut egui::Ui, summary: &HeaderSummary) {
+    ui.label("|");
+    ui.label(match summary.error_px {
+        Some(px) if px.is_finite() => format!("error: {px:.2}px"),
+        _ => "error: -".to_string(),
+    });
+    ui.label("|");
+    ui.label(format!("track: {} obs", summary.track_length));
+    // Said in words as well as in `w`, because the rest of this row is about
+    // a point that has a place and this one does not: the lines that would
+    // say where it is are absent rather than zero, and a reader is owed the
+    // reason.
+    if summary.at_infinity {
+        ui.label("|");
+        ui.label(egui::RichText::new("at infinity").color(ui.visuals().warn_fg_color));
+    }
+    if summary.max_angle_deg > 0.0 {
+        ui.label("|");
+        ui.label(format!("max pair angle: {:.1}°", summary.max_angle_deg));
+    }
+    // Complementary to the max angle: scale-free, and correct in the
+    // near-infinity regime.
+    if summary.depth_z.is_finite() {
+        ui.label("|");
+        ui.label(format!("depth z: {:.1}", summary.depth_z));
+    }
+    if summary.condition.is_finite() {
+        ui.label("|");
+        ui.label(format!("cond: {:.0}", summary.condition));
+    }
+}
+
+/// The summary of the committed point at `point`, read from the version at the
+/// cursor, or `None` when it is not a live point there.
+fn point_summary(edited: &EditedReconstruction, point: u32) -> Option<HeaderSummary> {
+    let view = edited.point(point)?;
+    let stored = view.point();
+    let table = &edited.base.image_table;
+    let images: Vec<usize> = view
+        .observations()
+        .iter()
+        .map(|obs| obs.image_index as usize)
+        .collect();
+    let rays = crate::metrics::observation_rays(
+        table,
+        &stored.position,
+        stored.is_at_infinity(),
+        images.iter().copied(),
+    );
+    let (condition, depth_z) = crate::metrics::compute_point_diagnostics(table, &view);
+    Some(HeaderSummary {
+        point: Some(stored.clone()),
+        error_px: Some(f64::from(stored.error)),
+        track_length: images.len(),
+        at_infinity: stored.is_at_infinity(),
+        max_angle_deg: crate::metrics::compute_max_pairwise_angle(&rays),
+        depth_z,
+        condition,
+    })
+}
+
+/// The summary of a bench track at the track stage, from its own position and
+/// its `in` observations, or `None` at the cluster stage, which has no
+/// position.
+///
+/// The error is the root mean square of the kept rows' measured reprojection
+/// errors, since a bench track carries no stored error of its own; `None`
+/// until a reading has measured one. Without a position nothing can be
+/// triangulated, and the angle and the diagnostics are left undefined.
+fn track_summary(recon: &SfmrReconstruction, track: &EditableTrack) -> Option<HeaderSummary> {
+    let Stage::Track(payload) = &track.stage else {
+        return None;
+    };
+    let kept: Vec<&Observation> = track
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+        .collect();
+    let errors: Vec<f64> = kept
+        .iter()
+        .filter_map(|o| o.track.as_ref()?.reprojection_error)
+        .filter(|e| e.is_finite())
+        .collect();
+    let error_px = (!errors.is_empty())
+        .then(|| (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt());
+    let images = || kept.iter().map(|o| o.image as usize);
+    let table = &recon.image_table;
+    let (max_angle_deg, condition, depth_z) = match payload.position {
+        Some(position) => {
+            let rays =
+                crate::metrics::observation_rays(table, &position, payload.at_infinity, images());
+            let (condition, depth_z) = if payload.at_infinity {
+                (f32::NAN, f32::NAN)
+            } else {
+                crate::metrics::compute_position_diagnostics(
+                    table,
+                    &position,
+                    error_px.unwrap_or(1.0),
+                    images(),
+                )
+            };
+            (
+                crate::metrics::compute_max_pairwise_angle(&rays),
+                condition,
+                depth_z,
+            )
+        }
+        None => (0.0, f32::NAN, f32::NAN),
+    };
+    Some(HeaderSummary {
+        point: None,
+        error_px,
+        track_length: kept.len(),
+        at_infinity: payload.at_infinity,
+        max_angle_deg,
+        depth_z,
+        condition,
+    })
+}
+
+/// The line under the Viewed header saying how to change the track: tick
+/// *Edit*, or, when the point already has an item on the bench, that the
+/// tick opens that item.
+fn bench_line(on_bench: Option<&str>) -> String {
+    match on_bench {
+        Some(label) => format!("On the bench as {label}. Tick {EDIT_LABEL} to open it."),
+        None => format!("Tick {EDIT_LABEL} to work on this track."),
+    }
 }
 
 /// The stage's own line under the header: at the cluster stage the reference
@@ -1304,7 +1769,7 @@ fn show_headline(ui: &mut egui::Ui, track: &EditableTrack) {
         sfmtool_core::bench::Stage::Track(payload) => {
             // A bearing and a position are the same three numbers and different
             // statements, so the word in front of them is what tells a reader
-            // which they are looking at. "at infinity" is view mode's own word
+            // which they are looking at. "at infinity" is the Viewed header's own word
             // for the same row.
             //
             // The track's own flag and not its patch's `w`: a point put on the
@@ -1330,16 +1795,22 @@ fn show_headline(ui: &mut egui::Ui, track: &EditableTrack) {
     }
 }
 
-/// The track's own patch, at view mode's stored-patch size, left of the
-/// headline, the toolbar and the boxes: at the track stage the consensus
-/// bitmap the observations were fused into, which is what a commit writes as
-/// the point's stored patch, and at the cluster stage the template the members
-/// register onto. It carries no label, since the picture says what it is. With
-/// nothing to show -- a track not yet fused, a cluster with no template cut --
-/// the slot is an empty frame of the same size, so the controls beside it do
-/// not move when a fit or a stage change fills it.
-fn show_track_patch(ui: &mut egui::Ui, texture: Option<egui::TextureId>, stage: StageKind) {
-    let size = crate::track_view::view::STORED_PATCH_SIZE;
+/// The track's own patch, at [`STORED_PATCH_SIZE`], left of the headline, the
+/// toolbar and the boxes: at the track stage the consensus bitmap the
+/// observations were fused into, which for the viewed track is the point's
+/// stored patch and which a commit writes as it, and at the cluster stage the
+/// template the members register onto. It carries no label, since the picture
+/// says what it is. With nothing to show -- a point with no stored patch, a
+/// track not yet fused, a cluster with no template cut -- the slot is an empty
+/// frame of the same size, so the controls beside it do not move when a fit or
+/// a stage change fills it.
+fn show_track_patch(
+    ui: &mut egui::Ui,
+    texture: Option<egui::TextureId>,
+    stage: StageKind,
+    mode: BodyMode,
+) {
+    let size = STORED_PATCH_SIZE;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     match texture {
         Some(texture) => {
@@ -1349,20 +1820,30 @@ fn show_track_patch(ui: &mut egui::Ui, texture: Option<egui::TextureId>, stage: 
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
-            response.on_hover_text(match stage {
-                StageKind::Track => {
+            response.on_hover_text(match (stage, mode) {
+                (StageKind::Track, BodyMode::Viewed) => {
+                    "The point's stored patch: the consensus of its observations"
+                }
+                (StageKind::Track, BodyMode::Edited) => {
                     "The track's patch: the consensus of its observations, which a commit \
                      writes as the point's stored patch"
                 }
-                StageKind::Cluster => "The cluster's template, which every member registers onto",
+                (StageKind::Cluster, _) => {
+                    "The cluster's template, which every member registers onto"
+                }
             });
         }
         None => {
             ui.painter()
                 .rect_filled(rect, 2.0, ui.visuals().faint_bg_color);
-            response.on_hover_text(match stage {
-                StageKind::Track => "No patch yet: fit the track to fuse its observations into one",
-                StageKind::Cluster => "No template yet: the cluster's first evaluation cuts one",
+            response.on_hover_text(match (stage, mode) {
+                (StageKind::Track, BodyMode::Viewed) => "The point has no stored patch",
+                (StageKind::Track, BodyMode::Edited) => {
+                    "No patch yet: fit the track to fuse its observations into one"
+                }
+                (StageKind::Cluster, _) => {
+                    "No template yet: the cluster's first evaluation cuts one"
+                }
             });
         }
     }
@@ -1398,7 +1879,7 @@ pub(super) struct PhotometricRefusals {
 /// to decode a dozen photographs and fail for a reason the track already knew,
 /// and it is why the button and the step cannot disagree about what is missing.
 ///
-/// Split out of [`TrackEdit::show_toolbar`] so the rule can be read without a
+/// Split out of [`TrackBody::show_toolbar`] so the rule can be read without a
 /// frame to draw it in.
 pub(super) fn photometric_refusals(
     busy: Option<&str>,
@@ -1431,6 +1912,58 @@ fn entry(ui: &mut egui::Ui, text: &str, refusal: Option<String>, hint: &str) -> 
             false
         }
     }
+}
+
+/// The line the crop's hover view adds under its picture: the pixel the
+/// observation sits at, and its feature index, or `None` for an observation
+/// nothing has placed.
+///
+/// The feature index is the `.sift` feature the observation is: named by a
+/// row put on by index, or, for a row read from the point the track came
+/// from, looked up in that point's observation of the same image. A
+/// reconstruction that stores its keypoints itself has no `.sift` feature
+/// behind them, and the index given is then the observation's place in the
+/// point's track. `origin` is that point, followed to the version `edited`
+/// holds.
+fn crop_caption(
+    edited: &EditedReconstruction,
+    origin: Option<u32>,
+    row: &Observation,
+) -> Option<String> {
+    let pixel = crate::bench::observation_site(row)?.pixel;
+    let feature = match row.provenance {
+        Provenance::Descriptor { feature } => format!("feature {feature} of its .sift file"),
+        Provenance::Origin => {
+            let found = origin.and_then(|point| {
+                let view = edited.point(point)?;
+                let k = view
+                    .observations()
+                    .iter()
+                    .position(|obs| obs.image_index == row.image)?;
+                Some((view.feature_indexes().map(|f| f[k]), k))
+            });
+            match found {
+                Some((Some(feature), _)) => format!("feature {feature} of its .sift file"),
+                Some((None, k)) => format!(
+                    "observation {k} of the point, whose keypoints the reconstruction stores \
+                     rather than as .sift features"
+                ),
+                None => "no feature index, since the point it was read from is not in this \
+                         version"
+                    .to_string(),
+            }
+        }
+        Provenance::Search { .. } => "no feature index: a descriptor search placed it".to_string(),
+        Provenance::Sweep => "no feature index: the view sweep placed it".to_string(),
+        Provenance::Pixel => "no feature index: it was placed by hand".to_string(),
+        Provenance::Point { point } => {
+            format!("no feature index: it was taken from point {point}")
+        }
+    };
+    Some(format!(
+        "The observation sits at pixel ({:.1}, {:.1}), {feature}.",
+        pixel[0], pixel[1]
+    ))
 }
 
 /// The word a provenance shows in the *From* column.

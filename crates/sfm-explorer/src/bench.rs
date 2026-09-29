@@ -1456,7 +1456,7 @@ impl AppState {
     ///
     /// No confirmation anywhere that calls this: a discard is a version, and an
     /// undo puts the item back where it was. Discarding the focused item
-    /// unfocuses it, so Track View returns to view mode rather than switching
+    /// unfocuses it, so Track View leaves Edited mode rather than switching
     /// to an item nobody asked for; the undo does not focus it again. The
     /// selection is then what clearing *Edit* leaves: the item's origin when
     /// it resolved before the discard, and otherwise no point.

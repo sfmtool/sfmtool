@@ -12,11 +12,9 @@
 //! different things:
 //!
 //! - At the **track stage** it is the patch re-rendered from this
-//!   observation's own view, re-anchored where the observation sits -- the very
-//!   tile Track View draws for a committed track, through
-//!   that panel's own renderer
-//!   ([`crate::track_view::view::patch_color_image`]), so a track on the
-//!   bench and the point it came from cannot show one surface two ways.
+//!   observation's own view, re-anchored where the observation sits -- through
+//!   [`super::patch::patch_color_image`], the one warp the body draws every
+//!   track-stage tile with, whichever mode it is in
 //! - At the **cluster stage** there is no surface, so it is the observation's
 //!   own grid: the `R x R` samples the refinement kernel reads at that place
 //!   and its shape, through the kernel's own sampler
@@ -81,7 +79,7 @@ pub(super) fn image(
             let frame = payload.placement.as_ref()?;
             let image = recon.image_table.images.get(img_idx)?;
             let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
-            Some(crate::track_view::view::patch_color_image(
+            Some(super::patch::patch_color_image(
                 frame,
                 camera,
                 &crate::scene::cam_from_world(image),
@@ -184,14 +182,8 @@ pub(super) fn context(
             let anchored = frame.anchored_at_keypoint(camera, &pose, site.pixel);
             let mut wide = anchored.clone().unwrap_or_else(|| frame.clone());
             wide.half_extent = wide.half_extent.map(|h| h * f64::from(k));
-            let side = crate::track_view::view::PATCH_RES * k;
-            let picture = crate::track_view::view::frame_color_image(
-                &wide,
-                camera,
-                &pose,
-                src.level(0),
-                side,
-            );
+            let side = super::patch::PATCH_RES * k;
+            let picture = super::patch::frame_color_image(&wide, camera, &pose, src.level(0), side);
             let side = side as f32;
             // The pixel of the photograph at `pixel`, as a place in the
             // picture: its ray met with the widened frame's plane, read on the

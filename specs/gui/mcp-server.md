@@ -694,10 +694,10 @@ array, not from an error it has to tell apart from a real one.
 number the agent is told matches the colour the human is looking at.
 `get_camera_image`'s summary is `compute_observation_reprojection_errors`, which
 the Image Detail panel's error heatmap uses; a track observation's is
-`metrics::compute_observation_metrics`, the same function Track View's
-table tabulates in view mode. `metrics` sits at the crate root rather than inside
-that panel for exactly this reason: no one surface owns a number three of them
-quote.
+`metrics::compute_observation_metrics`. `metrics` sits at the crate root
+rather than inside a panel because Track View's header, the Image Detail overlay
+and this tool quote its numbers, and no one surface owns a number several of
+them quote.
 
 Both can be absent, and say so rather than inventing a number.
 `get_camera_image`'s `reproj_error` is `null` when the errors cannot be
@@ -3092,7 +3092,7 @@ means. What this surface adds is the three things every tool family here adds.
 **An item is named by its label**, exactly as a node is by
 `reconstruction_label`. The bench tools take `item`; the track tools take
 `track`, and **a call that names no track acts on the focused item**, which is
-what a gesture in Track View's edit mode means when it names no item. A label that
+what a gesture in Track View's Edited mode means when it names no item. A label that
 names nothing on the bench is refused naming it.
 
 **There is one focused item for the viewer, and a bench can hold items with

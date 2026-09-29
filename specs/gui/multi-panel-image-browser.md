@@ -605,8 +605,8 @@ those tests a boundary sample that fails to project breaks the curve, exactly
 as in a member outline. Occlusion is not tested: the ghost is where the square
 would be seen, not a claim that nothing stands in front of it.
 
-Clicking a mark selects that observation's row in Track View's edit mode
-([`track-view.md`](track-view.md) § "Edit mode"): the mark and the row are one observation, so
+Clicking a mark selects that observation's row in Track View's Edited mode
+([`track-view.md`](track-view.md) § "Row gestures"): the mark and the row are one observation, so
 clicking either is the one gesture. The layer is on top, so a click it catches
 does not also select a feature underneath. That holds for every handle below,
 the ones that are no observation's mark included (an outline's corner or edge

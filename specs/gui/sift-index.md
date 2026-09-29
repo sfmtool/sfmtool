@@ -148,7 +148,7 @@ Patches*, under the same gate. It is where a person looks first.
 
 In Track View a row's context menu offers *Find matches by SIFT
 query* when the node's index is current ([`track-view.md`](track-view.md)
-§ "Edit mode"). When it is not, the entry itself is the remedy:
+§ "Row gestures"). When it is not, the entry itself is the remedy:
 
 - `none`: the entry reads *Build Index Files* (or *Rebuild Index Files* when
   the cluster patches are open without an index) and starts the build.
@@ -281,7 +281,7 @@ state word, the build, the open and the close of the pair -- is in
 [index_files.rs](../../crates/sfm-explorer/src/index_files.rs). The Scene
 tree's rows and their menus are in
 [scene_graph/](../../crates/sfm-explorer/src/scene_graph/), the search entry in
-[track_view/edit/table.rs](../../crates/sfm-explorer/src/track_view/edit/table.rs), and
+[track_view/body/table.rs](../../crates/sfm-explorer/src/track_view/body/table.rs), and
 the wire in [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs).
 
 ```rust
@@ -404,7 +404,7 @@ reconstruction row's menu carrying the build above *Convert to Embedded
 Patches*; and an unsaved node's build entry greyed.
 
 The search entry's three labels are in
-[track_view/edit/tests.rs](../../crates/sfm-explorer/src/track_view/edit/tests.rs), with
+[track_view/body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs), with
 the assertion that choosing a build label asks for the build and asks for no
 search, and that the panel draws no index row of its own.
 

@@ -77,16 +77,6 @@ pub fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
     map.sample(t)
 }
 
-/// Reprojection error over `[vmin, vmax]` px: green (good) → yellow → red.
-///
-/// Named because two panels colour the same quantity — the Image Detail
-/// overlay over the image's own error range, the Track View table's
-/// thumbnail dots over a fixed 0–2 px — and the name is what says they are the
-/// same ramp.
-pub fn error_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    ramp(value, vmin, vmax, &ERROR_COLORMAP)
-}
-
 /// Draw a vertical colorbar legend on the painter.
 ///
 /// Renders a gradient bar with min/max labels in the bottom-right corner
