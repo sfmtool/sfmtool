@@ -1,6 +1,6 @@
 // Bench track shader.
 //
-// Draws the bench's active track where it stands in the world: the patch
+// Draws the focused item where it stands in the world: the patch
 // frame's square, its outward normal with an arrowhead, one mark per
 // observation, and the filled centre disc. Each edge is a camera-facing ribbon
 // quad carrying its own colour; the disc is a triangle list. Rendered as a

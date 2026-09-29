@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
-use sfmtool_core::bench::{BenchItem, EditableTrack};
+use sfmtool_core::bench::{BenchItem, EditableTrack, ItemId};
 use sfmtool_core::progress::Progress;
 
 use crate::document::VersionSerial;
@@ -63,8 +63,8 @@ mod tests;
 pub(crate) struct Inputs {
     /// The node whose bench holds the track.
     node: ReconId,
-    /// The item's label on that bench.
-    item: String,
+    /// The item on that bench, by the ID a rename keeps.
+    item: ItemId,
     /// The track value. Compared by address: every step on a track gives it a
     /// new `Arc`, and holding this one keeps the address from being reused.
     track: Arc<EditableTrack>,
@@ -155,16 +155,17 @@ struct Running {
 pub(crate) struct Evaluations {
     /// The evaluation on a worker, if there is one.
     running: Option<Running>,
-    /// For each track, by node and label, the inputs its last evaluation was
+    /// For each track, by node and item, the inputs its last evaluation was
     /// installed for and whether it failed. The inputs hold the track value
     /// that was installed, so a track that has not moved since compares equal.
-    settled: HashMap<(ReconId, String), (Inputs, Result<(), String>)>,
+    settled: HashMap<(ReconId, ItemId), (Inputs, Result<(), String>)>,
 }
 
 impl AppState {
     /// Where the evaluation of `item` on `id`'s bench stands, or `None` when
     /// there is no such track.
     pub(crate) fn bench_evaluation(&self, id: ReconId, item: &str) -> Option<Evaluation> {
+        let item = self.bench(id)?.id(item)?;
         let inputs = self.evaluation_inputs(id, item)?;
         Some(self.evaluation_of(&inputs))
     }
@@ -177,7 +178,9 @@ impl AppState {
         let Some(running) = self.bench_evaluations.running.as_ref() else {
             return false;
         };
-        self.evaluation_inputs(id, item)
+        self.bench(id)
+            .and_then(|bench| bench.id(item))
+            .and_then(|item| self.evaluation_inputs(id, item))
             .is_some_and(|current| current.same(&running.inputs))
     }
 
@@ -189,7 +192,7 @@ impl AppState {
     pub(crate) fn drive_bench_evaluation(&mut self) -> bool {
         let landed = self.poll_bench_evaluation();
         if let Some(running) = self.bench_evaluations.running.as_ref() {
-            let current = self.evaluation_inputs(running.inputs.node, &running.inputs.item);
+            let current = self.evaluation_inputs(running.inputs.node, running.inputs.item);
             if !current.is_some_and(|current| current.same(&running.inputs)) {
                 running.cancel.store(true, Ordering::Relaxed);
             }
@@ -199,9 +202,10 @@ impl AppState {
         let Some(inputs) = self.next_unevaluated() else {
             return landed;
         };
-        let key = (inputs.node, inputs.item.clone());
+        let key = (inputs.node, inputs.item);
+        let label = self.item_label(inputs.node, inputs.item);
         let started = self
-            .bench_evaluate_job(inputs.node, &inputs.item)
+            .bench_evaluate_job(inputs.node, &label)
             .and_then(|job| self.spawn_evaluation(inputs.clone(), job));
         if let Err(message) = started {
             self.bench_evaluations
@@ -235,11 +239,11 @@ impl AppState {
     /// Install what an evaluation brought back, if its inputs are still the
     /// track's, and drop it otherwise.
     fn land_evaluation(&mut self, inputs: Inputs, measured: Measured) {
-        let current = self.evaluation_inputs(inputs.node, &inputs.item);
+        let current = self.evaluation_inputs(inputs.node, inputs.item);
         if !current.is_some_and(|current| current.same(&inputs)) {
             return;
         }
-        let key = (inputs.node, inputs.item.clone());
+        let key = (inputs.node, inputs.item);
         match measured {
             // Cancelled with the inputs current again -- an edit and its undo
             // inside one evaluation -- leaves the track unevaluated, and the
@@ -256,10 +260,11 @@ impl AppState {
                 };
                 let track = Arc::new(*track);
                 let history = &mut self.scene[index].history;
-                let Ok(next) = history
-                    .current_bench()
-                    .replace(&inputs.item, BenchItem::Track(Arc::clone(&track)))
-                else {
+                let bench = history.current_bench();
+                let Some(label) = bench.label_of(inputs.item) else {
+                    return;
+                };
+                let Ok(next) = bench.replace(label, BenchItem::Track(Arc::clone(&track))) else {
                     return;
                 };
                 history.replace_current_bench(Arc::new(next));
@@ -312,12 +317,13 @@ impl AppState {
     }
 
     /// What an evaluation of `item` on `id`'s bench would read right now.
-    fn evaluation_inputs(&self, id: ReconId, item: &str) -> Option<Inputs> {
+    fn evaluation_inputs(&self, id: ReconId, item: ItemId) -> Option<Inputs> {
         let node = self.node(id)?;
-        let track = node.history.current_bench().track(item)?;
+        let bench = node.history.current_bench();
+        let track = bench.track(bench.label_of(item)?)?;
         Some(Inputs {
             node: id,
-            item: item.to_string(),
+            item,
             track: Arc::clone(track),
             document: node.history.current_version().document_serial,
         })
@@ -326,9 +332,10 @@ impl AppState {
     /// Where the evaluation of `inputs` stands.
     fn evaluation_of(&self, inputs: &Inputs) -> Evaluation {
         if let Err(why) = sfmtool_core::bench::evaluate_preconditions(&inputs.track) {
-            return Evaluation::Refused(format!("Cannot evaluate {}: {why}", inputs.item));
+            let label = self.item_label(inputs.node, inputs.item);
+            return Evaluation::Refused(format!("Cannot evaluate {label}: {why}"));
         }
-        let key = (inputs.node, inputs.item.clone());
+        let key = (inputs.node, inputs.item);
         match self.bench_evaluations.settled.get(&key) {
             Some((done, outcome)) if done.same(inputs) => match outcome {
                 Ok(()) => Evaluation::Current,
@@ -338,29 +345,34 @@ impl AppState {
         }
     }
 
-    /// The next track to evaluate: the first in scene order whose evaluation
-    /// stands at [`Evaluation::Evaluating`], the active track of each bench
-    /// ahead of its other items, skipping any node an operation holds.
+    /// The next track to evaluate whose evaluation stands at
+    /// [`Evaluation::Evaluating`]: the focused item first, since it is what
+    /// Track View shows, and then every other item in scene order, skipping
+    /// any node an operation holds.
     fn next_unevaluated(&self) -> Option<Inputs> {
-        for node in &self.scene {
-            if self.busy_refusal(node.id).is_some() {
-                continue;
-            }
-            let bench = node.history.current_bench();
-            let active = super::active_track_label(bench);
-            let items = active
-                .into_iter()
-                .chain(bench.labels().filter(|label| Some(*label) != active));
-            for item in items {
-                let Some(inputs) = self.evaluation_inputs(node.id, item) else {
-                    continue;
-                };
-                if self.evaluation_of(&inputs) == Evaluation::Evaluating {
-                    return Some(inputs);
-                }
-            }
-        }
-        None
+        let focused = self.focused_item().map(|f| (f.node, f.item));
+        let others = self.scene.iter().flat_map(|node| {
+            node.history
+                .current_bench()
+                .entries()
+                .iter()
+                .map(move |entry| (node.id, entry.id))
+        });
+        focused
+            .into_iter()
+            .chain(others.filter(|key| Some(*key) != focused))
+            .filter(|(node, _)| self.busy_refusal(*node).is_none())
+            .filter_map(|(node, item)| self.evaluation_inputs(node, item))
+            .find(|inputs| self.evaluation_of(inputs) == Evaluation::Evaluating)
+    }
+
+    /// The label `item` carries on `id`'s bench at the cursor, or an empty
+    /// string when it is not there.
+    fn item_label(&self, id: ReconId, item: ItemId) -> String {
+        self.bench(id)
+            .and_then(|bench| bench.label_of(item))
+            .unwrap_or_default()
+            .to_string()
     }
 
     /// Drop what is remembered about tracks that are no longer on any bench.
@@ -370,7 +382,7 @@ impl AppState {
             scene
                 .iter()
                 .find(|n| n.id == *node)
-                .is_some_and(|n| n.history.current_bench().track(item).is_some())
+                .is_some_and(|n| n.history.current_bench().label_of(*item).is_some())
         });
     }
 

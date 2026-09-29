@@ -672,8 +672,7 @@ fn a_single_click_on_a_bench_row_selects_its_node_only() {
     let (mut state, id, point, cluster) = benched_behind_another();
     let (mut panel, ctx) = settled(&mut state);
     let before = versions(&state, id);
-    let active =
-        crate::bench::active_track_label(state.bench(id).expect("a bench")).map(str::to_string);
+    let active = state.focused_item_label(id).map(str::to_string);
     assert_eq!(active.as_deref(), Some(cluster.as_str()));
 
     let response = click(
@@ -693,21 +692,20 @@ fn a_single_click_on_a_bench_row_selects_its_node_only() {
 
     assert_eq!(versions(&state, id), before, "a click pushed a version");
     assert_eq!(
-        crate::bench::active_track_label(state.bench(id).expect("a bench")),
+        state.focused_item_label(id),
         active.as_deref(),
-        "a click changed the active item"
+        "a click changed the focused item"
     );
 }
 
-/// A double-click on a Bench row makes that item active, selects the node it
-/// is under and raises Track View, from either group: the active item is one
-/// across the two, because the bench's kinds are items, not stages.
+/// A double-click on a Bench row focuses that item, selects the node it is
+/// under and raises Track View, from either group, and pushes no version.
 #[test]
 fn a_double_click_on_a_bench_row_edits_its_item() {
     let (_, _, point, _) = benched();
-    // The cluster, put on last, is the active item, so the point row is the
-    // one a double-click moves the activation to; and the point is made active
-    // first for the cluster row's turn, so both are a real change.
+    // The cluster, put on last, is the focused item, so the point row is the
+    // one a double-click moves the focus to; and the point is focused first
+    // for the cluster row's turn, so both are a real change.
     for (which, group) in [(0, "Bench Points"), (1, "Bench Clusters")] {
         let (mut state, id, point_label, cluster_label) = benched_behind_another();
         let label = if which == 0 {
@@ -716,7 +714,7 @@ fn a_double_click_on_a_bench_row_edits_its_item() {
             cluster_label
         };
         if which == 1 {
-            state.activate_bench_item(id, &point).expect("on the bench");
+            state.focus_bench_item(id, &point).expect("on the bench");
             state.select_recon(state.scene[1].id);
         }
         let (mut panel, ctx) = settled(&mut state);
@@ -743,23 +741,26 @@ fn a_double_click_on_a_bench_row_edits_its_item() {
 
         assert_eq!(state.selected_recon, Some(id), "the node was not selected");
         assert_eq!(
-            crate::bench::active_track_label(state.bench(id).expect("a bench")),
+            state.focused_item_label(id),
             Some(label.as_str()),
             "{group}"
         );
-        assert_eq!(
-            versions(&state, id),
-            before + 1,
-            "one activation, one version"
+        assert_eq!(versions(&state, id), before, "a focus pushed a version");
+        let editing = format!("Editing {label}");
+        assert!(
+            state.action_log.entries().any(|entry| {
+                entry.kind == crate::action_log::Kind::Selection && entry.text == editing
+            }),
+            "no {editing:?} row"
         );
         assert!(state.is_panel_open(crate::dock::Tab::TrackView));
     }
 }
 
-/// A double-click on the item already active asked for the panel, and the
+/// A double-click on the item already focused asked for the panel, and the
 /// panel is what it gets: no version, and no no-effect row.
 #[test]
-fn a_double_click_on_the_active_item_only_raises_the_panel() {
+fn a_double_click_on_the_focused_item_only_raises_the_panel() {
     let (mut state, id, _point, cluster) = benched();
     let position = state
         .bench(id)
@@ -773,13 +774,18 @@ fn a_double_click_on_the_active_item_only_raises_the_panel() {
     state.edit_bench_item_at(id, position);
 
     assert_eq!(versions(&state, id), before, "a version was pushed");
-    let bench_rows = state
+    let written = state
         .action_log
         .entries()
         .skip(rows)
-        .filter(|entry| entry.kind == crate::action_log::Kind::Bench)
+        .filter(|entry| {
+            matches!(
+                entry.kind,
+                crate::action_log::Kind::Bench | crate::action_log::Kind::Selection
+            )
+        })
         .count();
-    assert_eq!(bench_rows, 0, "a bench row was written");
+    assert_eq!(written, 0, "a bench or selection row was written");
     assert!(state.is_panel_open(crate::dock::Tab::TrackView));
 }
 
@@ -810,10 +816,7 @@ fn the_double_click_raise_survives_the_swapped_out_dock() {
     let (node, position) = panel.take_bench_edit().expect("the panel kept the request");
     state.edit_bench_item_at(node, position);
     assert!(state.is_panel_open(crate::dock::Tab::TrackView));
-    assert_eq!(
-        crate::bench::active_track_label(state.bench(id).expect("a bench")),
-        Some(point.as_str())
-    );
+    assert_eq!(state.focused_item_label(id), Some(point.as_str()));
 }
 
 /// *Discard* is on a row of either group, and names the item the row is about.

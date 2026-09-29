@@ -38,8 +38,8 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FitOptions, GeometrySearchOptions, Observation, ObservationSeed, Provenance, SearchOptions,
-    Stage, StageKind, Thresholds, Verdict,
+    FitOptions, GeometrySearchOptions, ItemId, Observation, ObservationSeed, Provenance,
+    SearchOptions, Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
@@ -256,16 +256,26 @@ fn clamp_note(clamped_from: Option<[f64; 2]>, landed: [f64; 2]) -> String {
     }
 }
 
-/// What the viewer calls the item a gesture names when the caller named none:
-/// the active track of the node's bench.
+/// What Track View edits while its *Edit* box is ticked: one item on one
+/// node's bench, held in [`AppState::focused_item`].
 ///
-/// A bench panel acts on the active item of the kind it edits, so every method
-/// here takes the label explicitly and the panel passes the active one. That
-/// keeps the "which track" question in one place -- the panel and the wire --
-/// rather than inside each step.
-pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
-    bench.active_label(sfmtool_core::bench::ItemKind::Track)
+/// At most one in the viewer, and not part of any version: focusing and
+/// unfocusing push none, and an undo neither restores one nor is spent on one
+/// (`specs/gui/bench.md` § "The focused item"). The item is named by its
+/// [`ItemId`] rather than its label, so a rename keeps it focused. Every step
+/// here still takes a label, and a panel or the wire passes the focused item's
+/// ([`AppState::focused_item_label`]) when the caller named none, which keeps
+/// the "which track" question in one place rather than inside each step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FocusedItem {
+    /// The node whose bench holds the item.
+    pub(crate) node: ReconId,
+    /// The item, by the ID a rename keeps.
+    pub(crate) item: ItemId,
 }
+
+/// The Action Log run the focus rows fold into.
+const FOCUS_RUN: &str = "edited item";
 
 /// Where one observation sits, and with what shape.
 ///
@@ -315,33 +325,135 @@ pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
 /// write it; *Split off N rows*, the 3D figure's enlarged mark and
 /// `get_bench_track`'s `selected_observations` all read it.
 ///
-/// It names the track it belongs to, and it counts only while that track is
-/// the node's active one: the rows are observation indexes, and another
-/// track's observations are not these. [`AppState::push_bench_step`] clears it
-/// when a step leaves another item active, a rename carries it to the new
-/// label, and a move of the cursor clears it, since the version it lands on
-/// may hold a different list of observations under the same label.
+/// It names the track it belongs to by [`ItemId`], so a rename keeps it, and
+/// it counts only while that track is the focused item: the rows are
+/// observation indexes, and another track's observations are not these. A
+/// change of focused item clears it, and so does a move of the cursor, since
+/// the version it lands on may hold a different list of observations for the
+/// same item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BenchRows {
     /// The node whose bench holds the track.
     pub(crate) recon: ReconId,
-    /// The track's label.
-    pub(crate) label: String,
+    /// The track.
+    pub(crate) item: ItemId,
     /// The selected observations, by position in the track's list, ascending
     /// and without repeats.
     pub(crate) observations: Vec<usize>,
 }
 
 impl AppState {
+    /// The focused item, if one is.
+    pub(crate) fn focused_item(&self) -> Option<&FocusedItem> {
+        self.focused_item.as_ref()
+    }
+
+    /// The label the focused item carries on `id`'s bench at the cursor, or
+    /// `None` when nothing is focused, the focused item is on another node, or
+    /// it is not on that bench at the cursor.
+    ///
+    /// What a panel or a wire call that names no item acts on.
+    pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str> {
+        let focused = self.focused_item.filter(|focused| focused.node == id)?;
+        self.bench(id)?.label_of(focused.item)
+    }
+
+    /// Focus the item called `label` on `id`'s bench: what ticking Track
+    /// View's *Edit* box over a point already on the bench does, a Scene tree
+    /// double-click on a Bench row, and the wire's `focus_bench_item`.
+    ///
+    /// Pushes no version, and is not refused while a background task holds
+    /// the node, since it changes nothing on the bench. It writes one
+    /// `Selection` row, `Editing {label}`; an item already focused writes a
+    /// no-effect row instead. A focused item on another node is unfocused,
+    /// since there is one for the viewer.
+    pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+        let bench = self.bench(id).ok_or(crate::state::NOT_LOADED)?;
+        let item = bench
+            .id(label)
+            .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
+        let next = FocusedItem { node: id, item };
+        if self.focused_item == Some(next) {
+            self.action_log.record(
+                Kind::Selection,
+                format!("Editing {label}: no effect, it is being edited already"),
+            );
+            return Ok(());
+        }
+        self.set_focused_item(Some(next));
+        self.action_log
+            .record_run(Kind::Selection, FOCUS_RUN, format!("Editing {label}"));
+        Ok(())
+    }
+
+    /// Leave no item focused, every item staying on its bench: what clearing
+    /// Track View's *Edit* box does, and the wire's `unfocus_bench_item`.
+    ///
+    /// Pushes no version and writes one `Selection` row, `Stopped editing
+    /// {label}`; with nothing focused it writes a no-effect row instead.
+    pub(crate) fn unfocus_bench_item(&mut self) {
+        let Some(focused) = self.focused_item else {
+            self.action_log.record(
+                Kind::Selection,
+                "Stopped editing: no effect, no item is being edited",
+            );
+            return;
+        };
+        let text = match self.focused_item_label(focused.node) {
+            Some(label) => format!("Stopped editing {label}"),
+            None => "Stopped editing".to_string(),
+        };
+        self.set_focused_item(None);
+        self.action_log.record_run(Kind::Selection, FOCUS_RUN, text);
+    }
+
+    /// Focus the item called `label` on `id`'s bench and write no row: what a
+    /// step that puts an item on the bench does after it, since the step's own
+    /// row says what happened.
+    pub(crate) fn focus_put_item(&mut self, id: ReconId, label: &str) {
+        if let Some(item) = self.bench(id).and_then(|bench| bench.id(label)) {
+            self.set_focused_item(Some(FocusedItem { node: id, item }));
+        }
+    }
+
+    /// Unfocus the focused item when it is on `id` and no longer on that
+    /// node's bench at the cursor: after a discard, a clear, an undo past its
+    /// put or a redo past its discard. It writes no row, since the step or the
+    /// move that took the item away wrote its own.
+    pub(crate) fn settle_focused_item(&mut self, id: ReconId) {
+        let Some(focused) = self.focused_item.filter(|focused| focused.node == id) else {
+            return;
+        };
+        let on_bench = self
+            .bench(id)
+            .is_some_and(|bench| bench.label_of(focused.item).is_some());
+        if !on_bench {
+            self.set_focused_item(None);
+        }
+    }
+
+    /// The one place the focused item changes, so the selected observations
+    /// go with it: they are indexes into the item that was focused.
+    pub(crate) fn set_focused_item(&mut self, next: Option<FocusedItem>) {
+        if self.focused_item != next {
+            self.focused_item = next;
+            self.bench_rows = None;
+        }
+    }
+
     /// The selected observations of the track called `label` on `id`'s bench,
-    /// ascending. Empty unless that track is the active one and the selection
+    /// ascending. Empty unless that track is the focused item and the selection
     /// was made on it.
     pub(crate) fn selected_bench_observations(&self, id: ReconId, label: &str) -> &[usize] {
         let Some(rows) = &self.bench_rows else {
             return &[];
         };
-        let active = self.bench(id).and_then(|bench| active_track_label(bench));
-        if rows.recon != id || rows.label != label || active != Some(label) {
+        let item = self.bench(id).and_then(|bench| bench.id(label));
+        let focused = self
+            .focused_item
+            .filter(|focused| focused.node == id)
+            .map(|focused| focused.item);
+        if rows.recon != id || item.is_none() || item != Some(rows.item) || item != focused {
             return &[];
         }
         &rows.observations
@@ -360,12 +472,12 @@ impl AppState {
         }
     }
 
-    /// Make `observations` the selected observations of the active track
+    /// Make `observations` the selected observations of the focused track
     /// `label` on `id`'s bench, replacing whatever was selected. An empty list
     /// clears the selection.
     ///
-    /// Refused for a track that is not the active one, since the selection is
-    /// Track View's and Track View shows only the active track, and for an
+    /// Refused for a track that is not the focused item, since the selection is
+    /// Track View's and Track View shows only the focused item, and for an
     /// index past the end of the list. A change writes one `Selection` row,
     /// folded into the one before it when that was also a change of these rows,
     /// so a run of Ctrl-clicks reads as one line.
@@ -379,10 +491,11 @@ impl AppState {
         let track = bench
             .track(label)
             .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
-        if active_track_label(bench) != Some(label) {
+        let item = bench.id(label).expect("the track is on the bench");
+        if self.focused_item != Some(FocusedItem { node: id, item }) {
             return Err(format!(
-                "{label} is not the active track, and only the active track has selected \
-                 observations. Activate it first."
+                "{label} is not the focused item, and only the focused item has selected \
+                 observations. Focus it first."
             ));
         }
         let count = track.observations.len();
@@ -407,7 +520,7 @@ impl AppState {
         };
         self.bench_rows = Some(BenchRows {
             recon: id,
-            label: label.to_string(),
+            item,
             observations: chosen,
         });
         self.action_log
@@ -415,7 +528,7 @@ impl AppState {
         Ok(())
     }
 
-    /// A click on one observation of the active track `label`: with `extend`
+    /// A click on one observation of the focused track `label`: with `extend`
     /// clear, that observation alone; with it set (Ctrl or Shift held), that
     /// observation added to the selection, or taken out of it when it was in.
     ///
@@ -445,25 +558,9 @@ impl AppState {
         }
     }
 
-    /// Drop the selected observations when the active item of `id`'s bench is
-    /// no longer the track they were selected on: after a step that activated
-    /// another item, discarded or split this one, or put a new one on.
-    fn settle_bench_rows(&mut self, id: ReconId) {
-        let Some(rows) = &self.bench_rows else {
-            return;
-        };
-        if rows.recon != id {
-            return;
-        }
-        let active = self.bench(id).and_then(|bench| active_track_label(bench));
-        if active != Some(rows.label.as_str()) {
-            self.bench_rows = None;
-        }
-    }
-
     /// Drop the selected observations of `id`'s bench: what a move of the
     /// cursor does, since the version it lands on may hold another list of
-    /// observations under the same label.
+    /// observations for the same item.
     pub(crate) fn clear_bench_rows(&mut self, id: ReconId) {
         if self
             .bench_rows
@@ -485,44 +582,33 @@ impl AppState {
     }
 
     /// Put the point `point` names on its node's bench as a track-stage
-    /// editable track, and make it the active one.
+    /// editable track, and focus it.
     ///
     /// The label is `label` when the caller names one, and otherwise the
     /// point's portable id ([`crate::point_ids::mint`]), which is what a log
     /// row naming the item has to carry to be worth reading, and which core
     /// cannot mint because it sees one value rather than the node's version
     /// graph. Either way a label another item holds takes core's `" (n)"`
-    /// suffix. Putting on a point a track already came from activates that
+    /// suffix. Putting on a point a track already came from focuses that
     /// track instead of putting a second one on, under the label it already
-    /// has: the person asked to work on that point, and there it is.
+    /// has: the person asked to work on that point, and there it is. That
+    /// case pushes no version, and so is not refused while the node is busy.
     pub(crate) fn put_point_on_bench(
         &mut self,
         point: PointRef,
         label: Option<&str>,
     ) -> Result<String, String> {
+        let index = self.node_index(point.recon)?;
+        if let Some(label) = self.bench_item_from_point(point) {
+            self.focus_bench_item(point.recon, &label)?;
+            return Ok(label);
+        }
         if let Some(why) = self.busy_refusal(point.recon) {
             return Err(why);
         }
-        let index = self.node_index(point.recon)?;
         let node = &self.scene[index];
         let serial = node.history.current_version().serial;
         let bench = Arc::clone(node.history.current_bench());
-
-        // Already on it: the origin is the point, followed to this version.
-        if let Some(label) = bench
-            .entries()
-            .iter()
-            .find(|entry| match &entry.item {
-                BenchItem::Track(track) => self
-                    .resolved_origin(node, track)
-                    .is_some_and(|origin| origin == point.point),
-            })
-            .map(|entry| entry.label.clone())
-        {
-            self.activate_bench_item(point.recon, &label)?;
-            return Ok(label);
-        }
-
         let label = match label {
             Some(label) => label.to_string(),
             None => crate::scene::point_id(node, point.index()),
@@ -535,12 +621,30 @@ impl AppState {
             .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
         let text = format!("Put point {} on the bench as {}", point.point, report.label);
         self.push_bench_step(index, next, text);
+        self.focus_put_item(point.recon, &report.label);
         self.refresh_index_files(point.recon);
         Ok(report.label)
     }
 
-    /// Start a cluster-stage track on `image`'s node from `seed`, and make it
-    /// the active track.
+    /// The label of the item on `point`'s node's bench that came from
+    /// `point`: its origin, followed to the cursor, is that point. `None` when
+    /// no item did.
+    pub(crate) fn bench_item_from_point(&self, point: PointRef) -> Option<String> {
+        let node = self.node(point.recon)?;
+        node.history
+            .current_bench()
+            .entries()
+            .iter()
+            .find(|entry| match &entry.item {
+                BenchItem::Track(track) => self
+                    .resolved_origin(node, track)
+                    .is_some_and(|origin| origin == point.point),
+            })
+            .map(|entry| entry.label.clone())
+    }
+
+    /// Start a cluster-stage track on `image`'s node from `seed`, and focus
+    /// it.
     ///
     /// The pixel is where the Image Detail panel's context menu was last
     /// opened, and a seed that names no shape takes the node's own default
@@ -594,6 +698,7 @@ impl AppState {
             clamp_note(seeded.clamped_from, seeded.pixel)
         );
         self.push_bench_step(index, next, text);
+        self.focus_put_item(image.recon, &report.label);
         // Putting something on the bench is the moment a search becomes
         // possible, so it is the moment to look for the index that would serve
         // one. The look is remembered, so the second item costs nothing.
@@ -1105,8 +1210,8 @@ impl AppState {
     /// What a second patch over neighbouring ground is started from: the copy
     /// carries the geometry and the judgements and drops only the origin, so a
     /// commit of it creates a point rather than replacing the one the original
-    /// came from ([`sfmtool_core::bench::duplicate`]). The copy is the active
-    /// track when the step returns, because it is the thing about to be moved.
+    /// came from ([`sfmtool_core::bench::duplicate`]). The copy is the focused
+    /// item when the step returns, because it is the thing about to be moved.
     pub(crate) fn duplicate_bench_item(
         &mut self,
         id: ReconId,
@@ -1121,11 +1226,12 @@ impl AppState {
             .map_err(|e| format!("Cannot duplicate that item: {e}"))?;
         let text = format!("Duplicated {label} as {}", report.label);
         self.push_bench_step(index, next, text);
+        self.focus_put_item(id, &report.label);
         Ok(report.label)
     }
 
     /// Move the named observations off the track called `label` onto a second
-    /// track beside it, and report the label that one took.
+    /// track beside it, focus that one, and report the label it took.
     pub(crate) fn split_bench_track(
         &mut self,
         id: ReconId,
@@ -1148,63 +1254,22 @@ impl AppState {
         // would name other observations of this track.
         self.clear_bench_rows(id);
         self.push_bench_step(index, next, text);
+        self.focus_put_item(id, &report.label);
         Ok(report.label)
-    }
-
-    /// Make the item called `label` the active one of its kind.
-    pub(crate) fn activate_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
-        if let Some(why) = self.busy_refusal(id) {
-            return Err(why);
-        }
-        let index = self.node_index(id)?;
-        let bench = Arc::clone(self.scene[index].history.current_bench());
-        if active_track_label(&bench) == Some(label) {
-            self.no_effect(format!(
-                "Made {label} the active track: no effect, it is active already"
-            ));
-            return Ok(());
-        }
-        let next = bench
-            .activate(label)
-            .map_err(|e| format!("Cannot activate that item: {e}"))?;
-        let text = format!("Made {label} the active track");
-        self.push_bench_step(index, next, text);
-        Ok(())
-    }
-
-    /// Leave every item on `id`'s bench where it is and make none active: what
-    /// clearing Track View's *Edit* box does, and the wire's
-    /// `deactivate_bench_item`.
-    ///
-    /// One version, like an activation, so an undo brings back what was being
-    /// edited. With nothing active it pushes nothing and writes the no-effect
-    /// row every bench step answers a nothing-to-do with.
-    pub(crate) fn deactivate_bench_item(&mut self, id: ReconId) -> Result<(), String> {
-        if let Some(why) = self.busy_refusal(id) {
-            return Err(why);
-        }
-        let index = self.node_index(id)?;
-        let bench = Arc::clone(self.scene[index].history.current_bench());
-        let Some(label) = active_track_label(&bench).map(str::to_string) else {
-            self.no_effect("Stopped editing: no effect, no track is active".to_string());
-            return Ok(());
-        };
-        let next = bench.deactivate(sfmtool_core::bench::ItemKind::Track);
-        let text = format!("Stopped editing {label}; it stays on the bench");
-        self.push_bench_step(index, next, text);
-        Ok(())
     }
 
     /// What Track View's *Edit* box asks of `id`'s bench.
     ///
-    /// Ticked (`true`), the selected point is put on the bench, which activates
-    /// the item already there when one came from that point
+    /// Ticked (`true`), the selected point is put on the bench and focused, or
+    /// the item already there is focused when one came from that point
     /// ([`Self::put_point_on_bench`]); the selection notice's *Edit it* is the
-    /// same call. Cleared (`false`), nothing is active and every item stays on
-    /// the bench ([`Self::deactivate_bench_item`]). Either is one bench step.
+    /// same call. The first is a bench step and the second is not. Cleared
+    /// (`false`), nothing is focused and every item stays on the bench
+    /// ([`Self::unfocus_bench_item`]), which is no step.
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String> {
         if !on {
-            return self.deactivate_bench_item(id);
+            self.unfocus_bench_item();
+            return Ok(());
         }
         let point = self
             .selected_point
@@ -1215,7 +1280,7 @@ impl AppState {
 
     /// *Start cluster on the bench here*, chosen in the Image Detail panel at
     /// `pixel` of `image`: a cluster-stage track put on the bench there and
-    /// made active, and Track View raised on it.
+    /// focused, and Track View raised on it.
     ///
     /// The cluster starts at the size the reconstruction's own patches project
     /// to in this image, so it starts at the scale the node already works at
@@ -1233,15 +1298,14 @@ impl AppState {
         }
     }
 
-    /// Make the item at `position` on `id`'s bench the active one, select the
-    /// node it is on, and raise Track View on it: a Scene tree double-click on
-    /// a Bench row.
+    /// Focus the item at `position` on `id`'s bench, select the node it is on,
+    /// and raise Track View on it: a Scene tree double-click on a Bench row.
     ///
     /// The node is selected because Track View shows the selected node's bench,
     /// and a raise onto another node's bench would show the wrong item. An item
-    /// already active pushes no version and writes no row: the gesture asked
-    /// for the panel, and the panel is what it gets. Applied by `app.rs` once
-    /// the dock is back in the state, since the raise is a layout operation.
+    /// already focused writes no row: the gesture asked for the panel, and the
+    /// panel is what it gets. Applied by `app.rs` once the dock is back in the
+    /// state, since the raise is a layout operation.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize) {
         let Some(label) = self
             .bench(id)
@@ -1253,12 +1317,9 @@ impl AppState {
         if self.selected_recon != Some(id) {
             self.select_recon(id);
         }
-        let already = self
-            .bench(id)
-            .is_some_and(|bench| active_track_label(bench) == Some(label.as_str()));
-        if !already {
-            if let Err(why) = self.activate_bench_item(id, &label) {
-                self.action_log.fail(Kind::Bench, why);
+        if self.focused_item_label(id) != Some(label.as_str()) {
+            if let Err(why) = self.focus_bench_item(id, &label) {
+                self.action_log.fail(Kind::Selection, why);
                 return;
             }
         }
@@ -1268,9 +1329,9 @@ impl AppState {
     /// Take the item called `label` off the bench.
     ///
     /// No confirmation anywhere that calls this: a discard is a version, and an
-    /// undo puts the item back where it was and active as it was. Discarding the
-    /// active item leaves nothing active, so Track View returns to view mode
-    /// rather than switching to an item nobody asked for.
+    /// undo puts the item back where it was. Discarding the focused item
+    /// unfocuses it, so Track View returns to view mode rather than switching
+    /// to an item nobody asked for; the undo does not focus it again.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
@@ -1289,8 +1350,8 @@ impl AppState {
     ///
     /// The two Scene tree groups are one bench, so *Clear the Bench* on either
     /// clears both. Like a discard it is one version and asks for no
-    /// confirmation: an undo puts every item back, and the active one active
-    /// again. Clearing an empty bench is no step.
+    /// confirmation: an undo puts every item back. The focused item, when it
+    /// was on this bench, is unfocused. Clearing an empty bench is no step.
     pub(crate) fn clear_bench(&mut self, id: ReconId) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
@@ -1334,16 +1395,9 @@ impl AppState {
         let next = bench
             .rename(label, to)
             .map_err(|e| format!("Cannot rename that item: {e}"))?;
+        // The item keeps its ID, so the focused item and the selected
+        // observations follow it to the new label.
         let text = format!("Renamed {label} to {to} on the bench");
-        // The selected observations are the same observations under the new
-        // label.
-        if let Some(rows) = self
-            .bench_rows
-            .as_mut()
-            .filter(|rows| rows.recon == id && rows.label == label)
-        {
-            rows.label = to.to_string();
-        }
         self.push_bench_step(index, next, text);
         Ok(())
     }
@@ -1450,7 +1504,7 @@ impl AppState {
         let parent = version_before(node, serial);
         self.action_log
             .record(Kind::Edit, version_step_text(&text, parent, serial));
-        self.settle_bench_rows(id);
+        self.settle_focused_item(id);
         // After the row the edit wrote, because that is the order the two
         // happened in: the point the selection moves to is a row of the version
         // the line above just announced.
@@ -2104,8 +2158,8 @@ impl AppState {
 
     /// Push one bench step as the node's next version and write its row.
     ///
-    /// The selected observations go with the step when it leaves another item
-    /// active ([`Self::settle_bench_rows`]).
+    /// The focused item is unfocused when the step took it off the bench
+    /// ([`Self::settle_focused_item`]).
     fn push_bench_step(&mut self, index: usize, bench: Bench, text: String) {
         let node = &mut self.scene[index];
         let id = node.id;
@@ -2113,7 +2167,7 @@ impl AppState {
         let parent = version_before(node, serial);
         self.action_log
             .record(Kind::Bench, version_step_text(&text, parent, serial));
-        self.settle_bench_rows(id);
+        self.settle_focused_item(id);
     }
 
     /// The node, its bench and the track a step on one item acts on.
@@ -2239,7 +2293,7 @@ impl AppState {
 }
 
 /// The bench with `label`'s item replaced by `track`, leaving the order, the
-/// label and the activation as they were.
+/// label and the item's ID as they were.
 fn install(bench: &Bench, label: &str, track: EditableTrack) -> Result<Bench, String> {
     bench
         .replace(label, BenchItem::Track(Arc::new(track)))

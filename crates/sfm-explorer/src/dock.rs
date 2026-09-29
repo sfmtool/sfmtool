@@ -37,7 +37,7 @@ pub(crate) enum Tab {
     Viewer3D,
     ImageBrowser,
     ImageDetail,
-    /// The selected point's committed track, or the bench's active track
+    /// The selected point's committed track, or the focused item
     /// while its *Edit* box is ticked. See [`crate::track_view`].
     TrackView,
     IntrinsicsDetail,
@@ -196,15 +196,14 @@ impl TabContext<'_> {
             .state
             .selected_recon
             .and_then(|id| self.state.busy_refusal(id));
-        // What the viewport is told about the node's bench: the active track,
+        // What the viewport is told about the node's bench: the focused item,
         // which its bench layer draws as scene geometry. Read out here, before
         // the node is borrowed out of the scene, for the reason `busy` above
         // is -- and owned (its own `Arc`, not a borrow of the state), the way
         // the Image Detail panel's own bench value is read out.
-        let active = self.state.selected_recon.and_then(|id| {
-            let bench = self.state.bench(id)?;
-            let label = crate::bench::active_track_label(bench)?.to_string();
-            let track = bench.track(&label).cloned()?;
+        let focused = self.state.selected_recon.and_then(|id| {
+            let label = self.state.focused_item_label(id)?.to_string();
+            let track = self.state.bench_track(id, &label).cloned()?;
             // The one selected observation, which the figure draws larger.
             let selected = self.state.selected_bench_observation(id, &label);
             Some((label, track, selected))
@@ -214,7 +213,7 @@ impl TabContext<'_> {
         // overlap.
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            let bench = active.as_ref().map(|(_, track, selected)| {
+            let bench = focused.as_ref().map(|(_, track, selected)| {
                 crate::viewer_3d::bench_track::BenchTrack {
                     node: node.id,
                     track,
@@ -248,7 +247,7 @@ impl TabContext<'_> {
             // resized or turned, or one of its marks clicked. Applied here
             // rather than in the viewport because both halves need the state
             // mutably, and it is borrowed out of for the whole of that call.
-            self.apply_bench_gesture(active.as_ref().map(|(label, _, _)| label.as_str()));
+            self.apply_bench_gesture(focused.as_ref().map(|(label, _, _)| label.as_str()));
         } else {
             // Nothing selected is nothing on a bench: the figure would
             // otherwise hang in the scene after the node that held it closed.
@@ -302,8 +301,8 @@ impl TabContext<'_> {
         }
     }
 
-    /// Apply what Track View's edit mode asked for: each step on the active
-    /// track.
+    /// Apply what Track View's edit mode asked for: each step on the focused
+    /// item.
     ///
     /// Applied here rather than in the panel for the reason the Edit History
     /// panel's jump is: the panel holds `&AppState` while it draws, and every
@@ -336,14 +335,10 @@ impl TabContext<'_> {
         if response.request_goto_point {
             self.state.open_goto_point();
         }
-        // Everything below acts on the active track, which is what a bench
+        // Everything below acts on the focused item, which is what a bench
         // panel's gesture means when it names no item.
-        let active = self
-            .state
-            .bench(id)
-            .and_then(|bench| crate::bench::active_track_label(bench))
-            .map(str::to_string);
-        let Some(label) = active else {
+        let focused = self.state.focused_item_label(id).map(str::to_string);
+        let Some(label) = focused else {
             return;
         };
         if let Some((observation, verdict)) = response.set_verdict {
@@ -597,7 +592,7 @@ impl TabContext<'_> {
         }
     }
 
-    /// Decode the photographs the active bench track's rows draw their tiles
+    /// Decode the photographs the focused bench track's rows draw their tiles
     /// from, into the node's shared full-resolution cache.
     ///
     /// Here rather than in the panel for the reason view mode's pre-cache is
@@ -608,10 +603,10 @@ impl TabContext<'_> {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        let Some(bench) = self.state.bench(id) else {
-            return;
-        };
-        let Some(track) = crate::bench::active_track_label(bench).and_then(|l| bench.track(l))
+        let Some(track) = self
+            .state
+            .focused_item_label(id)
+            .and_then(|label| self.state.bench_track(id, label))
         else {
             return;
         };
@@ -661,7 +656,7 @@ impl TabContext<'_> {
             let selected_point = self.state.selected_point_in(id);
             let hovered_point = self.state.hovered_point_in(id);
             // What the panel is told about the node's bench: the task holding
-            // it, and its active track, which the menu's two bench entries are
+            // it, and its focused item, which the menu's two bench entries are
             // greyed by and the bench layer draws. Read out here, beside the
             // selection, for the same reason -- and owned (the label a
             // `String`, the track its own `Arc`), because the panel is handed
@@ -671,11 +666,11 @@ impl TabContext<'_> {
             // image shown, if they are.
             let create_track_refusal = selected_image
                 .and_then(|idx| self.state.create_track_here_refusal(ImageRef::new(id, idx)));
-            let (bench_label, bench_track) = match self.state.bench(id) {
-                Some(bench) => match crate::bench::active_track_label(bench) {
-                    Some(label) => (Some(label.to_string()), bench.track(label).cloned()),
-                    None => (None, None),
-                },
+            let (bench_label, bench_track) = match self.state.focused_item_label(id) {
+                Some(label) => (
+                    Some(label.to_string()),
+                    self.state.bench_track(id, label).cloned(),
+                ),
                 None => (None, None),
             };
             // The camera the selected image resolves to — the subject of
@@ -759,7 +754,7 @@ impl TabContext<'_> {
                 hovered_point,
                 crate::image_detail::BenchMenu {
                     busy: bench_busy.as_deref(),
-                    active_track: bench_track.as_deref(),
+                    focused_track: bench_track.as_deref(),
                     lock: self.track_view.lock(),
                     create_track: create_track_refusal.as_deref(),
                 },
@@ -881,8 +876,9 @@ impl TabContext<'_> {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        // The box and the selection notice, each one bench step
-        // (`AppState::set_editing`), refused in its own words.
+        // The box and the selection notice (`AppState::set_editing`): a put
+        // is a bench step, refused in its own words; focusing an item already
+        // on the bench and unfocusing are not.
         let on = response
             .set_edit
             .or(response.edit_selected_point.then_some(true));
@@ -901,7 +897,7 @@ impl TabContext<'_> {
 
     /// Decode what the mode Track View is about to draw reads from: in view
     /// mode the selected point's `.sift` positions and photographs, in edit
-    /// mode the active track's photographs.
+    /// mode the focused item's photographs.
     ///
     /// Here rather than in the panel because filling the caches needs
     /// `&mut AppState` and the panel is handed `&AppState` while it draws.
@@ -909,10 +905,7 @@ impl TabContext<'_> {
         let Some(id) = self.state.selected_recon else {
             return;
         };
-        let editing = self
-            .state
-            .bench(id)
-            .is_some_and(|bench| crate::bench::active_track_label(bench).is_some());
+        let editing = self.state.focused_item_label(id).is_some();
         if editing {
             self.cache_bench_track_images();
         } else {

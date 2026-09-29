@@ -197,13 +197,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "activate_bench_item",
+            "focus_bench_item",
             json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
         ),
-        (
-            "deactivate_bench_item",
-            json!({ "reconstruction_label": "alpha" }),
-        ),
+        ("unfocus_bench_item", json!({})),
         (
             "rename_bench_item",
             json!({

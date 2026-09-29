@@ -12,16 +12,16 @@ panel that reads the reconstruction sees it.
 What makes it the viewer's rather than core's is the **history**. A version of a
 node is a pair, the reconstruction value and the bench as it stood, so one Undo
 walks both and a person editing a track never has to know which of their steps
-touched the file. Everything else about the bench -- the list, the labels, the
-activation, and every step over an item -- is `sfmtool_core::bench`
+touched the file. Everything else about the bench -- the list, the labels and
+every step over an item -- is `sfmtool_core::bench`
 ([`../core/bench/bench.md`](../core/bench/bench.md),
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)), a value
 and pure functions with no window in them.
 
-Related specs: [`track-view.md`](track-view.md) (the panel that edits the active
-track with its *Edit* box ticked), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
-Detail panel, which carries the three steps that name a pixel and draws the active
-track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
+Related specs: [`track-view.md`](track-view.md) (the panel that edits the focused
+item with its *Edit* box ticked), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
+Detail panel, which carries the three steps that name a pixel and draws the focused
+item as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the two Bench groups are
@@ -172,21 +172,17 @@ impl AppState {
                                     observation: usize) -> Result<(), String>;
     pub(crate) fn split_bench_track(&mut self, id: ReconId, label: &str,
                                     observations: &[usize]) -> Result<String, String>;
-    pub(crate) fn activate_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
-    /// Every item left on the bench and none active: Track View's Edit box
-    /// cleared. No version, and a no-effect row, with nothing active.
-    pub(crate) fn deactivate_bench_item(&mut self, id: ReconId) -> Result<(), String>;
-    /// The Edit box ticked (the selected point put on, or its item activated)
-    /// or cleared (`deactivate_bench_item`).
+    /// The Edit box ticked (the selected point put on, or its item focused)
+    /// or cleared (`unfocus_bench_item`).
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String>;
-    /// A Scene tree double-click on a Bench row: select the node, activate the
-    /// item unless it is active already, raise Track View.
+    /// A Scene tree double-click on a Bench row: select the node, focus the
+    /// item unless it is focused already, raise Track View.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize);
     /// Image Detail's *Start cluster on the bench here*: the cluster put on,
-    /// active, and Track View raised.
+    /// focused, and Track View raised.
     pub(crate) fn start_cluster_here(&mut self, image: ImageRef, pixel: [f32; 2]);
     /// Image Detail's *Create Track Here*: a track built at the pixel on a
-    /// worker, then put on the bench, active, and committed. A refusal in
+    /// worker, then put on the bench, focused, and committed. A refusal in
     /// front of the worker is one failed row and no task.
     pub(crate) fn start_create_track_at_pixel(&mut self, image: ImageRef,
                                               pixel: [f64; 2], label: Option<&str>)
@@ -205,9 +201,9 @@ impl AppState {
     /// `.sift` features.
     pub(crate) fn find_nearby_tracks_refusal(&self, image: ImageRef, commit: bool)
         -> Option<String>;
-    /// Discarding the active item leaves nothing active.
+    /// Discarding the focused item unfocuses it.
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
-    /// A copy of the item beside it, active, with no origin: the label it took.
+    /// A copy of the item beside it, focused, with no origin: the label it took.
     pub(crate) fn duplicate_bench_item(&mut self, id: ReconId, label: &str)
         -> Result<String, String>;
     pub(crate) fn rename_bench_item(&mut self, id: ReconId, label: &str, to: &str)
@@ -246,24 +242,43 @@ impl AppState {
     pub(crate) fn drive_bench_evaluation(&mut self) -> bool;
 }
 
+// The focused item, held in `AppState::focused_item`, in
+// [bench.rs](../../crates/sfm-explorer/src/bench.rs) (§ "The focused item").
+pub(crate) struct FocusedItem {
+    pub(crate) node: ReconId,
+    pub(crate) item: ItemId,
+}
+
+impl AppState {
+    pub(crate) fn focused_item(&self) -> Option<&FocusedItem>;
+    /// The focused item's label on `id`'s bench at the cursor; `None` when
+    /// nothing is focused, it is on another node, or it is not on that bench.
+    pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str>;
+    /// No version; one `Selection` row. Refused when nothing on the bench is
+    /// called `label`, and never for a busy node.
+    pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// No version; one `Selection` row, or a no-effect row with nothing focused.
+    pub(crate) fn unfocus_bench_item(&mut self);
+}
+
 // The selected observations, held in `AppState::bench_rows`
 // (§ "The selected observations").
 pub(crate) struct BenchRows {
     pub(crate) recon: ReconId,
-    pub(crate) label: String,
+    pub(crate) item: ItemId,
     /// Ascending, without repeats.
     pub(crate) observations: Vec<usize>,
 }
 
 impl AppState {
-    /// Empty unless `label` is the active track and the selection was made on it.
+    /// Empty unless `label` is the focused item and the selection was made on it.
     pub(crate) fn selected_bench_observations(&self, id: ReconId, label: &str) -> &[usize];
     /// The one selected observation, when exactly one is: what the 3D viewer's
     /// bench figure draws larger.
     pub(crate) fn selected_bench_observation(&self, id: ReconId, label: &str)
         -> Option<usize>;
     /// Replace the selection; an empty list clears it. Refused for a track that
-    /// is not active and for an index past the end of the list.
+    /// is not the focused item and for an index past the end of the list.
     pub(crate) fn select_bench_observations(&mut self, id: ReconId, label: &str,
                                             observations: &[usize]) -> Result<(), String>;
     /// A click on one observation: alone, or with `extend` added to or taken out
@@ -306,10 +321,9 @@ forward, and spelling a bench step as "push this bench" keeps a hundred verdicts
 from having to restate the reconstruction they did not touch.
 
 **The item is named by its label at every call.** A gesture in a bench panel
-means "the active item of the kind this panel edits", and the panel is what
-knows that; the steps take the label, so the question of which item is answered
-in one place rather than inside each step. `active_track_label` is what a caller
-resolves it with.
+means "the focused item", and the panel is what knows that; the steps take the
+label, so the question of which item is answered in one place rather than
+inside each step. `focused_item_label` is what a caller resolves it with.
 
 **One `Seed` for the two steps that place an observation.** A caller arrives
 holding one of three things -- a pixel, a pixel with a size or a shape read at
@@ -423,7 +437,7 @@ in the one version that states all three halves
 ([`edits/bake-transform.md`](edits/bake-transform.md)). A track-stage item's
 placement and position are in the reconstruction's own coordinates, the same
 coordinates the bake rewrites, so a bake that left them alone would stand the
-active track's square in the old frame and the 3D viewer's figure would jump.
+focused item's square in the old frame and the 3D viewer's figure would jump.
 The centre goes through the whole similarity, the axes are rotated and the
 half-extent is scaled; a track at infinity keeps the rotation alone; a
 cluster-stage item has no world geometry and keeps its `Arc`.
@@ -456,7 +470,6 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Fit | `Fitted IMG_0042@142,198: finite at (x, y, z): condition number 82 under the 10000 bar, rms 0.1 px finite against 48.3 px as a bearing, rays up to 15.204 deg apart` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
-| Activate | `Made IMG_0042@142,198 the active track` |
 | Discard | `Discarded IMG_0042@142,198 from the bench` |
 | Duplicate | `Duplicated IMG_0042@142,198 as IMG_0042@142,198 copy` |
 | Rename | `Renamed IMG_0042@142,198 to bull-nose on the bench` |
@@ -466,8 +479,8 @@ edit's is: `Turned image_012.jpg out of pt3d_a1b2c3d4_1207 (v7 → v8)`. A
 refusal is one failed row carrying the refusal's sentence.
 
 **A step that changes nothing pushes no version.** Setting the verdict an
-observation already has, setting the stage a track is already at, activating the
-active item, renaming an item to the label it holds, and a drag of a handle that
+observation already has, setting the stage a track is already at, renaming an
+item to the label it holds, and a drag of a handle that
 ends where it started each report that nothing happened and leave the history
 alone: a row that has to be undone for nothing is worse than no row.
 
@@ -499,31 +512,69 @@ from a point is labelled by that point's portable id**, `pt3d_a1b2c3d4_1207`,
 because that id names the content the point is a row of and the version graph
 that content sits in, and core has neither ([`goto-point.md`](goto-point.md)).
 
-**Putting a point on the bench twice activates the track it already made.** The
+**Putting a point on the bench twice focuses the track it already made.** The
 person asked to work on that point, and there it is; a second item for one point
 would be two answers to one question. The test is the origin, followed to the
-cursor.
+cursor. That case pushes no version.
 
-**The bench holds one active item, and may hold none.** A track and a cluster
-share the one activation, so activating one leaves the other on the bench,
-inactive. Clearing Track View's *Edit* box is `deactivate_bench_item`, one
-version labelled `Stopped editing IMG_0042@142,198; it stays on the bench`, and
-with nothing active it pushes nothing and writes the no-effect row `Stopped
-editing: no effect, no track is active`. Discarding the active item leaves
-nothing active rather than handing the activation to a neighbour, so Track View
-returns to view mode instead of switching to an item nobody asked for. An undo
-over any of these restores the activation the version held.
+---
+
+## The focused item
+
+The item Track View edits while its *Edit* box is ticked, and the item a bench
+panel's gesture or a wire call means when it names none, is the **focused
+item**: `AppState::focused_item`, a `FocusedItem` naming a node and an item on
+that node's bench by its `ItemId`. There is **at most one for the whole
+viewer**, not one per bench. A track and a cluster are focused alike, and an
+item with no point in the reconstruction is focused like any other, since a
+`FocusedItem` names an item and never a point.
+
+**It is not part of any version.** It is held beside the selection, and
+focusing and unfocusing are not bench steps: they push no version and write one
+Action Log row of kind `Selection`, `Editing IMG_0042@142,198` and `Stopped
+editing IMG_0042@142,198`, folded like other selection rows. Focusing the item
+already focused writes the no-effect row `Editing IMG_0042@142,198: no effect,
+it is being edited already`; unfocusing with nothing focused writes `Stopped
+editing: no effect, no item is being edited`. Neither is refused while a
+background task holds the node, since neither changes the bench. So an undo is
+never spent on a change of focused item: a person who turns an observation out,
+clears *Edit* and presses Ctrl+Z gets the verdict back.
+
+**It is named by `ItemId`, not by label.** Core gives every item an ID when it
+is put on the bench and keeps it across a rename and every step that replaces
+the item's value ([`../core/bench/bench.md`](../core/bench/bench.md)), so a
+rename leaves the item focused under its new label.
+
+What changes it:
+
+- **focusing** it: ticking *Edit* over a point an item already came from, a
+  Scene tree double-click on a Bench row, and the wire's `focus_bench_item`.
+  Focusing an item on one node unfocuses whatever was focused on another;
+- **unfocusing**: clearing *Edit*, the selection notice's *View*, and the
+  wire's `unfocus_bench_item`;
+- **a step that puts an item on the bench** focuses the item it put on, with
+  no row of its own beside the step's: a put from a point, *Start cluster*,
+  *Create Track Here*, *Find Nearby Tracks* (its `1a`), *Duplicate* and
+  *Split*;
+- **a step that takes the focused item off the bench**, a discard or *Clear
+  the Bench*, unfocuses it, so Track View returns to view mode instead of
+  switching to an item nobody asked for;
+- **undo, redo and a jump** leave it focused while the version landed on holds
+  it, and unfocus it when that version does not (an undo past its put, a redo
+  past its discard), with no row beyond the move's own. They never focus an
+  item: an undo of a discard puts the item back unfocused;
+- **closing its node** unfocuses it.
 
 ---
 
 ## The selected observations
 
-The bench carries a selection of the active track's observations: the rows
+The bench carries a selection of the focused item's observations: the rows
 highlighted in Track View's edit mode. *Split off N rows* takes them, and when
 exactly one is selected the 3D viewer's bench figure draws its mark larger
 ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)). It is held in
 `AppState::bench_rows` as a `BenchRows`, which names the node and the track's
-label beside the observation indexes, so every gesture that reads or sets it
+`ItemId` beside the observation indexes, so every gesture that reads or sets it
 reads or sets one value:
 
 - a click on a Track View row selects that observation alone, and a Ctrl-click
@@ -539,23 +590,22 @@ Action Log row of kind `Selection` -- `Selected observations 0, 2 of bull-nose`
 -- folded into the row before it when that was also a change of the selected
 observations, so a run of Ctrl-clicks reads as one line.
 
-**Only the active track has selected observations.** The indexes mean
-something only against one track's list, and Track View shows only the active
-track, so a selection on any other track is refused. What clears it:
+**Only the focused item has selected observations.** The indexes mean
+something only against one track's list, and Track View shows only the focused
+item, so a selection on any other track is refused. What clears it:
 
 - **a move of the cursor**: undo, redo or a jump. The version landed on may
-  hold another list of observations under the same label, and an undo does not
+  hold another list of observations for the same item, and an undo does not
   bring back a selection, because a selection is not in a version;
-- **a step that leaves another item active, or none**: an activation, a
-  deactivation, a discard, a duplicate, a create or a commit that activates
-  something else. Coming back to the track later does not bring the selection
-  back;
+- **a change of focused item**: a focus of another item, an unfocus, a discard
+  of the focused item, or a step that puts another item on the bench and
+  focuses it. Coming back to the track later does not bring the selection back;
 - **a split**, which renumbers the observations left on the track;
 - **closing the node**.
 
-A rename carries the selection to the new label, since the observations are the
-same ones. Every other step on the active track keeps it, because those steps
-append observations or change them in place and never renumber the list.
+A rename keeps the selection, since it keeps the item's ID and the observations
+are the same ones. Every other step on the focused item keeps it, because those
+steps append observations or change them in place and never renumber the list.
 
 ---
 
@@ -581,17 +631,17 @@ The radius the evaluation looks for each peak within is the track's own
 `max_shift_px` bar, so it is part of the track value: moving it is a thresholds
 step like any other. There is no viewer-wide radius.
 
-So no step has to remember to ask for an evaluation, and none does. The track's
-label is part of the key too, so a renamed item is evaluated under its new
-name. The thresholds are not an input on their own: the evaluation reads with
+So no step has to remember to ask for an evaluation, and none does. The item's
+`ItemId` is part of the key too, so a rename, which keeps the ID and the track
+value, leaves an evaluated track current. The thresholds are not an input on their own: the evaluation reads with
 its gates off, and the bars reach it only through the verdicts they paint.
 
 **One evaluation runs at a time, and a stale one is cancelled.** Once per frame,
 after the frame's steps, `drive_bench_evaluation` lands a finished evaluation,
 and then either cancels the running one when its inputs are no longer the
 track's, or, when nothing is running, starts the next track whose evaluation is
-`Evaluating`: the active track of each bench first, then the rest in bench
-order, in scene order. It does not start the next until a cancelled one has
+`Evaluating`: the focused item first, whichever node it is on, then the rest in
+bench order, in scene order. It does not start the next until a cancelled one has
 reported back, so a box drag that moves an input on every frame has at most
 one worker behind it rather than a queue. It also waits while a background task
 holds the node, since that task's answer replaces the inputs it would read.
@@ -783,7 +833,7 @@ reconstruction that stores a bitmap per point as on one that does not.
 
 **A track that comes home is two versions**, in the order they happened. The
 first is a bench step: the track put on the bench under the label a cluster
-started at that pixel would take (`IMG_0042@142,198`), made active, one `Bench`
+started at that pixel would take (`IMG_0042@142,198`), focused, one `Bench`
 row whose sentence names the pixel, the member that built it, its `in` count and
 median ZNCC with the median middle ZNCC beside it (`median ZNCC 93% / 71%`),
 and any members that refused before it. The second is
@@ -791,7 +841,7 @@ and any members that refused before it. The second is
 `Edit` row, the selection of the written point and the item left seated on it
 are that step's own. The operation's row is written first and the commit's
 after it, both as whoever asked for the run. One Undo takes back the point and
-leaves the track on the bench, active, which is where a person who wants to
+leaves the track on the bench, focused, which is where a person who wants to
 work on it would want it. A commit that is refused, say over a track with fewer
 than two `in` sightings, is one failed `Edit` row naming the item the track
 stays on the bench as.
@@ -875,7 +925,7 @@ and one Redo puts it back:
   (core's `create_track`, seated on the point), under the label with its
   point, `frame_13@412,230 1b pt 812`, and is never committed again. A point a
   bench item already came from keeps that item under the label it has, as
-  *Edit on Bench* activates the item it made rather than putting a second one
+  *Edit on Bench* focuses the item it made rather than putting a second one
   on, so a second find at the same pixel puts no copies of its existing points
   on the bench;
 - **a built track** goes on under its label, `frame_13@412,230 2a`, and with
@@ -889,8 +939,8 @@ and one Redo puts it back:
   carries its reason.
 
 A find that would change nothing -- every track it found on the bench already,
-and `1a` active already -- pushes no version and ends its row with *no effect,
-the bench holds them already*.
+-- pushes no version and ends its row with *no effect, the bench holds them
+already*; `1a` is focused all the same.
 
 A label another item holds takes core's ` (n)` suffix, as every label on the
 bench does, so a second find at the same pixel puts its new tracks beside the
@@ -899,13 +949,13 @@ group label. The version is labelled *Found 8 nearby tracks at
 frame_13@412,230*. The row is an `Edit` row when the version wrote points and
 a `Bench` row when it wrote only the bench, and its sentence says how many
 tracks were found in how many layers, the first layer's confidence, what
-became of the tracks, and which item is active:
+became of the tracks, and which item is being edited:
 
 > Found 8 nearby tracks in 2 layers at (412.0, 230.0) in frame_13.jpg, the
 > first layer at 87% confidence: 5 committed as new points, 3 existing points
-> put on the bench; frame_13@412,230 1a is active (v12 -> v13)
+> put on the bench; editing frame_13@412,230 1a (v12 -> v13)
 
-**`1a` is the active item afterwards**, the track nearest the pixel on the
+**`1a` is the focused item afterwards**, the track nearest the pixel on the
 best-ranked layer, the best stand-in for the pixel on the surface the
 photographs favour. Its point, existing or just committed, becomes the
 selection after the row, as a commit selects the point it wrote, so Track View
@@ -935,19 +985,19 @@ adds no row and a bench of tracks alone shows one group; each remembers its own
 expansion.
 
 Inside each is one row per item of that stage, in the bench's own order, by
-label, with its `in` count, the active one marked as a selected row. There is no
+label, with its `in` count, the focused item marked as a selected row. There is no
 eye: nothing on the bench is drawn from these rows, and an item is not part of
 the reconstruction.
 
 A click on a row selects the node it is under and does nothing to the bench,
 as a click on the node's own row selects it, so a pass of clicks down the tree
-pushes no versions. A **double-click** makes the item active, selects the node
-and raises Track View on it (`AppState::edit_bench_item_at`); on the item that
-is active already it pushes no version and writes no row, since the gesture
-asked for the panel. A secondary click offers *Discard*, and one on either
-group's header offers *Clear the Bench*, which takes off every item of both
-groups in one version (`AppState::clear_bench`). One item is active
-across both groups, the kind being the item rather than the stage. The bench is in the tree
+pushes no versions. A **double-click** focuses the item, selects the node and
+raises Track View on it (`AppState::edit_bench_item_at`), with no version and
+the one `Selection` row a focus writes; on the item that is focused already it
+writes no row, since the gesture asked for the panel. A secondary click offers
+*Discard*, and one on either group's header offers *Clear the Bench*, which
+takes off every item of both groups in one version (`AppState::clear_bench`).
+The bench is in the tree
 because the tree is where a node's parts are listed, and it is per node because
 an item names that node's images and poses.
 
@@ -971,12 +1021,21 @@ the `AppState` methods above**, which is the whole of what makes an agent's
 verdict, split or commit a version in the history the human is looking at.
 
 Every tool takes `reconstruction_label`. The item tools take `item`; the track
-tools take `track`, and **a call that names no track acts on the active one**,
-resolved with `active_track_label`, which is what a gesture in Track View's edit
-mode means when it names no item. With nothing active such a call is refused:
-*"No track is active on bull's bench. Name one with track, activate one with
-activate_bench_item, or put one on with create_bench_track or
+tools take `track`, and **a call that names no track acts on the focused
+item**, resolved with `focused_item_label`, which is what a gesture in Track
+View's edit mode means when it names no item. When the focused item is on
+another node's bench, or nothing is focused, such a call is refused: *"No item
+on bull's bench is focused. Name one with track, focus one with
+focus_bench_item, or put one on with create_bench_track or
 create_bench_cluster."*
+
+**`focus_bench_item` and `unfocus_bench_item` are not steps.** They push no
+version, so they answer as the selection tools do, with what they left rather
+than a version: `focus_bench_item` with the `reconstruction_label` and `item`
+it focused, and `unfocus_bench_item`, which takes no argument since there is
+one focused item for the viewer, with the `reconstruction_label` and `item` it
+unfocused, both `null` when nothing was focused. Each carries `changed`, false
+when the focused item was already what the call asked for.
 
 ```jsonc
 // The two creates are named by the stage they make, and where the first
@@ -1004,14 +1063,14 @@ create_bench_cluster."*
 //
 // The list.
 // get_bench            { "reconstruction_label": "bull" }
-// activate_bench_item  { "reconstruction_label": "bull", "item": "IMG_0042@142,198" }
-// deactivate_bench_item { "reconstruction_label": "bull" }
+// focus_bench_item     { "reconstruction_label": "bull", "item": "IMG_0042@142,198" }
+// unfocus_bench_item   { }
 // rename_bench_item    { "reconstruction_label": "bull", "item": "IMG_0042@142,198",
 //                        "label": "bull-nose" }
 // discard_bench_item   { "reconstruction_label": "bull", "item": "bull-nose" }
 // duplicate_bench_item { "reconstruction_label": "bull", "item": "bull-nose" }
 //
-// One track on it. "track" omitted means the active track.
+// One track on it. "track" omitted means the focused item.
 // get_bench_track              { "reconstruction_label": "bull" }
 // add_bench_track_observation  { "reconstruction_label": "bull", "track": "bull-nose",
 //                                "camera_image": 7, "pixel": [88.5, 210.0] }
@@ -1063,8 +1122,9 @@ create_bench_cluster."*
 
 **The two reads have no panel gesture behind them**, because a panel shows what
 they answer. `get_bench` is the bench as JSON: each item's label, kind, stage,
-origin and counts, and the active label per kind, `null` when none is active,
-which a bench holding items can be. It is **one flat list** in the
+origin and counts, each with `focused`, and `focused_item`: the focused item's
+label when it is on this node's bench, and `null` otherwise, which a bench
+holding items can be. It is **one flat list** in the
 bench's own order, with the stage on each item, rather than the tree's two
 groups: a reader that wants them apart has the field to do it with, and a
 grouping on the wire would be the panel's layout rather than the bench's own
@@ -1100,7 +1160,7 @@ read the normal it would `tilt_bench_patch` from and compare it with the point
 the track was committed over. It also carries `selected_observations`, the rows selected in Track View
 (§ "The selected observations"), which `select_bench_observations` replaces:
 an agent reads the rows a person picked out, and picks out rows for a person to
-look at. The list is empty on a track that is not active. **An observation is
+look at. The list is empty on a track that is not focused. **An observation is
 addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or a fit still names the same observation. The template's
@@ -1259,7 +1319,7 @@ moves: a centre within a millionth of the patch's own half-length, a half-length
 within a millionth of itself, an affine coefficient within a millionth of the
 shape's largest, a sighting within a thousandth of a pixel, a turn within a
 nanoradian. The steps that compare something that is not a float -- a verdict, a
-stage, a label, which item is active -- compare it exactly, because there is
+stage, a label -- compare it exactly, because there is
 nothing to round.
 
 **The commit is the one float comparison that is exact**, and for the same
@@ -1302,10 +1362,30 @@ nothing: what an agent reads is the sentence the panel's status line would show.
 the demo reconstruction rewritten as `embedded_patches` with every keypoint its
 point's exact projection and a photograph cached for every image:
 
-- putting a second item on, activating it and discarding it are three versions,
-  an undo of the discard puts it back with the activation as it stood, and the
-  first item is the same `Arc` throughout;
-- putting a point on the bench twice activates the track it already made;
+- putting a second item on and discarding it are two versions and focusing the
+  first between them none, an undo of the discard puts it back and leaves the
+  focused item alone, and the first item is the same `Arc` throughout;
+- putting a point on the bench twice focuses the track it already made, with no
+  version;
+- focusing and unfocusing push no version and write one `Selection` row each,
+  and the undo after them takes back the last step; focusing the focused item
+  and unfocusing nothing write no-effect rows; focusing a label not on the
+  bench is refused in a sentence;
+- every step that puts an item on focuses it: a put, a cluster, a duplicate
+  and a split;
+- discarding the focused item unfocuses it, and its undo does not focus it
+  again;
+- a rename keeps the item focused and its selected observations, and so does
+  the undo of the rename;
+- the selected observations clear when the focused item changes, and a
+  selection on an item not focused is refused;
+- an undo after an unfocus takes back the verdict before it, and an undo past
+  the put unfocuses, the redo not focusing it again;
+- there is one focused item for the viewer: a put on a second node unfocuses
+  the first node's item, focusing the first's unfocuses the second's, and
+  closing the node unfocuses;
+- a busy node refuses neither a focus nor an unfocus, nor a tick of *Edit* over
+  a point whose item is on the bench;
 - the two gestures the Image Detail context menu carries -- a cluster started at
   a pixel, then a sighting added at one in the same image -- are one version and
   one `Bench` row each, the second sighting joining unpinned and `out`, and an
@@ -1352,14 +1432,18 @@ is not installed, the drive after the step cancels it without starting a second
 evaluation beside it, and the track is `Current` only once the evaluation of the
 new inputs lands; an undo, a document edit under the track and a change of the
 search radius each make it `Evaluating`; a track-stage track with no frame is
-`Refused` with core's sentence and starts nothing; and nothing starts while a
-background task holds the node.
+`Refused` with core's sentence and starts nothing; nothing starts while a
+background task holds the node; the focused item is evaluated first when it is
+on a node after another in the scene; and a rename keeps an evaluated track
+current.
 
-The deactivation is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds one version
-labelled as above with the item still on the bench, an undo bringing edit mode back, and a
-discard of the active item leaving view mode; [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs) calls
-`deactivate_bench_item` twice, one version and then a no-effect reply, with `get_bench`
-reporting `null` active in between.
+The unfocus is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds no version
+and one `Selection` row with the item still on the bench, a focus bringing edit mode back, and a
+discard of the focused item leaving view mode; [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs) calls
+`unfocus_bench_item` twice, no version and then a no-effect reply, with `get_bench`
+reporting a `null` `focused_item` in between, and `focus_bench_item` pushes no
+version while a task holds the node, `get_bench` reporting the item on its node
+and `null` on another, and the old tool names are unknown tools.
 
 The handles are tested in
 [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
@@ -1393,7 +1477,7 @@ pinhole cameras over a textured plane, a grid of points every camera sees at
 its exact projection, less the middle one, and a bitmap column. At the middle's
 pixel the run is two versions, a `Bench` row then the commit's `Edit` row and a
 `Selection`; it creates one point, the transfer member builds it (the demo node
-has no index files), the item is active and seated on the point, and one undo
+has no index files), the item is focused and seated on the point, and one undo
 takes the point back and leaves the track on the bench. At a pixel further from
 every point than any member looks, nothing is pushed, one failed row gives the
 last member's stage and reason and names both missing index files, and its
@@ -1416,7 +1500,7 @@ whose one point sits beyond the points source's reach so that only the
 far-field sweep finds anything. At the held-out point's pixel of the near plane
 the eight points around it land as their own tracks, labelled `1a` to `1h` with
 their points, seated on them, nothing committed, one `Bench` version, `1a`
-active and its point selected; a second find there puts no copies on and
+focused and its point selected; a second find there puts no copies on and
 pushes no version. On the far plane the sweep's reading is built and committed as a new point in the same
 version, whose row is an `Edit`, and one undo takes back the point and the
 bench items together, one redo puts both back; without `commit` the track goes
@@ -1464,8 +1548,8 @@ refused in the call with no task.
   sweep and the pull-in are proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).
 - **Drawing the bench in the Image Browser.** The thumbnail borders that would
-  mark the active track's `in` observations are proposed in the same draft. Both
-  of the panels that do draw the active track draw it as handles: the Image
+  mark the focused item's `in` observations are proposed in the same draft. Both
+  of the panels that do draw the focused item draw it as handles: the Image
   Detail panel's bench layer marks it in each photograph that observes it, where
   a mark places a sighting and sizes, turns, moves along its normal and tilts
   the patch, and at the track stage draws the patch as a ghost outline in each

@@ -361,14 +361,13 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
             edit_outcome(app_state, Some(outcome));
         }
 
-        // Ctrl+D is Track View's *Duplicate*, on the active track. Consumed
-        // only while there is one, so with nothing on the bench the key is left
-        // to whatever else wants it.
-        let active = app_state.selected_recon.and_then(|id| {
-            let bench = app_state.bench(id)?;
-            Some((id, crate::bench::active_track_label(bench)?.to_string()))
-        });
-        if let Some((id, label)) = active {
+        // Ctrl+D is Track View's *Duplicate*, on the focused item of the
+        // selected node. Consumed only while there is one, so with nothing
+        // being edited the key is left to whatever else wants it.
+        let focused = app_state
+            .selected_recon
+            .and_then(|id| Some((id, app_state.focused_item_label(id)?.to_string())));
+        if let Some((id, label)) = focused {
             if root_ui.input_mut(|i| i.consume_shortcut(&DUPLICATE_TRACK_SHORTCUT)) {
                 if let Err(why) = app_state.duplicate_bench_item(id, &label) {
                     app_state
@@ -431,7 +430,7 @@ pub(crate) const REDO_SHORTCUT_ALT: egui::KeyboardShortcut = egui::KeyboardShort
 pub(crate) const DELETE_POINT_SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Delete);
 
-/// Duplicate the active bench track, as Track View's *Duplicate* does.
+/// Duplicate the focused bench track, as Track View's *Duplicate* does.
 pub(crate) const DUPLICATE_TRACK_SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::D);
 

@@ -132,8 +132,8 @@ fn versions(state: &AppState, id: ReconId) -> usize {
     state.node(id).expect("loaded").history.versions().len()
 }
 
-fn active(state: &AppState, id: ReconId) -> Option<String> {
-    crate::bench::active_track_label(state.bench(id).expect("a bench")).map(str::to_string)
+fn focused(state: &AppState, id: ReconId) -> Option<String> {
+    state.focused_item_label(id).map(str::to_string)
 }
 
 /// The Point ID view mode's header shows for `point` of `id`.
@@ -141,11 +141,12 @@ fn point_id(state: &AppState, id: ReconId, point: usize) -> String {
     crate::scene::point_id(state.node(id).expect("loaded"), point)
 }
 
-/// The box is ticked exactly while something is active, and nothing about it
-/// is stored in the panel: an undo of a deactivation moves it on the next frame
-/// with no panel call in between.
+/// The box is ticked exactly while an item on the selected node's bench is
+/// focused, and nothing about it is stored in the panel: an unfocus and a
+/// focus made outside it move it on the next frame with no panel call in
+/// between.
 #[test]
-fn the_box_reads_the_bench() {
+fn the_box_reads_the_focused_item() {
     let (mut state, id) = state();
     let (mut panel, ctx) = settled(&state);
     let editing = |response: &TrackViewResponse| {
@@ -157,27 +158,27 @@ fn the_box_reads_the_bench() {
         response.edit.is_some()
     };
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
-    assert!(!editing(&response), "edit mode with nothing active");
+    assert!(!editing(&response), "edit mode with nothing focused");
 
     let label = crate::bench::tests::put_on_bench(&mut state, id);
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
-    assert!(editing(&response), "no edit mode with {label} active");
+    assert!(editing(&response), "no edit mode with {label} focused");
     assert!(!panel.edit_body().rows().is_empty());
 
-    state.deactivate_bench_item(id).expect("an active item");
+    state.unfocus_bench_item();
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
-    assert!(!editing(&response), "edit mode after a deactivation");
+    assert!(!editing(&response), "edit mode after an unfocus");
 
-    state.undo(id).expect("a version to undo");
+    state.focus_bench_item(id, &label).expect("on the bench");
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
-    assert_eq!(active(&state, id).as_deref(), Some(label.as_str()));
-    assert!(editing(&response), "the undo did not bring edit mode back");
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    assert!(editing(&response), "the focus did not bring edit mode back");
 }
 
 /// Ticking the box over a selected point reports it, and applied it is one
 /// version putting the point on the bench. A second tick over the same point
-/// after a clear activates the item already there rather than putting a second
-/// one on.
+/// after a clear focuses the item already there rather than putting a second
+/// one on, and pushes no version.
 #[test]
 fn ticking_the_box_puts_the_selected_point_on_the_bench_once() {
     let (mut state, id) = state();
@@ -189,20 +190,23 @@ fn ticking_the_box_puts_the_selected_point_on_the_bench_once() {
     let before = versions(&state, id);
     state.set_editing(id, true).expect("a selected point");
     assert_eq!(versions(&state, id), before + 1, "one tick, one version");
-    let label = active(&state, id).expect("the point's track is active");
+    let label = focused(&state, id).expect("the point's track is focused");
     assert_eq!(state.bench(id).expect("a bench").len(), 1);
 
-    state.set_editing(id, false).expect("an active item");
+    state.set_editing(id, false).expect("a focused item");
+    let before = versions(&state, id);
     state.set_editing(id, true).expect("a selected point");
     let bench = state.bench(id).expect("a bench");
     assert_eq!(bench.len(), 1, "a second item for one point");
-    assert_eq!(active(&state, id).as_deref(), Some(label.as_str()));
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    assert_eq!(versions(&state, id), before, "focusing pushed a version");
 }
 
-/// Clearing the box reports it, is one version that leaves the item on the
-/// bench, and the next frame draws the selected point's committed track.
+/// Clearing the box reports it, unfocuses the item with no version and one
+/// `Selection` row, leaves the item on the bench, and the next frame draws the
+/// selected point's committed track.
 #[test]
-fn clearing_the_box_deactivates_and_shows_the_selected_point() {
+fn clearing_the_box_unfocuses_and_shows_the_selected_point() {
     let (mut state, id) = state();
     state.select_point(PointRef::new(id, POINT));
     let label = crate::bench::tests::put_on_bench(&mut state, id);
@@ -213,9 +217,9 @@ fn clearing_the_box_deactivates_and_shows_the_selected_point() {
     assert_eq!(response.set_edit, Some(false));
     assert!(response.edit.is_some() && response.view.is_none());
     let before = versions(&state, id);
-    state.set_editing(id, false).expect("an active item");
-    assert_eq!(versions(&state, id), before + 1, "one clear, one version");
-    assert_eq!(active(&state, id), None);
+    state.set_editing(id, false).expect("a focused item");
+    assert_eq!(versions(&state, id), before, "a clear pushed a version");
+    assert_eq!(focused(&state, id), None);
     assert_eq!(
         state
             .bench(id)
@@ -224,17 +228,9 @@ fn clearing_the_box_deactivates_and_shows_the_selected_point() {
             .collect::<Vec<_>>(),
         [label.as_str()]
     );
-    assert_eq!(
-        state
-            .node(id)
-            .expect("loaded")
-            .history
-            .versions()
-            .last()
-            .expect("a version")
-            .label,
-        format!("Stopped editing {label}; it stays on the bench")
-    );
+    let last = state.action_log.entries().last().expect("a row");
+    assert_eq!(last.kind, crate::action_log::Kind::Selection);
+    assert_eq!(last.text, format!("Stopped editing {label}"));
 
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
     assert!(response.view.is_some() && response.edit.is_none());
@@ -246,7 +242,7 @@ fn clearing_the_box_deactivates_and_shows_the_selected_point() {
     );
 }
 
-/// With no point selected and nothing active the box is greyed, so a click on
+/// With no point selected and nothing focused the box is greyed, so a click on
 /// it reports nothing, and the refusal names the three ways in. The empty state
 /// underneath carries the bench line.
 #[test]
@@ -274,13 +270,13 @@ fn with_nothing_to_edit_the_box_is_greyed_and_names_the_ways_in() {
     );
 }
 
-/// With items on the bench and none active, the empty state says how many and
+/// With items on the bench and none focused, the empty state says how many and
 /// where to go to edit one.
 #[test]
 fn the_empty_state_says_what_the_bench_holds() {
     let (mut state, id) = state();
     crate::bench::tests::put_on_bench(&mut state, id);
-    state.deactivate_bench_item(id).expect("an active item");
+    state.unfocus_bench_item();
     assert_eq!(state.selected_point, None);
     let (mut panel, ctx) = settled(&state);
     let texts = painted(&mut panel, &ctx, &state);
@@ -292,10 +288,10 @@ fn the_empty_state_says_what_the_bench_holds() {
     );
 }
 
-/// A discard of the active item leaves nothing active, so the panel returns to
-/// view mode rather than switching to another item on the bench.
+/// A discard of the focused item leaves nothing focused, so the panel returns
+/// to view mode rather than switching to another item on the bench.
 #[test]
-fn discarding_the_active_item_returns_to_view_mode() {
+fn discarding_the_focused_item_returns_to_view_mode() {
     let (mut state, id) = state();
     let first = crate::bench::tests::put_on_bench(&mut state, id);
     let second = state
@@ -311,7 +307,7 @@ fn discarding_the_active_item_returns_to_view_mode() {
         .label;
     let (mut panel, ctx) = settled(&state);
     state.discard_bench_item(id, &second).expect("on the bench");
-    assert_eq!(active(&state, id), None);
+    assert_eq!(focused(&state, id), None);
     let response = run_frame(&mut panel, &ctx, &state, Vec::new());
     assert!(
         response.view.is_some(),
@@ -398,6 +394,43 @@ fn the_selection_notice_appears_when_the_selection_parts_from_the_item() {
     assert_eq!(state.bench(id).expect("a bench").len(), 2);
     run_frame(&mut panel, &ctx, &state, Vec::new());
     assert!(!notice(&painted(&mut panel, &ctx, &state)));
+}
+
+/// A task holding the node greys the box only where a tick would put a point
+/// on the bench: a clear, and a tick over a point an item already came from,
+/// push no version and stay available.
+#[test]
+fn a_busy_node_greys_the_box_only_for_a_put() {
+    let (mut state, id) = state();
+    state.select_point(PointRef::new(id, POINT));
+    crate::bench::tests::put_on_bench(&mut state, id);
+    state
+        .start_background_task(
+            crate::background::Operation::BENCH_FIT,
+            id,
+            Box::new(|_| crate::background::Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    assert!(state.busy_refusal(id).is_some());
+
+    // Editing: the clear is available.
+    let (mut panel, ctx) = settled(&state);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, Some(false), "the clear was greyed");
+
+    // Over the point the item came from: the tick focuses it.
+    state.unfocus_bench_item();
+    let (mut panel, ctx) = settled(&state);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, Some(true), "the focus was greyed");
+
+    // Over a point not on the bench: the tick is a put, and greyed.
+    state.select_point(PointRef::new(id, 0));
+    let (mut panel, ctx) = settled(&state);
+    let response = click_text(&mut panel, &ctx, &state, EDIT_LABEL);
+    assert_eq!(response.set_edit, None, "the put was not greyed");
+
+    state.finish_background_task();
 }
 
 /// With no reconstruction there is no box, only the one sentence.

@@ -4,15 +4,15 @@
 //! The Track View panel: one 3D point's track, looked at or worked on.
 //!
 //! See `specs/gui/track-view.md`. The panel's first row is the **Edit**
-//! checkbox, and it is a reading of the bench rather than a setting: it is
-//! ticked exactly while the selected node's bench has an active track
-//! ([`crate::bench::active_track_label`]). Below it the panel draws one of two
+//! checkbox, and it is a reading of the focused item rather than a setting: it
+//! is ticked exactly while the focused item is on the selected node's bench
+//! ([`AppState::focused_item_label`]). Below it the panel draws one of two
 //! bodies:
 //!
 //! - [`view`], with the box clear: the selected point's committed track, read
 //!   from the reconstruction and never from the bench.
-//! - [`edit`], with the box ticked: the bench's active track and the steps that
-//!   act on it.
+//! - [`edit`], with the box ticked: the focused item and the steps that act on
+//!   it.
 //!
 //! The two bodies keep their own state, because what each caches is disjoint:
 //! one caches thumbnails and patch tiles per image of a committed point, the
@@ -22,9 +22,9 @@
 //! and the line about the bench under view mode's empty state.
 //!
 //! The panel decides nothing. Ticking the box, clearing it and the notice's two
-//! buttons land in [`TrackViewResponse`], and the dock applies them through the
-//! `AppState` bench steps, for the reason every panel's response works that
-//! way: the panel holds `&AppState` while it draws.
+//! buttons land in [`TrackViewResponse`], and the dock applies them through
+//! `AppState`, for the reason every panel's response works that way: the panel
+//! holds `&AppState` while it draws.
 
 pub(crate) mod edit;
 mod header_buttons;
@@ -134,20 +134,27 @@ impl TrackView {
         };
         let id = node.id;
         let bench = node.history.current_bench();
-        let active = crate::bench::active_track_label(bench);
-        let editing = active.is_some();
+        let focused = state.focused_item_label(id);
+        let editing = focused.is_some();
         // A selection the version no longer holds is no selection: the view
         // body filters the same way, so the box and the body agree.
         let selected_point = state
             .selected_point_in(id)
             .filter(|&index| node.edited().point(index as u32).is_some());
 
-        // The box. Every transition it makes is a bench step, so a task holding
-        // the node greys it with the node's own sentence; with nothing to edit
-        // and nothing to put on, it says what the ways in are.
-        let refusal = state
-            .busy_refusal(id)
-            .or_else(|| (!editing && selected_point.is_none()).then(nothing_to_edit));
+        // The box. Only a tick over a point not yet on the bench is a bench
+        // step, so only that is greyed by a task holding the node, with the
+        // node's own sentence; focusing an item already on the bench and
+        // unfocusing push no version. With nothing to edit and nothing to put
+        // on, it says what the ways in are.
+        let refusal = if editing {
+            None
+        } else {
+            match selected_point {
+                None => Some(nothing_to_edit()),
+                Some(point) => put_refusal(state, crate::scene::PointRef::new(id, point)),
+            }
+        };
         let mut checked = editing;
         let hint = if editing {
             "Stop editing this track: it stays on the bench, and the panel shows the \
@@ -168,8 +175,8 @@ impl TrackView {
         }
         ui.separator();
 
-        if let Some(label) = active {
-            let track = bench.track(label).expect("the active label names a track");
+        if let Some(label) = focused {
+            let track = bench.track(label).expect("the focused label names a track");
             self.show_selection_notice(ui, state, node, track, selected_point, &mut response);
             response.edit = Some(self.edit.show(ui, state));
         } else {
@@ -216,18 +223,15 @@ impl TrackView {
         if state.resolved_origin(node, track) == Some(point as u32) {
             return;
         }
-        let busy = state.busy_refusal(node.id);
+        let busy = put_refusal(state, crate::scene::PointRef::new(node.id, point));
         ui.horizontal_wrapped(|ui| {
             ui.label(format!(
                 "Selected: {}, not the track being edited.",
                 crate::scene::point_id(node, point)
             ));
-            let view = ui.add_enabled(busy.is_none(), egui::Button::new(VIEW_LABEL));
-            let view = match &busy {
-                Some(why) => view.on_disabled_hover_text(why),
-                None => view
-                    .on_hover_text("Stop editing, and show the selected point's committed track"),
-            };
+            let view = ui
+                .button(VIEW_LABEL)
+                .on_hover_text("Stop editing, and show the selected point's committed track");
             if view.clicked() {
                 response.set_edit = Some(false);
             }
@@ -250,7 +254,17 @@ pub(crate) const VIEW_LABEL: &str = "View";
 /// The selection notice's button that puts the selected point on the bench.
 pub(crate) const EDIT_IT_LABEL: &str = "Edit it";
 
-/// The ticked box's refusal with no point selected and nothing active: the
+/// Why ticking *Edit* over `point` is refused, or `None`: a task holding the
+/// node, when the tick would put the point on the bench. A point an item on
+/// the bench already came from is focused instead, which no task refuses.
+fn put_refusal(state: &AppState, point: crate::scene::PointRef) -> Option<String> {
+    if state.bench_item_from_point(point).is_some() {
+        return None;
+    }
+    state.busy_refusal(point.recon)
+}
+
+/// The ticked box's refusal with no point selected and nothing focused: the
 /// three ways in, the last quoted from the Image Detail entry's own constant.
 pub(crate) fn nothing_to_edit() -> String {
     format!(

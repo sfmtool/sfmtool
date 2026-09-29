@@ -11,9 +11,9 @@
 //! handle to a node and to an item, and the two reads, which have no panel
 //! gesture behind them because a panel shows what they answer.
 //!
-//! **A step that names no track acts on the active one**, which is what a bench
-//! panel's gesture means when it names no item: the panel resolves it with
-//! [`crate::bench::active_track_label`], and so does [`target`].
+//! **A step that names no track acts on the focused item**, which is what a
+//! bench panel's gesture means when it names no item: the panel resolves it
+//! with [`AppState::focused_item_label`], and so does [`target`].
 //!
 //! The replies are [`super::edit`]'s, because a bench step is an edit of the
 //! bench half of the version: [`super::edit::edited`] carries the version the
@@ -51,7 +51,7 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
     let bench = state
         .bench(id)
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
-    let active = crate::bench::active_track_label(bench);
+    let focused = state.focused_item_label(id);
     let items: Vec<Value> = bench
         .entries()
         .iter()
@@ -61,7 +61,7 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
             Some(json!({
                 "item": entry.label,
                 "kind": "track",
-                "active": active == Some(entry.label.as_str()),
+                "focused": focused == Some(entry.label.as_str()),
                 "stage": track.stage_kind().to_string(),
                 "origin": origin(track),
                 "evaluation": evaluation(state, id, &entry.label),
@@ -75,10 +75,9 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
         .collect();
     Ok(json!({
         "reconstruction_label": node_label(state, id),
-        // One active item per kind, which is what an omitted `track` resolves
-        // to; null when none of that kind is active, which a bench holding
-        // items can be once Track View's Edit box is cleared.
-        "active": { "track": active },
+        // What an omitted `track` resolves to; null when the focused item is
+        // on another node's bench or nothing is focused.
+        "focused_item": focused,
         "items": items,
         // The files a search reads, reported here rather than on the track
         // because they are the node's: every track's search goes through the
@@ -160,8 +159,8 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
         "reconstruction_label": node_label(state, id),
         "item": item,
         "kind": "track",
-        "active": crate::bench::active_track_label(bench) == Some(item.as_str()),
-        // Track View's highlighted rows. Only the active track has any.
+        "focused": state.focused_item_label(id) == Some(item.as_str()),
+        // Track View's highlighted rows. Only the focused item has any.
         "selected_observations": state.selected_bench_observations(id, &item),
         "stage": stage.to_string(),
         "origin": origin(track),
@@ -199,7 +198,7 @@ fn evaluation(state: &AppState, id: ReconId, item: &str) -> Value {
 // ── The steps ───────────────────────────────────────────────────────────
 
 /// `create_bench_cluster`: a cluster-stage track from a place in one camera
-/// image, made the active one, under `named` when the call gives a label.
+/// image, focused, under `named` when the call gives a label.
 pub(super) fn create_bench_cluster(
     state: &mut AppState,
     label: &str,
@@ -222,9 +221,9 @@ pub(super) fn create_bench_cluster(
 }
 
 /// `create_bench_track`: a point of the reconstruction put on the bench as a
-/// track-stage track, made the active one.
+/// track-stage track, focused.
 ///
-/// Putting on a point a track already came from activates that track rather
+/// Putting on a point a track already came from focuses that track rather
 /// than putting a second one on, which is the step's own rule; the reply names
 /// the item either way, and that track keeps its label whatever `named` says.
 pub(super) fn create_bench_track(
@@ -504,18 +503,47 @@ pub(super) fn found_nearby_reply(
     Ok(super::ToolOutput::Json(reply))
 }
 
-pub(super) fn activate_bench_item(state: &mut AppState, label: &str, item: &str) -> JsonReply {
+/// `focus_bench_item`: the item Track View edits, and the item a bench tool
+/// acts on when it names none.
+///
+/// Not a step: it pushes no version, so the reply is the item now focused and
+/// `changed` for whether it was not focused before, as the selection tools
+/// answer with what they left selected rather than a version.
+pub(super) fn focus_bench_item(state: &mut AppState, label: &str, item: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
-    let reply = edit::edited(state, id, |state| state.activate_bench_item(id, item))?;
-    Ok(with_item(reply, item))
+    let before = state.focused_item().copied();
+    state.focus_bench_item(id, item).map_err(ToolError::new)?;
+    Ok(json!({
+        "reconstruction_label": node_label(state, id),
+        "item": item,
+        "changed": state.focused_item().copied() != before,
+    }))
 }
 
-/// `deactivate_bench_item`: Track View's *Edit* box cleared. Every item stays
-/// on the bench and none is active; with nothing active it is a no-effect
-/// reply, as every bench step's nothing-to-do is.
-pub(super) fn deactivate_bench_item(state: &mut AppState, label: &str) -> JsonReply {
-    let id = resolve_reconstruction(state, Some(label))?;
-    edit::edited(state, id, |state| state.deactivate_bench_item(id))
+/// `unfocus_bench_item`: Track View's *Edit* box cleared. Every item stays on
+/// its bench and none is focused.
+///
+/// Not a step, and it names no node: there is one focused item for the
+/// viewer. The reply names the item it unfocused, or null for both fields and
+/// `changed: false` when nothing was focused.
+pub(super) fn unfocus_bench_item(state: &mut AppState) -> JsonReply {
+    let before = state.focused_item().copied();
+    let named = before.map(|focused| {
+        (
+            node_label(state, focused.node),
+            state.focused_item_label(focused.node).map(str::to_string),
+        )
+    });
+    state.unfocus_bench_item();
+    let (node, item) = match named {
+        Some((node, item)) => (Some(node), item),
+        None => (None, None),
+    };
+    Ok(json!({
+        "reconstruction_label": node,
+        "item": item,
+        "changed": before.is_some(),
+    }))
 }
 
 /// `rename_bench_item`: the item under a name of the caller's own.
@@ -537,9 +565,9 @@ pub(super) fn rename_bench_item(
 /// reply names.
 ///
 /// Answers as `split_bench_track` does, with the label the copy took, because
-/// that is the handle every later call has to use -- and the copy is the active
-/// track, so the calls that name none already act on it. `item` omitted means
-/// the active track, as it does for the track tools.
+/// that is the handle every later call has to use -- and the copy is the
+/// focused item, so the calls that name none already act on it. `item` omitted means
+/// the focused item, as it does for the track tools.
 pub(super) fn duplicate_bench_item(
     state: &mut AppState,
     label: &str,
@@ -1317,16 +1345,10 @@ pub(super) fn observation_place(
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let item = match named {
         Some(item) => item.to_string(),
-        None => crate::bench::active_track_label(bench)
+        None => state
+            .focused_item_label(label_of_node)
             .map(str::to_string)
-            .ok_or_else(|| {
-                ToolError::new(format!(
-                    "No track is active on {}'s bench. Name one with track, activate one with \
-                     activate_bench_item, or put one on with create_bench_track or \
-                     create_bench_cluster.",
-                    node_label(state, label_of_node)
-                ))
-            })?,
+            .ok_or_else(|| no_focused_item(state, label_of_node))?,
     };
     let track = bench
         .track(&item)
@@ -1352,7 +1374,7 @@ pub(super) fn observation_place(
 // ── Resolution ──────────────────────────────────────────────────────────
 
 /// The node a call named, and the item it acts on: the one it named, or the
-/// active track of that node's bench.
+/// focused item when it is on that node's bench.
 ///
 /// A named item that is on no bench is **not** refused here. The step itself
 /// refuses it, in the bench's own words, so the wire and the panel give one
@@ -1367,19 +1389,21 @@ fn target(
     if let Some(item) = named {
         return Ok((id, item.to_string()));
     }
-    let active = state
-        .bench(id)
-        .and_then(|bench| crate::bench::active_track_label(bench))
+    let focused = state
+        .focused_item_label(id)
         .map(str::to_string)
-        .ok_or_else(|| {
-            ToolError::new(format!(
-                "No track is active on {}'s bench. Name one with track, activate one with \
-                 activate_bench_item, or put one on with create_bench_track or \
-                 create_bench_cluster.",
-                node_label(state, id)
-            ))
-        })?;
-    Ok((id, active))
+        .ok_or_else(|| no_focused_item(state, id))?;
+    Ok((id, focused))
+}
+
+/// The refusal a call that names no track gets when no item on the node's
+/// bench is focused.
+fn no_focused_item(state: &AppState, id: ReconId) -> ToolError {
+    ToolError::new(format!(
+        "No item on {}'s bench is focused. Name one with track, focus one with \
+         focus_bench_item, or put one on with create_bench_track or create_bench_cluster.",
+        node_label(state, id)
+    ))
 }
 
 /// The refusal a label that names nothing gets, in the bench's own words.

@@ -216,7 +216,7 @@ fn on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Context) {
     (state, id, label, panel, ctx)
 }
 
-/// With nothing active the body draws nothing: Track View is in view mode
+/// With nothing focused the body draws nothing: Track View is in view mode
 /// then, and the ways in are its empty state's.
 #[test]
 fn with_nothing_active_the_body_draws_no_rows_and_no_text() {
@@ -605,6 +605,7 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
     state.scene[index]
         .history
         .push_bench(std::sync::Arc::new(bench), "Put a bearing on the bench");
+    state.focus_put_item(id, "bearing");
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
 
@@ -617,11 +618,11 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
     assert!(texts.contains(&why), "the reason is not drawn: {texts:?}");
 }
 
-/// Edit mode draws the active item and nothing else on the bench: no row of
+/// Edit mode draws the focused item and nothing else on the bench: no row of
 /// item tabs, so the labels of the other items appear nowhere in what the frame
 /// painted. The bench as a list is the Scene tree's.
 #[test]
-fn edit_mode_draws_the_active_item_and_no_item_tabs() {
+fn edit_mode_draws_the_focused_item_and_no_item_tabs() {
     let (mut state, id) = state();
     let first = state
         .put_point_on_bench(PointRef::new(id, POINT as usize), None)
@@ -648,14 +649,12 @@ fn edit_mode_draws_the_active_item_and_no_item_tabs() {
         )
         .expect("a pixel on the sensor")
         .label;
-    state
-        .activate_bench_item(id, &second)
-        .expect("on the bench");
+    state.focus_bench_item(id, &second).expect("on the bench");
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
 
-    // The cluster is the active one, and it has the one observation it was
+    // The cluster is the focused one, and it has the one observation it was
     // started with.
     assert_eq!(panel.rows().len(), 1);
 
@@ -671,12 +670,12 @@ fn edit_mode_draws_the_active_item_and_no_item_tabs() {
     );
     assert!(
         texts.contains(&second),
-        "the active item's header: {texts:?}"
+        "the focused item's header: {texts:?}"
     );
     for label in [&first, &third] {
         assert!(
             !texts.iter().any(|t| t.contains(label.as_str())),
-            "{label} is not the active item and was painted: {texts:?}"
+            "{label} is not the focused item and was painted: {texts:?}"
         );
     }
 }
@@ -811,7 +810,7 @@ fn the_lock_is_greyed_at_the_cluster_stage() {
 /// Outside a drag the boxes hold no value of their own: whatever the panel
 /// had is replaced by the track's bars on the next frame.
 #[test]
-fn the_boxes_show_the_active_track_s_bars_outside_a_drag() {
+fn the_boxes_show_the_focused_item_s_bars_outside_a_drag() {
     let (state, id, label, mut panel, ctx) = on_the_bench();
     panel.thresholds.min_zncc = 0.5;
     run_frame(&mut panel, &ctx, &state);
@@ -819,12 +818,12 @@ fn the_boxes_show_the_active_track_s_bars_outside_a_drag() {
     assert_eq!(panel.thresholds(), &track.thresholds);
 }
 
-/// The boxes show the **active track's** bars, whoever moved them: a step
+/// The boxes show the **focused item's** bars, whoever moved them: a step
 /// taken over the wire moves the track's, and the panel that paints the rows by
 /// them has to be showing the same numbers or it proposes a rule the track does
 /// not hold. An undo moves them back.
 #[test]
-fn the_boxes_follow_the_active_track_s_own_thresholds() {
+fn the_boxes_follow_the_focused_item_s_own_thresholds() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     // Handed to the bars, so the painting below is every row's proposal.
     state
@@ -1080,9 +1079,9 @@ fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
     assert!(super::table::accepted_walk(row).is_none());
 }
 
-/// A second track has its own bars, so making it active moves the boxes.
+/// A second track has its own bars, so focusing it moves the boxes.
 #[test]
-fn a_change_of_active_track_reseats_the_boxes() {
+fn a_change_of_focused_item_reseats_the_boxes() {
     let (mut state, id, first, mut panel, ctx) = on_the_bench();
     state
         .apply_bench_thresholds(
@@ -1355,9 +1354,9 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
 }
 
 /// *Duplicate* is the toolbar's own way to a second patch over neighbouring
-/// ground: one version, a second item on the bench, and the copy active.
+/// ground: one version, a second item on the bench, and the copy focused.
 #[test]
-fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
+fn duplicate_puts_a_second_item_on_the_bench_and_focuses_it() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     let texts = crate::test_support::painted_texts(
         &ctx,
@@ -1391,7 +1390,7 @@ fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
     );
     let bench = state.bench(id).expect("a loaded node has a bench");
     assert_eq!(bench.len(), 2, "the bench holds the original and the copy");
-    assert_eq!(crate::bench::active_track_label(bench), Some(copy.as_str()));
+    assert_eq!(state.focused_item_label(id), Some(copy.as_str()));
     assert_eq!(
         state.bench_track(id, &copy).and_then(|track| track.origin),
         None,
@@ -2242,7 +2241,7 @@ fn hovering_a_name_shows_it_whole() {
     );
 }
 
-/// The hover view of one observation's tile on the active track, beside the
+/// The hover view of one observation's tile on the focused item, beside the
 /// tile itself, both rendered from the node's cached photograph.
 fn tile_and_context(
     state: &AppState,
@@ -2529,7 +2528,7 @@ fn hovering_a_tile_shows_it_in_context_and_keeps_the_row() {
 
 // ── The bars' colours and the Keep cell's proposal ──────────────────────
 
-/// Set the boxes the way a drag in progress holds them: from the active
+/// Set the boxes the way a drag in progress holds them: from the focused
 /// track's bars with `change` applied, and held there for the next frame, which
 /// is drawn.
 fn with_boxes(
@@ -2560,7 +2559,7 @@ fn measured_on_the_bench() -> (AppState, ReconId, String, TrackEdit, egui::Conte
     (state, id, label, panel, ctx)
 }
 
-/// The whole and the middle ZNCC of observation `i` of the active track.
+/// The whole and the middle ZNCC of observation `i` of the focused item.
 fn zncc_readings(state: &AppState, id: ReconId, label: &str, i: usize) -> (f64, f64) {
     let track = state.bench_track(id, label).expect("on the bench");
     let m = track.observations[i]

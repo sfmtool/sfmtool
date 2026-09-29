@@ -10,7 +10,7 @@
 //! - [`overlay`] — the feature-overlay draw modes, hit-testing, and tooltip.
 //! - [`mod@intrinsics`] — the intrinsics overlay layer, drawn independently of
 //!   the feature mode and composing with whichever one is active.
-//! - [`mod@bench_track`]: the bench layer, the active editable track drawn
+//! - [`mod@bench_track`]: the bench layer, the focused editable track drawn
 //!   over everything else in the bench's own colours.
 //! - [`mod@view`] -- what the pan and the zoom mean, as a pure function over the
 //!   frame's geometry, so the row-click reveal and the wire's
@@ -184,7 +184,7 @@ pub struct ImageDetailResponse {
     /// Track View, so `show` keeps it for [`ImageDetail::take_cluster_start`].
     pub start_bench_cluster: Option<[f32; 2]>,
     /// The pixel the context menu's `Add observation to bench track here` was
-    /// clicked for: a candidate joins the bench's active track there.
+    /// clicked for: a candidate joins the focused item there.
     pub add_bench_observation: Option<[f32; 2]>,
     /// The pixel *Create Track Here* was asked for at, in source-image
     /// coordinates: the context menu's entry, at the pixel the menu was opened
@@ -207,11 +207,11 @@ pub struct ImageDetailResponse {
     /// ones committed, as one version.
     ///
     /// Applied by the dock, as `create_track_here` is: the step raises no
-    /// panel, and the active track's point becomes the selection, which Track
+    /// panel, and the focused item's point becomes the selection, which Track
     /// View already follows.
     pub find_nearby_tracks: Option<[f32; 2]>,
     /// A mark of the bench layer was clicked: select this observation's row of
-    /// the active track in Track View. The layer is on top, so a click it
+    /// the focused item in Track View. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
     pub select_bench_row: Option<usize>,
     /// The edit a drag of one of the bench layer's handles just finished, in
@@ -695,7 +695,7 @@ impl ImageDetail {
         let hovered_handle = self.update_bench_drag(
             ui,
             &interact_response,
-            bench.active_track,
+            bench.focused_track,
             bench.lock,
             chord,
             &edited.base.image_table,
@@ -825,7 +825,7 @@ impl ImageDetail {
         // The bench layer, last and over everything: it is about the track
         // being worked on rather than about the reconstruction, so no overlay
         // mode turns it off and none of them draws on top of it.
-        if let Some(track) = bench.active_track {
+        if let Some(track) = bench.focused_track {
             bench_track::draw(
                 &painter,
                 ui,

@@ -132,7 +132,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `clear_selection` | write | Drop the selection, wholly or one kind of it |
 | `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
-| `set_reconstruction_transform_from_patch` | write | Set it from the bench's active patch, in one of the four ways the viewport's patch menu offers |
+| `set_reconstruction_transform_from_patch` | write | Set it from the focused item's patch, in one of the four ways the viewport's patch menu offers |
 | `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
@@ -155,14 +155,14 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
-| `get_bench` | read | One reconstruction's bench: every item on it, and which is active |
+| `get_bench` | read | One reconstruction's bench: every item on it, and the focused item when it is on that bench |
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
 | `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
 | `create_track_at_pixel` | write | Build a track at a pixel of one camera image, put it on the bench and commit it as a new point, on a worker thread: Image Detail's *Create Track Here* |
 | `find_nearby_tracks` | write | Find the tracks near a pixel of one camera image, put every usable one on the bench and commit the new ones as points, as one version, on a worker thread: Image Detail's *Find Nearby Tracks* |
-| `activate_bench_item` | write | Make one item the active one, the item Track View edits |
-| `deactivate_bench_item` | write | Leave every item on the bench with none active: Track View's Edit box cleared |
+| `focus_bench_item` | write | Focus one item, the item Track View edits; no version |
+| `unfocus_bench_item` | write | Leave no item focused, every item staying on its bench: Track View's Edit box cleared; no version |
 | `rename_bench_item` | write | Give one item a label of your own |
 | `discard_bench_item` | write | Take one item off the bench |
 | `duplicate_bench_item` | write | Put a copy of one item on the bench beside it |
@@ -178,7 +178,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; `pin`, which pins one observation, a list of them or `"all"` at the verdicts they have; or `unpin`, which hands them back to the thresholds; each one version |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
-| `select_bench_observations` | write | Replace the selected observations of the active track: Track View's highlighted rows |
+| `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
@@ -817,7 +817,7 @@ bake_reconstruction_transform { "reconstruction_label": "run_b" }
 The three set, frame from a patch, and bake a node's **display transform**
 ([scene-graph.md](scene-graph.md) § "The transform"). Each is named for the part
 it acts on, the transform, addressed through the reconstruction that carries it.
-None of them is a bench tool: the second reads the bench's active patch and
+None of them is a bench tool: the second reads the focused item's patch and
 changes nothing on the bench, so none takes the `bench` infix.
 
 The first two push a **reframe**, a version whose value half is untouched, so
@@ -849,8 +849,8 @@ and why Set to Origin is `Mᵀ` and Align Normal to Z turns about the patch, is 
 [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The patch menu".
 
 Refusals name what is missing rather than answering with a no-op: no
-reconstruction of that label, nothing on its bench active, the active item a
-cluster, the active track without a patch frame, the track at infinity, a
+reconstruction of that label, no item on its bench focused, the focused item a
+cluster, the focused track without a patch frame, the track at infinity, a
 background task holding the node. `bake_reconstruction_transform` also refuses a
 node whose transform is the identity, which is the tool half of the greyed menu
 entry.
@@ -1278,7 +1278,7 @@ selection. `bench_observation` is what a double-click on a Track View row does
 camera image, turned until the observation is in the middle of the view. Where
 the observation sits is `bench::observation_site`'s, the rule
 `set_image_detail_view`'s `bench_observation` aims by, and `track` omitted is
-the active track. Each gesture's own code computes where the view ends: `point`
+the focused item. Each gesture's own code computes where the view ends: `point`
 starts the gesture's transition and lands it at once
 (`Viewer3D::finish_transition`), and `bench_observation` assigns the same end
 state its animated entry eases toward (`Viewer3D::jump_through_toward_feature`).
@@ -3044,19 +3044,29 @@ means. What this surface adds is the three things every tool family here adds.
 
 **An item is named by its label**, exactly as a node is by
 `reconstruction_label`. The bench tools take `item`; the track tools take
-`track`, and **a call that names no track acts on the active one**, which is
+`track`, and **a call that names no track acts on the focused item**, which is
 what a gesture in Track View's edit mode means when it names no item. A label that
 names nothing on the bench is refused naming it.
 
-**A bench can hold items with none active.** `deactivate_bench_item` is Track
-View's *Edit* box cleared: every item stays on the bench and none is active,
-one version, and a no-effect reply with nothing active. A discard of the active
-item leaves none active too. So `get_bench`'s `active.track` is `null` over a
-bench that has items, and a reader that took "non-empty" to mean "something is
-active" reads the wrong thing. A track tool that names no `track` while nothing
-is active is refused with the remedies: *"No track is active on bull's bench.
-Name one with track, activate one with activate_bench_item, or put one on with
-create_bench_track or create_bench_cluster."*
+**There is one focused item for the viewer, and a bench can hold items with
+none of them focused.** `focus_bench_item` focuses one item, unfocusing
+whatever was focused on any node, and `unfocus_bench_item`, which takes no
+argument, is Track View's *Edit* box cleared: every item stays on its bench and
+none is focused. Neither is a step: each pushes no version, writes one
+`Selection` row, is not refused while a task holds the node, and answers as the
+selection tools do, with what it left rather than a version -- the
+`reconstruction_label` and `item` it focused or unfocused (both `null` from an
+unfocus with nothing focused) and `changed`. A discard of the focused item
+unfocuses it too. So `get_bench`'s `focused_item` is `null` over a bench that
+has items, and also over every bench but the focused item's, and a reader that
+took "non-empty" to mean "something is being edited" reads the wrong thing. A
+track tool that names no `track` while no item on that bench is focused is
+refused with the remedies: *"No item on bull's bench is focused. Name one with
+track, focus one with focus_bench_item, or put one on with create_bench_track
+or create_bench_cluster."* `activate_bench_item` and `deactivate_bench_item`
+are not tools, and a call to either gets the unknown-tool error: the catalog
+carries no alias for a tool whose behaviour is not the one that name
+described, since an agent calling it would expect that behaviour.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on -- a create and a
@@ -3129,15 +3139,15 @@ one Action Log row. A label another item holds takes the first free ` (2)`,
 taken label is refused instead, because a rename that took a different name
 would leave the caller holding a label that names another item; a create's
 reply always carries the label the item took, in `item`, so there is nothing to
-misread. A label of nothing but whitespace is refused in the call. A `create_bench_track` on a point already on the bench activates that
-track under the label it has, whatever `label` says.
+misread. A label of nothing but whitespace is refused in the call. A `create_bench_track` on a point already on the bench focuses that
+track under the label it has, whatever `label` says, and pushes no version.
 
 **`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
 `camera_image` and a `pixel` and runs `AppState::start_create_track_at_pixel`,
 the call the panel's menu entry and its Control+Shift click make: the
 track-at-pixel cascade on a worker, reading the node's index files only where
-`get_bench` reports them `current`, then the track put on the bench as the
-active item and committed, two versions. It answers as `commit_bench_track`
+`get_bench` reports them `current`, then the track put on the bench,
+focused, and committed, two versions. It answers as `commit_bench_track`
 does, with the commit's version, the `item` the track stays on the bench as and
 the `point` it wrote, plus the `member` of the cascade that built it and a
 `report` that is the sentence of the row that put it on the bench. It is not
@@ -3377,7 +3387,7 @@ and its data, every observation with its keypoint, seed, shape, verdict and pin,
 the measurements, the thresholds -- and drops exactly one field: the **origin**.
 That is what makes a commit *replace* a point, so without it the copy's commit
 creates one, which is what it must do; otherwise the second commit would delete
-what the first wrote. The copy is the active track and the reply names it, as a
+what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
 **Four of the thirty-two are about the index files**, the node's SIFT index and
@@ -4354,7 +4364,7 @@ where a test hands no host over.
   the three seed
   forms are exclusive and a feature seed on a node with no `.sift` file is
   refused naming the file; a point put on the bench is an item `get_bench`
-  lists, active, at the track stage, seated on that point; a split answers with
+  lists, focused, at the track stage, seated on that point; a split answers with
   the label the half that came off took and that half is at the cluster stage; a
   thresholds call moves the bars it names and leaves the rest; a track put on
   the bench carries the 8 px shift bar, and with that bar at zero a fit leaves
@@ -4388,10 +4398,15 @@ where a test hands no host over.
 - **The selected observations are the bench's, and do not outlive their
   track**: `select_bench_observations` replaces the set sorted and without
   repeats, `get_bench_track` reads it back, it writes one `Selection` row and
-  no version, and an empty list clears it; a verdict keeps it, a rename carries
-  it to the new label, and an undo clears it; a duplicate, and an activation of
+  no version, and an empty list clears it; a verdict keeps it, a rename keeps
+  it under the new label, and an undo clears it; a duplicate, and a focus of
   the first item after it, leave none; a split clears it; and a selection on a
-  track that is not active, or past the end of the list, is refused.
+  track that is not focused, or past the end of the list, is refused.
+- **Focusing is not a step**: `focus_bench_item` and `unfocus_bench_item` push
+  no version, each writes one `Selection` row, a second unfocus is a no-effect
+  reply naming no item, a focus is not refused while a task holds the node,
+  `get_bench` reports the focused item on its node and `null` on another, and
+  `activate_bench_item` and `deactivate_bench_item` are unknown tools.
 - **`set_view` aims at a point and at a bench observation**: `point` puts the
   point's world position at the orbit target, leaves camera view and moves no
   selection, and is refused beside `fov_short_axis_deg` or a second form;
@@ -4419,8 +4434,8 @@ where a test hands no host over.
   set, with `dirty` still false; an undo takes it back. Setting the identity on
   a node already there is refused, as is a bake of one, and a zero quaternion
   or a scale of zero is refused at the parse. The patch tool refuses a node with
-  nothing active on its bench and names the active item in its label once there
-  is one; a bake is one `Edit` row, leaves the transform at the identity and
+  no item on its bench focused and names the focused item in its label once
+  there is one; a bake is one `Edit` row, leaves the transform at the identity and
   the node dirty, and its undo restores the transform the bake consumed.
 - **The spec's own counts are read back**: the tool count, the number of reads
   and the panel list in the prose above are asserted against `catalog()` and

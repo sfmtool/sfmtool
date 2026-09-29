@@ -1,13 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Track View's edit mode: the bench's active track, and the steps that act on
+//! Track View's edit mode: the focused item, and the steps that act on
 //! it.
 //!
 //! See `specs/gui/track-view.md`. This body is drawn while Track View's *Edit*
 //! box is ticked, which is while the selected node's bench ([`crate::bench`])
-//! has an active track, and every gesture in it names that track. It shows the
-//! active item and nothing else on the bench: the bench as a list is the Scene
+//! has the focused item, and every gesture in it names that track. It shows
+//! the focused item and nothing else on the bench: the bench as a list is the Scene
 //! tree's. The table carries view mode's columns first, so a reader who knows
 //! one reads the other.
 //!
@@ -65,7 +65,7 @@ pub struct TrackEditResponse {
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// A threshold box was released, or a value typed into one was
-    /// committed: the bars the four boxes stand at, for the active track.
+    /// committed: the bars the four boxes stand at, for the focused item.
     /// Set only when they differ from the track's own.
     pub apply_thresholds: Option<Thresholds>,
     /// A kept-at-seed row's *Accept walk*, carrying the observation: put its
@@ -77,7 +77,7 @@ pub struct TrackEditResponse {
     /// to extend the selection rather than replace it. Applied through
     /// `AppState::pick_bench_observation`.
     pub pick_row: Option<(usize, bool)>,
-    /// *Duplicate*: put a copy of the active track on the bench beside it.
+    /// *Duplicate*: put a copy of the focused item on the bench beside it.
     pub duplicate: bool,
     /// *Commit*.
     pub commit: bool,
@@ -122,9 +122,9 @@ pub struct TrackEditResponse {
 pub struct TrackEdit {
     /// Where the threshold boxes stand.
     ///
-    /// The **active track's own bars**, copied from it on every frame no box
+    /// The **focused item's own bars**, copied from it on every frame no box
     /// is being dragged, so an undo, a redo, a step over the wire or a change
-    /// of active item moves the boxes with it. Only during a drag does this
+    /// of focused item moves the boxes with it. Only during a drag does this
     /// hold a value the track does not: the drag repaints the table live, and
     /// its release applies the bars to the track as one version. The panel
     /// therefore never holds bars a *Fit* would not use.
@@ -133,7 +133,7 @@ pub struct TrackEdit {
     /// what keeps [`TrackEdit::thresholds`] from being reset to the track's bars
     /// in the middle of the drag.
     sliding: bool,
-    /// What the boxes say about each observation of the active track, which
+    /// What the boxes say about each observation of the focused item, which
     /// is what its readings and its *Keep* cell are coloured by: `None` for an
     /// observation nothing at the track's stage has measured, which the bars
     /// do not judge.
@@ -143,7 +143,7 @@ pub struct TrackEdit {
     /// boxes. A step on the track gives it a new `Arc`, which is what says the
     /// judgement is stale.
     judged_for: Option<(String, usize, Thresholds)>,
-    /// Why the active track cannot be committed, or `None` when it can, as of
+    /// Why the focused item cannot be committed, or `None` when it can, as of
     /// the value and the track [`TrackEdit::commit_refusal_for`] last asked.
     ///
     /// Cached rather than asked per frame: the question is
@@ -210,7 +210,7 @@ pub struct TrackEdit {
     /// refusal is asked every frame, in front of this, because that one is free
     /// and does move.
     build_refusal: Option<(ReconId, Option<String>)>,
-    /// Where the active track's evaluation stood when this frame drew it:
+    /// Where the focused item's evaluation stood when this frame drew it:
     /// what the status at the head of the toolbar says, and how the rows print
     /// their numbers.
     evaluation: Evaluation,
@@ -273,7 +273,7 @@ impl TrackEdit {
         &self.thresholds
     }
 
-    /// Where the active track's evaluation stood when the panel last drew it.
+    /// Where the focused item's evaluation stood when the panel last drew it.
     #[cfg(test)]
     pub(crate) fn evaluation(&self) -> &Evaluation {
         &self.evaluation
@@ -282,7 +282,7 @@ impl TrackEdit {
     /// Whether the *Lock* box is ticked: a track-stage dot drag in Image Detail
     /// moves the patch when it is, and one sighting's keypoint when it is not.
     ///
-    /// The box's own state, whatever stage the active track is in. At the
+    /// The box's own state, whatever stage the focused item is in. At the
     /// cluster stage the box is greyed and every handle is already one
     /// sighting's, so what it holds there is only what the next track stage
     /// will be edited with.
@@ -309,10 +309,11 @@ impl TrackEdit {
         self.rows.clear();
     }
 
-    /// Draw the active track and report what the user did with it.
+    /// Draw the focused item and report what the user did with it.
     ///
-    /// Track View calls this only while a track is active; with none, or with
-    /// no node selected, it draws nothing and forgets the rows it drew.
+    /// Track View calls this only while an item on the selected node's bench
+    /// is focused; with none, or with no node selected, it draws nothing and
+    /// forgets the rows it drew.
     pub fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackEditResponse {
         let mut response = TrackEditResponse::default();
         let panel_rect = ui.available_rect_before_wrap();
@@ -327,13 +328,15 @@ impl TrackEdit {
         let id = node.id;
         let bench = node.history.current_bench();
 
-        let active = crate::bench::active_track_label(bench).map(str::to_string);
-        let Some(label) = active else {
+        let focused = state.focused_item_label(id).map(str::to_string);
+        let Some(label) = focused else {
             self.rows.clear();
             self.showing = None;
             return response;
         };
-        let track = bench.track(&label).expect("the active label names a track");
+        let track = bench
+            .track(&label)
+            .expect("the focused label names a track");
 
         self.showing = Some((id, label.clone()));
         self.reseat_thresholds(track);
@@ -377,7 +380,7 @@ impl TrackEdit {
         response
     }
 
-    /// The toolbar: every step that acts on the active track, each greyed with
+    /// The toolbar: every step that acts on the focused item, each greyed with
     /// the sentence naming what is missing.
     fn show_toolbar(
         &mut self,
@@ -508,7 +511,7 @@ impl TrackEdit {
         }
     }
 
-    /// The threshold boxes, which apply to the active track: a drag paints
+    /// The threshold boxes, which apply to the focused item: a drag paints
     /// the table live, and its release (or a typed value's commit) hands back
     /// the bars to apply as one version. `None` on every other frame, and on a
     /// release that left the bars where the track has them.
@@ -596,13 +599,13 @@ impl TrackEdit {
             .then(|| self.thresholds.clone())
     }
 
-    /// Put the boxes where the active track's own bars are, unless a box
+    /// Put the boxes where the focused item's own bars are, unless a box
     /// is being dragged.
     ///
     /// Every frame, rather than when something is seen to change: the boxes
     /// show the track's bars and nothing else, so whatever moved them -- a
     /// box's release here, `apply_bench_track_thresholds` over the wire, an
-    /// undo or redo of either, another item made active -- the boxes follow.
+    /// undo or redo of either, another item focused -- the boxes follow.
     fn reseat_thresholds(&mut self, track: &EditableTrack) {
         if !self.sliding {
             self.thresholds = track.thresholds.clone();
@@ -642,7 +645,7 @@ impl TrackEdit {
         self.judged_for = Some(key);
     }
 
-    /// Ask again why the active track cannot be committed, when the track or the
+    /// Ask again why the focused item cannot be committed, when the track or the
     /// node's version has moved since the last time.
     ///
     /// The question is the core commit itself, asked of the very track the
@@ -1183,7 +1186,7 @@ pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Find matches by SIFT query";
 /// because it reads poses and photographs, and requires no descriptor index.
 pub(crate) const SEARCH_GEOMETRY_LABEL: &str = "Find matches by geometry";
 
-/// What the toolbar says while an evaluation of the active track's current
+/// What the toolbar says while an evaluation of the focused item's current
 /// inputs is running or waiting to start, and what each row's status cell says
 /// then.
 pub(crate) const EVALUATING_LABEL: &str = "Evaluating\u{2026}";
@@ -1196,7 +1199,7 @@ pub(crate) const EVALUATED_LABEL: &str = "Evaluated";
 /// inputs and gets none until a step changes them.
 pub(crate) const NOT_EVALUATED: &str = "not evaluated";
 
-/// Where the active track's evaluation stands, at the head of the toolbar.
+/// Where the focused item's evaluation stands, at the head of the toolbar.
 ///
 /// There is no *Evaluate* button: every change to an input of the evaluation
 /// evaluates the track again (`specs/gui/bench.md` § "Live evaluation"), so
@@ -1224,7 +1227,7 @@ fn show_evaluation(ui: &mut egui::Ui, evaluation: &Evaluation) {
     }
 }
 
-/// The header: what the active track is, and what the last evaluation of it
+/// The header: what the focused item is, and what the last evaluation of it
 /// made of it. Returns whether its go-to button was clicked.
 ///
 /// `point_id` is the ID of the point the track was read from, when that point

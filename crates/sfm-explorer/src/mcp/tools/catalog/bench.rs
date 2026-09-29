@@ -9,7 +9,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "create_bench_cluster",
             description: "Start a cluster-stage track on the bench from a place in one camera \
-                          image, and make it the active track. A cluster is a set of image \
+                          image, and focus it. A cluster is a set of image \
                           patches that register onto one template, with no geometry behind them: \
                           it wants more observations, and set_bench_track_stage \"track\" is \
                           what triangulates it. It is evaluated on a worker as soon as it is \
@@ -29,14 +29,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "create_bench_track",
             description: "Put one 3D point of the reconstruction on the bench as a track-stage \
-                          track, and make it the active track, so its observations can be judged \
+                          track, and focus it, so its observations can be judged \
                           one at a time and the result committed back over the point. This is \
                           what Edit on Bench does at the window: the entry on a point's menu \
                           in the 3D viewport and on a feature's menu in Image Detail, and what \
                           double-clicking either of them does. Putting on a point a track \
-                          already came from activates that track rather than putting a second \
-                          one on, and that track keeps the label it has whatever label says. \
-                          The reply names the item.",
+                          already came from focuses that track rather than putting a second \
+                          one on, and that track keeps the label it has whatever label says; \
+                          that pushes no version and replies changed: false. The reply names \
+                          the item.",
             kind: Write,
             schema: object(
                 &[("label", new_item_label_schema())],
@@ -58,7 +59,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           gates. Only index files that get_bench reports as current are read; a \
                           member whose file is missing or stale refuses and names it, and \
                           build_index_files makes both. A track that is built is put on the \
-                          bench as the active item (one version) and committed (a second), so \
+                          bench and focused (one version) and committed (a second), so \
                           one undo takes the point back and leaves the track on the bench. The \
                           reply is commit_bench_track's (the version, the item and the point \
                           by index and id) with the member that built it. When every member \
@@ -94,7 +95,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           tracks are grouped into depth layers, ranked with a confidence that \
                           the pixel is on each, and labelled `<group> <rank><letter>`, \
                           `frame_13@412,230 1a` for the nearest the pixel on the best-ranked \
-                          layer, which becomes the active item. An existing point near the pixel \
+                          layer, which is focused. An existing point near the pixel \
                           goes on the bench as its own track, as create_bench_track puts it, \
                           under its label with ` pt <index>` and is never committed. A track \
                           whose built track has an existing point's sightings, or those of a \
@@ -142,10 +143,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "activate_bench_item",
-            description: "Make one item on the bench the active one, which is the item Track \
-                          View is editing and the item a bench tool acts on when it names none. \
-                          A track and a cluster share the one activation.",
+            name: "focus_bench_item",
+            description: "Focus one item on the bench: the item Track View edits, and the item \
+                          a bench tool acts on when it names none. There is one focused item for \
+                          the whole viewer, so focusing an item unfocuses any other, on this \
+                          bench or another. Not a step: it pushes no version and writes one \
+                          Selection row in the Action Log, and a background task on the \
+                          reconstruction does not refuse it. The reply names the item, with \
+                          changed: false when it was focused already.",
             kind: Write,
             schema: object(
                 &[],
@@ -156,13 +161,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "deactivate_bench_item",
-            description: "Stop editing: every item stays on the bench and none is active, which \
+            name: "unfocus_bench_item",
+            description: "Stop editing: every item stays on its bench and none is focused, which \
                           is Track View's Edit box cleared, so the panel shows the selected \
-                          point's committed track. One version; with nothing active, a no-effect \
-                          reply. get_bench then reports active.track as null.",
+                          point's committed track. It names no reconstruction, since there is \
+                          one focused item for the viewer. Not a step: it pushes no version and \
+                          writes one Selection row. The reply names the item it unfocused; with \
+                          nothing focused, both are null and changed is false. get_bench then \
+                          reports focused_item as null.",
             kind: Write,
-            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+            schema: object(&[], &[]),
         },
         ToolSpec {
             name: "rename_bench_item",
@@ -191,7 +199,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "discard_bench_item",
             description: "Take one item off the bench. It is a version like any other step, so \
-                          undo puts the item back where it was and active as it was; nothing of \
+                          undo puts the item back where it was; discarding the focused item \
+                          unfocuses it, and the undo does not focus it again. Nothing of \
                           the reconstruction is touched, since nothing on the bench is part of \
                           it.",
             kind: Write,
@@ -231,8 +240,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "duplicate_bench_item",
-            description: "Put a copy of one item on the bench beside it, and make the copy the \
-                          active one — what a second patch over neighbouring ground is started \
+            description: "Put a copy of one item on the bench beside it, and focus the copy \
+                          — what a second patch over neighbouring ground is started \
                           from, since a patch already fitted to one piece of surface is most of \
                           the way to the piece next to it. The copy carries everything that \
                           describes the geometry and the judgements about it: the stage and its \
@@ -240,7 +249,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           pin, the measurements, and the thresholds. The one thing it does not \
                           carry is the **origin**, so a commit of the copy creates a point rather \
                           than replacing the one the original came from. Its label is the \
-                          original's with \" copy\" after it. Omit item for the active track. \
+                          original's with \" copy\" after it. Omit item for the focused item. \
                           The reply names the copy, which is the handle every later call uses.",
             kind: Write,
             schema: object(
@@ -668,13 +677,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "select_bench_observations",
-            description: "Replace the selected observations of the active bench track: Track \
+            description: "Replace the selected observations of the focused bench track: Track \
                           View's highlighted rows, which its Split off N rows button takes and, \
                           when there is exactly one, the 3D viewer draws larger. An empty list \
                           clears them. get_bench_track reports them as selected_observations, \
-                          including the ones a person clicked. Only the active track has \
+                          including the ones a person clicked. Only the focused item has \
                           selected observations, so naming another track is refused. Pushes no \
-                          version; an undo, a redo or a change of active item clears them.",
+                          version; an undo, a redo or a change of focused item clears them, and \
+                          a rename keeps them.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],

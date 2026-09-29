@@ -10,8 +10,8 @@ Four panel types:
 1. **3D Viewer** — the existing viewport (point cloud, frustums, navigation)
 2. **Image Browser** — bottom strip of 128×128 thumbnails for browsing the image sequence
 3. **Image Detail** — full-resolution image view for the selected camera
-4. **Track View** — the selected 3D point's observations, or the bench's active
-   track while its *Edit* box is ticked (see [track-view.md](track-view.md));
+4. **Track View** — the selected 3D point's observations, or the focused bench
+   item while its *Edit* box is ticked (see [track-view.md](track-view.md));
    the right-hand column beside the two pictures.
 
 A fifth panel, **Scene**, was added by
@@ -509,11 +509,11 @@ rendered interactively via egui rather than baked into an output image.
 
 #### The bench layer
 
-The active track of the node's **bench** ([`bench.md`](bench.md)) is drawn on
+The focused item on the node's **bench** ([`bench.md`](bench.md)) is drawn on
 this panel as a second layer, independent of the mode above in the same way the
 intrinsics layer is, and **last**: it is the one thing here that is not about
 the reconstruction, so no mode turns it off and nothing draws on top of it. It
-is drawn only for the *active* item: the bench holds several and this panel
+is drawn only for the *focused* item: the bench holds several and this panel
 shows the one being worked on. Its marks and handles are in the images that
 track observes; an image it does not observe shows at most the **ghost
 outline** described below, which takes the patch-wide handles while Track View's
@@ -783,9 +783,9 @@ and what a pointer means against a patch is
 wire's patch tools read it through too.
 Like the selection, what the panel is told about the bench is passed in by the
 dock rather than read by the panel: one value carrying the task holding the node,
-the active track and Track View's *Lock*, which both this layer and the menu's
+the focused item and Track View's *Lock*, which both this layer and the menu's
 two bench entries read, so what is offered and what is drawn cannot disagree
-about which track is active or what its dot does.
+about which track is focused or what its dot does.
 
 #### Feature Filtering
 
@@ -1076,11 +1076,11 @@ in this order:
 
 | Entry | What it does |
 |-------|--------------|
-| `Create Track Here` (`Ctrl+Shift+Click`) | Builds a track at the clicked pixel with the track-at-pixel cascade, on a worker, puts it on the bench as the active item and commits it as a new point |
+| `Create Track Here` (`Ctrl+Shift+Click`) | Builds a track at the clicked pixel with the track-at-pixel cascade, on a worker, puts it on the bench as the focused item and commits it as a new point |
 | `Edit on Bench` | Puts the track of the point the feature under the pointer observes on the bench as a track-stage track, and raises Track View on it |
-| `Find Nearby Tracks` | Finds the tracks the photographs agree on near the clicked pixel, on a worker, puts every usable one on the bench under its label, commits the ones that are not existing points as new points, all as one version, and makes the nearest the pixel on the best-ranked depth layer the active item |
+| `Find Nearby Tracks` | Finds the tracks the photographs agree on near the clicked pixel, on a worker, puts every usable one on the bench under its label, commits the ones that are not existing points as new points, all as one version, and makes the nearest the pixel on the best-ranked depth layer the focused item |
 | `Start cluster on the bench here` | Puts a cluster-stage track on the bench seeded at the clicked pixel, with the node's own default patch radius, and raises Track View on it |
-| `Add observation to bench track here` | Adds a candidate sighting at that pixel to the bench's active track: at the track stage the pixel is its keypoint, at the cluster stage its seed |
+| `Add observation to bench track here` | Adds a candidate sighting at that pixel to the focused item: at the track stage the pixel is its keypoint, at the cluster stage its seed |
 
 What `Edit on Bench` and the two bench entries put on the bench is edited
 afterwards in Track View ([`track-view.md`](track-view.md)), and the commit
@@ -1110,7 +1110,7 @@ already follows.
 pixel the menu was opened at, and it is greyed with `Create Track Here`'s
 sentences, word for word, since it ends in the same commit
 (`AppState::find_nearby_tracks_refusal`). It raises no panel either: the
-nearest track on the best-ranked layer becomes the active item and its point,
+nearest track on the best-ranked layer becomes the focused item and its point,
 existing or just committed, the selection ([`bench.md`](bench.md) § "Find
 Nearby Tracks").
 
@@ -1131,10 +1131,10 @@ point a click there would have selected.
 The two lower entries are offered whatever backs the node's observations,
 because a bench track is seeds in one image's pixels until it is
 committed. Starting a cluster needs nothing but a pixel and a node no background
-task is holding; adding to the bench track is greyed until a track is active,
+task is holding; adding to the bench track is greyed until an item is focused,
 with *"No track is being edited: tick Edit in Track View, or double-click a
 Bench item in the Scene tree."*, since a bench with items on it can have none
-active. An image the active track already holds a sighting in is not a
+focused. An image the focused item already holds a sighting in is not a
 refusal -- a second one joins unpinned and `out` and is scored like any other, and
 it is the `in` verdict a track cannot hold twice
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)). A busy

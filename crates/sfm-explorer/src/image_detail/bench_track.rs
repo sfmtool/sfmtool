@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bench layer: the active track of the node's bench, drawn over the image
+//! The bench layer: the focused item of the node's bench, drawn over the image
 //! in the detail panel, and edited on it.
 //!
 //! It is a layer rather than an overlay mode, for the reason the intrinsics
@@ -1042,7 +1042,7 @@ fn runs(samples: &[Option<Pos2>]) -> (Vec<Vec<Pos2>>, bool) {
     (runs, false)
 }
 
-/// Draw the active bench track in `img_idx`, and report a click on one of its
+/// Draw the focused bench track in `img_idx`, and report a click on one of its
 /// marks.
 ///
 /// `drag` is the handle the pointer has hold of, if any: the layer is drawn

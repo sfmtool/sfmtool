@@ -77,6 +77,53 @@ fn a_track_put_on_the_bench_is_evaluated_first_with_no_version_and_no_row() {
     );
 }
 
+/// The focused item is evaluated before every other track, on any node, since
+/// it is what Track View shows.
+#[test]
+fn the_focused_item_is_evaluated_first() {
+    let (mut state, a) = state();
+    let on_a = put_on_bench(&mut state, a);
+    let b = state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let on_b = put_on_bench(&mut state, b);
+
+    // Node a comes first in the scene, and node b's item is focused.
+    state.drive_bench_evaluation();
+    assert!(
+        state.bench_evaluation_running(b, &on_b),
+        "the focused item on the second node was not evaluated first"
+    );
+    state.settle_bench_evaluation();
+
+    state.focus_bench_item(a, &on_a).expect("on a's bench");
+    state
+        .set_bench_verdict(b, &on_b, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    state
+        .set_bench_verdict(a, &on_a, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(a, &on_a));
+    state.settle_bench_evaluation();
+}
+
+/// A rename keeps the item's ID, which is what the evaluation is keyed by, so
+/// an evaluated track stays current under its new label.
+#[test]
+fn a_rename_keeps_the_evaluation_current() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    state
+        .rename_bench_item(id, &label, "renamed")
+        .expect("a free label");
+    assert_eq!(
+        state.bench_evaluation(id, "renamed"),
+        Some(Evaluation::Current)
+    );
+}
+
 #[test]
 fn a_step_that_changes_an_input_starts_a_new_evaluation() {
     let (mut state, id) = state();

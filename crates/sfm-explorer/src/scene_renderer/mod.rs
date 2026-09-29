@@ -112,7 +112,7 @@ pub struct SceneRenderer {
     track_ray_bind_group: Option<wgpu::BindGroup>, // recreated on resize
     track_ray_count: u32,
 
-    // ── The bench's active track (post-EDL, depth-aware) ──
+    // ── The focused item (post-EDL, depth-aware) ──
     bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_disc_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_edge_buffer: Option<wgpu::Buffer>,

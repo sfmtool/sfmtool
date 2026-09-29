@@ -353,7 +353,7 @@ pub struct Viewer3D {
     /// Which reframe the patch menu asked for, and on which node, drained by
     /// `app.rs` after the frame for the reason [`Self::point_menu`] is.
     pub(crate) patch_menu: Option<(ReconId, crate::display_transform::PatchReframe)>,
-    /// The figure the bench's active track draws in the scene, as of the last
+    /// The figure the focused item draws in the scene, as of the last
     /// frame this panel was shown, or `None` when there is nothing to draw.
     ///
     /// Built here rather than in the upload because it is a reading of the
@@ -424,7 +424,7 @@ const PATCH_AT_INFINITY_HINT: &str =
 /// What the viewport's context menu stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuTarget {
-    /// The bench's active patch, on the node whose figure was drawn.
+    /// The focused item's patch, on the node whose figure was drawn.
     Patch(ReconId),
     /// A 3D point the pick reported under the cursor.
     Point(PointRef),
@@ -480,7 +480,7 @@ impl Viewer3D {
         }
     }
 
-    /// The viewport's context menu: right-click the bench's active patch, a
+    /// The viewport's context menu: right-click the focused item's patch, a
     /// point's dot or a point's own patch, and this is what opens.
     ///
     /// **A right *click* opens it and a right *drag* does not.** The viewport's
@@ -665,8 +665,8 @@ impl Viewer3D {
         // what the point menu greys its entries with. Read before the node is
         // borrowed out of the scene, because the answer is the whole state's.
         busy: Option<&str>,
-        // The node's bench, as much of it as this layer draws: the active
-        // track, the value its marks unproject through and the node's
+        // The node's bench, as much of it as this layer draws: the focused
+        // item, the value its marks unproject through and the node's
         // transform. Read out by the dock for the reason `busy` above is --
         // the state is borrowed mutably further down this same call.
         bench: Option<bench_track::BenchTrack<'_>>,
@@ -835,7 +835,7 @@ impl Viewer3D {
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui);
 
-        // The bench's active track, as the scene geometry the next frame's
+        // The focused item, as the scene geometry the next frame's
         // upload draws. After the camera has been moved by this frame's input,
         // because the arrowhead is squared to the eye.
         //

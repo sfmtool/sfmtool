@@ -79,7 +79,7 @@ fn find(
 /// At the held-out grid point's pixel the eight points around it come back as
 /// existing points on one layer: each goes on the bench as its own track,
 /// seated on its point and labelled with it, nothing is committed, and the
-/// whole is one bench version. `1a` is active and its point selected.
+/// whole is one bench version. `1a` is focused and its point selected.
 #[test]
 fn existing_points_go_on_the_bench_as_their_own_tracks_in_one_version() {
     let (mut state, id) = plane_state();
@@ -118,10 +118,7 @@ fn existing_points_go_on_the_bench_as_their_own_tracks_in_one_version() {
         other => panic!("{other:?}"),
     };
     assert!(first_item.starts_with(&format!("{group} 1a pt ")));
-    assert_eq!(
-        crate::bench::active_track_label(bench),
-        Some(first_item.as_str())
-    );
+    assert_eq!(state.focused_item_label(id), Some(first_item.as_str()));
     assert_eq!(state.selected_point.map(|p| p.point), Some(first_point));
 
     // One bench row, then the selection's.
@@ -133,7 +130,7 @@ fn existing_points_go_on_the_bench_as_their_own_tracks_in_one_version() {
                 .2
                 .starts_with("Found 8 nearby tracks in 1 layer at (")
             && rows[0].2.contains("8 existing points put on the bench")
-            && rows[0].2.contains(&format!("{first_item} is active")),
+            && rows[0].2.contains(&format!("editing {first_item}")),
         "{rows:?}"
     );
     assert_eq!(
@@ -142,7 +139,7 @@ fn existing_points_go_on_the_bench_as_their_own_tracks_in_one_version() {
     );
 
     // A second find at the same pixel finds the same points on the bench
-    // already, puts no second copy on and, with `1a` still active, pushes no
+    // already, puts no second copy on and, with `1a` still focused, pushes no
     // version.
     let labels = bench_labels(&state, id);
     let versions_before = versions(&state, id);

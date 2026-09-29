@@ -2215,19 +2215,20 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
 }
 
 /// A second Edit on Bench on the same point -- a double-click after a menu, or
-/// one double-click after another -- activates the item that is there rather
+/// one double-click after another -- focuses the item that is there rather
 /// than putting a second one on, and raises the panel again.
 ///
 /// This is what makes a double-click safe: the gesture arrives as two clicks
 /// and the panel is reached from two places, so the step has to be one a
 /// reader can repeat without collecting duplicates.
 #[test]
-fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
+fn a_second_edit_on_bench_on_one_point_focuses_the_item_already_there() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
     state.apply_point_gesture(PointGesture::EditOnBench(point));
-    let label = crate::bench::active_track_label(state.bench(id).expect("the node has a bench"))
-        .expect("a track is active")
+    let label = state
+        .focused_item_label(id)
+        .expect("a track is focused")
         .to_string();
 
     state.hide_panel(crate::dock::Tab::TrackView);
@@ -2236,9 +2237,9 @@ fn a_second_edit_on_bench_on_one_point_activates_the_item_already_there() {
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "a second item joined the bench");
     assert_eq!(
-        crate::bench::active_track_label(bench),
+        state.focused_item_label(id),
         Some(label.as_str()),
-        "the item already there is not the active one",
+        "the item already there is not the focused one",
     );
     assert!(state.is_panel_open(crate::dock::Tab::TrackView));
 }

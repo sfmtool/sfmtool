@@ -64,7 +64,7 @@ Scene (root, implicit)
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
 │   ├── Bench Points (2)           ← the bench's track-stage items, when it has any
-│   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the active one marked
+│   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the focused one marked
 │   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
 │   │   └── IMG_0004@120,90  3 in
 │   ├── Patches                   ← toggle-only row, present when the recon
@@ -505,14 +505,14 @@ node whose bench holds only tracks shows only *Bench Points*; each remembers its
 own expansion, and both open by default.
 
 Each expands to one row per item of its stage, in the bench's own order, by
-label and with its `in` count; the active item is drawn as the selected row.
-There is **one** active item across both groups, the bench's kinds being items
-rather than stages. A **click** on a row selects the node it is under and does
-nothing to the bench, the pair the node row follows (click to select,
+label and with its `in` count; the focused item
+([`bench.md`](bench.md) § "The focused item") is drawn as the selected row, in
+whichever group holds it. A **click** on a row selects the node it is under and
+does nothing to the bench, the pair the node row follows (click to select,
 double-click to act), so a pass of clicks down the tree pushes no versions. A
-**double-click** makes the item active, which is a step of the node's history
-like any other, selects the node, and raises Track View on it; on the item that
-is active already it pushes no version and writes no row. A secondary click
+**double-click** focuses the item, which is not a step of the node's history and
+pushes no version, selects the node, and raises Track View on it; on the item
+that is focused already it writes no row. A secondary click
 offers *Discard*. An item is named by its position in the whole bench, so both
 groups' rows reach the same list.
 
@@ -520,7 +520,8 @@ A secondary click on either group's own header offers **Clear the Bench**,
 which takes every item off the bench, both groups', since they are one bench
 (`AppState::clear_bench`, reported as `clear_bench` and applied by the dock).
 Like a discard it asks for no confirmation and is one version, so one undo puts
-every item back and the active one active again. Clearing an empty bench writes
+every item back; the focused item, when it was on this bench, is unfocused and
+the undo does not focus it again. Clearing an empty bench writes
 a row saying it had no effect and pushes no version.
 
 The raise is a layout operation, and the tree is drawn inside a tab body, where
@@ -1296,8 +1297,9 @@ bundle from `retain_nodes` on the next frame.
   and nothing to `take_bench_edit`, and pushes no version; a double-click on a
   row of either group reports the item by its position in the whole bench and
   hands the request to `take_bench_edit`, and applied it selects the node,
-  activates the item in one version and raises Track View; applied over the item
-  that is active it pushes no version and writes no `Bench` row; and a
+  focuses the item with no version and raises Track View; applied over the item
+  that is focused it pushes no version and writes no `Bench` or `Selection`
+  row; and a
   double-click made while the dock is swapped out for the placeholder still
   raises the panel once the request is drained against the real dock.
 - **The Index Files rows**, through the same whole frames: the group row and

@@ -217,16 +217,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "set_reconstruction_transform_from_patch",
-            description: "Set one reconstruction's display transform from the active patch on \
-                          its bench, in one of the four ways the 3D viewport's patch menu offers: \
+            description: "Set one reconstruction's display transform from the focused item's \
+                          patch on its bench, in one of the four ways the 3D viewport's patch menu offers: \
                           set_to_origin draws the scene in the patch's own frame (centre at the \
                           origin, u on +X, normal on +Z); align_normal_to_z tips the scene about \
                           the patch's centre until its normal is +Z; translate_to_origin moves the \
                           patch's centre to the origin; translate_to_xy_plane moves the scene \
                           along Z alone so the patch's centre sits at z = 0. Each composes onto \
                           the transform the reconstruction already carries and keeps its scale. \
-                          One version, like set_reconstruction_transform. Refused when nothing on \
-                          the bench is active, the active item is a cluster, the track has no \
+                          One version, like set_reconstruction_transform. Refused when no item on \
+                          the bench is focused, the focused item is a cluster, the track has no \
                           patch frame, or the track is at infinity.",
             kind: Write,
             schema: object(

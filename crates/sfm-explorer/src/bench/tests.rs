@@ -107,10 +107,15 @@ fn rows(state: &AppState) -> Vec<(Kind, String)> {
         .collect()
 }
 
-// ── The list, the activation and the discard ────────────────────────────
+/// The label of the focused item on `id`'s bench, owned.
+fn focused(state: &AppState, id: ReconId) -> Option<String> {
+    state.focused_item_label(id).map(str::to_string)
+}
+
+// ── The list, the focused item and the discard ──────────────────────────
 
 #[test]
-fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
+fn putting_a_second_item_on_and_discarding_it_are_two_versions_and_focusing_none() {
     let (mut state, id) = state();
     let first = put_on_bench(&mut state, id);
     let before = versions(&state, id);
@@ -126,23 +131,20 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
         .label;
     assert_eq!(bench(&state, id).len(), 2);
     assert_eq!(
-        crate::bench::active_track_label(bench(&state, id)),
+        focused(&state, id).as_deref(),
         Some(second.as_str()),
-        "a new item is the active one"
+        "a new item is the focused one"
     );
 
-    state.activate_bench_item(id, &first).expect("on the bench");
-    assert_eq!(
-        crate::bench::active_track_label(bench(&state, id)),
-        Some(first.as_str())
-    );
+    state.focus_bench_item(id, &first).expect("on the bench");
+    assert_eq!(focused(&state, id).as_deref(), Some(first.as_str()));
 
     state.discard_bench_item(id, &second).expect("on the bench");
     assert_eq!(bench(&state, id).len(), 1);
     assert_eq!(
         versions(&state, id) - before,
-        3,
-        "the three steps are three versions"
+        2,
+        "the put and the discard are two versions, and the focus none"
     );
     assert_eq!(
         item_address(&state, id, 0),
@@ -154,9 +156,9 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
     let bench = bench(&state, id);
     assert_eq!(bench.len(), 2, "the undo put the item back");
     assert_eq!(
-        crate::bench::active_track_label(bench),
+        focused(&state, id).as_deref(),
         Some(first.as_str()),
-        "the undo restored the activation as it stood"
+        "the undo left the focused item alone"
     );
     assert_eq!(item_address(&state, id, 0), first_address);
 }
@@ -214,7 +216,7 @@ fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
 }
 
 #[test]
-fn putting_a_point_on_twice_activates_the_track_it_already_made() {
+fn putting_a_point_on_twice_focuses_the_track_it_already_made() {
     let (mut state, id) = state();
     let first = put_on_bench(&mut state, id);
     state
@@ -229,11 +231,252 @@ fn putting_a_point_on_twice_activates_the_track_it_already_made() {
     let again = put_on_bench(&mut state, id);
     assert_eq!(again, first, "a second item was put on for one point");
     assert_eq!(bench(&state, id).len(), 2);
+    assert_eq!(focused(&state, id).as_deref(), Some(first.as_str()));
     assert_eq!(
-        versions(&state, id) - before,
-        1,
-        "the activation is the one version it pushed"
+        versions(&state, id),
+        before,
+        "focusing the item already there pushed a version"
     );
+}
+
+// ── The focused item ────────────────────────────────────────────────────
+
+#[test]
+fn focusing_and_unfocusing_push_no_version_and_write_one_selection_row_each() {
+    let (mut state, id) = state();
+    let first = put_on_bench(&mut state, id);
+    state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
+        .expect("a pixel on the sensor");
+    let before = versions(&state, id);
+
+    state.action_log.clear();
+    state.focus_bench_item(id, &first).expect("on the bench");
+    assert_eq!(versions(&state, id), before, "a focus pushed a version");
+    assert_eq!(
+        rows(&state),
+        [(Kind::Selection, format!("Editing {first}"))]
+    );
+
+    state.action_log.clear();
+    state.unfocus_bench_item();
+    assert_eq!(versions(&state, id), before, "an unfocus pushed a version");
+    assert_eq!(focused(&state, id), None);
+    assert!(state.focused_item().is_none());
+    assert_eq!(
+        rows(&state),
+        [(Kind::Selection, format!("Stopped editing {first}"))]
+    );
+
+    // Neither is a step, so neither is left to undo: the undo takes back the
+    // cluster's put.
+    state.undo(id).expect("the cluster's put");
+    assert_eq!(bench(&state, id).len(), 1);
+}
+
+#[test]
+fn focusing_what_is_focused_and_unfocusing_nothing_write_no_effect_rows() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let before = versions(&state, id);
+
+    state.action_log.clear();
+    state.focus_bench_item(id, &label).expect("on the bench");
+    state.unfocus_bench_item();
+    state.unfocus_bench_item();
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows[0].1.contains("no effect"), "{rows:?}");
+    assert!(rows[2].1.contains("no effect"), "{rows:?}");
+    assert!(rows.iter().all(|(kind, _)| *kind == Kind::Selection));
+    assert_eq!(versions(&state, id), before);
+}
+
+#[test]
+fn focusing_a_label_that_is_not_on_the_bench_is_refused_in_a_sentence() {
+    let (mut state, id) = state();
+    put_on_bench(&mut state, id);
+    let why = state
+        .focus_bench_item(id, "nothing-is-called-this")
+        .expect_err("not on the bench");
+    assert_eq!(
+        why,
+        "Nothing on the bench is called nothing-is-called-this."
+    );
+}
+
+#[test]
+fn every_step_that_puts_an_item_on_focuses_it() {
+    let (mut state, id) = state();
+    let put = put_on_bench(&mut state, id);
+    assert_eq!(focused(&state, id).as_deref(), Some(put.as_str()));
+
+    let cluster = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    assert_eq!(focused(&state, id).as_deref(), Some(cluster.as_str()));
+
+    let copy = state.duplicate_bench_item(id, &put).expect("on the bench");
+    assert_eq!(focused(&state, id).as_deref(), Some(copy.as_str()));
+
+    let split = state
+        .split_bench_track(id, &put, &[2])
+        .expect("three observations, one moved");
+    assert_eq!(focused(&state, id).as_deref(), Some(split.as_str()));
+}
+
+#[test]
+fn discarding_the_focused_item_unfocuses_it_and_the_undo_does_not_focus_it_again() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.discard_bench_item(id, &label).expect("on the bench");
+    assert!(state.focused_item().is_none());
+
+    state.undo(id).expect("the discard");
+    assert_eq!(bench(&state, id).len(), 1, "the undo put the item back");
+    assert!(state.focused_item().is_none());
+}
+
+#[test]
+fn a_rename_keeps_the_item_focused_and_its_selected_observations() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state
+        .select_bench_observations(id, &label, &[0, 2])
+        .expect("the focused item");
+
+    state
+        .rename_bench_item(id, &label, "renamed")
+        .expect("a free label");
+    assert_eq!(focused(&state, id).as_deref(), Some("renamed"));
+    assert_eq!(state.selected_bench_observations(id, "renamed"), [0, 2]);
+
+    state.undo(id).expect("the rename");
+    assert_eq!(
+        focused(&state, id).as_deref(),
+        Some(label.as_str()),
+        "the item under its old label is still the focused one"
+    );
+}
+
+#[test]
+fn the_selected_observations_clear_when_the_focused_item_changes() {
+    let (mut state, id) = state();
+    let first = put_on_bench(&mut state, id);
+    state
+        .select_bench_observations(id, &first, &[1])
+        .expect("the focused item");
+    let cluster = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &pixel_seed([120.0, 90.0], Some(6.0)),
+            None,
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    assert!(state.bench_rows.is_none(), "the put focused another item");
+
+    state.focus_bench_item(id, &first).expect("on the bench");
+    assert_eq!(
+        state.selected_bench_observations(id, &first),
+        [] as [usize; 0]
+    );
+    let refused = state.select_bench_observations(id, &cluster, &[0]);
+    assert!(refused.is_err(), "rows selected on an item not focused");
+}
+
+#[test]
+fn an_undo_past_the_put_unfocuses_and_an_undo_after_unfocusing_takes_back_the_verdict() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+
+    // Unfocusing is not a step, so the undo after it takes back the verdict
+    // rather than bringing the focused item back.
+    state.unfocus_bench_item();
+    state.undo(id).expect("the verdict");
+    assert_eq!(
+        state
+            .bench_track(id, &label)
+            .expect("on the bench")
+            .observations[1]
+            .verdict,
+        Verdict::In,
+        "the undo was spent on something other than the verdict"
+    );
+    assert!(state.focused_item().is_none());
+
+    // Focused again, an undo past the put leaves nothing to be focused.
+    state.focus_bench_item(id, &label).expect("on the bench");
+    state.undo(id).expect("the put");
+    assert!(bench(&state, id).is_empty());
+    assert!(
+        state.focused_item().is_none(),
+        "focused on an item not there"
+    );
+
+    // The redo does not focus it again.
+    state.redo(id).expect("the put");
+    assert!(state.focused_item().is_none());
+}
+
+#[test]
+fn there_is_one_focused_item_for_the_viewer() {
+    let (mut state, a) = state();
+    let on_a = put_on_bench(&mut state, a);
+    let b = state.append_node(SceneNode::demo(projected_embedded_demo(12)));
+    let on_b = put_on_bench(&mut state, b);
+
+    assert_eq!(focused(&state, b).as_deref(), Some(on_b.as_str()));
+    assert_eq!(focused(&state, a), None, "node a kept a focused item");
+
+    state.focus_bench_item(a, &on_a).expect("on a's bench");
+    assert_eq!(focused(&state, a).as_deref(), Some(on_a.as_str()));
+    assert_eq!(focused(&state, b), None, "node b kept a focused item");
+
+    state.close_node(a).expect("nothing is running");
+    assert!(state.focused_item().is_none(), "closing a left it focused");
+}
+
+#[test]
+fn a_busy_node_does_not_refuse_focusing_or_unfocusing() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.unfocus_bench_item();
+    state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            id,
+            Box::new(move |_| Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    assert!(state.busy_refusal(id).is_some(), "the task holds the node");
+
+    state.focus_bench_item(id, &label).expect("not a step");
+    assert!(state.focused_item().is_some());
+    // Ticking Edit over the point the item came from focuses it too.
+    state.unfocus_bench_item();
+    state
+        .set_editing(id, true)
+        .expect_err("no point is selected, so the tick has nothing to put on");
+    state.select_point(PointRef::new(id, POINT as usize));
+    state.set_editing(id, true).expect("a focus, not a put");
+    assert_eq!(focused(&state, id).as_deref(), Some(label.as_str()));
+    state.set_editing(id, false).expect("an unfocus");
+    assert!(state.focused_item().is_none());
+
+    state.finish_background_task();
 }
 
 // ── Undo, redo and the document edit between two bench steps ────────────
@@ -595,7 +838,7 @@ fn a_step_that_changes_nothing_pushes_no_version() {
     state
         .start_bench_stage(id, &label, StageKind::Track)
         .expect("already at the track stage");
-    state.activate_bench_item(id, &label).expect("on the bench");
+    state.focus_bench_item(id, &label).expect("on the bench");
 
     assert_eq!(versions(&state, id), before);
 }

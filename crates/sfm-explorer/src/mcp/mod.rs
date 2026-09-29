@@ -163,7 +163,7 @@ pub(crate) enum Command {
         translation: [f64; 3],
         scale: f64,
     },
-    /// Set it from the bench's active patch, in one of the four ways the
+    /// Set it from the focused item's patch, in one of the four ways the
     /// viewport's patch menu offers.
     SetReconstructionTransformFromPatch {
         reconstruction_label: String,
@@ -319,7 +319,7 @@ pub(crate) enum Command {
         reconstruction_label: String,
     },
     /// One node's bench: the items, their kinds, origins, stages and counts,
-    /// and which is active.
+    /// and the focused item when it is on that bench.
     GetBench {
         reconstruction_label: String,
     },
@@ -327,7 +327,7 @@ pub(crate) enum Command {
     /// measurements.
     GetBenchTrack {
         reconstruction_label: String,
-        /// `None` is the active track, which is what a bench panel's gesture
+        /// `None` is the focused item, which is what a bench panel's gesture
         /// means when it names no item.
         track: Option<String>,
     },
@@ -372,15 +372,16 @@ pub(crate) enum Command {
         /// The group label, in place of `<stem>@<x>,<y>`.
         label: Option<String>,
     },
-    ActivateBenchItem {
+    /// Focus one item on a node's bench: the item Track View edits. No
+    /// version.
+    FocusBenchItem {
         reconstruction_label: String,
         item: String,
     },
-    /// Leave every item on the bench and make none active: Track View's *Edit*
-    /// box cleared.
-    DeactivateBenchItem {
-        reconstruction_label: String,
-    },
+    /// Leave no item focused, every item staying on its bench: Track View's
+    /// *Edit* box cleared. No version, and no node named, since there is one
+    /// focused item for the viewer.
+    UnfocusBenchItem,
     RenameBenchItem {
         reconstruction_label: String,
         item: String,
@@ -395,7 +396,7 @@ pub(crate) enum Command {
     /// a commit of it creates a point rather than replacing one.
     DuplicateBenchItem {
         reconstruction_label: String,
-        /// Omitted means the active track.
+        /// Omitted means the focused item.
         item: Option<String>,
     },
     AddBenchTrackObservation {
@@ -496,11 +497,11 @@ pub(crate) enum Command {
         track: Option<String>,
         observations: Vec<usize>,
     },
-    /// Replace the selected observations of the active track: Track View's
+    /// Replace the selected observations of the focused item: Track View's
     /// highlighted rows. An empty list clears them.
     SelectBenchObservations {
         reconstruction_label: String,
-        /// `None` is the active track; a named one must be it.
+        /// `None` is the focused item; a named one must be it.
         track: Option<String>,
         observations: Vec<usize>,
     },
@@ -705,7 +706,7 @@ pub(crate) enum ImageDetailTarget {
     Feature(u32),
     /// One observation of a bench track, which names its own photograph.
     BenchObservation {
-        /// `None` is the active track, as everywhere else on the bench.
+        /// `None` is the focused item, as everywhere else on the bench.
         track: Option<String>,
         /// Its position in the track's observation list.
         observation: usize,
@@ -885,7 +886,7 @@ pub(crate) enum ViewCommand {
     /// turned toward it: a double-click on a Track View row.
     BenchObservation {
         reconstruction_label: Option<String>,
-        /// `None` is the active track.
+        /// `None` is the focused item.
         track: Option<String>,
         /// Its position in `get_bench_track`'s list.
         observation: usize,
@@ -1441,17 +1442,11 @@ pub(crate) fn apply_with_window(
             commit,
             label.as_deref(),
         ),
-        Command::ActivateBenchItem {
+        Command::FocusBenchItem {
             reconstruction_label,
             item,
-        } => done(bench::activate_bench_item(
-            state,
-            &reconstruction_label,
-            &item,
-        )),
-        Command::DeactivateBenchItem {
-            reconstruction_label,
-        } => done(bench::deactivate_bench_item(state, &reconstruction_label)),
+        } => done(bench::focus_bench_item(state, &reconstruction_label, &item)),
+        Command::UnfocusBenchItem => done(bench::unfocus_bench_item(state)),
         Command::RenameBenchItem {
             reconstruction_label,
             item,

@@ -88,7 +88,7 @@ and the command line are one implementation.
 
 **The bench's placements go through the same transform**, because the bench is
 the version's second half and its placement is world geometry the value does
-not hold. A bake that transformed the value alone would leave the active track's
+not hold. A bake that transformed the value alone would leave the focused item's
 square standing in the old frame, and the figure would jump. For every
 track-stage item the centre and the track's position go through the whole
 similarity, the in-plane axes are rotated and the half-extent is scaled, which is

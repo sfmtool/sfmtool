@@ -12,7 +12,7 @@
 //! - **the sources**: the node's index files, read only when they are
 //!   `current`, so a member whose file is missing or stale refuses and names
 //!   what it lacked;
-//! - **the landing**: the track put on the bench as the active item (one bench
+//! - **the landing**: the track put on the bench as the focused item (one bench
 //!   version), and then committed by [`AppState::commit_bench_track`], the step
 //!   Track View's *Commit* button takes (one edit version), so an Undo takes
 //!   back the point first and leaves the track on the bench;
@@ -377,7 +377,7 @@ impl AppState {
     }
 
     /// Land a finished run on the node at `index`: the track put on the bench
-    /// as the active item, one bench version, or the cascade's refusal.
+    /// and focused, one bench version, or the cascade's refusal.
     ///
     /// Gives back the row's outcome, what the wire will answer with, and, for
     /// a track that landed, the item to commit once the row is written: the
@@ -443,7 +443,7 @@ impl AppState {
                 let serial = node.history.push_bench(Arc::new(next), version_label);
                 let parent = crate::state::edits::version_before(node, serial);
                 let id = node.id;
-                self.settle_bench_rows(id);
+                self.focus_put_item(id, &item);
                 let placeholder = CreatedTrack::NotCommitted {
                     item: item.clone(),
                     member,

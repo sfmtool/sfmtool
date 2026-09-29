@@ -1677,9 +1677,13 @@ impl AppState {
             self.follow_image_selection(id, carried.as_deref());
         }
         // The selected observations are indexes into a track as the version
-        // left held it, and the version landed on may hold another list under
-        // the same label.
+        // left held it, and the version landed on may hold another list for
+        // the same item.
         self.clear_bench_rows(id);
+        // The focused item stays focused while the version landed on holds
+        // it, and is unfocused otherwise; the move's own row says what
+        // happened.
+        self.settle_focused_item(id);
         let landed = self.scene[index].history.current_version();
         let (to, text) = (landed.serial, kind.text(&left_label, &landed.label));
         {

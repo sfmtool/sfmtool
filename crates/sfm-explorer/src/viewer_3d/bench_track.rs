@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bench's active track as world geometry, for the 3D viewer to draw.
+//! The focused item as world geometry, for the 3D viewer to draw.
 //!
 //! Where the Image Detail panel's bench layer shows the track in each
 //! photograph that observes it, this shows it where it stands: the patch frame
@@ -113,7 +113,7 @@ pub(crate) struct BenchTrack<'a> {
     /// The node whose bench it is. A gesture that outlives a change of selected
     /// node is dropped: its handle names a frame that is no longer up.
     pub(crate) node: ReconId,
-    /// The active track, which is the one item of the bench this layer draws.
+    /// The focused item, which is the one item of the bench this layer draws.
     pub(crate) track: &'a EditableTrack,
     /// The node's value at its cursor, for the cameras and poses the marks
     /// unproject their keypoints through.
@@ -220,7 +220,7 @@ impl Figure {
     }
 }
 
-/// The figure `bench`'s active track draws, or `None` when it draws nothing.
+/// The figure the focused item draws, or `None` when it draws nothing.
 ///
 /// `None` for a cluster-stage item, which has no geometry behind it, and for a
 /// track nothing has given a frame. `eye` is the viewport camera's position in

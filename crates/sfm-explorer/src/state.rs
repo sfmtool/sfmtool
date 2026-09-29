@@ -732,14 +732,23 @@ pub struct AppState {
     /// [`crate::bench::live`].
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
 
-    /// Which observations of the active bench track are selected: Track
+    /// Which observations of the focused bench track are selected: Track
     /// View's highlighted rows, which *Split off N rows* reads and the 3D
     /// viewer's bench figure draws larger when there is exactly one.
     ///
     /// Part of the bench, but not of a version: selecting pushes none and an
     /// undo does not restore it. Undo, redo and a jump clear it instead, as
-    /// does a change of active item. See [`crate::bench::BenchRows`].
+    /// does a change of focused item. See [`crate::bench::BenchRows`].
     pub(crate) bench_rows: Option<crate::bench::BenchRows>,
+
+    /// What Track View edits while its *Edit* box is ticked: at most one item,
+    /// on one node's bench, for the whole viewer.
+    ///
+    /// Beside the selection rather than in a version: focusing and unfocusing
+    /// push none, and an undo does not restore it. Changed only through
+    /// [`AppState::set_focused_item`], so the selected observations go with
+    /// it. See [`crate::bench::FocusedItem`].
+    pub(crate) focused_item: Option<crate::bench::FocusedItem>,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -846,6 +855,7 @@ impl AppState {
             wake: None,
             bench_evaluations: Default::default(),
             bench_rows: None,
+            focused_item: None,
         }
     }
 
@@ -942,6 +952,7 @@ impl AppState {
         self.hovered_image = None;
         self.hovered_point = None;
         self.bench_rows = None;
+        self.focused_item = None;
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
@@ -973,6 +984,7 @@ impl AppState {
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
         self.bench_rows = self.bench_rows.take().filter(|rows| rows.recon != id);
+        self.focused_item = self.focused_item.filter(|focused| focused.node != id);
     }
 
     /// Take the panel's own reading of the view it drew, with the dock rectangle

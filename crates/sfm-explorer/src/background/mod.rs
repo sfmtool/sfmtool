@@ -1037,7 +1037,7 @@ impl AppState {
         if let Some((node, item, member)) = to_commit {
             created_track = Some(self.commit_created_track(actor, node, item, member));
         }
-        // The active nearby track's point, selected after the row that put it
+        // The focused nearby track's point, selected after the row that put it
         // on the bench, as a commit selects the point it wrote, and as whoever
         // asked for the run.
         if let Some(point) = to_select {

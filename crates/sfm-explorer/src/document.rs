@@ -461,8 +461,8 @@ impl History {
     /// Append the next version with `bench` in place of the one at the cursor
     /// and the document half exactly as it stands.
     ///
-    /// A **bench step**: every step on an item, every change to the list and
-    /// every activation. Point indexes are untouched, so the map is an empty
+    /// A **bench step**: every step on an item and every change to the list.
+    /// Point indexes are untouched, so the map is an empty
     /// `Removed` -- the identity -- and a selection, an id copied before the
     /// step and an undo across it all resolve unchanged.
     pub(crate) fn push_bench(

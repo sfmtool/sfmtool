@@ -212,19 +212,14 @@ fn a_reframe_names_the_patch_and_records_a_scene_row() {
 }
 
 #[test]
-fn a_reframe_with_nothing_active_is_refused_and_pushes_nothing() {
+fn a_reframe_with_nothing_focused_is_refused_and_pushes_nothing() {
     let (mut state, id, _) = framed();
-    let bench = state
-        .bench(id)
-        .expect("a bench")
-        .deactivate(sfmtool_core::bench::ItemKind::Track);
-    let node = state.scene.iter_mut().find(|n| n.id == id).expect("loaded");
-    node.history.push_bench(Arc::new(bench), "Deactivated");
-    let versions = node.history.versions().len();
+    state.unfocus_bench_item();
+    let versions = state.node(id).expect("loaded").history.versions().len();
     let why = state
         .reframe_on_patch(id, PatchReframe::SetToOrigin)
         .expect_err("no patch to read");
-    assert!(why.contains("active"), "{why}");
+    assert!(why.contains("being edited"), "{why}");
     assert_eq!(
         state.node(id).expect("loaded").history.versions().len(),
         versions

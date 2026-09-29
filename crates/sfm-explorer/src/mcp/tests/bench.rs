@@ -141,8 +141,8 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
             "pixel": [124.0, 93.0],
         }),
     );
-    // Named no track, so it landed on the active one, which is the cluster the
-    // create just made.
+    // Named no track, so it landed on the focused item, which is the cluster
+    // the create just made.
     assert_eq!(added["item"], json!(item), "{added}");
     let observation = added["observation"].as_u64().expect("the index it took");
     assert_eq!(observation, 1, "{added}");
@@ -166,7 +166,7 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     );
     assert_eq!(track["item"], json!(item), "{track}");
     assert_eq!(track["stage"], json!("cluster"), "{track}");
-    assert_eq!(track["active"], json!(true), "{track}");
+    assert_eq!(track["focused"], json!(true), "{track}");
     let rows = track["observations"].as_array().expect("the observations");
     assert_eq!(rows.len(), 2, "{track}");
     assert_eq!(rows[0]["verdict"], json!("in"), "{track}");
@@ -227,7 +227,7 @@ fn a_duplicate_carries_the_patch_and_commits_as_a_creation() {
     );
     assert_eq!(version_count(&state), before + 1);
 
-    // The copy is the active track, so a call that names none acts on it, and
+    // The copy is the focused item, so a call that names none acts on it, and
     // it carries the same sightings.
     let track = call(
         &mut state,
@@ -236,7 +236,7 @@ fn a_duplicate_carries_the_patch_and_commits_as_a_creation() {
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(track["item"], json!(copy), "{track}");
-    assert_eq!(track["active"], json!(true), "{track}");
+    assert_eq!(track["focused"], json!(true), "{track}");
     assert_eq!(
         track["origin"],
         json!(null),
@@ -1040,7 +1040,7 @@ fn tilting_refuses_a_patch_at_infinity_and_a_normal_that_is_not_one() {
 #[test]
 fn the_two_spins_each_refuse_the_other_stage_and_name_it() {
     let (mut state, mut viewer) = benchable();
-    // A track-stage track first, so the cluster made after it is the active one
+    // A track-stage track first, so the cluster made after it is the focused one
     // a call that names no track resolves to.
     let track_stage = on_the_bench(&mut state, &mut viewer);
     let made = call(
@@ -1410,7 +1410,7 @@ fn a_feature_seed_on_a_node_with_no_sift_file_is_refused() {
     assert_eq!(version_count(&state), 1, "a refusal pushed a version");
 }
 
-/// A point put on the bench is an item `get_bench` lists, active, at the track
+/// A point put on the bench is an item `get_bench` lists, focused, at the track
 /// stage, seated on the point it came from.
 #[test]
 fn create_bench_track_lists_the_item_on_get_bench() {
@@ -1423,12 +1423,12 @@ fn create_bench_track_lists_the_item_on_get_bench() {
         "get_bench",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert_eq!(bench["active"]["track"], json!(item), "{bench}");
+    assert_eq!(bench["focused_item"], json!(item), "{bench}");
     let items = bench["items"].as_array().expect("the items");
     assert_eq!(items.len(), 1, "{bench}");
     assert_eq!(items[0]["item"], json!(item), "{bench}");
     assert_eq!(items[0]["kind"], json!("track"), "{bench}");
-    assert_eq!(items[0]["active"], json!(true), "{bench}");
+    assert_eq!(items[0]["focused"], json!(true), "{bench}");
     assert_eq!(items[0]["stage"], json!("track"), "{bench}");
     assert_eq!(items[0]["origin"]["point"], json!(BENCH_POINT), "{bench}");
     assert_eq!(items[0]["counts"]["in"], json!(3), "{bench}");
@@ -1653,29 +1653,24 @@ fn commit_answers_with_a_version_an_undo_takes_back() {
     );
 }
 
-/// `deactivate_bench_item` is Track View's Edit box cleared: one version that
-/// leaves the item on the bench, `get_bench` then reporting no active track
-/// over a bench that has items, and a track tool that names none refused with
-/// the remedies. A second call, with nothing active, is a no-effect reply.
+/// `unfocus_bench_item` is Track View's Edit box cleared: no version, the
+/// item left on the bench, `get_bench` then reporting no focused item over a
+/// bench that has items, and a track tool that names none refused with the
+/// remedies. A second call, with nothing focused, is a no-effect reply.
 #[test]
-fn deactivate_leaves_the_item_and_nothing_active() {
+fn unfocus_leaves_the_item_and_nothing_focused() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
 
-    let reply = call(
-        &mut state,
-        &mut viewer,
-        "deactivate_bench_item",
-        json!({ "reconstruction_label": "run_a" }),
-    );
+    let reply = call(&mut state, &mut viewer, "unfocus_bench_item", json!({}));
     assert_eq!(reply["changed"], json!(true), "{reply}");
-    assert_eq!(version_count(&state), before + 1, "{reply}");
-    assert_eq!(
-        reply["label"],
-        json!(format!("Stopped editing {item}; it stays on the bench")),
-        "{reply}"
-    );
+    assert_eq!(reply["item"], json!(item), "{reply}");
+    assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
+    assert_eq!(version_count(&state), before, "an unfocus pushed a version");
+    let last = state.action_log.entries().last().expect("a row");
+    assert_eq!(last.kind, crate::action_log::Kind::Selection);
+    assert_eq!(last.text, format!("Stopped editing {item}"));
 
     let bench = call(
         &mut state,
@@ -1683,7 +1678,7 @@ fn deactivate_leaves_the_item_and_nothing_active() {
         "get_bench",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert_eq!(bench["active"]["track"], Value::Null, "{bench}");
+    assert_eq!(bench["focused_item"], Value::Null, "{bench}");
     assert_eq!(bench["items"].as_array().map(Vec::len), Some(1), "{bench}");
 
     let refused = refused_call(
@@ -1694,30 +1689,105 @@ fn deactivate_leaves_the_item_and_nothing_active() {
     );
     assert_eq!(
         refused.0,
-        "No track is active on run_a's bench. Name one with track, activate one with \
-         activate_bench_item, or put one on with create_bench_track or create_bench_cluster."
+        "No item on run_a's bench is focused. Name one with track, focus one with \
+         focus_bench_item, or put one on with create_bench_track or create_bench_cluster."
     );
+
+    let again = call(&mut state, &mut viewer, "unfocus_bench_item", json!({}));
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert_eq!(again["item"], Value::Null, "{again}");
+    assert_eq!(
+        version_count(&state),
+        before,
+        "a no-effect call pushed a version"
+    );
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(last.text.contains("no effect"), "{}", last.text);
+}
+
+/// `focus_bench_item` pushes no version, answers `changed` for whether the
+/// focused item moved, makes `get_bench` report the item on its own node and
+/// null on another, and is not refused while a task holds the node.
+#[test]
+fn focus_pushes_no_version_and_get_bench_reports_the_focused_item() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    call(&mut state, &mut viewer, "unfocus_bench_item", json!({}));
+    let before = version_count(&state);
+    let id = state.scene[0].id;
+    state
+        .start_background_task(
+            crate::background::Operation::BENCH_FIT,
+            id,
+            Box::new(|_| crate::background::Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "focus_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
+    );
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    assert_eq!(reply["item"], json!(item), "{reply}");
+    assert_eq!(version_count(&state), before, "a focus pushed a version");
+    let last = state.action_log.entries().last().expect("a row");
+    assert_eq!(last.kind, crate::action_log::Kind::Selection);
+    assert_eq!(last.text, format!("Editing {item}"));
 
     let again = call(
         &mut state,
         &mut viewer,
-        "deactivate_bench_item",
-        json!({ "reconstruction_label": "run_a" }),
+        "focus_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
     );
     assert_eq!(again["changed"], json!(false), "{again}");
-    assert_eq!(
-        version_count(&state),
-        before + 1,
-        "a no-effect call pushed a version"
+    state.finish_background_task();
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
     );
-    let report = again["report"].as_str().expect("the step's own sentence");
-    assert!(report.contains("no effect"), "{again}");
+    assert_eq!(bench["focused_item"], json!(item), "{bench}");
+
+    // A second reconstruction's bench reports no focused item: there is one
+    // for the viewer, and it is on run_a.
+    state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let other = state.scene[1].label.clone();
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": other }),
+    );
+    assert_eq!(bench["focused_item"], Value::Null, "{bench}");
 }
 
-/// The three item steps: a rename hands back the new label, an activation moves
-/// which item a call that names none acts on, and a discard empties the bench.
+/// The tools the focus pair replaced are gone from the catalog and from the
+/// dispatch, so a call under an old name is the ordinary unknown-tool error.
 #[test]
-fn rename_activate_and_discard_answer_with_the_item_they_acted_on() {
+fn the_old_activation_tools_are_unknown() {
+    for name in ["activate_bench_item", "deactivate_bench_item"] {
+        assert!(
+            crate::mcp::tools::catalog()
+                .iter()
+                .all(|spec| spec.name != name),
+            "{name} is still advertised"
+        );
+        let error = crate::mcp::tools::parse(name, None).expect_err("an unknown tool");
+        assert!(error.0.contains(name), "{error}");
+    }
+}
+
+/// The item calls: a rename hands back the new label, a focus moves which item
+/// a call that names none acts on, and a discard empties the bench.
+#[test]
+fn rename_focus_and_discard_answer_with_the_item_they_acted_on() {
     let (mut state, mut viewer) = benchable();
     let first = on_the_bench(&mut state, &mut viewer);
     let second = call(
@@ -1753,7 +1823,7 @@ fn rename_activate_and_discard_answer_with_the_item_they_acted_on() {
     call(
         &mut state,
         &mut viewer,
-        "activate_bench_item",
+        "focus_bench_item",
         json!({ "reconstruction_label": "run_a", "item": first }),
     );
     let active = call(
@@ -1779,7 +1849,7 @@ fn rename_activate_and_discard_answer_with_the_item_they_acted_on() {
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(bench["items"].as_array().expect("an array").len(), 0);
-    assert_eq!(bench["active"]["track"], Value::Null, "{bench}");
+    assert_eq!(bench["focused_item"], Value::Null, "{bench}");
 }
 
 /// A create call that names a label puts its item on the bench under it, in
@@ -1828,7 +1898,7 @@ fn a_create_names_its_item_and_a_taken_label_takes_a_suffix() {
     );
     assert_eq!(track["item"], json!("nose (3)"), "{track}");
 
-    // The point is on the bench already, so the call activates that track
+    // The point is on the bench already, so the call focuses that track
     // under the label it has.
     let again = call(
         &mut state,
@@ -1872,7 +1942,7 @@ fn a_create_names_its_item_and_a_taken_label_takes_a_suffix() {
 fn the_bench_refuses_in_its_own_words() {
     let (mut state, mut viewer) = benchable();
 
-    // With nothing on the bench there is no active track to act on, and the
+    // With nothing on the bench there is no focused item to act on, and the
     // refusal says how to get one.
     let empty = refused_call(
         &mut state,
@@ -2529,7 +2599,7 @@ fn create_track_at_pixel_commits_a_point_and_names_it() {
         "get_bench",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert_eq!(bench["active"]["track"], json!(item), "{bench}");
+    assert_eq!(bench["focused_item"], json!(item), "{bench}");
 }
 
 /// A label named in the call is the label the built track goes on the bench
@@ -2698,7 +2768,7 @@ fn find_nearby_tracks_lands_the_existing_points_under_their_labels() {
         "get_bench",
         json!({ "reconstruction_label": "run_a" }),
     );
-    assert_eq!(bench["active"]["track"], tracks[0]["item"], "{bench}");
+    assert_eq!(bench["focused_item"], tracks[0]["item"], "{bench}");
 
     call(
         &mut state,
@@ -2874,8 +2944,8 @@ fn select_bench_observations_replaces_the_selection_and_reads_back() {
     assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
 }
 
-/// A step on the active track keeps the selection, an undo clears it, and a
-/// rename carries it to the new label.
+/// A step on the focused item keeps the selection, an undo clears it, and a
+/// rename keeps it under the new label.
 #[test]
 fn the_selection_survives_a_step_and_is_cleared_by_an_undo() {
     let (mut state, mut viewer) = benchable();
@@ -2915,10 +2985,10 @@ fn the_selection_survives_a_step_and_is_cleared_by_an_undo() {
     assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
 }
 
-/// Another item made active takes the selection with it, and coming back to
-/// the first item does not bring it back.
+/// Another item focused takes the selection with it, and coming back to the
+/// first item does not bring it back.
 #[test]
-fn a_change_of_active_item_clears_the_selection() {
+fn a_change_of_focused_item_clears_the_selection() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     call(
@@ -2940,7 +3010,7 @@ fn a_change_of_active_item_clears_the_selection() {
     call(
         &mut state,
         &mut viewer,
-        "activate_bench_item",
+        "focus_bench_item",
         json!({ "reconstruction_label": "run_a", "item": item }),
     );
     assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
@@ -2968,13 +3038,13 @@ fn a_split_clears_the_selection() {
     call(
         &mut state,
         &mut viewer,
-        "activate_bench_item",
+        "focus_bench_item",
         json!({ "reconstruction_label": "run_a", "item": item }),
     );
     assert_eq!(selected(&mut state, &mut viewer, &item), json!([]));
 }
 
-/// Only the active track has selected observations, and an index past the end
+/// Only the focused item has selected observations, and an index past the end
 /// of the list names nothing; both are refused and change nothing.
 #[test]
 fn a_selection_on_another_track_or_past_the_end_is_refused() {
@@ -3000,7 +3070,7 @@ fn a_selection_on_another_track_or_past_the_end_is_refused() {
         "select_bench_observations",
         json!({ "reconstruction_label": "run_a", "track": item, "observations": [0] }),
     );
-    assert!(error.0.contains("is not the active track"), "{error}");
+    assert!(error.0.contains("is not the focused item"), "{error}");
     assert!(state.bench_rows.is_none());
 }
 

@@ -156,14 +156,14 @@ fn new_item_label_schema() -> Value {
 }
 
 /// The track a bench tool acts on, which is optional: a call that names none
-/// acts on the active track, as a gesture in Track View's edit mode does.
+/// acts on the focused item, as a gesture in Track View's edit mode does.
 fn bench_track_schema() -> Value {
     json!({
         "type": "string",
         "description":
-            "Which track on the bench, by its label. Omit for the active track, which is the \
-             item Track View is editing and what a create or an activate last made active; with \
-             nothing active, a call that omits it is refused.",
+            "Which track on the bench, by its label. Omit for the focused item, which is the \
+             item Track View is editing and what a create or focus_bench_item last focused; \
+             with no item on this bench focused, a call that omits it is refused.",
     })
 }
 

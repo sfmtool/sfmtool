@@ -13,7 +13,7 @@
 //! three halves at once: the transformed value, the transformed bench, and the
 //! identity.
 //!
-//! Four of the ways to set a transform read the bench's active patch
+//! Four of the ways to set a transform read the focused item's patch
 //! ([`PatchReframe`]), which the 3D viewport's context menu and the wire both
 //! offer. The arithmetic is here, apart from either, so the menu, the wire and
 //! the tests share one answer.
@@ -341,7 +341,7 @@ impl AppState {
         self.set_node_transform(id, Se3Transform::identity())
     }
 
-    /// Put the world's frame onto the bench's active patch of `id`, in the way
+    /// Put the world's frame onto the focused item's patch of `id`, in the way
     /// `mode` names, as one version of the node.
     ///
     /// The map acts in world space and is composed **after** the transform the
@@ -373,12 +373,17 @@ impl AppState {
         let node = self
             .node(id)
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
-        let refuse =
-            |why: String| format!("Cannot reframe {} on its active patch: {why}", node.label);
+        let refuse = |why: String| {
+            format!(
+                "Cannot reframe {} on the focused item's patch: {why}",
+                node.label
+            )
+        };
         let bench = node.history.current_bench();
-        let item = crate::bench::active_track_label(bench)
-            .ok_or_else(|| refuse("nothing on its bench is active.".to_string()))?;
-        let track = bench.track(item).expect("the active label names an item");
+        let item = self
+            .focused_item_label(id)
+            .ok_or_else(|| refuse("no item on its bench is being edited.".to_string()))?;
+        let track = bench.track(item).expect("the focused label names an item");
         let payload = match &track.stage {
             Stage::Track(payload) => payload,
             Stage::Cluster(_) => {

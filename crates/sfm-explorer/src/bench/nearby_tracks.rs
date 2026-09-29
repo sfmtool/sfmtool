@@ -139,7 +139,7 @@ pub(crate) struct Landed {
     /// `Edit` when the version wrote points, `Bench` when it wrote the bench
     /// alone or nothing.
     pub(crate) kind: Kind,
-    /// The active item's point, selected after the row, as a commit selects
+    /// The focused item's point, selected after the row, as a commit selects
     /// the point it wrote.
     pub(crate) select: Option<PointRef>,
 }
@@ -317,7 +317,7 @@ impl AppState {
     /// tracks beside the first's.
     ///
     /// The `1a` track, the nearest the pixel on the best-ranked layer, is the
-    /// active item afterwards, and its point, when it has one, the selection.
+    /// focused item afterwards, and its point, when it has one, the selection.
     pub(crate) fn land_nearby_tracks(&mut self, index: usize, run: NearbyTracksRun) -> Landed {
         let NearbyTracksRun {
             pixel,
@@ -503,19 +503,23 @@ impl AppState {
             };
         }
 
-        // The `1a` track, or the first that went on the bench, is active.
-        let active = landed
+        // The `1a` track, or the first that went on the bench, is focused.
+        let focus = landed
             .iter()
-            .find_map(|(_, l)| l.item().map(|i| (i, l.point())));
+            .find_map(|(_, l)| l.item().map(|i| (i.to_string(), l.point())));
         let mut select = None;
-        if let Some((item, point)) = active {
-            bench = bench.activate(item).expect("the item is on the bench");
+        if let Some((item, point)) = &focus {
             select = point.map(|p| PointRef::new(id, p as usize));
-            text.push_str(&format!(": {}; {item} is active", parts.join(", ")));
+            text.push_str(&format!(": {}; editing {item}", parts.join(", ")));
         }
-        // Everything found was on the bench already and active as it stands:
-        // a version would change nothing, so none is pushed.
-        if maps.is_empty() && bench == **self.scene[index].history.current_bench() {
+        // Everything found was on the bench already: a version would change
+        // nothing, so none is pushed, and the `1a` item is focused all the
+        // same.
+        if maps.is_empty() && bench.entries() == self.scene[index].history.current_bench().entries()
+        {
+            if let Some((item, _)) = &focus {
+                self.focus_put_item(id, item);
+            }
             return Landed {
                 outcome: Ok(format!("{text}; no effect, the bench holds them already")),
                 found: FoundNearby {
@@ -548,7 +552,9 @@ impl AppState {
             )
         };
         let parent = crate::state::edits::version_before(node, pushed);
-        self.settle_bench_rows(id);
+        if let Some((item, _)) = &focus {
+            self.focus_put_item(id, item);
+        }
         Landed {
             outcome: Ok(version_step_text(&text, parent, pushed)),
             found: FoundNearby {

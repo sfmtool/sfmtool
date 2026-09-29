@@ -294,7 +294,7 @@ fn rows_after(state: &AppState, since: usize) -> Vec<(Kind, bool, String)> {
 
 /// A pixel on the textured plane between the points: the cascade builds a
 /// track there, which lands as two versions -- the track put on the bench and
-/// active, then committed as a new point -- and the item settles on the point
+/// focused, then committed as a new point -- and the item settles on the point
 /// it wrote, which is the selection.
 #[test]
 fn a_track_built_at_a_pixel_is_put_on_the_bench_and_committed() {
@@ -350,10 +350,10 @@ fn a_track_built_at_a_pixel_is_put_on_the_bench_and_committed() {
         format!("image_0@{},{}", p[0].round() as i64, p[1].round() as i64)
     );
 
-    // The item is on the bench, active, and seated on the point it wrote.
+    // The item is on the bench, focused, and seated on the point it wrote.
     let node = state.node(id).expect("loaded");
     let bench = node.history.current_bench();
-    assert_eq!(crate::bench::active_track_label(bench), Some(item.as_str()));
+    assert_eq!(state.focused_item_label(id), Some(item.as_str()));
     let track = bench.track(&item).expect("on the bench");
     assert_eq!(state.resolved_origin(node, track), Some(point.point));
     // The committed point is the selection, which Track View follows.

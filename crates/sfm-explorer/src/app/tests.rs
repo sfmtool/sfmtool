@@ -394,16 +394,17 @@ fn the_step_keys_do_nothing_while_a_text_field_holds_the_keyboard() {
 
 // ── Ctrl+D, Track View's *Duplicate* ────────────────────────────────────
 
-/// With a track active on the bench, Ctrl+D puts a copy beside it and makes
-/// the copy active, as the toolbar's *Duplicate* does.
+/// With an item focused, Ctrl+D puts a copy beside it and focuses the copy,
+/// as the toolbar's *Duplicate* does.
 #[test]
-fn ctrl_d_duplicates_the_active_track() {
+fn ctrl_d_duplicates_the_focused_item() {
     let (mut state, id) = edits::adjustable_state();
     let point = PointRef::new(id, 11);
     super::apply_point_click(&mut state, point, false);
     super::apply_point_click(&mut state, point, true);
-    let original = crate::bench::active_track_label(state.bench(id).unwrap())
-        .expect("the double-click made the staged track active")
+    let original = state
+        .focused_item_label(id)
+        .expect("the double-click focused the staged track")
         .to_string();
     let mut parts = Parts::with_state(state);
 
@@ -411,17 +412,17 @@ fn ctrl_d_duplicates_the_active_track() {
 
     let bench = parts.state.bench(id).unwrap();
     assert_eq!(bench.entries().len(), 2, "Ctrl+D put no copy on the bench");
-    let copy = crate::bench::active_track_label(bench).unwrap().to_string();
-    assert_ne!(copy, original, "the copy is not the active track");
+    let copy = parts.state.focused_item_label(id).unwrap().to_string();
+    assert_ne!(copy, original, "the copy is not the focused item");
     let rows = texts(&parts.state);
     let row = format!("Duplicated {original} as {copy} ");
     assert!(rows.iter().any(|t| t.starts_with(&row)), "{rows:?}");
 }
 
-/// With nothing active on the bench there is nothing to duplicate, and Ctrl+D
+/// With nothing focused on the bench there is nothing to duplicate, and Ctrl+D
 /// writes nothing.
 #[test]
-fn ctrl_d_does_nothing_without_an_active_track() {
+fn ctrl_d_does_nothing_without_a_focused_item() {
     let mut parts = Parts::new();
     let before = texts(&parts.state);
 

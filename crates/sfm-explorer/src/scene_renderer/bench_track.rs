@@ -30,10 +30,10 @@ use crate::viewer_3d::bench_track::Figure;
 use crate::viewer_3d::ViewportCamera;
 
 impl SceneRenderer {
-    /// Upload the figure the bench's active track draws, or clear it.
+    /// Upload the figure the focused item draws, or clear it.
     ///
-    /// `None` -- a cluster-stage item, a track with no frame, or no active item
-    /// at all -- uploads nothing and draws nothing.
+    /// `None` -- a cluster-stage item, a track with no frame, or no focused
+    /// item at all -- uploads nothing and draws nothing.
     pub fn upload_bench_track(&mut self, device: &wgpu::Device, figure: Option<&Figure>) {
         let Some(figure) = figure else {
             self.clear_bench_track();

@@ -433,13 +433,11 @@ pub(crate) fn parse(
             commit: args.optional_bool("commit")?.unwrap_or(true),
             label: args.new_item_label("label")?,
         },
-        "activate_bench_item" => Command::ActivateBenchItem {
+        "focus_bench_item" => Command::FocusBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.required_string("item")?,
         },
-        "deactivate_bench_item" => Command::DeactivateBenchItem {
-            reconstruction_label: args.required_string("reconstruction_label")?,
-        },
+        "unfocus_bench_item" => Command::UnfocusBenchItem,
         "rename_bench_item" => Command::RenameBenchItem {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.required_string("item")?,

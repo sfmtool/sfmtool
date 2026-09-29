@@ -83,7 +83,7 @@ Two entries, in this order:
 
 `Edit on Bench` is what ticking Track View's *Edit* box over the selected
 point does, reached from the viewport: `AppState::put_point_on_bench`, which
-activates the item already there when one came from that point. It raises that
+focuses the item already there when one came from that point. It raises that
 panel afterwards because this gesture is made somewhere the panel is not. Both entries are drawn and greyed
 while an operation is running on the node, carrying the state's own busy
 sentence.
@@ -106,7 +106,7 @@ than on the placeholder a tab body sees.
 A double-click arrives as two clicks and the first of them has already selected
 the point, so the selection moves once and the Action Log carries one
 `Selected point …` row however many clicks named it. Staging a point a track
-already came from activates that track rather than putting a second one on
+already came from focuses that track rather than putting a second one on
 ([bench.md](bench.md)), so a repeated double-click raises the panel on the item
 that is already there. A double-click on a frustum or on empty space keeps its
 own meaning: camera view, and clearing the selection.
@@ -340,7 +340,7 @@ Speed scales with target distance — moving fast when far from things, slow
 when close. Shift acts as a sprint multiplier (3×) for quick repositioning.
 
 With Ctrl/Cmd down a letter belongs to a shortcut instead (Ctrl+S saves, Ctrl+D
-duplicates the active bench track), and no fly key moves the camera, so saving
+duplicates the focused bench item), and no fly key moves the camera, so saving
 does not also fly backward. Shift and Alt are not reserved: Shift is the sprint,
 and Alt shows the target, which is useful while flying.
 

@@ -79,8 +79,8 @@ impl Command {
             Command::CreateBenchTrack { .. } => "create_bench_track",
             Command::CreateTrackAtPixel { .. } => "create_track_at_pixel",
             Command::FindNearbyTracks { .. } => "find_nearby_tracks",
-            Command::ActivateBenchItem { .. } => "activate_bench_item",
-            Command::DeactivateBenchItem { .. } => "deactivate_bench_item",
+            Command::FocusBenchItem { .. } => "focus_bench_item",
+            Command::UnfocusBenchItem => "unfocus_bench_item",
             Command::RenameBenchItem { .. } => "rename_bench_item",
             Command::DiscardBenchItem { .. } => "discard_bench_item",
             Command::DuplicateBenchItem { .. } => "duplicate_bench_item",
@@ -322,8 +322,6 @@ impl Command {
             // Its refusals are the bench's; a run that commits writes its row
             // as an `Edit` itself.
             | Command::FindNearbyTracks { .. }
-            | Command::ActivateBenchItem { .. }
-            | Command::DeactivateBenchItem { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::DuplicateBenchItem { .. }
@@ -354,6 +352,10 @@ impl Command {
             | Command::SelectCameraIntrinsics { .. }
             | Command::SelectPoint { .. }
             | Command::SelectBenchObservations { .. }
+            // Not bench steps: the focused item is beside the selection and
+            // outside every version.
+            | Command::FocusBenchItem { .. }
+            | Command::UnfocusBenchItem
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. }
             | Command::SetSolo { .. }
@@ -452,7 +454,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             track,
         } => format!(
             "get_bench_track {reconstruction_label} {}",
-            track.as_deref().unwrap_or("(the active track)")
+            track.as_deref().unwrap_or("(the focused item)")
         ),
         Command::Screenshot {
             panel,

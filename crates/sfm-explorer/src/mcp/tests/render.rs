@@ -701,7 +701,7 @@ fn a_bench_observation_target_selects_its_own_camera_image() {
 
 // ── What the two photometric steps refuse before they start ─────────────
 
-/// Turn every observation of the active track out but the first.
+/// Turn every observation of the focused item out but the first.
 #[track_caller]
 fn leave_one_in(state: &mut AppState, viewer: &mut Viewer3D) {
     let track = call(
@@ -2102,7 +2102,7 @@ fn set_reconstruction_transform_from_patch_frames_the_scene_on_the_active_patch(
         json!({ "reconstruction_label": "run_a", "mode": "set_to_origin" }),
     );
     assert!(
-        error.0.contains("nothing on its bench is active"),
+        error.0.contains("no item on its bench is being edited"),
         "{error}"
     );
 

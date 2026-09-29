@@ -204,7 +204,7 @@ pub struct SceneGraphResponse {
     pub close_index_files: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
-    /// A Bench row was double-clicked: make that item the active one, select
+    /// A Bench row was double-clicked: focus that item, select
     /// its node and raise Track View on it. The item is named by its position
     /// on the bench rather than by its label, so this response stays a `Copy`
     /// value. The raise is a layout operation, so the panel also keeps the
@@ -342,6 +342,7 @@ impl SceneGraphPanel {
         let selected_point = state.selected_point;
         let hovered_image = state.hovered_image;
         let hovered_point = state.hovered_point;
+        let focused_item = state.focused_item().copied();
         // Auto-scroll fires on a selection change from *another* panel; a click
         // inside this one lands in the response and is applied after the frame,
         // so by construction it cannot also trigger a scroll.
@@ -362,6 +363,7 @@ impl SceneGraphPanel {
             busy,
             index_files: &index_files,
             image_menus: &image_menus,
+            focused_item,
             log,
         };
 
@@ -450,6 +452,9 @@ struct TreeOutput<'a> {
     /// The image menu's view of each node, read out before the walk for the
     /// same reason.
     image_menus: &'a std::collections::HashMap<ReconId, crate::image_menu::ImageMenu>,
+    /// The focused item, whose Bench row is drawn selected, read out before
+    /// the walk for the same reason.
+    focused_item: Option<crate::bench::FocusedItem>,
     /// Where the toggles that write straight into a node record what they did.
     log: &'a mut ActionLog,
 }
@@ -1025,16 +1030,15 @@ pub(crate) const CLEAR_THE_BENCH_LABEL: &str = "Clear the Bench";
 /// moves between the groups, which is the whole of what the split is for.
 ///
 /// A group with nothing in it is not drawn, which is what the one bench group
-/// did when the bench was empty. The two are one bench all the same: there is
-/// one active item across both, because the bench's kinds are items rather than
-/// stages.
+/// did when the bench was empty. The two are one bench all the same: the
+/// focused item is drawn selected in whichever group holds it.
 fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     show_bench_stage_group(ui, node, out, StageKind::Track, "bench_points");
     show_bench_stage_group(ui, node, out, StageKind::Cluster, "bench_clusters");
 }
 
 /// One of the two bench groups: the items at `stage`, in the bench's own order,
-/// the active one marked.
+/// the focused one marked.
 ///
 /// No eye: nothing on the bench is drawn from this row, and an item is not part
 /// of the reconstruction. The groups are here because the tree is where a
@@ -1043,7 +1047,7 @@ fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
 ///
 /// A click on a row selects the node it is under and does nothing to the
 /// bench, the way a click on the node's own row selects it; a double-click
-/// makes the item active and raises [`crate::track_view`] on it, and a
+/// focuses the item and raises [`crate::track_view`] on it, and a
 /// secondary click offers *Discard*. A secondary click on the group's own
 /// header offers *Clear the Bench*, which takes off every item of both groups,
 /// since they are one bench. An item is named by its **position on the
@@ -1072,7 +1076,10 @@ fn show_bench_stage_group(
         return;
     }
     let id = node.id;
-    let active = crate::bench::active_track_label(bench).map(str::to_string);
+    let focused = out
+        .focused_item
+        .filter(|focused| focused.node == id)
+        .map(|focused| focused.item);
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         row_id(id, key),
@@ -1104,7 +1111,7 @@ fn show_bench_stage_group(
     header.body(|ui| {
         for (position, entry) in items {
             let track = entry.item.as_track().expect("filtered to tracks above");
-            let selected = active.as_deref() == Some(entry.label.as_str());
+            let selected = focused == Some(entry.id);
             let (kept, out_count) = track.verdict_counts();
             let text = format!("{}  {kept} in", entry.label);
             let row = ui

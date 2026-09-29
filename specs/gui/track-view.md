@@ -24,7 +24,7 @@ and the Scene tree groups), [`edits/commit-track.md`](edits/commit-track.md)
 (the Commit button's edit), [`scene-graph.md`](scene-graph.md) (the Bench rows'
 gestures), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the
 Image Detail panel, which carries the gestures that name a pixel and draws the
-active track as its bench layer),
+focused item as its bench layer),
 [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) (the same track in the 3D
 viewer), [`../core/bench/bench.md`](../core/bench/bench.md) and
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the value
@@ -121,12 +121,16 @@ pub struct TrackEditResponse {
 
 impl AppState {
     /// What the Edit box asks: `true` puts the selected point on the bench
-    /// (activating the item already from it), `false` deactivates.
+    /// (focusing the item already from it), `false` unfocuses.
     pub(crate) fn set_editing(&mut self, id: ReconId, on: bool) -> Result<(), String>;
-    /// Leave every item on `id`'s bench and make none active. One version; no
-    /// effect, and no version, with nothing active.
-    pub(crate) fn deactivate_bench_item(&mut self, id: ReconId) -> Result<(), String>;
-    /// A Scene tree double-click on a Bench row: select the node, activate the
+    /// The item Track View edits, one for the viewer; no version, one
+    /// `Selection` row ([`bench.md`](bench.md) § "The focused item").
+    pub(crate) fn focus_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// Leave no item focused, every item staying on its bench. No version.
+    pub(crate) fn unfocus_bench_item(&mut self);
+    /// The focused item's label on `id`'s bench, which the box reads.
+    pub(crate) fn focused_item_label(&self, id: ReconId) -> Option<&str>;
+    /// A Scene tree double-click on a Bench row: select the node, focus the
     /// item, raise Track View.
     pub(crate) fn edit_bench_item_at(&mut self, id: ReconId, position: usize);
     /// Image Detail's *Start cluster on the bench here*, raising Track View.
@@ -139,7 +143,7 @@ A frame in the dock is one call and three applications:
 ```rust
 let response = track_view.show(ui, state, gesture_events, scroll_input);
 if let Some(on) = response.set_edit.or(response.edit_selected_point.then_some(true)) {
-    state.set_editing(id, on)?;         // one bench step, refused in its own words
+    state.set_editing(id, on)?;         // a put is a bench step, refused in its own words
 }
 // then the view or the edit response, whichever was drawn
 ```
@@ -155,10 +159,11 @@ struct it is means neither cache learns about the other, and each body's
 headless tests read what that body drew. What the panel adds is the checkbox,
 the dispatch on it and the notice.
 
-**The mode is derived from the bench, so nothing about it is stored.** A panel
-flag would have to be set by each of the places that can change the activation,
-and an Undo would leave it disagreeing with the bench at the cursor. Reading the
-active label each frame costs a map lookup.
+**The mode is derived from the focused item, so nothing about it is stored in
+the panel.** A panel flag would have to be set by each of the places that can
+focus or unfocus an item, and an Undo that takes the item off the bench would
+leave it disagreeing with the bench at the cursor. Reading the focused item's
+label each frame costs one lookup on the bench.
 
 **The panel decides nothing.** `show` takes `&AppState` and every gesture lands
 in the response; the dock applies each through the `AppState` method that pushes
@@ -224,40 +229,44 @@ is a value a leaf holds, not a key or a node kind.
 The first row of the panel is a checkbox, **Edit**, and nothing else is drawn
 above it in either mode.
 
-**The box shows the state of the bench, not an independent setting.** It is
-checked if and only if a track or cluster is active on the selected node's
-bench (`crate::bench::active_track_label`). Every way the activation can change
-therefore moves the box on the next frame with no code keeping the two in step:
-a Scene tree double-click, a step that puts an item on the bench, a wire call,
-and an Undo or Redo that walks back over an activation.
+**The box shows the focused item, not an independent setting.** It is checked
+if and only if the focused item is on the selected node's bench
+(`AppState::focused_item_label`, [`bench.md`](bench.md) § "The focused item").
+Every way the focused item can change therefore moves the box on the next frame
+with no code keeping the two in step: a Scene tree double-click, a step that
+puts an item on the bench, a wire call, and an Undo or Redo that lands on a
+version without the item.
 
-The bench holds **one active item at a time**, and a point track and a cluster
-are not two kinds for that purpose. Both are editable tracks (`ItemKind::Track`)
-at different stages, which is why the Scene tree draws them in two groups and
-still marks one active row across both ([`bench.md`](bench.md) § "The Bench
-groups in the Scene tree"). So a ticked box names exactly one item, whether it
-sits under *Bench Points* or *Bench Clusters*, and activating a cluster while a
-track is being edited leaves the track on the bench, no longer active.
+There is **one focused item for the viewer**, and a point track and a cluster
+are not two kinds for that purpose. Both are editable tracks at different
+stages, which is why the Scene tree draws them in two groups and still marks
+one selected row across both ([`bench.md`](bench.md) § "The Bench groups in the
+Scene tree"). So a ticked box names exactly one item, whether it sits under
+*Bench Points* or *Bench Clusters*, and focusing a cluster while a track is
+being edited leaves the track on the bench, unfocused.
 
 ### Transitions
 
 | From | Gesture | What happens | Then shown |
 |---|---|---|---|
-| Viewing a selected point | Tick Edit | `put_point_on_bench(selected point)`: a new item, active, in one version; or, when an item on the bench already came from that point, that item is activated instead | Edit mode, on that item |
-| Viewing, no point selected, nothing active | Tick Edit | Nothing: the box is greyed, its hover text naming the ways in | Unchanged |
-| Editing an item | Clear Edit | `deactivate_bench_item`: the item stays on the bench and nothing is active, in one version | View mode, on the selection |
-| Either | Double-click a Bench row in the Scene tree | That item becomes active, its node is selected, and the panel is raised | Edit mode, on that item |
+| Viewing a selected point | Tick Edit | `put_point_on_bench(selected point)`: a new item, focused, in one version; or, when an item on the bench already came from that point, that item is focused instead, with no version | Edit mode, on that item |
+| Viewing, no point selected, nothing focused | Tick Edit | Nothing: the box is greyed, its hover text naming the ways in | Unchanged |
+| Editing an item | Clear Edit | `unfocus_bench_item`: the item stays on the bench and nothing is focused, with no version | View mode, on the selection |
+| Either | Double-click a Bench row in the Scene tree | That item is focused, its node is selected, and the panel is raised | Edit mode, on that item |
 | Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | As the ticked box from that point, then the panel is raised | Edit mode |
-| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench, active, and the panel is raised | Edit mode, on the cluster |
-| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench, active, and committed; the point it wrote is selected. No panel is raised | Edit mode, on the new item |
-| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and becomes active | Edit mode, on the new item |
-| Editing | *Discard* | The item leaves the bench and nothing is active | View mode |
-| Editing | *Commit* | The point is written and selected; the item stays on the bench and stays active | Edit mode, on the same item |
-| Either | Undo or Redo over an activation, a deactivation, a put or a discard | The bench at the cursor says what is active | Whatever that bench says |
+| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench, focused, and the panel is raised | Edit mode, on the cluster |
+| Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench, focused, and committed; the point it wrote is selected. No panel is raised | Edit mode, on the new item |
+| Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused | Edit mode, on the new item |
+| Editing | *Discard* | The item leaves the bench and is unfocused | View mode |
+| Editing | *Commit* | The point is written and selected; the item stays on the bench and stays focused | Edit mode, on the same item |
+| Either | Undo or Redo | The item stays focused while the version landed on holds it, and is unfocused when it does not | Edit mode on the item, or view mode |
 
 The box is greyed while a background task holds the node, with the node's own
-busy sentence, because every transition above is a bench step and a bench step
-is refused then. With no point selected and nothing active, its refusal is one
+busy sentence, only when ticking it would put a point on the bench, since that
+is a bench step and a bench step is refused then. Clearing it, and ticking it
+over a point an item on the bench already came from, push no version and are
+never greyed for a busy node. With no point selected and nothing focused, its
+refusal is one
 sentence naming the three ways in: *"Nothing to edit: select a point,
 double-click an item in the Scene tree's Bench groups, or right-click a pixel in
 Image Detail and choose "Start cluster on the bench here"."*, the last quoted
@@ -265,34 +274,36 @@ from that entry's own constant (`track_view::nothing_to_edit`).
 
 ### Why each transition is the one it is
 
-**Clearing Edit only deactivates.** The box stands for "active for editing",
-not for being on the bench, and a discard already has its own toolbar button and
+**Clearing Edit only unfocuses.** The box stands for "being edited", not for
+being on the bench, and a discard already has its own toolbar button and
 Scene tree menu entry. An Edit-clear that discarded would make looking at the
 committed point cost the person their verdicts and their fit.
 
-**A deactivation is a version**, one version and one `Bench` row labelled
-`Stopped editing IMG_0042@142,198; it stays on the bench`, as an activation is.
-The activation is part of the bench value, and an Undo that brings back what was
-being edited is useful. The price is that flipping Edit to compare a track with
-its committed point pushes two versions per round trip.
+**An unfocus is not a version**, and neither is a focus: each writes one
+`Selection` row (`Stopped editing IMG_0042@142,198`, `Editing
+IMG_0042@142,198`) and leaves the history alone. A person who turns an
+observation out, clears Edit to look at the committed point and presses Ctrl+Z
+gets the verdict back, rather than spending the undo on the change of what was
+being edited; and flipping Edit to compare a track with its committed point
+pushes nothing.
 
 **Ticking Edit on a point already on the bench reuses its item**: the item whose
-origin, followed to the cursor, is that point is activated rather than a second
+origin, followed to the cursor, is that point is focused rather than a second
 one put on, which is what `put_point_on_bench` does for every way in. Two items
 for one point are two answers to one question, and with no list of items in the
 panel a second one would be easy not to notice.
 
-**Discarding the active item leaves nothing active**, so the panel returns to
-view mode (`Bench::discard`, [`../core/bench/bench.md`](../core/bench/bench.md)).
-Handing the activation to a neighbour would switch the panel to an item the
-person did not ask for, and nothing on screen would say which one arrived.
+**Discarding the focused item unfocuses it**, so the panel returns to view
+mode. Focusing a neighbour instead would switch the panel to an item the person
+did not ask for, and nothing on screen would say which one arrived. An undo of
+the discard puts the item back without focusing it.
 
-**Commit leaves edit mode on**, the item on the bench and active and the written
+**Commit leaves edit mode on**, the item on the bench and focused and the written
 point selected. A person commonly commits and keeps going, the written point is
 one Edit-clear away, and clearing on commit would make Commit two bench steps.
 
-**With no point selected and nothing active, the box is greyed** rather than
-bringing back the last active item or the last item on the bench. "The last one"
+**With no point selected and nothing focused, the box is greyed** rather than
+bringing back the last focused item or the last item on the bench. "The last one"
 is not recorded anywhere a person can see, and the Scene tree double-click names
 the item exactly.
 
@@ -302,13 +313,13 @@ because a track staged into a panel nobody can see is a gesture with no answer.
 
 ---
 
-## The selection and the active item
+## The selection and the focused item
 
 The **selection** is the viewer's selected point, image and camera, which every
 panel reads and which clicking in the 3D viewer or Image Detail moves. The
-**active item** is the bench's, part of the version at the cursor. The two are
+**focused item** is held beside it, outside every version. The two are
 independent, and the box decides which one Track View shows: view mode shows the
-selection, edit mode shows the active item.
+selection, edit mode shows the focused item.
 
 **Editing is sticky.** Selecting another point while editing moves the
 selection, and with it the 3D viewer's track rays, the Image Browser's borders
@@ -319,10 +330,11 @@ would make that impossible.
 
 **The selection notice** is what says the two have parted. It is one line under
 the box, drawn in edit mode exactly when the node has a live selected point that
-is not the active item's origin followed to the cursor: *"Selected:
+is not the focused item's origin followed to the cursor: *"Selected:
 pt3d_a1b2c3d4_5120, not the track being edited."*, with *View*, which clears
 Edit, and *Edit it*, which puts that point on the bench as the ticked box does.
-Both buttons grey with the busy sentence while a task holds the node.
+*Edit it* greys with the busy sentence while a task holds the node and the
+point is not on the bench yet; *View* is never greyed for it.
 
 **The common case keeps them together without asking.** Every way into editing
 from a point selects that point first, and a commit selects the point it wrote,
@@ -520,9 +532,9 @@ pyramid, until the reconstruction is closed.
 
 ### Edit mode
 
-Edit mode shows the active item and nothing else on the bench; the bench as a
-list is the Scene tree's. A gesture in it that names no item means the active
-track. **A cluster and a track are the same body at two stages**: the header's
+Edit mode shows the focused item and nothing else on the bench; the bench as a
+list is the Scene tree's. A gesture in it that names no item means the focused
+item. **A cluster and a track are the same body at two stages**: the header's
 headline, the table's cells and the row menu follow the stage, and there is no
 separate cluster layout. What differs is outside the panel: a cluster has no
 geometry, so the 3D viewer's bench layer draws nothing for it and Image Detail
@@ -539,7 +551,7 @@ tiles it has rendered, and the bars' judgement of each row.
 
 #### The header
 
-The active track's label, its stage as a word, and `N kept · K out · P
+The focused item's label, its stage as a word, and `N kept · K out · P
 pinned`. When the
 point the track was read from is still in the version at the cursor, its
 portable Point ID follows the label with the two icon buttons view mode's
@@ -592,7 +604,7 @@ kept against the track's `Arc` and dropped with the tiles.
 
 #### The toolbar
 
-Two rows. The first opens with where the active track's evaluation stands, and
+Two rows. The first opens with where the focused item's evaluation stands, and
 then acts on the track: *Fit*, the *Stage* toggle (which names the stage it
 would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
 second is the *Lock* box and *Rename*, which opens a field in place and commits
@@ -630,14 +642,14 @@ version and records the no-effect row *"Committed bull-nose: no effect, point
 4211 already holds this track"*, with that point selected.
 
 **Duplicate is how a second patch over neighbouring ground is started.** It puts
-a copy of the active track on the bench and makes the copy active, so a patch
+a copy of the focused item on the bench and focuses the copy, so a patch
 fitted to one piece of surface can be slid to the piece beside it rather than
 built again from a pixel
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
 "Duplicating"). The copy drops only the origin, which makes its commit create a
 point, so its header reads *new*. Ctrl+D (Cmd+D on macOS) does the same from
-anywhere in the window while a track is active on the selected node's bench;
-with none active the key is left alone.
+anywhere in the window while an item on the selected node's bench is focused;
+with none focused the key is left alone.
 
 **Evaluating and fitting are two things because they are two questions.** The
 evaluation measures every observation where it sits and **moves nothing**, so a
@@ -682,7 +694,7 @@ so a click on a mark in either bench layer and the wire's
 `get_bench_track` reports the rows a person clicked. A row click reports itself
 as `TrackEditResponse::pick_row` and the dock applies it through
 `AppState::pick_bench_observation`. It is not a version: undo, redo, a jump and
-a change of active item clear it. *Split off N rows* takes it; a split names its
+a change of focused item clear it; a rename keeps it. *Split off N rows* takes it; a split names its
 observations explicitly, because `out` says a sighting does not belong here and
 cannot say which of two tracks it belongs to.
 
@@ -718,7 +730,7 @@ radius read, turns nothing out, and a row with no reading clears it. Its label's
 hover text says what the radius is, what a row past the bar is, and that `3`
 turns nothing out.
 
-**A box applies to the active track when it is let go.** Dragging one
+**A box applies to the focused item when it is let go.** Dragging one
 recolours the table live; releasing it sets the track's bars to where the five
 boxes stand and turns the painting into verdicts, one version carrying both,
 with the row `Applied the thresholds to …` in the Action Log, and Undo reverses
@@ -742,10 +754,10 @@ pinned verdict unchanged. It is recomputed when the track's `Arc` or the bars
 move, and not per frame, because a copy of a track carries its consensus
 bitmap.
 
-**The boxes show the active track's own bars**, copied from it on every frame
+**The boxes show the focused item's own bars**, copied from it on every frame
 no box is being dragged, so whatever moved them -- a release here,
 `apply_bench_track_thresholds` over the wire, an undo or redo of either, another
-item made active -- the boxes follow. Only during a drag do they hold a value
+item focused -- the boxes follow. Only during a drag do they hold a value
 the track does not.
 
 #### The observation table
@@ -767,7 +779,7 @@ click on the switch, on the pin and on the heading's own pin does, and what the
 cell's colour means.
 
 **The *Keep* heading carries a pin** over the rows' pin column, and it
-toggles. While any row of the active track is pinned, clicking it unpins every
+toggles. While any row of the focused item is pinned, clicking it unpins every
 pinned row in one step (`AppState::unpin_bench_verdicts`, core's
 `unpin_verdicts`). While none is, clicking it pins every row at the verdict it
 has now (`AppState::pin_bench_verdicts`, core's `pin_verdicts`), moving no
@@ -931,7 +943,7 @@ at (`crate::bench::observation_site`, which the marks, the reveal and the wire
 read too). A row a search has just added carries only that seed, and its
 tile is cut around it, so nothing has to be evaluated for a fresh row to show its
 patch. The photographs are the node's full-resolution cache, which the dock fills
-for the active track's images before edit mode draws; the rendered tiles are kept
+for the focused item's images before edit mode draws; the rendered tiles are kept
 against the track's `Arc` and rebuilt when a step moves it.
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
@@ -1147,14 +1159,14 @@ viewer's way to name a pixel is a right-click in **Image Detail**, so both are
 entries in that panel's context menu, *Start cluster on the bench here* and
 *Add observation to bench track here*
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Image Detail:
-the context menu"). *Start cluster* puts the cluster on the bench active and
+the context menu"). *Start cluster* puts the cluster on the bench focused and
 raises Track View on it (`AppState::start_cluster_here`); its radius is the
 node's own default patch radius in that image (`AppState::default_patch_radius`),
 converted to the cluster stage's keypoint-frame units. *Add observation* adds
 an unpinned `out` sighting at the clicked pixel, which its first evaluation
 switches on when it clears the bars; on a track-stage track that pixel is its
 keypoint, so the row reads from it and, once `in`, commits at it without a
-*Fit* first, while on a cluster it is a seed. It greys while nothing is active,
+*Fit* first, while on a cluster it is a seed. It greys while nothing is focused,
 with *"No track is being edited: tick Edit in Track View, or double-click a Bench
 item in the Scene tree."*
 
@@ -1162,18 +1174,19 @@ item in the Scene tree."*
 
 ## The Scene tree's Bench rows
 
-The Bench group rows are one per item, by label with its `in` count, the active
+The Bench group rows are one per item, by label with its `in` count, the focused
 item drawn as a selected row, *Discard* on the secondary click
 ([`scene-graph.md`](scene-graph.md)).
 
 - **Single click** selects the node the row is under and does nothing to the
   bench, the node row's own pattern (click to select, double-click to act), so a
   pass of clicks down the tree pushes no versions.
-- **Double-click** makes the item active, selects its node and brings Track View
+- **Double-click** focuses the item, selects its node and brings Track View
   to the front, reopening it at its home when it is closed
-  (`AppState::edit_bench_item_at`). The node is selected because Track View shows
-  the selected node's bench. On an item already active it pushes no version and
-  writes no row: the gesture asked for the panel, and the panel is what it gets.
+  (`AppState::edit_bench_item_at`), with no version. The node is selected
+  because Track View shows the selected node's bench. On an item already
+  focused it writes no row: the gesture asked for the panel, and the panel is
+  what it gets.
 
 **Every raise is applied after the dock is back in the state.** The frame swaps
 the dock out of `AppState` while a tab body draws, so a raise from inside one
@@ -1189,10 +1202,10 @@ panel` and `Closed Track View panel`.
 ## Other panels
 
 **The bench layers follow the box.** Image Detail's bench layer and the 3D
-viewer's draw the active item and nothing else, so with Edit clear neither draws
-anything and none of their handles can be grabbed. That is what "no track is
-active for editing" means in the rest of the window. Image Detail's layer also
-reads *Lock*, which the dock hands it beside the active track; the 3D viewer's
+viewer's draw the focused item and nothing else, so with Edit clear neither draws
+anything and none of their handles can be grabbed. That is what "no item is
+being edited" means in the rest of the window. Image Detail's layer also
+reads *Lock*, which the dock hands it beside the focused item; the 3D viewer's
 does not, its handles being the patch's own.
 
 ---
@@ -1204,17 +1217,18 @@ does not, its handles being the patch's own.
   unknown-panel sentence, which lists the names that exist. The wire name is the
   title lower-cased by the panel-layout rule, and an alias would be a second name
   for one panel on a surface whose error message lists the names.
-- **`deactivate_bench_item`** `{ "reconstruction_label": "bull" }` is the Edit
-  box cleared, answering as every bench step answers; with nothing active it is
-  a no-effect reply, `changed: false`, and one row. It is named for what it acts
-  on and sits beside `activate_bench_item` in a listing.
-- **`get_bench`'s `active.track` can be `null` on a bench that has items.**
-- **A track tool that names no track, with nothing active**, is refused with
-  *"No track is active on bull's bench. Name one with track, activate one with
-  activate_bench_item, or put one on with create_bench_track or
+- **`unfocus_bench_item`** `{}` is the Edit box cleared. It pushes no version
+  and names no reconstruction, since there is one focused item for the viewer;
+  it answers with the item it unfocused and `changed`, and with nothing focused
+  it is a no-effect reply, `changed: false`, and one row. It sits beside
+  `focus_bench_item` in a listing.
+- **`get_bench`'s `focused_item` can be `null` on a bench that has items.**
+- **A track tool that names no track, with no item on that bench focused**, is
+  refused with *"No item on bull's bench is focused. Name one with track, focus
+  one with focus_bench_item, or put one on with create_bench_track or
   create_bench_cluster."*
-- `create_bench_track` on a point already on the bench activates that item,
-  which is the Edit box's own rule.
+- `create_bench_track` on a point already on the bench focuses that item,
+  which is the Edit box's own rule, and pushes no version.
 
 The whole bench family is [`bench.md`](bench.md) § "The wire" and
 [`mcp-server.md`](mcp-server.md).
@@ -1225,17 +1239,19 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 
 - **The panel**,
   [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs),
-  headless through `Context::run_ui`: the box reads the bench, edit mode drawn
-  with an active item and view mode without one, and following an undo of a
-  deactivation with no panel call in between; ticking it over a selected point
-  reporting `set_edit`, and applied, one version putting the point on the bench,
-  with a second tick after a clear activating the existing item; clearing it
-  reporting `set_edit`, one version labelled `Stopped editing ...`, and the next
-  frame drawing the selected point's header; the box greyed with no point
-  selected and nothing active, a click on it reporting nothing, the refusal
-  naming the three ways in and the empty state carrying the bench line; the
-  empty state counting the items on a bench with none active; a discard of the
-  active item returning to view mode; edit mode on a cluster drawing the cluster
+  headless through `Context::run_ui`: the box reads the focused item, edit mode
+  drawn with a focused item and view mode without one, and following an
+  unfocus and a focus made outside the panel with no panel call in between;
+  ticking it over a selected point reporting `set_edit`, and applied, one
+  version putting the point on the bench, with a second tick after a clear
+  focusing the existing item and pushing no version; clearing it reporting
+  `set_edit`, no version and one `Selection` row `Stopped editing ...`, and the
+  next frame drawing the selected point's header; the box greyed with no point
+  selected and nothing focused, a click on it reporting nothing, the refusal
+  naming the three ways in and the empty state carrying the bench line; a busy
+  node greying the box only over a point not on the bench; the empty state
+  counting the items on a bench with none focused; a discard of the focused
+  item returning to view mode; edit mode on a cluster drawing the cluster
   headline; the selection notice drawn exactly when the selected point is not the
   item's origin, with *View* and *Edit it* reporting their two gestures; and no
   reconstruction drawing no box.
@@ -1252,7 +1268,7 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **Edit mode**,
   [edit/tests.rs](../../crates/sfm-explorer/src/track_view/edit/tests.rs), with
   what the table drew recorded unconditionally so the assertions read the table
-  the app draws: nothing drawn with nothing active; **no *Evaluate* button**,
+  the app draws: nothing drawn with nothing focused; **no *Evaluate* button**,
   the toolbar reading *Evaluating…* until the evaluation of a track just put on
   the bench lands and *Evaluated* after it; every Status cell reading
   *Evaluating…* until then and again after a verdict; a frameless bearing on the
@@ -1324,13 +1340,14 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
 - **The Scene tree**,
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs): a
   single click on a Bench row selects its node and pushes no version; a
-  double-click from either group activates, selects the node and raises the
-  panel; a double-click on the active item pushes no version and writes no row;
+  double-click from either group focuses, selects the node and raises the
+  panel with no version and one `Editing ...` row; a double-click on the
+  focused item pushes no version and writes no bench or selection row;
   and the raise survives a double-click made while the dock is swapped out.
 - **Layout and wire**: [`panel-layout.md`](panel-layout.md) § "Testing" (the
   stock grid, the retired names refused, the startup load of an old default
   file) and [`mcp-server.md`](mcp-server.md) § "Testing" (the panel name,
-  `deactivate_bench_item`, the null `active.track`).
+  `unfocus_bench_item`, the null `focused_item`).
 - **`ui_basic`**: a `screenshot` of `camera_intrinsics`, which the stock grid
   keeps behind Track View, is refused with a message naming "Track View". No
   windowed test of the box: what it decides is covered headlessly, and the

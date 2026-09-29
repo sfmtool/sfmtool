@@ -38,7 +38,7 @@ pub(crate) enum FeatureHit {
 pub(crate) const START_CLUSTER_LABEL: &str = "Start cluster on the bench here";
 
 /// The add-a-bench-observation entry's label. "Bench track" rather than
-/// "track": the row joins the bench's **active** track, which is not the
+/// "track": the row joins the **focused** item, which is not the
 /// selected point's.
 pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench track here";
 
@@ -47,21 +47,21 @@ pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench t
 /// The panel is handed a reconstruction value and a selection and holds nothing
 /// else, so the two things the bench costs it are passed in: the dock reads
 /// them off `AppState` beside the selection. Both the menu's two bench entries
-/// and the layer that draws the active track
+/// and the layer that draws the focused item
 /// ([`mod@super::bench_track`]) read this one value, so what is offered and
-/// what is drawn cannot disagree about which track is the active one.
+/// what is drawn cannot disagree about which track is the focused one.
 ///
 /// It also carries the one tool setting the layer's handles are read by,
 /// Track View's *Lock*, which is not bench state but belongs beside it: the
-/// drag it decides the meaning of is a drag of the active track.
+/// drag it decides the meaning of is a drag of the focused item.
 #[derive(Debug, Clone, Copy)]
 pub struct BenchMenu<'a> {
     /// Why no step on this node can run -- a background task is holding it --
     /// or `None` when one can.
     pub busy: Option<&'a str>,
-    /// The bench's active track, or `None` when no track is on the bench. A
-    /// gesture that names no item means the active one.
-    pub active_track: Option<&'a EditableTrack>,
+    /// The focused item, or `None` when no item on this node's bench is
+    /// focused. A gesture that names no item means the focused one.
+    pub focused_track: Option<&'a EditableTrack>,
     /// Track View's *Lock*: at the track stage, whether the dot slides the
     /// patch with every sighting following (`true`) or moves that one
     /// sighting's keypoint alone (`false`), in which case the outline's edges
@@ -82,7 +82,7 @@ impl Default for BenchMenu<'_> {
     fn default() -> Self {
         Self {
             busy: None,
-            active_track: None,
+            focused_track: None,
             lock: true,
             create_track: None,
         }
@@ -162,8 +162,8 @@ pub(crate) fn start_cluster_entry(bench: BenchMenu<'_>) -> Result<(), String> {
 /// Whether the menu's add-to-the-bench-track entry can run, and why not when it
 /// is greyed.
 ///
-/// What it needs beyond the pixel is a track to add to, which is the bench's
-/// active one. An image the track already holds an observation in is **not** a
+/// What it needs beyond the pixel is a track to add to, which is the focused
+/// item. An image the track already holds an observation in is **not** a
 /// refusal: a second sighting in one image joins as a candidate and is scored
 /// like any other, and what a track cannot do is hold two `in` observations of
 /// one image, which is a verdict rather than this gesture
@@ -172,7 +172,7 @@ pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), St
     if let Some(why) = bench.busy {
         return Err(why.to_string());
     }
-    if bench.active_track.is_none() {
+    if bench.focused_track.is_none() {
         return Err(
             "No track is being edited: tick Edit in Track View, or double-click a \
                     Bench item in the Scene tree."

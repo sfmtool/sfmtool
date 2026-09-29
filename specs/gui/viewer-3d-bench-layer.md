@@ -1,9 +1,9 @@
-# The bench's active track in the 3D viewer
+# The focused item in the 3D viewer
 
 The SfM Explorer's **bench** is where a single 3D point is held and worked on by
 hand before it is written into a reconstruction: its observations across the
 photographs, and the oriented square of surface those observations are views of.
-The 3D viewer draws the track that is active on that bench where it stands in
+The 3D viewer draws the track focused on that bench where it stands in
 the world, as scene geometry rather than as a symbol floating over the viewport.
 What it draws is the square itself, the direction that square faces, and one
 mark per photograph saying where that photograph sees the square's content
@@ -44,17 +44,17 @@ without a device and a pointer reading without a window.
 The viewer does not read the bench, for the reason the Image Detail panel does
 not: the panel is handed `&mut` into the state further down the same call, so
 what it needs is read out beside the selection and passed in. The dock hands the
-viewport one value per frame, carrying the node whose bench it is, the active
-track, the node's edited reconstruction at its cursor (for the camera poses the
+viewport one value per frame, carrying the node whose bench it is, the focused
+item, the node's edited reconstruction at its cursor (for the camera poses the
 marks unproject their keypoints through), the node's similarity, the observation
 row Track View has selected, and whether a background task holds the node. A
 task holding the node does not stop the layer drawing, because what is being
 worked on does not stop being worth seeing; it stops every handle taking a
 press.
 
-**The layer draws the active item, and only when it is a track-stage track.** A
+**The layer draws the focused item, and only when it is a track-stage track.** A
 cluster-stage item has no shared geometry behind it and draws nothing, as does a
-track nothing has given a patch. Items that are not active draw nothing, which
+track nothing has given a patch. Items that are not focused draw nothing, which
 is what Image Detail does too: the bench holds several and both panels show the
 one being worked on.
 
@@ -466,12 +466,12 @@ way to lay a surface on the ground without moving it sideways. The log reads
 `Set run_b to the frame of patch tk104`, `Aligned run_b's patch tk104 normal to
 +Z`, `Translated run_b's patch tk104 to the origin` and `Translated run_b's
 patch tk104 to the XY plane`, each followed by its version transition; the
-active item's label names the patch because it is what the Bench group and Track
+focused item's label names the patch because it is what the Bench group and Track
 View show.
 
 ### Which patch, and which node
 
-The square is the placement of the active item on the bench of
+The square is the placement of the focused item on the bench of
 `AppState::selected_recon`, at the track stage, and the viewport draws no other,
 so the patch a menu opens on is singular and so is the node it acts on. A
 cluster-stage item, a track with no patch and an empty bench draw no square and
@@ -654,16 +654,16 @@ exactly `−Z` (built directly, so `rotation_between` really declines) comes out
 `+Z` with `u` kept and `v` negated; Translate to XY Plane touches `z` alone and
 leaves the rotation and the scale; Align Normal to Z then Translate to XY Plane
 puts all four corners on `z = 0`; every entry keeps the node's scale; and a
-bench with nothing active is refused and pushes nothing.
+bench with nothing focused is refused and pushes nothing.
 
 ## Non-goals
 
-- **Drawing the tracks that are not active.** The bench holds several items and
+- **Drawing the tracks that are not focused.** The bench holds several items and
   this layer draws the one being worked on, as the Image Detail bench layer
-  does. Clicking a track in the world to make it active is not something the
-  layer offers; a track is activated by a double-click on its row in the Scene
+  does. Clicking a track in the world to focus it is not something the
+  layer offers; a track is focused by a double-click on its row in the Scene
   tree, or by ticking *Edit* in Track View over a selected point
-  ([`track-view.md`](track-view.md)). With nothing active, which a bench holding
+  ([`track-view.md`](track-view.md)). With nothing focused, which a bench holding
   items can be, the layer draws nothing.
 - **Putting the viewport on the patch.** The patch menu moves the world onto the
   patch; the same geometry read the other way, which would move the viewport

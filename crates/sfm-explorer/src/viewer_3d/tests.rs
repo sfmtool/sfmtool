@@ -2304,7 +2304,7 @@ fn a_right_click_on_empty_space_beside_the_square_opens_nothing() {
 }
 
 #[test]
-fn with_no_active_track_the_square_is_not_there_to_click() {
+fn with_no_focused_item_the_square_is_not_there_to_click() {
     let mut staged = staged();
     let at = inside_the_square(&staged);
     staged.viewer.bench_figure = None;

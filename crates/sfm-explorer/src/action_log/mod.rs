@@ -120,8 +120,8 @@ pub(crate) enum Kind {
     /// An edit to a reconstruction, and the undo or redo of one. See
     /// [`crate::document`].
     Edit,
-    /// A step on the bench beside a reconstruction: an item put on, taken off,
-    /// activated or renamed, and every step on one. See [`crate::bench`].
+    /// A step on the bench beside a reconstruction: an item put on, taken off
+    /// or renamed, and every step on one. See [`crate::bench`].
     ///
     /// A kind of its own rather than an [`Kind::Edit`] because nothing here
     /// touches the file: the one bench step that does is the commit, and its
