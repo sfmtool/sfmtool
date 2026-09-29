@@ -193,11 +193,12 @@ impl ColumnLayout {
 /// The *Keep* heading's hover text.
 pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A kept observation \
     is one the evaluation and a fit read the track by, and one a commit writes.\n\n\
-    The thresholds set the switch when an observation is first measured and when a threshold \
-    is moved. Click a switch to set it by hand, which pins it. The pin beside the switch is \
-    solid on a pinned verdict, which the thresholds leave alone, and a faint outline on one \
-    they set. Click the pin to unpin a verdict and let the thresholds decide again, or to pin \
-    one as it stands.\n\n\
+    The thresholds set the switch of every unpinned row each time the track is evaluated and \
+    when a threshold box is let go. Click a switch to set it by hand, which pins it. The pin \
+    beside the switch is solid on a pinned verdict, which the thresholds leave alone, and a \
+    faint outline on one they set. Click the pin to unpin a verdict and let the thresholds \
+    decide again, or to pin one as it stands. The pin in this heading unpins every pinned \
+    verdict of the track at once.\n\n\
     The cell is green when the bars propose keeping the observation and red when they \
     propose turning it out, as they would were its verdict unpinned, so a switch that is on \
     in a red cell is a hand ruling against the bars. Hover a switch for the reason.\n\n\
@@ -264,6 +265,27 @@ const FROM_TIP: &str = "Where the observation came from: the point the track was
 
 /// The label a pinned verdict's menu entry carries.
 pub(super) const UNPIN_LABEL: &str = "Unpin, let the thresholds decide";
+
+/// The row menu's unpin entry when the row is one of several selected, which
+/// unpins every pinned verdict among them in one step.
+pub(super) fn unpin_selection_label(count: usize) -> String {
+    let noun = if count == 1 { "verdict" } else { "verdicts" };
+    format!("Unpin {count} {noun}, let the thresholds decide")
+}
+
+/// The accessible name of the *Keep* heading's pin.
+pub(super) const UNPIN_ALL_NAME: &str = "Unpin all";
+
+/// The *Keep* heading's pin's hover text: what a click does, with the count,
+/// or why there is nothing to do.
+pub(super) fn unpin_all_hover(pinned: usize, busy: Option<&str>) -> String {
+    match (pinned, busy) {
+        (0, _) => "No verdict is pinned: the thresholds decide every row.".to_string(),
+        (_, Some(why)) => why.to_string(),
+        (1, None) => "Unpin the 1 pinned verdict and let the bars decide".to_string(),
+        (n, None) => format!("Unpin all {n} pinned verdicts and let the bars decide"),
+    }
+}
 
 /// The *Keep* switch of one row, filling `rect`. The whole of `rect` takes
 /// the click, so the target is the cell and not the switch's own few points.
@@ -467,23 +489,53 @@ fn pin_hover(pinned: bool) -> &'static str {
     }
 }
 
-/// The menu entry that hands a pinned verdict back to the thresholds, greyed
-/// on a row whose verdict nobody set by hand.
-fn unpin_entry(ui: &mut egui::Ui, pinned: bool) -> bool {
-    let button = egui::Button::new(UNPIN_LABEL);
-    if pinned {
+/// The menu entry that hands pinned verdicts back to the thresholds, carrying
+/// `label`, greyed with `why_not` when `enabled` is false.
+fn unpin_entry(ui: &mut egui::Ui, label: &str, enabled: bool, why_not: &str) -> bool {
+    let button = egui::Button::new(label);
+    if enabled {
         ui.add(button)
             .on_hover_text(
-                "Clear the verdict set by hand, and give this observation the one the \
+                "Clear the verdict set by hand, and give the observation the one the \
                  thresholds propose",
             )
             .clicked()
     } else {
-        ui.add_enabled(false, button).on_disabled_hover_text(
-            "The thresholds already decide this verdict: it is not pinned.",
-        );
+        ui.add_enabled(false, button)
+            .on_disabled_hover_text(why_not);
         false
     }
+}
+
+/// The hover text of a greyed unpin entry on a row whose verdict is not pinned.
+const NOT_PINNED: &str = "The thresholds already decide this verdict: it is not pinned.";
+
+/// The pin in the *Keep* heading, filling `rect`: solid when any row is pinned
+/// and an outline when none is, greyed when there is nothing to unpin or the
+/// node is busy. Returns whether it was clicked while it could act.
+fn unpin_all_pin(ui: &mut egui::Ui, rect: egui::Rect, pinned: usize, busy: Option<&str>) -> bool {
+    let enabled = pinned > 0 && busy.is_none();
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let response = ui.interact(rect, ui.id().with("track_view_unpin_all"), sense);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, UNPIN_ALL_NAME)
+    });
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let color = match (enabled, response.hovered()) {
+            (true, true) => visuals.strong_text_color(),
+            (true, false) => visuals.text_color(),
+            (false, _) => visuals.weak_text_color().gamma_multiply(0.6),
+        };
+        paint_pushpin(ui.painter(), rect.center(), color, pinned > 0);
+    }
+    let clicked = enabled && response.clicked();
+    response.on_hover_text(unpin_all_hover(pinned, busy));
+    clicked
 }
 
 impl TrackEdit {
@@ -516,7 +568,12 @@ impl TrackEdit {
         // nothing saying which is which. Alignment survives the move because
         // every column is left-anchored at the table's left edge, and a scroll
         // area moves its right edge, never that one.
-        draw_header(ui, &cols);
+        let pinned: Vec<usize> = (0..track.observations.len())
+            .filter(|&i| track.observations[i].pinned)
+            .collect();
+        if draw_header(ui, &cols, pinned.len(), state.busy_refusal(id).as_deref()) {
+            response.unpin_verdicts = Some(pinned);
+        }
 
         let mut scroll_area = egui::ScrollArea::vertical().auto_shrink([false, false]);
         if let Some(offset) = self.scroll_offset_y {
@@ -622,9 +679,31 @@ impl TrackEdit {
         // capture takes long enough that the person has moved on, and
         // observations landing on a track unasked are a surprise.
         let sources = self.build_refusal.as_ref().and_then(|(_, why)| why.clone());
+        // On a row that is one of several selected, the unpin acts on the
+        // selection: every pinned verdict among the selected rows, in one step.
+        let on_selection = selected.len() > 1 && selected.contains(&observation);
+        let (unpin_label, unpin_rows, why_not) = if on_selection {
+            let rows: Vec<usize> = selected
+                .iter()
+                .copied()
+                .filter(|&i| track.observations.get(i).is_some_and(|o| o.pinned))
+                .collect();
+            (
+                unpin_selection_label(rows.len()),
+                rows,
+                "None of the selected verdicts is pinned: the thresholds already decide them.",
+            )
+        } else {
+            let rows = if row.pinned {
+                vec![observation]
+            } else {
+                Vec::new()
+            };
+            (UNPIN_LABEL.to_string(), rows, NOT_PINNED)
+        };
         crate::context_menu::on_secondary_click(&row_response).show(|ui| {
-            if unpin_entry(ui, row.pinned) {
-                response.unpin_verdict = Some(observation);
+            if unpin_entry(ui, &unpin_label, !unpin_rows.is_empty(), why_not) {
+                response.unpin_verdicts = Some(unpin_rows.clone());
                 ui.close();
             }
             ui.separator();
@@ -771,10 +850,10 @@ impl TrackEdit {
             row.pinned,
         );
         // Pinning the verdict a row already carries is `set_verdict` with that
-        // verdict, and unpinning is `unpin_verdict`.
+        // verdict, and unpinning is `unpin_verdicts` of that row.
         if pin.clicked() {
             if row.pinned {
-                response.unpin_verdict = Some(observation);
+                response.unpin_verdicts = Some(vec![observation]);
             } else {
                 response.set_verdict = Some((observation, row.verdict));
             }
@@ -785,8 +864,8 @@ impl TrackEdit {
                 Some((observation, if kept { Verdict::Out } else { Verdict::In }));
         }
         crate::context_menu::on_secondary_click(&keep).show(|ui| {
-            if unpin_entry(ui, row.pinned) {
-                response.unpin_verdict = Some(observation);
+            if unpin_entry(ui, UNPIN_LABEL, row.pinned, NOT_PINNED) {
+                response.unpin_verdicts = Some(vec![observation]);
                 ui.close();
             }
         });
@@ -1145,7 +1224,11 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
 
 /// The header row, at the same offsets the rows draw at, drawn once above the
 /// scroll area so it stays put while the rows move under it.
-fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
+///
+/// The *Keep* heading carries a pin over the rows' pin column, which unpins
+/// every pinned verdict of the track; `pinned` is how many there are and
+/// `busy` the node's busy refusal. Returns whether that pin was clicked.
+fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout, pinned: usize, busy: Option<&str>) -> bool {
     let available = ui.available_rect_before_wrap();
     // Body-sized, as the cells under them are, and in the weak colour, so
     // they still read as headings.
@@ -1176,4 +1259,10 @@ fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
         )
         .on_hover_text(tip);
     }
+    // After the headings, so it takes the pointer over its own few points.
+    let pin_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x + cols.keep + SWITCH_CELL_WIDTH, rect.min.y),
+        egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
+    );
+    unpin_all_pin(ui, pin_rect, pinned, busy)
 }

@@ -197,10 +197,11 @@ class TestTheEditableTrack:
         assert bench.labels[0].endswith(f"_{long_track_point}")
         np.testing.assert_allclose(track.position, embedded.positions[long_track_point])
 
-        # The keypoints are carried, not refitted.
+        # The keypoints are carried, not refitted, and the point's verdicts
+        # arrive pinned, so no evaluation moves them.
         for observation in track.observations:
             assert observation["verdict"] == "in"
-            assert not observation["pinned"]
+            assert observation["pinned"]
             assert observation["provenance"] == {"kind": "origin"}
             assert "keypoint" in observation["track"]
 
@@ -256,7 +257,8 @@ class TestTheEditableTrack:
         assert pinned.observation(1)["pinned"]
         painted, report = apply_thresholds(pinned, min_zncc=0.0)
         assert painted.observation(1)["verdict"] == "out"
-        assert report["pinned"] == 1
+        # Every row of a point arrives pinned.
+        assert report["pinned"] == track.observation_count
 
     def test_unpinning_hands_a_verdict_back_to_the_thresholds(
         self, edited, long_track_point
@@ -267,16 +269,49 @@ class TestTheEditableTrack:
         assert not unpinned.observation(1)["pinned"]
         # Nothing has measured it, so there is no proposal and it keeps its
         # verdict.
-        assert report == {"observation": 1, "was": "out", "is": "out", "changed": True}
+        assert unpinned.observation(1)["verdict"] == "out"
+        assert report == {
+            "unpinned": 1,
+            "turned_in": 0,
+            "turned_out": 0,
+            "changed": True,
+        }
         _, again = unpin_verdict(unpinned, 1)
         assert not again["changed"]
         with pytest.raises(ValueError):
             unpin_verdict(unpinned, 99)
 
+    def test_an_unpin_takes_a_list_of_rows_or_all_of_them(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        count = track.observation_count
+        some, report = unpin_verdict(track, [0, 1])
+        assert report["unpinned"] == 2
+        assert [o["pinned"] for o in some.observations][:2] == [False, False]
+        assert all(o["pinned"] for o in some.observations[2:])
+
+        every, report = unpin_verdict(some, "all")
+        assert report["unpinned"] == count - 2
+        assert report["changed"]
+        assert not any(o["pinned"] for o in every.observations)
+        _, report = unpin_verdict(every, "all")
+        assert report == {
+            "unpinned": 0,
+            "turned_in": 0,
+            "turned_out": 0,
+            "changed": False,
+        }
+        with pytest.raises(ValueError, match="unknown observations"):
+            unpin_verdict(track, "some")
+        with pytest.raises(ValueError):
+            unpin_verdict(track, [0, 99])
+
     def test_the_painting_leaves_an_unmeasured_observation_where_it_is(
         self, edited, long_track_point
     ):
         _, track = create_track(Bench(), edited, long_track_point)
+        track, _ = unpin_verdict(track, "all")
         painted, report = apply_thresholds(track, min_zncc=0.99)
         assert report["turned_out"] == 0
         assert report["unmeasured"] == track.observation_count
@@ -356,6 +391,28 @@ class TestEvaluating:
                 if not np.isnan(surface).all():
                     assert 0.0 < entry["zncc_self_similarity_tolerance"] < 1.0
 
+    def test_an_evaluation_lets_the_bars_decide_the_unpinned_rows_once(
+        self, edited, images, long_track_point
+    ):
+        """Every unpinned verdict follows the bars, and a reading that only
+        follows that repaint does not repaint again."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        track, _ = unpin_verdict(track, "all")
+        # Bars no reading clears, set while nothing is measured.
+        track, _ = apply_thresholds(track, min_zncc=1.1)
+        assert track.verdict_counts == (track.observation_count, 0)
+        assert not track.repainted
+
+        read, report = evaluate(track, edited, images)
+        assert report["turned_out"] == report["measured"] > 0
+        assert report["turned_in"] == 0
+        assert read.repainted
+
+        again, report = evaluate(read, edited, images)
+        assert (report["turned_in"], report["turned_out"]) == (0, 0)
+        assert again.verdict_counts == read.verdict_counts
+        assert not again.repainted
+
     def test_the_reading_takes_its_memory_bounds_as_keyword_arguments(
         self, edited, images, long_track_point
     ):
@@ -431,9 +488,9 @@ class TestEvaluating:
                 assert entry["reason"]
         out_row = read.observation(1)["track"]
         assert out_row.get("projection_offset_px", 0.0) >= 0.0
-        # The pinned ``out`` row stays out, and every row measured before keeps
-        # its verdict. Only the new row, measured for the first time, can be
-        # taken in, and only when it clears the thresholds.
+        # Every row of the point is pinned, the ``out`` one by hand, so each
+        # keeps its verdict. Only the new row, which is unpinned, is the bars'
+        # to decide, and it is taken in only when it clears them.
         assert added["observation"] == track.observation_count - 1
         for i in range(added["observation"]):
             assert read.observation(i)["verdict"] == track.observation(i)["verdict"]
@@ -963,10 +1020,10 @@ class TestPlacingSizingAndTurningByHand:
         normal = np.cross(before["u_halfvec"], before["v_halfvec"])
         assert abs(float(offset @ normal)) < 1e-12, "the patch left its own plane"
         np.testing.assert_allclose(moved.position, after["center"])
-        # Every sighting moved with it, and none was pinned by a translation.
+        # Every sighting moved with it, and a translation set no pin.
         for index in range(moved.observation_count):
             observation = moved.observation(index)
-            assert not observation["pinned"]
+            assert observation["pinned"] == track.observation(index)["pinned"]
             assert "zncc" not in observation["track"]
             before_at = track.observation(index)["track"]["keypoint"]
             assert not np.array_equal(observation["track"]["keypoint"], before_at)
@@ -1060,8 +1117,8 @@ class TestPlacingSizingAndTurningByHand:
         # The patch grew toward the edge that was dragged, so its centre moved
         # with it and every dot follows.
         # A resize moves the centre, so every sighting follows it, exactly as a
-        # slide's does; nothing is pinned.
-        assert not resized.observation(0)["pinned"]
+        # slide's does; no pin is set or cleared.
+        assert resized.observation(0)["pinned"] == track.observation(0)["pinned"]
         assert not np.array_equal(resized.observation(0)["track"]["keypoint"], was)
         assert not np.array_equal(
             resized.observation(1)["track"]["keypoint"],
@@ -1087,7 +1144,9 @@ class TestPlacingSizingAndTurningByHand:
         assert shaped["half_px"] == pytest.approx(
             track.radius * np.linalg.norm(turn[:, 0]), rel=1e-12
         ), "radius * the first column's norm"
-        assert not turned.observation(0)["pinned"], "a turn is not a verdict"
+        assert turned.observation(0)["pinned"] == track.observation(0)["pinned"], (
+            "a turn is not a verdict"
+        )
         with pytest.raises(ValueError, match="spans no area"):
             shape_observation(track, 0, [[1.0, 2.0], [2.0, 4.0]])
 

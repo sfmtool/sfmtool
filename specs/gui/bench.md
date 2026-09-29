@@ -444,6 +444,8 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
+| Unpin one verdict | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: in` |
+| Unpin several, or all | `Handed 4 verdicts back to the thresholds in pt3d_a1b2c3d4_1207: 1 in, 2 out` |
 | Slide the patch | `Moved pt3d_a1b2c3d4_1207 by 0.123 units to (1.204, -0.318, 4.006)` |
 | Place one sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
 | Resize the patch | `Resized pt3d_a1b2c3d4_1207 to 7.4 px in IMG_0042.jpg` |
@@ -600,10 +602,28 @@ measured before it saw the flag -- is dropped, and the track reads `Evaluating`
 until the evaluation of its new inputs lands. A result that matches is written
 into the version at the cursor in place (`History::replace_current_bench`):
 **no version is pushed and no Action Log row is written.** An evaluation fills
-measurement slots and moves nothing a person put there, so a version per
+measurement slots and sets each unpinned verdict to what the bars propose from
+them, moving nothing a person put there, so a version per
 evaluation would put a step in the history for every edit that Undo would then
 have to walk back over, each restoring numbers that no longer matched the
 inputs beside them. The version keeps its serial and its label.
+
+**A repaint that moved a verdict is read once more.** A track-stage reading is
+scored against the `in` rows, so when the evaluation's repaint changes which
+rows are `in`, the readings it brings back were taken under the rows before it.
+The track it lands carries core's repaint mark
+(`EditableTrack::repainted`, [../core/bench/editable-track.md](../core/bench/editable-track.md)
+§ "Evaluating"), and it is not recorded as current: the next frame evaluates it
+again. Core reads a marked track without repainting, so that second evaluation
+settles the track, and a row it leaves out of step with the bars shows in Track
+View as a switch disagreeing with its cell's colour until the next step.
+
+**A track put on the bench from a point arrives with every row pinned `in`**,
+so its evaluations leave the point's verdicts alone; rows added later by a
+search, the far-field sweep or a pixel gesture arrive `out` and unpinned, and
+their first evaluation takes them in when they clear the bars. A cluster
+started from a pixel arrives with its one seed pinned `in` for the same reason:
+it is what the person pointed at.
 
 **A track-stage track with no bitmap gets one fused.** A patch step -- a move,
 a resize, a spin or a tilt -- drops the consensus bitmap, because it was fused

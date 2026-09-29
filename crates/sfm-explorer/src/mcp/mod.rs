@@ -477,11 +477,11 @@ pub(crate) enum Command {
     SetBenchTrackVerdict {
         reconstruction_label: String,
         track: Option<String>,
-        /// The observation's position in the track's list, which is stable for
-        /// the life of the track.
-        observation: usize,
-        /// The verdict to pin, or `None` to clear the pin and give the
-        /// observation the verdict the thresholds propose.
+        /// The observations the call rules on: one for `in` and `out`, and one,
+        /// several or all of them for an unpin.
+        rows: VerdictRows,
+        /// The verdict to pin, or `None` to clear the pins and give the
+        /// observations the verdicts the thresholds propose.
         verdict: Option<sfmtool_core::bench::Verdict>,
     },
     /// Set the track's bars and paint the proposed verdicts onto its unpinned
@@ -791,6 +791,21 @@ pub(crate) enum TranslateTarget {
         /// Where, in that image's own px.
         pixel: [f64; 2],
     },
+}
+
+/// Which observations `set_bench_track_verdict` names.
+///
+/// `in` and `out` rule on one observation at a time, since each is a hand
+/// ruling on one sighting; an unpin may name several, or all of them, because
+/// the bars decide the rows it hands back together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VerdictRows {
+    /// One observation, by its position in the track's list.
+    One(usize),
+    /// Several, by their positions.
+    Listed(Vec<usize>),
+    /// Every observation of the track.
+    All,
 }
 
 /// Which photograph a pixel form names its pixel in: the wire's spelling of
@@ -1557,13 +1572,13 @@ pub(crate) fn apply_with_window(
         Command::SetBenchTrackVerdict {
             reconstruction_label,
             track,
-            observation,
+            rows,
             verdict,
         } => done(bench::set_bench_track_verdict(
             state,
             &reconstruction_label,
             track.as_deref(),
-            observation,
+            rows,
             verdict,
         )),
         Command::ApplyBenchTrackThresholds {

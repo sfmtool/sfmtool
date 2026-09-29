@@ -48,9 +48,10 @@ use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
+use super::steps::apply_thresholds;
 use super::track::{
-    ClusterPayload, ClusterTemplate, EditableTrack, Observation, Stage, StageKind, TrackPayload,
-    Unmeasured, Verdict,
+    ClusterPayload, ClusterTemplate, EditableTrack, Observation, RepaintMark, Stage, StageKind,
+    TrackPayload, Unmeasured, Verdict,
 };
 
 /// The localizer with every per-view gate off and the consensus-basis cap
@@ -307,6 +308,12 @@ pub struct EvaluateReport {
     /// At the track stage, the condition number of the triangulation the track
     /// carries.
     pub condition_number: Option<f64>,
+    /// How many unpinned observations the repaint after the reading turned
+    /// `in`. Zero when the track the evaluation read carried a
+    /// [`RepaintMark`], because that evaluation does not repaint.
+    pub turned_in: usize,
+    /// How many it turned `out`.
+    pub turned_out: usize,
 }
 
 impl std::fmt::Display for EvaluateReport {
@@ -330,12 +337,21 @@ impl std::fmt::Display for EvaluateReport {
                     (None, _) => write!(f, "; the track stands nowhere"),
                 }
             }
+        }?;
+        if self.turned_in + self.turned_out > 0 {
+            write!(
+                f,
+                "; the bars turned {} in and {} out",
+                self.turned_in, self.turned_out
+            )?;
         }
+        Ok(())
     }
 }
 
 /// Fill the measurement slots of every observation of `track`, whatever its
-/// verdict, at the stage it is in, and change nothing else about it.
+/// verdict, at the stage it is in, then let the bars decide the unpinned
+/// verdicts from those readings, and change nothing else about it.
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
 /// index -- the decoded pixels the kernels need, which a reconstruction value
@@ -369,12 +385,25 @@ impl std::fmt::Display for EvaluateReport {
 /// the bitmap: what a reading gives back is the same track with its own account
 /// of itself.
 ///
-/// **An added observation measured for the first time is taken in when it
-/// clears the thresholds**: one that is `out`, unpinned, was unmeasured before
-/// the call, and whose image no `in` observation holds. It joined the track
-/// `out` with nothing measured, and this is the first point at which there is
-/// a proposal to act on. Nothing is turned `out` and every other verdict stays
-/// where it was.
+/// **Then the bars decide every unpinned observation**, in both directions:
+/// the readings are painted onto the unpinned rows exactly as
+/// [`apply_thresholds`] paints them, best score
+/// first and one `in` per image, so an unpinned verdict is always what the bars
+/// say about the latest reading. An added observation, which joined `out` with
+/// nothing measured, is taken in by the evaluation that first measures it when
+/// it clears every bar; a row a step moved past a bar is turned out, and one
+/// moved back is turned in. A pinned verdict is never moved.
+///
+/// **An evaluation that only follows a repaint does not repaint again.** A
+/// track-stage reading is scored against the rows that are `in`, so when the
+/// repaint changes the `in` set the readings it returns were taken under the
+/// old set, and the track returned carries a [`RepaintMark`] saying so. An
+/// evaluation of a track that still carries it ([`EditableTrack::repainted`])
+/// reads the rows under the new set and leaves every verdict where it is. That
+/// bounds the flipping a repaint could otherwise start, a row turned in
+/// dropping another below a bar and that one's turn moving the first back,
+/// to one extra reading. [`EvaluateReport::turned_in`] and
+/// [`EvaluateReport::turned_out`] say what the repaint moved.
 ///
 /// `progress` is where the call names its phases, the names the batch kernels
 /// carry: `refine` and `self-similarity` at the cluster stage, `localize` and
@@ -413,12 +442,20 @@ pub fn evaluate(
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
     check_views(edited, images)?;
     evaluate_preconditions(track)?;
-    let (mut read, report) = match &track.stage {
+    let (read, mut report) = match &track.stage {
         Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress)?,
         Stage::Track(payload) => evaluate_track(track, images, payload, options, progress)?,
     };
-    super::steps::apply_thresholds_to_first_readings(track, &mut read);
-    Ok((read, report))
+    if track.repainted() {
+        return Ok((read, report));
+    }
+    let (mut painted, repaint) = apply_thresholds(&read);
+    report.turned_in = repaint.turned_in;
+    report.turned_out = repaint.turned_out;
+    if repaint.changed {
+        painted.repaint = RepaintMark::of(&painted);
+    }
+    Ok((painted, report))
 }
 
 /// Whether `track` can be read at the stage it stands in, judged on the track
@@ -719,6 +756,8 @@ pub(super) fn evaluate_cluster(
             position: None,
             at_infinity: false,
             condition_number: None,
+            turned_in: 0,
+            turned_out: 0,
         },
     ))
 }
@@ -1100,6 +1139,8 @@ fn evaluate_track(
             // carries.
             at_infinity: payload.at_infinity,
             condition_number: payload.condition_number,
+            turned_in: 0,
+            turned_out: 0,
         },
     ))
 }

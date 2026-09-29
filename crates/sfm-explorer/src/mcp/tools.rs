@@ -506,12 +506,15 @@ pub(crate) fn parse(
             observation: args.required_usize("observation")?,
             degrees: args.required_f64("degrees")?,
         },
-        "set_bench_track_verdict" => Command::SetBenchTrackVerdict {
-            reconstruction_label: args.required_string("reconstruction_label")?,
-            track: args.optional_string("track")?,
-            observation: args.required_usize("observation")?,
-            verdict: args.verdict("verdict")?,
-        },
+        "set_bench_track_verdict" => {
+            let verdict = args.verdict("verdict")?;
+            Command::SetBenchTrackVerdict {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                rows: args.verdict_rows(verdict.is_none())?,
+                verdict,
+            }
+        }
         "apply_bench_track_thresholds" => Command::ApplyBenchTrackThresholds {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
@@ -1330,6 +1333,36 @@ impl Args<'_> {
                     .ok_or_else(|| self.wrong_type(key, expected, value))
             })
             .collect()
+    }
+
+    /// The observations a verdict call names: `observation` alone, or for an
+    /// unpin `observations` instead, as a list of indexes or `"all"`.
+    fn verdict_rows(&self, unpin: bool) -> Result<super::VerdictRows, ToolError> {
+        use super::VerdictRows;
+        let one = self.optional_usize("observation")?;
+        let many = self.map.get("observations").filter(|v| !v.is_null());
+        match (one, many) {
+            (Some(_), Some(_)) => Err(self.error("takes observation or observations, not both.")),
+            (Some(observation), None) => Ok(VerdictRows::One(observation)),
+            (None, Some(_)) if !unpin => Err(self.error(
+                "names several observations only to unpin them; set in or out one \
+                 observation at a time.",
+            )),
+            (None, Some(Value::String(word))) if word == "all" => Ok(VerdictRows::All),
+            (None, Some(value)) if value.is_array() => {
+                Ok(VerdictRows::Listed(self.observations("observations")?))
+            }
+            (None, Some(value)) => Err(self.wrong_type(
+                "observations",
+                "an array of observation indexes, or \"all\"",
+                value,
+            )),
+            (None, None) => Err(self.error(if unpin {
+                "needs observation, or observations to unpin several."
+            } else {
+                "needs observation."
+            })),
+        }
     }
 
     /// A verdict to pin, in the two words the bench spells them with, or

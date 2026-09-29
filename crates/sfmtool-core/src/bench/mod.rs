@@ -94,17 +94,17 @@ pub use steps::{
     add_observation, apply_thresholds, bar_checks, clamp_to_photograph, create_cluster,
     create_track, duplicate, half_width_px, resize_patch, resize_patch_to_pixel, set_verdict,
     shape_observation, sight_observation, spin_patch, split, tilt_patch, translate_patch,
-    translate_patch_to_pixel, unpin_verdict, verdicts_if_unpinned, AddObservationReport, Axis,
+    translate_patch_to_pixel, unpin_verdicts, verdicts_if_unpinned, AddObservationReport, Axis,
     BarCheck, BarChecks, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,
     CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed, ResizeReport,
     ShapeReport, SightReport, SpinReport, SplitError, SplitReport, ThresholdReport, TiltReport,
-    TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, VerdictReport, Viewpoint,
-    MAX_TILT_DEG,
+    TiltStop, TrackEditError, TranslateReport, TranslateToPixelReport, UnpinReport, VerdictReport,
+    Viewpoint, MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,
-    Provenance, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Unmeasured, Verdict,
-    BENCH_MAX_SHIFT_PX, BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS, BENCH_MIN_ZNCC,
+    Provenance, RepaintMark, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload,
+    Unmeasured, Verdict, BENCH_MAX_SHIFT_PX, BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS, BENCH_MIN_ZNCC,
     BENCH_MIN_ZNCC_MIDDLE,
 };
 pub use track_at_pixel::{

@@ -427,7 +427,8 @@ pub struct Observation {
     /// The person's decision.
     pub verdict: Verdict,
     /// Whether the verdict was set by hand. A pinned verdict is left alone by
-    /// [`apply_thresholds`](super::steps::apply_thresholds).
+    /// [`apply_thresholds`](super::steps::apply_thresholds) and by an
+    /// evaluation's repaint; an unpinned one is whatever the bars propose.
     pub pinned: bool,
     /// The cluster stage's slot, filled for an observation the track carried
     /// through that stage.
@@ -778,6 +779,83 @@ pub struct EditableTrack {
     pub origin: Option<Origin>,
     /// The bars the painting judges against.
     pub thresholds: Thresholds,
+    /// Whether the verdicts were set by the repaint of the evaluation that
+    /// took the readings, so the readings were taken under other verdicts.
+    /// See [`RepaintMark`].
+    pub repaint: RepaintMark,
+}
+
+/// That an evaluation's repaint set a track's verdicts after its readings were
+/// taken, which the next evaluation of the same value reads without repainting.
+///
+/// An evaluation paints the bars' verdicts onto every unpinned observation
+/// ([`evaluate`](super::evaluate::evaluate)). The track-stage ZNCC of a row is
+/// scored against the rows that are `in`, so a repaint that changes the `in`
+/// set leaves readings taken under the old one, and the next evaluation reads
+/// the rows again under the new one. Were that evaluation to repaint too, a row
+/// its new reading drops below a bar would be turned out, the one after would
+/// read under that set and could turn it back, and so on. So the evaluation
+/// whose repaint moved a verdict leaves this mark on the track it returns, and
+/// an evaluation of a track carrying it reads without repainting. The table
+/// then settles after one more evaluation, and a row left out of step with the
+/// bars shows as a verdict the bars disagree with until the next edit.
+///
+/// **The mark belongs to the one value the evaluation returned.** Every step
+/// makes its new track by cloning the old one, and a clone does not carry the
+/// mark, so "only the repaint has changed since the readings" is exactly
+/// "this is still the value that evaluation returned". A caller that holds the
+/// track behind an `Arc`, as the bench does, keeps the mark until the next step.
+/// The mark also records the verdicts and pins the repaint left, and is honoured
+/// only while the track still carries them, so a verdict changed in place
+/// rather than by a step is repainted as any other change is.
+///
+/// Equality ignores it: two tracks that differ only in the mark are the same
+/// track.
+#[derive(Debug, Default)]
+pub struct RepaintMark {
+    /// The verdict and pin of each observation as the repaint left them, or
+    /// `None` for no mark.
+    left: Option<Vec<(Verdict, bool)>>,
+}
+
+impl RepaintMark {
+    /// The mark for `track`'s verdicts and pins as they stand.
+    pub(super) fn of(track: &EditableTrack) -> Self {
+        Self {
+            left: Some(verdicts_and_pins(track)),
+        }
+    }
+
+    /// The same mark, for a value that differs from the marked one in nothing
+    /// a reading or a verdict depends on: a step that fuses the consensus
+    /// bitmap where the patch stands carries the mark across with this.
+    pub(super) fn carried(&self) -> Self {
+        Self {
+            left: self.left.clone(),
+        }
+    }
+}
+
+/// A clone is the start of a new value a step is about to change, so it does
+/// not carry the mark.
+impl Clone for RepaintMark {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for RepaintMark {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn verdicts_and_pins(track: &EditableTrack) -> Vec<(Verdict, bool)> {
+    track
+        .observations
+        .iter()
+        .map(|o| (o.verdict, o.pinned))
+        .collect()
 }
 
 impl EditableTrack {
@@ -792,7 +870,18 @@ impl EditableTrack {
             stage: Stage::Cluster(ClusterPayload::default()),
             origin: None,
             thresholds: Thresholds::default(),
+            repaint: RepaintMark::default(),
         }
+    }
+
+    /// Whether the track's verdicts were set by the repaint of the evaluation
+    /// that took its readings, and nothing has changed since: the state an
+    /// evaluation reads without repainting ([`RepaintMark`]).
+    pub fn repainted(&self) -> bool {
+        self.repaint
+            .left
+            .as_ref()
+            .is_some_and(|left| *left == verdicts_and_pins(self))
     }
 
     /// Which stage the track is in.

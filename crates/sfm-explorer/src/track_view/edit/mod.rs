@@ -93,8 +93,10 @@ pub struct TrackEditResponse {
     /// A row's *Keep* switch was clicked: the observation, and the verdict it
     /// switched to.
     pub set_verdict: Option<(usize, Verdict)>,
-    /// A row's *Unpin, let the thresholds decide*, carrying the observation.
-    pub unpin_verdict: Option<usize>,
+    /// Verdicts handed back to the thresholds in one step: a row's pin or
+    /// its *Unpin, let the thresholds decide*, the row menu's unpin of a
+    /// selection, or the *Keep* heading's pin, which names every pinned row.
+    pub unpin_verdicts: Option<Vec<usize>>,
     /// The header's go-to button: open the *Go to Point* dialog.
     pub request_goto_point: bool,
     /// A row was clicked -- select this image, as a view-mode row does.
@@ -1091,6 +1093,7 @@ fn show_header(
 ) -> bool {
     use crate::track_view::header_buttons::{copy_button, goto_button};
     let (kept, out) = track.verdict_counts();
+    let pinned = track.observations.iter().filter(|o| o.pinned).count();
     let mut goto_clicked = false;
     ui.horizontal_wrapped(|ui| {
         match point_id {
@@ -1123,7 +1126,7 @@ fn show_header(
             }
             (Some(_), Some(_)) => {}
         }
-        ui.label(format!("{kept} kept · {out} out"));
+        ui.label(format!("{kept} kept · {out} out · {pinned} pinned"));
     });
     match &track.stage {
         sfmtool_core::bench::Stage::Cluster(payload) => {

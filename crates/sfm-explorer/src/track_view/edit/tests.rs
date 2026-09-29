@@ -239,7 +239,7 @@ fn the_table_has_a_row_per_observation_in_index_order() {
     for (index, row) in rows.iter().enumerate() {
         assert_eq!(row.observation, index, "rows are not in index order");
         assert_eq!(row.verdict, Verdict::In, "a track from a point is all in");
-        assert!(!row.pinned, "a track from a point pins nothing");
+        assert!(row.pinned, "a track from a point arrives pinned");
     }
     assert_eq!(
         rows.iter().map(|row| row.image).collect::<Vec<_>>(),
@@ -826,6 +826,10 @@ fn the_boxes_show_the_active_track_s_bars_outside_a_drag() {
 #[test]
 fn the_boxes_follow_the_active_track_s_own_thresholds() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    // Handed to the bars, so the painting below is every row's proposal.
+    state
+        .unpin_bench_verdicts(id, &label, &[0, 1, 2])
+        .expect("the rows exist");
     let before = state
         .bench_track(id, &label)
         .expect("on the bench")
@@ -1999,18 +2003,18 @@ fn a_pinned_row_offers_to_unpin_from_the_switch_and_from_the_row() {
         open_row_menu(&mut panel, &ctx, &state, at);
         let entry = menu_entry_pos(&mut panel, &ctx, &state, super::table::UNPIN_LABEL);
         let response = at_pointer(&mut panel, &ctx, &state, entry, true);
-        assert_eq!(response.unpin_verdict, Some(0), "from x = {x}");
+        assert_eq!(response.unpin_verdicts, Some(vec![0]), "from x = {x}");
     }
 
     let before = versions(&state, id);
     state
-        .unpin_bench_verdict(id, &label, 0)
+        .unpin_bench_verdicts(id, &label, &[0])
         .expect("observation 0 exists");
     assert_eq!(versions(&state, id), before + 1);
     let track = state.bench_track(id, &label).expect("on the bench");
     assert!(!track.observations[0].pinned);
     state
-        .unpin_bench_verdict(id, &label, 0)
+        .unpin_bench_verdicts(id, &label, &[0])
         .expect("observation 0 exists");
     assert_eq!(
         versions(&state, id),
@@ -2065,6 +2069,11 @@ fn a_track_from_a_point_resolves_the_id_the_header_copies() {
 #[test]
 fn the_pin_pins_a_verdict_and_unpins_a_pinned_one() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    // A point's rows arrive pinned; this one is handed to the bars first.
+    state
+        .unpin_bench_verdicts(id, &label, &[1])
+        .expect("observation 1 exists");
+    run_frame(&mut panel, &ctx, &state);
     let y = row_y(&mut panel, &ctx, &state, 1);
     let pin = egui::pos2(super::table::ColumnLayout::new().keep_x() + 52.0, y + 8.0);
     let response = at_pointer(&mut panel, &ctx, &state, pin, true);
@@ -2078,7 +2087,7 @@ fn the_pin_pins_a_verdict_and_unpins_a_pinned_one() {
         .set_bench_verdict(id, &label, 1, Verdict::In)
         .expect("observation 1 exists");
     let response = at_pointer(&mut panel, &ctx, &state, pin, true);
-    assert_eq!(response.unpin_verdict, Some(1));
+    assert_eq!(response.unpin_verdicts, Some(vec![1]));
     assert_eq!(response.set_verdict, None);
 }
 
@@ -2605,7 +2614,7 @@ fn a_pinned_row_ruled_against_the_bars_shows_what_unpinning_would_give() {
         .apply_bench_thresholds(id, &label, &bars)
         .expect("on the bench");
     state
-        .unpin_bench_verdict(id, &label, 0)
+        .unpin_bench_verdicts(id, &label, &[0])
         .expect("observation 0 exists");
     let track = state.bench_track(id, &label).expect("on the bench");
     assert_eq!(track.observations[0].verdict, Verdict::Out);
@@ -2706,4 +2715,122 @@ fn the_headings_are_as_large_as_the_cells() {
             .unwrap_or_else(|| panic!("{text:?} was not painted"))
     };
     assert_eq!(height("Name"), height("image_000.jpg"));
+}
+
+/// Where the *Keep* heading's pin is drawn: over the rows' pin column, on the
+/// heading's line.
+fn heading_pin_pos(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> egui::Pos2 {
+    let keep = crate::test_support::painted_text_rects(ctx, input(Vec::new()), |ui| {
+        panel.show(ui, state);
+    })
+    .into_iter()
+    .find(|painted| painted.text == "Keep")
+    .expect("the Keep heading was painted")
+    .rect;
+    egui::pos2(
+        super::table::ColumnLayout::new().keep_x() + 52.0,
+        keep.center().y,
+    )
+}
+
+/// The pin in the *Keep* heading unpins every pinned row of the track in one
+/// step, and is greyed once nothing is pinned.
+#[test]
+fn the_keep_heading_pin_unpins_every_pinned_row_and_is_greyed_with_none() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    assert!(
+        panel.rows().iter().all(|row| row.pinned),
+        "a point's rows arrive pinned"
+    );
+    let at = heading_pin_pos(&mut panel, &ctx, &state);
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert_eq!(response.unpin_verdicts, Some(vec![0, 1, 2]));
+    assert_eq!(response.pick_row, None);
+
+    let before = versions(&state, id);
+    state
+        .unpin_bench_verdicts(id, &label, &[0, 1, 2])
+        .expect("the rows exist");
+    assert_eq!(versions(&state, id), before + 1, "one step, one version");
+    run_frame(&mut panel, &ctx, &state);
+    assert!(panel.rows().iter().all(|row| !row.pinned));
+
+    // Nothing is pinned now: the pin is greyed and a click asks for nothing.
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert_eq!(response.unpin_verdicts, None);
+    // And an unpin of rows none of which is pinned pushes no version.
+    state
+        .unpin_bench_verdicts(id, &label, &[0, 1, 2])
+        .expect("the rows exist");
+    assert_eq!(versions(&state, id), before + 1);
+}
+
+/// The heading pin's hover text counts the pins, and says why it is greyed.
+/// A headless frame shows no tooltip, so the text is asked of the function
+/// that writes it.
+#[test]
+fn the_heading_pin_hover_counts_the_pins() {
+    use super::table::unpin_all_hover;
+    assert_eq!(
+        unpin_all_hover(12, None),
+        "Unpin all 12 pinned verdicts and let the bars decide"
+    );
+    assert_eq!(
+        unpin_all_hover(1, None),
+        "Unpin the 1 pinned verdict and let the bars decide"
+    );
+    assert_eq!(unpin_all_hover(4, Some("busy")), "busy");
+    assert!(unpin_all_hover(0, Some("busy")).starts_with("No verdict is pinned"));
+}
+
+/// The header counts the pinned rows beside the kept and the turned out.
+#[test]
+fn the_header_counts_kept_out_and_pinned() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let text = header_text(state.bench_track(id, &label).expect("on the bench"));
+    assert!(text.contains("3 kept · 0 out · 3 pinned"), "{text}");
+    state
+        .unpin_bench_verdicts(id, &label, &[1])
+        .expect("observation 1 exists");
+    let text = header_text(state.bench_track(id, &label).expect("on the bench"));
+    assert!(text.contains(" · 2 pinned"), "{text}");
+}
+
+/// On a row that is one of several selected, the row menu's unpin acts on the
+/// selection: every pinned verdict among the selected rows in one step, with
+/// the count in its label. The *Keep* switch's own menu stays per row.
+#[test]
+fn the_row_menu_unpins_every_pinned_row_of_a_selection() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state
+        .unpin_bench_verdicts(id, &label, &[1])
+        .expect("observation 1 exists");
+    for (observation, extend) in [(0, false), (1, true), (2, true)] {
+        state.pick_bench_observation(id, &label, observation, extend);
+    }
+    run_frame(&mut panel, &ctx, &state);
+
+    let text = super::table::unpin_selection_label(2);
+    assert_eq!(text, "Unpin 2 verdicts, let the thresholds decide");
+    let y = row_y(&mut panel, &ctx, &state, 0);
+    open_row_menu(&mut panel, &ctx, &state, egui::pos2(400.0, y + 8.0));
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, &text);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    let mut rows = response.unpin_verdicts.expect("the entry was taken");
+    rows.sort_unstable();
+    assert_eq!(rows, vec![0, 2], "the pinned rows of the selection");
+
+    let switch = egui::pos2(super::table::ColumnLayout::new().keep_x() + 12.0, y + 8.0);
+    open_row_menu(&mut panel, &ctx, &state, switch);
+    let entry = menu_entry_pos(&mut panel, &ctx, &state, super::table::UNPIN_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert_eq!(response.unpin_verdicts, Some(vec![0]));
+
+    let before = versions(&state, id);
+    state
+        .unpin_bench_verdicts(id, &label, &[0, 2])
+        .expect("the rows exist");
+    assert_eq!(versions(&state, id), before + 1, "one step, one version");
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert!(track.observations.iter().all(|o| !o.pinned));
 }

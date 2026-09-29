@@ -28,11 +28,19 @@
 //! only when its inputs are still the track's.
 //!
 //! **An evaluation pushes no version and writes no Action Log row.** It fills
-//! measurement slots and moves nothing a person put there, so it is installed
+//! measurement slots and sets each unpinned verdict to what the bars propose,
+//! moving nothing a person put there, so it is installed
 //! into the version at the cursor with
 //! [`crate::document::History::replace_current_bench`]. The node is not made
 //! busy by it either: every step stays available while it runs, and a step
 //! taken during it is what cancels it.
+//!
+//! **A repaint that moves a verdict is read once more.** The readings it
+//! returns were taken under the `in` set before the repaint, so the track it
+//! lands carries core's repaint mark
+//! (`sfmtool_core::bench::EditableTrack::repainted`) and is not recorded as
+//! settled; the next frame evaluates it again, and core reads a marked track
+//! without repainting, so that second evaluation settles it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -255,6 +263,14 @@ impl AppState {
                     return;
                 };
                 history.replace_current_bench(Arc::new(next));
+                // A repaint that moved a verdict left readings taken under the
+                // old `in` set, so the track is not settled: the next frame
+                // reads it again, and that evaluation, of a track carrying the
+                // repaint's mark, does not repaint.
+                if track.repainted() {
+                    self.bench_evaluations.settled.remove(&key);
+                    return;
+                }
                 self.bench_evaluations
                     .settled
                     .insert(key, (Inputs { track, ..inputs }, Ok(())));

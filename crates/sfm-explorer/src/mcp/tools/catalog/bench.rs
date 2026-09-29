@@ -520,20 +520,43 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "set_bench_track_verdict",
             description: "Rule on one observation of a bench track by hand, in or out, or hand \
-                          it back to the thresholds with unpin. A verdict set in or out is \
-                          pinned, which is what leaves it alone when the thresholds are applied. \
-                          unpin clears the pin and gives the observation the verdict the \
-                          thresholds propose from its measurements. A track cannot see one image \
+                          verdicts back to the thresholds with unpin. A verdict set in or out is \
+                          pinned, which is what leaves it alone when the thresholds are applied \
+                          and when the track is evaluated. unpin clears the pins and lets the \
+                          bars decide the rows together from their measurements, best score \
+                          first and one in per image. in and out name one observation; unpin \
+                          names one with observation, or several with observations, a list of \
+                          indexes or \"all\", as one version. A track cannot see one image \
                           twice, so turning an observation in while another observation of the \
-                          same image is in is refused. A call that changes nothing pushes no \
-                          version. The reply carries the verdict and the pin the observation \
-                          has afterwards.",
+                          same image is in is refused. A call that changes nothing, such as an \
+                          unpin of rows none of which is pinned, pushes no version. The reply \
+                          carries the verdict and the pin the observation has afterwards, or \
+                          for observations one entry per named row.",
             kind: Write,
             schema: object(
-                &[("track", bench_track_schema())],
+                &[
+                    ("track", bench_track_schema()),
+                    ("observation", observation_schema()),
+                    (
+                        "observations",
+                        json!({
+                            "anyOf": [
+                                {
+                                    "type": "array",
+                                    "items": { "type": "integer", "minimum": 0 },
+                                },
+                                { "type": "string", "enum": ["all"] },
+                            ],
+                            "description":
+                                "Only with verdict unpin, in place of observation: the \
+                                 observations to hand back to the thresholds, by their \
+                                 positions in get_bench_track's list, or \"all\" for every \
+                                 observation of the track.",
+                        }),
+                    ),
+                ],
                 &[
                     ("reconstruction_label", edited_label_schema()),
-                    ("observation", observation_schema()),
                     (
                         "verdict",
                         json!({
@@ -542,8 +565,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "description":
                                 "in: the observation belongs to the track, and a commit writes \
                                  it. out: the track does not keep it; it stays in the list so \
-                                 the refusal is visible. unpin: clear a verdict set by hand and \
-                                 take the one the thresholds propose.",
+                                 the refusal is visible. unpin: clear the verdicts set by hand \
+                                 and take the ones the thresholds propose.",
                         }),
                     ),
                 ],

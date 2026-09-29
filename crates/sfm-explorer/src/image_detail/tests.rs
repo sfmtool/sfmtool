@@ -2525,8 +2525,9 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
             "the slide scrambled a sighting's offset: {offset:?} became {now:?}",
         );
     }
+    // A point's rows arrive pinned, and a translation leaves the pins alone.
     assert!(
-        moved.observations.iter().all(|o| !o.pinned),
+        moved.observations.iter().all(|o| o.pinned),
         "a translation is not a verdict"
     );
     // The outline moved in every image at once: no sighting is where it was.
@@ -2602,7 +2603,10 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
             "the resize scrambled a sighting's offset: {offset:?} became {now:?}",
         );
     }
-    assert!(after.observations.iter().all(|o| !o.pinned));
+    assert!(
+        after.observations.iter().all(|o| o.pinned),
+        "a resize leaves the pins a point's rows arrive with"
+    );
     // Against the outline as it is redrawn -- the patch re-anchored on the
     // sighting the edge was dragged in, which is what the person sees.
     let (redrawn, _, _) = outline_at(&state.scene[0], &after, 0);

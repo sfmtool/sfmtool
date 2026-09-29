@@ -15,7 +15,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::*;
 use crate::bench::track::{
-    ClusterMeasurement, ClusterPayload, Observation, Stage, Thresholds, Verdict,
+    ClusterMeasurement, ClusterPayload, Observation, RepaintMark, Stage, Thresholds, Verdict,
 };
 use crate::features::kdforest::{
     FeatureGeometry, FeatureOrigin, KdForestParams, KdForestU8, KdfSiftSources,
@@ -264,6 +264,7 @@ fn track(also_in: &[u32]) -> EditableTrack {
         stage: Stage::Cluster(ClusterPayload::default()),
         origin: None,
         thresholds: Thresholds::default(),
+        repaint: RepaintMark::default(),
     }
 }
 

@@ -1663,8 +1663,18 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
         "{turned}"
     );
 
-    // The first call pins the verdict the observation carries, which is a
-    // change; the second finds it pinned already.
+    // A point's rows arrive pinned, so the row is handed to the bars first.
+    // Then the first call pins the verdict the observation carries, which is
+    // a change; the second finds it pinned already.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "verdict": "unpin",
+        }),
+    );
     let verdict_call = |state: &mut _, viewer: &mut _| {
         call(
             state,
@@ -1735,11 +1745,11 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
         "{again}"
     );
 
-    // One version for the pin and one for the drag that did something, and
-    // none for the rest.
+    // One version for the unpin, one for the pin and one for the drag that did
+    // something, and none for the rest.
     assert_eq!(
         version_count(&state),
-        before + 2,
+        before + 3,
         "a no-effect step pushed a version"
     );
 }

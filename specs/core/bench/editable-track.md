@@ -66,7 +66,17 @@ pub struct EditableTrack {
     pub stage: Stage,
     pub origin: Option<Origin>,
     pub thresholds: Thresholds,
+    pub repaint: RepaintMark,     // set by an evaluation whose repaint moved a verdict
 }
+
+impl EditableTrack {
+    /// Whether the verdicts were set by the repaint of the evaluation that
+    /// took the readings, and nothing has changed since.
+    pub fn repainted(&self) -> bool;
+}
+
+pub struct RepaintMark { /* the verdicts and pins the repaint left */ }
+// Clone gives an empty mark; equality ignores it.
 
 pub struct Observation {
     pub image: u32,
@@ -176,10 +186,17 @@ pub fn set_verdict(
     verdict: Verdict,
 ) -> Result<(EditableTrack, VerdictReport), TrackEditError>;
 
-pub fn unpin_verdict(
+pub fn unpin_verdicts(
     track: &EditableTrack,
-    observation: usize,
-) -> Result<(EditableTrack, VerdictReport), TrackEditError>;
+    observations: &[usize],
+) -> Result<(EditableTrack, UnpinReport), TrackEditError>;
+
+pub struct UnpinReport {
+    pub unpinned: usize,     // pins cleared
+    pub turned_in: usize,    // by the bars, deciding the rows together
+    pub turned_out: usize,
+    pub changed: bool,       // false exactly when none of the rows was pinned
+}
 
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
 
@@ -548,6 +565,8 @@ pub struct EvaluateReport {
     pub position: Option<Point3<f64>>,   // where the track stands; a bearing at w = 0
     pub at_infinity: bool,               // which of the two that coordinate is
     pub condition_number: Option<f64>,
+    pub turned_in: usize,                // what the repaint after the reading moved
+    pub turned_out: usize,
 }
 
 pub struct FitReport {
@@ -665,7 +684,9 @@ pipeline is that here the numbers are shown and the person decides.
 
 **Reading and moving are two steps, not one.** `evaluate` is a measurement of
 the track as it stands: it fills the measurement slots and leaves the position,
-the frame, the bitmap, every keypoint and every verdict exactly as they were.
+the frame, the bitmap and every keypoint exactly as they were. The one thing it
+sets beyond the readings is each unpinned verdict, to what the bars say about
+those readings (§ "Evaluating").
 `fit` is the modification, and it **ends by calling `evaluate` on its own
 result**, so the numbers a fit leaves behind are a reading's numbers and the two
 steps can never give two accounts of one track. A person asking "is this track
@@ -743,14 +764,17 @@ photograph" as an infinite shift and that signal still has to land.
 
 ```rust
 use sfmtool_core::bench::{
-    apply_thresholds, commit, create_track, set_verdict, Bench, CreateTrackOptions, Verdict,
+    apply_thresholds, commit, create_track, set_verdict, unpin_verdicts, Bench,
+    CreateTrackOptions, Verdict,
 };
 
 let bench = Bench::new();
 let (bench, report) = create_track(&bench, &edited, 1207, &CreateTrackOptions::default())?;
 let track = bench.track(&report.label).expect("just put on");
 
-let (track, _) = set_verdict(track, 3, Verdict::Out)?;   // this photograph is not it
+let every: Vec<usize> = (0..track.observations.len()).collect();
+let (track, _) = unpin_verdicts(track, &every)?;         // the point's rows, to the bars
+let (track, _) = set_verdict(&track, 3, Verdict::Out)?;  // this photograph is not it
 let (track, painted) = apply_thresholds(&track);          // the rest, from the numbers
 println!("{} in, {} out", painted.turned_in, painted.turned_out);
 
@@ -784,8 +808,9 @@ over and what a commit writes. `out` is every other observation: one added and
 not yet measured, one the thresholds did not take, or one the person refused.
 It stays in the list so a later search does not propose it again and so the
 refusal stays visible. **A pin** says the verdict was set by hand, and the
-thresholds leave a pinned verdict where it is; an unpinned `out` is one nobody
-has ruled on.
+thresholds leave a pinned verdict where it is. **Unpinned means the bars
+decide**: every evaluation and every threshold painting sets an unpinned verdict
+to what the bars propose, so an unpinned `out` is one nobody has ruled on.
 
 **One `in` observation per image.** A track cannot observe an image twice. A
 second observation in an image already held is allowed, and is shown and scored
@@ -1211,8 +1236,10 @@ bar.
 
 `create_track` reads the point through the reconstruction's overlay and builds a
 track-stage track from it: the point's own frame, bitmap, colour and keypoints,
-its origin set to that point, and every observation `in` and unpinned. **Nothing
-is recomputed.** The leave-one-out ZNCC is `observation_confidence` read back out
+its origin set to that point, and every observation `in` and **pinned**. The
+point's observations are ones a reconstruction already decided on, so they stand
+as that decision until a person hands them to the bars with `unpin_verdicts`;
+an evaluation's repaint does not move them. **Nothing is recomputed.** The leave-one-out ZNCC is `observation_confidence` read back out
 of its byte scale where the column exists, and every measurement an evaluation
 would produce is left unmeasured, so putting a track on the bench and doing
 nothing shows the numbers the reconstruction already holds plus the verdict
@@ -1225,7 +1252,8 @@ back.
 ### Starting a cluster
 
 `create_cluster` puts a new cluster-stage track on the bench with one
-observation, which is also its reference and is `in`. The seed is a pixel with a
+observation, which is also its reference and is `in` and pinned: it is what the
+person pointed at, so no evaluation turns it out however it reads. The seed is a pixel with a
 half-width in pixels (`ClusterSeed::from_pixel`, for the patch every detector
 missed, where nothing says how large the patch is so the caller names it) or a
 `.sift` feature with its own position and shape (`ClusterSeed::from_feature`).
@@ -1238,7 +1266,9 @@ minted from it.
 
 `add_observation` appends an `out` observation, unpinned, with a cluster seed
 at the named pixel. The evaluation that first measures it turns it `in` when it
-clears the thresholds (§ "Evaluating"). The shape defaults to the reference observation's own, so a pixel
+clears the thresholds, through the repaint every evaluation makes (§
+"Evaluating"). Rows a descriptor search, a geometry search or the far-field
+sweep add arrive the same way. The shape defaults to the reference observation's own, so a pixel
 gesture on a track that already has a scale needs no radius prompt and lands at
 that track's size. With no reference to copy it is the identity, which is one
 pixel to the keypoint-frame unit: a patch of `[-radius, radius]` pixels, and
@@ -1259,10 +1289,15 @@ alone: a cluster has no keypoints.
 
 `set_verdict` sets one verdict **by hand** and pins it. Setting the verdict an
 observation already carries still pins it, which is a change when it was not
-pinned. `unpin_verdict` is the way back: it clears the pin and gives the
-observation the verdict the thresholds propose from its stored measurements,
-`in` only when no other `in` observation holds its image; an observation
-nothing has measured keeps its verdict. `apply_thresholds` paints the proposed
+pinned. `unpin_verdicts` is the way back, for one row or many in one step: it
+clears the pins of the named rows and then paints the bars' verdicts onto every
+unpinned row, as `apply_thresholds` does, so the rows it hands back are decided
+together, best score first and one `in` per image. Unpinning them one at a time
+would decide each while the others were still pinned: of two rows of one image,
+the first unpinned would take the image from the other still pinned `out`,
+whichever scored better. An observation nothing has measured keeps its verdict.
+An unpin none of whose rows is pinned changes nothing and reports
+`changed: false`, so a caller pushes no version for it. `apply_thresholds` paints the proposed
 verdicts from the stored measurements onto the unpinned observations, and
 leaves a pinned one where it is. An observation nothing has measured at the
 track's current stage is left alone: there is no proposal to apply. An
@@ -1280,15 +1315,15 @@ nothing at the stage has measured. A bar does not judge a reading that is not
 there, and the middle bar at `0` judges nothing; a reading nobody judged clears
 its bar. A `NaN` reading fails. The thresholds propose `in` for an observation
 exactly when no bar fails it (`BarChecks::clears_every_bar`) and its image is
-free, so the painting, `unpin_verdict`, the first reading's turn `in`, and a
+free, so the painting, `unpin_verdicts`, an evaluation's repaint, and a
 viewer that colours each reading by its bar all read the same judgement, and a
 reading shown as passing cannot sit on a row the painting turns out for that
 reading.
 
 `verdicts_if_unpinned` is what the thresholds propose for every observation
 whatever the person decided: for an unpinned one the verdict `apply_thresholds`
-gives it, and for a pinned one the verdict `unpin_verdict` followed by
-`apply_thresholds` would give it. That second case judges the one row as
+gives it, and for a pinned one the verdict `unpin_verdicts` of that row alone
+would give it. That second case judges the one row as
 though it were unpinned while every other pin stands, so the row takes its
 image's `in` only when no pinned `in` sighting of that image holds it and no
 unpinned sighting of that image that the painting takes scores better. A
@@ -1740,20 +1775,48 @@ basis.
 
 `evaluate` fills the measurement slots of every observation at the stage the
 track is in, whatever its verdict, and **moves nothing else**: the position, the
-frame, the bitmap and every keypoint come back as they went in, and so does
-every verdict but one kind. An `out` observation is scored the way an `in` one
-is, so a refusal is shown beside the number it would have been judged on and a
-box can propose taking it back.
+frame, the bitmap and every keypoint come back as they went in. An `out`
+observation is scored the way an `in` one is, so a refusal is shown beside the
+number it would have been judged on and a box can propose taking it back.
 
-**An added observation's first reading can take it in.** An observation that is
-`out`, unpinned, and unmeasured at this stage before the call, and that clears
-every bar once measured, is turned `in`, best score first, when no `in`
-observation holds its image. That is how a row a search or a pixel gesture
-added joins the track without a person turning it in. Nothing is turned `out`,
-so a track put on the bench from a point, which arrives `in` and unmeasured,
-keeps the point's verdicts. The measurements came from the round that read the
-new row `out`, so the next evaluation reads the new `in` set; it has no first
-readings of its own, so it turns nothing and the two settle.
+**Then the bars decide every unpinned verdict.** The readings are painted onto
+the unpinned rows exactly as `apply_thresholds` paints them, in both directions,
+best score first and one `in` per image, and `EvaluateReport::turned_in` and
+`turned_out` say what moved. An unpinned verdict is therefore always what the
+bars say about the latest reading: a row a search or a pixel gesture added joins
+the track when its first reading clears every bar, a row a step moved past a bar
+is turned out by the evaluation that follows, and one a fit moved back within
+the bars is turned in again. A pinned verdict is never moved, which is why a
+point's rows arrive pinned.
+
+**An evaluation that only follows a repaint does not repaint again.** A
+track-stage reading is a leave-one-out score against the rows that are `in`, so
+a repaint that changes the `in` set leaves readings taken under the set before
+it. The next reading can then say something different about other rows, and were
+it to repaint too, a row turned `in` could drop another below a bar, that one's
+turn could move the first back, and the table would flip without end. So the
+evaluation whose repaint moved a verdict marks the track it returns
+(`EditableTrack::repaint`), and an evaluation of a track that carries the mark
+(`EditableTrack::repainted`) reads the rows under the new set and leaves every
+verdict where it is. The table settles after at most one extra reading; a row
+that reading puts out of step with the bars shows as a verdict the bars
+disagree with, and the next step's evaluation repaints it.
+
+The mark has to say "nothing but the repaint has changed since the readings
+were taken", and it does so by belonging to the one value the evaluation
+returned. Every step makes its new track by cloning the old one, and cloning a
+`RepaintMark` gives an empty one, so any step, whether it moves a patch, changes
+a bar or sets a verdict, hands the next evaluation an unmarked track that is
+repainted as usual. A caller that holds the returned track behind an `Arc`, as
+the bench does, passes the marked value itself to the next evaluation. The mark
+also records the verdicts and pins the repaint left and is honoured only while
+the track still carries them, so a verdict changed in place rather than by a
+step does not inherit it. `fuse_bitmap_in_place` carries the mark across,
+because the bitmap is nothing a reading or a verdict depends on. Equality
+ignores the mark. The two alternatives this rules out: comparing the whole track
+with the one the evaluation returned fails on a `NaN` in a self-similarity
+surface, and comparing only the `in` set cannot tell the repaint from a step
+that kept the verdicts and moved a patch.
 
 **At the cluster stage** every observation's seed is a member of an in-memory
 `.matches` cluster, and
@@ -2307,7 +2370,7 @@ builds, wrapped as an
 `embedded_patches` reconstruction whose stored keypoints are the exact
 projections, so what a commit should have written is known to the pixel. It
 covers: a point put on the bench being at the track stage with every observation
-`in` and the stored numbers carried; an observation added at the track stage
+`in` and pinned and the stored numbers carried; an observation added at the track stage
 carrying its pixel as its keypoint and committing without a fit, and one added at
 the cluster stage carrying a seed alone; two observations in one image not both
 being `in`; the painting proposing from the measurements, leaving a pinned
@@ -2315,7 +2378,14 @@ verdict alone and giving one image one `in`; `bar_checks` passing and failing
 each bar, failing a `NaN`, and judging neither a missing reading nor the middle
 bar at `0`; `verdicts_if_unpinned` giving an unpinned row the painting's verdict
 and a pinned one, `in` or `out`, with and without a competing sighting in its
-image, exactly what unpinning it and applying the thresholds makes it; a split taking exactly the named
+image, exactly what unpinning it and applying the thresholds makes it;
+`unpin_verdicts` handing rows back together, so of two rows of one image the
+better-scoring one takes the image whichever is named first, and changing
+nothing when none of its rows is pinned; an evaluation taking in an added row
+that clears the bars, turning out an unpinned row moved past the shift bar and
+taking it back in after a fit moves it within the bar, reading a track its own
+repaint marked without repainting it, and leaving a point's pinned rows `in`
+whatever the bars say; a split taking exactly the named
 observations, handing the half it takes off back as a cluster, and refusing an
 empty list or all of them; a duplicate carrying every observation and all of the
 stage's data, dropping the origin so its commit creates a point rather than

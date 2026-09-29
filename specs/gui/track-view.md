@@ -108,7 +108,7 @@ pub struct TrackEditResponse {
     pub search_descriptors: Option<usize>,  // Find matches by SIFT query
     pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
     pub set_verdict: Option<(usize, Verdict)>, // a row's Keep switch, or its pin pinning
-    pub unpin_verdict: Option<usize>,          // its pin unpinning, or Unpin in a menu
+    pub unpin_verdicts: Option<Vec<usize>>,    // a pin, Unpin in a menu, or the Keep heading's pin
     pub request_goto_point: bool,              // the header's go-to button
     pub select_image: Option<usize>,
     pub request_camera_view: Option<usize>,
@@ -536,7 +536,8 @@ tiles it has rendered, and the bars' judgement of each row.
 
 #### The header
 
-The active track's label, its stage as a word, and `N kept · K out`. When the
+The active track's label, its stage as a word, and `N kept · K out · P
+pinned`. When the
 point the track was read from is still in the version at the cursor, its
 portable Point ID follows the label with the two icon buttons view mode's
 header draws beside an ID: copy it, and open *Go to Point*, so an ID copied
@@ -730,7 +731,17 @@ cells' own body size, in the weak text colour so they still read as headings.
 Each heading has hover text over the width of its column, running to where the
 next heading starts, saying what the column holds; the *Keep* heading's says
 what a kept observation is used for, when the thresholds set the switch, what a
-click on the switch and on the pin does, and what the cell's colour means. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
+click on the switch, on the pin and on the heading's own pin does, and what the
+cell's colour means.
+
+**The *Keep* heading carries a pin** over the rows' pin column. Clicking it
+unpins every pinned row of the active track in one step
+(`AppState::unpin_bench_verdicts`, core's `unpin_verdicts`), one version and one
+`Bench` row. It is drawn solid while any row is pinned and as an outline when
+none is, and its hover text counts them: *Unpin all 12 pinned verdicts and let
+the bars decide*. It is greyed with nothing pinned, and while the node is busy
+with the same busy sentence the threshold boxes carry, since the step would be
+refused. The *ZNCC* heading's says what a ZNCC is, that `whole` is over the
 whole patch and `mid` over its middle half, what the two apart mean, and how
 the grid beside them is coloured. The *Self-similarity* heading's
 says what the radius is and what its two readings, its colours and its lines
@@ -956,11 +967,19 @@ image is kept, naming the image.
 
 **The Keep switch is the verdict.** On is `in`: the evaluation and a fit read
 the track by the observation, and a commit writes it. Off is `out`. The
-thresholds set it for every unpinned row when a threshold box is let go, and a
-row added by a search or a pixel gesture joins `out` and is switched on by the
-evaluation that first measures it when it clears the bars
+thresholds set it for every unpinned row when a threshold box is let go and on
+every evaluation, so an unpinned row's switch follows its latest reading in
+both directions: a row added by a search or a pixel gesture joins `out` and is
+switched on by the evaluation that first measures it when it clears the bars, a
+row moved past a bar is switched off, and one a *Fit* moves back within the bars
+is switched on again
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
-"Evaluating"). A click sets the other verdict by hand and pins it. The switch's
+"Evaluating"). The switch and the cell's colour then agree on an unpinned row.
+The one exception is the reading that follows a repaint, which does not repaint
+again so the table settles; a row it leaves out of step shows as a switch
+disagreeing with its colour until the next step. A track put on the bench from
+a point arrives with every row pinned `in`, so its verdicts stand until they are
+unpinned. A click sets the other verdict by hand and pins it. The switch's
 part of the cell, the whole height of the row, takes the click, since a
 switch's own few points are a small target. There is no third state: a row
 nobody has ruled on is an unpinned `out`.
@@ -988,13 +1007,17 @@ something was marked, and the control sits where the state is shown.
   the switch after it, so the switch keeps its own click. Turning a row `in`
   while another row of its image is `in` is refused with core's sentence.
 - **Click the pin**: on a pinned row, clear the pin and give the row the
-  verdict the bars propose (`AppState::unpin_bench_verdict`, core's
-  `unpin_verdict`); on an unpinned row, pin the verdict it carries
+  verdict the bars propose (`AppState::unpin_bench_verdicts`, core's
+  `unpin_verdicts`); on an unpinned row, pin the verdict it carries
   (`AppState::set_bench_verdict` with that verdict). One version and one
   `Bench` row either way.
 - **Right-click the Keep switch**, or the row: *Unpin, let the thresholds
   decide*, the same unpinning as a click on a solid pin, on a pinned row only
-  (greyed on the others).
+  (greyed on the others). On a row that is one of several selected, the row's
+  menu acts on the selection instead: *Unpin 4 verdicts, let the thresholds
+  decide* unpins every pinned row among the selected in one step, so the bars
+  decide them together, and is greyed when none of them is pinned. The *Keep*
+  switch's own menu stays with its row.
 - **Hover a row**: set the cross-panel hover.
 - **Right-click a row**: the searches the stage offers. *Find matches by SIFT
   query* runs the descriptor search from that observation
@@ -1157,7 +1180,12 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   and turning a kept row out; a click on the pin pinning an unpinned row's
   verdict as it stands and unpinning a pinned one, and *Unpin* offered from the
   switch's menu
-  and the row's, a second unpin being no effect; the header printing the point's
+  and the row's, a second unpin being no effect; the row menu on a row of a
+  multi-row selection unpinning every pinned selected row with the count in its
+  label, while the switch's menu names its row alone; the *Keep* heading's pin
+  unpinning every pinned row as one version and asking for nothing once none is
+  pinned, and its hover text counting the pins; the header counting kept, out
+  and pinned rows; the header printing the point's
   ID once, beside a renamed label, and the old index for a point that is gone,
   and a track from a point resolving the ID its copy button copies; a hover on
   an elided name showing it whole, with the row still hovered; the *Keep*

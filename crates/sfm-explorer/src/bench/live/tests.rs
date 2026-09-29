@@ -340,3 +340,52 @@ fn a_tilt_drops_the_bitmap_and_the_evaluation_fuses_it_again_where_the_patch_now
         "fusing the bitmap pushed a version"
     );
 }
+
+#[test]
+fn an_evaluation_whose_repaint_moved_a_verdict_is_read_once_more_and_then_settles() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    // Hand every row to the bars, and set bars no reading clears while nothing
+    // is measured, so the first evaluation's repaint turns every row out.
+    let rows: Vec<usize> = (0..track(&state, id, &label).observations.len()).collect();
+    state
+        .unpin_bench_verdicts(id, &label, &rows)
+        .expect("the rows exist");
+    let mut bars = track(&state, id, &label).thresholds.clone();
+    bars.min_zncc = 1.1;
+    state
+        .apply_bench_thresholds(id, &label, &bars)
+        .expect("a track on the bench");
+    let before = versions(&state, id);
+
+    state.drive_bench_evaluation();
+    state.land_running_evaluation();
+    let repainted = track(&state, id, &label);
+    assert_eq!(
+        repainted.verdict_counts().0,
+        0,
+        "the repaint turned them out"
+    );
+    assert!(repainted.repainted());
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "readings taken under the old verdicts are not current"
+    );
+
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(id, &label));
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    let settled = track(&state, id, &label);
+    assert!(!settled.repainted());
+    assert_eq!(settled.verdict_counts().0, 0);
+    assert_eq!(
+        versions(&state, id),
+        before,
+        "no evaluation pushed a version"
+    );
+}

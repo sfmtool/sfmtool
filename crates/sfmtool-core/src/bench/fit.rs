@@ -385,7 +385,23 @@ pub fn fit(
 /// A cluster, a track with no placement, and one with fewer than two `in`
 /// sightings that carry a keypoint come back unchanged, since there is no
 /// consensus to fuse.
+///
+/// The track's [`RepaintMark`](super::track::RepaintMark) comes across: the
+/// bitmap is nothing a reading or a verdict depends on, so an evaluation whose
+/// answer is fused here still hands on what its repaint did.
 pub fn fuse_bitmap_in_place(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitOptions,
+) -> EditableTrack {
+    let mut next = fused_in_place(track, edited, images, options);
+    next.repaint = track.repaint.carried();
+    next
+}
+
+/// [`fuse_bitmap_in_place`] before the mark is carried across.
+fn fused_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
