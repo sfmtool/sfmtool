@@ -1139,9 +1139,9 @@ The two lower entries are offered whatever backs the node's observations,
 because a bench track is seeds in one image's pixels until it is
 committed. Starting a cluster needs nothing but a pixel and a node no background
 task is holding; adding to the bench track is greyed until an item is focused,
-with *"No track is being edited: tick Edit in Track View, or double-click a
-Bench item in the Scene tree."*, since a bench with items on it can have none
-focused. An image the focused item already holds a sighting in is not a
+with *"No track is being edited: tick Edit in Track View, click a recent item
+beside it, or double-click a Bench item in the Scene tree."*, since a bench
+with items on it can have none focused. An image the focused item already holds a sighting in is not a
 refusal -- a second one joins unpinned and `out` and is scored like any other, and
 it is the `in` verdict a track cannot hold twice
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)). A busy

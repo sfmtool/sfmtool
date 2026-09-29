@@ -63,6 +63,7 @@ mod tile;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use patch::track_patch_image;
 pub(crate) use table::RowSummary;
 
 /// Display size of the track's own patch, left of the toolbar.
@@ -933,17 +934,7 @@ impl TrackBody {
         track: &EditableTrack,
     ) -> Option<egui::TextureId> {
         let texture = self.track_patch.get_or_insert_with(|| {
-            let image = match &track.stage {
-                sfmtool_core::bench::Stage::Track(payload) => {
-                    patch::stored_patch_image(payload.bitmap.as_ref()?.view())
-                }
-                sfmtool_core::bench::Stage::Cluster(payload) => {
-                    let samples = &payload.template.as_ref()?.samples;
-                    let shape = samples.shape();
-                    let grid: Vec<f32> = samples.iter().copied().collect();
-                    Some(tile::color_image(&grid, shape[0], shape[2]))
-                }
-            }?;
+            let image = patch::track_patch_image(track)?;
             Some(ctx.load_texture(
                 format!("bench_track_patch_{label}"),
                 image,
@@ -1775,23 +1766,37 @@ fn show_headline(ui: &mut egui::Ui, track: &EditableTrack) {
             // The track's own flag and not its patch's `w`: a point put on the
             // bench from a node that stores no patch frames has no patch to read
             // a `w` off, and a bearing it came from is still a bearing.
-            let at_infinity = payload.at_infinity;
             ui.weak(match payload.position {
-                Some(position) => format!(
-                    "{} ({:.3}, {:.3}, {:.3}){}{}",
-                    if at_infinity { "Bearing" } else { "Position" },
-                    position.x,
-                    position.y,
-                    position.z,
-                    if at_infinity { ", at infinity" } else { "" },
+                Some(_) => format!(
+                    "{}{}",
+                    position_text(payload),
                     match payload.condition_number {
                         Some(condition) => format!(", condition {condition:.1}"),
                         None => String::new(),
                     }
                 ),
-                None => "No position: nothing has triangulated this track yet".to_string(),
+                None => position_text(payload),
             });
         }
+    }
+}
+
+/// Where a track-stage track is: `Position (x, y, z)`, `Bearing (x, y, z), at
+/// infinity`, or the sentence saying nothing has triangulated it yet. The
+/// headline prints it with the condition number after it, and a recent item's
+/// hover text prints it alone.
+pub(crate) fn position_text(payload: &sfmtool_core::bench::TrackPayload) -> String {
+    let at_infinity = payload.at_infinity;
+    match payload.position {
+        Some(position) => format!(
+            "{} ({:.3}, {:.3}, {:.3}){}",
+            if at_infinity { "Bearing" } else { "Position" },
+            position.x,
+            position.y,
+            position.z,
+            if at_infinity { ", at infinity" } else { "" },
+        ),
+        None => "No position: nothing has triangulated this track yet".to_string(),
     }
 }
 

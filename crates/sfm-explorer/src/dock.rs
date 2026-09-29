@@ -887,6 +887,13 @@ impl TabContext<'_> {
                 self.state.action_log.fail(Kind::Bench, why);
             }
         }
+        // A chip in the recent items strip: focus its item, which selects the
+        // item's node and origin. No version, so a busy node does not refuse it.
+        if let Some((node, label)) = &response.focus_item {
+            if let Err(why) = self.state.focus_bench_item(*node, label) {
+                self.state.action_log.fail(Kind::Selection, why);
+            }
+        }
         let Some(body) = response.body else {
             return;
         };

@@ -174,8 +174,8 @@ pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), St
     }
     if bench.focused_track.is_none() {
         return Err(
-            "No track is being edited: tick Edit in Track View, or double-click a \
-                    Bench item in the Scene tree."
+            "No track is being edited: tick Edit in Track View, click a recent item \
+             beside it, or double-click a Bench item in the Scene tree."
                 .to_string(),
         );
     }

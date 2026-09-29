@@ -6,7 +6,9 @@
 //! See `specs/gui/track-view.md`. The panel's first row is the **Edit**
 //! checkbox, and it is a reading of the focused item rather than a setting: it
 //! is ticked exactly while the focused item is on the selected node's bench
-//! ([`AppState::focused_item_label`]). Below it the panel draws one body
+//! ([`AppState::focused_item_label`]). To its right on the same row is the
+//! recent items strip ([`recent`]), the items most recently focused, each one
+//! click from being focused again. Below them the panel draws one body
 //! ([`body`]) in one of two modes:
 //!
 //! - **Viewed**, with the box clear and a point selected: the viewed track,
@@ -16,20 +18,21 @@
 //!
 //! With the box clear and no point selected, the panel draws the empty state:
 //! *No point selected*, *Go to Point...*, and a line about the bench. What this
-//! module adds to the body is the checkbox, that empty state, and the choice
-//! between them.
+//! module adds to the body is the checkbox, the strip, that empty state, and
+//! the choice between them.
 //!
 //! While an item is focused, the selected point is its origin or no point
 //! (`AppState::select_point` unfocuses the item on any other), so Edited mode
 //! never shows one track while the selection names another.
 //!
-//! The panel decides nothing. Ticking the box and clearing it land in
-//! [`TrackViewResponse`], and the dock applies them through
+//! The panel decides nothing. Ticking the box, clearing it and clicking a chip
+//! land in [`TrackViewResponse`], and the dock applies them through
 //! `AppState`, for the reason every panel's response works that way: the panel
 //! holds `&AppState` while it draws.
 
 pub(crate) mod body;
 mod header_buttons;
+mod recent;
 
 #[cfg(test)]
 mod tests;
@@ -69,11 +72,15 @@ pub(crate) struct TrackViewResponse {
     pub set_edit: Option<bool>,
     /// What the body, or the empty state in its place, reported.
     pub body: Option<TrackBodyResponse>,
+    /// A chip in the recent items strip was clicked: the item to focus, as
+    /// its node and its label, for `AppState::focus_bench_item`.
+    pub focus_item: Option<(crate::scene::ReconId, String)>,
 }
 
-/// Track View panel state: the body it draws.
+/// Track View panel state: the body it draws, and the recent items strip.
 pub(crate) struct TrackView {
     body: TrackBody,
+    recent: recent::RecentStrip,
 }
 
 impl Default for TrackView {
@@ -86,6 +93,7 @@ impl TrackView {
     pub(crate) fn new() -> Self {
         Self {
             body: TrackBody::new(),
+            recent: recent::RecentStrip::default(),
         }
     }
 
@@ -93,6 +101,12 @@ impl TrackView {
     #[cfg(test)]
     pub(crate) fn body(&self) -> &TrackBody {
         &self.body
+    }
+
+    /// The recent items strip's state, for the tests that read what it drew.
+    #[cfg(test)]
+    pub(crate) fn recent(&self) -> &recent::RecentStrip {
+        &self.recent
     }
 
     /// Whether Edited mode's *Lock* box is ticked, which Image Detail reads a
@@ -150,17 +164,22 @@ impl TrackView {
             (false, None, Some((_, label))) => again_hint(label),
             (false, _, _) => "Put the selected point's track on the bench and edit it".to_string(),
         };
-        let checkbox = ui.add_enabled(
-            refusal.is_none(),
-            egui::Checkbox::new(&mut checked, EDIT_LABEL),
-        );
-        let checkbox = match &refusal {
-            Some(why) => checkbox.on_disabled_hover_text(why),
-            None => checkbox.on_hover_text(hint),
-        };
-        if checkbox.changed() {
-            response.set_edit = Some(checked);
-        }
+        // The box, and the recent items strip in the rest of its row.
+        ui.horizontal(|ui| {
+            let checkbox = ui.add_enabled(
+                refusal.is_none(),
+                egui::Checkbox::new(&mut checked, EDIT_LABEL),
+            );
+            let checkbox = match &refusal {
+                Some(why) => checkbox.on_disabled_hover_text(why),
+                None => checkbox.on_hover_text(hint),
+            };
+            if checkbox.changed() {
+                response.set_edit = Some(checked);
+            }
+            ui.add_space(8.0);
+            response.focus_item = self.recent.show(ui, state);
+        });
         ui.separator();
 
         let viewed = selected_point.is_some() && state.viewed_track().is_some();
@@ -239,8 +258,8 @@ pub(crate) fn again_hint(label: &str) -> String {
 fn bench_note(items: usize, recent: Option<&str>) -> String {
     if let Some(label) = recent {
         return format!(
-            "Tick {EDIT_LABEL} to edit {label} again, or double-click an item in the Scene \
-             tree's Bench groups."
+            "Tick {EDIT_LABEL} to edit {label} again, click a recent item beside it, or \
+             double-click an item in the Scene tree's Bench groups."
         );
     }
     match items {

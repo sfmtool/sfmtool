@@ -18,7 +18,9 @@ current as it changes.
 The panel has an explicit mode so that it always says which of the two things is
 on screen, and it does not list the bench: the Scene tree already lists each
 node's bench in two groups that say which stage each item is at, and a
-double-click there is the way into editing an item.
+double-click there is the way into editing an item. What the panel does keep,
+beside the box, is a strip of the few items most recently edited, so the way
+back to one of them is one click.
 
 Related specs: [`bench.md`](bench.md) (the bench, the versions its steps push,
 the viewed track and the Scene tree groups),
@@ -41,13 +43,16 @@ change, both searches and the index build run), and
 
 The panel is [track_view/](../../crates/sfm-explorer/src/track_view/):
 [mod.rs](../../crates/sfm-explorer/src/track_view/mod.rs) holds the checkbox,
-the empty state and the choice between them and the body, and
+the empty state and the choice between them and the body,
+[recent.rs](../../crates/sfm-explorer/src/track_view/recent.rs) is the recent
+items strip, and
 [body/](../../crates/sfm-explorer/src/track_view/body/) is the one body that
 draws both modes: `mod.rs` the header, the toolbar and the boxes, `table.rs` the
 observation table, `tile.rs` the tile each row draws and its hover view,
 `crop.rs` the crop of the photograph beside the tile and its hover view,
 `surface_plot.rs` the self-similarity surface plot, and `patch.rs` the warp a
-track-stage tile is rendered through and the stored bitmap's conversion. The
+track-stage tile is rendered through and the picture of a track's own patch,
+which the header and the strip both draw. The
 viewed track is [bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs).
 The bench steps the body reports are `AppState` methods in
 [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock applies them in
@@ -56,6 +61,7 @@ The bench steps the body reports are `AppState` methods in
 ```rust
 pub(crate) struct TrackView {
     body: TrackBody,
+    recent: RecentStrip, // the chips' uploaded patches, keyed by item and track Arc
 }
 
 impl TrackView {
@@ -74,6 +80,8 @@ pub(crate) struct TrackViewResponse {
     /// What the body reported, or the empty state in its place; `None` only
     /// with no reconstruction selected.
     pub body: Option<TrackBodyResponse>,
+    /// A chip in the recent items strip clicked: its item's node and label.
+    pub focus_item: Option<(ReconId, String)>,
 }
 
 pub(crate) enum BodyMode {
@@ -149,6 +157,9 @@ state.refresh_viewed_track();
 let response = track_view.show(ui, state);
 if let Some(on) = response.set_edit {
     state.set_editing(id, on)?;         // a put is a bench step, refused in its own words
+}
+if let Some((node, label)) = &response.focus_item {
+    state.focus_bench_item(*node, label)?; // a chip: no version, never busy-refused
 }
 match response.body.and_then(|b| b.mode) {
     Some(BodyMode::Edited) => { /* each step on the focused item */ }
@@ -230,8 +241,9 @@ is a value a leaf holds, not a key or a node kind.
 
 ## The Edit checkbox
 
-The first row of the panel is a checkbox, **Edit**, and nothing else is drawn
-above it in either mode.
+The first row of the panel is a checkbox, **Edit**, with the recent items strip
+to its right on the same row (§ "The recent items strip"), and nothing else is
+drawn above it in either mode.
 
 **The box shows the focused item, not an independent setting.** It is checked
 if and only if the focused item is on the selected node's bench
@@ -266,7 +278,8 @@ split, a track whose origin was deleted) is focused with no point selected.
 | Editing | Clear the point selection (a click on empty space) | The item stays focused | Edited mode, same item |
 | Editing | Select an image or a camera of the focused item's node (a row click, a thumbnail, a frustum) | The item stays focused | Edited mode, same item |
 | Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | Viewed mode, on the new selection |
-| Either | Double-click a Bench row in the Scene tree | That item is focused, its node and its origin are selected (or the point selection cleared), and the panel is raised | Edited mode, on that item |
+| Either | Click a chip in the recent items strip | That item is focused, with no version, and its node and its origin are selected (or the point selection cleared) | Edited mode, on that item |
+| Either | Double-click a Bench row in the Scene tree | The same as a chip, and the panel is raised | Edited mode, on that item |
 | Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised | Edited mode |
 | Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised | Edited mode, on the cluster |
 | Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edited mode, on the new item |
@@ -278,14 +291,17 @@ split, a track whose origin was deleted) is focused with no point selected.
 The box is greyed while a background task holds the node, with the node's own
 busy sentence, only when ticking it would put a point on the bench, since that
 is a bench step and a bench step is refused then. Clearing it, ticking it over
-a point an item on the bench already came from, and ticking it with no point
-selected push no version and are never greyed for a busy node.
+a point an item on the bench already came from, ticking it with no point
+selected and clicking a chip push no version and are never greyed for a busy
+node.
 
 **Ticking Edit with no point selected** focuses the first entry of the recent
 list whose item is on its node's bench at the cursor
-(`AppState::most_recent_item`), on any loaded node, and selects that node. The
-box's hover text names it: *"Tick to edit pt3d_a1b2c3d4_1207 again"*
-(`track_view::again_hint`). It is greyed only when no entry is on a bench, and
+(`AppState::most_recent_item`), on any loaded node, and selects that node. That
+is the strip's first chip when the row has room for one. The box's hover text
+names it, so a panel too narrow to draw the chip still says what the tick does:
+*"Tick to edit pt3d_a1b2c3d4_1207 again"* (`track_view::again_hint`). It is
+greyed only when no entry is on a bench, and
 its refusal is then one sentence naming the three ways in: *"Nothing to edit:
 select a point, double-click an item in the Scene tree's Bench groups, or
 right-click a pixel in Image Detail and choose "Start cluster on the bench
@@ -298,8 +314,9 @@ gesture, a wire call or a step that put the item on, moves the item to the
 front. An entry is dropped when its node is closed, and the list is emptied by
 *Close All*. An entry whose item is not on its node's bench at the cursor is
 skipped by a reader rather than dropped, so an undo of a discard brings it back.
-The list is not cut to any length. It is session state: not in a version, not
-saved, and not on the wire.
+The list is not cut to any length: the strip draws the first entries that are on
+a bench, so skipped entries do not leave it short. It is session state: not in a
+version, not saved with the layout, and not on the wire.
 
 ### Why each transition is the one it is
 
@@ -380,6 +397,55 @@ because a track staged into a panel nobody can see is a gesture with no answer.
 
 ---
 
+## The recent items strip
+
+To the right of the *Edit* box, on the same row, the panel draws the items most
+recently focused, most recent first, leaving out the focused item
+([recent.rs](../../crates/sfm-explorer/src/track_view/recent.rs)). They are the
+entries of the recent list (§ "Transitions") whose item is on its node's bench
+at the cursor, from any loaded node. The strip is drawn in both modes and in the
+empty state, so after the box is cleared its first chip is the item just left.
+
+**What a chip shows.** The item's patch at 24 points square, the same picture
+the header's patch slot draws for that item (the consensus bitmap at the track
+stage, the template at the cluster stage, an empty frame when there is neither,
+through `body::track_patch_image`), drawn with nearest filtering, and the label
+beside it, shortened by a cut out of the middle so that the start and the end
+both survive (`pt3d_…_1207`, `IMG_0…@142,198`), by the same middle elision the
+table's *Name* column uses (`crate::elide::middle`), to at most 72 points.
+
+**How many.** As many as fit whole in the width left on the row, up to eight. A
+chip that would not fit whole is not drawn, and neither is any chip after it, so
+the chips drawn are always the most recent ones. On a narrow panel there may be
+none, and the box's hover text still names the item a tick focuses.
+
+**Hover** shows the patch at 64 points, then one line each: the whole label; the
+node's name (`On bull`) when more than one reconstruction is loaded; the stage
+(`The track stage`); `N kept · K out · P pinned`; the origin (`Point
+pt3d_a1b2c3d4_1207` when it resolves at the cursor, `From point 1207, which is
+gone` when it does not, `New: read from no point` for an item that never had
+one); at the track stage `Position (x, y, z)` or `Bearing (x, y, z), at
+infinity`, as the Edited headline writes them (`body::position_text`); where the
+item's evaluation stands (*Evaluated*, *Evaluating…*, or the refusal or failure
+sentence); and *Click to edit*.
+
+**Click** reports the item in `TrackViewResponse::focus_item`, and the dock
+focuses it through `AppState::focus_bench_item`, which selects the item's node
+first when it is on another one, then its origin, or clears the point selection
+for an item with no origin. A focus is no version, so a chip is never greyed
+while a background task holds the node.
+
+**The patches are uploaded once.** Each chip's texture is cached against the
+item and the track's `Arc`, so a chip does not upload its patch again every
+frame; a step on the item gives it a new `Arc`, and the next frame uploads the
+new picture. An entry the frame did not draw is dropped.
+
+**It is not a list of the bench.** The Scene tree's Bench groups remain the full
+list, per node; the strip is only the way back to the last few, which are the
+ones most often wanted after a point click has left Edited mode.
+
+---
+
 ## The selection and the focused item
 
 The **selection** is the viewer's selected point, image and camera, which every
@@ -423,8 +489,8 @@ its empty state: `No point selected` above a **Go to Point...** button, which is
 where a person with an ID in hand and no idea how to feed it in looks
 ([goto-point.md](goto-point.md)). Under the button one line names the item a
 tick of *Edit* goes back to when there is one, *"Tick Edit to edit
-pt3d_a1b2c3d4_1207 again, or double-click an item in the Scene tree's Bench
-groups."*; otherwise it says what the bench holds when it holds anything, *"3
+pt3d_a1b2c3d4_1207 again, click a recent item beside it, or double-click an item
+in the Scene tree's Bench groups."*; otherwise it says what the bench holds when it holds anything, *"3
 items on the bench: double-click one in the Scene tree's Bench groups to edit
 it."*, and otherwise names the pixel gesture: *"To work on a track from a
 pixel: right-click it in the Image Detail panel and choose "Start cluster on
@@ -490,7 +556,8 @@ cluster has no geometry, so the 3D viewer's bench layer draws nothing for it and
 Image Detail draws its parallelograms rather than an outline, and no ghost
 outline in the images it has no sighting in. A cluster has no committed point
 behind it and so no Viewed mode, and the way back to a cluster after Edit has
-been cleared is its row under *Bench Clusters*. A gesture in Edited mode that
+been cleared is its chip in the recent items strip, a tick of *Edit* while no
+point is selected, or its row under *Bench Clusters*. A gesture in Edited mode that
 names no item means the focused item, and the panel shows the focused item and
 nothing else on the bench: the bench as a list is the Scene tree's.
 
@@ -1273,7 +1340,7 @@ angle, depth z and cond), which reads the point and needs no frame. So for such
 a point the panel shows its header and no per-observation readings. Which
 readings a frameless evaluation should produce, what the *Crop* cell would show
 without a frame, and how the cluster stage, which a frameless track is taken
-through to get a frame, fits in are left to a later draft.
+through to get a frame, fits in are not decided here (§ "Non-goals").
 
 #### The gestures that name a pixel
 
@@ -1290,8 +1357,8 @@ an unpinned `out` sighting at the clicked pixel, which its first evaluation
 switches on when it clears the bars; on a track-stage track that pixel is its
 keypoint, so the row reads from it and, once `in`, commits at it without a
 *Fit* first, while on a cluster it is a seed. It greys while nothing is focused,
-with *"No track is being edited: tick Edit in Track View, or double-click a Bench
-item in the Scene tree."*
+with *"No track is being edited: tick Edit in Track View, click a recent item
+beside it, or double-click a Bench item in the Scene tree."*
 
 ---
 
@@ -1384,7 +1451,20 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   state; a discard of the focused item leaving Edited mode; Edited mode
   on a cluster drawing the cluster headline; a point selected while editing
   drawing that point in Viewed mode with no version; and no
-  reconstruction drawing no box.
+  reconstruction drawing no box. The recent items strip, in the same module:
+  the chips most recent first with the focused item left out, the label cut in
+  its middle, and the item just left first after a clear; at most eight on a
+  wide panel, the most recent few on a narrow one, and none when the row has no
+  room beside the box; a chip click reporting `focus_item`, and applied,
+  focusing the item and selecting its origin with no version while a
+  background task holds the node; a rename keeping the chip under the new
+  label; a discard hiding the chip and its undo bringing it back; a chip for an
+  item on another node naming that node in its hover text and, clicked,
+  selecting that node, the item and its origin; the hover text's label, stage,
+  counts, origin, position, evaluation state and *Click to edit*, and no node
+  name with one reconstruction loaded; and the track's patch drawn from the
+  same texture on a second frame, a cluster with no template drawing an empty
+  frame, and its hover text saying it is new.
 - **The selection rules**,
   [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs) § "The
   selection rules": another point selected unfocusing with one `Stopped
@@ -1530,7 +1610,8 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   and no flip is a version. A second Track View is not possible, since a panel is a
   singleton.
 - **Listing the bench in the panel.** The Scene tree's two Bench groups are the
-  list, per node, with the stage each item is at.
+  list, per node, with the stage each item is at; the recent items strip holds
+  only the last few items focused.
 - **Deciding anything from a number.** The boxes propose and the person
   decides.
 - **A second tile beside the first**, the cluster template and each member warped

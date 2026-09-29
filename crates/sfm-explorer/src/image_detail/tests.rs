@@ -575,8 +575,8 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
         .expect_err("nothing is on the bench to add to");
     assert_eq!(
         why,
-        "No track is being edited: tick Edit in Track View, or double-click a Bench item \
-         in the Scene tree."
+        "No track is being edited: tick Edit in Track View, click a recent item beside it, \
+         or double-click a Bench item in the Scene tree."
     );
 
     // The image the menu is open over is nowhere in the rule: a second

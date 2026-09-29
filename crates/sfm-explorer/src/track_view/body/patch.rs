@@ -9,8 +9,11 @@
 //! [`frame_color_image`] is its body for a frame already where it should be,
 //! which the tile's hover view renders a wider frame through.
 //! [`stored_patch_image`] turns a patch bitmap into an opaque picture, which
-//! is what the header's patch slot draws at the track stage.
+//! is what the header's patch slot draws at the track stage, and
+//! [`track_patch_image`] picks the picture of a track's own patch for its
+//! stage, for the header and the recent items strip alike.
 
+use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
@@ -78,6 +81,24 @@ pub(super) fn render_frame(
     keypoint
         .and_then(|kp| frame.anchored_at_keypoint(camera, cam_from_world, kp))
         .unwrap_or_else(|| frame.clone())
+}
+
+/// The picture of a track's own patch: the consensus bitmap at the track
+/// stage ([`stored_patch_image`]), the template at the cluster stage, `None`
+/// where there is neither.
+///
+/// What the header's patch slot draws, and what the recent items strip draws
+/// in each chip, so an item looks the same in both places.
+pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImage> {
+    match &track.stage {
+        Stage::Track(payload) => stored_patch_image(payload.bitmap.as_ref()?.view()),
+        Stage::Cluster(payload) => {
+            let samples = &payload.template.as_ref()?.samples;
+            let shape = samples.shape();
+            let grid: Vec<f32> = samples.iter().copied().collect();
+            Some(super::tile::color_image(&grid, shape[0], shape[2]))
+        }
+    }
 }
 
 /// A patch bitmap, `(rows, columns, channels)`, as an opaque RGBA image, or

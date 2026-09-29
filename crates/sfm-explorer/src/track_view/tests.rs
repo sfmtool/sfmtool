@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for Track View: the Edit checkbox and the choice of mode.
+//! Headless tests for Track View: the Edit checkbox, the recent items strip
+//! and the choice of mode.
 //!
 //! What the body draws is tested in its own module (`body/tests.rs`). What is
 //! tested here is what the panel adds: that the box is a reading of the bench
@@ -552,4 +553,310 @@ fn with_no_reconstruction_there_is_no_box() {
     let ctx = egui::Context::default();
     let texts = painted(&mut panel, &ctx, &mut state);
     assert_eq!(texts, ["No reconstruction loaded"]);
+}
+
+// ── The recent items strip ──────────────────────────────────────────────
+
+/// Put point `point` of `id` on the bench, which focuses it, and give back its
+/// label.
+fn put(state: &mut AppState, id: ReconId, point: usize) -> String {
+    state
+        .put_point_on_bench(PointRef::new(id, point), None)
+        .expect("a live point")
+}
+
+/// The labels of the chips the strip drew on the last frame, in order.
+fn chips(panel: &TrackView) -> Vec<String> {
+    panel
+        .recent()
+        .drawn()
+        .iter()
+        .map(|chip| chip.label.clone())
+        .collect()
+}
+
+/// One frame of the panel in a window `width` points wide.
+fn run_frame_at_width(
+    panel: &mut TrackView,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    width: f32,
+) {
+    state.refresh_viewed_track();
+    let state = &*state;
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, VIEWPORT.y),
+        )),
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(ctx, raw, |ui| {
+        panel.show(ui, state);
+    });
+}
+
+/// Where the chip for `label` is drawn: the centre of its shown text.
+fn chip_at(
+    panel: &mut TrackView,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    label: &str,
+) -> egui::Pos2 {
+    run_frame(panel, ctx, state, Vec::new());
+    let shown = panel
+        .recent()
+        .drawn()
+        .iter()
+        .find(|chip| chip.label == label)
+        .unwrap_or_else(|| panic!("no chip for {label}"))
+        .shown
+        .clone();
+    painted_at(panel, ctx, state, &shown)
+}
+
+/// The strip lists the items focused this session, most recent first, with
+/// the focused item left out, each chip's label cut in the middle.
+#[test]
+fn the_strip_lists_recent_items_most_recent_first_without_the_focused_one() {
+    let (mut state, id) = state();
+    let first = put(&mut state, id, 0);
+    let second = put(&mut state, id, 1);
+    let third = put(&mut state, id, POINT);
+    assert_eq!(focused(&state, id).as_deref(), Some(third.as_str()));
+    let (mut panel, ctx) = settled(&mut state);
+    assert_eq!(chips(&panel), [second.clone(), first.clone()]);
+    let shown = panel.recent().drawn()[0].shown.clone();
+    let (head, tail) = shown
+        .split_once(crate::elide::ELLIPSIS)
+        .unwrap_or_else(|| panic!("{second} was not cut in the middle: {shown}"));
+    assert!(
+        second.starts_with(head) && second.ends_with(tail),
+        "{shown}"
+    );
+
+    // With nothing focused, the item just left is the first chip.
+    state.unfocus_bench_item();
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert_eq!(chips(&panel), [third, second, first]);
+}
+
+/// At most eight chips on a wide panel, the most recent of them on a narrow
+/// one, and none when the row has no room left beside the box.
+#[test]
+fn the_strip_draws_at_most_eight_and_fewer_on_a_narrow_panel() {
+    let (mut state, id) = state();
+    for point in 0..11 {
+        put(&mut state, id, point);
+    }
+    assert_eq!(state.recent_items.len(), 11);
+    let (mut panel, ctx) = settled(&mut state);
+    let wide = chips(&panel);
+    assert_eq!(wide.len(), super::recent::MAX_CHIPS);
+
+    run_frame_at_width(&mut panel, &ctx, &mut state, 360.0);
+    let narrow = chips(&panel);
+    assert!(
+        (1..super::recent::MAX_CHIPS).contains(&narrow.len()),
+        "{} chips at 360 points",
+        narrow.len()
+    );
+    assert_eq!(narrow, wide[..narrow.len()]);
+
+    run_frame_at_width(&mut panel, &ctx, &mut state, 80.0);
+    assert!(chips(&panel).is_empty(), "{:?}", chips(&panel));
+}
+
+/// A click on a chip reports its item, and applied it focuses the item and
+/// selects its origin, with no version and not refused by a busy node.
+#[test]
+fn clicking_a_chip_focuses_its_item_and_selects_its_origin() {
+    let (mut state, id) = state();
+    let first = put(&mut state, id, 0);
+    put(&mut state, id, POINT);
+    state
+        .start_background_task(
+            crate::background::Operation::BENCH_FIT,
+            id,
+            Box::new(|_| crate::background::Finished::Cancelled),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&mut state);
+    let at = chip_at(&mut panel, &ctx, &mut state, &first);
+    let response = click_at(&mut panel, &ctx, &mut state, at);
+    assert_eq!(response.focus_item, Some((id, first.clone())));
+
+    let before = versions(&state, id);
+    state
+        .focus_bench_item(id, &first)
+        .expect("on the bench, and no step");
+    assert_eq!(
+        versions(&state, id),
+        before,
+        "a chip click pushed a version"
+    );
+    assert_eq!(focused(&state, id).as_deref(), Some(first.as_str()));
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 0)));
+    state.finish_background_task();
+}
+
+/// A rename keeps the chip, under the item's new label.
+#[test]
+fn a_rename_keeps_the_chip() {
+    let (mut state, id) = state();
+    let first = put(&mut state, id, 0);
+    put(&mut state, id, POINT);
+    state
+        .rename_bench_item(id, &first, "kerb")
+        .expect("a free label");
+    let (panel, _ctx) = settled(&mut state);
+    assert_eq!(chips(&panel), ["kerb"]);
+}
+
+/// A discarded item's chip is hidden, and an undo of the discard brings it
+/// back.
+#[test]
+fn a_discard_hides_the_chip_and_its_undo_brings_it_back() {
+    let (mut state, id) = state();
+    let first = put(&mut state, id, 0);
+    put(&mut state, id, POINT);
+    state.discard_bench_item(id, &first).expect("on the bench");
+    let (mut panel, ctx) = settled(&mut state);
+    assert!(chips(&panel).is_empty(), "{:?}", chips(&panel));
+
+    state.undo(id).expect("the discard to undo");
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(chips(&panel).contains(&first), "{:?}", chips(&panel));
+}
+
+/// A chip for an item on another node focuses it, which selects that node.
+/// The hover text names the node once more than one is loaded.
+#[test]
+fn a_chip_for_an_item_on_another_node_selects_that_node() {
+    let (mut state, a) = state();
+    let on_a = put(&mut state, a, POINT);
+    let b = state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    put(&mut state, b, POINT);
+    assert_eq!(state.selected_recon, Some(b));
+    let (mut panel, ctx) = settled(&mut state);
+    assert_eq!(chips(&panel), std::slice::from_ref(&on_a));
+
+    let at = chip_at(&mut panel, &ctx, &mut state, &on_a);
+    let texts = hover_texts_at(&mut panel, &ctx, &mut state, at);
+    let node_label = state.node(a).expect("loaded").label.clone();
+    assert!(texts.contains(&format!("On {node_label}")), "{texts:?}");
+
+    let response = click_at(&mut panel, &ctx, &mut state, at);
+    let (node, label) = response.focus_item.expect("the chip was clicked");
+    state.focus_bench_item(node, &label).expect("on a's bench");
+    assert_eq!(state.selected_recon, Some(a));
+    assert_eq!(focused(&state, a).as_deref(), Some(on_a.as_str()));
+    assert_eq!(state.selected_point, Some(PointRef::new(a, POINT)));
+}
+
+/// The hover text: the whole label, the stage, the counts, the origin, the
+/// position, the evaluation state and what a click does, and no node name
+/// with one reconstruction loaded.
+#[test]
+fn a_chips_hover_text_says_what_the_item_is() {
+    let (mut state, id) = state();
+    let first = put(&mut state, id, POINT);
+    put(&mut state, id, 0);
+    let (mut panel, ctx) = settled(&mut state);
+    let at = chip_at(&mut panel, &ctx, &mut state, &first);
+    let texts = hover_texts_at(&mut panel, &ctx, &mut state, at);
+
+    let track = std::sync::Arc::clone(
+        state
+            .bench(id)
+            .expect("a bench")
+            .track(&first)
+            .expect("on the bench"),
+    );
+    let (kept, out) = track.verdict_counts();
+    let pinned = track.observations.iter().filter(|o| o.pinned).count();
+    let expected = [
+        first.clone(),
+        "The track stage".to_string(),
+        format!("{kept} kept · {out} out · {pinned} pinned"),
+        format!("Point {}", point_id(&state, id, POINT)),
+        super::recent::CLICK_TO_EDIT.to_string(),
+    ];
+    for line in &expected {
+        assert!(texts.contains(line), "{line:?} missing: {texts:?}");
+    }
+    assert!(
+        texts.iter().any(|t| t.starts_with("Position (")),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == super::body::EVALUATED_LABEL || t == super::body::EVALUATING_LABEL),
+        "no evaluation state: {texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.starts_with("On ")), "{texts:?}");
+}
+
+/// A chip draws the item's patch, uploaded once and not per frame; an item
+/// with neither a bitmap nor a template draws an empty frame, and its hover
+/// text says it is new.
+#[test]
+fn a_chip_draws_the_items_patch_or_an_empty_frame() {
+    let (mut state, id) = state();
+    let track = put(&mut state, id, POINT);
+    // The demo stores no bitmaps; a fit fuses one.
+    state
+        .start_bench_fit(id, &track)
+        .expect("a framed track with three sightings fits");
+    state.finish_background_task();
+    let cluster = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+            None,
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    put(&mut state, id, 0);
+    let (mut panel, ctx) = settled(&mut state);
+    let chip = |panel: &TrackView, label: &str| {
+        panel
+            .recent()
+            .drawn()
+            .iter()
+            .find(|chip| chip.label == label)
+            .unwrap_or_else(|| panic!("no chip for {label}"))
+            .clone()
+    };
+    let has_template = matches!(
+        &state.bench(id).expect("a bench").track(&cluster).expect("on the bench").stage,
+        sfmtool_core::bench::Stage::Cluster(payload) if payload.template.is_some()
+    );
+    assert!(!has_template, "the fixture's cluster has a template");
+    assert_eq!(
+        chip(&panel, &cluster).patch,
+        None,
+        "a cluster with no template"
+    );
+    let patch = chip(&panel, &track)
+        .patch
+        .expect("the track's consensus bitmap");
+
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert_eq!(
+        chip(&panel, &track).patch,
+        Some(patch),
+        "the patch was uploaded again"
+    );
+
+    let at = chip_at(&mut panel, &ctx, &mut state, &cluster);
+    let texts = hover_texts_at(&mut panel, &ctx, &mut state, at);
+    assert!(texts.iter().any(|t| t == "The cluster stage"), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("New")), "{texts:?}");
 }

@@ -561,8 +561,9 @@ item ([`track-view.md`](track-view.md) § "Transitions").
 What changes it:
 
 - **focusing** it: ticking *Edit* over a point an item already came from,
-  ticking it with no point selected (the most recent item, below), a Scene tree
-  double-click on a Bench row, and the wire's `focus_bench_item`. Focusing an
+  ticking it with no point selected (the most recent item, below), a click on
+  a chip in Track View's recent items strip, a Scene tree double-click on a
+  Bench row, and the wire's `focus_bench_item`. Focusing an
   item on one node unfocuses whatever was focused on another. **Focusing
   selects**: the item's node, and its origin when that resolves at the cursor,
   or else the point selection is cleared; a selected image stays when it belongs
@@ -605,9 +606,11 @@ one place the focused item changes, moves a newly focused item to the front.
 An entry is dropped when its node is closed and the list emptied by *Close
 All*; an entry whose item is not on its node's bench at the cursor is skipped
 by `most_recent_item` rather than dropped, so an undo of a discard brings it
-back. It is session state, outside every version, and what ticking *Edit* with
-no point selected focuses the first resolving entry of
-([`track-view.md`](track-view.md) § "Transitions").
+back. It is session state, outside every version. Ticking *Edit* with no point
+selected focuses its first resolving entry ([`track-view.md`](track-view.md)
+§ "Transitions"), and Track View's recent items strip draws the first eight
+resolving entries other than the focused item
+([`track-view.md`](track-view.md) § "The recent items strip").
 
 ---
 

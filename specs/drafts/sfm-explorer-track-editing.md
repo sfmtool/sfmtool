@@ -448,7 +448,7 @@ search seeds each admitted image at the surfel's own projection and leaves the
 localization to the next Evaluate or Fit. Filed as
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "Searching by geometry" and
-[`../gui/track-view.md`](../gui/track-view.md) § "Edit mode". What
+[`../gui/track-view.md`](../gui/track-view.md) § "Row gestures". What
 is described below is the proposal it came from.
 
 At the track stage, **Sweep views** takes every image of the node that
