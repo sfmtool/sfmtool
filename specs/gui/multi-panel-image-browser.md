@@ -94,8 +94,11 @@ All four panels share `AppState::selected_image` as the central image selection 
 - Image Browser: cyan highlight border moves to the new thumbnail
 - 3D Viewer: frustum re-upload with new selection color (already implemented via
   `prev_selected_image` change detection)
-- Image Detail: loads the new full-resolution image from disk (same path as `upload_bg_image`
-  in camera view mode, but rendered to an egui texture instead of a wgpu background pass)
+- Image Detail: shows the new full-resolution image from the viewer's photograph cache
+  ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)), which decodes
+  it on the rayon pool on a miss while the panel says "Loading image…" (same path as
+  `upload_bg_image` in camera view mode, but rendered to an egui texture instead of a wgpu
+  background pass)
 
 ### 3D Point Selection
 
@@ -421,7 +424,7 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
      already reduced from the photograph, so reading it is a 48 KiB decompression where
      the photograph is a full decode and a resize.
   2. **The photograph** at `workspace_dir.join(name)`, the path Image Detail reads
-     full-resolution images from, decoded by `state::decode_full_res` (no EXIF
+     full-resolution images from, decoded by `ImageU8::read_rgb` (no EXIF
      orientation applied, matching the SIFT extractors) and resized to 128 x 128 by area
      averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. That
      resize matches the format's in method rather than bit for bit, which is all a
@@ -463,7 +466,11 @@ Full-resolution image display for the selected camera, with SIFT feature overlay
 **Image loading**: When `selected_image` changes, load the full-resolution image from
 `workspace_dir.join(&img.name)` into an egui texture. This is the same image path used by
 `SceneRenderer::upload_bg_image` for camera view mode, but rendered as an egui `Image`
-widget instead of a wgpu background pass.
+widget instead of a wgpu background pass. The pixels come from the viewer's photograph
+cache and are never decoded on the GUI thread: on a miss `state::display_photograph`
+starts the decode on the rayon pool and repaints when it lands, and until then the panel
+shows "Loading image…", or "Failed to load image" for a file that cannot be read
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
 
 **Display**: The image is shown fitted to the panel dimensions (maintaining aspect ratio)
 using `egui::Image` with `fit_to_exact_size` or `max_size`. Pan/zoom within the detail

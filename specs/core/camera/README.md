@@ -11,5 +11,6 @@ operations they support. Implemented in `crates/sfmtool-core/src/camera/`.
 | [refit-camera-intrinsics.md](refit-camera-intrinsics.md) | Fitting a camera of one model to a camera of another over the angles where the source is trusted: one linear solve for the spline models, a small nonlinear fit for the COLMAP polynomials, and a report of what the target cannot represent. |
 | [projection-jacobian.md](projection-jacobian.md) | Analytic ray-to-pixel derivatives — the shared basis for bundle adjustment and pose refinement. |
 | [image-warping.md](image-warping.md) | Applying distort/undistort to whole images: warp maps, remapping, and pyramids. |
+| [photograph-cache.md](photograph-cache.md) | Decoded photograph pyramids shared across threads, keyed by file path under a byte budget: what the viewer's panels, its background steps and the display bitmap render read photographs through. |
 | [ray-grid-projection.md](ray-grid-projection.md) | Splitting patch warps into model-free geometry and a camera-owned projection stage, to cut the per-pixel cost. |
 | [epipolar-curves.md](epipolar-curves.md) | Epipolar geometry as curves rather than lines, for fisheye and other non-perspective cameras. |

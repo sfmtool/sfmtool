@@ -1679,11 +1679,11 @@ impl AppState {
     /// file reads and the pyramid builds are seconds of work, and a step that
     /// did them here would hold the frame -- and the wire's reply window --
     /// for the whole of it before the task it defers to had begun. What
-    /// crosses to the worker is [`crate::state::edits::ViewSources`] -- a
-    /// shared clone of the pyramid the node's own cache already holds for each
-    /// photograph, and a path for each one it does not -- with a clone of the
-    /// value at the cursor and a clone of the track, so the worker holds no
-    /// reference into the scene.
+    /// crosses to the worker is [`crate::state::edits::ViewSources`] -- the
+    /// path of each photograph and a handle on the viewer's photograph cache,
+    /// which hands back what it holds and decodes the rest in parallel -- with
+    /// a clone of the value at the cursor and a clone of the track, so the
+    /// worker holds no reference into the scene.
     ///
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::fit_preconditions`], which carries the two-`in`
@@ -1864,6 +1864,7 @@ impl AppState {
             }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => {
                     return Finished::Failed(format!(
                         "Cannot find geometry matches for {label}: {e}"
@@ -2127,6 +2128,7 @@ pub(crate) fn evaluate_job(
         }
         let decoded = match sources.decode(progress) {
             Ok(decoded) => decoded,
+            Err(_) if progress.is_cancelled() => return live::Measured::Cancelled,
             Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
         };
         if progress.is_cancelled() {
@@ -2173,6 +2175,7 @@ impl AppState {
             }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(format!("Cannot fit {label}: {e}")),
             };
             if progress.is_cancelled() {
@@ -2218,6 +2221,7 @@ impl AppState {
             }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
             };
             if progress.is_cancelled() {
@@ -2282,8 +2286,16 @@ impl AppState {
         Ok((edited, track, sources))
     }
 
-    /// The geometry search needs every image, unlike an evaluation whose
-    /// kernels visit only images the track already names.
+    /// The geometry search can match any image of the node, unlike an
+    /// evaluation whose kernels visit only images the track already names. It
+    /// reads the photographs of the track's own images and of every image in
+    /// which [`view_could_see_patch`] holds for the track's patch: the view
+    /// selection tests that same predicate before it reads a view's pixels, so
+    /// the images left out become one-pixel placeholders it never samples.
+    /// A track with no patch is refused before this runs; were it to reach
+    /// here, every image is read.
+    ///
+    /// [`view_could_see_patch`]: sfmtool_core::patch::view_selection::view_could_see_patch
     fn bench_geometry_search_inputs(
         &mut self,
         id: ReconId,
@@ -2301,7 +2313,40 @@ impl AppState {
             .track(label)
             .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
         let track = (**track).clone();
-        let needed: Vec<usize> = (0..node.recon().image_count()).collect();
+        let table = &node.recon().image_table;
+        let placement = match &track.stage {
+            Stage::Track(payload) => payload.placement.as_ref(),
+            Stage::Cluster(_) => None,
+        };
+        let needed: Vec<usize> = match placement {
+            None => (0..table.images.len()).collect(),
+            Some(patch) => {
+                let own: std::collections::BTreeSet<usize> = track
+                    .observations
+                    .iter()
+                    .map(|o| o.image as usize)
+                    .collect();
+                table
+                    .images
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, image)| {
+                        own.contains(&i)
+                            || table
+                                .cameras
+                                .get(image.camera_index as usize)
+                                .is_none_or(|camera| {
+                                    sfmtool_core::patch::view_selection::view_could_see_patch(
+                                        patch,
+                                        camera,
+                                        &crate::scene::cam_from_world(image),
+                                    )
+                                })
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+        };
         let sources = self.view_sources_for(id, &needed)?;
         Ok((track, sources))
     }

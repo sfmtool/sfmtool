@@ -30,14 +30,10 @@ pub(super) fn editable() -> (AppState, Viewer3D) {
     let (width, height) = (camera.width, camera.height);
     for index in 0..2 {
         let data: Vec<u8> = (0..(width * height * 3)).map(|i| (i % 251) as u8).collect();
-        state.full_res_cache.insert(
-            crate::scene::ImageRef::new(id, index),
-            Some(std::sync::Arc::new(
-                sfmtool_core::camera::remap::ImageU8Pyramid::from_image(
-                    sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
-                    crate::state::PYRAMID_LEVELS,
-                ),
-            )),
+        state.insert_photograph(
+            id,
+            index,
+            sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
         );
     }
     let mut viewer = Viewer3D::new();

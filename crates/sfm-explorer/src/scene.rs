@@ -17,7 +17,7 @@
 //! draws the line for the rest of the crate:
 //!
 //! - Anything **stored across frames** — [`crate::state::AppState`] selection
-//!   and hover, the SIFT/full-res caches, every panel-local texture cache, the
+//!   and hover, the SIFT cache, every panel-local texture cache, the
 //!   camera-view target — is keyed by [`ImageRef`] / [`PointRef`] /
 //!   [`CameraRef`].
 //! - Anything **scoped to one call** is a plain index local to the
@@ -510,7 +510,7 @@ pub fn unique_label(scene: &[SceneNode], base: &str) -> String {
 ///
 /// A free function over the scene slice rather than an `AppState` method, so
 /// callers can hold the node while mutating other `AppState` fields — the SIFT
-/// and full-res caches, notably, which is the whole point of the split.
+/// cache, notably, which is the whole point of the split.
 pub fn node_by_id(scene: &[SceneNode], id: ReconId) -> Option<&SceneNode> {
     scene.iter().find(|n| n.id == id)
 }

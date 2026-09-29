@@ -15,16 +15,21 @@ use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::photograph_cache::default_budget_bytes;
+use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(crate) mod edits;
 pub(crate) mod open;
+pub(crate) use photograph_requests::{display_photograph, DisplayPhotograph, PhotographRequests};
 mod ops;
+mod photograph_requests;
 mod save;
 
 /// The window title with no file loaded, and the start of every other title.
@@ -591,7 +596,7 @@ pub struct AppState {
     /// still good.
     ///
     /// `None` is "looked beside the .sfmr and there was none", memoized the way
-    /// a failed decode is in [`Self::full_res_cache`]: a reconstruction whose
+    /// a failed decode is in [`Self::photographs`]: a reconstruction whose
     /// index has never been built is the ordinary case, and the tree would
     /// otherwise stat the same absent file every frame.
     pub(crate) sift_indexes: HashMap<ReconId, Option<crate::sift_index::SiftIndex>>,
@@ -602,26 +607,31 @@ pub struct AppState {
     /// none.
     pub(crate) cluster_patches: HashMap<ReconId, Option<crate::cluster_patches::ClusterPatches>>,
 
-    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
-    /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
-    /// ImageDetail (builds its GPU texture from level 0) and Track View
-    /// (CPU-samples it to render per-observation tiles and crops). Cleared when the
-    /// scene changes.
+    /// The reconstructions' photographs, decoded to RGB and pyramided at the
+    /// decode ([`PhotographCache`]), keyed by the path each is read from.
+    /// Shared by Image Detail (builds its GPU texture from level 0), Track View
+    /// (CPU-samples it to render per-observation patch tiles) and every
+    /// background step that reads pixels ([`crate::state::edits::ViewSources`]).
     ///
-    /// A [`ImageU8Pyramid`] rather than the bare photograph because the
-    /// photometric readers all want one, and building it costs a copy of the
-    /// full-resolution buffer plus five downsamples per image -- per *step*, if
-    /// what is kept is the photograph alone. Level 0 **is** the decoded image,
-    /// so a pyramid holds one copy of the pixels and about a third as much
-    /// again for the levels under it, and every consumer that wants the plain
-    /// photograph reads [`ImageU8Pyramid::level`] 0.
+    /// Behind an [`Arc`] because the workers use it too: a job captures a clone,
+    /// decodes what is missing into it in parallel, and leaves what it decoded
+    /// for the next job and the panels. Level 0 of a pyramid **is** the decoded
+    /// photograph, so a consumer that wants the plain image reads
+    /// [`ImageU8Pyramid::level`] 0 rather than holding a second copy.
     ///
-    /// Behind an [`Arc`] because a photograph is megabytes and one of them is
-    /// wanted on a **worker**: a background step that reads pixels
-    /// ([`crate::bench`]) takes a clone of what is already decoded here rather
-    /// than a copy of it, so the viewer holds one copy of each photograph
-    /// however many tasks are looking at it.
-    pub full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
+    /// Keyed by path rather than by [`ImageRef`], so an edit that renumbers a
+    /// node's images leaves its photographs where they are, and two nodes over
+    /// one workspace share them. Closing a node or the whole scene does **not**
+    /// clear it: reopening the same file then reuses the pixels, and the byte
+    /// budget the cache was made with ([`default_budget_bytes`]) bounds the
+    /// memory, dropping the least recently used photographs first.
+    pub photographs: Arc<PhotographCache>,
+
+    /// The photographs a panel has asked to have decoded on the rayon pool and
+    /// that are still decoding, so each is asked for once. The panels read
+    /// through [`display_photograph`], which never decodes on the
+    /// GUI thread.
+    pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
@@ -867,7 +877,8 @@ impl AppState {
             sift_cache: HashMap::new(),
             sift_indexes: HashMap::new(),
             cluster_patches: HashMap::new(),
-            full_res_cache: HashMap::new(),
+            photographs: Arc::new(PhotographCache::new(default_budget_bytes(), PYRAMID_LEVELS)),
+            photograph_requests: PhotographRequests::default(),
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),
@@ -996,7 +1007,6 @@ impl AppState {
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
-        self.full_res_cache.clear();
         if closed > 0 {
             self.action_log
                 .record(Kind::File, format!("Closed all ({closed})"));
@@ -1012,7 +1022,6 @@ impl AppState {
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
         self.forget_index_files(id);
-        self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
@@ -1585,65 +1594,56 @@ pub(crate) const PYRAMID_LEVELS: usize =
 /// closed after its id was taken, whichever surface asked.
 pub(crate) const NOT_LOADED: &str = "That reconstruction is no longer loaded.";
 
-/// Get the cached full-resolution image for an image index, decoding from disk
-/// if needed.
-///
-/// This is a free function (not a method on `AppState`) so the caller can borrow
-/// `full_res_cache` mutably while simultaneously borrowing other `AppState`
-/// fields (like `reconstruction`) immutably.
-///
-/// Images are decoded to 3-channel RGB [`ImageU8`], and what the cache holds is
-/// the pyramid over that image ([`ensure_full_res_pyramid`]); this is its level
-/// 0, which is the decoded photograph itself. A failed decode is memoized as
-/// `None` so missing files aren't re-opened every frame.
-pub fn ensure_full_res_cached<'a>(
-    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
-    recon: &SfmrReconstruction,
-    image: ImageRef,
-) -> Option<&'a ImageU8> {
-    ensure_full_res_pyramid(cache, recon, image).map(|pyramid| pyramid.level(0))
+/// The path image `index` of `recon` is read from, which is also the key the
+/// photograph cache ([`AppState::photographs`]) holds its pyramid under: the
+/// workspace directory joined with the image's name. `None` for an index the
+/// image table does not have.
+pub(crate) fn photograph_path(recon: &SfmrReconstruction, index: usize) -> Option<PathBuf> {
+    recon
+        .image_table
+        .images
+        .get(index)
+        .map(|image| recon.workspace_dir.join(&image.name))
 }
 
-/// The cached pyramid for an image index, decoding and pyramiding from disk if
-/// needed.
-///
-/// The half of [`ensure_full_res_cached`] the photometric readers want: the
-/// pyramid is built once, at the decode, so a step that samples a dozen
-/// photographs pays an `Arc` clone each rather than a copy and five
-/// downsamples. The `Arc` is what crosses to a worker
-/// ([`crate::state::edits::ViewSources`]).
-pub fn ensure_full_res_pyramid<'a>(
-    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
+/// The pyramid of image `index`'s photograph if the cache already holds it,
+/// without reading anything: what a panel that only draws what is decoded
+/// calls every frame.
+pub(crate) fn peek_full_res_pyramid(
+    cache: &PhotographCache,
     recon: &SfmrReconstruction,
-    image: ImageRef,
-) -> Option<&'a Arc<ImageU8Pyramid>> {
-    cache
-        .entry(image)
-        .or_insert_with(|| {
-            recon
-                .image_table
-                .images
-                .get(image.index())
-                .and_then(|im| decode_full_res(&recon.workspace_dir.join(&im.name)))
-                .map(|image| Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)))
-        })
-        .as_ref()
+    index: usize,
+) -> Option<Arc<ImageU8Pyramid>> {
+    cache.peek(&photograph_path(recon, index)?)
 }
 
-/// One photograph read off disk as 3-channel RGB, or `None` with the reason
-/// logged.
-///
-/// The one decode in the viewer, so that a worker reading a photograph the
-/// cache has not got ([`crate::state::edits::ViewSources`]) reads it exactly as
-/// the GUI thread would have. It is [`ImageU8::read_rgb`], the decode the
-/// display thumbnails and display patch bitmaps built in `sfmtool-core` use.
-pub fn decode_full_res(path: &std::path::Path) -> Option<ImageU8> {
-    match ImageU8::read_rgb(path) {
-        Ok(image) => Some(image),
-        Err(e) => {
-            log::warn!("Failed to load full-res image {}: {}", path.display(), e);
-            None
-        }
+#[cfg(test)]
+impl AppState {
+    /// Put `image`, pyramided, in the photograph cache as the photograph of
+    /// image `index` of node `id`: what a fixture whose photographs are not on
+    /// disk does in place of the decode.
+    pub(crate) fn insert_photograph(
+        &self,
+        id: ReconId,
+        index: usize,
+        image: sfmtool_core::camera::remap::ImageU8,
+    ) {
+        let recon = self.node(id).expect("a loaded node").recon();
+        let path = photograph_path(recon, index).expect("an image of the node");
+        self.photographs.insert(
+            &path,
+            Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)),
+        );
+    }
+
+    /// The photograph cache's pyramid for image `index` of node `id`, without
+    /// reading anything.
+    pub(crate) fn cached_photograph(
+        &self,
+        id: ReconId,
+        index: usize,
+    ) -> Option<Arc<ImageU8Pyramid>> {
+        peek_full_res_pyramid(&self.photographs, self.node(id)?.recon(), index)
     }
 }
 

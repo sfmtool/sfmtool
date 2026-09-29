@@ -14,8 +14,9 @@
 //!   ([`DisplayThumbnails::build`]), from the image's verified `.sift` first
 //!   and its photograph second, held by the node and never by the value;
 //! - **`patch bitmaps`**, for a file with patch frames and inline keypoints but
-//!   no bitmaps: every photograph decoded, then every patch fused at its stored
-//!   frame and keypoints by the fuse `sfm xform --add-patch-bitmaps` runs
+//!   no bitmaps: every photograph read through the viewer's photograph cache
+//!   ([`AppState::photographs`], so the panels and later operations find them
+//!   decoded), then every patch fused at its stored frame and keypoints by the fuse `sfm xform --add-patch-bitmaps` runs
 //!   ([`render_display_patch_bitmaps`], which `sfm web-export` also calls).
 //!   The column goes into the value marked
 //!   [`sfmtool_core::PointSet::patch_bitmaps_for_display`], so the bench, the
@@ -28,6 +29,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::patch::display_bitmaps::render_display_patch_bitmaps;
 use sfmtool_core::progress::{Cancelled, Progress};
 use sfmtool_core::progress_note;
@@ -98,7 +100,12 @@ impl AppState {
             [path] => crate::scene::label_for_path(path),
             many => format!("{} files", many.len()),
         };
-        self.start_task(Operation::OPEN, None, label, open_job(paths))
+        self.start_task(
+            Operation::OPEN,
+            None,
+            label,
+            open_job(paths, Arc::clone(&self.photographs)),
+        )
     }
 
     /// Open `paths` for the File menu and the command line: every path that is
@@ -203,8 +210,9 @@ fn not_a_file(path: &Path) -> Option<String> {
 }
 
 /// The work of one open: each path read and filled in, in order, each under an
-/// equal share of the bar.
-pub(crate) fn open_job(paths: Vec<PathBuf>) -> Job {
+/// equal share of the bar. The photographs a patch bitmap render decodes go
+/// into `photographs`.
+pub(crate) fn open_job(paths: Vec<PathBuf>, photographs: Arc<PhotographCache>) -> Job {
     Box::new(move |progress| {
         let n = paths.len();
         let mut files = Vec::with_capacity(n);
@@ -216,7 +224,7 @@ pub(crate) fn open_job(paths: Vec<PathBuf>) -> Job {
             if n > 1 {
                 progress_note!(phase, "{}", path.display());
             }
-            match load_for_display(&path, &phase) {
+            match load_for_display(&path, &photographs, &phase) {
                 Ok(loaded) => files.push(OpenedFile {
                     path,
                     outcome: Ok(loaded),
@@ -233,7 +241,11 @@ pub(crate) fn open_job(paths: Vec<PathBuf>) -> Job {
 }
 
 /// Read `path` and fill in what it does not carry for display.
-fn load_for_display(path: &Path, progress: &Progress<'_>) -> Result<Loaded, Stop> {
+fn load_for_display(
+    path: &Path,
+    photographs: &PhotographCache,
+    progress: &Progress<'_>,
+) -> Result<Loaded, Stop> {
     let [read, rest] = progress.split([1.0, 9.0]);
     let mut recon = SfmrReconstruction::load(path, &read)
         .map_err(|e| Stop::Failed(format!("Failed to load {}: {e}", path.display())))?;
@@ -266,7 +278,7 @@ fn load_for_display(path: &Path, progress: &Progress<'_>) -> Result<Loaded, Stop
     }
     if wants_bitmaps {
         let phase = bitmaps.phase("patch bitmaps");
-        if let Some(column) = render_patch_bitmaps(&recon, &phase)? {
+        if let Some(column) = render_patch_bitmaps(&recon, photographs, &phase)? {
             recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column));
             recon.point_set.patch_bitmaps_for_display = true;
         }
@@ -279,15 +291,17 @@ fn load_for_display(path: &Path, progress: &Progress<'_>) -> Result<Loaded, Stop
 }
 
 /// Render `recon`'s display patch bitmaps at its stored frames and keypoints,
-/// moving nothing: [`render_display_patch_bitmaps`]. `Ok(None)` when not one photograph could be read, since
-/// a column of zero rows would draw nothing. The conversion worker also calls
-/// this, but keeps the result as a stored column rather than marking it for
-/// display only.
+/// moving nothing: [`render_display_patch_bitmaps`], reading the photographs
+/// through `photographs`. `Ok(None)` when not one photograph could be read,
+/// since a column of zero rows would draw nothing. The conversion worker also
+/// calls this, but keeps the result as a stored column rather than marking it
+/// for display only.
 pub(super) fn render_patch_bitmaps(
     recon: &SfmrReconstruction,
+    photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<Option<ndarray::Array4<u8>>, Cancelled> {
-    render_display_patch_bitmaps(recon, progress)
+    render_display_patch_bitmaps(recon, photographs, progress)
 }
 
 #[cfg(test)]

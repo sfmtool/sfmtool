@@ -572,6 +572,86 @@ fn is_in_front(
     }
 }
 
+/// Samples per side of the grid [`view_could_see_patch`] projects over the
+/// patch to find its footprint.
+const FOOTPRINT_SAMPLES: usize = 9;
+
+/// Whether `camera` at `cam_from_world` could see `patch` at all: the patch
+/// faces it, its centre is in front of it, and the patch's projected footprint
+/// overlaps the image. Reads no pixels.
+///
+/// This is the pixel-free part of [`select_patch_views`]'s candidate test, and
+/// the selection calls it for every candidate before sampling that view. A
+/// caller that fetches photographs can therefore call it first and fetch only
+/// the views that pass: a view it rejects is never sampled, so a placeholder
+/// in its slot changes nothing.
+///
+/// The footprint test is conservative. It projects a 9 × 9 grid of points
+/// spanning the patch (the same `[-1, 1]` extent a render covers,
+/// in the camera frame the render uses, so a point at infinity is handled
+/// through its homogeneous weight), widens their pixel bounding box by the
+/// largest step between neighbouring samples plus one pixel, and rejects only
+/// when that box lies entirely outside `[0, width) × [0, height)`. If any
+/// sample fails to project, the view is kept. A render whose every sample
+/// misses the frame fails the selection's coverage test anyway, so the cull
+/// never rejects a view the selection would have admitted.
+pub fn view_could_see_patch(
+    patch: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &crate::geometry::RigidTransform,
+) -> bool {
+    if !patch.is_front_facing(cam_from_world) || !is_in_front(patch, camera, cam_from_world) {
+        return false;
+    }
+    let rot = cam_from_world.rotation.to_rotation_matrix();
+    let q0 = rot * patch.center.coords + cam_from_world.translation * patch.w;
+    let qu = (rot * patch.u_axis) * patch.half_extent[0];
+    let qv = (rot * patch.v_axis) * patch.half_extent[1];
+    let n = FOOTPRINT_SAMPLES;
+    let mut pixels = [[0.0f64; 2]; FOOTPRINT_SAMPLES * FOOTPRINT_SAMPLES];
+    for r in 0..n {
+        let t = -1.0 + 2.0 * r as f64 / (n - 1) as f64;
+        for c in 0..n {
+            let s = -1.0 + 2.0 * c as f64 / (n - 1) as f64;
+            let ray = q0 + qu * s + qv * t;
+            let Some((x, y)) = camera
+                .ray_to_pixel([ray.x, ray.y, ray.z])
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+            else {
+                return true;
+            };
+            pixels[r * n + c] = [x, y];
+        }
+    }
+    // The largest step between neighbouring samples bounds how far the
+    // footprint can bulge past the sampled points between them.
+    let mut step = 0.0f64;
+    for r in 0..n {
+        for c in 0..n {
+            let p = pixels[r * n + c];
+            if c + 1 < n {
+                let q = pixels[r * n + c + 1];
+                step = step.max((q[0] - p[0]).hypot(q[1] - p[1]));
+            }
+            if r + 1 < n {
+                let q = pixels[(r + 1) * n + c];
+                step = step.max((q[0] - p[0]).hypot(q[1] - p[1]));
+            }
+        }
+    }
+    let pad = step + 1.0;
+    let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
+    let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in &pixels {
+        x0 = x0.min(p[0]);
+        x1 = x1.max(p[0]);
+        y0 = y0.min(p[1]);
+        y1 = y1.max(p[1]);
+    }
+    let (w, h) = (camera.width as f64, camera.height as f64);
+    x1 + pad >= 0.0 && x0 - pad < w && y1 + pad >= 0.0 && y0 - pad < h
+}
+
 /// Windowed ZNCC of `patch` rendered in `view` against the reference template,
 /// over the reference's frozen support. `None` when the render does not cover the
 /// reference support (a masked pixel falls out of frame) — the candidate is then
@@ -737,8 +817,11 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
 /// [`ViewSelection`] and `specs/core/patch/patch-view-selection.md`.
 ///
 /// The candidate set is the track views plus every other image that
-/// geometrically sees the surfel (front-facing patch, point in front of the
-/// camera, projects in-frame with enough coverage). A reference appearance is
+/// geometrically sees the surfel: [`view_could_see_patch`] holds (front-facing
+/// patch, point in front of the camera, footprint overlapping the image), and
+/// the render covers the reference support. That predicate is tested before
+/// any pixel of a candidate is read, so a caller may pass a placeholder
+/// pyramid for every non-track view it rejects. A reference appearance is
 /// fused from the track views; a candidate is admitted when its windowed ZNCC to
 /// the reference clears `min_relative_zncc ×` the track's self-agreement. Track
 /// views are always admitted. When no reference can be built (track too small or
@@ -976,12 +1059,11 @@ fn select_patch_views_impl(
         }
         score_progress.check_cancel()?;
         let view = &views[i as usize];
-        // Geometric visibility: the patch must face this camera *and* the point
-        // must be in front of it (cheirality — `is_front_facing` alone does not
-        // guarantee positive depth on wide-fisheye / equirect projection).
-        if !patch.is_front_facing(view.cam_from_world)
-            || !is_in_front(patch, view.camera, view.cam_from_world)
-        {
+        // Geometric visibility, before any pixel of this view is read: the
+        // patch must face this camera, its centre must be in front of it, and
+        // its footprint must overlap the image. A caller that culled views by
+        // the same predicate may have left a placeholder in this slot.
+        if !view_could_see_patch(patch, view.camera, view.cam_from_world) {
             scored_views += 1;
             score_progress.count(scored_views, Some(total_views), "view");
             continue;

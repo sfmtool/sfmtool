@@ -558,7 +558,7 @@ fn panel_frame_with_input(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            Some(image),
+            crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             intrinsics,
         );
@@ -579,7 +579,7 @@ fn panel_frame_with_input(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            Some(image),
+            crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             intrinsics,
         );

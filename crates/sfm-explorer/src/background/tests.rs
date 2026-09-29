@@ -435,10 +435,12 @@ fn real_task(operation: Operation) -> RealTask {
             let mut state = AppState::new();
             state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
             let id = state.scene[0].id;
+            let job =
+                crate::state::open::open_job(vec![path], std::sync::Arc::clone(&state.photographs));
             RealTask {
                 state,
                 id,
-                job: Some(crate::state::open::open_job(vec![path])),
+                job: Some(job),
                 _workspace: Some(workspace),
             }
         }

@@ -887,16 +887,17 @@ reads them: the file reads and the pyramid builds are seconds of work in their
 own right, and a step that did them on the GUI thread would freeze the frame --
 and hold the wire's reply window shut -- for all of it before the task it defers
 to had begun. So what the gesture does here is clone a handful of
-handles: `ViewSources` carries the node's cameras and poses, a **shared** clone
-of the pyramid the node's own full-resolution cache already holds for each
-photograph, and a path for each one it does not, and `ViewSources::decode` turns
-that into one pyramid per view on the worker, under a `decode images` phase
-whose note says how many it read from disk and how many it reused from the
-cache. The cache holds pyramids rather than bare photographs, so a photograph
-the viewer had is neither decoded, nor copied, nor pyramided a second time; one
-the worker reads itself is decoded and pyramided there and dropped with the
-task, because the cache is the GUI thread's and the panels fill it for what they
-draw. A photograph that cannot be read is the
+handles: `ViewSources` carries the node's cameras and poses, the path of each
+photograph the step reads, and a clone of the viewer's photograph cache
+(`AppState::photographs`, [../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
+On the worker `ViewSources::decode` asks the cache for every path at once
+(`PhotographCache::get_many`), which hands back what it holds and decodes the
+rest in parallel, under a `decode images` phase whose note says how many it
+read from disk, how many it reused from the cache, and how full the cache is
+afterwards. The cache holds pyramids rather than bare photographs, so a
+photograph the viewer had is neither decoded, nor copied, nor pyramided a
+second time, and what the worker decodes stays in the cache for the next step
+and the panels. A photograph that cannot be read is the
 worker's refusal, arriving as the task's failed row rather than as a refusal of
 the gesture -- which is honest: whether a file is readable is not a question the
 gesture can answer without doing the read. Beside those views the worker gets a
@@ -1037,10 +1038,10 @@ constellation source queries the index with. A source whose input is missing is
 skipped and named in core's report, not refused: a node with no index files and
 no `.sift` files still gets its own points and the far-field sweep. The grey
 images the far-field sweep and the layers sample, and the rays through the
-keypoints, are built on the worker for the run and dropped with it: the viewer
-keeps no decoded set of photographs between runs for a cache of them to sit
-beside, and building them is a small part of a run, which decodes every
-photograph it does not find in the node's full-resolution cache. The options
+keypoints, are built on the worker for the run and dropped with it, since
+building them is a small part of a run. They are built from the pyramids the
+viewer's photograph cache hands back, which decodes only the photographs it
+does not already hold and keeps them for the next run. The options
 are core's defaults, the harness's, with the caller's `label` as the group
 label.
 

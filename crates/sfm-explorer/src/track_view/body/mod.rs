@@ -853,10 +853,12 @@ impl TrackBody {
     /// The tile one row draws, rendering it if this is the first frame that has
     /// asked for it since the track moved.
     ///
-    /// `None` is a real answer and is cached as one: an observation with no
-    /// patch behind it yet, or in a photograph the node's cache has not
-    /// decoded, has no tile, and re-attempting the warp every frame would be
-    /// the cost the cache exists to avoid.
+    /// `None` from the render is a real answer and is cached as one: an
+    /// observation with no patch behind it yet has no tile, and re-attempting
+    /// the warp every frame would be the cost the cache exists to avoid. A
+    /// photograph the photograph cache has not decoded yet is not cached as a
+    /// miss: its decode is running off the GUI thread and repaints when it
+    /// ends, and the next frame's look finds it.
     fn ensure_tile(
         &mut self,
         ctx: &egui::Context,
@@ -870,20 +872,15 @@ impl TrackBody {
         }
         let id = self.showing.as_ref().map(|showing| showing.node)?;
         let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
-        let tile = state
-            .full_res_cache
-            .get(&image)
-            .and_then(|slot| slot.as_ref())
-            .and_then(|src| {
-                tile::render(
-                    ctx,
-                    recon,
-                    track,
-                    observation,
-                    src,
-                    format!("bench_tile_{}_{observation}", image.index()),
-                )
-            });
+        let src = crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
+        let tile = tile::render(
+            ctx,
+            recon,
+            track,
+            observation,
+            &src,
+            format!("bench_tile_{}_{observation}", image.index()),
+        );
         let texture_id = tile.as_ref().map(|texture| texture.id());
         self.tiles.insert(observation, tile);
         texture_id
@@ -894,7 +891,8 @@ impl TrackBody {
     ///
     /// Asked for only while the pointer rests on the tile, so a table of many
     /// rows renders the wider picture for the rows a person looks at and no
-    /// others.
+    /// others. As with [`Self::ensure_tile`], a photograph not decoded yet is
+    /// not cached as a miss.
     fn ensure_context(
         &mut self,
         ctx: &egui::Context,
@@ -906,18 +904,15 @@ impl TrackBody {
         if !self.contexts.contains_key(&observation) {
             let id = self.showing.as_ref().map(|showing| showing.node)?;
             let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
-            let drawn = state
-                .full_res_cache
-                .get(&image)
-                .and_then(|slot| slot.as_ref())
-                .and_then(|src| tile::context(recon, track, observation, src))
-                .map(|context| {
-                    tile::DrawnContext::new(
-                        ctx,
-                        context,
-                        format!("bench_tile_context_{}_{observation}", image.index()),
-                    )
-                });
+            let src =
+                crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
+            let drawn = tile::context(recon, track, observation, &src).map(|context| {
+                tile::DrawnContext::new(
+                    ctx,
+                    context,
+                    format!("bench_tile_context_{}_{observation}", image.index()),
+                )
+            });
             self.contexts.insert(observation, drawn);
         }
         self.contexts.get(&observation).and_then(Option::as_ref)
@@ -946,7 +941,8 @@ impl TrackBody {
 
     /// The crop one row draws beside its tile, cutting it out of the
     /// photograph if this is the first frame that has asked for it since the
-    /// track moved. `None` is cached as the tile's is.
+    /// track moved. `None` is cached as the tile's is, and, as with the tile,
+    /// a photograph not decoded yet is not cached as a miss.
     fn ensure_crop(
         &mut self,
         ctx: &egui::Context,
@@ -956,7 +952,7 @@ impl TrackBody {
         state: &AppState,
     ) -> Option<&crop::DrawnCrop> {
         if !self.crops.contains_key(&observation) {
-            let drawn = self.drawn_crop(ctx, recon, track, observation, state, false);
+            let drawn = self.drawn_crop(ctx, recon, track, observation, state, false)?;
             self.crops.insert(observation, drawn);
         }
         self.crops.get(&observation).and_then(Option::as_ref)
@@ -974,7 +970,7 @@ impl TrackBody {
         state: &AppState,
     ) -> Option<&crop::DrawnCrop> {
         if !self.crop_contexts.contains_key(&observation) {
-            let drawn = self.drawn_crop(ctx, recon, track, observation, state, true);
+            let drawn = self.drawn_crop(ctx, recon, track, observation, state, true)?;
             self.crop_contexts.insert(observation, drawn);
         }
         self.crop_contexts
@@ -982,8 +978,12 @@ impl TrackBody {
             .and_then(Option::as_ref)
     }
 
-    /// A row's crop, or with `in_context` its hover view, cut from the node's
-    /// cached photograph and uploaded.
+    /// A row's crop, or with `in_context` its hover view, cut from the
+    /// photograph cache's pyramid and uploaded.
+    ///
+    /// The outer `None` is "not yet": no row, or a photograph the cache has
+    /// not decoded, which the caller does not remember. The inner `None` is a
+    /// crop that cannot be cut from the photograph, which it does.
     fn drawn_crop(
         &self,
         ctx: &egui::Context,
@@ -992,37 +992,40 @@ impl TrackBody {
         observation: usize,
         state: &AppState,
         in_context: bool,
-    ) -> Option<crop::DrawnCrop> {
+    ) -> Option<Option<crop::DrawnCrop>> {
         let id = self.showing.as_ref().map(|showing| showing.node)?;
         let row = track.observations.get(observation)?;
         let image = ImageRef::new(id, row.image as usize);
-        let src = state.full_res_cache.get(&image)?.as_ref()?;
-        let (picture, name, options) = if in_context {
-            (
-                crop::context(recon, track, observation, src)?,
-                format!("bench_crop_context_{}_{observation}", image.index()),
-                egui::TextureOptions::LINEAR,
-            )
-        } else {
-            (
-                crop::image(recon, track, observation, src)?,
-                format!("bench_crop_{}_{observation}", image.index()),
-                // Each photograph pixel magnified to a block, as the tile
-                // is, so the crop shows the photograph's own resolution.
-                egui::TextureOptions {
-                    magnification: egui::TextureFilter::Nearest,
-                    minification: egui::TextureFilter::Linear,
-                    ..egui::TextureOptions::NEAREST
-                },
-            )
+        let src = crate::state::peek_full_res_pyramid(&state.photographs, recon, image.index())?;
+        let cut = || {
+            let (picture, name, options) = if in_context {
+                (
+                    crop::context(recon, track, observation, &src)?,
+                    format!("bench_crop_context_{}_{observation}", image.index()),
+                    egui::TextureOptions::LINEAR,
+                )
+            } else {
+                (
+                    crop::image(recon, track, observation, &src)?,
+                    format!("bench_crop_{}_{observation}", image.index()),
+                    // Each photograph pixel magnified to a block, as the tile
+                    // is, so the crop shows the photograph's own resolution.
+                    egui::TextureOptions {
+                        magnification: egui::TextureFilter::Nearest,
+                        minification: egui::TextureFilter::Linear,
+                        ..egui::TextureOptions::NEAREST
+                    },
+                )
+            };
+            Some(crop::DrawnCrop::new(
+                ctx,
+                picture,
+                row.verdict,
+                name,
+                options,
+            ))
         };
-        Some(crop::DrawnCrop::new(
-            ctx,
-            picture,
-            row.verdict,
-            name,
-            options,
-        ))
+        Some(cut())
     }
 
     /// The self-similarity surface plot of `observation` for `surface` read

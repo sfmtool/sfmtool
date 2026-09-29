@@ -43,14 +43,10 @@ pub(super) fn benchable_with(recon: sfmtool_core::SfmrReconstruction) -> (AppSta
                 ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
             })
             .collect();
-        state.full_res_cache.insert(
-            crate::scene::ImageRef::new(id, image),
-            Some(std::sync::Arc::new(
-                sfmtool_core::camera::remap::ImageU8Pyramid::from_image(
-                    sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
-                    crate::state::PYRAMID_LEVELS,
-                ),
-            )),
+        state.insert_photograph(
+            id,
+            image,
+            sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
         );
     }
     let mut viewer = Viewer3D::new();
@@ -2512,7 +2508,7 @@ fn a_slow_fit_answers_with_a_handle_naming_it() {
     let item = on_the_bench(&mut state, &mut viewer);
     // Nothing decoded: the fit has every photograph to read, which is the work
     // that must not happen before the deferral.
-    state.full_res_cache.clear();
+    state.photographs.clear();
 
     let arguments = json!({ "reconstruction_label": "run_a" })
         .as_object()

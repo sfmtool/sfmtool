@@ -16,7 +16,7 @@
 //! Application state stays single-threaded on the GUI thread. `AppState`,
 //! [`Viewer3D`] and the renderer are threaded through the frame as `&mut`, and
 //! the panels rely on that — [`crate::dock::TabContext`] hands out seven
-//! simultaneous `&mut` borrows, and the SIFT and full-res caches are
+//! simultaneous `&mut` borrows, and the SIFT cache is
 //! split-borrowed against the scene on purpose. So the server never touches app
 //! state: it builds a [`Command`], hands it to the GUI thread over a channel,
 //! wakes the event loop, and waits for the answer.

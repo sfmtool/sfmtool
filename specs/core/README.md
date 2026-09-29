@@ -12,7 +12,7 @@ under the module they drive.
 |-----------|--------|----------|
 | [analysis/](analysis/) | `analysis/` | Graphs and measurements over a reconstruction: covisibility, adjacency, coverage, alignment between reconstructions. |
 | [bench/](bench/) | `bench/` | The bench beside a reconstruction and the editable track on it: the item list and its labels, the observations with their measurements and verdicts, and the commit that writes one back as a point. |
-| [camera/](camera/) | `camera/` | Camera models, distortion kernels, projection derivatives, and image warping. |
+| [camera/](camera/) | `camera/` | Camera models, distortion kernels, projection derivatives, image warping, and the photograph cache. |
 | [features/](features/) | `features/` | Feature extraction and matching: SIFT, descriptor search, optical flow, cluster matching. |
 | [geometry/](geometry/) | `geometry/` | Pose estimation, epipolar geometry, and bundle adjustment. |
 | [patch/](patch/) | `patch/` | Everything about oriented patches: normals, keypoint localization, and cluster patches. |

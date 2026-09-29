@@ -24,14 +24,16 @@
 //!   the next version's base with an empty overlay, under the row map
 //!   `RowMap::by_scan` reads off that call's input and output.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::progress::Cancelled;
 use sfmtool_core::progress_note;
 use sfmtool_core::reconstruction::prune_covered::{
     prune_covered_observations, PruneCoveredError, PruneCoveredOptions, PruneCoveredReport,
@@ -305,139 +307,153 @@ pub(crate) struct DecodedViews {
 /// them has been decoded.
 ///
 /// What crosses to a **worker**: the poses and the cameras, which are cheap,
-/// and per image either the pyramid the viewer already holds -- shared rather
-/// than copied, which is what the cache's `Arc` is for -- or the path to read
-/// the photograph from. So a step over photographs the cache has costs the GUI
-/// thread a handful of `Arc` clones and the worker nothing at all, and the file
-/// reads and the pyramid builds the rest of them need happen where every other
-/// second of that step already happens.
-///
-/// A photograph the worker reads is dropped with the task rather than put in
-/// the cache: the cache is `AppState`'s and the worker cannot reach it, and the
-/// panels fill it for what they draw.
+/// per image the path its photograph is read from (or nothing, for an image
+/// the step does not read), and the viewer's photograph cache
+/// ([`AppState::photographs`]). Building one reads nothing, so it costs the GUI
+/// thread a path join per image; the worker asks the cache for every path at
+/// once, which hands back what it holds and decodes the rest in parallel, and
+/// what the worker decodes stays in the cache for the next step and the
+/// panels.
 pub(crate) struct ViewSources {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    sources: Vec<ViewSource>,
+    /// Per image, the path to read and the image's name for the refusal, or
+    /// `None` for an image the step does not read: a one-pixel placeholder,
+    /// which no kernel samples.
+    paths: Vec<Option<(PathBuf, String)>>,
+    photographs: Arc<PhotographCache>,
 }
 
-/// Where one image's pixels come from.
-enum ViewSource {
-    /// Already decoded and pyramided, shared with whatever else holds it.
-    Decoded(Arc<ImageU8Pyramid>),
-    /// To be read from this path, with the image's name for the refusal.
-    Read(std::path::PathBuf, String),
-    /// An image the step does not read: a one-pixel placeholder, which no
-    /// kernel samples.
-    Unused,
-}
+/// What [`ViewSources::fetch`] found: per image, `None` for an image the step
+/// does not read, else what the cache answered for it (`None` inside for a
+/// file that cannot be read).
+type Fetched = Vec<Option<Option<Arc<ImageU8Pyramid>>>>;
+
+/// Bytes in a GiB, for the cache occupancy in the `decode images` note.
+const GIB: f64 = (1u64 << 30) as f64;
 
 impl ViewSources {
-    /// Decode what has not been decoded and build the pyramids it needs,
-    /// reporting through `progress`.
-    ///
-    /// A photograph the cache had arrives here already pyramided, so all this
-    /// does with it is keep the `Arc`; what is built is one pyramid per
-    /// photograph read from disk, and the one-pixel placeholder, which every
-    /// unused slot shares.
+    /// The images whose photographs this reads, in index order: every image
+    /// but the placeholders.
+    #[cfg(test)]
+    pub(crate) fn read_images(&self) -> Vec<usize> {
+        self.paths
+            .iter()
+            .enumerate()
+            .filter(|(_, path)| path.is_some())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Ask the cache for every photograph the step reads, inside the
+    /// `decode images` phase, and write the phase note: how many were read
+    /// from disk, how many the cache already had, how many could not be read
+    /// when `with_unreadable`, and how full the cache is afterwards.
+    fn fetch(
+        &self,
+        progress: &sfmtool_core::progress::Progress<'_>,
+        with_unreadable: bool,
+    ) -> Result<Fetched, Cancelled> {
+        let mut phase = progress.phase("decode images");
+        let wanted: Vec<&Path> = self
+            .paths
+            .iter()
+            .flatten()
+            .map(|(path, _)| path.as_path())
+            .collect();
+        let (found, tally) = self.photographs.get_many(&wanted, &phase)?;
+        let stats = self.photographs.stats();
+        let occupancy = format!(
+            "cache {:.1} of {:.1} GiB",
+            stats.bytes as f64 / GIB,
+            stats.budget_bytes as f64 / GIB
+        );
+        let (read, reused, missing) = (tally.read, tally.reused, tally.unreadable);
+        if with_unreadable {
+            progress_note!(
+                phase,
+                "{read} read from disk, {reused} reused from the cache, {missing} unreadable, {occupancy}"
+            );
+        } else {
+            progress_note!(
+                phase,
+                "{read} read from disk, {reused} reused from the cache, {occupancy}"
+            );
+        }
+        let mut found = found.into_iter();
+        Ok(self
+            .paths
+            .iter()
+            .map(|path| {
+                path.as_ref()
+                    .map(|_| found.next().expect("one answer per path"))
+            })
+            .collect())
+    }
+
+    /// Every photograph the step reads, from the cache or decoded into it, and
+    /// the one-pixel placeholder for every image it does not read, reporting
+    /// through `progress`.
     ///
     /// The refusal a file that cannot be read produces is the caller's own
     /// sentence, arriving from the worker rather than from the gesture: the
     /// step cannot know before it starts which photographs are readable, and a
     /// step that answered that question first would be the wait this type
     /// exists to remove.
+    ///
+    /// A cancelled `progress` also ends in an `Err`, so a caller checks
+    /// [`is_cancelled`](sfmtool_core::progress::Progress::is_cancelled) before
+    /// reporting the error as a failure.
     pub(crate) fn decode(
         self,
         progress: &sfmtool_core::progress::Progress<'_>,
     ) -> Result<DecodedViews, String> {
-        let mut phase = progress.phase("decode images");
-        let placeholder = Arc::new(ImageU8Pyramid::from_image(
-            ImageU8::new(1, 1, 3, vec![0u8; 3]),
-            PYRAMID_LEVELS,
-        ));
-        let mut pyramids = Vec::with_capacity(self.sources.len());
-        let mut present = Vec::with_capacity(self.sources.len());
-        let mut read = 0usize;
-        let mut reused = 0usize;
-        for source in self.sources {
-            present.push(!matches!(source, ViewSource::Unused));
-            pyramids.push(match source {
-                ViewSource::Decoded(pyramid) => {
-                    reused += 1;
-                    pyramid
-                }
-                ViewSource::Read(path, name) => {
-                    read += 1;
-                    let image = crate::state::decode_full_res(&path)
-                        .ok_or(format!("Cannot read {name}."))?;
-                    Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS))
-                }
-                ViewSource::Unused => Arc::clone(&placeholder),
-            });
+        let fetched = self
+            .fetch(progress, false)
+            .map_err(|_| "Cancelled.".to_string())?;
+        let unreadable = self
+            .paths
+            .iter()
+            .zip(&fetched)
+            .find(|(_, found)| matches!(found, Some(None)));
+        if let Some((Some((_, name)), _)) = unreadable {
+            return Err(format!("Cannot read {name}."));
         }
-        progress_note!(
-            phase,
-            "{read} read from disk, {reused} reused from the cache"
-        );
-        Ok(DecodedViews {
-            cameras: self.cameras,
-            poses: self.poses,
-            pyramids,
-            present,
-        })
+        Ok(self.into_views(fetched))
     }
 
     /// [`Self::decode`] for a step that can do without some of its
     /// photographs: one that cannot be read is left out, as an image the step
     /// does not use is, rather than refusing the step. Polls `progress` between
-    /// photographs, and hands back [`Cancelled`](sfmtool_core::progress::Cancelled)
-    /// when asked to stop.
+    /// photographs, and hands back [`Cancelled`] when asked to stop.
     pub(crate) fn decode_available(
         self,
         progress: &sfmtool_core::progress::Progress<'_>,
-    ) -> Result<DecodedViews, sfmtool_core::progress::Cancelled> {
-        let mut phase = progress.phase("decode images");
+    ) -> Result<DecodedViews, Cancelled> {
+        let fetched = self.fetch(progress, true)?;
+        Ok(self.into_views(fetched))
+    }
+
+    /// The views over what [`Self::fetch`] found, with the placeholder in every
+    /// slot that has no photograph.
+    fn into_views(self, fetched: Fetched) -> DecodedViews {
         let placeholder = Arc::new(ImageU8Pyramid::from_image(
             ImageU8::new(1, 1, 3, vec![0u8; 3]),
             PYRAMID_LEVELS,
         ));
-        let total = self.sources.len();
-        let mut pyramids = Vec::with_capacity(total);
-        let mut present = Vec::with_capacity(total);
-        let (mut read, mut reused, mut missing) = (0usize, 0usize, 0usize);
-        for (i, source) in self.sources.into_iter().enumerate() {
-            phase.check_cancel()?;
-            let pyramid = match source {
-                ViewSource::Decoded(pyramid) => {
-                    reused += 1;
-                    Some(pyramid)
-                }
-                ViewSource::Read(path, _) => match crate::state::decode_full_res(&path) {
-                    Some(image) => {
-                        read += 1;
-                        Some(Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)))
-                    }
-                    None => {
-                        missing += 1;
-                        None
-                    }
-                },
-                ViewSource::Unused => None,
-            };
-            present.push(pyramid.is_some());
-            pyramids.push(pyramid.unwrap_or_else(|| Arc::clone(&placeholder)));
-            phase.count(i as u64 + 1, Some(total as u64), "images");
-        }
-        progress_note!(
-            phase,
-            "{read} read from disk, {reused} reused from the cache, {missing} unreadable"
-        );
-        Ok(DecodedViews {
+        let (pyramids, present) = fetched
+            .into_iter()
+            .map(|found| match found.flatten() {
+                Some(pyramid) => (pyramid, true),
+                None => (Arc::clone(&placeholder), false),
+            })
+            .unzip();
+        DecodedViews {
             cameras: self.cameras,
             poses: self.poses,
             pyramids,
             present,
-        })
+        }
     }
 }
 
@@ -1475,6 +1491,7 @@ impl AppState {
             .history
             .current()
             .clone();
+        let photographs = Arc::clone(&self.photographs);
         Ok(Box::new(move |progress| {
             let refuse =
                 |why: String| format!("Convert to embedded patches of {label} refused: {why}");
@@ -1509,7 +1526,7 @@ impl AppState {
                 };
             conversion.set_fraction(1.0);
             let bitmap_phase = bitmaps.phase("patch bitmaps");
-            match super::open::render_patch_bitmaps(&converted, &bitmap_phase) {
+            match super::open::render_patch_bitmaps(&converted, &photographs, &bitmap_phase) {
                 Ok(Some(column)) => {
                     converted.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(column));
                 }
@@ -1739,9 +1756,8 @@ impl AppState {
         self.selected_point = moved.map(|index| PointRef::new(id, index as usize));
     }
 
-    /// Where a **background** step's photographs are to come from: what the
-    /// cache already holds for the images `needed` names, and the path to
-    /// everything else.
+    /// Where a **background** step's photographs are to come from: the path
+    /// of each image `needed` names, and the photograph cache to ask for them.
     ///
     /// Nothing is decoded and nothing is read here, which is the point: this
     /// runs on the GUI thread and [`ViewSources::decode`] runs on the worker.
@@ -1754,7 +1770,7 @@ impl AppState {
         let recon = node.recon();
         let mut cameras = Vec::with_capacity(recon.image_count());
         let mut poses = Vec::with_capacity(recon.image_count());
-        let mut sources = Vec::with_capacity(recon.image_count());
+        let mut paths = Vec::with_capacity(recon.image_count());
         for (i, im) in recon.image_table.images.iter().enumerate() {
             cameras.push(recon.image_table.cameras[im.camera_index as usize].clone());
             let q = im.quaternion_wxyz;
@@ -1766,33 +1782,29 @@ impl AppState {
                     im.translation_xyz.z,
                 ],
             ));
-            sources.push(if !needed.contains(&i) {
-                ViewSource::Unused
-            } else {
-                match self
-                    .full_res_cache
-                    .get(&ImageRef::new(id, i))
-                    .and_then(|slot| slot.as_ref())
-                {
-                    Some(pyramid) => ViewSource::Decoded(Arc::clone(pyramid)),
-                    None => ViewSource::Read(recon.workspace_dir.join(&im.name), im.name.clone()),
-                }
-            });
+            paths.push(
+                needed
+                    .contains(&i)
+                    .then(|| (recon.workspace_dir.join(&im.name), im.name.clone())),
+            );
         }
         Ok(ViewSources {
             cameras,
             poses,
-            sources,
+            paths,
+            photographs: Arc::clone(&self.photographs),
         })
     }
 
     /// Drop everything this state holds that is keyed by an image of `id`.
     ///
-    /// What a bulk edit owes: it renumbers the image table, so a cached decode
-    /// would silently become a statement about a different image. The panels'
-    /// own texture caches are dropped by the caller, which is where they are
-    /// reachable. Hover goes with them -- it is a statement about where a
-    /// pointer was over a value that has just been replaced.
+    /// What a bulk edit owes: it renumbers the image table, so a cached set of
+    /// SIFT features would silently become a statement about a different
+    /// image. The photographs stay: [`AppState::photographs`] is keyed by path,
+    /// which a renumbering does not change. The panels' own texture caches are
+    /// dropped by the caller, which is where they are reachable. Hover goes
+    /// with them -- it is a statement about where a pointer was over a value
+    /// that has just been replaced.
     ///
     /// The image **selection** is not dropped here. A cursor move carries it
     /// across with [`AppState::selected_image_name`] and
@@ -1800,7 +1812,6 @@ impl AppState {
     /// steps from emptying the Image Detail panel between them.
     fn forget_images_of(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
-        self.full_res_cache.retain(|image, _| image.recon != id);
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
     }

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::{ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation};
@@ -210,7 +210,7 @@ fn plane_recon_with(points: &[Point3<f64>], depth: f64) -> SfmrReconstruction {
     recon
 }
 
-/// Put the capture's photographs in the node's full-resolution cache, so the
+/// Put the capture's photographs in the viewer's photograph cache, so the
 /// run finds them without a file on disk.
 pub(crate) fn cache_photographs(state: &mut AppState, id: ReconId) {
     cache_photographs_at(state, id, PLANE_Z);
@@ -219,13 +219,7 @@ pub(crate) fn cache_photographs(state: &mut AppState, id: ReconId) {
 /// [`cache_photographs`] of the plane at `depth`.
 fn cache_photographs_at(state: &mut AppState, id: ReconId, depth: f64) {
     for (i, &center) in CENTERS.iter().enumerate() {
-        state.full_res_cache.insert(
-            ImageRef::new(id, i),
-            Some(Arc::new(ImageU8Pyramid::from_image(
-                photograph_at(center, depth),
-                crate::state::PYRAMID_LEVELS,
-            ))),
-        );
+        state.insert_photograph(id, i, photograph_at(center, depth));
     }
 }
 
@@ -266,7 +260,7 @@ pub(crate) fn far_plane_recon() -> SfmrReconstruction {
     plane_recon_with(&[Point3::new(off, off, FAR_DEPTH)], FAR_DEPTH)
 }
 
-/// Put the far plane's photographs in the node's full-resolution cache.
+/// Put the far plane's photographs in the viewer's photograph cache.
 pub(crate) fn cache_far_photographs(state: &mut AppState, id: ReconId) {
     cache_photographs_at(state, id, FAR_DEPTH);
 }

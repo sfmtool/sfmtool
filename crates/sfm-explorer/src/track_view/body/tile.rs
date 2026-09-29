@@ -61,8 +61,8 @@ pub(super) fn render(
 /// a degenerate shape at the cluster stage.
 ///
 /// Pure, so a headless test can ask what a row shows rather than only whether
-/// it showed something. `src` is the observation's own photograph as the node's
-/// full-resolution cache holds it: the pyramid built at the decode, whose level
+/// it showed something. `src` is the observation's own photograph as the viewer's
+/// photograph cache holds it: the pyramid built at the decode, whose level
 /// 0 is the photograph and whose lower levels are what the cluster sampler
 /// mip-selects over.
 pub(super) fn image(

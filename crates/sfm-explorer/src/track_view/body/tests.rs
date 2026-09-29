@@ -11,7 +11,7 @@
 //! boxes paint, and what it reports back to the dock -- rather than pixels.
 
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::remap::ImageU8;
 
 use super::{TrackBody, TrackBodyResponse, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -51,13 +51,7 @@ fn cache_photographs(state: &mut AppState, id: ReconId) {
                 ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
             })
             .collect();
-        state.full_res_cache.insert(
-            ImageRef::new(id, image),
-            Some(std::sync::Arc::new(ImageU8Pyramid::from_image(
-                ImageU8::new(w, h, 3, data),
-                crate::state::PYRAMID_LEVELS,
-            ))),
-        );
+        state.insert_photograph(id, image, ImageU8::new(w, h, 3, data));
     }
 }
 
@@ -341,6 +335,35 @@ fn every_row_draws_a_tile_at_either_stage() {
     );
 }
 
+/// A row drawn before its photograph is decoded gets its tile and its crop on a
+/// later frame once the photograph arrives, without the track moving: a
+/// photograph not decoded yet is not remembered as a row with neither.
+#[test]
+fn a_tile_appears_when_its_photograph_arrives_after_the_first_frame() {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(projected_embedded_demo(12)));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    state
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
+        .expect("a live point");
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel.rows().iter().all(|row| !row.tile && !row.crop),
+        "a row drew a tile or a crop with no photograph decoded: {:?}",
+        panel.rows(),
+    );
+
+    cache_photographs(&mut state, id);
+    run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel.rows().iter().all(|row| row.tile && row.crop),
+        "a row drawn before its photograph arrived stayed without a tile or a crop: {:?}",
+        panel.rows(),
+    );
+}
+
 /// A candidate a descriptor search has just added sits where the index's warp
 /// put it -- its keypoint and its seed are that pixel, and nothing has read it
 /// -- and its tile is cut around **that**, which is the whole of what says
@@ -384,9 +407,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     );
     let image = ImageRef::new(id, row.image as usize);
     let src = state
-        .full_res_cache
-        .get(&image)
-        .and_then(|slot| slot.clone())
+        .cached_photograph(image.recon, image.index())
         .expect("a cached photograph");
 
     let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
@@ -2244,9 +2265,7 @@ fn tile_and_context(
     let track = state.bench_track(id, label).expect("on the bench").clone();
     let row = &track.observations[observation];
     let src = state
-        .full_res_cache
-        .get(&ImageRef::new(id, row.image as usize))
-        .and_then(|slot| slot.clone())
+        .cached_photograph(id, row.image as usize)
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
     let tile = super::tile::image(recon, &track, observation, &src).expect("a tile");
@@ -3096,9 +3115,7 @@ fn crop_and_context(
     let track = state.bench_track(id, label).expect("on the bench").clone();
     let row = &track.observations[observation];
     let src = state
-        .full_res_cache
-        .get(&ImageRef::new(id, row.image as usize))
-        .and_then(|slot| slot.clone())
+        .cached_photograph(id, row.image as usize)
         .expect("a cached photograph");
     let recon = state.node(id).expect("loaded").recon();
     let outline = super::crop::outline(recon, &track, observation).expect("an outline");
@@ -3165,12 +3182,7 @@ fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
                 "{stage}: the crop is not one texel per pixel"
             );
             let src = state
-                .full_res_cache
-                .get(&ImageRef::new(
-                    id,
-                    track.observations[observation].image as usize,
-                ))
-                .and_then(|slot| slot.clone())
+                .cached_photograph(id, track.observations[observation].image as usize)
                 .expect("a cached photograph");
             let (x, y) = (region.min[0] + 1, region.min[1] + 1);
             let texel = crop.image.pixels[crop.image.size[0] + 1].to_array();

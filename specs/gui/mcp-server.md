@@ -3558,8 +3558,8 @@ rather than a view onto `AppState`:
 
 `AppState`, `Viewer3D` and the renderer are threaded through the frame as
 `&mut`, and the existing panels rely on that — `TabContext` hands out seven
-simultaneous `&mut` borrows, the SIFT and full-res caches are split-borrowed
-against the scene on purpose. Wrapping any of it in a lock to let an HTTP thread
+simultaneous `&mut` borrows, the SIFT cache and the photograph cache are
+split-borrowed against the scene on purpose. Wrapping any of it in a lock to let an HTTP thread
 peek would either deadlock against those borrows or force a redesign of half the
 crate. It would also introduce the one bug class this design refuses to have: an
 agent observing the scene mid-mutation.

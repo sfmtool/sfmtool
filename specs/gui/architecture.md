@@ -422,7 +422,8 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
   This is simpler and fast enough.
 - **Single depth readback**: One 5x5 region per frame, not full-screen readback
 - **Lazy image loading**: Thumbnails loaded on reconstruction open; full-res
-  images loaded on demand (planned)
+  photographs decoded on demand, off the GUI thread, into a shared cache under a
+  byte budget ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md))
 
 ---
 

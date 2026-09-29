@@ -97,7 +97,7 @@ fn look_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             None,
-            Some(image),
+            crate::image_detail::DetailPhotograph::Decoded(image),
             &feature_display,
             &mut intrinsics_display,
         );
@@ -530,7 +530,7 @@ fn overlay_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
-            Some(image),
+            crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             &mut intrinsics_display,
         );
@@ -685,7 +685,7 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(&sift),
-                Some(&image),
+                crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
             );
@@ -847,7 +847,7 @@ fn chord_click(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(&sift),
-                Some(&image),
+                crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
             );
@@ -1081,7 +1081,7 @@ fn click_frames(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(sift),
-                Some(image),
+                crate::image_detail::DetailPhotograph::Decoded(image),
                 &display,
                 &mut intrinsics_display,
             );
@@ -1280,7 +1280,7 @@ fn bench_frame(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,
-                Some(&image),
+                crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
             );
@@ -1924,7 +1924,7 @@ fn published_frame(
             &[],
             &crate::platform::ScrollInput::default(),
             None,
-            Some(image),
+            crate::image_detail::DetailPhotograph::Decoded(image),
             &feature_display,
             &mut intrinsics_display,
         );
@@ -2194,7 +2194,7 @@ fn gesture(
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,
-                Some(&image),
+                crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
             ));

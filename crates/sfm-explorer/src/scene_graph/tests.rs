@@ -2069,6 +2069,13 @@ fn closing_a_node_purges_its_caches_and_selection() {
     let mut state = shared_shoot(2);
     let first = state.scene[0].id;
     let second = state.scene[1].id;
+    let photograph =
+        crate::state::photograph_path(state.scene[0].recon(), 0).expect("the node has an image 0");
+    state.insert_photograph(
+        first,
+        0,
+        sfmtool_core::camera::remap::ImageU8::new(2, 2, 3, vec![9; 12]),
+    );
     for id in [first, second] {
         state.sift_cache.insert(
             ImageRef::new(id, 0),
@@ -2078,7 +2085,6 @@ fn closing_a_node_purges_its_caches_and_selection() {
                 read_count: 1,
             },
         );
-        state.full_res_cache.insert(ImageRef::new(id, 0), None);
     }
     state.select_image(Some(ImageRef::new(first, 3)));
     state.hovered_point = Some(PointRef::new(first, 1));
@@ -2090,9 +2096,11 @@ fn closing_a_node_purges_its_caches_and_selection() {
         state.sift_cache.keys().all(|k| k.recon == second),
         "the SIFT cache kept entries for the closed node"
     );
+    // The photographs are keyed by path, not by node, and are kept for the
+    // next node that reads the same file.
     assert!(
-        state.full_res_cache.keys().all(|k| k.recon == second),
-        "the full-res cache kept entries for the closed node"
+        state.photographs.peek(&photograph).is_some(),
+        "closing a node dropped a decoded photograph"
     );
     assert_eq!(state.selected_image, None, "selection outlived its node");
     assert_eq!(state.hovered_point, None, "hover outlived its node");
@@ -2120,17 +2128,28 @@ fn closing_the_selected_node_falls_back_to_the_first_remaining() {
 }
 
 #[test]
-fn close_all_empties_the_scene_and_every_shared_cache() {
+fn close_all_empties_the_scene_and_keeps_the_photographs() {
     let mut state = shared_shoot(2);
     let id = state.scene[0].id;
-    state.full_res_cache.insert(ImageRef::new(id, 0), None);
+    let photograph =
+        crate::state::photograph_path(state.scene[0].recon(), 0).expect("the node has an image 0");
+    state.insert_photograph(
+        id,
+        0,
+        sfmtool_core::camera::remap::ImageU8::new(2, 2, 3, vec![9; 12]),
+    );
     state.select_image(Some(ImageRef::new(id, 0)));
 
     state.close_all().expect("nothing is running");
     assert!(state.scene.is_empty());
     assert_eq!(state.selected_recon, None);
     assert_eq!(state.selected_image, None);
-    assert!(state.full_res_cache.is_empty());
+    // Reopening the same file reuses the pixels; the cache's byte budget,
+    // not the scene, bounds what it holds.
+    assert!(
+        state.photographs.peek(&photograph).is_some(),
+        "closing everything dropped a decoded photograph"
+    );
 }
 
 #[test]

@@ -129,6 +129,51 @@ fn opening_renders_the_patch_bitmaps_a_file_does_not_carry() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The open reads the photographs through the viewer's cache, so opening the
+/// file again, or anything else that reads them afterwards, decodes nothing.
+#[test]
+fn a_second_open_reads_the_photographs_from_the_cache() {
+    let dir = temp_dir("bitmaps_cached");
+    let path = saved_with_photographs(&dir);
+
+    let mut state = AppState::new();
+    let first = state.open_now(&path).expect("the file opens");
+    let n = state.node(first).unwrap().recon().image_count();
+    assert_eq!(
+        phase_note(&newest(&state).detail, "decode photographs"),
+        Some(format!("{n} of {n} read")),
+    );
+    let decoded = state.photographs.stats();
+    assert_eq!(decoded.entries, n, "every photograph stays decoded");
+
+    let second = state.open_now(&path).expect("the file opens again");
+    assert_eq!(
+        phase_note(&newest(&state).detail, "decode photographs"),
+        Some(format!("{n} of {n} read, {n} reused from the cache")),
+    );
+    assert_eq!(
+        state.photographs.stats().misses,
+        decoded.misses,
+        "the second open decoded nothing"
+    );
+    let column = |id| {
+        state
+            .node(id)
+            .unwrap()
+            .recon()
+            .point_set
+            .patch_bitmaps_y_x_rgba
+            .clone()
+            .expect("the open rendered the column")
+    };
+    assert_eq!(
+        column(first),
+        column(second),
+        "the same pixels, the same tiles"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// What the open filled in is not part of the reconstruction: the value keeps
 /// the file's content hash, which every point id is minted against, and a save
 /// writes the columns the file had.

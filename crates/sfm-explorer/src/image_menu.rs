@@ -163,16 +163,12 @@ impl AppState {
             .image_table
             .images
             .iter()
-            .enumerate()
-            .map(|(i, image)| {
-                let cached = self
-                    .full_res_cache
-                    .get(&ImageRef::new(id, i))
-                    .is_some_and(|slot| slot.is_some());
-                if cached {
+            .map(|image| {
+                let path = recon.workspace_dir.join(&image.name);
+                if self.photographs.peek(&path).is_some() {
                     Photograph::Cached
                 } else {
-                    Photograph::File(recon.workspace_dir.join(&image.name))
+                    Photograph::File(path)
                 }
             })
             .collect();

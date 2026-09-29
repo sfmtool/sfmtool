@@ -1065,17 +1065,23 @@ tile is cut around it, so nothing has to be evaluated for a fresh row to show it
 patch. The rendered tiles are kept against the track's `Arc` and rebuilt when a
 step moves it.
 
-**The photographs** come from `AppState::full_res_cache`, the decoded
-full-resolution images shared with the Image Detail panel and read by the
-evaluations, so no image is decoded more than once. An entry is the
+**The photographs** come from `AppState::photographs`, the viewer's photograph
+cache ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)),
+shared with the Image Detail panel and read by the evaluations, so no image is
+decoded more than once while the cache holds it. An entry is the
 `ImageU8Pyramid` built when the image was decoded, whose level 0 is the
 photograph: the photometric readers sample the lower levels. A failed decode is
-remembered as `None` so a missing file is not reopened every frame. Before the
-body draws, the dock fills the cache for every image the drawn track observes:
-the focused item's in Edited mode, and in Viewed mode the selected point's, when
-the reconstruction carries patch frames, with the SIFT cache for them on a
-`sift_files` reconstruction. The cache has no eviction: it holds every image
-decoded in the session, with its pyramid, until the reconstruction is closed.
+remembered so a missing file is not reopened every frame. Before the body
+draws, the dock asks for every image the drawn track observes: the focused
+item's in Edited mode, and in Viewed mode the selected point's, when the
+reconstruction carries patch frames, with the SIFT cache filled for them on a
+`sift_files` reconstruction. Asking (`state::display_photograph`) starts a
+decode on the rayon pool for each photograph the cache does not hold, and
+repaints when it lands; the body only peeks at the cache, and a row whose
+photograph is not decoded yet keeps no tile or crop, rather than a remembered
+empty one, so they appear on the frame after the decode's repaint. The cache is
+bounded by its byte budget, which drops the least recently used photographs
+first.
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
 over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
@@ -1163,7 +1169,8 @@ behind them, and the index given is the observation's place in the point's
 track. A row a search, the view sweep or a hand placed has no feature index,
 and the line says which of them placed it. The
 crop and its hover view are cached per row beside the tiles and dropped with
-them, and the hover view is rendered the first time the pointer rests on the
+them; like a tile, a crop whose photograph is not decoded yet is not cached,
+so it appears once the decode ends. The hover view is rendered the first time the pointer rests on the
 crop. Its hover region takes no click, so a click on the crop is the row's.
 
 **Each judged reading is coloured by its bar.** Four readings are judged, one

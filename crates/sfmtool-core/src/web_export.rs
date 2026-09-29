@@ -43,7 +43,8 @@ use crate::analysis::scene_scale::{
     compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds, length_scale,
 };
 use crate::camera::frustum::compute_distorted_frustum_grid;
-use crate::patch::display_bitmaps::render_display_patch_bitmaps;
+use crate::camera::PhotographCache;
+use crate::patch::display_bitmaps::{render_display_patch_bitmaps, DISPLAY_PYRAMID_LEVELS};
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::thumbnail::{display_thumbnail_row, resize_area, ThumbnailSource};
 use crate::{progress_note, SfmrReconstruction, THUMBNAIL_SIZE};
@@ -282,7 +283,10 @@ pub fn build_web_export(
         Some(bitmaps.as_ref())
     } else {
         let mut phase = bitmap_progress.phase("patch bitmaps");
-        rendered_bitmaps = render_display_patch_bitmaps(recon, &phase)?;
+        // Nothing else in the export reads a photograph, so a cache that
+        // keeps nothing: each pyramid is dropped once the fuse is done.
+        let photographs = PhotographCache::new(0, DISPLAY_PYRAMID_LEVELS);
+        rendered_bitmaps = render_display_patch_bitmaps(recon, &photographs, &phase)?;
         report.patch_bitmaps_rendered = rendered_bitmaps.is_some();
         if rendered_bitmaps.is_none() {
             progress_note!(phase, "no photographs to render them from; drawing splats");

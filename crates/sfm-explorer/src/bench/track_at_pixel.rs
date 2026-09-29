@@ -320,6 +320,7 @@ impl AppState {
             }
             let decoded = match views.decode(progress) {
                 Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => {
                     return Finished::Failed(format!(
                         "Cannot create a track in {}: {e}",

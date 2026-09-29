@@ -248,6 +248,12 @@ impl ImageU8Pyramid {
     pub fn num_levels(&self) -> usize {
         self.levels.len()
     }
+
+    /// The pixel bytes held across every level: what the pyramid costs in
+    /// memory, not counting the small per-level headers.
+    pub fn byte_len(&self) -> usize {
+        self.levels.iter().map(|level| level.data.len()).sum()
+    }
 }
 
 /// Bilinear sample from a multi-channel u8 image, returning an f32 value for

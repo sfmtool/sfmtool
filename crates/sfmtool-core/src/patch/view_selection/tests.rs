@@ -1310,3 +1310,187 @@ fn the_selector_reports_its_phases_and_cancels_instead_of_returning_a_partial_se
         .expect_err("the set flag stops it before any selection is returned");
     assert!(cancel.load(Ordering::Relaxed));
 }
+
+// ── The geometric cull ───────────────────────────────────────────────────────
+
+/// A camera of the plane scene at `center`, looking down world +z.
+fn plane_scene_pose(center: [f64; 3]) -> RigidTransform {
+    RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-center[0], center[1], center[2]])
+}
+
+#[test]
+fn the_cull_keeps_a_camera_that_sees_the_patch() {
+    let cam = pinhole();
+    assert!(view_could_see_patch(
+        &plane_patch(),
+        &cam,
+        &plane_scene_pose([0.6, 0.0, 0.0])
+    ));
+}
+
+#[test]
+fn the_cull_rejects_a_camera_the_patch_is_behind() {
+    // Front-facing, but the canonical camera looks down world -z from z = 1,
+    // away from the plane at z = 4.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let patch = plane_patch();
+    assert!(
+        patch.is_front_facing(&pose),
+        "test setup: only cheirality rejects"
+    );
+    assert!(!view_could_see_patch(&patch, &pinhole(), &pose));
+}
+
+#[test]
+fn the_cull_rejects_a_camera_the_patch_faces_away_from() {
+    // Beyond the plane: the patch's normal points back toward z < PLANE_Z.
+    let pose = plane_scene_pose([0.0, 0.0, 8.0]);
+    assert!(!plane_patch().is_front_facing(&pose));
+    assert!(!view_could_see_patch(&plane_patch(), &pinhole(), &pose));
+}
+
+#[test]
+fn the_cull_rejects_a_footprint_entirely_off_frame() {
+    // The centre projects to x = 160 - 65 * 3.5 = -67.5, and the patch's
+    // half-width is 26 px, so every part of it lies left of the frame.
+    let cam = pinhole();
+    let pose = plane_scene_pose([3.5, 0.0, 0.0]);
+    let patch = plane_patch();
+    let c = pose.transform_point(&patch.center);
+    let (x, _) = cam.ray_to_pixel([c.x, c.y, c.z]).unwrap();
+    assert!(x < -60.0, "test setup: centre at x = {x}");
+    assert!(patch.is_front_facing(&pose) && is_in_front(&patch, &cam, &pose));
+    assert!(!view_could_see_patch(&patch, &cam, &pose));
+    // Far off frame as well.
+    assert!(!view_could_see_patch(
+        &patch,
+        &cam,
+        &plane_scene_pose([40.0, 0.0, 0.0])
+    ));
+}
+
+#[test]
+fn the_cull_keeps_a_footprint_partly_in_frame() {
+    // The centre projects just left of the frame (x = 160 - 65 * 2.6 = -9),
+    // but the patch's right half reaches into it.
+    let cam = pinhole();
+    let pose = plane_scene_pose([2.6, 0.0, 0.0]);
+    let patch = plane_patch();
+    let c = pose.transform_point(&patch.center);
+    let (x, _) = cam.ray_to_pixel([c.x, c.y, c.z]).unwrap();
+    assert!(x < 0.0, "test setup: centre at x = {x}");
+    assert!(view_could_see_patch(&patch, &cam, &pose));
+}
+
+#[test]
+fn the_cull_handles_a_point_at_infinity() {
+    let cam = pinhole();
+    // Camera translation is irrelevant for w = 0.
+    let ahead = plane_scene_pose([25.0, -3.0, 7.0]);
+    assert!(view_could_see_patch(&infinity_patch(), &cam, &ahead));
+    // The canonical identity camera looks down world -z, directly away from
+    // the direction +z.
+    let away = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    assert!(!view_could_see_patch(&infinity_patch(), &cam, &away));
+    // A direction 60 degrees off the optical axis is in front of the camera
+    // but outside its roughly 32-degree half field of view.
+    let a = 60f64.to_radians();
+    let off_axis = OrientedPatch::from_infinity_direction(
+        Point3::new(a.sin(), 0.0, a.cos()),
+        Vector3::new(0.0, -1.0, 0.0),
+        [0.05, 0.05],
+    );
+    assert!(is_in_front(&off_axis, &cam, &ahead));
+    assert!(!view_could_see_patch(&off_axis, &cam, &ahead));
+}
+
+#[test]
+fn the_cull_keeps_a_view_whose_footprint_does_not_fully_project() {
+    // A large patch whose far corners cross the camera's plane: the centre is
+    // in front, some samples are not, so the footprint is unknown and kept.
+    let cam = pinhole();
+    let pose = plane_scene_pose([0.0, 0.0, 3.9]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(30.0, 0.0, 3.95),
+        Vector3::new(-0.2, 0.0, -1.0),
+        Vector3::y(),
+        [40.0, 40.0],
+    );
+    assert!(patch.is_front_facing(&pose) && is_in_front(&patch, &cam, &pose));
+    assert!(view_could_see_patch(&patch, &cam, &pose));
+}
+
+/// The cull changes which photographs a caller must supply, never the
+/// selection: replacing every culled view's pyramid with a one-pixel
+/// placeholder gives the same admitted views and bit-identical scores.
+#[test]
+fn culled_views_as_placeholders_select_identically() {
+    let centers = [
+        [0.6, 0.0, 0.0],  // 0 track
+        [-0.6, 0.0, 0.0], // 1 track
+        [0.0, 0.6, 0.0],  // 2 agreeing candidate
+        [0.0, -0.6, 0.0], // 3 disagreeing candidate
+        [40.0, 0.0, 0.0], // 4 far out of frame
+        [0.0, 0.0, 8.0],  // 5 back-facing
+        [3.5, 0.0, 0.0],  // 6 just out of frame
+        [2.6, 0.0, 0.0],  // 7 partly in frame
+        [0.3, 0.3, 1.0],  // 8 agreeing candidate, closer
+    ];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture; centers.len()];
+    let mut texs = texs;
+    texs[3] = occluder_texture;
+    let scene = Scene::new(&centers, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+    let track = vec![0u32, 1];
+
+    let kept: Vec<bool> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            track.contains(&(i as u32)) || view_could_see_patch(&patch, v.camera, v.cam_from_world)
+        })
+        .collect();
+    assert_eq!(
+        kept,
+        [true, true, true, true, false, false, false, true, true],
+        "test setup: the views the cull drops"
+    );
+
+    let placeholder = ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 5);
+    let culled: Vec<ProjectedImage<'_>> = views
+        .iter()
+        .zip(&kept)
+        .map(|(v, &keep)| ProjectedImage {
+            pyramid: if keep { v.pyramid } else { &placeholder },
+            ..*v
+        })
+        .collect();
+
+    for sampler in [
+        Sampler::Bilinear,
+        Sampler::BilinearMip,
+        Sampler::Anisotropic,
+    ] {
+        let p = ViewSelectParams {
+            sampler,
+            ..params()
+        };
+        let full = select(&patch, &views, &track, None, &p);
+        let cut = select(&patch, &culled, &track, None, &p);
+        assert!(
+            full.admitted.contains(&2) && full.admitted.contains(&8),
+            "{sampler:?}: the scene admits candidates: {:?}",
+            full.admitted
+        );
+        assert_eq!(full.admitted, cut.admitted, "{sampler:?}");
+        assert_eq!(full.track_view_count, cut.track_view_count);
+        assert_eq!(
+            full.self_agreement.to_bits(),
+            cut.self_agreement.to_bits(),
+            "{sampler:?}"
+        );
+        let bits = |s: &ViewSelection| s.scores.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&full), bits(&cut), "{sampler:?}");
+    }
+}

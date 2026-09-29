@@ -242,10 +242,12 @@ not one.
 A point edit moves no image index, so nothing keyed by one has to be told; what
 it does owe is the section below. A bulk edit renumbers the image table, and a
 cached decode or a selected index keyed by an image is then a statement about a
-different photo. So `delete_image`, undo and redo each drop the state-level
-caches for the node (the SIFT and full-resolution caches) and clear its hover
-state, and the caller drops the panel-local texture caches -- the same
-three-part release closing a node performs. The image and camera **selections**
+different photo. So `delete_image`, undo and redo each drop the node's SIFT
+cache and clear its hover state, and the caller drops the panel-local texture
+caches -- the same three-part release closing a node performs. The decoded
+photographs are not dropped: the photograph cache is keyed by file path, which
+a renumbering does not change
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)). The image and camera **selections**
 are not dropped with them: they name a photograph the person is looking at
 rather than a cached product, so they are carried across by name and cleared
 only where the version arrived at has no such photograph

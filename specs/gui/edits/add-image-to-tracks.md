@@ -50,12 +50,14 @@ which reads `ImageMenu::add_to_tracks_refusal` in
 The step is a **background operation**, `Add image to tracks`
 (`Operation::ADD_IMAGE_TO_TRACKS`), so the window stays live while it runs and
 the Background panel shows its progress and offers Cancel. What crosses to the
-worker is a clone of the value at the cursor and, per image, either the pyramid
-the viewer's full-resolution cache already holds or the path to read the
-photograph from (`AppState::view_sources_for`). On the worker the photographs
-are decoded with the cancel flag polled between them; one that cannot be read is
-left out of every point's references rather than refusing the step
-(`ViewSources::decode_available`). The overlay is folded in when there is one,
+worker is a clone of the value at the cursor, per image the path to read the
+photograph from, and a clone of the viewer's photograph cache
+(`AppState::view_sources_for`). On the worker the cache hands back the
+photographs it holds and decodes the rest in parallel, with the cancel flag
+polled before each decode, and keeps them for later steps
+([../../core/camera/photograph-cache.md](../../core/camera/photograph-cache.md));
+one that cannot be read is left out of every point's references rather than
+refusing the step (`ViewSources::decode_available`). The overlay is folded in when there is one,
 and the core operation runs with its defaults.
 
 A cancelled run pushes no version and logs `... cancelled`.

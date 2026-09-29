@@ -217,14 +217,11 @@ fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
         .set_bench_verdict(id, &label, 1, Verdict::Out)
         .expect("observation 1 exists");
     state.settle_bench_evaluation();
-    // A cursor move and a document edit let go of the node's decoded
-    // photographs, which the viewer reads again from disk; the fixture's are
-    // only in memory, so they are put back after each.
-    let photographs = state.full_res_cache.clone();
+    // The fixture's photographs are only in memory. The photograph cache is
+    // keyed by path, so the cursor move and the document edit below keep them.
 
     // Undo lands on another version of the track.
     state.undo(id).expect("the verdict");
-    state.full_res_cache = photographs.clone();
     assert_eq!(
         state.bench_evaluation(id, &label),
         Some(Evaluation::Evaluating),
@@ -244,7 +241,6 @@ fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
     state
         .delete_point(PointRef::new(id, other))
         .expect("a live point");
-    state.full_res_cache = photographs;
     assert_eq!(
         state.bench_evaluation(id, &label),
         Some(Evaluation::Evaluating),

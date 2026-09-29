@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use sfmtool_core::bench::{BenchItem, StageKind, Verdict};
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::remap::ImageU8;
 
 use crate::action_log::Kind;
 use crate::background::{Finished, Operation};
@@ -36,8 +36,13 @@ pub(crate) const POINT: u32 = 2;
 /// test that holds each operation's cancellable declaration to its claim runs
 /// the real work.
 pub(crate) fn state() -> (AppState, ReconId) {
+    state_of(projected_embedded_demo(12))
+}
+
+/// [`state`] over a reconstruction the caller has built or altered.
+fn state_of(recon: sfmtool_core::SfmrReconstruction) -> (AppState, ReconId) {
     let mut state = AppState::new();
-    state.append_node(SceneNode::demo(projected_embedded_demo(12)));
+    state.append_node(SceneNode::demo(recon));
     let id = state.selected_recon.expect("a selected reconstruction");
     let camera = &state.scene[0].recon().image_table.cameras[0];
     let (w, h) = (camera.width, camera.height);
@@ -55,13 +60,7 @@ pub(crate) fn state() -> (AppState, ReconId) {
                 ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
             })
             .collect();
-        state.full_res_cache.insert(
-            ImageRef::new(id, image),
-            Some(Arc::new(ImageU8Pyramid::from_image(
-                ImageU8::new(w, h, 3, data),
-                crate::state::PYRAMID_LEVELS,
-            ))),
-        );
+        state.insert_photograph(id, image, ImageU8::new(w, h, 3, data));
     }
     (state, id)
 }
@@ -1190,7 +1189,7 @@ fn a_run_of_bench_steps_over_a_clean_value_is_clean_and_a_commit_is_dirty() {
 fn a_photometric_step_decodes_on_the_worker() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    state.full_res_cache.clear();
+    state.photographs.clear();
     state.action_log.clear();
     let before = versions(&state, id);
 
@@ -1619,4 +1618,75 @@ fn a_resize_cursor_names_the_way_the_edge_moves_not_the_way_it_lies() {
     // A degenerate edge names no direction, so it asks for nothing in
     // particular rather than whatever `atan2(0, 0)` happens to be.
     assert_eq!(super::resize_cursor(Vec2::ZERO), CursorIcon::Move);
+}
+
+/// The geometry search reads the photographs of the track's own images and of
+/// the images that could see its patch, and no others. In the fixture the
+/// point's patch faces only its own three cameras; one more image is moved to
+/// the pose of the first, so it is read although the track does not name it,
+/// and the images the patch faces away from are placeholders.
+#[test]
+fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
+    use sfmtool_core::bench::Stage;
+    use sfmtool_core::patch::view_selection::view_could_see_patch;
+
+    let mut recon = projected_embedded_demo(12);
+    let image_count = recon.image_table.images.len();
+    let moved = 3;
+    {
+        let [first, .., image] = &mut recon.image_table.images[..=moved] else {
+            unreachable!("the demo has more than three images");
+        };
+        image.quaternion_wxyz = first.quaternion_wxyz;
+        image.translation_xyz = first.translation_xyz;
+    }
+    let (mut state, id) = state_of(recon);
+    let label = put_on_bench(&mut state, id);
+
+    let (track, sources) = state
+        .bench_geometry_search_inputs(id, &label)
+        .expect("a framed track");
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a committed point goes on the bench at the track stage");
+    };
+    let patch = payload.placement.as_ref().expect("a framed track");
+    let table = &state.scene[0].recon().image_table;
+    let could_see: Vec<usize> = (0..image_count)
+        .filter(|&i| {
+            let image = &table.images[i];
+            view_could_see_patch(
+                patch,
+                &table.cameras[image.camera_index as usize],
+                &crate::scene::cam_from_world(image),
+            )
+        })
+        .collect();
+    assert_eq!(could_see, [0, 1, 2, moved], "test setup");
+    assert!(
+        image_count > moved + 1,
+        "test setup: some images are culled"
+    );
+    assert!(
+        track
+            .observations
+            .iter()
+            .all(|o| (o.image as usize) < moved),
+        "test setup: the moved image is not in the track"
+    );
+    assert_eq!(sources.read_images(), [0, 1, 2, moved]);
+
+    state.action_log.clear();
+    state
+        .start_bench_geometry_search(id, &label, 0)
+        .expect("a framed track and decoded photographs are enough");
+    state.finish_background_task();
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].1.starts_with(&format!(
+            "{label}: Geometry search from observation 0 of 3:"
+        )),
+        "{}",
+        rows[0].1
+    );
 }

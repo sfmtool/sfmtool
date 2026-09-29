@@ -213,8 +213,8 @@ impl AppState {
     /// [`AppState::create_track_at_pixel_job`] hands them, so a source whose
     /// file is missing or stale is skipped and named in the report. The grey
     /// images the far-field sweep and the layers sample are built on the
-    /// worker, per run, from the decoded photographs: the viewer keeps no
-    /// decoded set between runs for them to sit beside.
+    /// worker, per run, from the decoded photographs: the photograph cache
+    /// keeps the photographs between runs, but not grey images made from them.
     pub(crate) fn find_nearby_tracks_job(
         &mut self,
         image: ImageRef,
@@ -282,6 +282,7 @@ impl AppState {
             }
             let decoded = match views.decode(progress) {
                 Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => {
                     return Finished::Failed(format!(
                         "Cannot find nearby tracks in {}: {e}",

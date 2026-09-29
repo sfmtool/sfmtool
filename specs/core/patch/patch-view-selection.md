@@ -30,8 +30,10 @@ self-occluded or disagreeing views are left out.
 ## Algorithm
 
 1. **Candidates.** The track views plus every other image that *geometrically*
-   sees the surfel — the point projects in front of the camera and inside the
-   frame, and the patch is front-facing (`OrientedPatch::is_front_facing`).
+   sees the surfel — the patch is front-facing (`OrientedPatch::is_front_facing`),
+   the point is in front of the camera, and the patch's projected footprint
+   overlaps the frame (`view_could_see_patch`, § "The geometric cull") — and
+   whose render covers the reference support.
 2. **Reference appearance.** Render the patch in each track view and combine them
    into a robust consensus — a reference image of what the surface looks like,
    from the views that already observe the point.
@@ -126,6 +128,44 @@ returns an admitted view's centre pixel and projected `u`/`v` half-frame under
 the same homogeneous finite/infinity convention. The bench geometry search
 uses it to seed a candidate without carrying a second projection convention.
 
+### The geometric cull
+
+The pixel-free half of the candidate test is one public predicate:
+
+```rust
+/// Whether `camera` at `cam_from_world` could see `patch` at all: the patch
+/// faces it, its centre is in front of it, and the patch's projected
+/// footprint overlaps the image. Reads no pixels.
+pub fn view_could_see_patch(
+    patch: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+) -> bool;
+```
+
+`select_patch_views` calls it for every candidate before it reads any pixel of
+that view, so the selection and a caller that culls with it cannot drift apart.
+A caller that fetches photographs can call it first and fetch only the views
+that pass, putting a placeholder pyramid in every other slot: a view the
+predicate rejects is never sampled. The viewer's geometry search does this, so
+it reads the photographs of the track's own images and of the images that pass,
+not of every image ([photograph-cache.md](../camera/photograph-cache.md) § "The
+geometric cull").
+
+The cull is **conservative**: it rejects a view only when the full selection
+would also reject it, so it changes the time a search takes and never its
+result. The front-facing and cheirality tests are the same code the selection
+runs. The footprint test projects a 9 × 9 grid spanning the patch's `[-1, 1]`
+extent, in the camera frame a render uses (so a point at infinity goes through
+its homogeneous weight), widens the pixels' bounding box by the largest step
+between neighbouring samples plus one pixel, and rejects only when that box
+lies entirely outside `[0, width) × [0, height)`. If any sample fails to
+project, the view is kept. A render whose every sample misses the frame fails
+the selection's coverage test anyway. The `the_cull_*` tests and
+`culled_views_as_placeholders_select_identically` in
+[view_selection/tests.rs](../../../crates/sfmtool-core/src/patch/view_selection/tests.rs)
+hold it to that.
+
 ### Affine candidate scoring (2026-07)
 
 The candidate gate score exists only to admit/reject — nothing downstream
@@ -219,10 +259,10 @@ frozen common support (re-normalized per channel so a dot product is a windowed
 ZNCC). A candidate is scored on the **reference's** surviving original channels
 (a flat-in-the-candidate channel contributes 0), so the score is always a
 correlation in one channel space — never the reference's channel A against a
-candidate's channel B. Candidates are gated geometrically by `is_front_facing`
-**and** an explicit cheirality check (the point must have positive camera-frame
-depth, since wide-fisheye / equirect projection can map behind-camera points
-in-frame). The track image indices are deduped order-preserving before use, so a
+candidate's channel B. Candidates are gated geometrically by
+`view_could_see_patch`: `is_front_facing`, an explicit cheirality check (the
+point must have positive camera-frame depth, since wide-fisheye / equirect
+projection can map behind-camera points in-frame), and the footprint test. The track image indices are deduped order-preserving before use, so a
 point with two observations in one image does not double-weight that view. The
 self-agreement is the track views' mean ZNCC to the reference; when it is below
 `min_self_agreement` (default 0.3) the track is admitted verbatim with no

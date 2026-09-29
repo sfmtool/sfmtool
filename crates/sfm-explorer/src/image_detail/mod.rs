@@ -46,6 +46,25 @@ use std::collections::HashMap;
 
 use intrinsics::View;
 
+/// The photograph the panel is asked to draw, as far as the photograph cache
+/// has got with it.
+#[derive(Clone, Copy)]
+pub(crate) enum DetailPhotograph<'a> {
+    /// Decoded: the full-resolution RGB pixels.
+    Decoded(&'a ImageU8),
+    /// Being decoded off the GUI thread. The panel says so and draws the
+    /// photograph on the frame after it arrives.
+    Decoding,
+    /// The file could not be read or decoded.
+    Unreadable,
+}
+
+/// What the panel says in place of a photograph still being decoded.
+pub(crate) const DECODING_LABEL: &str = "Loading image…";
+
+/// What the panel says in place of a photograph that could not be read.
+pub(crate) const UNREADABLE_LABEL: &str = "Failed to load image";
+
 /// Maximum zoom level (32× = pixel-level inspection).
 pub(crate) const MAX_ZOOM: f32 = 32.0;
 /// Minimum overlap in pixels between image and panel when panning.
@@ -539,7 +558,7 @@ impl ImageDetail {
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
-        full_res: Option<&ImageU8>,
+        photograph: DetailPhotograph<'_>,
         feature_display: &FeatureDisplaySettings,
         intrinsics_display: &mut IntrinsicsDisplaySettings,
     ) -> ImageDetailResponse {
@@ -573,9 +592,15 @@ impl ImageDetail {
         let image_ref = ImageRef::new(recon_id, img_idx);
 
         // Load the full-resolution image if it changed. The CPU pixels come
-        // from the shared `full_res_cache` (decoded once, in dock.rs); this
-        // panel only uploads them to a GPU texture.
+        // from the shared photograph cache (decoded once, on a worker thread
+        // that dock.rs asks for); this panel only uploads them to a GPU
+        // texture. Until they arrive nothing is loaded, so this runs again on
+        // each frame until the decode lands.
         if self.loaded_image.as_ref().map(|(i, _)| *i) != Some(image_ref) {
+            let full_res = match photograph {
+                DetailPhotograph::Decoded(image) => Some(image),
+                DetailPhotograph::Decoding | DetailPhotograph::Unreadable => None,
+            };
             self.load_image(ui.ctx(), full_res, image_ref);
             self.feature_overlay = None; // reset overlay on image change
         }
@@ -619,8 +644,13 @@ impl ImageDetail {
             .as_ref()
             .map(|(_, texture)| (texture.size_vec2(), texture.id()))
         else {
-            ui.centered_and_justified(|ui| {
-                ui.label("Failed to load image");
+            ui.centered_and_justified(|ui| match photograph {
+                DetailPhotograph::Decoding => {
+                    ui.label(DECODING_LABEL);
+                }
+                DetailPhotograph::Decoded(_) | DetailPhotograph::Unreadable => {
+                    ui.label(UNREADABLE_LABEL);
+                }
             });
             return response;
         };
@@ -860,8 +890,9 @@ impl ImageDetail {
     }
 
     /// Build the display texture from the shared full-res CPU image (decoded
-    /// once into `AppState::full_res_cache`). `None` means the decode failed,
-    /// in which case the "Failed to load image" placeholder path applies.
+    /// once into `AppState::photographs`). `None` means there are no pixels
+    /// yet or the decode failed; the panel then draws [`DECODING_LABEL`] or
+    /// [`UNREADABLE_LABEL`] in their place.
     fn load_image(&mut self, ctx: &egui::Context, full_res: Option<&ImageU8>, image: ImageRef) {
         let Some(img) = full_res else {
             self.loaded_image = None;

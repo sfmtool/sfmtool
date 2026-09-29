@@ -2097,7 +2097,7 @@ fn a_reconstruction_with_no_patch_frames_is_refused_in_the_menu_s_own_words() {
 /// hold the same pixels and cost the seconds this cache exists to remove.
 #[test]
 fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
-    let mut state = state();
+    let state = state();
     let id = node(&state);
     let images = state.scene[0].image_count();
     assert!(images > 1, "the demo node has images to read");
@@ -2108,9 +2108,9 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
                 ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]),
                 crate::state::PYRAMID_LEVELS,
             ));
-            state
-                .full_res_cache
-                .insert(ImageRef::new(id, index), Some(Arc::clone(&pyramid)));
+            let path = crate::state::photograph_path(state.scene[0].recon(), index)
+                .expect("an image of the node");
+            state.photographs.insert(&path, Arc::clone(&pyramid));
             pyramid
         })
         .collect();
@@ -2128,9 +2128,13 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
             "image {index} was pyramided again rather than taken from the cache",
         );
     }
-    assert_eq!(
-        crate::test_support::phase_note(&collector.take(), "decode images"),
-        Some(format!("0 read from disk, {images} reused from the cache")),
+    let note = crate::test_support::phase_note(&collector.take(), "decode images")
+        .expect("a decode images note");
+    assert!(
+        note.starts_with(&format!(
+            "0 read from disk, {images} reused from the cache, cache "
+        )),
+        "{note}"
     );
 }
 
@@ -2138,17 +2142,11 @@ fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
 /// hundred images costs a step over two of them two pyramids and not a hundred.
 #[test]
 fn the_images_a_step_does_not_read_share_one_placeholder() {
-    let mut state = state();
+    let state = state();
     let id = node(&state);
     let images = state.scene[0].image_count();
     assert!(images > 2, "the demo node has images to leave unused");
-    state.full_res_cache.insert(
-        ImageRef::new(id, 0),
-        Some(Arc::new(ImageU8Pyramid::from_image(
-            ImageU8::new(8, 8, 3, vec![7u8; 8 * 8 * 3]),
-            crate::state::PYRAMID_LEVELS,
-        ))),
-    );
+    state.insert_photograph(id, 0, ImageU8::new(8, 8, 3, vec![7u8; 8 * 8 * 3]));
 
     let sources = state.view_sources_for(id, &[0]).expect("a loaded node");
     let collector = crate::progress::Collector::new(false);
@@ -2162,10 +2160,143 @@ fn the_images_a_step_does_not_read_share_one_placeholder() {
             "unused image {index} carries a placeholder of its own",
         );
     }
-    assert_eq!(
-        crate::test_support::phase_note(&collector.take(), "decode images"),
-        Some("0 read from disk, 1 reused from the cache".to_string()),
+    let note = crate::test_support::phase_note(&collector.take(), "decode images")
+        .expect("a decode images note");
+    assert!(
+        note.starts_with("0 read from disk, 1 reused from the cache, cache "),
+        "{note}"
     );
+}
+
+/// A state whose one node's photographs are real files: small JPEGs, one per
+/// image, in a temporary workspace the node reads them from.
+fn state_with_photographs_on_disk() -> (AppState, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let mut recon = SfmrReconstruction::demo(64);
+    recon.workspace_dir = dir.path().to_path_buf();
+    for (i, image) in recon.image_table.images.iter().enumerate() {
+        let path = dir.path().join(&image.name);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+        image::RgbImage::from_fn(16, 12, |x, y| image::Rgb([x as u8, y as u8, i as u8]))
+            .save(&path)
+            .expect("a written photograph");
+    }
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(recon));
+    (state, dir)
+}
+
+/// What a step's worker decodes stays in the viewer's photograph cache, so the
+/// next step over the same images reads nothing from disk.
+#[test]
+fn a_second_step_over_the_same_images_reads_nothing_from_disk() {
+    let (state, _dir) = state_with_photographs_on_disk();
+    let id = node(&state);
+    let needed = [0usize, 1, 2];
+
+    let collector = crate::progress::Collector::new(false);
+    let first = state
+        .view_sources_for(id, &needed)
+        .expect("a loaded node")
+        .decode(&collector.progress())
+        .expect("the photographs are on disk");
+    let note = crate::test_support::phase_note(&collector.take(), "decode images")
+        .expect("a decode images note");
+    assert!(
+        note.starts_with("3 read from disk, 0 reused from the cache, cache "),
+        "{note}"
+    );
+
+    let second = state
+        .view_sources_for(id, &needed)
+        .expect("a loaded node")
+        .decode(&collector.progress())
+        .expect("the photographs are cached");
+    let note = crate::test_support::phase_note(&collector.take(), "decode images")
+        .expect("a decode images note");
+    assert!(
+        note.starts_with("0 read from disk, 3 reused from the cache, cache "),
+        "{note}"
+    );
+    assert_eq!(
+        state.photographs.stats().misses,
+        3,
+        "a photograph was read twice"
+    );
+    for index in needed {
+        assert!(Arc::ptr_eq(&first.pyramids[index], &second.pyramids[index]));
+    }
+}
+
+/// An image that cannot be read refuses a step that needs every photograph,
+/// with the refusal naming it.
+#[test]
+fn a_step_refuses_on_an_unreadable_photograph() {
+    let (state, dir) = state_with_photographs_on_disk();
+    let id = node(&state);
+    let name = state.scene[0].recon().image_table.images[1].name.clone();
+    std::fs::remove_file(dir.path().join(&name)).expect("the photograph was written");
+
+    let collector = crate::progress::Collector::new(false);
+    let refusal = state
+        .view_sources_for(id, &[0, 1])
+        .expect("a loaded node")
+        .decode(&collector.progress())
+        .err()
+        .expect("image 1 has no file");
+    assert_eq!(refusal, format!("Cannot read {name}."));
+    collector.take();
+
+    let available = state
+        .view_sources_for(id, &[0, 1])
+        .expect("a loaded node")
+        .decode_available(&collector.progress())
+        .expect("not cancelled");
+    assert_eq!(
+        available
+            .pyramid_slots()
+            .iter()
+            .filter(|s| s.is_some())
+            .count(),
+        1
+    );
+    let note = crate::test_support::phase_note(&collector.take(), "decode images")
+        .expect("a decode images note");
+    assert!(
+        note.starts_with("0 read from disk, 1 reused from the cache, 1 unreadable, cache "),
+        "{note}"
+    );
+}
+
+/// Deleting an image renumbers the image table, and the photographs stay: the
+/// cache is keyed by path, which the renumbering does not change.
+#[test]
+fn deleting_an_image_keeps_the_decoded_photographs() {
+    let mut state = state();
+    let id = node(&state);
+    let images = state.scene[0].image_count();
+    for index in 0..images {
+        state.insert_photograph(id, index, ImageU8::new(4, 4, 3, vec![index as u8; 48]));
+    }
+    let before: Vec<Arc<ImageU8Pyramid>> = (0..images)
+        .map(|index| state.cached_photograph(id, index).expect("inserted"))
+        .collect();
+
+    state.delete_image(ImageRef::new(id, 1)).expect("an image");
+
+    // Old image 2 is now image 1, and its photograph is still the one decoded.
+    assert_eq!(state.scene[0].image_count(), images - 1);
+    for new in 1..images - 1 {
+        let now = state.cached_photograph(id, new).expect("still cached");
+        assert!(
+            Arc::ptr_eq(&now, &before[new + 1]),
+            "image {new} lost its photograph to the renumbering"
+        );
+    }
+    assert!(Arc::ptr_eq(
+        &state.cached_photograph(id, 0).expect("still cached"),
+        &before[0]
+    ));
 }
 
 // ── The point gestures ──────────────────────────────────────────────────

@@ -130,7 +130,7 @@ impl TabViewer for Tabs<'_> {
                     &[],
                     &crate::platform::ScrollInput::default(),
                     Some(&self.photograph.sift),
-                    Some(&self.photograph.image),
+                    crate::image_detail::DetailPhotograph::Decoded(&self.photograph.image),
                     &state.feature_display,
                     &mut state.intrinsics_display,
                 );

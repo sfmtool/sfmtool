@@ -27,8 +27,8 @@ assumption runs through every layer:
 - `SceneRenderer` owns one point instance buffer, one frustum edge buffer, one
   thumbnail atlas, and single-valued derived scalars (`auto_point_size`,
   `scene_center`, `scene_radius`).
-- A long tail of caches key by bare image index: `AppState::sift_cache` /
-  `full_res_cache`, `ImageBrowser::thumbnail_cache` (invalidated only by image
+- A long tail of caches key by bare image index: `AppState::sift_cache` and
+  the decoded photographs, `ImageBrowser::thumbnail_cache` (invalidated only by image
   *count*), `ImageDetail::loaded_image`, Track View's texture maps, and
   `SceneRenderer::bg_image_loaded_index`.
 - `File > Open` replaces the loaded file wholesale.
@@ -1234,11 +1234,19 @@ reconstruction row and the camera row in the Scene panel.
 Every image/point-keyed cache re-keys by ref:
 
 - `AppState::sift_cache: HashMap<ImageRef, CachedSiftFeatures>`
-- `AppState::full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>`
 - panel-local texture caches as listed above
 - `SceneRenderer` bg image: `Option<ImageRef>`
 
-Closing a node purges its entries from every cache (a `retain` on
+The decoded photographs are the exception. `AppState::photographs` is a
+`PhotographCache` keyed by the path each photograph is read from, not by
+`ImageRef`, so two nodes over one workspace share their decodes and a
+renumbering edit leaves them in place
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)).
+Closing a node or the whole scene does not purge it: reopening the same file
+reuses the pixels, and the cache's byte budget bounds the memory, dropping the
+least recently used photographs first.
+
+Closing a node purges its entries from every `ImageRef`-keyed cache (a `retain` on
 `ref.recon != id`), releases its `ReconResources`, clears any
 selection/hover/camera-view state pointing into it, reassigns pick bases, and
 recomputes union bounds. The camera-view rule holds for *any* way a node

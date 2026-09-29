@@ -363,7 +363,9 @@ are all kept, up to `DETAIL_EVENTS`.
 **Overview is always on and is a coverage requirement.** Every operation the
 Action Log can record that can exceed a frame's budget names its stages: a file
 opening, every bulk edit, every history step, the uploads, the render, the
-resection, the alignment, the decode the Image Detail panel does. The point of
+resection and the alignment. The Image Detail panel's photograph decode is not one
+of them: it runs on the rayon pool, off every frame, and reports no phases
+([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)). The point of
 the level is that the first question is never unanswerable. When a row says
 2.4 s, expanding it says which stage that was, without anybody having had to
 predict in advance that this would be the slow row.
@@ -758,7 +760,7 @@ The operations:
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
 | `localize` and `refine` | the two calls a bench fit makes | |
-| `decode views` | the full-resolution decode an edit needs | |
+| `decode images` | `ViewSources` in `state::edits`: the photographs a bench step or *Add image to tracks* reads, through the photograph cache | 0.5 to 1.7 s for a geometry search on a 368-image 4K capture, under 2 ms when repeated |
 
 The five under `uploads` open in `App::prepare_uploads` rather than inside the
 `upload` functions they wrap, because the caller is what holds the frame's
