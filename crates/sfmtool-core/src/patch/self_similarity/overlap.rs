@@ -50,10 +50,7 @@ pub fn zncc_self_similarity_radius_overlap(
     );
     let r = params.max_radius as usize;
     let sums: Vec<Sums> = shifts(r)
-        .map(|shift| match shift {
-            Some((dx, dy)) => prepared.sums(template, dx, dy),
-            None => Sums::default(),
-        })
+        .map(|(dx, dy)| prepared.sums(template, dx, dy))
         .collect();
     judge(&sums, prepared.channels, r, params)
 }
@@ -103,15 +100,7 @@ pub fn zncc_self_similarity_parts_overlap(
         std::array::from_fn(|_| std::array::from_fn(|_| Vec::with_capacity(count)));
     let mut middle_sums = Vec::with_capacity(count);
     let mut whole = Vec::with_capacity(count);
-    for shift in shifts(r) {
-        let Some((dx, dy)) = shift else {
-            for cell in cells.iter_mut().flatten() {
-                cell.push(Sums::default());
-            }
-            middle_sums.push(Sums::default());
-            whole.push(Sums::default());
-            continue;
-        };
+    for (dx, dy) in shifts(r) {
         // The nine cells tile the bitmap and the sums add, so the whole
         // bitmap's sums are the cells' added.
         let mut total = Sums::default();
@@ -135,13 +124,10 @@ pub fn zncc_self_similarity_parts_overlap(
     }
 }
 
-/// Every shift of the `(2r + 1)²` square, row-major from `(−r, −r)`: `Some`
-/// for a shift in the disk `dx² + dy² ≤ r²`, `None` outside it.
-fn shifts(r: usize) -> impl Iterator<Item = Option<(i64, i64)>> {
+/// Every shift of the `(2r + 1)²` square, row-major from `(−r, −r)`.
+fn shifts(r: usize) -> impl Iterator<Item = (i64, i64)> {
     let ri = r as i64;
-    (-ri..=ri).flat_map(move |dy| {
-        (-ri..=ri).map(move |dx| (dx * dx + dy * dy <= ri * ri).then_some((dx, dy)))
-    })
+    (-ri..=ri).flat_map(move |dy| (-ri..=ri).map(move |dx| (dx, dy)))
 }
 
 /// The sums of one template over one shift's overlap: the overlap's sample
@@ -314,8 +300,7 @@ fn judge(
     let tolerance = params.relative_tolerance + noise_term;
 
     let mut surface = vec![f64::NAN; shift_count];
-    for (index, shift) in shifts(r).enumerate() {
-        let Some((dx, dy)) = shift else { continue };
+    for (index, (dx, dy)) in shifts(r).enumerate() {
         if dx == 0 && dy == 0 {
             surface[index] = 1.0;
             continue;

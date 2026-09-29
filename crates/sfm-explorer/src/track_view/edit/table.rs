@@ -1124,9 +1124,10 @@ impl TrackEdit {
 pub(super) fn plot_caption(radius: Option<f64>, tolerance: f64) -> String {
     let radius = radius.map_or_else(|| "-".to_string(), super::radius_number);
     format!(
-        "ZNCC of the patch against itself at every shift up to 3 px. The contour is at \
-         {:.3}, one minus the tolerance {:.3}; the dots are the whole-pixel shifts inside \
-         it. Radius {radius}.",
+        "ZNCC of the patch against itself at every shift up to 3 px along each axis. The \
+         contour is at {:.3}, one minus the tolerance {:.3}; the dots are the whole-pixel \
+         shifts inside it. Radius {radius}: how far from the centre the contour reaches, \
+         read up to 3 px.",
         1.0 - tolerance,
         tolerance
     )

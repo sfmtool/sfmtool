@@ -1841,13 +1841,10 @@ fn the_surface_plot_passes_through_the_measured_shifts() {
     let surface = bowl(0.02);
     let plot = SurfacePlot::new(&surface, 0.05).expect("a textured surface");
     let step = (plot.n - 1) / 6;
+    // The picture covers the whole square, corners included, as the radius
+    // does.
+    assert!(plot.values.iter().all(|v| v.is_finite()));
     for (i, &z) in surface.iter().enumerate() {
-        let (dx, dy) = ((i % 7) as i32 - 3, (i / 7) as i32 - 3);
-        if f64::from(dx * dx + dy * dy).sqrt() > 3.35 {
-            // The picture is cut to the disk and a margin round it.
-            assert!(plot.values[(i / 7) * step * plot.n + (i % 7) * step].is_nan());
-            continue;
-        }
         let (x, y) = ((i % 7) * step, (i / 7) * step);
         assert!(
             (plot.values[y * plot.n + x] - z).abs() < 1e-9,
@@ -1908,7 +1905,7 @@ fn a_surface_with_nothing_to_draw_has_no_plot() {
 }
 
 #[test]
-fn a_ridge_s_contour_runs_to_the_edge_of_the_disk() {
+fn a_ridge_s_contour_runs_to_the_edge_of_the_square() {
     use super::surface_plot::SurfacePlot;
     // A ridge along x: the ZNCC falls only across it.
     let surface: Vec<f64> = (0..49)

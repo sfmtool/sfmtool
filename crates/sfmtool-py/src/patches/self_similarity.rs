@@ -24,13 +24,14 @@ use sfmtool_core::patch::self_similarity::{
 /// match itself as well as a true match between two views would (see
 /// ``specs/core/patch/zncc-self-similarity-radius.md``).
 ///
-/// For every shift ``d`` in the disk ``dx^2 + dy^2 <= r^2``, the core is
+/// For every shift ``d`` of the square ``|dx|, |dy| <= r``, the core is
 /// compared with the window of the same size moved by ``d`` by the per-channel
 /// ZNCC averaged over the core's textured channels. A shift is
 /// indistinguishable when ``1 - z(d) <= relative_tolerance + mean_c (noise /
 /// s_c)^2``, with ``s_c`` the core's own spread in channel ``c``. The radius is
-/// the length of the furthest indistinguishable shift, or ``r`` when one lies
-/// in the disk's outer ring, read as "``r`` or more".
+/// how far from the centre that ZNCC, interpolated linearly between
+/// neighbouring shifts, falls through the level ``1 - tolerance`` at its
+/// furthest, capped at ``r``, which reads as "``r`` or more".
 ///
 /// Args:
 ///     tile: An ``(R + 2r, R + 2r)`` single-channel tile or an ``(R + 2r, R +

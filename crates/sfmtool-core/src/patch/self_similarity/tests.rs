@@ -330,8 +330,8 @@ fn repeats_score_the_repeat_distance() {
 
     // A random texture across the diagonal, constant along (1, 1) but for a
     // slow wave along it: the shift (1, 1) stays within the tolerance and
-    // (2, 2) does not. (An exact repeat every (1, 1) also repeats at (2, 2),
-    // which lies in the outer ring and saturates.)
+    // (2, 2) does not. (An exact repeat every (1, 1) also repeats at (3, 3),
+    // on the square's border, and reads 3.)
     let size = 22;
     let stripe: Vec<f64> = (0..2 * size)
         .map(|_| 255.0 * rng.next_f32() as f64)
@@ -344,19 +344,121 @@ fn repeats_score_the_repeat_distance() {
     assert!(s.radius > 2f64.sqrt() && s.radius < 2.0, "{s:?}");
 }
 
+/// A `(2r + 1)²` surface from `z(dx, dy)`, row-major from `(−r, −r)`.
+fn surface_of(r: i64, z: impl Fn(i64, i64) -> f64) -> Vec<f64> {
+    (-r..=r)
+        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| z(dx, dy))
+        .collect()
+}
+
 /// The crossing is where the ZNCC, interpolated linearly along a grid edge,
 /// equals the level.
 #[test]
 fn the_radius_is_where_the_surface_crosses_the_level() {
-    // A 3 x 3 surface (r = 1): the centre at 1, the right-hand neighbour at
-    // 0.9 and the other three at 0.5, read at the level 0.8.
-    let nan = f64::NAN;
-    let surface = [nan, 0.5, nan, 0.5, 1.0, 0.9, nan, 0.5, nan];
-    // Right: 1 to 0.9 stays above 0.8, so no crossing between them, and the
-    // shift (1, 0) is on the disk's rim with no neighbour inside it. Left, up
-    // and down: 1 to 0.5 crosses 0.8 two fifths of the way out.
-    let radius = super::crossing_radius(&surface, 1, 0.8);
-    assert!((radius - 0.4).abs() < 1e-12, "{radius}");
+    // A 5 x 5 surface (r = 2): the centre at 1, the shift (1, 0) at 0.9 and
+    // every other at 0.5, read at the level 0.8.
+    let surface = surface_of(2, |dx, dy| match (dx, dy) {
+        (0, 0) => 1.0,
+        (1, 0) => 0.9,
+        _ => 0.5,
+    });
+    // From (1, 0) outward to (2, 0), 0.9 to 0.5 crosses 0.8 a quarter of the
+    // way, at (1.25, 0); every other crossing is nearer the centre.
+    let radius = super::crossing_radius(&surface, 2, 0.8);
+    assert!((radius - 1.25).abs() < 1e-12, "{radius}");
+}
+
+/// A sighting on a real reconstruction whose one shift in the disk's outer
+/// ring, (−2, +1), clears the level by 0.0002 while every shift further out
+/// in that direction reads well under it. The furthest the surface crosses
+/// the level is just past that shift, √5 ≈ 2.24 from the centre.
+#[test]
+fn a_shift_just_clearing_the_level_reads_its_own_distance() {
+    #[rustfmt::skip]
+    let surface = vec![
+        0.514, 0.594, 0.661, 0.714, 0.748, 0.762, 0.758,
+        0.68,  0.755, 0.816, 0.86,  0.879, 0.877, 0.853,
+        0.804, 0.873, 0.927, 0.961, 0.963, 0.939, 0.896,
+        0.883, 0.94,  0.981, 1.0,   0.98,  0.935, 0.872,
+        0.908, 0.946, 0.965, 0.961, 0.923, 0.861, 0.783,
+        0.876, 0.891, 0.884, 0.856, 0.803, 0.729, 0.641,
+        0.79,  0.783, 0.754, 0.708, 0.641, 0.559, 0.464,
+    ];
+    let s = read_surface(surface, 3, 0.05421260937718174);
+    assert!((s.radius - 5f64.sqrt()).abs() < 0.01, "{}", s.radius);
+}
+
+/// A ridge along the diagonal reads the length along the diagonal where the
+/// surface crosses the level, not the grid's reach.
+#[test]
+fn a_ridge_along_the_diagonal_reads_its_crossing() {
+    // z = 1 − 0.5·across² − 0.02·along², with along and across the unit
+    // directions (1, 1)/√2 and (1, −1)/√2: at the level 0.95 the ridge
+    // reaches √2.5 ≈ 1.58 along the diagonal. (1, 1) at 0.96 is at the level
+    // and (2, 2) at 0.84 is not; the grid edges out of (1, 1) cross the level
+    // just past it.
+    let ridge = |dx: i64, dy: i64| {
+        let (x, y) = (dx as f64, dy as f64);
+        let (along, across) = ((x + y) / 2f64.sqrt(), (x - y) / 2f64.sqrt());
+        1.0 - 0.5 * across * across - 0.02 * along * along
+    };
+    let s = read_surface(surface_of(3, ridge), 3, 0.05);
+    assert!(s.radius > 2f64.sqrt() && s.radius < 1.6, "{}", s.radius);
+    let len = s.slide[0].hypot(s.slide[1]);
+    assert!(len > 0.9, "{:?}", s.slide);
+    assert!((s.slide[0] * s.slide[1]).signum() > 0.0, "{:?}", s.slide);
+}
+
+/// A region at the level that runs off the square reads `r`, along an axis
+/// and along the diagonal alike: the corners reach r√2, but the radius is
+/// capped at `r`.
+#[test]
+fn a_region_running_off_the_square_reads_r() {
+    for (ax, ay) in [(1.0f64, 0.0f64), (0.0, 1.0), (1.0, 1.0), (1.0, -1.0)] {
+        let norm = ax.hypot(ay);
+        let ridge = |dx: i64, dy: i64| {
+            let (x, y) = (dx as f64, dy as f64);
+            let across = (x * ay - y * ax) / norm;
+            let along = (x * ax + y * ay) / norm;
+            1.0 - 0.5 * across * across - 0.001 * along * along
+        };
+        let s = read_surface(surface_of(3, ridge), 3, 0.05);
+        assert_eq!(s.radius, 3.0, "along ({ax}, {ay})");
+    }
+    // One shift on the border at the level, with its inward neighbours under
+    // it, is enough: its crossing outward was not searched.
+    let lone = surface_of(3, |dx, dy| match (dx, dy) {
+        (0, 0) => 1.0,
+        (3, 1) => 0.97,
+        _ => 0.5,
+    });
+    assert_eq!(read_surface(lone, 3, 0.05).radius, 3.0);
+}
+
+/// A reading that is not finite is not a crossing, and a shift at the level
+/// beside one counts its own distance, as beside the square's border.
+#[test]
+fn a_shift_beside_a_missing_reading_counts_its_own_distance() {
+    let with_gap = surface_of(3, |dx, dy| match (dx, dy) {
+        (0, 0) => 1.0,
+        (1, 0) => 0.97,
+        (2, 0) => f64::NAN,
+        _ => 0.5,
+    });
+    // Toward (2, 0) the crossing is not known, so (1, 0) counts 1; the
+    // furthest crossing is on the edges to (1, ±1), 0.02 / 0.47 of the way.
+    let radius = super::crossing_radius(&with_gap, 3, 0.95);
+    let expected = 1f64.hypot(0.02 / 0.47);
+    assert!((radius - expected).abs() < 1e-12, "{radius}");
+    // With a reading of 0.5 at (2, 0) the crossing toward it lies further out.
+    let mut filled = with_gap.clone();
+    filled[3 * 7 + 5] = 0.5;
+    let further = super::crossing_radius(&filled, 3, 0.95);
+    assert!((further - (1.0 + 0.02 / 0.47)).abs() < 1e-12, "{further}");
+    // The missing reading itself is not at the level.
+    let s = read_surface(with_gap, 3, 0.05);
+    assert!((s.slide[0].abs() - 1.0).abs() < 1e-12, "{:?}", s.slide);
 }
 
 #[test]
@@ -631,15 +733,8 @@ fn overlap_agrees_with_the_ringed_reading_on_a_cut_patch() {
                 a.radius,
                 b.radius
             );
-            let side = 2 * r + 1;
-            for (k, (x, y)) in a.surface.iter().zip(&b.surface).enumerate() {
-                let (dx, dy) = ((k % side) as i64 - r as i64, (k / side) as i64 - r as i64);
-                if dx * dx + dy * dy > (r * r) as i64 {
-                    // The ringed reading keeps the corners outside the disk,
-                    // and the overlap reading leaves them NaN.
-                    assert!(x.is_finite() && y.is_nan(), "{what}: {x} vs {y}");
-                    continue;
-                }
+            for (x, y) in a.surface.iter().zip(&b.surface) {
+                assert!(x.is_finite() && y.is_finite(), "{what}: {x} vs {y}");
                 assert!(
                     x.is_nan() && y.is_nan() || (x - y).abs() < 1e-5,
                     "{what}: {x} vs {y}"

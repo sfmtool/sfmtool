@@ -8,12 +8,12 @@
 //! See `specs/core/patch/zncc-self-similarity-radius.md`. For a template
 //! rectangle inside a tile, [`zncc_self_similarity_radius`] computes the
 //! channel-averaged ZNCC of the template against the window of the same size
-//! moved by every shift `d` in the disk `dx² + dy² ≤ r²`, counts a shift as
+//! moved by every shift `d` of the square `|dx|, |dy| ≤ r`, counts a shift as
 //! indistinguishable when `1 − z(d) ≤ ε + mean_c (n / s_c)²`, and reports how
-//! far from the centre the surface crosses that level (interpolated linearly
-//! along the grid edges between neighbouring shifts, and saturating at `r`
-//! when an indistinguishable shift lies in the disk's outer ring) and the
-//! direction the indistinguishable shifts line up in. [`zncc_self_similarity_parts`] reads a whole `R×R` core, its middle
+//! far from the centre the surface crosses that level at its furthest
+//! (interpolated linearly along the grid edges between neighbouring shifts,
+//! and capped at `r`) and the direction the indistinguishable shifts line up
+//! in. [`zncc_self_similarity_parts`] reads a whole `R×R` core, its middle
 //! square and the nine cells of the ZNCC grid's split from one tile, sharing
 //! the cross sums between them.
 //!
@@ -47,8 +47,9 @@ pub const FLAT_FLOOR: f64 = 0.5;
 /// true position.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SelfSimilarityParams {
-    /// The length of the largest shift searched, in tile pixels; a radius of
-    /// `max_radius` reads "this far or further".
+    /// How far the shifts searched reach along each axis, in tile pixels,
+    /// and the largest radius read; a radius of `max_radius` reads "this far
+    /// or further".
     pub max_radius: u32,
     /// ε: the ZNCC deficit two views of the same surface show from warp, blur
     /// and lighting, as a fraction.
@@ -71,12 +72,14 @@ impl Default for SelfSimilarityParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelfSimilarity {
     /// How far from the centre the ZNCC surface crosses the level `1 −
-    /// tolerance`, `0 ..= max_radius`, in tile pixels: over the grid edges
-    /// between neighbouring shifts where one is at or above the level and the
-    /// other below, the furthest point where the ZNCC interpolated linearly
-    /// along the edge equals the level. `max_radius` when an indistinguishable
-    /// shift lies in the window's outer ring, or when the template has no
-    /// textured channel.
+    /// tolerance`, `0 ..= max_radius`, in tile pixels: over the grid edges of
+    /// the square of shifts between neighbouring shifts where one is at or
+    /// above the level and the other below, the furthest point where the ZNCC
+    /// interpolated linearly along the edge equals the level, capped at
+    /// `max_radius`. A shift at or above the level on the square's border
+    /// counts its own distance, at least `max_radius`, since the crossing past
+    /// it was not searched. `max_radius` reads "this far or further"; it is
+    /// also the reading of a template with no textured channel.
     pub radius: f64,
     /// The direction of the indistinguishable shifts, in the grid frame (`x`
     /// column-right, `y` row-down), scaled by how strongly they line up:
@@ -88,10 +91,8 @@ pub struct SelfSimilarity {
     /// template with no textured channel, where every shift counts.
     pub tolerance: f64,
     /// The channel-averaged ZNCC `z(d)` for every shift of the `(2r + 1)²`
-    /// square, row-major from `(dx, dy) = (−r, −r)`, `z(0, 0) = 1`. The
-    /// ringed reading covers the square's corners outside the disk too, which
-    /// the radius and slide leave out, so a display can interpolate to the
-    /// disk's edge; the overlap reading leaves them `NaN`. Every value is `NaN`
+    /// square, row-major from `(dx, dy) = (−r, −r)`, `z(0, 0) = 1`: the
+    /// surface the radius and the slide are read from. Every value is `NaN`
     /// for a template with no textured channel.
     pub surface: Vec<f64>,
 }
@@ -483,9 +484,8 @@ impl Prepared {
         let mut surface = vec![f64::NAN; shifts];
         for dy in -ri..=ri {
             for dx in -ri..=ri {
-                let d2 = dx * dx + dy * dy;
                 let index = ((dy + ri) as usize) * side + (dx + ri) as usize;
-                if d2 == 0 {
+                if dx == 0 && dy == 0 {
                     surface[index] = 1.0;
                     continue;
                 }
@@ -512,25 +512,22 @@ impl Prepared {
     }
 }
 
-/// The reading of a filled surface judged by `tolerance`: the radius, `r` when
-/// an indistinguishable shift lies in the disk's outer ring and otherwise where
-/// the surface crosses `1 − tolerance`, and the slide of the indistinguishable
+/// The reading of a filled surface judged by `tolerance`: the radius, where
+/// the surface crosses `1 − tolerance` furthest from the centre, capped at `r`,
+/// and the slide of the indistinguishable shifts. Both read the whole square of
 /// shifts. The centre does not count as a shift.
 fn read_surface(surface: Vec<f64>, r: usize, tolerance: f64) -> SelfSimilarity {
     let side = 2 * r + 1;
     let ri = r as i64;
-    let inner = (ri - 1) * (ri - 1);
-    let mut saturated = false;
+    let level = 1.0 - tolerance;
     let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
     for dy in -ri..=ri {
         for dx in -ri..=ri {
-            let d2 = dx * dx + dy * dy;
-            if d2 == 0 || d2 > ri * ri {
+            if dx == 0 && dy == 0 {
                 continue;
             }
-            let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
-            if 1.0 - z <= tolerance {
-                saturated |= d2 > inner;
+            // A `NaN` reading compares false and is not indistinguishable.
+            if surface[((dy + ri) as usize) * side + (dx + ri) as usize] >= level {
                 let (fx, fy) = (dx as f64, dy as f64);
                 sxx += fx * fx;
                 sxy += fx * fy;
@@ -538,31 +535,33 @@ fn read_surface(surface: Vec<f64>, r: usize, tolerance: f64) -> SelfSimilarity {
             }
         }
     }
-    let radius = if saturated {
-        r as f64
-    } else {
-        crossing_radius(&surface, r, 1.0 - tolerance)
-    };
     SelfSimilarity {
-        radius,
+        radius: crossing_radius(&surface, r, level),
         slide: slide_of(sxx, sxy, syy),
         tolerance,
         surface,
     }
 }
 
-/// How far from the centre the surface crosses `level`: over every grid edge
-/// between two neighbouring shifts of the disk where one is at or above the
-/// level and the other below it, the point where the ZNCC, interpolated
-/// linearly along the edge, equals the level; the largest distance of those
-/// points from the centre. Tracked as a squared length, with one square root
-/// at the end. The centre is always at or above the level, so a patch that
-/// locks reads the fraction of a pixel its peak takes to fall through it.
+/// How far from the centre the surface crosses `level`, capped at `r`.
+///
+/// Over every grid edge of the `(2r + 1)²` square between two neighbouring
+/// shifts where one is at or above the level and the other below it, the point
+/// where the ZNCC, interpolated linearly along the edge, equals the level; the
+/// largest distance of those points from the centre. A shift at or above the
+/// level whose neighbour was not read, because the neighbour lies past the
+/// square's border or its reading is not finite, has its crossing in that
+/// direction somewhere past itself, so its own distance counts as a lower
+/// bound. Every shift on the border is at least `r` from the centre, so a
+/// region at the level that reaches the border reads `r`. Tracked as a squared
+/// length, with one square root at the end. The centre is always at or above
+/// the level, so a patch that locks reads the fraction of a pixel its peak
+/// takes to fall through it.
 fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
     let side = 2 * r + 1;
     let ri = r as i64;
     let at = |dx: i64, dy: i64| -> Option<f64> {
-        if dx * dx + dy * dy > ri * ri {
+        if dx.abs() > ri || dy.abs() > ri {
             return None;
         }
         let z = surface[((dy + ri) as usize) * side + (dx + ri) as usize];
@@ -576,19 +575,20 @@ fn crossing_radius(surface: &[f64], r: usize, level: f64) -> f64 {
                 continue;
             }
             for (ex, ey) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let Some(zn) = at(dx + ex, dy + ey) else {
-                    continue;
+                let (px, py) = match at(dx + ex, dy + ey) {
+                    Some(zn) if zn >= level => continue,
+                    Some(zn) => {
+                        let t = (z - level) / (z - zn);
+                        (dx as f64 + t * ex as f64, dy as f64 + t * ey as f64)
+                    }
+                    // Not read: the shift itself is as far as is known.
+                    None => (dx as f64, dy as f64),
                 };
-                if zn >= level {
-                    continue;
-                }
-                let t = (z - level) / (z - zn);
-                let (px, py) = (dx as f64 + t * ex as f64, dy as f64 + t * ey as f64);
                 furthest = furthest.max(px * px + py * py);
             }
         }
     }
-    furthest.sqrt()
+    furthest.sqrt().min(r as f64)
 }
 
 /// The slide of a set of shifts from the sums of their second moments: the

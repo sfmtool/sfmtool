@@ -5,38 +5,33 @@
 //! whole-pixel shift, drawn as a heatmap with the contour the radius is read
 //! at.
 //!
-//! The bench carries the surface as a `(2r + 1)²` square of ZNCC values
-//! round the disk of shifts the score searches, and the tolerance `τ` the
+//! The bench carries the surface as the `(2r + 1)²` square of ZNCC values
+//! the score searches and reads its radius from, and the tolerance `τ` the
 //! patch was judged by. A shift is indistinguishable from the true position
 //! where the ZNCC is at or above `1 - τ`, so that level is the one drawn. The
 //! square is interpolated to a finer grid for the picture and the contour, and
 //! the colour ramp jumps at the level so the region inside the contour reads as
 //! one bright shape: a small ring round the centre is a patch that locks, a
 //! long one is a patch that slides along it, and one that runs to the edge of
-//! the disk is a patch that slides further than the score looks.
+//! the square is a patch that slides further than the score looks.
 
 /// Interpolated samples per pixel of shift. At `r = 3` the picture is
 /// `6 · 16 + 1 = 97` samples across.
 const SAMPLES_PER_PIXEL: usize = 16;
 
-/// How far outside the disk of searched shifts the picture still shows the
-/// interpolated surface, in pixels of shift, so the disk's edge is not cut
-/// through the middle of a lattice point's neighbourhood.
-const DISK_MARGIN: f64 = 0.35;
-
 /// A surface ready to draw: the interpolated values, the level the radius is
 /// read at, and which shifts are indistinguishable.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SurfacePlot {
-    /// Interpolated ZNCC, row-major, `n × n`, `NaN` outside the disk.
+    /// Interpolated ZNCC, row-major, `n × n`, over the whole square.
     pub values: Vec<f64>,
     /// Samples across the picture.
     pub n: usize,
-    /// The radius of the disk of searched shifts, `r`.
+    /// How far the searched shifts reach along each axis, `r`.
     pub r: usize,
     /// The ZNCC level of the contour, `1 - τ`.
     pub level: f64,
-    /// The indistinguishable shifts, `(dx, dy)` with `dx² + dy² ≤ r²`, the
+    /// The indistinguishable shifts, `(dx, dy)` with `|dx|, |dy| ≤ r`, the
     /// centre left out.
     pub inside: Vec<[i32; 2]>,
 }
@@ -60,16 +55,7 @@ impl SurfacePlot {
         }
         let level = 1.0 - tolerance;
         let n = (side - 1) * SAMPLES_PER_PIXEL + 1;
-        let mut values = upsample(surface, side, n);
-        let reach = r as f64 + DISK_MARGIN;
-        for (k, v) in values.iter_mut().enumerate() {
-            let (x, y) = (k % n, k / n);
-            let dx = x as f64 / SAMPLES_PER_PIXEL as f64 - r as f64;
-            let dy = y as f64 / SAMPLES_PER_PIXEL as f64 - r as f64;
-            if dx.hypot(dy) > reach {
-                *v = f64::NAN;
-            }
-        }
+        let values = upsample(surface, side, n);
         let mut inside = Vec::new();
         for (k, &z) in surface.iter().enumerate() {
             let dx = (k % side) as i32 - r as i32;
@@ -87,8 +73,8 @@ impl SurfacePlot {
         })
     }
 
-    /// The picture, one pixel per interpolated sample, transparent outside
-    /// the disk.
+    /// The picture, one pixel per interpolated sample, transparent where a
+    /// sample is not finite.
     pub(super) fn image(&self) -> egui::ColorImage {
         let pixels = self
             .values

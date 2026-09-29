@@ -829,14 +829,15 @@ its nine numbers as the cell prints them. The *self-sim. px* bar judges
 **Beside the grid is the core's surface plot**: the whole core's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between
 the shifts (Catmull-Rom, repeating the edge value past the square's edge)
-and drawn as a disk, with the contour at `1 - τ`, the
+and drawn over the whole square of shifts, with the contour at `1 - τ`, the
 level the radius is read at, over it. The colour ramp is keyed to that level so
 the region inside the contour reads as one shape: below the level a muted ramp
 from dark to mid slate, and at it a jump to bright amber that lightens towards
 pale yellow at `1`. A dot marks each whole-pixel shift inside the contour and a
-ring marks the centre, so the radius is the distance to the furthest dot. A
+ring marks the centre, and the radius is how far from the centre the contour
+reaches, read up to `r`. A
 small ring round the centre is a patch that locks; a long region is a patch
-that slides along it; a region that runs to the edge of the disk is one that
+that slides along it; a region that runs to the edge of the square is one that
 slides at least as far as the radius looks. Hovering the plot draws it large
 with a sentence giving the contour's level, the tolerance and the radius. The
 picture and the contour are computed once per reading and kept until the row's
