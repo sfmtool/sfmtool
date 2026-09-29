@@ -113,13 +113,20 @@ either needing to know its own width.
 
 **Expanded width** is fixed (220 pt) so slider tracks do not jitter as
 labels change. If the viewport is too small to show the expanded HUD without
-covering more than about a third of it, the HUD stays collapsed and the gear
-is the only affordance. Concretely: the expanded panel needs a viewport of at
-least 472 × 300 pt (twice the panel's width-plus-insets, and enough height for
-a few sections). At the minimum width the panel spans half the viewport
-horizontally but only part of it vertically, so the area it covers stays under
-a third. A refused open is remembered, not discarded — widen the panel and the
-HUD expands without a second click.
+covering more than about a third of it, the HUD does not open on its own and
+stays collapsed to the gear. Concretely: the expanded panel opens on its own
+only in a viewport of at least 472 × 300 pt (twice the panel's width-plus-insets,
+and enough height for a few sections). At the minimum width the panel spans half
+the viewport horizontally but only part of it vertically, so the area it covers
+stays under a third. An open the size refused is remembered, not discarded —
+widen the panel and the HUD expands without a click.
+
+**A click on the gear opens the HUD at any size.** The size rule decides only
+what the HUD does on its own, at launch and as the panel is resized; a click
+is a request to see the controls, so it is carried out even when the panel then
+covers most of a narrow viewport. The panel stays open, whatever the viewport's
+size, until its close button is clicked, which hands the decision back to the
+size rule.
 
 **Every section is visible at once — the panel never scrolls.** Its height is
 whatever its content needs, and `constrain_to(viewport)` keeps it on screen. A

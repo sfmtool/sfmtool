@@ -324,6 +324,12 @@ pub struct Viewer3D {
     /// the point of the panel, and a viewport that starts by hiding them just
     /// trades a menu round-trip for a click. Never persisted across runs.
     pub hud_open: bool,
+    /// Whether the HUD was opened by a click on the gear while the viewport
+    /// was too small for the expanded panel. The size rule decides only
+    /// whether the HUD opens on its own; an explicit click opens it at any
+    /// size, and it stays open until the close button is clicked. Never
+    /// persisted across runs.
+    hud_opened_by_click: bool,
     /// Whether the view turns itself back to Z-up whenever it is not looking
     /// through a camera: the HUD's **Maintain Z-up**. On at launch; Q and E
     /// turn it off, since rolling the view is a request for a view that is not
@@ -467,6 +473,7 @@ impl Viewer3D {
             fly_drag_locked: false,
             target_transition: None,
             hud_open: true,
+            hud_opened_by_click: false,
             maintain_z_up: true,
             righting_speed: 0.0,
             hud_rect: None,

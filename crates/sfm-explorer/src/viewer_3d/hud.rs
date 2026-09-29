@@ -31,8 +31,9 @@ const HUD_INSET: f32 = 8.0;
 /// label fit inside [`HUD_WIDTH`] without wrapping.
 const HUD_SLIDER_WIDTH: f32 = 78.0;
 
-/// Smallest viewport that will show the expanded panel. Below this the HUD
-/// stays collapsed and the gear is the only affordance — the spec's "not more
+/// Smallest viewport the expanded panel opens itself in. Below this the HUD
+/// stays collapsed until the gear is clicked, which opens it at any size — the
+/// spec's "not more
 /// than about a third of the viewport" rule, resolved against a panel of fixed
 /// width and bounded height: at the minimum width the panel spans half the
 /// viewport horizontally but only a fraction of it vertically, so the area it
@@ -176,9 +177,12 @@ impl Viewer3D {
             return;
         }
 
-        let expanded = self.hud_open
-            && viewport.width() >= HUD_MIN_VIEWPORT.x
-            && viewport.height() >= HUD_MIN_VIEWPORT.y;
+        // The size rule keeps the HUD from opening itself over a small
+        // viewport. A click on the gear is a request to see the controls, so
+        // it opens the panel whatever the size.
+        let fits =
+            viewport.width() >= HUD_MIN_VIEWPORT.x && viewport.height() >= HUD_MIN_VIEWPORT.y;
+        let expanded = self.hud_open && (fits || self.hud_opened_by_click);
 
         // Anchored to the viewport rect and recomputed every frame: the 3D
         // viewer lives in a dock tab the user can resize or re-dock, and a
@@ -200,6 +204,7 @@ impl Viewer3D {
                         .clicked()
                     {
                         self.hud_open = true;
+                        self.hud_opened_by_click = !fits;
                     }
                     return;
                 }
@@ -220,6 +225,7 @@ impl Viewer3D {
                                 .clicked()
                             {
                                 self.hud_open = false;
+                                self.hud_opened_by_click = false;
                             }
                         });
                     });

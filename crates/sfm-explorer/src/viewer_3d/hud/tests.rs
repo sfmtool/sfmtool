@@ -450,6 +450,56 @@ fn a_viewport_too_small_for_the_panel_keeps_the_hud_collapsed() {
     );
 }
 
+/// The size rule only keeps the HUD from opening itself. A click on the gear
+/// in a viewport too small for the panel opens it anyway, it stays open over
+/// later frames, and the close button collapses it again, after which the
+/// size rule is back in charge.
+#[test]
+fn a_click_on_the_gear_opens_the_hud_in_a_viewport_too_small_for_it() {
+    let mut state = demo_state();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+
+    // Between the panel's own width and the size it opens itself at.
+    let narrow = egui::vec2(452.0, 800.0);
+    let frame = || Frame::new().sized(narrow);
+    for _ in 0..3 {
+        run_frame(&mut viewer, &ctx, &mut state, frame());
+    }
+    let gear = viewer.hud_rect.expect("the gear is there");
+    assert!(gear.width() < 60.0, "the panel opened itself in {narrow:?}");
+
+    // `click_at`, in the narrow viewport.
+    let click = |viewer: &mut Viewer3D, state: &mut AppState, at: egui::Pos2| {
+        run_frame(viewer, &ctx, state, frame().at(at));
+        run_frame(viewer, &ctx, state, frame().button(at, true));
+        run_frame(viewer, &ctx, state, frame().button(at, false));
+    };
+    click(&mut viewer, &mut state, gear.center());
+    for _ in 0..3 {
+        run_frame(&mut viewer, &ctx, &mut state, frame());
+    }
+    let panel = viewer.hud_rect.expect("the panel is there");
+    assert!(
+        panel.width() > 200.0,
+        "a click on the gear did not open the panel in {narrow:?}: {panel:?}"
+    );
+
+    let close = egui::pos2(panel.right() - 14.0, panel.top() + 16.0);
+    click(&mut viewer, &mut state, close);
+    for _ in 0..3 {
+        run_frame(&mut viewer, &ctx, &mut state, frame());
+    }
+    assert!(
+        !viewer.hud_open,
+        "the close button did not collapse the HUD"
+    );
+    assert!(
+        viewer.hud_rect.expect("the gear is back").width() < 60.0,
+        "the HUD did not collapse to the gear"
+    );
+}
+
 // ── Anchoring ───────────────────────────────────────────────────────────
 
 #[test]
