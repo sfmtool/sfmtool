@@ -6,9 +6,9 @@
 //! Two value classes, [`PyBench`] and [`PyEditableTrack`], and the steps as
 //! module-level functions, exactly as the core module is shaped: a step takes a
 //! value and gives back the next one plus a report, and nothing is mutated in
-//! place. A script holding several candidate tracks gets the same list, the
-//! same labels and the same "the active one" default a window does, with no
-//! window.
+//! place. A script holding several candidate tracks gets the same list and
+//! the same labels a window does, with no window; which one it is working on
+//! is the script's own variable.
 //!
 //! An observation crosses the boundary as a dict, one key per column of the
 //! table the panel draws, with the two stages' measurements under `"cluster"`
@@ -36,9 +36,9 @@ use sfmtool_core::bench::{
     translate_patch_to_pixel as core_translate_patch_to_pixel,
     unpin_verdicts as core_unpin_verdicts, Bench, BenchItem, ClassificationReason, ClusterSeed,
     CreateTrackOptions, Edge, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions,
-    FitReport, Found, GeometrySearchOptions, GeometrySearchReport, ItemKind, Observation,
-    ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport, StageKind,
-    TrackClassification, Verdict, Viewpoint, DEFAULT_RADIUS_PX,
+    FitReport, Found, GeometrySearchOptions, GeometrySearchReport, Observation, ObservationSeed,
+    Provenance, ResizeReport, SearchOptions, SearchReport, StageKind, TrackClassification, Verdict,
+    Viewpoint, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -523,7 +523,10 @@ impl PyEditableTrack {
 }
 
 /// The things being worked on beside one reconstruction, in the order they were
-/// put there, and which one of each kind is active.
+/// put there.
+///
+/// The bench is only its list: which item a script is working on is the
+/// script's to hold, and a step that puts an item on returns the label it took.
 ///
 /// A plain value: every operation returns the next bench and leaves this object
 /// as it was. Items the operation did not touch are shared, not copied.
@@ -537,16 +540,6 @@ impl PyBench {
     /// The wrapper around a core bench.
     fn wrap(inner: Bench) -> Self {
         Self { inner }
-    }
-}
-
-/// The item kind a Python caller names, refused when it names none.
-fn item_kind(kind: &str) -> PyResult<ItemKind> {
-    match kind {
-        "track" => Ok(ItemKind::Track),
-        other => Err(PyValueError::new_err(format!(
-            "unknown item kind: {other:?} (expected track)"
-        ))),
     }
 }
 
@@ -568,23 +561,6 @@ impl PyBench {
         self.inner.labels().map(str::to_string).collect()
     }
 
-    /// The label of the active item of `kind`, or ``None``.
-    #[pyo3(signature = (kind = "track"))]
-    fn active_label(&self, kind: &str) -> PyResult<Option<String>> {
-        Ok(self
-            .inner
-            .active_label(item_kind(kind)?)
-            .map(str::to_string))
-    }
-
-    /// The active track, or ``None`` when no track is active.
-    #[getter]
-    fn active_track(&self) -> Option<PyEditableTrack> {
-        self.inner.active_track().map(|t| PyEditableTrack {
-            inner: Arc::clone(t),
-        })
-    }
-
     /// The ID of the item called `label`, as an ``int``, or ``None`` when
     /// nothing is.
     ///
@@ -603,7 +579,7 @@ impl PyBench {
     }
 
     /// Put `track` back in the place of the item called `label`, leaving the
-    /// order, the label and the activation as they were.
+    /// order, the label and the ID as they were.
     ///
     /// How a step on one track is installed: the step gives back a value, and
     /// this is what puts that value on the bench.
@@ -614,20 +590,8 @@ impl PyBench {
             .map_err(refused)
     }
 
-    /// Make the item called `label` the active one of its kind.
-    fn activate(&self, label: &str) -> PyResult<Self> {
-        self.inner.activate(label).map(Self::wrap).map_err(refused)
-    }
-
-    /// The bench with no active item of `kind`, every item left where it is.
-    #[pyo3(signature = (kind = "track"))]
-    fn deactivate(&self, kind: &str) -> PyResult<Self> {
-        Ok(Self::wrap(self.inner.deactivate(item_kind(kind)?)))
-    }
-
-    /// Take the item called `label` off the bench. When it was the active item
-    /// of its kind, nothing of that kind is active afterwards. Its label is then
-    /// free to be minted again.
+    /// Take the item called `label` off the bench, every other item keeping its
+    /// place. Its label is then free to be minted again.
     fn discard(&self, label: &str) -> PyResult<Self> {
         self.inner.discard(label).map(Self::wrap).map_err(refused)
     }
@@ -1799,7 +1763,7 @@ fn split(
 /// field it does not carry is the **origin**, so a commit of the copy creates a
 /// point rather than replacing the one the original came from. Its label is the
 /// original's with ``" copy"`` after it, through the bench's own collision
-/// rule, and the copy is the active track.
+/// rule, and the report's ``label`` is the one the copy took.
 ///
 /// Returns ``(Bench, report)`` with ``label``, ``from`` and
 /// ``observation_count``.

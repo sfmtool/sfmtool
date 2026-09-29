@@ -2739,8 +2739,8 @@ pub struct DuplicateReport {
 ///
 /// The label is minted from `<label> copy` through the bench's own collision
 /// rule ([`Bench::mint_label`]), so a second duplicate of the same track is
-/// `<label> copy (2)`, and the copy becomes the active track, because it is the
-/// thing the person is about to work on.
+/// `<label> copy (2)`. The report carries the label the copy took, so a caller
+/// can go on to work on the copy, which is usually what it is made for.
 pub fn duplicate(bench: &Bench, label: &str) -> Result<(Bench, DuplicateReport), DuplicateError> {
     let track = bench
         .track(label)

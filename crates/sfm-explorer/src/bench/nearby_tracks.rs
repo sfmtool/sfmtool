@@ -515,8 +515,7 @@ impl AppState {
         // Everything found was on the bench already: a version would change
         // nothing, so none is pushed, and the `1a` item is focused all the
         // same.
-        if maps.is_empty() && bench.entries() == self.scene[index].history.current_bench().entries()
-        {
+        if maps.is_empty() && bench == **self.scene[index].history.current_bench() {
             if let Some((item, _)) = &focus {
                 self.focus_put_item(id, item);
             }

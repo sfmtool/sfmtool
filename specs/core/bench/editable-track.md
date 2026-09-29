@@ -672,7 +672,8 @@ impl CommitReport {
 **A value in, a value out, for every step.** There is no `&mut` anywhere, so a
 refused step leaves nothing half-applied and a caller holding both the before
 and the after can go back. The creating steps take the bench because they mint a
-label and make the new item active, which is the bench's business; the steps on
+label and put the new item on the list, which is the bench's business, and each
+returns the label it minted; the steps on
 one track take the track alone, and the caller installs the result with
 `Bench::replace`. That split is what stops a verdict from touching the list.
 
@@ -1402,8 +1403,8 @@ in it is refused, with `StageError::NoReference`.
 ### Duplicating
 
 `duplicate` puts a copy of one item on the bench beside it, labelled
-`<label> copy` through the bench's own collision rule, and makes the copy the
-active one, because it is the thing about to be worked on.
+`<label> copy` through the bench's own collision rule, and returns the label the
+copy took, since the copy is usually the thing about to be worked on.
 
 **What a second patch over neighbouring ground is started from.** A patch slid,
 turned and sized until it covers one piece of surface is most of the work of
@@ -2419,7 +2420,7 @@ observations, handing the half it takes off back as a cluster, and refusing an
 empty list or all of them; a duplicate carrying every observation and all of the
 stage's data, dropping the origin so its commit creates a point rather than
 replacing the original's, taking the collision suffix on a second copy of the
-same track, becoming the active item, and leaving the original exactly as it
+same track, reporting the label the copy took, and leaving the original exactly as it
 was; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.

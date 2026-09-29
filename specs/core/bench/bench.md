@@ -8,22 +8,20 @@ then writing the result down. A reconstruction has no room for work in that
 state: everything in it is a point that exists. The **bench** is the place
 beside it where things that are not settled yet are held. It is a list of
 labelled **items**, in the order they were put there, each with an ID that
-stays the same when its label changes, with at most one
-**active** item per kind of item, and nothing on it is part of the reconstruction: a save does
+stays the same when its label changes, and nothing on it is part of the
+reconstruction: a save does
 not write an item, the point count does not include one, and exactly one step
 crosses from an item to a point.
 
-The bench is a value. Putting something on, taking something off, renaming an
-item and changing which one is active are each a function from one bench to the
-next, and every item the operation did not touch is the same shared pointer in
+The bench is a value. Putting something on, taking something off and renaming
+an item are each a function from one bench to the next, and every item the operation did not touch is the same shared pointer in
 both. That is what lets a caller keep a run of benches and go back to any of
 them, and it is why the viewer can hold the bench as the second half of a
 version and undo the reconstruction and the bench with one gesture.
 
 The first and, today, only kind of item is the **editable track**
 ([editable-track.md](editable-track.md)). The enum is what makes it the first
-rather than the only: a second kind joins by adding a variant and its own active
-label, without touching the list, the labels or the steps that work on a track.
+rather than the only: a second kind joins by adding a variant, without touching the list, the labels or the steps that work on a track.
 
 Related specs: [editable-track.md](editable-track.md) (the item),
 [`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)
@@ -82,21 +80,26 @@ impl Bench {
     pub fn track(&self, label: &str) -> Option<&Arc<EditableTrack>>;
     pub fn id(&self, label: &str) -> Option<ItemId>;
     pub fn label_of(&self, id: ItemId) -> Option<&str>;
-    pub fn active_label(&self, kind: ItemKind) -> Option<&str>;
-    pub fn active_track(&self) -> Option<&Arc<EditableTrack>>;
 
     pub fn mint_label(&self, base: &str) -> String;
     pub fn put(&self, base: &str, item: BenchItem) -> (Bench, String);
     pub fn replace(&self, label: &str, item: BenchItem) -> Result<Bench, BenchError>;
-    pub fn activate(&self, label: &str) -> Result<Bench, BenchError>;
-    /// The bench with no active item of `kind`, every item left where it is.
-    pub fn deactivate(&self, kind: ItemKind) -> Bench;
     pub fn discard(&self, label: &str) -> Result<Bench, BenchError>;
     pub fn rename(&self, label: &str, to: &str) -> Result<Bench, BenchError>;
 }
 ```
 
 ### Why it is shaped this way
+
+**The bench is only its list of items.** It does not record which item a caller
+is working on: that is the caller's to hold. In the viewer it is the focused
+item ([`../../gui/bench.md`](../../gui/bench.md) § "The focused item"), held
+beside the selection and outside the version; in a script it is the script's
+own variable. A second record of it inside the bench could disagree with the
+caller's, so there is none. Every step that puts an item on (`create_track`,
+`create_cluster`, `split`, `duplicate`, and `put` itself) returns the label it
+minted, which is what a caller goes on to work on. Two benches are equal when
+their entries are.
 
 **The label is the bench's, not the item's.** Uniqueness is a property of a
 particular bench: two benches may hold items minted from the same origin and
@@ -126,23 +129,9 @@ pairs plus the IDs and label strings, and nothing at all of the items themselves
 are behind `Arc`.
 
 **`put` mints and `replace` does not.** Putting an item on is where a label is
-chosen and where activation moves; installing the result of a step on an item
-that is already on the bench must change neither. Splitting them into two
+chosen; installing the result of a step on an item that is already on the bench
+must not change it. Splitting them into two
 functions is what keeps a hundred verdicts from renaming anything.
-
-**The active item is per kind and lives in a map.** Each kind of item is edited
-in its own panel and a gesture that names no target means "the active one of the
-kind this panel edits". A single "active item" would make one panel's click
-change what another panel is showing.
-
-**A non-empty bench may have no active item.** `put` activates what it puts on,
-but `deactivate` takes the activation away and leaves every item where it is,
-and a discard of the active item leaves its kind with none. The viewer's Track
-View shows a committed point while nothing is active and the active item while
-something is ([`../../gui/track-view.md`](../../gui/track-view.md)), so "on the
-bench" and "being edited" are two states and the bench has to hold both. A
-deactivation of a kind with nothing active gives back an equal bench, which is
-how a caller tells that it had no effect.
 
 **Every refusal names its subject.** The caller is a menu entry or a wire tool
 that has to say in one sentence why nothing happened, so `BenchError`'s
@@ -159,7 +148,6 @@ let (bench, report) = create_cluster(&bench, &seed)?;
 assert_eq!(report.label, "IMG_0042@142,198");
 
 let bench = bench.rename(&report.label, "bull-nose")?;
-assert_eq!(bench.active_label(ItemKind::Track), Some("bull-nose"));
 let track = bench.track("bull-nose").expect("just renamed");
 ```
 
@@ -195,30 +183,16 @@ added, which is a row of no content at all.
 
 ## Implementation notes
 
-**A discard of the active item leaves its kind with no active item.** The
-activation is not handed to a neighbour: the item that would arrive is one
-nobody asked for, and with the viewer's list of items in the Scene tree rather
-than in the panel that edits them, nothing on screen would say which one it was.
-A discard of an item that is not active leaves the activation as it was.
-
 **A rename that changes nothing is not a collision.** Renaming an item to the
 label it already holds is allowed, because the label it collides with is itself;
 `rename` compares positions rather than strings for exactly that case.
-
-**The active map is a `BTreeMap`, not a `HashMap`.** A bench is compared for
-equality by the viewer's history and dumped by the wire, and a deterministic
-iteration order is worth more here than the lookup speed of a map with one entry
-in it.
 
 ## Python bindings
 
 `sfmtool._sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
 `len(bench)`, `bench.labels`, `bench.track(label)`, `bench.id(label)` (the
-item's ID as an `int`, or `None` when nothing has that label),
-`bench.active_label(kind)`
-and `bench.active_track`; change it with `bench.activate`,
-`bench.deactivate(kind="track")`, `bench.discard`,
-`bench.rename` and `bench.replace`, each of which returns the next bench and
+item's ID as an `int`, or `None` when nothing has that label); change it with
+`bench.discard`, `bench.rename` and `bench.replace`, each of which returns the next bench and
 leaves the object it was called on as it was. A refusal is a `ValueError`
 carrying the core sentence.
 
@@ -247,15 +221,15 @@ label), the item IDs (each put minting a distinct one, on the same bench or
 another; `replace` and `rename` keeping it; a put after a discard of the same
 label getting a new one; `duplicate` and `split` giving the new item a new ID
 and leaving the original's; `id` and `label_of` answering each other and giving
-`None` for a label or an ID the bench does not hold), the activation (a discard of the active item leaving none active, a
-discard of another keeping it, `deactivate` leaving every item the same `Arc`
-and none active and an activation afterwards restoring one, a deactivation with
-nothing active giving back an equal bench), and the sharing: a step on one item leaves every other item the
-same `Arc`, which is the property the viewer's per-version budget rests on.
+`None` for a label or an ID the bench does not hold), that the bench is only
+its list (a put adds exactly one entry at the end, and a put followed by its
+discard, or a rename followed by its reverse, gives back an equal bench), and
+the sharing: a step on one item leaves every other item the same `Arc`, which is
+the property the viewer's per-version budget rests on.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same through the bindings, `bench.id` (an `int`, kept by a rename,
-`None` for an unknown label), `deactivate` and its refusal of an
-unknown kind included, and that a step leaves the Python object it was called
+`None` for an unknown label), a discard taking off only its item, and the
+refusal of a label that names nothing, and that a step leaves the Python object it was called
 on unchanged.
 
 ## Non-goals

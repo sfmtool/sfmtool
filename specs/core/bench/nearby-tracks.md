@@ -260,7 +260,7 @@ evidence is off), the layer's place, nearest first, stands in for the rank.
 **Within a layer the tracks run by their distance from the pixel, nearest
 first**, ties keeping the layer's order, with the duplicates left out. The track nearest the pixel is the
 best stand-in for the pixel on that surface and the one a caller walks from,
-so `1a` is the track the viewer makes active. The layer's own member order is
+so `1a` is the track the viewer focuses. The layer's own member order is
 by the near end of each range, which says nothing about the pixel.
 
 ## Parameters

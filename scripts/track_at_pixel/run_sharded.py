@@ -76,9 +76,11 @@ def merge_tracks(out: Path, n_shards: int, pass_name: str, shard_rows) -> None:
         index = {}
         for p in range(src.point_count):
             bench, _ = B.create_track(B.Bench(), edited, p)
-            bench, _ = B.duplicate(bench, bench.active_label())
+            bench, copied = B.duplicate(bench, bench.labels[0])
             merged, committed = B.commit(
-                merged, bench.active_track, node=f"tracks-{pass_name}.sfmr"
+                merged,
+                bench.track(copied["label"]),
+                node=f"tracks-{pass_name}.sfmr",
             )
             index[p] = committed["point"]
         for r in shard_rows[i]:
