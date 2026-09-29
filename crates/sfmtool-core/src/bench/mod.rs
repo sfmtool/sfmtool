@@ -55,6 +55,7 @@ pub mod track_at_pixel;
 mod tests;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub use classify::{
@@ -162,6 +163,45 @@ impl BenchItem {
     }
 }
 
+/// The identity of one item on a bench, which stays the same while its label
+/// changes.
+///
+/// A label changes on [`Bench::rename`], and an undo across a rename changes it
+/// back, so a caller that holds on to an item between frames (a selection, a
+/// list of recent items, a cached evaluation) holds its `ItemId` and asks the
+/// bench for the current label with [`Bench::label_of`]. The label stays what a
+/// log row, a tab and a wire call name the item by.
+///
+/// [`Bench::put`] mints each ID from one counter shared by the whole process,
+/// so an ID is never given out twice, not even on another bench. A caller that
+/// keeps benches as versions can undo past a put, drop the redo versions with
+/// a new put, and still never see the new item take the ID of the one it
+/// replaced in history. [`Bench::replace`] and [`Bench::rename`] keep the ID;
+/// [`Bench::discard`] takes it off with the item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ItemId(u64);
+
+/// The next [`ItemId`] to give out. It starts at 1, so no ID is 0.
+static NEXT_ITEM_ID: AtomicU64 = AtomicU64::new(1);
+
+impl ItemId {
+    /// An ID no item in this process has had before.
+    fn mint() -> Self {
+        ItemId(NEXT_ITEM_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The number the ID is.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
 /// An item on the bench, with the label it is named by everywhere.
 ///
 /// The label lives here rather than inside the item because uniqueness is a
@@ -169,6 +209,9 @@ impl BenchItem {
 /// origin, and neither knows about the other.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BenchEntry {
+    /// Minted by [`Bench::put`] and kept by every step that installs a new
+    /// value under the same entry, so it names the item across a rename.
+    pub id: ItemId,
     /// Unique on this bench, and how the item is named in a log row, on a tab
     /// and on the wire.
     pub label: String,
@@ -267,6 +310,20 @@ impl Bench {
         self.get(label)?.as_track()
     }
 
+    /// The ID of the item called `label`, or `None` when nothing is.
+    pub fn id(&self, label: &str) -> Option<ItemId> {
+        self.position(label).map(|i| self.entries[i].id)
+    }
+
+    /// The label the item with ID `id` carries on this bench, or `None` when
+    /// no item on it has that ID.
+    pub fn label_of(&self, id: ItemId) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.label.as_str())
+    }
+
     /// The label of the active item of `kind`, or `None` when none is active:
     /// the bench holds none of that kind, or holds some with none active.
     pub fn active_label(&self, kind: ItemKind) -> Option<&str> {
@@ -295,11 +352,15 @@ impl Bench {
 
     /// Put `item` on the bench under a label minted from `base`, make it the
     /// active item of its kind, and give back the bench and the label it took.
+    ///
+    /// The item gets a new [`ItemId`], one no other item in the process has
+    /// had.
     pub fn put(&self, base: &str, item: BenchItem) -> (Bench, String) {
         let label = self.mint_label(base);
         let kind = item.kind();
         let mut next = self.clone();
         next.entries.push(BenchEntry {
+            id: ItemId::mint(),
             label: label.clone(),
             item,
         });
@@ -308,7 +369,7 @@ impl Bench {
     }
 
     /// Put the value called `label` back with `item` in its place, leaving the
-    /// order, the label and the activation as they were.
+    /// order, the label, the [`ItemId`] and the activation as they were.
     ///
     /// What a step on one item is installed with: the item is a new `Arc` and
     /// every other is the old one.
@@ -364,7 +425,8 @@ impl Bench {
 
     /// Rename the item called `label` to `to`.
     ///
-    /// The old label then names nothing, and is free to be minted again.
+    /// The item keeps its [`ItemId`]. The old label then names nothing, and is
+    /// free to be minted again.
     pub fn rename(&self, label: &str, to: &str) -> Result<Bench, BenchError> {
         let at = self
             .position(label)

@@ -150,6 +150,19 @@ class TestTheBench:
         # The bench a step was called on is not changed by it.
         assert bench.labels == ["IMG_0042@1,2"]
 
+    def test_an_item_id_is_an_int_that_a_rename_keeps(self):
+        bench, _ = create_cluster(Bench(), 1, "a", (1.0, 1.0), radius_px=7.5)
+        bench, _ = create_cluster(bench, 2, "b", (2.0, 2.0), radius_px=7.5)
+        first = bench.id("a@1,1")
+        second = bench.id("b@2,2")
+        assert isinstance(first, int)
+        assert isinstance(second, int)
+        assert first != second
+        renamed = bench.rename("a@1,1", "bull-nose")
+        assert renamed.id("bull-nose") == first
+        assert renamed.id("a@1,1") is None
+        assert Bench().id("bull-nose") is None
+
     def test_a_discard_of_the_active_item_leaves_nothing_active(self):
         bench, _ = create_cluster(Bench(), 1, "a", (1.0, 1.0), radius_px=7.5)
         bench, _ = create_cluster(bench, 2, "b", (2.0, 2.0), radius_px=7.5)

@@ -7,7 +7,8 @@ comparing what you have with something else that is also unsettled, and only
 then writing the result down. A reconstruction has no room for work in that
 state: everything in it is a point that exists. The **bench** is the place
 beside it where things that are not settled yet are held. It is a list of
-labelled **items**, in the order they were put there, with at most one
+labelled **items**, in the order they were put there, each with an ID that
+stays the same when its label changes, with at most one
 **active** item per kind of item, and nothing on it is part of the reconstruction: a save does
 not write an item, the point count does not include one, and exactly one step
 crosses from an item to a point.
@@ -49,7 +50,17 @@ pub enum ItemKind {
     Track,
 }
 
+/// Minted by `put` from one counter shared by the whole process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ItemId(u64);
+
+impl ItemId {
+    pub fn get(self) -> u64;
+}
+// Display writes `#<n>`.
+
 pub struct BenchEntry {
+    pub id: ItemId,
     pub label: String,
     pub item: BenchItem,
 }
@@ -69,6 +80,8 @@ impl Bench {
     pub fn position(&self, label: &str) -> Option<usize>;
     pub fn get(&self, label: &str) -> Option<&BenchItem>;
     pub fn track(&self, label: &str) -> Option<&Arc<EditableTrack>>;
+    pub fn id(&self, label: &str) -> Option<ItemId>;
+    pub fn label_of(&self, id: ItemId) -> Option<&str>;
     pub fn active_label(&self, kind: ItemKind) -> Option<&str>;
     pub fn active_track(&self) -> Option<&Arc<EditableTrack>>;
 
@@ -92,10 +105,24 @@ on would either be unenforceable or would make the item responsible for
 something it cannot see. `BenchEntry` pairs the two, and the item is left as the
 thing it is.
 
+**An item has an ID as well as a label.** The label is what a log row, a tab
+and a wire call name an item by, but it changes on `rename`, and an undo across
+a rename changes it back. A caller that holds on to an item between frames (a
+selection, a list of recent items, a cached evaluation) holds its `ItemId`
+instead, and reads the label it has now with `label_of`. `put` mints the ID;
+`replace` and `rename` keep it; `discard` takes it off with the item. `split`
+and `duplicate` go through `put`, so the new item gets a new ID and the original
+keeps its own. IDs come from one counter for the whole process rather than one
+per bench, so no two items ever share one: a caller that keeps benches as
+versions can undo past a put and make a new put that drops the redo versions,
+and the new item still does not take the ID an item in those dropped versions
+had. The ID is part of a bench's equality, so two benches built separately with
+the same labels and items are not equal.
+
 **Every operation returns a new bench.** There is no `&mut`, so a refusal cannot
 leave a half-applied change behind, and a caller holding the bench from before
 an operation still holds exactly that. The cost is one `Vec` clone of pointer
-pairs plus the label strings, and nothing at all of the items themselves, which
+pairs plus the IDs and label strings, and nothing at all of the items themselves, which
 are behind `Arc`.
 
 **`put` mints and `replace` does not.** Putting an item on is where a label is
@@ -186,7 +213,9 @@ in it.
 ## Python bindings
 
 `sfmtool._sfmtool.bench.Bench`. Construct one with `Bench()`; read it with
-`len(bench)`, `bench.labels`, `bench.track(label)`, `bench.active_label(kind)`
+`len(bench)`, `bench.labels`, `bench.track(label)`, `bench.id(label)` (the
+item's ID as an `int`, or `None` when nothing has that label),
+`bench.active_label(kind)`
 and `bench.active_track`; change it with `bench.activate`,
 `bench.deactivate(kind="track")`, `bench.discard`,
 `bench.rename` and `bench.replace`, each of which returns the next bench and
@@ -214,13 +243,18 @@ bench = bench.rename("IMG_0042@142,198", "bull-nose")
 
 [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) covers the
 labels (each origin's form, the collision suffix, a rename freeing the old
-label), the activation (a discard of the active item leaving none active, a
+label), the item IDs (each put minting a distinct one, on the same bench or
+another; `replace` and `rename` keeping it; a put after a discard of the same
+label getting a new one; `duplicate` and `split` giving the new item a new ID
+and leaving the original's; `id` and `label_of` answering each other and giving
+`None` for a label or an ID the bench does not hold), the activation (a discard of the active item leaving none active, a
 discard of another keeping it, `deactivate` leaving every item the same `Arc`
 and none active and an activation afterwards restoring one, a deactivation with
 nothing active giving back an equal bench), and the sharing: a step on one item leaves every other item the
 same `Arc`, which is the property the viewer's per-version budget rests on.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
-covers the same through the bindings, `deactivate` and its refusal of an
+covers the same through the bindings, `bench.id` (an `int`, kept by a rename,
+`None` for an unknown label), `deactivate` and its refusal of an
 unknown kind included, and that a step leaves the Python object it was called
 on unchanged.
 

@@ -585,6 +585,16 @@ impl PyBench {
         })
     }
 
+    /// The ID of the item called `label`, as an ``int``, or ``None`` when
+    /// nothing is.
+    ///
+    /// The ID stays the same across :meth:`rename` and :meth:`replace`, and a
+    /// put gives a new item an ID no other item in the process has had, so it
+    /// names an item where its label would change.
+    fn id(&self, label: &str) -> Option<u64> {
+        self.inner.id(label).map(|id| id.get())
+    }
+
     /// The track called `label`, or ``None`` when nothing is.
     fn track(&self, label: &str) -> Option<PyEditableTrack> {
         self.inner.track(label).map(|t| PyEditableTrack {

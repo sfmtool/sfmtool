@@ -532,6 +532,102 @@ fn a_label_that_names_nothing_is_refused_by_name() {
     );
 }
 
+// ---- Item IDs --------------------------------------------------------------
+
+#[test]
+fn each_put_gives_its_item_a_distinct_id() {
+    let (bench, first) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let (bench, second) =
+        create_cluster(&bench, &pixel_seed(2, [20.0, 20.0])).expect("a usable seed");
+    let a = bench.id(&first.label).expect("on the bench");
+    let b = bench.id(&second.label).expect("on the bench");
+    assert_ne!(a, b);
+    // A put on a bench built separately still gets an ID of its own.
+    let (other, third) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let c = other.id(&third.label).expect("on the bench");
+    assert_ne!(c, a);
+    assert_ne!(c, b);
+    assert_eq!(
+        bench.entries().iter().map(|e| e.id).collect::<Vec<_>>(),
+        [a, b]
+    );
+}
+
+#[test]
+fn replace_and_rename_keep_the_id() {
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let id = bench.id(&report.label).expect("on the bench");
+
+    let track = track_of(&bench, &report.label);
+    let bench = install(&bench, &report.label, track);
+    assert_eq!(bench.id(&report.label), Some(id));
+
+    let bench = bench
+        .rename(&report.label, "bull-nose")
+        .expect("a live item");
+    assert_eq!(bench.id("bull-nose"), Some(id));
+    assert_eq!(bench.id(&report.label), None);
+    assert_eq!(bench.label_of(id), Some("bull-nose"));
+}
+
+#[test]
+fn a_put_after_a_discard_of_the_same_label_gets_a_new_id() {
+    let seed = pixel_seed(1, [10.0, 10.0]);
+    let (bench, report) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
+    let id = bench.id(&report.label).expect("on the bench");
+
+    let bench = bench.discard(&report.label).expect("a live item");
+    assert_eq!(bench.label_of(id), None);
+
+    let (bench, again) = create_cluster(&bench, &seed).expect("a usable seed");
+    assert_eq!(again.label, report.label, "the label is free again");
+    let new_id = bench.id(&again.label).expect("on the bench");
+    assert_ne!(new_id, id);
+    assert_eq!(bench.label_of(id), None);
+}
+
+#[test]
+fn a_duplicate_and_a_split_give_the_new_item_a_new_id_and_leave_the_original() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = four_observation_cluster();
+    let id = bench.id(&label).expect("on the bench");
+
+    let (bench, copied) = duplicate(&bench, &label).expect("the label is on the bench");
+    assert_eq!(bench.id(&label), Some(id));
+    let copy_id = bench.id(&copied.label).expect("just put on");
+    assert_ne!(copy_id, id);
+
+    let (bench, halved) = split(&bench, &edited, &label, &[1, 3]).expect("two of four");
+    assert_eq!(bench.id(&label), Some(id), "the first half is the original");
+    let split_id = bench.id(&halved.label).expect("just put on");
+    assert_ne!(split_id, id);
+    assert_ne!(split_id, copy_id);
+}
+
+#[test]
+fn id_and_label_of_round_trip_and_name_nothing_unknown() {
+    let (bench, first) =
+        create_cluster(&Bench::new(), &pixel_seed(1, [10.0, 10.0])).expect("a usable seed");
+    let (bench, second) =
+        create_cluster(&bench, &pixel_seed(2, [20.0, 20.0])).expect("a usable seed");
+    for label in [&first.label, &second.label] {
+        let id = bench.id(label).expect("on the bench");
+        assert_eq!(bench.label_of(id), Some(label.as_str()));
+        assert_eq!(id.to_string(), format!("#{}", id.get()));
+    }
+    assert_eq!(bench.id("nothing at all"), None);
+
+    // An ID from another bench names nothing on this one.
+    let (other, third) =
+        create_cluster(&Bench::new(), &pixel_seed(3, [30.0, 30.0])).expect("a usable seed");
+    let foreign = other.id(&third.label).expect("on the other bench");
+    assert_eq!(bench.label_of(foreign), None);
+}
+
 // ---- The list, the activation and the sharing ------------------------------
 
 #[test]
