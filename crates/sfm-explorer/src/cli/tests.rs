@@ -69,8 +69,8 @@ fn the_default_layout_can_be_skipped() {
     assert_eq!(args.paths, vec![PathBuf::from("scene.sfmr")]);
 }
 
-/// The other flag the UI tests pass: demo data without driving two dialogs
-/// through the accessibility API. It composes with the rest of the line.
+/// The other flag the UI tests pass: demo data without driving File > Load
+/// Demo Data… and its dialog. It composes with the rest of the line.
 #[test]
 fn demo_data_can_be_asked_for_at_startup() {
     assert!(!parse_ok(&["scene.sfmr"]).demo);

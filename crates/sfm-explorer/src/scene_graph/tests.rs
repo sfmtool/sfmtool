@@ -2356,7 +2356,6 @@ fn the_window_title_names_the_first_file_and_counts_the_rest() {
 
 #[test]
 fn demo_data_first_leaves_the_base_window_title_alone() {
-    // `ui_basic` attaches to the window by this exact name on Windows.
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
     assert_eq!(state.window_title(), "SfM Explorer");

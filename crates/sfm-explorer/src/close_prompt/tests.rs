@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! What the prompt remembers, and the two ways of leaving it that report no
-//! answer. The three buttons are exercised where they are reachable by name, in
-//! the windowed `ui_basic` suite.
+//! answer. No test presses the three buttons.
 
 use crate::scene::ReconId;
 

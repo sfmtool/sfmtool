@@ -79,18 +79,17 @@ export RAYON_NUM_THREADS=1
 
 # Run Rust tests (generates Rust-side coverage).
 #
-# sfm-explorer stays out. Its windowed `ui_basic` suite is no longer the
-# reason -- that sits behind the crate's non-default `ui-tests` feature, so a
-# plain `cargo test --workspace` skips it regardless (which is exactly what the
-# `test-os-rust` CI jobs run). What is left is that instrumenting the whole
-# wgpu/egui/winit tree is a large build for a GUI crate whose line coverage the
-# report does not chase, and that this target dir must stay *uniformly*
-# instrumented: cargo does not fingerprint llvm-cov's RUSTC_WRAPPER, so objects
-# from an uninstrumented pass beside this one would look fresh, survive into the
-# shared CI cache and silently degrade the next run's coverage. That is why the
-# lib tests are not simply added back here under a second invocation; they run
-# uninstrumented in `test-os-rust`. Locally, use `cargo test -p sfm-explorer
-# --lib`, or just `cargo test --workspace`.
+# sfm-explorer stays out. Its windowed `ui_basic` suite is not the reason: that
+# sits behind the crate's non-default `ui-tests` feature, so a plain
+# `cargo test --workspace` skips it anyway. The reasons are that instrumenting
+# the whole wgpu/egui/winit tree is a large build for a GUI crate whose line
+# coverage the report does not chase, and that this target dir must stay
+# *uniformly* instrumented: cargo does not fingerprint llvm-cov's
+# RUSTC_WRAPPER, so objects from an uninstrumented pass beside this one would
+# look fresh, survive into the shared CI cache and silently degrade the next
+# run's coverage. So the lib tests do not run here under a second invocation;
+# they run uninstrumented in `test-os-rust`. Locally, use
+# `cargo test -p sfm-explorer --lib`, or just `cargo test --workspace`.
 if [ "$mode" != python ]; then
   cargo test --workspace --exclude sfm-explorer
 fi

@@ -567,22 +567,15 @@ jobs:
           # `false` (24s to install, 20s to restore). See the lint job.
           cache: false
 
-      # One invocation, covering every crate including sfm-explorer. It used to
-      # be two -- `--workspace --exclude sfm-explorer` then `-p sfm-explorer
-      # --lib` -- because sfm-explorer's `ui_basic` integration tests need a
-      # window and `--test-threads=1`. That split cost far more than it looked
-      # like it should: measured by touching sfmtool-core and running both in
-      # sequence, the second invocation rebuilt wgpu, wgpu-hal, wgpu-core,
-      # windows, accesskit_windows, accesskit_winit, gpu-allocator and the egui
-      # integration crates -- none of which depend on sfmtool-core, and all of
-      # which the first invocation had just left fresh. The two resolve features
-      # differently over that subtree, so each dirtied the other's artifacts and
-      # the cached target dir carried both fingerprint variants. `ui_basic` now
-      # sits behind sfm-explorer's non-default `ui-tests` feature (see its
-      # Cargo.toml), so a plain `cargo test --workspace` builds and runs
-      # everything except it, once.
+      # One invocation, covering every crate including sfm-explorer's lib
+      # tests. Its windowed `ui_basic` suite sits behind the non-default
+      # `ui-tests` feature (see its Cargo.toml), so `cargo test --workspace`
+      # builds and runs everything but that. A second invocation for
+      # sfm-explorer alone would resolve features differently over the
+      # wgpu/winit/accesskit subtree, and the two would rebuild each other's
+      # artifacts.
       #
-      # The Linux coverage job still excludes sfm-explorer, for an unrelated
+      # The Linux coverage job excludes sfm-explorer, for an unrelated
       # reason: adding an uninstrumented `cargo test` beside the instrumented
       # one would write non-instrumented artifacts into the same target dir
       # (cargo does not fingerprint llvm-cov's RUSTC_WRAPPER), silently
@@ -1034,16 +1027,12 @@ jobs:
   # which are declared in the manifests, not the lockfile. So the target keys
   # are `hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml')`.
   #
-  # PR #518 is what that sentence costs when it is not true. It gated
-  # sfm-explorer's `ui_basic` behind a feature and collapsed two `cargo test`
-  # invocations into one, changing no dependency and so not touching Cargo.lock.
-  # The restore was an *exact* hit on an entry built under the old resolution,
-  # and cargo rebuilt the whole wgpu/egui/accesskit/windows stack against it:
-  # 13m13s, against 11m17s for the two invocations it replaced. That alone would
-  # be a one-time transition cost, but the save guard is
-  # `cache-hit != 'true'`, so main would have skipped the save, kept the
-  # poisoned entry, and paid the rebuild on every run until some unrelated
-  # change happened to bump Cargo.lock.
+  # Keyed on the lockfile alone, a change to features or targets that moves no
+  # dependency would restore an *exact* hit on an entry built under the old
+  # resolution, and cargo would rebuild the affected crates against it. The
+  # save guard is `cache-hit != 'true'`, so main would skip the save, keep that
+  # entry, and pay the rebuild on every run until some unrelated change bumped
+  # Cargo.lock.
   #
   # The patterns are enumerated rather than written `**/Cargo.toml`, for two
   # reasons that both end in a silently wrong hash. `lint` and the three

@@ -632,8 +632,8 @@ already decodes. Left clicks keep the touch-emulation path they have always
 taken, which the 3D viewport's drag handling is built against.
 
 Nothing above the window can observe any of this — the panel behaves correctly
-under `Context::run_ui` — so it is guarded by a windowed test that drives real
-synthetic mouse input (`ui_basic.rs`,
+under `Context::run_ui` — so it is guarded by a windowed test that presses
+the right mouse button through `SendInput` (`ui_basic.rs`,
 `a_real_right_click_opens_the_reconstruction_rows_context_menu`).
 
 The left button staying on the touch path is why **every** context menu in this
@@ -1189,25 +1189,22 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
 - **File > Close All** clears the scene. Individual close lives in the Scene
   panel.
 - **Demo data** becomes a node labeled `demo` (`path: None`) and appends like
-  any other load. This also fixes the current demo-load path that skips the
-  cache/selection resets `append_node` performs for an opened file, so node lifecycle is one code
-  path.
+  any other load, through the same `append_node` and its cache and selection
+  resets, so node lifecycle is one code path.
 - **CLI**: `sfm explorer` accepts multiple paths
   (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` opens every
   trailing argument, in order, as one background open
   ([background-tasks.md](background-tasks.md) § "Opening a file").
-- **Window title**: unchanged for zero or one file (`SfM Explorer`,
-  `SfM Explorer - run_a.sfmr`); with N > 1 files:
-  `SfM Explorer - run_a.sfmr (+2)`. The exact base title is load-bearing for
-  the `ui_basic` Windows attach path and keeps its current value — which is also
-  why a *nameless* first node (demo data) leaves the title at the bare base
-  however many files follow it, rather than inventing a name for the count.
-  A dirty node puts a `*` **on the file name**, not at the front of the title:
-  `SfM Explorer - *run_a.sfmr`, `SfM Explorer - *run_a.sfmr (+2)`. The leading
-  base title is what an attaching process matches on -- the same reason the MCP
-  mention is a suffix -- so a marker before it would break the match on exactly
-  the sessions where something had been edited. A window showing no file name
-  keeps the bare base title, marker or not. See [saving.md](saving.md).
+- **Window title**: `SfM Explorer` with nothing loaded,
+  `SfM Explorer - run_a.sfmr` with one file, and
+  `SfM Explorer - run_a.sfmr (+2)` with three. A *nameless* first node (demo
+  data) leaves the title at `SfM Explorer` however many files follow it, since
+  there is no name to put the count after. A dirty node puts a `*` **on the
+  file name**: `SfM Explorer - *run_a.sfmr`, `SfM Explorer - *run_a.sfmr (+2)`.
+  The marker sits on the name, and the MCP port is a suffix
+  ([mcp-server.md](mcp-server.md)), so every title starts with the
+  application's name. A window showing no file name keeps the bare base title,
+  marker or not. See [saving.md](saving.md).
 
 The scene-stats overlay (top-left) sums across the effectively visible nodes
 (the same eye-AND-solo rule the draw loop uses) and leads with the file count
@@ -1385,20 +1382,18 @@ bundle from `retain_nodes` on the next frame.
   side, a node that is not effectively visible drops out of every pass and out
   of the bounds union, the all-hidden fallback still frames the loaded nodes,
   and the stats overlay counts the soloed node alone.
-- `ui_basic` keeps matching the base window title, and gains a check that the
-  Scene panel's rows reach a real window — including the row's solo toggle,
-  since a third glyph button squeezed onto a row is exactly the kind of thing
-  that lays out correctly under `Context::run_ui` and not in a window. The
-  context menu is checked twice: after a real right-click on Windows, for a
-  context menu owned by the Scene row, opened where the cursor was, holding a
-  few of its entries (read over MCP), and with a synthetic click over MCP on all three
-  platforms, for every entry in order with its enabled state, `Tint` marked as
-  the one that opens a submenu, and `Align to` and `Bake Transform` greyed on
-  the demo. A submenu's contents exist only once it is opened, and are covered
-  headlessly. The multi-file title case stays
-  a lib test: driving it through `ui_basic` would need two real `.sfmr` fixtures
-  on disk and a way past the file dialog, for a string `window_title` already
-  decides on its own.
+- `ui_basic` checks that the Scene panel's rows reach a real window,
+  including the row's solo toggle: a third glyph button on a row can lay out
+  under `Context::run_ui` and not in a window. It checks the context menu
+  twice. After a real right-click on Windows, it checks that a context menu
+  owned by the Scene row opened where the cursor was and holds a few of its
+  entries (read over MCP). After a synthetic right-click over MCP on all three
+  platforms, it checks every entry in order with its enabled state, `Tint` as
+  the one entry that opens a submenu, and `Align to` and `Bake Transform`
+  greyed on the demo. A submenu's contents exist only once it is opened, and
+  are covered headlessly. The window title is covered by lib tests only:
+  `window_title` decides the string on its own, and a windowed test of the
+  multi-file case would need two `.sfmr` fixtures on disk.
 
 ---
 

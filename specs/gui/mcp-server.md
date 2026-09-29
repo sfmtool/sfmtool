@@ -1727,7 +1727,7 @@ every frame but the one that opened it.
 Every widget egui drew in a frame, with its rectangle, role, name and state.
 The viewer builds this information inside its own process every frame, and
 the platform's accessibility tree carries the same thing out across the
-operating system's accessibility bridge, where one read of it takes about
+operating system's accessibility bridge, where one read of it can take about
 eighteen seconds on a GitHub-hosted Windows runner. Read here, it costs a frame
 ([architecture.md](architecture.md) § "Testing"). For an agent working with a
 human it is what makes a screenshot actionable: the agent is told which
@@ -2164,11 +2164,10 @@ The events go into egui's input and never pass through `winit`. That is the
 intended scope for everything above egui. It also means a click or key over
 MCP cannot catch a defect in how `winit` turns operating-system input into egui
 input: the keyboard layout, dead keys and an input method's composition are
-all resolved before these events, and a synthetic key starts after them. The
-viewer's most serious input bug was there: on Windows, `EnableMouseInPointer`
-makes every mouse button arrive as `WM_POINTER`, which `winit` reports as
-touch, and no right click reached egui until
-`platform::windows::restore_mouse_button` rewrote it. On Windows the real left
+all resolved before these events, and a synthetic key starts after them. On
+Windows, `EnableMouseInPointer` makes every mouse button arrive as
+`WM_POINTER`, which `winit` reports as touch, and a right click reaches egui
+only because `platform::windows::restore_mouse_button` rewrites it. The real left
 button still arrives through egui's touch emulation, which a synthetic
 `PointerButton` bypasses. The windowed suite keeps one test that sends real
 input for this reason ([architecture.md](architecture.md) § "Testing").
@@ -4529,9 +4528,10 @@ demo row's label inside the picture it came with.
 
 **`get_widgets` and `click` are how the rest of `ui_basic` reads and drives the
 window**: its menu, panel and HUD tests list widgets and click them over the
-same endpoint rather than reading the platform's accessibility tree, which only
-the Windows `window_appears` smoke test does, through UI Automation. The Windows test that presses a real
-right mouse button aims it with the window block's `inner_position` and a
+same endpoint rather than reading the platform's accessibility tree. Only the
+Windows `window_appears` smoke test reads that tree, through UI Automation.
+The Windows test that presses a real right mouse button aims it with the
+window block's `inner_position` and a
 listing's `rect_px`, and reads the menu it opened with `get_widgets`
 ([architecture.md](architecture.md) § "Testing").
 

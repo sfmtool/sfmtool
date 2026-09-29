@@ -1380,10 +1380,11 @@ comes from synthetic `CameraIntrinsics` values in the core tests rather than
 from datasets, since no checked-in dataset exercises thin-prism or
 equirectangular.
 
-No new windowed (`ui_basic`) tests: nothing here depends on real OS input the
-way the context menu does. One existing windowed assertion moves — the HUD
-Layers checkbox is matched by name, and phase 3 renames it to
-`Camera Images`.
+Nothing here has a windowed (`ui_basic`) test of its own, since none of it
+depends on real OS input the way the context menu does. The HUD's
+`Camera Images` layer check box is one of the three that
+`hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded` finds by
+name.
 
 ---
 

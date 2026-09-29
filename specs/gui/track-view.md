@@ -1243,9 +1243,11 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   stock grid, the retired names refused, the startup load of an old default
   file) and [`mcp-server.md`](mcp-server.md) § "Testing" (the panel name,
   `deactivate_bench_item`, the null `active.track`).
-- **`ui_basic`**: the refusal for a panel behind another names "Track View". No
-  windowed test of the box: what it decides is covered headlessly, and the tab's
-  presence by the layout test that walks every tab.
+- **`ui_basic`**: a `screenshot` of `camera_intrinsics`, which the stock grid
+  keeps behind Track View, is refused with a message naming "Track View". No
+  windowed test of the box: what it decides is covered headlessly, and the
+  tab's presence by `layout/tests.rs`'s
+  `every_panel_appears_exactly_once_in_the_default`.
 
 ---
 

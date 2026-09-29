@@ -223,10 +223,8 @@ dirty ([scene-graph.md](scene-graph.md) § "Tree rows").
 
 **The window title puts the `*` on the file name** rather than at the front:
 `SfM Explorer - *foo.sfmr`, and `SfM Explorer - *foo.sfmr (+2)` with more files
-loaded. The leading base title is what an attaching process matches on -- the
-same reason the MCP endpoint's mention is a suffix -- so a marker in front of it
-would break the match on exactly the sessions where something had been edited. A
-window showing no file name keeps the bare base title.
+loaded, so the title still starts with the application's name. A window showing
+no file name keeps the bare base title.
 
 ## The close prompt
 

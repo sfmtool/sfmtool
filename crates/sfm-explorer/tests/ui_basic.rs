@@ -206,8 +206,8 @@ struct Guard {
     child: Child,
     /// The default layout file this test wrote, for the two tests that start
     /// the viewer on one. Held here so that it is restored *under* the lock:
-    /// restored after the lock was released, it raced the next test's own
-    /// `rename` of that one path, which failed with "Access is denied".
+    /// restored after the lock is released, it would race the next test's own
+    /// `rename` of that one path, which fails with "Access is denied".
     _layout_file: Option<DefaultLayoutFile>,
     _lock: MutexGuard<'static, ()>,
 }
@@ -371,7 +371,7 @@ impl Drop for Guard {
 
 // Generous timeout: the first launch on a cold CI runner pays wgpu
 // adapter/shader init (and, on Windows, AV scanning of the fresh binary),
-// which has been observed to exceed 15s. Healthy launches are ready in ~1s.
+// which can exceed 15s. Healthy launches are ready in ~1s.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Budget for a widget to appear in, or change within, a listing or the
@@ -379,8 +379,8 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 /// cases stay fast; only a genuine failure waits the full budget.
 ///
 /// More than a nominal budget: a lookup straight after loading the demo scene
-/// pays the scene renderer's wgpu pipeline init on a cold CI runner, and at 5s
-/// that timed out on Windows with the widget appearing just past the budget.
+/// pays the scene renderer's wgpu pipeline init, which on a cold Windows CI
+/// runner can take more than 5s.
 const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 
 // --- The smoke test: the accessibility tree, read through UI Automation ---
@@ -762,8 +762,8 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     // The return value is checked because `SendInput` is refused silently: UIPI
     // blocks injection into the session whenever the foreground window belongs
     // to a more privileged process, and the call then inserts nothing and
-    // returns 0. Ignoring that turned a machine-state problem into a
-    // thirty-second wait for a menu that was never asked for.
+    // returns 0. Unchecked, the test would wait out its budget for a menu that
+    // was never asked for and report it as a product failure.
     fn mouse_event(flags: MOUSE_EVENT_FLAGS) {
         let input = INPUT {
             r#type: INPUT_MOUSE,
@@ -830,8 +830,8 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
         std::thread::sleep(Duration::from_millis(250));
     }
     // A left click first, which both activates the window (a right-press on an
-    // inactive one is swallowed by the activation) and puts the row through the
-    // selection change that used to take its menu's identity with it.
+    // inactive one is swallowed by the activation) and selects the row, so the
+    // menu has to open on a row whose selection just changed.
     mouse_event(MOUSEEVENTF_LEFTDOWN);
     std::thread::sleep(Duration::from_millis(120));
     mouse_event(MOUSEEVENTF_LEFTUP);
@@ -1423,9 +1423,9 @@ fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
 
 /// File > Quit exits the process.
 ///
-/// It used to send `ViewportCommand::Close`, which this app's own winit loop
-/// never reads, so the menu item did nothing at all. Asserting on the child
-/// process rather than on the window is the point: only a real exit proves it.
+/// Asserted on the child process rather than on the window: a menu item wired
+/// to a command the event loop never reads leaves the window up, and only the
+/// process exiting shows the item works.
 #[test]
 fn quit_menu_item_exits_the_process() {
     let mut viewer = McpViewer::launch();

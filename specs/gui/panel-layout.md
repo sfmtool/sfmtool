@@ -502,16 +502,18 @@ line — the human sees *why* their layout did not come back rather than wonderi
 A file that is absent is nothing: no entry, no log line.
 
 **The load happens after the window is created and before it is shown.** The
-window is created with `with_visible(false)` — it already is, so that AccessKit
-can register its UIAutomation provider first — the file is applied, and the
-window is then made visible. So a saved "maximized on the left monitor" comes up
-that way rather than appearing at 1280 × 720 in the middle and jumping.
+window is created with `with_visible(false)`, which also lets AccessKit
+register its UI Automation provider before the window is shown; the file is
+applied, and the window is then made visible. So a saved "maximized on the left
+monitor" comes up that way rather than appearing at 1280 × 720 in the middle and
+jumping.
 
 **`--no-default-layout`** on the viewer's command line skips the startup load —
 for a test that must start from the stock grid whatever the developer has saved,
 for CI, and for a human whose saved layout has become the problem. `ui_basic`
-passes it wherever it launches the binary, except in the one test that is *about*
-the startup load. `sfm explorer --no-default-layout` forwards it.
+passes it wherever it launches the binary, except in the two tests that write
+a default layout file and start the viewer on it. `sfm explorer
+--no-default-layout` forwards it.
 
 The viewer restores **the one file the human saved to the default location**,
 never its last state, and never anything an agent did through MCP. An agent that
@@ -1063,9 +1065,11 @@ egui's checkbox rather than anything this spec decides.
 one thing no headless test can: a small default-layout file written to the home
 directory, the viewer launched *without* `--no-default-layout`, and the panel
 that file named listed by `get_widgets` over the viewer's MCP endpoint — the
-startup load end to end, through a real window. It puts the developer's own file back afterwards. Every other test
-there passes `--no-default-layout`, so a saved layout on the machine running the
-suite cannot make its panel assertions fail.
+startup load end to end, through a real window. The Edit History panel's
+windowed test starts the same way, to put that panel in front. Both put the
+developer's own file back afterwards. Every other test there passes
+`--no-default-layout`, so a saved layout on the machine running the suite
+cannot make its panel assertions fail.
 
 ## Non-goals
 

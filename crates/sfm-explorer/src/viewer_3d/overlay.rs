@@ -318,8 +318,7 @@ pub(crate) fn scene_stats_text(
 /// The bottom-left hover line for what the pick buffer resolved to.
 ///
 /// The reconstruction label is included only when more than one file is
-/// loaded — with a single one it would be noise, and it is exactly the text
-/// `ui_basic`-adjacent expectations were written against.
+/// loaded: with a single one it names the only reconstruction there is.
 pub(crate) fn hover_overlay_text(
     scene: &[SceneNode],
     hover_pick: Option<PickTarget>,

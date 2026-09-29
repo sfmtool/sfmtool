@@ -842,12 +842,11 @@ editing fixture's node, so the wire is read at an instant the test chose:
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.
 
-`crates/sfm-explorer/tests/ui_basic.rs`: the Background Task panel is in the
-accessibility tree, and **Panels ▸ Background Task** ticks it.
-
 `crates/sfm-explorer/src/layout/tests.rs` and `dock/tests.rs`: the default
 layout's left column is a top-bottom split of Scene over Background Task at
-0.28, and its home position is the left edge with Scene as its group-mate.
+0.72, and its home position is the left edge with Scene as its group-mate. The
+Panels menu's Background Task item is covered with every other panel's
+([panel-layout.md](panel-layout.md) § "Testing").
 
 ## Parameters
 

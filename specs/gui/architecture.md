@@ -523,13 +523,10 @@ mouse would; `screenshot` and the command vocabulary do the rest
 That is the information the platform's accessibility tree carries, read inside
 the viewer's process instead of across the operating system's accessibility
 bridge, and the bridge is the expensive part: on a GitHub-hosted Windows runner
-one walk of the viewer's tree through it has taken about 18.6s, and in a run of
-19 tests that read every widget through it, 33 walks and the search for the
-viewer's window took about 88% of the 881s the run took.
-Read in-process, the listing also says what the platform trees do not report
-consistently: whether a menu item is enabled (Linux never matched an
-`enabled="false"` selector), which widget owns a context menu, and which items
-open a submenu.
+one walk of the viewer's tree through it can take about 18.6s. Read
+in-process, the listing also says what the platform trees do not report the
+same way on every platform: whether a menu item is enabled, which widget owns a
+context menu, and which items open a submenu.
 
 An MCP test never reads the accessibility API. `McpViewer` waits on
 the endpoint instead: it polls `get_widgets` until the menu bar's `File` button
@@ -563,8 +560,10 @@ a person debugging one.
 presses the right mouse button with `SendInput` on the Scene panel's `demo`
 row. A synthetic `click` goes into egui's input and never passes through
 winit, so it cannot see a defect in how the operating system's input reaches
-egui — and on Windows `EnableMouseInPointer` once made every mouse button
-arrive as a touch, so no right click reached egui at all. The input is real;
+egui. On Windows `EnableMouseInPointer` makes every mouse button arrive as a
+touch, and a right click reaches egui only because
+`platform::windows::restore_mouse_button` rewrites it
+([scene-graph.md](scene-graph.md)). The input is real;
 where to press and what happened are both read over MCP. The point is the
 window block's `inner_position`, the drawable area's top-left corner on the
 desktop, plus the centre of the row label's `rect_px` in a `get_widgets`
@@ -670,9 +669,8 @@ display mode, power plan, effective Defender state, and UI Automation version.
 These are observations rather than setup: an unavailable probe reports itself
 and cannot suppress the tests. The same snapshot after the suite distinguishes
 a runner that arrived slow from resource pressure accumulated by the build.
-Identical `windows-2025-vs2026` images have split into fast and slow
-populations under the same tree walks, and the system properties are the
-evidence needed to tell which host attribute moves with the cost.
+Runners on the same image differ in speed, and these properties are what show
+which host attribute moves with the cost.
 
 ### What the lock covers
 
@@ -680,10 +678,10 @@ evidence needed to tell which host attribute moves with the cost.
 `Guard` that holds the mutex owns the viewer process *and* anything the test
 placed in the developer's home directory — the two tests that start the viewer
 on a saved default layout write one path there — and it drops them in that
-order, so the file is back before the next test can take the lock. It was not
-always so: the file used to be restored after the lock was released, which under
-a plain multi-threaded `cargo test` raced the next test's own `rename` of it and
-failed that test with "Access is denied".
+order, so the file is back before the next test can take the lock. Restored
+after the lock is released, it would race the next test's own `rename` of it
+under a plain multi-threaded `cargo test`, and that test would fail with
+"Access is denied".
 
 ### Platforms
 
@@ -702,9 +700,9 @@ client libraries winit loads at run time.
 
 Every test needs a working GPU surface, since each draws real frames and the
 screenshot tests decode the PNG a presented frame produced — on Linux that
-means a Vulkan ICD, per "Linux" above. The right-click test is Windows-only by
-construction: it drives synthetic OS mouse input to catch a `WM_POINTER`
-routing defect that exists only there.
+means a Vulkan ICD, per "Linux" above. The right-click test is Windows-only:
+it presses the button through `SendInput` to check the `WM_POINTER` routing,
+which exists only there.
 
 **A test that synthesizes OS input aims first.** `SendInput` presses a button
 wherever the cursor happens to be, on whatever window is under it, and neither

@@ -27,8 +27,7 @@ pub(crate) mod open;
 mod ops;
 mod save;
 
-/// The window title with no file loaded. `ui_basic`'s Windows attach path
-/// finds our window by this exact name, so it is also what the tests match on.
+/// The window title with no file loaded, and the start of every other title.
 pub const WINDOW_TITLE_BASE: &str = "SfM Explorer";
 
 /// Which overlay to draw on the image detail panel.
@@ -1369,14 +1368,12 @@ impl AppState {
     /// `"SfM Explorer - <first> (+N-1)"`.
     ///
     /// A first node with no file name — demo data — leaves this at the base
-    /// title however many nodes follow it: it came from no file, so naming one
-    /// would be a lie, and the base title is load-bearing for `ui_basic`'s
-    /// Windows attach path.
+    /// title however many nodes follow it: it came from no file, so there is no
+    /// name to show.
     ///
     /// The file name carries a leading `*` while the node showing it is not at
-    /// the version its file holds. The marker sits on the *name* rather than at
-    /// the front of the title for the same reason the MCP suffix does: the
-    /// leading base title is what an attaching process matches on.
+    /// the version its file holds. The marker sits on the *name*, and the MCP
+    /// port is a suffix, so every title starts with the application's name.
     pub fn window_title(&self) -> String {
         let extra = self.scene.len().saturating_sub(1);
         let marker = match self.scene.first() {
@@ -1391,9 +1388,7 @@ impl AppState {
             Some(name) => format!("{WINDOW_TITLE_BASE} - {marker}{name}"),
             None => WINDOW_TITLE_BASE.to_string(),
         };
-        // A window something else can drive should never look like one nothing
-        // can. Appended rather than prefixed so `ui_basic`'s Windows attach
-        // path, which matches on the leading base title, is unaffected.
+        // A window that another process can drive says so in its title.
         #[cfg(feature = "mcp")]
         if let Some(mcp) = &self.mcp {
             title.push_str(&format!(" [MCP :{}]", mcp.port));
