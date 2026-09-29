@@ -471,6 +471,68 @@ pub(crate) fn anchored_frame(
         .unwrap_or_else(|| frame.clone())
 }
 
+/// Samples per edge of a projected patch boundary, before the size of the
+/// projection is known.
+const BASE_SAMPLES: usize = 8;
+
+/// The most samples per edge, for a patch that fills the panel.
+const MAX_SAMPLES: usize = 64;
+
+/// The four `(s, t)` corners of a patch's square, in the order
+/// [`OrientedPatch::boundary`] walks them, so consecutive pairs are its edges.
+pub(crate) const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+
+/// The patch's boundary projected into the view, as one sample per boundary
+/// point with `None` where it did not land, and how many samples each edge got.
+///
+/// The density follows the size of the projection: the corners are projected
+/// first to measure it, and the edges then sampled finely enough that the
+/// distortion shows as a curve rather than as a polygon. Image Detail strokes
+/// this outline and Track View crops the photograph around it, so the two draw
+/// one curve.
+pub(crate) fn project_outline(
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+) -> (Vec<Option<[f64; 2]>>, usize) {
+    let corners: Vec<[f64; 2]> = frame
+        .boundary(1)
+        .into_iter()
+        .filter_map(|p| project(camera, pose, p.coords, frame.w))
+        .collect();
+    let span = corners.iter().fold(0.0f64, |span, a| {
+        corners.iter().fold(span, |span, b| {
+            span.max((a[0] - b[0]).abs()).max((a[1] - b[1]).abs())
+        })
+    });
+    // One sample per dozen source pixels of the widest side, which is finer
+    // than the eye can tell a chord from an arc at any zoom the panel offers.
+    let samples = ((span / 12.0).ceil() as usize).clamp(BASE_SAMPLES, MAX_SAMPLES);
+    let projected = frame
+        .boundary(samples)
+        .iter()
+        .map(|point| project(camera, pose, point.coords, frame.w))
+        .collect();
+    (projected, samples)
+}
+
+/// The four image-pixel corners of the square `[-radius, radius]^2` mapped
+/// through the affine `shape` at `position`, in [`CORNERS`] order: a
+/// cluster-stage observation's outline.
+pub(crate) fn parallelogram(
+    position: [f64; 2],
+    shape: [[f64; 2]; 2],
+    radius: f64,
+) -> [[f64; 2]; 4] {
+    CORNERS.map(|(s, t)| {
+        let (s, t) = (s * radius, t * radius);
+        [
+            position[0] + shape[0][0] * s + shape[0][1] * t,
+            position[1] + shape[1][0] * s + shape[1][1] * t,
+        ]
+    })
+}
+
 /// The turn, in radians about the patch's outward normal, that carries the
 /// in-plane direction of `from` onto that of `to`.
 ///

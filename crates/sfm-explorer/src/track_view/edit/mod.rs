@@ -39,6 +39,7 @@ use crate::bench::live::Evaluation;
 use crate::scene::{ImageRef, ReconId, SceneNode};
 use crate::state::AppState;
 
+mod crop;
 mod surface_plot;
 mod table;
 mod tile;
@@ -176,6 +177,13 @@ pub struct TrackEdit {
     /// [`TrackEdit::tiles`], since it is the same picture made wider and goes
     /// stale exactly when the tile does. `None` is cached as the tile's is.
     contexts: HashMap<usize, Option<tile::DrawnContext>>,
+    /// The crop of each row's photograph around the patch's outline, by
+    /// observation index, kept and dropped with [`TrackEdit::tiles`]: it moves
+    /// exactly when the tile does. `None` is cached as the tile's is.
+    crops: HashMap<usize, Option<crop::DrawnCrop>>,
+    /// The hover view of each row's crop, rendered the first time the pointer
+    /// rests on that crop and dropped with [`TrackEdit::crops`].
+    crop_contexts: HashMap<usize, Option<crop::DrawnCrop>>,
     /// The self-similarity surface plot of each observation, by observation
     /// index, with the surface and tolerance it was drawn from. Checked
     /// against the row's own reading every frame and redrawn when that
@@ -235,6 +243,8 @@ impl TrackEdit {
             tiles: HashMap::new(),
             tiles_for: None,
             contexts: HashMap::new(),
+            crops: HashMap::new(),
+            crop_contexts: HashMap::new(),
             plots: HashMap::new(),
             rows: Vec::new(),
             build_refusal: None,
@@ -278,6 +288,8 @@ impl TrackEdit {
         self.tiles.clear();
         self.tiles_for = None;
         self.contexts.clear();
+        self.crops.clear();
+        self.crop_contexts.clear();
         if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
             self.showing = None;
         }
@@ -713,6 +725,87 @@ impl TrackEdit {
         self.contexts.get(&observation).and_then(Option::as_ref)
     }
 
+    /// The crop one row draws beside its tile, cutting it out of the
+    /// photograph if this is the first frame that has asked for it since the
+    /// track moved. `None` is cached as the tile's is.
+    fn ensure_crop(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+    ) -> Option<&crop::DrawnCrop> {
+        if !self.crops.contains_key(&observation) {
+            let drawn = self.drawn_crop(ctx, recon, track, observation, state, false);
+            self.crops.insert(observation, drawn);
+        }
+        self.crops.get(&observation).and_then(Option::as_ref)
+    }
+
+    /// The hover view of one row's crop, rendering it if this is the first
+    /// frame that has asked for it since the track moved. Asked for only while
+    /// the pointer rests on the crop, as the tile's hover view is.
+    fn ensure_crop_context(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+    ) -> Option<&crop::DrawnCrop> {
+        if !self.crop_contexts.contains_key(&observation) {
+            let drawn = self.drawn_crop(ctx, recon, track, observation, state, true);
+            self.crop_contexts.insert(observation, drawn);
+        }
+        self.crop_contexts
+            .get(&observation)
+            .and_then(Option::as_ref)
+    }
+
+    /// A row's crop, or with `in_context` its hover view, cut from the node's
+    /// cached photograph and uploaded.
+    fn drawn_crop(
+        &self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+        in_context: bool,
+    ) -> Option<crop::DrawnCrop> {
+        let id = self.showing.as_ref().map(|(id, _)| *id)?;
+        let row = track.observations.get(observation)?;
+        let image = ImageRef::new(id, row.image as usize);
+        let src = state.full_res_cache.get(&image)?.as_ref()?;
+        let (picture, name, options) = if in_context {
+            (
+                crop::context(recon, track, observation, src)?,
+                format!("bench_crop_context_{}_{observation}", image.index()),
+                egui::TextureOptions::LINEAR,
+            )
+        } else {
+            (
+                crop::image(recon, track, observation, src)?,
+                format!("bench_crop_{}_{observation}", image.index()),
+                // Each photograph pixel magnified to a block, as the tile
+                // is, so the crop shows the photograph's own resolution.
+                egui::TextureOptions {
+                    magnification: egui::TextureFilter::Nearest,
+                    minification: egui::TextureFilter::Linear,
+                    ..egui::TextureOptions::NEAREST
+                },
+            )
+        };
+        Some(crop::DrawnCrop::new(
+            ctx,
+            picture,
+            row.verdict,
+            name,
+            options,
+        ))
+    }
+
     /// The self-similarity surface plot of `observation` for `surface` read
     /// at `tolerance`, drawing it if the row's reading has changed since it
     /// was last drawn, or `None` when the reading has nothing to draw.
@@ -755,6 +848,8 @@ impl TrackEdit {
         }
         self.tiles.clear();
         self.contexts.clear();
+        self.crops.clear();
+        self.crop_contexts.clear();
         self.tiles_for = Some(key);
     }
 }

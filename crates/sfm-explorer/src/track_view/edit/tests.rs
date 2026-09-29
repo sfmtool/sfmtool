@@ -2674,22 +2674,31 @@ fn a_row_that_clears_every_bar_but_loses_its_image_says_so() {
     );
 }
 
-/// The tile stands at the table's left edge with no heading, and the *Keep*
-/// column comes after it.
+/// The crop stands at the table's left edge under *Crop*, the patch tile
+/// after it under *Patch*, and the *Keep* column after that, none of them
+/// overlapping.
 #[test]
-fn the_tile_column_is_left_of_the_keep_column() {
+fn the_crop_and_patch_columns_come_first_under_their_headings() {
     let cols = super::table::ColumnLayout::new();
-    assert_eq!(cols.tile_x(), 0.0);
+    let size = super::table::TILE_SIZE;
+    assert_eq!(cols.crop_x(), 0.0);
     assert!(
-        cols.keep_x() >= cols.tile_x() + super::table::TILE_SIZE,
-        "the Keep column overlaps the tile"
+        cols.tile_x() >= cols.crop_x() + size,
+        "the patch overlaps the crop"
+    );
+    assert!(
+        cols.keep_x() >= cols.tile_x() + size,
+        "the Keep column overlaps the patch"
     );
     let headers = cols.headers();
-    assert_eq!(headers[0].1, "Keep");
-    assert_eq!(headers[0].0, cols.keep_x());
-    assert!(
-        headers.iter().all(|&(x, _, _)| x >= cols.keep_x()),
-        "a heading stands over the tile"
+    let firsts: Vec<(f32, &str)> = headers[..3].iter().map(|&(x, h, _)| (x, h)).collect();
+    assert_eq!(
+        firsts,
+        vec![
+            (cols.crop_x(), "Crop"),
+            (cols.tile_x(), "Patch"),
+            (cols.keep_x(), "Keep"),
+        ]
     );
 }
 
@@ -2923,4 +2932,376 @@ fn the_row_menu_unpins_every_pinned_row_of_a_selection() {
     assert_eq!(versions(&state, id), before + 1, "one step, one version");
     let track = state.bench_track(id, &label).expect("on the bench");
     assert!(track.observations.iter().all(|o| !o.pinned));
+}
+
+// ── The crop column ─────────────────────────────────────────────────────
+
+/// Every row draws the crop of its photograph beside its tile, at the track
+/// stage and at the cluster stage.
+#[test]
+fn every_row_draws_a_crop_at_either_stage() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    assert!(
+        panel.rows().iter().all(|row| row.crop),
+        "a track-stage row drew no crop: {:?}",
+        panel.rows(),
+    );
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel.rows().iter().all(|row| row.crop),
+        "a cluster-stage row drew no crop: {:?}",
+        panel.rows(),
+    );
+}
+
+/// One observation's outline, its crop and the crop's hover view, all from
+/// the node's cached photograph.
+fn crop_and_context(
+    state: &AppState,
+    id: ReconId,
+    label: &str,
+    observation: usize,
+) -> (
+    super::crop::Outline,
+    super::crop::CropPicture,
+    super::crop::CropPicture,
+) {
+    let track = state.bench_track(id, label).expect("on the bench").clone();
+    let row = &track.observations[observation];
+    let src = state
+        .full_res_cache
+        .get(&ImageRef::new(id, row.image as usize))
+        .and_then(|slot| slot.clone())
+        .expect("a cached photograph");
+    let recon = state.node(id).expect("loaded").recon();
+    let outline = super::crop::outline(recon, &track, observation).expect("an outline");
+    let crop = super::crop::image(recon, &track, observation, &src).expect("a crop");
+    let context = super::crop::context(recon, &track, observation, &src).expect("a context");
+    (outline, crop, context)
+}
+
+/// The crop is square, and is the outline's bounding box widened by the margin,
+/// rounded out to whole pixels and then widened evenly on its shorter side:
+/// every sample of the outline lies at least the margin inside it, on the
+/// longer side neither edge reaches a whole pixel further than that, and on
+/// both the outline sits in the middle to within the rounding. At one texel per
+/// pixel each texel is the photograph's own pixel. Checked at both stages.
+#[test]
+fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
+    let (mut state, id, label, _, _) = on_the_bench();
+    let margin = super::crop::CROP_MARGIN_PX;
+    let check = |state: &AppState, stage: &str| {
+        let track = state.bench_track(id, &label).expect("on the bench").clone();
+        for observation in 0..track.observations.len() {
+            let (outline, crop, _) = crop_and_context(state, id, &label, observation);
+            let region = crop.crop;
+            let landed: Vec<[f64; 2]> = outline.samples.iter().flatten().copied().collect();
+            assert!(landed.len() >= 4, "{stage}: the outline did not land");
+            assert_eq!(
+                region.size[0], region.size[1],
+                "{stage}: observation {observation}'s crop is not square"
+            );
+            let gaps: Vec<(f64, f64)> = (0..2)
+                .map(|axis| {
+                    let lo = landed.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
+                    let hi = landed
+                        .iter()
+                        .map(|p| p[axis])
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let start = region.min[axis] as f64;
+                    (lo - start, start + region.size[axis] as f64 - hi)
+                })
+                .collect();
+            for (axis, &(before, after)) in gaps.iter().enumerate() {
+                assert!(
+                    before >= margin && after >= margin,
+                    "{stage}: observation {observation}'s outline is {before} and {after} px \
+                     from the crop's edges on axis {axis}"
+                );
+                assert!(
+                    (before - after).abs() < 2.0,
+                    "{stage}: observation {observation}'s outline is off centre on axis \
+                     {axis}: {before} vs {after} px"
+                );
+            }
+            assert!(
+                gaps.iter()
+                    .any(|&(before, after)| before < margin + 1.0 && after < margin + 1.0),
+                "{stage}: observation {observation}'s crop is wider than the outline on \
+                 both axes: {gaps:?}"
+            );
+            // The demo's patches are a few dozen pixels across, so the crop is
+            // read one texel per photograph pixel.
+            assert_eq!(
+                crop.image.size,
+                [region.size[0] as usize, region.size[1] as usize],
+                "{stage}: the crop is not one texel per pixel"
+            );
+            let src = state
+                .full_res_cache
+                .get(&ImageRef::new(
+                    id,
+                    track.observations[observation].image as usize,
+                ))
+                .and_then(|slot| slot.clone())
+                .expect("a cached photograph");
+            let (x, y) = (region.min[0] + 1, region.min[1] + 1);
+            let texel = crop.image.pixels[crop.image.size[0] + 1].to_array();
+            for (c, &value) in texel.iter().take(3).enumerate() {
+                assert_eq!(
+                    value,
+                    src.level(0).get_pixel(x as u32, y as u32, c as u32),
+                    "{stage}: a crop texel is not the photograph's pixel"
+                );
+            }
+        }
+    };
+    check(&state, "track stage");
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    check(&state, "cluster stage");
+}
+
+/// A crop's hover view is the crop centred in three times its width and height
+/// of the photograph at the crop's own sampling: three crops across and down,
+/// the box its middle third, the texels there the crop's, and the outline the
+/// crop's moved by one crop width and height.
+#[test]
+fn a_crop_s_hover_view_holds_the_crop_in_its_middle_third() {
+    let (state, id, label, _, _) = on_the_bench();
+    let k = super::tile::CONTEXT_FACTOR as usize;
+    let observations = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .observations
+        .len();
+    for observation in 0..observations {
+        let (_, crop, context) = crop_and_context(&state, id, &label, observation);
+        let [w, h] = crop.image.size;
+        assert_eq!(context.image.size, [w * k, h * k]);
+        assert_eq!(context.crop, crop.crop, "the hover view names another crop");
+        assert!(
+            (context.keypoint - crop.keypoint - egui::vec2(w as f32, h as f32)).length() < 1e-3,
+            "the hover view's dot is not the crop's moved by one crop"
+        );
+        for y in 0..h {
+            for x in 0..w {
+                let a = crop.image.pixels[y * w + x];
+                let b = context.image.pixels[(y + h) * w * k + x + w];
+                assert_eq!(a, b, "observation {observation}: texel ({x}, {y}) differs");
+            }
+        }
+        for (a, b) in crop.outline.iter().zip(&context.outline) {
+            let (a, b) = (a.expect("landed"), b.expect("landed"));
+            assert!(
+                (b - a - egui::vec2(w as f32, h as f32)).length() < 1e-3,
+                "the hover view's outline is not the crop's moved by one crop"
+            );
+        }
+    }
+}
+
+/// The caption gives the patch's two axes in the photograph's pixels. At the
+/// track stage each is the axis's length through the lens, which for the
+/// demo's cameras is the distance between the projections of the patch's
+/// opposite edge midpoints; at the cluster stage it is the shape's column
+/// times the template's width.
+#[test]
+fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
+    use sfmtool_core::bench::Stage;
+
+    let (mut state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track put on from a point is at the track stage");
+    };
+    let patch = payload.placement.clone().expect("a patch");
+    let row = &track.observations[0];
+    let recon = state.node(id).expect("loaded").recon();
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&recon.image_table, row.image as usize).expect("a view");
+    let frame = crate::bench::geometry::anchored_frame(&patch, &camera, &pose, row);
+    let across = |s: f64, t: f64| {
+        let (xyz, w) = frame.corner_homogeneous(s, t);
+        crate::bench::geometry::project(&camera, &pose, xyz, w).expect("projects")
+    };
+    let chord = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let want = [
+        chord(across(-1.0, 0.0), across(1.0, 0.0)),
+        chord(across(0.0, -1.0), across(0.0, 1.0)),
+    ];
+    let (_, _, context) = crop_and_context(&state, id, &label, 0);
+    for (axis, (got, want)) in context.axes_px.iter().zip(want).enumerate() {
+        let got = got.expect("the axis projects");
+        assert!(
+            (got - want).abs() < 0.01 * want,
+            "axis {axis} is {got} px, the edge midpoints {want} px apart"
+        );
+    }
+    let caption = super::crop::context_caption(&context);
+    for axis in context.axes_px {
+        let text = format!("{:.1} px", axis.expect("projects"));
+        assert!(caption.contains(&text), "{text} is not in {caption}");
+    }
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let Stage::Cluster(payload) = &track.stage else {
+        panic!("the track moved to the cluster stage");
+    };
+    let shape = track.observations[0].shape().expect("a cluster shape");
+    let (_, _, context) = crop_and_context(&state, id, &label, 0);
+    for (axis, got) in context.axes_px.iter().enumerate() {
+        let want = 2.0 * payload.radius * shape[0][axis].hypot(shape[1][axis]);
+        let got = got.expect("a cluster axis");
+        assert!(
+            (got - want).abs() < 1e-9,
+            "cluster axis {axis}: {got} vs {want}"
+        );
+    }
+}
+
+/// Resting the pointer on a row's crop shows its hover view, rendered for
+/// that row alone, while the row keeps its hover and its click.
+#[test]
+fn hovering_a_crop_shows_it_in_context_and_keeps_the_row() {
+    let (state, _, _, mut panel, ctx) = on_the_bench();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    let x = super::table::ColumnLayout::new().crop_x() + super::table::TILE_SIZE / 2.0;
+    let at = egui::pos2(x + 8.0, y + 20.0);
+    let response = at_pointer(&mut panel, &ctx, &state, at, false);
+    assert_eq!(response.hovered_image, Some(1), "the row lost its hover");
+    for _ in 0..12 {
+        run_frame(&mut panel, &ctx, &state);
+    }
+    let texts = painted(&mut panel, &ctx, &state, Vec::new());
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("The patch's outline in this photograph")),
+        "no crop hover caption in {texts:?}"
+    );
+    let rendered: Vec<usize> = panel.crop_contexts.keys().copied().collect();
+    assert_eq!(
+        rendered,
+        vec![1],
+        "crop hover views rendered for rows not hovered"
+    );
+    assert!(
+        panel.contexts.is_empty(),
+        "the tile's hover view was rendered"
+    );
+
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert_eq!(
+        response.pick_row,
+        Some((1, false)),
+        "a click on the crop did not pick the row"
+    );
+}
+
+/// A crop's hover view marks where the observation sits and, at the track
+/// stage, where the track's point projects, each at its own photograph pixel:
+/// the picture is the photograph at one texel per pixel, so a mark's texel plus
+/// the picture's corner is the pixel it marks. The distance the caption states
+/// is the row's reprojection error. At the cluster stage there is a dot and no
+/// ring.
+#[test]
+fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
+    use sfmtool_core::bench::Stage;
+
+    let (mut state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let Stage::Track(payload) = &track.stage else {
+        panic!("a track put on from a point is at the track stage");
+    };
+    let frame = payload.placement.clone().expect("a patch");
+    let position = payload.position.expect("a triangulated point");
+
+    // A sighting of the point in a fourth image, 5 px off its projection.
+    let image = 3;
+    let recon = state.node(id).expect("loaded").recon();
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
+    let projected = crate::bench::geometry::project(&camera, &pose, position.coords, frame.w)
+        .expect("the demo cameras see every point");
+    let keypoint = [projected[0] + 4.0, projected[1] - 3.0];
+    state
+        .add_bench_observation(
+            &label,
+            ImageRef::new(id, image),
+            &crate::bench::Seed::Pixel {
+                pixel: keypoint,
+                radius_px: None,
+            },
+        )
+        .expect("a pixel on the sensor");
+    state.settle_bench_evaluation();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let added = track.observations.len() - 1;
+    let error = track.observations[added]
+        .track
+        .as_ref()
+        .and_then(|m| m.reprojection_error)
+        .expect("the evaluation measured the new row's error");
+
+    let (_, _, context) = crop_and_context(&state, id, &label, added);
+    let region = context.crop;
+    let k = super::tile::CONTEXT_FACTOR as i64;
+    let corner = [
+        (region.min[0] - region.size[0] * (k / 2)) as f64,
+        (region.min[1] - region.size[1] * (k / 2)) as f64,
+    ];
+    let to_photograph = |at: egui::Pos2| [corner[0] + f64::from(at.x), corner[1] + f64::from(at.y)];
+    let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    assert!(
+        distance(to_photograph(context.keypoint), keypoint) < 1e-3,
+        "the dot is not on the observation"
+    );
+    let ring = context.projection.expect("a ring");
+    assert!(
+        distance(to_photograph(ring), projected) < 1e-3,
+        "the ring is not on the point's projection"
+    );
+    assert_eq!(
+        context.projection_of,
+        Some(super::tile::ProjectionOf::Point)
+    );
+    let stated = context.projection_px.expect("a projection distance");
+    assert!(
+        (stated - error).abs() < 1e-6,
+        "the hover view states {stated} px, the row {error} px"
+    );
+    let caption = super::crop::context_caption(&context);
+    assert!(
+        caption.contains(&format!("{stated:.2} px away along the dashed line")),
+        "the caption does not state the distance: {caption}"
+    );
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    let (_, _, context) = crop_and_context(&state, id, &label, 0);
+    assert_eq!(context.projection, None);
+    assert_eq!(context.projection_of, None);
+    assert!(
+        super::crop::context_caption(&context).contains("no point to project"),
+        "the cluster caption does not say why there is no ring"
+    );
 }

@@ -355,74 +355,96 @@ impl DrawnContext {
         let to_screen = |at: egui::Pos2| rect.min + at.to_vec2() * scale;
         let halo = egui::Stroke::new(3.0, egui::Color32::from_black_alpha(170));
         let light = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
-        let projection_color = egui::Color32::from_rgb(255, 196, 64);
 
         let patch =
             egui::Rect::from_min_max(to_screen(self.patch_box.min), to_screen(self.patch_box.max));
         for stroke in [halo, light] {
             painter.rect_stroke(patch, 0.0, stroke, egui::StrokeKind::Middle);
         }
-        if let (Some(keypoint), Some(projection)) = (self.keypoint, self.projection) {
-            let line = [to_screen(keypoint), to_screen(projection)];
-            for stroke in [halo, light] {
-                painter.extend(egui::Shape::dashed_line(&line, stroke, 5.0, 4.0));
-            }
-        }
-        if let Some(projection) = self.projection {
-            let at = to_screen(projection);
-            painter.circle_stroke(at, 5.0, egui::Stroke::new(4.0, halo.color));
-            painter.circle_stroke(at, 5.0, egui::Stroke::new(2.0, projection_color));
-        }
-        if let Some(keypoint) = self.keypoint {
-            painter.circle(
-                to_screen(keypoint),
-                3.0,
-                light.color,
-                egui::Stroke::new(1.5, halo.color),
-            );
-        }
+        paint_marks(
+            &painter,
+            self.keypoint.map(to_screen),
+            self.projection.map(to_screen),
+        );
         ui.set_max_width(CONTEXT_HOVER_SIDE);
         ui.label(&self.caption);
+    }
+}
+
+/// Draw the marks a hover view puts over its picture, in screen points: a dot
+/// at `keypoint`, where the observation sits, a ring at `projection`, where
+/// the track's point or its patch's centre projects, and a dashed line from
+/// the one to the other.
+///
+/// Each mark is a light stroke over a wider dark one, so it reads over a
+/// bright photograph and a dark one alike, the ring in amber. The tile's hover
+/// view and the crop's both draw through this, so the two mark one place the
+/// same way.
+pub(super) fn paint_marks(
+    painter: &egui::Painter,
+    keypoint: Option<egui::Pos2>,
+    projection: Option<egui::Pos2>,
+) {
+    let halo = egui::Stroke::new(3.0, egui::Color32::from_black_alpha(170));
+    let light = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
+    let projection_color = egui::Color32::from_rgb(255, 196, 64);
+    if let (Some(keypoint), Some(projection)) = (keypoint, projection) {
+        let line = [keypoint, projection];
+        for stroke in [halo, light] {
+            painter.extend(egui::Shape::dashed_line(&line, stroke, 5.0, 4.0));
+        }
+    }
+    if let Some(at) = projection {
+        painter.circle_stroke(at, 5.0, egui::Stroke::new(4.0, halo.color));
+        painter.circle_stroke(at, 5.0, egui::Stroke::new(2.0, projection_color));
+    }
+    if let Some(at) = keypoint {
+        painter.circle(at, 3.0, light.color, egui::Stroke::new(1.5, halo.color));
     }
 }
 
 /// The words under a tile's hover view: what the picture is, and what each
 /// mark on it is.
 pub(super) fn context_caption(context: &TileContext) -> String {
-    let mut caption = format!(
+    let side = context.image.size[0] as f32;
+    let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(side, side));
+    format!(
         "The patch, boxed, in {CONTEXT_FACTOR} times its width of this photograph. The dot is \
-         where the observation sits."
-    );
-    let outside = |at: egui::Pos2| {
-        let side = context.image.size[0] as f32;
-        !egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(side, side)).contains(at)
-    };
-    let (what, what_first) = match context.projection_of {
-        None => {
-            caption.push_str(" A cluster has no point to project.");
-            return caption;
-        }
+         where the observation sits.{}",
+        projection_sentence(
+            context.projection_of,
+            context.projection.map(|at| !view.contains(at)),
+            context.projection_px,
+        )
+    )
+}
+
+/// What a hover view's caption says about its ring, with a leading space:
+/// what was projected, and how far from the observation it landed.
+///
+/// `outside` is whether the ring lies outside the picture, `None` where there
+/// is no ring to draw; `projection_px` the distance in the photograph's
+/// pixels, `None` where nothing projected. Shared by the tile's hover view and
+/// the crop's, so the two say one thing about one mark.
+pub(super) fn projection_sentence(
+    projection_of: Option<ProjectionOf>,
+    outside: Option<bool>,
+    projection_px: Option<f64>,
+) -> String {
+    let (what, what_first) = match projection_of {
+        None => return " A cluster has no point to project.".to_string(),
         Some(ProjectionOf::Point) => ("the track's point", "The track's point"),
         Some(ProjectionOf::PatchCentre) => ("the patch's centre", "The patch's centre"),
     };
-    match (context.projection, context.projection_px) {
-        (Some(at), Some(px)) => {
-            caption.push_str(&format!(
-                " The ring is where {what} projects, {px:.2} px away along the dashed line"
-            ));
-            caption.push_str(if outside(at) {
-                ", outside this view."
-            } else {
-                "."
-            });
-        }
-        (None, Some(px)) => caption.push_str(&format!(
+    match (outside, projection_px) {
+        (Some(outside), Some(px)) => format!(
+            " The ring is where {what} projects, {px:.2} px away along the dashed line{}",
+            if outside { ", outside this view." } else { "." }
+        ),
+        (None, Some(px)) => format!(
             " {what_first} projects {px:.2} px away, off the patch's plane as this view \
              sees it.",
-        )),
-        _ => caption.push_str(&format!(
-            " {what_first} does not project into this photograph."
-        )),
+        ),
+        _ => format!(" {what_first} does not project into this photograph."),
     }
-    caption
 }

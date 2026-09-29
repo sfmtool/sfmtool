@@ -109,17 +109,6 @@ const HANDLE_HIT_RADIUS: f32 = 9.0;
 /// distance.
 const EDGE_HIT_WIDTH: f32 = 8.0;
 
-/// Samples per edge of the projected patch boundary, before the size of the
-/// projection is known.
-const BASE_SAMPLES: usize = 8;
-
-/// The most samples per edge, for a patch that fills the panel.
-const MAX_SAMPLES: usize = 64;
-
-/// The four `(s, t)` corners of a patch's square, in the order
-/// [`OrientedPatch::boundary`] walks them, so consecutive pairs are its edges.
-const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-
 /// What the pointer has hold of.
 ///
 /// Every outline handle names the [`Viewpoint`] its outline was drawn from,
@@ -153,7 +142,7 @@ pub(super) enum Handle {
     Corner {
         /// The view the outline is drawn from.
         outline: Viewpoint,
-        /// Which corner, as an index into [`CORNERS`].
+        /// Which corner, as an index into [`geometry::CORNERS`].
         corner: usize,
     },
     /// The normal's segment: dragging it moves the patch along its normal.
@@ -431,7 +420,7 @@ impl Layer {
             return;
         };
         let color = verdict_color(strongest);
-        let (samples, per_edge) = project_outline(&square, camera, pose);
+        let (samples, per_edge) = geometry::project_outline(&square, camera, pose);
         let pivot = self
             .sightings
             .iter()
@@ -547,7 +536,7 @@ impl Layer {
         }
         let centre = geometry::project(&camera, &pose, patch.center.coords, patch.w)?;
         let viewpoint = Viewpoint::Image(img_idx as u32);
-        let (samples, per_edge) = project_outline(patch, &camera, &pose);
+        let (samples, per_edge) = geometry::project_outline(patch, &camera, &pose);
         let color = ghost_color();
         let centre = to_panel(centre);
         Some(Layer {
@@ -1160,48 +1149,10 @@ fn parallelogram(
     radius: f64,
     to_panel: &impl Fn([f64; 2]) -> Pos2,
 ) -> Vec<Pos2> {
-    CORNERS
+    geometry::parallelogram(position, shape, radius)
         .into_iter()
-        .map(|(s, t)| {
-            let (s, t) = (s * radius, t * radius);
-            to_panel([
-                position[0] + shape[0][0] * s + shape[0][1] * t,
-                position[1] + shape[1][0] * s + shape[1][1] * t,
-            ])
-        })
+        .map(to_panel)
         .collect()
-}
-
-/// The patch's boundary projected into the view, as one sample per boundary
-/// point with `None` where it did not land, and how many samples each edge got.
-///
-/// The density follows the size of the projection: the corners are projected
-/// first to measure it, and the edges then sampled finely enough that the
-/// distortion shows as a curve rather than as a polygon.
-fn project_outline(
-    frame: &OrientedPatch,
-    camera: &CameraIntrinsics,
-    pose: &RigidTransform,
-) -> (Vec<Option<[f64; 2]>>, usize) {
-    let corners: Vec<[f64; 2]> = frame
-        .boundary(1)
-        .into_iter()
-        .filter_map(|p| geometry::project(camera, pose, p.coords, frame.w))
-        .collect();
-    let span = corners.iter().fold(0.0f64, |span, a| {
-        corners.iter().fold(span, |span, b| {
-            span.max((a[0] - b[0]).abs()).max((a[1] - b[1]).abs())
-        })
-    });
-    // One sample per dozen source pixels of the widest side, which is finer
-    // than the eye can tell a chord from an arc at any zoom the panel offers.
-    let samples = ((span / 12.0).ceil() as usize).clamp(BASE_SAMPLES, MAX_SAMPLES);
-    let projected = frame
-        .boundary(samples)
-        .iter()
-        .map(|point| geometry::project(camera, pose, point.coords, frame.w))
-        .collect();
-    (projected, samples)
 }
 
 /// The distance from `pos` to the polyline `points`, or `None` for a polyline

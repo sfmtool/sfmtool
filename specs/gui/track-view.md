@@ -47,8 +47,9 @@ selection changes), `header`, `table` and `patch`; the numbers it displays come
 from [metrics/](../../crates/sfm-explorer/src/metrics), at the crate root,
 because the Image Detail overlay and the MCP surface read the same ones.
 [edit/](../../crates/sfm-explorer/src/track_view/edit/) is edit mode: `mod.rs`
-the header, the toolbar and the boxes, `table.rs` the observation table and
-`tile.rs` the tile each row draws and its hover view. The bench steps it reports are `AppState`
+the header, the toolbar and the boxes, `table.rs` the observation table,
+`tile.rs` the tile each row draws and its hover view, and `crop.rs` the crop
+of the photograph beside the tile and its hover view. The bench steps it reports are `AppState`
 methods in [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock
 applies them in [dock.rs](../../crates/sfm-explorer/src/dock.rs).
 
@@ -726,11 +727,17 @@ the track does not.
 #### The observation table
 
 One row per observation, in index order, with the headings above the scroll
-area. The rendered tile is the first column, at the table's left edge, and
-*Keep* follows it; the tile has no heading. The headings are drawn at the
-cells' own body size, in the weak text colour so they still read as headings.
-Each heading has hover text over the width of its column, running to where the
-next heading starts, saying what the column holds; the *Keep* heading's says
+area. The crop of the photograph around the patch's outline is the first
+column, at the table's left edge, under *Crop*; the rendered tile is the
+second, under *Patch*; and *Keep* follows them. The crop comes first because it
+is the photograph as it is, and the tile beside it is that patch warped square,
+so the eye reads from the raw pixels to the picture the numbers are read from.
+The headings are drawn at the cells' own body size, in the weak text colour so
+they still read as headings. Each heading has hover text over the width of its
+column, running to where the next heading starts, saying what the column holds:
+the *Crop* heading's says what the crop shows and what its hover view adds, the
+*Patch* heading's what the tile is at each stage and that the numbers are read
+from it, and the *Keep* heading's says
 what a kept observation is used for, when the thresholds set the switch, what a
 click on the switch, on the pin and on the heading's own pin does, and what the
 cell's colour means.
@@ -767,7 +774,8 @@ that is not there prints a bare `-`, with no unit.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|
-| Tile | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp; hovering it shows it in context, with the projection |
+| Crop | the photograph around the observation's parallelogram, with the parallelogram over it; hovering it shows it in context, with the patch's two axes in pixels | the photograph around the patch's outline as Image Detail draws it, with the outline over it; hovering it shows it in context, with the projection and the patch's two axes in pixels |
+| Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through view mode's warp; hovering it shows it in context, with the projection |
 | Keep | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
 | Img, Name | as view mode; the name is elided in its middle to fit, and hovering it shows it whole | as view mode, and the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
@@ -940,6 +948,49 @@ The picture itself is `tile::context`, a pure function of the track, the
 observation and the photograph, which returns the picture with the box, the
 keypoint and the projection in its own texels, so the tests check the geometry
 rather than the pixels on screen.
+
+**The crop beside the tile shows the patch as the photograph holds it.** The
+tile is the patch warped square, which hides how the lens and the view bend
+it. The crop is the photograph itself, cut around the outline Image Detail's
+bench layer strokes for the row, with that outline over it in the row's
+verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
+features. At the track stage the outline is the patch re-anchored where the
+observation sits (`crate::bench::geometry::anchored_frame`, the frame the tile
+is rendered through) with its boundary projected through the camera's own
+model (`geometry::project_outline`, the function Image Detail strokes), so on a
+fisheye the edges show as the curves they are. At the cluster stage it is the
+observation's parallelogram (`geometry::parallelogram`). The crop is the
+outline's bounding box widened by one photograph pixel on every side
+(`crop::CROP_MARGIN_PX`) and rounded out to whole pixels, so the whole outline
+is in it with its stroke clear of the edge, and then widened on its shorter
+side, evenly on either side, until it is square. The photograph is not
+stretched: the extra is more of the photograph around the outline, which stays
+in the middle, and the square crop fills the square cell. It is read one texel
+per photograph pixel up to 128 texels a side, and past that from the pyramid
+level nearest the step, so a patch that spans half a photograph costs a small
+texture; texels off the photograph are transparent. It is magnified with
+nearest filtering as the tile is, so the photograph's own resolution shows.
+
+**Hovering the crop shows it in context**, as hovering the tile does: the same
+crop centred in three times its width and height of the photograph
+(`tile::CONTEXT_FACTOR`), at the crop's own sampling, so the crop is its middle
+third texel for texel, drawn at 288 points with the outline over it. Over the
+outline are the tile's hover view's marks, drawn by the same code
+(`tile::paint_marks`): a dot where the observation sits and, at the track
+stage, the amber ring where the track's point projects, or before the track is
+triangulated its patch's centre, with a dashed line from the dot to the ring.
+The picture is the photograph itself, so each mark sits at its own pixel. The
+crop is not boxed: the outline already shows where it is. The caption says
+what the marks are and how far the projection is, in the sentence the tile's
+hover view uses (`tile::projection_sentence`), then gives the crop's size in
+photograph pixels and the patch's two axes, the one across the tile and the one up it, as
+lengths in the photograph's pixels. At the track stage each axis is measured
+along its projection through the lens, from one edge's midpoint through the
+centre to the opposite edge's, so a bent axis is measured along its bend; at
+the cluster stage it is the shape's column times the template's width. The
+crop and its hover view are cached per row beside the tiles and dropped with
+them, and the hover view is rendered the first time the pointer rests on the
+crop. Its hover region takes no click, so a click on the crop is the row's.
 
 **Each judged reading is coloured by its bar.** Four readings are judged, one
 per bar: the *whole* line of the ZNCC cell by *min ZNCC*, its *mid* line by
@@ -1208,15 +1259,28 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   `in` row ruled against the bars proposed `out` with the failing bar in its
   hover text, and unpinning it turning it `out`; of two sightings in one image
   that clear every bar, the one that loses the image proposed `out` with the
-  image named in its hover text; the tile column left of *Keep* with no heading
-  over it; the headings as tall as the cells; the
+  image named in its hover text; the crop column at the table's left edge
+  under *Crop*, the tile after it under *Patch* and *Keep* after that; the
+  headings as tall as the cells; the
   cells following the stage; every row's tile at both stages,
   and a fresh row's cut around its seed; a tile's hover view at both stages
   holding the tile texel for texel in its middle third with the keypoint at the
   box's centre, its projection mark mapping back through the picture's own frame
   onto the projected pixel at the row's reprojection error, no mark at the
   cluster stage, and resting the pointer on a tile showing the view for that
-  row alone while the row keeps its hover and its click; the boxes showing the track's
+  row alone while the row keeps its hover and its click; every row's crop at
+  both stages, the crop square,
+  holding every sample of the outline at least one pixel inside it, centred to
+  within the rounding and less than two pixels from both edges on its longer
+  side, its texels the photograph's own pixels, its hover view holding it
+  texel for texel in the middle third with the outline and the dot moved by one
+  crop, the hover view's dot on the observation's pixel and its ring on the
+  point's projection at the row's reprojection error with the caption stating
+  it, and no ring at the cluster stage, the axes
+  matching the projected edge midpoints' distance at the track stage and the
+  shape's columns at the cluster stage and printed in the caption, and resting
+  the pointer on a crop showing the view for that row alone while the row keeps
+  its hover and its click; the boxes showing the track's
   bars outside a drag, following them when a step, an undo or a redo moves them,
   and re-seating on another item; a drag of *shift px* pushing exactly one
   version and one row on its release, with the track's bar where it was let go

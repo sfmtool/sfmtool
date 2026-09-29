@@ -4,9 +4,10 @@
 //! The observation table: the columns, one row per observation, and the
 //! *Keep* switch each row carries.
 //!
-//! The rendered patch tile comes first, at the table's left edge, then the
-//! *Keep* switch, then the image and its name, the stage's own photometric
-//! numbers and the reprojection error, the kernel's status and where the
+//! The crop of the photograph around the patch's outline comes first, at the
+//! table's left edge, then the rendered patch tile, then the *Keep* switch,
+//! then the image and its name, the stage's own photometric numbers and the
+//! reprojection error, the kernel's status and where the
 //! observation came from.
 //!
 //! Rows are painted at fixed x-offsets rather than laid out by egui, as the
@@ -93,6 +94,9 @@ pub(crate) struct RowSummary {
     /// Whether the row drew a rendered tile, rather than the empty frame that
     /// stands in when there is nothing to render.
     pub tile: bool,
+    /// Whether the row drew the crop of its photograph around the patch's
+    /// outline, rather than the empty frame that stands in for it.
+    pub crop: bool,
     /// Whether the row drew the self-similarity surface plot.
     pub self_similarity_plot: bool,
 }
@@ -101,6 +105,7 @@ pub(crate) struct RowSummary {
 pub(super) struct ColumnLayout {
     keep: f32,
     tile: f32,
+    crop: f32,
     image: f32,
     name: f32,
     zncc: f32,
@@ -116,7 +121,8 @@ pub(super) struct ColumnLayout {
 
 impl ColumnLayout {
     pub(super) fn new() -> Self {
-        let tile = 0.0;
+        let crop = 0.0;
+        let tile = crop + TILE_SIZE + 4.0;
         let keep = tile + TILE_SIZE + 8.0;
         let image = keep + KEEP_WIDTH + 6.0;
         let name = image + 34.0;
@@ -142,6 +148,7 @@ impl ColumnLayout {
         Self {
             keep,
             tile,
+            crop,
             image,
             name,
             zncc,
@@ -162,6 +169,12 @@ impl ColumnLayout {
         self.tile
     }
 
+    /// The crop column's offset from the table's left edge.
+    #[cfg(test)]
+    pub(super) fn crop_x(&self) -> f32 {
+        self.crop
+    }
+
     /// The *Keep* column's offset from the table's left edge.
     #[cfg(test)]
     pub(super) fn keep_x(&self) -> f32 {
@@ -169,10 +182,11 @@ impl ColumnLayout {
     }
 
     /// The header's cells, each at the offset its column is drawn at, with the
-    /// hover text that says what the column holds. The tile column, left of
-    /// *Keep*, has no heading.
-    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 9] {
+    /// hover text that says what the column holds.
+    pub(super) fn headers(&self) -> [(f32, &'static str, &'static str); 11] {
         [
+            (self.crop, "Crop", CROP_TIP),
+            (self.tile, "Patch", PATCH_TIP),
             (self.keep, "Keep", KEEP_TIP),
             (
                 self.image,
@@ -202,8 +216,24 @@ pub(super) const KEEP_TIP: &str = "Whether the track keeps the observation. A ke
     stands.\n\n\
     The cell is green when the bars propose keeping the observation and red when they \
     propose turning it out, as they would were its verdict unpinned, so a switch that is on \
-    in a red cell is a hand ruling against the bars. Hover a switch for the reason.\n\n\
-    The tile left of it is the patch as this photograph sees it.";
+    in a red cell is a hand ruling against the bars. Hover a switch for the reason.";
+
+/// The *Crop* heading's hover text.
+pub(super) const CROP_TIP: &str = "The photograph itself around the patch's outline as it \
+    lands there, the outline Image Detail draws, in a square with the outline in the middle. \
+    It shows how the lens and the view bend the patch, which the square patch beside it \
+    hides.\n\n\
+    Hover a crop to see it in three times its width of the photograph, with a dot where the \
+    observation sits, a ring where the track's point projects, and the patch's two axes in \
+    the photograph's pixels.";
+
+/// The *Patch* heading's hover text.
+pub(super) const PATCH_TIP: &str = "The patch as this photograph sees it, warped square: at \
+    the track stage the patch re-rendered from this photograph where the observation sits, \
+    at the cluster stage the grid the refinement samples there. It is the picture the ZNCC \
+    and self-similarity numbers are read from.\n\n\
+    Hover a patch to see it in three times its width of the photograph, with a dot where the \
+    observation sits and a ring where the track's point projects.";
 
 /// The ZNCC heading's hover text, in one constant so the tests aim at the text
 /// shown.
@@ -944,6 +974,39 @@ impl TrackEdit {
             });
         }
 
+        // The crop: the photograph around the patch's outline as it lands
+        // there, fitted to a tile-sized cell. Its hover view is the crop in
+        // three times its width and height of the photograph, with the
+        // patch's axes in the photograph's pixels.
+        let crop_rect = egui::Rect::from_min_size(
+            egui::pos2(x0 + cols.crop, cy - TILE_SIZE / 2.0),
+            egui::vec2(TILE_SIZE, TILE_SIZE),
+        );
+        ui.painter()
+            .rect_filled(crop_rect, 2.0, ui.visuals().faint_bg_color);
+        let cropped = match self.ensure_crop(ui.ctx(), recon, track, observation, state) {
+            Some(drawn) => {
+                drawn.paint_cell(ui.painter(), crop_rect);
+                true
+            }
+            None => false,
+        };
+        if cropped {
+            ui.interact(
+                crop_rect,
+                ui.id().with(("track_view_crop", observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_ui(|ui| {
+                match self.ensure_crop_context(ui.ctx(), recon, track, observation, state) {
+                    Some(drawn) => drawn.show(ui),
+                    None => {
+                        ui.label("Nothing around this crop could be rendered.");
+                    }
+                }
+            });
+        }
+
         let painter = ui.painter();
         let font = egui::TextStyle::Body.resolve(ui.style());
         let text_color = ui.visuals().text_color();
@@ -1114,6 +1177,7 @@ impl TrackEdit {
             checks,
             grids,
             tile: tile.is_some(),
+            crop: cropped,
             self_similarity_plot: plotted,
         });
     }
