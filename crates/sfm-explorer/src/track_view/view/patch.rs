@@ -212,6 +212,33 @@ pub(super) fn build_patch_frame(view: &PointView<'_>) -> Option<OrientedPatch> {
     Some(patch)
 }
 
+/// A patch bitmap, `(rows, columns, channels)`, as an opaque RGBA image, or
+/// `None` when it is all zero, which is how a point with no stored patch is
+/// written.
+///
+/// One channel is repeated across RGB, three are RGB, and a fourth, the
+/// per-texel cross-view confidence, is dropped for an opaque alpha. Shared by
+/// view mode's stored patch and edit mode's consensus bitmap, which is what a
+/// commit writes as that stored patch.
+pub(crate) fn stored_patch_image(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<egui::ColorImage> {
+    let [h, w, channels] = [bitmap.shape()[0], bitmap.shape()[1], bitmap.shape()[2]];
+    if channels == 0 || bitmap.iter().all(|&b| b == 0) {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(h * w * 4);
+    for row in 0..h {
+        for col in 0..w {
+            let level = |c: usize| bitmap[[row, col, c.min(channels - 1)]];
+            if channels >= 3 {
+                rgba.extend_from_slice(&[level(0), level(1), level(2), 255]);
+            } else {
+                rgba.extend_from_slice(&[level(0), level(0), level(0), 255]);
+            }
+        }
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba))
+}
+
 /// Build the stored-patch header texture for the selected point from
 /// `patch_bitmaps_y_x_rgba`, or `None` when the array is absent or the
 /// point's bitmap is all-zero (no stored patch). Displays RGB only: the
@@ -221,21 +248,7 @@ pub(super) fn build_stored_patch_texture(
     view: &PointView<'_>,
     point_idx: usize,
 ) -> Option<egui::TextureHandle> {
-    let bitmap = view.patch_bitmap()?;
-    let h = bitmap.shape()[0];
-    let w = bitmap.shape()[1];
-    let mut rgba: Vec<u8> = if let Some(slice) = bitmap.as_slice() {
-        slice.to_vec()
-    } else {
-        bitmap.iter().copied().collect()
-    };
-    if rgba.iter().all(|&b| b == 0) {
-        return None;
-    }
-    for px in rgba.as_chunks_mut::<4>().0.iter_mut() {
-        px[3] = 255;
-    }
-    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+    let image = stored_patch_image(view.patch_bitmap()?)?;
     Some(ctx.load_texture(
         format!("stored_patch_{point_idx}"),
         image,

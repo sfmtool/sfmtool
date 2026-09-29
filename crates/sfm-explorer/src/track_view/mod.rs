@@ -43,6 +43,22 @@ pub(crate) use view::{PointTrackView, PointTrackViewResponse};
 /// The checkbox's label, and what the sentences that point at it quote.
 pub(crate) const EDIT_LABEL: &str = "Edit";
 
+/// The mark both headers draw left of the point's ID when the point is at
+/// infinity (U+221E), so a direction is told from a place before its numbers
+/// are read.
+pub(crate) const INFINITY: &str = "\u{221e}";
+
+/// The hover text on [`INFINITY`].
+pub(crate) const INFINITY_HOVER: &str =
+    "At infinity: the point is a direction, not a place, and its three numbers are a unit \
+     bearing";
+
+/// Draw [`INFINITY`] with its hover text, in the size of the ID beside it.
+pub(crate) fn infinity_mark(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new(INFINITY).strong())
+        .on_hover_text(INFINITY_HOVER);
+}
+
 /// What one frame of Track View asks the dock to do.
 ///
 /// Only the mode that was drawn reports: `view` is `Some` in view mode and

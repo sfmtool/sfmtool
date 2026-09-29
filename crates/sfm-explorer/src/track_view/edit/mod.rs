@@ -184,6 +184,12 @@ pub struct TrackEdit {
     /// The hover view of each row's crop, rendered the first time the pointer
     /// rests on that crop and dropped with [`TrackEdit::crops`].
     crop_contexts: HashMap<usize, Option<crop::DrawnCrop>>,
+    /// The track's own patch drawn left of the toolbar, uploaded, or `None`
+    /// until it has been asked for since the track moved. The inner `None` is
+    /// a track with nothing to show, cached as the tile's is. Dropped with
+    /// [`TrackEdit::tiles`], since a step that moves the track gives it a new
+    /// `Arc`.
+    track_patch: Option<Option<egui::TextureHandle>>,
     /// The self-similarity surface plot of each observation, by observation
     /// index, with the surface and tolerance it was drawn from. Checked
     /// against the row's own reading every frame and redrawn when that
@@ -245,6 +251,7 @@ impl TrackEdit {
             contexts: HashMap::new(),
             crops: HashMap::new(),
             crop_contexts: HashMap::new(),
+            track_patch: None,
             plots: HashMap::new(),
             rows: Vec::new(),
             build_refusal: None,
@@ -290,6 +297,7 @@ impl TrackEdit {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.track_patch = None;
         if self.showing.as_ref().is_some_and(|(of, _)| *of == id) {
             self.showing = None;
         }
@@ -349,11 +357,21 @@ impl TrackEdit {
             .resolved_origin(node, track)
             .map(|index| crate::scene::point_id(node, index as usize));
         response.request_goto_point = show_header(ui, &label, track, point_id.as_deref());
-        self.show_toolbar(ui, state, node, &label, track, &mut response);
-        // A release applies what the drag left the boxes at. Painted by this
-        // frame's value from the next frame on, which is the frame the dock
-        // has applied it by.
-        response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
+        // The track's own patch at the left, under the title, and the stage's
+        // line, the toolbar and the boxes beside it, so the table's separator
+        // runs straight under the patch.
+        let patch = self.ensure_track_patch(ui.ctx(), &label, track);
+        ui.horizontal_top(|ui| {
+            show_track_patch(ui, patch, track.stage_kind());
+            ui.vertical(|ui| {
+                show_headline(ui, track);
+                self.show_toolbar(ui, state, node, &label, track, &mut response);
+                // A release applies what the drag left the boxes at. Painted
+                // by this frame's value from the next frame on, which is the
+                // frame the dock has applied it by.
+                response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
+            });
+        });
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
@@ -725,6 +743,37 @@ impl TrackEdit {
         self.contexts.get(&observation).and_then(Option::as_ref)
     }
 
+    /// The track's own patch, uploading it if this is the first frame that has
+    /// asked for it since the track moved: the consensus bitmap at the track
+    /// stage, the template at the cluster stage, `None` where there is
+    /// neither.
+    fn ensure_track_patch(
+        &mut self,
+        ctx: &egui::Context,
+        label: &str,
+        track: &EditableTrack,
+    ) -> Option<egui::TextureId> {
+        let texture = self.track_patch.get_or_insert_with(|| {
+            let image = match &track.stage {
+                sfmtool_core::bench::Stage::Track(payload) => {
+                    crate::track_view::view::stored_patch_image(payload.bitmap.as_ref()?.view())
+                }
+                sfmtool_core::bench::Stage::Cluster(payload) => {
+                    let samples = &payload.template.as_ref()?.samples;
+                    let shape = samples.shape();
+                    let grid: Vec<f32> = samples.iter().copied().collect();
+                    Some(tile::color_image(&grid, shape[0], shape[2]))
+                }
+            }?;
+            Some(ctx.load_texture(
+                format!("bench_track_patch_{label}"),
+                image,
+                egui::TextureOptions::NEAREST,
+            ))
+        });
+        texture.as_ref().map(|texture| texture.id())
+    }
+
     /// The crop one row draws beside its tile, cutting it out of the
     /// photograph if this is the first frame that has asked for it since the
     /// track moved. `None` is cached as the tile's is.
@@ -850,6 +899,7 @@ impl TrackEdit {
         self.contexts.clear();
         self.crops.clear();
         self.crop_contexts.clear();
+        self.track_patch = None;
         self.tiles_for = Some(key);
     }
 }
@@ -1194,6 +1244,9 @@ fn show_header(
     let pinned = track.observations.iter().filter(|o| o.pinned).count();
     let mut goto_clicked = false;
     ui.horizontal_wrapped(|ui| {
+        if matches!(&track.stage, sfmtool_core::bench::Stage::Track(p) if p.at_infinity) {
+            crate::track_view::infinity_mark(ui);
+        }
         match point_id {
             Some(id) if id == label => {
                 ui.label(egui::RichText::new(label).monospace().strong());
@@ -1226,6 +1279,14 @@ fn show_header(
         }
         ui.label(format!("{kept} kept · {out} out · {pinned} pinned"));
     });
+    goto_clicked
+}
+
+/// The stage's own line under the header: at the cluster stage the reference
+/// observation and whether a template has been cut, and at the track stage the
+/// coordinate and the last triangulation's condition number, or the sentence
+/// saying nothing has triangulated it yet.
+fn show_headline(ui: &mut egui::Ui, track: &EditableTrack) {
     match &track.stage {
         sfmtool_core::bench::Stage::Cluster(payload) => {
             ui.weak(format!(
@@ -1264,7 +1325,44 @@ fn show_header(
             });
         }
     }
-    goto_clicked
+}
+
+/// The track's own patch, at view mode's stored-patch size, left of the
+/// headline, the toolbar and the boxes: at the track stage the consensus
+/// bitmap the observations were fused into, which is what a commit writes as
+/// the point's stored patch, and at the cluster stage the template the members
+/// register onto. It carries no label, since the picture says what it is. With
+/// nothing to show -- a track not yet fused, a cluster with no template cut --
+/// the slot is an empty frame of the same size, so the controls beside it do
+/// not move when a fit or a stage change fills it.
+fn show_track_patch(ui: &mut egui::Ui, texture: Option<egui::TextureId>, stage: StageKind) {
+    let size = crate::track_view::view::STORED_PATCH_SIZE;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    match texture {
+        Some(texture) => {
+            ui.painter().image(
+                texture,
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+            response.on_hover_text(match stage {
+                StageKind::Track => {
+                    "The track's patch: the consensus of its observations, which a commit \
+                     writes as the point's stored patch"
+                }
+                StageKind::Cluster => "The cluster's template, which every member registers onto",
+            });
+        }
+        None => {
+            ui.painter()
+                .rect_filled(rect, 2.0, ui.visuals().faint_bg_color);
+            response.on_hover_text(match stage {
+                StageKind::Track => "No patch yet: fit the track to fuse its observations into one",
+                StageKind::Cluster => "No template yet: the cluster's first evaluation cuts one",
+            });
+        }
+    }
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.

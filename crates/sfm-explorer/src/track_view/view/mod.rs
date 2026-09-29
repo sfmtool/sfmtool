@@ -39,7 +39,7 @@ mod patch;
 mod prepare;
 mod table;
 
-pub(crate) use patch::{frame_color_image, patch_color_image, PATCH_RES};
+pub(crate) use patch::{frame_color_image, patch_color_image, stored_patch_image, PATCH_RES};
 
 #[cfg(test)]
 mod tests;
@@ -140,7 +140,7 @@ const THUMB_SIZE: f32 = 48.0;
 /// thumbnail so the tile sits flush beside it).
 const PATCH_TILE: f32 = THUMB_SIZE;
 /// Display size of the stored-patch header tile.
-const STORED_PATCH_SIZE: f32 = 64.0;
+pub(crate) const STORED_PATCH_SIZE: f32 = 64.0;
 
 impl PointTrackView {
     pub fn new() -> Self {

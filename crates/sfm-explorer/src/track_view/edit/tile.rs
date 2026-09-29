@@ -269,7 +269,7 @@ fn middle_box(side: f32) -> egui::Rect {
 /// and clamped rather than rescaled: a tile is a picture of the photograph, and
 /// stretching its levels would make two tiles of one surface look different.
 /// One channel is repeated across RGB, which is what a grey photograph is.
-fn color_image(grid: &[f32], resolution: usize, channels: usize) -> egui::ColorImage {
+pub(super) fn color_image(grid: &[f32], resolution: usize, channels: usize) -> egui::ColorImage {
     let mut rgba = Vec::with_capacity(resolution * resolution * 4);
     for texel in grid.chunks_exact(channels.max(1)) {
         let level = |c: usize| texel.get(c).copied().unwrap_or(texel[0]).clamp(0.0, 255.0) as u8;

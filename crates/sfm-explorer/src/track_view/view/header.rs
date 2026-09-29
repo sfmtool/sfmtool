@@ -46,6 +46,9 @@ impl PointTrackView {
             );
             swatch_response.on_hover_text(format!("rgb({r}, {g}, {b})"));
 
+            if point.w == 0.0 {
+                crate::track_view::infinity_mark(ui);
+            }
             // Point ID — monospace, with copy button
             ui.label(egui::RichText::new(&point_id).monospace().strong());
             if copy_button(ui, "Copy Point ID") {

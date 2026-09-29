@@ -373,6 +373,7 @@ A compact bar of the point's summary:
 | Field | Description |
 |-------|-------------|
 | Colour | A swatch of the point's RGB. |
+| Infinity mark | ∞, left of the ID, for a point at infinity (`w` is `0`); absent otherwise. Its hover text says the point is a direction and its numbers a unit bearing. |
 | Point ID | The copyable `pt3d_{hash}_{index}` ID, in monospace, with *Copy Point ID* and the *Go to Point* arrow beside it. |
 | Position | `xyzw`, with *Copy coordinates*; *at infinity* follows when `w` is `0`. |
 | Error | RMS reprojection error in pixels. |
@@ -565,6 +566,29 @@ view mode's word for the same thing. It comes from the track's own `at_infinity`
 and not from its patch's `w`, so a point put on the bench from a reconstruction
 with no patch frames reads as the bearing it is. A fit that crosses the boundary
 changes the header's first word, which is how a person sees that it crossed.
+The same flag puts **an infinity mark** (∞, U+221E, which egui's bundled fonts
+draw) left of the label, as view mode puts one left of its Point ID
+(`track_view::infinity_mark`), so the header's first glyph says a direction
+before any number is read; its hover text says the point is a direction and
+its numbers a unit bearing.
+
+**The track's own patch stands at the left, under the label**, at view mode's
+stored-patch size (64 points) with nearest filtering and no label, since the
+picture says what it is. The headline, both rows of the toolbar and the
+threshold boxes stand to its right, and the table's separator runs directly
+under it. At the track stage it is the consensus bitmap the observations were
+fused into (`TrackPayload::bitmap`), the bitmap a commit writes as the point's
+stored patch, so a *Fit* that re-fuses the track changes it and a person sees
+what the commit would store before committing. At the cluster stage it is the
+template every member registers onto, once an evaluation has cut one. With
+neither -- a track not yet fused, as one put on from a reconstruction that
+stores no bitmaps is until its first *Fit*, or a cluster with no template -- the
+slot is an empty frame of the same size, so the controls beside it do not move
+when a step fills it. Its hover text says which of the two it is, or what would
+fill it. The bitmap is converted by view mode's own `stored_patch_image`, so the
+two modes draw one stored patch one way: one channel repeated across RGB, three
+as RGB, and a fourth, the confidence, dropped for an opaque alpha. The upload is
+kept against the track's `Arc` and dropped with the tiles.
 
 #### The toolbar
 
@@ -1220,7 +1244,7 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   preparing one row per observation and re-preparing on a selection change; the
   extents; the name column; the max pair angle; per-row hover; a row click
   selecting and revealing, a double-click entering camera view with the
-  feature; the Go to Point way in from the empty state and the header; the
+  feature; the Go to Point way in from the empty state and the header; the infinity mark left of a point at infinity's ID and absent for a finite point; the
   pointer ownership; the cached
   thumbnails; the patch column's presence, its tiles rendered once per image and
   anchored on the observation's keypoint, with the geometric frame where there is
@@ -1291,7 +1315,7 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   walked pixel, pinned, in one version; the Status cell's reading sentence and
   its `walked` form with and without the walked ZNCC; the ZNCC cell's
   `whole / middle` percent form at both stages, and `-` for a missing middle; the
-  header's `Bearing (...)` and `Position (` lines; the row menu's search entries
+  header's `Bearing (...)` and `Position (` lines; the infinity mark first in a bearing's header and absent from a position's; the track's patch slot empty before a fit and filled with the consensus bitmap after it, with the toolbar to its right and the table's first heading not; the cluster stage's slot following whether a template is cut; a bitmap of one, three or four channels drawn opaque and an all-zero one not drawn; the row menu's search entries
   and their remedies; a row click reporting the image and the pixel, and a
   double-click asking for camera view with the pixel; *Lock* starting ticked, a
   click clearing it and a second ticking it again with no version pushed and no

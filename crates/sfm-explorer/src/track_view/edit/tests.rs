@@ -1468,7 +1468,8 @@ fn position_track() -> sfmtool_core::bench::EditableTrack {
     track
 }
 
-/// Everything the header painted for `track`, joined.
+/// Everything the header and the stage's line under it painted for `track`,
+/// joined.
 fn header_text(track: &sfmtool_core::bench::EditableTrack) -> String {
     let ctx = egui::Context::default();
     let input = egui::RawInput {
@@ -1477,8 +1478,138 @@ fn header_text(track: &sfmtool_core::bench::EditableTrack) -> String {
     };
     crate::test_support::painted_texts(&ctx, input, |ui| {
         super::show_header(ui, "item", track, None);
+        super::show_headline(ui, track);
     })
     .join(" | ")
+}
+
+/// A track at infinity carries the infinity mark left of its label, and a
+/// track on a place does not.
+#[test]
+fn the_header_marks_a_track_at_infinity() {
+    let bearing = header_text(&bearing_track());
+    assert!(
+        bearing.starts_with(crate::track_view::INFINITY),
+        "the mark is not first in the header: {bearing}"
+    );
+    let position = header_text(&position_track());
+    assert!(
+        !position.contains(crate::track_view::INFINITY),
+        "a track on a place carries the mark: {position}"
+    );
+}
+
+/// The track's own patch sits left of the toolbar, under the header, and the
+/// controls start to its right. Before a fit fuses the observations the
+/// demo's track, from a reconstruction that stores no bitmaps, has none and
+/// the slot is empty; after it the slot shows the consensus bitmap.
+#[test]
+fn the_track_s_patch_sits_left_of_the_toolbar() {
+    use sfmtool_core::bench::Stage;
+
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    let bitmap = |state: &AppState| {
+        let track = state.bench_track(id, &label).expect("on the bench");
+        let Stage::Track(payload) = &track.stage else {
+            panic!("a track put on from a point is at the track stage");
+        };
+        payload.bitmap.is_some()
+    };
+    assert!(!bitmap(&state), "the demo stores bitmaps now");
+    assert!(
+        matches!(panel.track_patch, Some(None)),
+        "a track with no bitmap drew one"
+    );
+    state
+        .start_bench_fit(id, &label)
+        .expect("a framed track with three sightings fits");
+    state.finish_background_task();
+    assert!(bitmap(&state), "the fit fused no bitmap");
+    let painted = crate::test_support::painted_text_rects(&ctx, input(Vec::new()), |ui| {
+        panel.show(ui, &state);
+    });
+    assert!(
+        matches!(panel.track_patch, Some(Some(_))),
+        "the track's patch was not uploaded"
+    );
+    let size = crate::track_view::view::STORED_PATCH_SIZE;
+    let x_of = |text: &str| {
+        painted
+            .iter()
+            .find(|p| p.text == text)
+            .unwrap_or_else(|| panic!("{text:?} was not painted"))
+            .rect
+            .min
+            .x
+    };
+    let label_x = x_of(&label);
+    assert!(
+        x_of("Fit") >= label_x + size,
+        "the toolbar overlaps the patch"
+    );
+    assert!(
+        x_of("Crop") < label_x + size,
+        "the table's first heading moved right with the toolbar"
+    );
+}
+
+/// At the cluster stage the slot shows the template once one is cut, and is
+/// an empty frame before that.
+#[test]
+fn the_cluster_stage_shows_its_template_in_the_slot() {
+    use sfmtool_core::bench::Stage;
+
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    run_frame(&mut panel, &ctx, &state);
+    let track = state.bench_track(id, &label).expect("on the bench");
+    let Stage::Cluster(payload) = &track.stage else {
+        panic!("the track moved to the cluster stage");
+    };
+    assert_eq!(
+        payload.template.is_some(),
+        matches!(panel.track_patch, Some(Some(_))),
+        "the slot does not follow whether a template is cut"
+    );
+    state.settle_bench_evaluation();
+    run_frame(&mut panel, &ctx, &state);
+    let track = state.bench_track(id, &label).expect("on the bench");
+    let Stage::Cluster(payload) = &track.stage else {
+        panic!("still the cluster stage");
+    };
+    assert!(payload.template.is_some(), "the evaluation cut no template");
+    assert!(
+        matches!(panel.track_patch, Some(Some(_))),
+        "the template is not shown"
+    );
+}
+
+/// A patch bitmap of one, three or four channels becomes an opaque picture of
+/// its colours, and an all-zero bitmap, which is how no patch is written,
+/// becomes none.
+#[test]
+fn a_stored_patch_image_reads_any_channel_count() {
+    use ndarray::Array3;
+
+    let image = |channels: usize, fill: &[u8]| {
+        let bitmap = Array3::from_shape_fn((2, 3, channels), |(_, _, c)| fill[c]);
+        crate::track_view::view::stored_patch_image(bitmap.view())
+    };
+    let grey = image(1, &[40]).expect("a grey patch");
+    assert_eq!(grey.size, [3, 2]);
+    assert_eq!(grey.pixels[0], egui::Color32::from_rgb(40, 40, 40));
+    let rgb = image(3, &[10, 20, 30]).expect("an RGB patch");
+    assert_eq!(rgb.pixels[5], egui::Color32::from_rgb(10, 20, 30));
+    let rgba = image(4, &[10, 20, 30, 7]).expect("an RGBA patch");
+    assert_eq!(
+        rgba.pixels[0],
+        egui::Color32::from_rgb(10, 20, 30),
+        "the confidence channel is not dropped for an opaque alpha"
+    );
+    assert!(image(4, &[0, 0, 0, 0]).is_none(), "an empty patch drew");
 }
 
 /// A bearing and a position are the same three numbers under different rules,

@@ -995,6 +995,44 @@ fn the_header_shows_the_point_id_it_was_handed() {
     assert_eq!(panel.point_id, TEST_POINT_ID);
 }
 
+/// A point at infinity carries the infinity mark left of its ID, and a finite
+/// point does not.
+#[test]
+fn the_header_marks_a_point_at_infinity() {
+    let mut panel = PointTrackView::new();
+    panel.point_id = TEST_POINT_ID.to_string();
+    let header = |w: f64| {
+        let point = sfmtool_core::Point3D {
+            position: Point3::new(0.0, 0.0, 1.0),
+            w,
+            color: [128, 128, 128],
+            error: 0.5,
+            normal: Vector3::zeros(),
+        };
+        crate::test_support::painted_texts(
+            &egui::Context::default(),
+            egui::RawInput::default(),
+            |ui| {
+                panel.show_header(ui, 3, &point);
+            },
+        )
+    };
+    let at_infinity = header(0.0);
+    let mark = at_infinity
+        .iter()
+        .position(|t| t == crate::track_view::INFINITY)
+        .expect("no infinity mark on a point at infinity");
+    let id = at_infinity
+        .iter()
+        .position(|t| t == TEST_POINT_ID)
+        .expect("no point ID");
+    assert!(mark < id, "the mark is not left of the ID: {at_infinity:?}");
+    assert!(
+        !header(1.0).iter().any(|t| t == crate::track_view::INFINITY),
+        "a finite point carries the mark"
+    );
+}
+
 #[test]
 fn clear_resets_every_cache() {
     let recon = with_thumbnails(with_embedded_patches(SfmrReconstruction::demo(12)));
