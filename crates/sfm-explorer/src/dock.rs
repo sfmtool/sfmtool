@@ -861,6 +861,11 @@ impl TabContext<'_> {
     /// says is on screen, with each gesture applied after the draw.
     fn show_track_view(&mut self, ui: &mut egui::Ui) {
         self.cache_track_view_images();
+        // The viewed track, built or taken from its cache here because the
+        // panel is handed `&AppState`. With an item focused there is none. The
+        // frame cleared it before the dock drew, so a frame that does not draw
+        // this tab leaves none (`crate::bench::viewed`).
+        self.state.refresh_viewed_track();
         // The node's index files, opened on sight in either mode: a `.kdf`
         // opens without decoding a tree or a descriptor block and the
         // cluster-patches file is read for its image table alone, so a session

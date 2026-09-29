@@ -27,7 +27,7 @@ use crate::state::AppState;
 /// The point every test here puts on the bench: [`projected_embedded_demo`]
 /// gives it three observations, in images 0, 1 and 2, at their exact
 /// projections, which is what makes a triangulation of it well conditioned.
-const POINT: u32 = 2;
+pub(crate) const POINT: u32 = 2;
 
 /// A state holding one `embedded_patches` node with a photograph cached for
 /// every image, so the steps that read pixels find them without a file on disk.

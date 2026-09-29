@@ -36,8 +36,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           double-clicking either of them does. Putting on a point a track \
                           already came from focuses that track rather than putting a second \
                           one on, and that track keeps the label it has whatever label says; \
-                          that pushes no version and replies changed: false. The reply names \
-                          the item.",
+                          that pushes no version and replies changed: false. When the point \
+                          is the viewed point (the selected point, with no item focused on \
+                          its node) and Track View's read-only bars differ from the \
+                          defaults, the new track takes those bars, and the version label \
+                          and report name them. The reply names the item.",
             kind: Write,
             schema: object(
                 &[("label", new_item_label_schema())],

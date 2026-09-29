@@ -136,25 +136,7 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
         .ok_or_else(|| no_such_item(bench, &item))?;
     let stage = track.stage_kind();
     let (kept, out) = track.verdict_counts();
-    let observations: Vec<Value> = track
-        .observations
-        .iter()
-        .enumerate()
-        .map(|(index, observation)| {
-            let image = crate::scene::ImageRef::new(id, observation.image as usize);
-            json!({
-                "observation": index,
-                "camera_image": observation.image,
-                "camera_image_name": state.image_name(image),
-                "provenance": provenance(observation.provenance),
-                "verdict": observation.verdict.to_string(),
-                "pinned": observation.pinned,
-                "pixel": observation_pixel(observation),
-                "cluster": cluster_measurement(observation),
-                "track": track_measurement(observation),
-            })
-        })
-        .collect();
+    let observations = observation_rows(state, id, track);
     Ok(json!({
         "reconstruction_label": node_label(state, id),
         "item": item,
@@ -174,6 +156,32 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
         "evaluation": evaluation(state, id, &item),
         "observations": observations,
     }))
+}
+
+/// One object per observation of `track` on `id`, as `get_bench_track`
+/// reports them: its image, provenance, verdict, pin, pixel and the
+/// measurements of each stage. `get_point`'s evaluation block reports the
+/// viewed track's rows in the same shape.
+pub(super) fn observation_rows(state: &AppState, id: ReconId, track: &EditableTrack) -> Vec<Value> {
+    track
+        .observations
+        .iter()
+        .enumerate()
+        .map(|(index, observation)| {
+            let image = crate::scene::ImageRef::new(id, observation.image as usize);
+            json!({
+                "observation": index,
+                "camera_image": observation.image,
+                "camera_image_name": state.image_name(image),
+                "provenance": provenance(observation.provenance),
+                "verdict": observation.verdict.to_string(),
+                "pinned": observation.pinned,
+                "pixel": observation_pixel(observation),
+                "cluster": cluster_measurement(observation),
+                "track": track_measurement(observation),
+            })
+        })
+        .collect()
 }
 
 /// Where a track's live evaluation stands, as the two reads report it: the
@@ -1480,7 +1488,7 @@ fn origin(track: &EditableTrack) -> Value {
     }
 }
 
-fn thresholds(bars: &Thresholds) -> Value {
+pub(super) fn thresholds(bars: &Thresholds) -> Value {
     json!({
         "min_zncc": bars.min_zncc,
         "min_zncc_middle": bars.min_zncc_middle,

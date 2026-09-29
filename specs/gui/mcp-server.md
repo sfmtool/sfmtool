@@ -114,7 +114,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `list_camera_images` | read | One reconstruction's camera images, paginated |
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
-| `get_point` | read | One 3D point: position, colour, error, patch placement, full track |
+| `get_point` | read | One 3D point: position, colour, error, patch placement, full track, and the viewed track's evaluation for the viewed point |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -622,7 +622,46 @@ one at the cursor, and this block reports it.
                "xy": [131.4, 208.9], "reproj_error": 0.44 } ] }
 
 // get_point { "point": 1207 }   // bare index, in the selected reconstruction
+
+// get_point on the viewed point adds the viewed track's evaluation
+{ "id": "pt3d_a1b2c3d4_1207", /* ...as above... */
+  "evaluation": {
+    "item": "pt3d_a1b2c3d4_1207",
+    "state": "current",              // current | evaluating | refused | failed
+    "reason": null,                  // the sentence of a refusal or failure
+    "running": false,
+    "thresholds": { "min_zncc": 0.8, "min_zncc_middle": 0.7,
+                    "max_shift_px": 6.0,
+                    "max_zncc_self_similarity_radius": 2.5,
+                    "min_relative_zncc": 0.7 },
+    "observations": [ { "observation": 0, "camera_image": 3,
+                        "camera_image_name": "images/IMG_0042.jpg",
+                        "provenance": { "kind": "origin" },
+                        "verdict": "in", "pinned": true,
+                        "pixel": [131.4, 208.9], "cluster": null,
+                        "track": { /* get_bench_track's track measurement */ },
+                        "verdict_by_bars": "out" } ] } }
 ```
+
+**The `evaluation` block is the viewed track**, reported only when the point asked
+for is the **viewed point**: the selected point on the selected node, with no
+item focused on that node, while Track View is drawn
+([bench.md](bench.md) § "The viewed track"). An agent reads the numbers a person
+sees in Track View without putting the point on the bench. The rows have
+`get_bench_track`'s shape (the same serializer), so every row reads `in` and
+pinned, which is how the point arrives on the bench. `state` and `reason` are
+the evaluation state as `get_bench_track` reports it, and `running` says whether
+the evaluation is on a worker now. While the state is `evaluating` the
+measurements are the last ones landed, or the stored readings a put carries
+when none has landed. `thresholds` are the read-only bars Track View's threshold
+boxes hold, and `verdict_by_bars` is each row's verdict by them -- `in`, `out`,
+or `null` where nothing has measured the row -- computed with core's
+`verdicts_if_unpinned` over a copy of the track carrying those bars, the same
+computation the panel colours by. For any other point the block is absent:
+there is no call that evaluates an arbitrary point on request, since that is a
+separate operation with a cost. A `select_point` earlier in the same batch of
+calls moves the viewed point with it, since `get_point` asks for the viewed
+track again before answering while Track View is drawn.
 
 **`placement` is the point's patch**: its centre, its unit axes, its outward
 normal and its world half-size along each axis, read through
@@ -3153,6 +3192,14 @@ would leave the caller holding a label that names another item; a create's
 reply always carries the label the item took, in `item`, so there is nothing to
 misread. A label of nothing but whitespace is refused in the call. A `create_bench_track` on a point already on the bench focuses that
 track under the label it has, whatever `label` says, and pushes no version.
+
+**`create_bench_track` on the viewed point carries the read-only bars.** When the
+point named is the viewed point (the selected point, with no item focused on its
+node) and Track View's read-only bars differ from the defaults, the new track
+takes those bars in the same version, and the reply's version `label` and its
+`report` name the bars that differ: `Put point 1207 on the bench as
+pt3d_a1b2c3d4_1207, with min ZNCC 80%`. A call naming any other point starts at
+the defaults ([bench.md](bench.md) § "The viewed track").
 
 **`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
 `camera_image` and a `pixel` and runs `AppState::start_create_track_at_pixel`,

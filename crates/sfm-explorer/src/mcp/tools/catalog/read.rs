@@ -97,7 +97,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           normal and half_extent; null with no patch frame) with its \
                           normal_confidence, and its full track — every observing camera image \
                           with the pixel it was seen at and that observation's reprojection \
-                          error.",
+                          error. When the point is the one Track View is showing with Edit \
+                          clear (the viewed point), the reply adds an evaluation block: the \
+                          point read as a bench track and evaluated live, off the bench, with \
+                          its rows in get_bench_track's shape, its state (current, evaluating, \
+                          refused, failed) and reason, the read-only bars Track View's \
+                          threshold boxes hold, and each row's verdict_by_bars (in, out, or \
+                          null where unmeasured). While evaluating, the measurements are the \
+                          last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
         },

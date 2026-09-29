@@ -421,7 +421,10 @@ layer", [`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 
 ### View mode
 
-View mode reads the reconstruction and never the bench.
+View mode reads the reconstruction and never the bench. While the panel is
+drawn with no item focused, the dock also asks for the selected point's viewed
+track, which the live evaluation keeps evaluated and `get_point` reports
+([bench.md](bench.md) § "The viewed track"); view mode's body does not draw it.
 
 **No point selected**: `No point selected` above a **Go to Point...** button,
 which is where a person with an ID in hand and no idea how to feed it in looks

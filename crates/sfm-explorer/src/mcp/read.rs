@@ -475,6 +475,11 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
     // a time, because `ensure_sift_cached` needs `&mut` on the cache while the
     // reconstruction it reads is borrowed out of the same `AppState`.
     warm_track_sift_cache(state, point_ref);
+    // A call earlier in the same batch may have moved the selection, and the
+    // panel only asks for the viewed track when it draws.
+    if state.viewed_track_shown() {
+        state.refresh_viewed_track();
+    }
 
     let node = state
         .node(recon_id)
@@ -517,7 +522,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         })
         .collect();
 
-    Ok(json!({
+    let mut reply = json!({
         "id": point_id(node, point_index),
         "reconstruction_label": node.label,
         "index": point_index,
@@ -528,6 +533,36 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         "placement": render::placement(view.placement().as_ref()),
         "normal_confidence": view.normal_confidence(),
         "track": track,
+    });
+    if let Some(evaluation) = viewed_evaluation(state, point_ref) {
+        reply["evaluation"] = evaluation;
+    }
+    Ok(reply)
+}
+
+/// The `evaluation` block of `get_point` for the viewed point: the viewed
+/// track's rows in `get_bench_track`'s shape, where its evaluation stands, the
+/// read-only bars, and each row's verdict by those bars (`verdict_by_bars`,
+/// null where nothing has measured the row). `None` for any other point.
+///
+/// While the state is `evaluating` the measurements are the last ones landed,
+/// or the stored readings a put carries when none has landed yet.
+fn viewed_evaluation(state: &AppState, point: crate::scene::PointRef) -> Option<Value> {
+    let viewed = state
+        .viewed_track()
+        .filter(|viewed| viewed.node == point.recon && viewed.point == point.point)?;
+    let verdicts = state.viewed_verdicts()?;
+    let mut rows = super::bench::observation_rows(state, viewed.node, &viewed.track);
+    for (row, verdict) in rows.iter_mut().zip(verdicts) {
+        row["verdict_by_bars"] = json!(verdict.map(|verdict| verdict.to_string()));
+    }
+    Some(json!({
+        "item": viewed.label,
+        "state": viewed.evaluation.name(),
+        "reason": viewed.evaluation.reason(),
+        "running": state.viewed_evaluation_running(),
+        "thresholds": super::bench::thresholds(&state.viewed_thresholds),
+        "observations": rows,
     }))
 }
 

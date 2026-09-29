@@ -460,7 +460,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 
 | Step | Version label |
 |---|---|
-| Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207` |
+| Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
@@ -684,8 +684,11 @@ its gates off, and the bars reach it only through the verdicts they paint.
 after the frame's steps, `drive_bench_evaluation` lands a finished evaluation,
 and then either cancels the running one when its inputs are no longer the
 track's, or, when nothing is running, starts the next track whose evaluation is
-`Evaluating`: the focused item first, whichever node it is on, then the rest in
-bench order, in scene order. It does not start the next until a cancelled one has
+`Evaluating`: the viewed track first (§ "The viewed track" below), then the
+focused item, whichever node it is on, then the rest in bench order, in scene
+order. The viewed track and the focused item do not exist together, since the
+viewed point is defined only while no item is focused on its node, so whichever
+of the two Track View shows goes first. It does not start the next until a cancelled one has
 reported back, so a box drag that moves an input on every frame has at most
 one worker behind it rather than a queue. It also waits while a background task
 holds the node, since that task's answer replaces the inputs it would read.
@@ -749,6 +752,86 @@ either: it does not appear in the Background panel, is not what
 - `Failed(why)` -- the evaluation of the current inputs failed, for instance
   because a photograph could not be read. It is not retried until an input
   changes.
+
+### The viewed track
+
+The live evaluation has a second kind of subject beside the bench's items: the
+**viewed track**, the **viewed point** read as an editable track and held off
+every bench. The viewed point is the selected point on the selected node while
+no item is focused on that node (`AppState::viewed_point`). The code is
+[bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs), and the live
+evaluation names its subject as
+
+```rust
+enum Subject {
+    Item { node: ReconId, item: ItemId },
+    Viewed { node: ReconId, point: u32 },
+}
+```
+
+**It is built the way a put builds a bench track**: core's `create_track`, from
+the version at the cursor, under the label a put gives it (the point's portable
+ID) and with the same options. Its rows arrive `in` and pinned, the
+leave-one-out ZNCC is read back from the point's stored column, and the bars are
+the defaults. It is held in `AppState::viewed_tracks` as a `ViewedTrack` (node,
+point, document serial, label, track, evaluation state), never in a version: no
+step accepts it, the Scene tree does not list it, and the bench layers do not
+draw it. A deleted or out-of-range point gives none.
+
+**Who asks for it.** Track View's body draws from `&AppState` and cannot build a
+track, so the frame clears the current viewed track before the dock draws
+(`hide_viewed_track`), and the dock asks for it before it draws Track View
+(`refresh_viewed_track`), which builds it or takes it from the cache and makes
+it current. A frame that does not draw Track View therefore leaves no current
+viewed track. `AppState::viewed_track` answers only while the key it was asked
+for is still the one the selection and the cursor give.
+
+**The cache.** The last eight viewed tracks are kept, most recently viewed
+first, keyed on `(node, point, document serial)`, each with its evaluation
+state. A point's content at a given document serial is fixed, so a track built
+for a key stays right for it, and another point, another node, or a document
+edit or an undo that moves the document serial is another key. So clicking back
+to a point whose evaluation has landed draws current numbers and starts nothing,
+and an undo back across a document edit finds the track built before it. Closing
+a node drops its entries, and *Close All* empties the cache. A bench item's
+evaluation is not shared with the viewed track of the point it came from, since
+the bench copy may have been changed.
+
+**The freshness rule is the bench's**: the track's `Arc` and the document serial.
+The viewed track carries its own state (`Evaluating` when built, or `Refused`
+when core's `evaluate_preconditions` refuses it, in the sentence `Cannot evaluate
+{point id}: …`). A change of the viewed track -- a selection change, another
+node, a document edit or an undo moving the document serial, or Track View no
+longer drawn -- cancels its running evaluation, as a step on a bench track
+cancels that track's. The evaluation reads the photographs as a bench track's
+does, and waits while a background task holds the node.
+
+**A landed result is installed into the cached viewed track**, never into a
+version: no version is pushed and no Action Log row is written. The rows are
+pinned, so the evaluation moves no verdict; the repaint mark is handled as for a
+bench track all the same.
+
+**The read-only bars.** `AppState::viewed_thresholds` holds the bars Track
+View's threshold boxes show while the panel draws the viewed track. They are
+session state, starting at the bench's default bars, and `set_viewed_thresholds`
+changes them without pushing a version or writing a row. They are never applied
+to the viewed track: they judge its readings, and each row's verdict by them is
+core's `verdicts_if_unpinned` over a copy of the track carrying them
+(`AppState::viewed_verdicts`), the verdict the bench's own evaluation would give
+the row once unpinned.
+
+**Moved bars carry onto the bench with the point.** A put of the viewed point
+(`put_point_on_bench` for the point that is `viewed_point`: ticking *Edit*, *Edit
+on Bench*, a double-click on the point or one of its features, which select the
+point before putting it, or the wire's `create_bench_track` naming it) while the
+read-only bars differ from the defaults gives the new track those bars, in the
+same version as the put. The rows arrive pinned `in` as always, so the bars
+change no verdict until rows are unpinned. The version label, and so the wire's
+reply, names the bars that differ, in percent for the three ZNCC bars and in
+patch-grid px for the shift and self-similarity bars (§ "What a step writes").
+A put of any other point, a cluster, and focusing a point's existing item (which
+keeps that item's own bars) carry nothing. The read-only bars keep their values
+after the put.
 
 ## The two steps that read photographs
 

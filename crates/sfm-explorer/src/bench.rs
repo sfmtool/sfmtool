@@ -54,6 +54,7 @@ pub(crate) mod geometry;
 pub(crate) mod live;
 pub(crate) mod nearby_tracks;
 pub(crate) mod track_at_pixel;
+pub(crate) mod viewed;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -697,6 +698,12 @@ impl AppState {
     /// track instead of putting a second one on, under the label it already
     /// has: the person asked to work on that point, and there it is. That
     /// case pushes no version, and so is not refused while the node is busy.
+    ///
+    /// A put of the viewed point ([`Self::viewed_point`]) while Track View's
+    /// read-only bars ([`AppState::viewed_thresholds`]) differ from the
+    /// defaults gives the new track those bars, in the same version, and the
+    /// version label names them. The rows arrive pinned `in` either way, so
+    /// the bars change no verdict until the rows are unpinned.
     pub(crate) fn put_point_on_bench(
         &mut self,
         point: PointRef,
@@ -710,6 +717,9 @@ impl AppState {
         if let Some(why) = self.busy_refusal(point.recon) {
             return Err(why);
         }
+        let carried = (self.viewed_point() == Some(point)
+            && self.viewed_thresholds != Thresholds::default())
+        .then(|| self.viewed_thresholds.clone());
         let node = &self.scene[index];
         let serial = node.history.current_version().serial;
         let bench = Arc::clone(node.history.current_bench());
@@ -721,9 +731,18 @@ impl AppState {
             version: serial.as_u64(),
             label: Some(label),
         };
-        let (next, report) = bench::create_track(&bench, node.edited(), point.point, &options)
+        let (mut next, report) = bench::create_track(&bench, node.edited(), point.point, &options)
             .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
-        let text = format!("Put point {} on the bench as {}", point.point, report.label);
+        let mut text = format!("Put point {} on the bench as {}", point.point, report.label);
+        if let Some(bars) = carried {
+            let mut with_bars = (**next.track(&report.label).expect("just put on")).clone();
+            with_bars.thresholds = bars;
+            text.push_str(&format!(
+                ", with {}",
+                viewed::bars_phrase(&with_bars.thresholds)
+            ));
+            next = install(&next, &report.label, with_bars)?;
+        }
         self.push_bench_step(index, next, text);
         self.focus_put_item(point.recon, &report.label);
         self.refresh_index_files(point.recon);
@@ -2053,51 +2072,92 @@ impl AppState {
         label: &str,
     ) -> Result<live::EvaluationJob, String> {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
-        let label = label.to_string();
-        let options = EvaluateOptions::default();
-        Ok(Box::new(move |progress| {
-            // The decode is seconds of file reads with no poll of its own, so
-            // the flag is read on either side of it: a cancel during it is
-            // answered the moment it returns rather than after the kernels have
-            // run as well.
-            if progress.is_cancelled() {
-                return live::Measured::Cancelled;
-            }
-            let decoded = match sources.decode(progress) {
-                Ok(decoded) => decoded,
-                Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
-            };
-            if progress.is_cancelled() {
-                return live::Measured::Cancelled;
-            }
-            let views = decoded.views();
-            let measured = match bench::evaluate(&track, &edited, &views, &options, progress) {
-                Err(sfmtool_core::bench::EvaluateError::Cancelled) => {
-                    return live::Measured::Cancelled
-                }
-                Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
-                Ok((measured, _)) => measured,
-            };
-            // A patch step drops the consensus bitmap, since it was fused over
-            // the square as it stood. The photographs are decoded here anyway,
-            // so fuse it again over the square as it stands now, moving
-            // nothing, rather than leave the track without one until a fit.
-            let needs_bitmap = matches!(
-                &measured.stage,
-                Stage::Track(payload) if payload.placement.is_some() && payload.bitmap.is_none()
-            );
-            if !needs_bitmap {
-                return live::Measured::Track(Box::new(measured));
-            }
-            if progress.is_cancelled() {
-                return live::Measured::Cancelled;
-            }
-            let fused =
-                bench::fuse_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
-            live::Measured::Track(Box::new(fused))
-        }))
+        Ok(evaluate_job(label.to_string(), edited, track, sources))
     }
 
+    /// What a photometric reading of `track` on `id` needs: the value at the
+    /// cursor and where one view per image of the node is to come from.
+    ///
+    /// The images the worker will decode are the ones the track's observations
+    /// name. Every other entry becomes a one-pixel placeholder, which no kernel
+    /// samples, because the kernels index the view slice by image index.
+    /// Refused while a background task holds the node.
+    pub(crate) fn track_photometric_inputs(
+        &self,
+        id: ReconId,
+        track: &EditableTrack,
+    ) -> Result<(EditedReconstruction, crate::state::edits::ViewSources), String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let node = self
+            .node(id)
+            .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
+        let edited = node.edited().clone();
+        let mut needed: Vec<usize> = track
+            .observations
+            .iter()
+            .map(|o| o.image as usize)
+            .collect();
+        needed.sort_unstable();
+        needed.dedup();
+        let sources = self.view_sources_for(id, &needed)?;
+        Ok((edited, sources))
+    }
+}
+
+/// The evaluation of `track` as a function of the `Progress` it polls its
+/// cancellation through: what [`AppState::bench_evaluate_job`] hands the live
+/// evaluation for a bench track, and what the viewed track's evaluation runs
+/// ([`viewed`]). `label` names the track in a failure's sentence.
+pub(crate) fn evaluate_job(
+    label: String,
+    edited: EditedReconstruction,
+    track: EditableTrack,
+    sources: crate::state::edits::ViewSources,
+) -> live::EvaluationJob {
+    let options = EvaluateOptions::default();
+    Box::new(move |progress| {
+        // The decode is seconds of file reads with no poll of its own, so
+        // the flag is read on either side of it: a cancel during it is
+        // answered the moment it returns rather than after the kernels have
+        // run as well.
+        if progress.is_cancelled() {
+            return live::Measured::Cancelled;
+        }
+        let decoded = match sources.decode(progress) {
+            Ok(decoded) => decoded,
+            Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
+        };
+        if progress.is_cancelled() {
+            return live::Measured::Cancelled;
+        }
+        let views = decoded.views();
+        let measured = match bench::evaluate(&track, &edited, &views, &options, progress) {
+            Err(sfmtool_core::bench::EvaluateError::Cancelled) => return live::Measured::Cancelled,
+            Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
+            Ok((measured, _)) => measured,
+        };
+        // A patch step drops the consensus bitmap, since it was fused over
+        // the square as it stood. The photographs are decoded here anyway,
+        // so fuse it again over the square as it stands now, moving
+        // nothing, rather than leave the track without one until a fit.
+        let needs_bitmap = matches!(
+            &measured.stage,
+            Stage::Track(payload) if payload.placement.is_some() && payload.bitmap.is_none()
+        );
+        if !needs_bitmap {
+            return live::Measured::Track(Box::new(measured));
+        }
+        if progress.is_cancelled() {
+            return live::Measured::Cancelled;
+        }
+        let fused = bench::fuse_bitmap_in_place(&measured, &edited, &views, &FitOptions::default());
+        live::Measured::Track(Box::new(fused))
+    })
+}
+
+impl AppState {
     /// The fit itself, as a function of the `Progress` it reports through.
     ///
     /// Reachable from the crate's tests as well as from the step, so the test
@@ -2193,11 +2253,8 @@ impl AppState {
     }
 
     /// What a photometric bench step needs: the value at the cursor, the track,
-    /// and where one view per image of the node is to come from.
-    ///
-    /// The images the worker will decode are the ones the track's observations
-    /// name. Every other entry becomes a one-pixel placeholder, which no kernel
-    /// samples, because the kernels index the view slice by image index.
+    /// and where one view per image of the node is to come from
+    /// ([`Self::track_photometric_inputs`]).
     fn bench_photometric_inputs(
         &mut self,
         id: ReconId,
@@ -2221,15 +2278,7 @@ impl AppState {
             .track(label)
             .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
         let track = (**track).clone();
-        let edited = node.edited().clone();
-        let mut needed: Vec<usize> = track
-            .observations
-            .iter()
-            .map(|o| o.image as usize)
-            .collect();
-        needed.sort_unstable();
-        needed.dedup();
-        let sources = self.view_sources_for(id, &needed)?;
+        let (edited, sources) = self.track_photometric_inputs(id, &track)?;
         Ok((edited, track, sources))
     }
 

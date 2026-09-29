@@ -767,6 +767,20 @@ pub struct AppState {
     /// the item back; a reader skips an entry whose item is not on its
     /// node's bench at the cursor.
     pub(crate) recent_items: Vec<crate::bench::FocusedItem>,
+
+    /// The viewed tracks: the selected point read as an editable track off
+    /// every bench, for the last few points Track View showed, and which of
+    /// them is current. Session state, not part of any version. See
+    /// [`crate::bench::viewed`].
+    pub(crate) viewed_tracks: crate::bench::viewed::ViewedTracks,
+
+    /// The bars Track View's threshold boxes hold while it shows the viewed
+    /// track. They judge the readings drawn and change no verdict; a put of
+    /// the viewed point carries them onto the new track when they differ from
+    /// the defaults ([`AppState::put_point_on_bench`]). Session state, starting
+    /// at the bench's default bars, and set only through
+    /// [`AppState::set_viewed_thresholds`].
+    pub(crate) viewed_thresholds: sfmtool_core::bench::Thresholds,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -875,6 +889,8 @@ impl AppState {
             bench_rows: None,
             focused_item: None,
             recent_items: Vec::new(),
+            viewed_tracks: Default::default(),
+            viewed_thresholds: Default::default(),
         }
     }
 
@@ -976,6 +992,7 @@ impl AppState {
         self.bench_rows = None;
         self.focused_item = None;
         self.recent_items.clear();
+        self.viewed_tracks.clear();
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
@@ -1009,6 +1026,7 @@ impl AppState {
         self.bench_rows = self.bench_rows.take().filter(|rows| rows.recon != id);
         self.focused_item = self.focused_item.filter(|focused| focused.node != id);
         self.recent_items.retain(|recent| recent.node != id);
+        self.viewed_tracks.forget_node(id);
     }
 
     /// Take the panel's own reading of the view it drew, with the dock rectangle

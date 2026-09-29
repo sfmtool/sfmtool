@@ -975,6 +975,10 @@ impl App {
                 // and nothing may: a tab that needs a layout operation reports
                 // it in its response struct and the frame applies it after.
                 let mut dock = std::mem::replace(&mut app_state.dock, DockState::new(Vec::new()));
+                // Track View asks for the viewed track again when it draws, so
+                // a frame in which it is hidden leaves none current and the
+                // live evaluation drops it (`crate::bench::viewed`).
+                app_state.hide_viewed_track();
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,

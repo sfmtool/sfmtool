@@ -3404,3 +3404,146 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
     );
     assert!(past.0.contains("no observation 99"), "{past}");
 }
+
+// ── The viewed track on the wire ────────────────────────────────────────
+
+/// `get_point` on the point Track View shows with Edit clear carries the viewed
+/// track's evaluation, `evaluating` and then `current`, with the read-only bars
+/// and each row's verdict by them; any other point carries none.
+#[test]
+fn get_point_reports_the_viewed_points_evaluation_and_no_other_points() {
+    let (mut state, mut viewer) = benchable();
+    let id = state.scene[0].id;
+    state.select_point(PointRef::new(id, BENCH_POINT as usize));
+    // What the dock does when it draws Track View.
+    state.refresh_viewed_track();
+
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    let evaluation = &point["evaluation"];
+    assert_eq!(evaluation["state"], json!("evaluating"), "{point}");
+    assert_eq!(evaluation["item"], point["id"], "{point}");
+    assert_eq!(
+        evaluation["thresholds"]["min_zncc"],
+        json!(sfmtool_core::bench::Thresholds::default().min_zncc)
+    );
+    let rows = evaluation["observations"].as_array().expect("rows");
+    assert_eq!(rows.len(), point["track"].as_array().expect("track").len());
+    assert!(rows.iter().all(|row| row["verdict"] == json!("in")
+        && row["pinned"] == json!(true)
+        && row.get("verdict_by_bars").is_some()));
+
+    state.settle_bench_evaluation();
+    state.set_viewed_thresholds(sfmtool_core::bench::Thresholds {
+        min_zncc: 1.1,
+        ..Default::default()
+    });
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    let evaluation = &point["evaluation"];
+    assert_eq!(evaluation["state"], json!("current"), "{point}");
+    assert_eq!(evaluation["thresholds"]["min_zncc"], json!(1.1));
+    let rows = evaluation["observations"].as_array().expect("rows");
+    assert!(
+        rows.iter()
+            .any(|row| row["verdict_by_bars"] == json!("out")),
+        "a bar no reading reaches turns a measured row out: {point}"
+    );
+    assert!(rows.iter().all(|row| row["verdict"] == json!("in")));
+
+    let other = (0..state.scene[0].edited().point_count() as u32)
+        .find(|&p| p != BENCH_POINT && state.scene[0].edited().point(p).is_some())
+        .expect("another point");
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": other }),
+    );
+    assert!(point.get("evaluation").is_none(), "{point}");
+
+    // A select_point earlier in the same batch moves the viewed point with it.
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": other }),
+    );
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": other }),
+    );
+    assert!(point["evaluation"].is_object(), "{point}");
+}
+
+/// `create_bench_track` naming the viewed point carries the moved read-only
+/// bars onto the new track, and the reply's label and report name them; the
+/// same call on another point starts at the defaults.
+#[test]
+fn create_bench_track_carries_the_read_only_bars_for_the_viewed_point_only() {
+    let (mut state, mut viewer) = benchable();
+    let id = state.scene[0].id;
+    let other = (0..state.scene[0].edited().point_count() as u32)
+        .find(|&p| p != BENCH_POINT && state.scene[0].edited().point(p).is_some())
+        .expect("another point");
+    state.select_point(PointRef::new(id, BENCH_POINT as usize));
+    let bars = sfmtool_core::bench::Thresholds {
+        max_shift_px: 4.0,
+        ..Default::default()
+    };
+    state.set_viewed_thresholds(bars.clone());
+
+    let elsewhere = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": other }),
+    );
+    assert!(
+        !elsewhere["label"]
+            .as_str()
+            .expect("a label")
+            .contains("with"),
+        "{elsewhere}"
+    );
+    let item = elsewhere["item"].as_str().expect("an item");
+    assert_eq!(
+        state.bench_track(id, item).expect("on").thresholds,
+        sfmtool_core::bench::Thresholds::default()
+    );
+
+    // The put focused that item; select the viewed point again.
+    state.select_point(PointRef::new(id, BENCH_POINT as usize));
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": BENCH_POINT }),
+    );
+    assert!(
+        made["label"]
+            .as_str()
+            .expect("a label")
+            .ends_with(", with max shift 4.0 px"),
+        "{made}"
+    );
+    assert!(
+        made["report"]
+            .as_str()
+            .expect("a report")
+            .contains(", with max shift 4.0 px"),
+        "{made}"
+    );
+    let item = made["item"].as_str().expect("an item");
+    assert_eq!(state.bench_track(id, item).expect("on").thresholds, bars);
+}
