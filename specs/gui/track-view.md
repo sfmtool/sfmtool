@@ -656,7 +656,7 @@ a direction before any number is read.
 **The track's own patch stands at the left, under the header**, 64 points
 square (`STORED_PATCH_SIZE`) with nearest filtering and no label, since the
 picture says what it is. The line under the header, the toolbar and the
-threshold boxes stand to its right, and the table's separator runs directly
+geometry search box stand to its right, and the table's separator runs directly
 under it. At the track stage it is the consensus bitmap
 (`TrackPayload::bitmap`): for the viewed track that is the point's stored patch,
 and for a bench track the bitmap a commit writes as the point's stored patch,
@@ -776,35 +776,54 @@ cannot say which of two tracks it belongs to.
 
 #### The thresholds
 
-Five boxes, one per bar of `Thresholds`: minimum ZNCC, minimum middle ZNCC,
-maximum shift, maximum self-similarity radius and minimum relative ZNCC, so no
-bar is one only the wire can move. Each is its label and a number box: dragging
-the box left or right changes the bar (half a percent per point for the ZNCC
-bars, 0.05 grid px per point for the shift, 0.02 grid px per point for the
-self-similarity radius),
-and clicking it takes a typed value. There is no slider rail beside it, since a
-rail would say nothing the box does not. The first four are the bars the painting and the table's colours read;
-the fifth is the fraction of the track's own self-agreement a geometry search's view is
-scored by. The three ZNCC boxes read and take percent in whole steps, as the
-table's ZNCC column reads, so *min ZNCC (%)* and *min middle ZNCC (%)* both show
-70 on a new track while the track and the wire hold 0.7; a typed value may end
-in `%`. A middle bar of 0 turns it off, and a row with no middle reading clears
-it.
-*shift px*, the maximum shift, is in patch-grid px, the unit of the
+Five boxes, one per bar of `Thresholds`, so no bar is one only the wire can
+move. Four of them judge the table's readings, and they stand in **a threshold
+row directly under the column headings**, each in the column of the readings it
+judges and followed by the unit and name those readings print with:
+
+```
+Crop  Patch  Keep  Img  Name       ZNCC          Proj. err  Self-similarity        Shift     Status
+Thresholds                         [70]% whole              [2.5] px whole         [6.0] px
+                                   [70]% mid
+```
+
+The row is drawn above the scroll area with the headings, so a bar stays beside
+the heading of what it judges however far the table is scrolled, and the
+columns no bar judges leave room for the word *Thresholds* at its left. The
+minimum ZNCC and minimum middle ZNCC boxes stack in the *ZNCC* column, whole
+over mid, as its cell stacks the two readings. They read and take percent in
+whole steps, as that column reads, so both show 70 on a new track while the
+track and the wire hold 0.7; a typed value may end in `%`. A middle bar of 0
+turns it off, and a row with no middle reading clears it.
+The self-similarity box, `px whole`, is the largest self-similarity radius, in
+patch-grid px, 2.5 on a new track, and takes `0` to `3` to one decimal. It
+judges the whole tile's radius, the upper reading in the *Self-similarity*
+column; `3`, the largest radius read, turns nothing out, and a row with no
+reading clears it.
+The shift box, `px`, is the maximum shift, in patch-grid px, the unit of the
 self-similarity radius, and 6 on a new track. It is three things at once, since
 they are one question -- how far from where a sighting is the correlation may
 put it: the bar the *Shift* column is judged by, the radius the evaluation
 looks for each peak within, so moving it evaluates the track again, and the
 bound on how far a *Fit* may move a sighting
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
-fit's walk is bounded by the person's bar"). Its label's hover text says so.
-There is no separate search radius.
-*self-sim. px*, the largest self-similarity radius, is in patch-grid px, 2.5 on a
-new track, and takes `0` to `3` to one decimal. It judges the whole tile's
-radius, the upper reading in the *Self-similarity* column; `3`, the largest
-radius read, turns nothing out, and a row with no reading clears it. Its label's
-hover text says what the radius is, what a row past the bar is, and that `3`
-turns nothing out.
+fit's walk is bounded by the person's bar"). There is no separate search radius.
+The text after each box has hover text saying what the bar is and what a row
+past it is.
+
+The fifth box, *geometry search min relative ZNCC (%)*, is
+`geometry_search_min_relative_zncc`: the fraction of the track's own
+self-agreement a photograph's ZNCC has to reach for *Find matches by geometry*
+to add it. It judges no reading and no verdict, so it has no column; it stands
+above the table, to the right of the track's patch, after the toolbar in Edited
+mode and after the evaluation line in Viewed mode, as its label and a box. It
+reads in percent, 70 on a new track.
+
+Each box is a number box: dragging it left or right changes the bar (half a
+percent per point for the ZNCC bars, 0.05 grid px per point for the shift, 0.02
+grid px per point for the self-similarity radius), and clicking it takes a
+typed value. There is no slider rail beside it, since a rail would say nothing
+the box does not.
 
 **A box applies to the focused item when it is let go.** Dragging one
 recolours the table live; releasing it sets the track's bars to where the five
@@ -861,7 +880,28 @@ track").
 #### The observation table
 
 One row per observation, in index order, with the headings above the scroll
-area. The crop of the photograph around the patch's outline is the first
+area.
+
+**The table scrolls both ways.** The rows scroll up and down under the
+headings and the threshold row, which stay in place. The table is wider than a
+narrow dock cell, so it also scrolls sideways, and the headings and the
+threshold row move sideways with the rows, placed from the left edge the rows
+are drawn from on the same frame. The controls above the table, the header,
+the toolbar and the geometry search box, fit the panel's width and do not
+scroll. A trackpad, a wheel (with Shift for sideways) and the scroll bars move
+the table, and so does a drag with the left or the middle button begun
+anywhere on the rows, the headings or the threshold row except on a control.
+The *Keep* switches and the pins take a drag begun on them, which does
+nothing, so a drag that starts on a switch does not scroll the table and
+cannot toggle a switch it passes over. A drag on the rows keeps moving briefly
+after the button is released, as egui's scroll area does on a touch screen.
+The scroll area drags on a touch screen only unless it is asked to drag always
+(`ScrollSource::ALL`), and the headings and the threshold row are outside it,
+so a drag of either is added to its offset by the panel. The tests cover a
+sideways wheel in both units, a middle and a left drag over the rows and the
+headings, and a drag begun on a switch.
+
+The crop of the photograph around the patch's outline is the first
 column, at the table's left edge, under *Crop*; the rendered tile is the
 second, under *Patch*; and the verdict column follows them, *Keep* in Edited
 mode and *Verdict* in Viewed mode. The crop comes first because it
@@ -898,8 +938,8 @@ would be refused. The *ZNCC* heading's says what a ZNCC is, that `whole` is over
 whole patch and `mid` over its middle half, what the two apart mean, and how
 the grid beside them is coloured. The *Self-similarity* heading's
 says what the radius is and what its two readings, its colours and its lines
-mean, and ends by saying that the *self-sim. px* bar judges the whole tile's
-radius. The *Proj. err* heading's says what the error is measured to before and
+mean, and ends by saying that the box under the heading is the bar that judges
+the whole tile's radius. The *Proj. err* heading's says what the error is measured to before and
 after the track is triangulated, and that the degrees are the same residual as
 an angle.
 
@@ -918,10 +958,10 @@ that is not there prints a bare `-`, with no unit.
 | Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
 | Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
 | Img, Name | the image's index, and its file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
-| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within *shift px* of the observation, over the middle ZNCC, then the ZNCC grid |
+| ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within the shift bar of the observation, over the middle ZNCC, then the ZNCC grid |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Self-similarity | the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
-| Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within *shift px*, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
+| Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 
@@ -971,7 +1011,7 @@ alone: a box is green under `1`, yellow from `1` to `2`, orange from `2` to
 `3` and red at `3` or more, and carries a dark
 line along its slide where the slide is at least `0.5` long, so the ninth's
 matching shifts line up along one direction, as on an edge. Hovering it shows
-its nine numbers as the cell prints them. The *self-sim. px* bar judges
+its nine numbers as the cell prints them. The self-similarity bar judges
 `whole`; the middle and the grid are shown and judged by no bar.
 
 **Beside the grid is the core's surface plot**: the whole core's ZNCC against
@@ -1003,7 +1043,7 @@ the toolbar says why.
 
 **The two distances are two columns because they are two questions.** *Shift*
 is the sighting's own evidence, where the correlation would rather sit, and is
-what the *shift px* bar paints on. *Proj. err* is a statement about
+what the shift bar paints on. *Proj. err* is a statement about
 the point: a mis-triangulated track shows a column of large errors beside a
 column of near-zero shifts, the picture that says the position is wrong and the
 sightings are not.
@@ -1022,7 +1062,7 @@ a ZNCC has one of core's `Unmeasured` reasons behind it, and the cell prints tha
 sentence (`it sits off the photograph`, `its ray grazes the patch`, `its seed
 sits 2,483 px from the projection, beyond the 64 px bound`) elided to its
 column. **It also names the walk a fit refused**: a sighting the fit's kernels
-wanted to carry further than the *shift px* bar kept its seed
+wanted to carry further than the shift bar kept its seed
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 fit's walk is bounded by the person's bar"), which a person reading `localized`
 would get wrong, so the walk comes first among a scored row's answers. The
@@ -1174,9 +1214,9 @@ so it appears once the decode ends. The hover view is rendered the first time th
 crop. Its hover region takes no click, so a click on the crop is the row's.
 
 **Each judged reading is coloured by its bar.** Four readings are judged, one
-per bar: the *whole* line of the ZNCC cell by *min ZNCC*, its *mid* line by
-*min middle ZNCC*, the Shift cell by *shift px*, and the *whole* line of the
-Self-similarity cell by *self-sim. px*. A reading that clears its bar is drawn
+per bar: the *whole* line of the ZNCC cell by the minimum ZNCC, its *mid* line
+by the minimum middle ZNCC, the Shift cell by the shift bar, and the *whole*
+line of the Self-similarity cell by the self-similarity bar. A reading that clears its bar is drawn
 green and one that does not red, in a green and a red chosen for each of the
 dark and light visuals so they read as text on the panel's background. Each line
 of a two-line cell takes its own colour, so a whole ZNCC can be green over a red
@@ -1573,7 +1613,9 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   the pointer on a crop showing the view for that row alone while the row keeps
   its hover and its click; the boxes showing the track's
   bars outside a drag, following them when a step, an undo or a redo moves them,
-  and re-seating on another item; a drag of *shift px* pushing exactly one
+  and re-seating on another item; each box of the threshold row standing
+  under the heading of what it judges, whole over mid in the ZNCC column, and the
+  geometry search box above the table; a drag of the shift box pushing exactly one
   version and one row on its release, with the track's bar where it was let go
   and an undo taking bar and box back; no *Apply thresholds* button drawn; a
   fit after a release to a zero bar keeping sightings at their seeds, *Accept

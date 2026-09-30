@@ -742,7 +742,7 @@ pub(crate) struct ThresholdChange {
     pub(crate) min_zncc_middle: Option<f64>,
     pub(crate) max_shift_px: Option<f64>,
     pub(crate) max_zncc_self_similarity_radius: Option<f64>,
-    pub(crate) min_relative_zncc: Option<f64>,
+    pub(crate) geometry_search_min_relative_zncc: Option<f64>,
 }
 
 impl ThresholdChange {
@@ -764,8 +764,8 @@ impl ThresholdChange {
         if let Some(value) = self.max_zncc_self_similarity_radius {
             next.max_zncc_self_similarity_radius = value;
         }
-        if let Some(value) = self.min_relative_zncc {
-            next.min_relative_zncc = value;
+        if let Some(value) = self.geometry_search_min_relative_zncc {
+            next.geometry_search_min_relative_zncc = value;
         }
         next
     }

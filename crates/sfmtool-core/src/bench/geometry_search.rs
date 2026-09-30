@@ -25,8 +25,8 @@ use super::track::{ClusterPayload, EditableTrack, Provenance, Stage, StageKind, 
 pub struct GeometrySearchOptions {
     /// The patch-view selector's photometric and rendering tunables.
     ///
-    /// `min_relative_zncc` is replaced by the editable track's threshold when
-    /// the search runs. That bar belongs to the track, where the panel and
+    /// `min_relative_zncc` is replaced by the editable track's
+    /// `geometry_search_min_relative_zncc` when the search runs. That bar belongs to the track, where the panel and
     /// threshold step expose it, rather than to one invocation.
     pub selection: ViewSelectParams,
 }
@@ -259,7 +259,7 @@ pub fn search_geometry(
 
     let [select_progress, add_progress] = progress.split([0.95, 0.05]);
     let params = ViewSelectParams {
-        min_relative_zncc: track.thresholds.min_relative_zncc,
+        min_relative_zncc: track.thresholds.geometry_search_min_relative_zncc,
         ..options.selection.clone()
     };
     let selection = select_patch_views(

@@ -34,13 +34,15 @@
 //! `verdicts_if_unpinned`), so the colours and the verdicts a release applies
 //! cannot disagree.
 
-use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Verdict};
+use sfmtool_core::bench::{BarCheck, EditableTrack, StageKind, Thresholds, Verdict};
 use sfmtool_core::SfmrReconstruction;
 
 use super::{
-    measurements, provenance_text, radius_number, row_grids, row_radius, row_surface,
-    self_similarity_cell_color, zncc_cell_color, BodyMode, Judgement, RowGrids, TrackBody,
-    TrackBodyResponse,
+    bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
+    row_grids, row_radius, row_surface, self_similarity_cell_color, zncc_cell_color, BodyMode,
+    BoxHover, BoxesMoved, Judgement, RowGrids, TrackBody, TrackBodyResponse,
+    MAX_SELF_SIMILARITY_LABEL, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL, MAX_SHIFT_TIP,
+    MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -54,6 +56,8 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 /// Width of the *Keep* column: the switch, then the pin that marks a verdict
 /// set by hand.
 const KEEP_WIDTH: f32 = 64.0;
+/// Width of the *From* column: room for its longest cell, `feature 123456`.
+const FROM_WIDTH: f32 = 110.0;
 /// Width of the part of the *Keep* cell the switch takes; the pin takes the
 /// rest.
 const SWITCH_CELL_WIDTH: f32 = 40.0;
@@ -180,6 +184,16 @@ impl ColumnLayout {
         }
     }
 
+    /// The table's width in `mode`: to the end of *From* in Edited mode, and of
+    /// *Status* in Viewed mode, which draws no *From*. What the table scrolls
+    /// sideways over when the panel is narrower.
+    pub(super) fn width(&self, mode: BodyMode) -> f32 {
+        match mode {
+            BodyMode::Edited => self.from + FROM_WIDTH,
+            BodyMode::Viewed => self.from,
+        }
+    }
+
     /// The tile column's offset from the table's left edge.
     #[cfg(test)]
     pub(super) fn tile_x(&self) -> f32 {
@@ -288,12 +302,12 @@ pub(super) const ZNCC_TIP: &str = "Zero-mean normalized cross-correlation, in pe
 pub(super) const SHIFT_TIP: &str = "How far the correlation peak sits from where the \
     observation sits, in patch-grid pixels, the unit of the self-similarity radius: the \
     observation's own evidence of where it belongs.\n\n\
-    At the track stage the evaluation looks for the peak within the shift px bar of the \
+    At the track stage the evaluation looks for the peak within the shift bar of the \
     sighting, against the consensus of the others, and moves nothing. A shift inside the \
     self-similarity radius is within what the patch cannot tell apart; one beyond it says the \
     other photographs want the sighting moved. A fit moves it, up to the bar.\n\n\
     At the cluster stage it is how far the refinement moved the member off its seed.\n\n\
-    The shift px bar judges it.";
+    The box under this heading is the shift bar, which judges it.";
 
 /// The projection error heading's hover text.
 pub(super) const PROJECTION_ERROR_TIP: &str = "The reprojection error, in pixels over the \
@@ -319,7 +333,7 @@ pub(super) const SELF_SIMILARITY_TIP: &str = "The ZNCC self-similarity radius: h
     green under 1, yellow from 1 to 2, orange from 2 to 3, red at 3 or more. A line in a box is \
     the direction that ninth can slide in, where its matching shifts line up along one. Hover \
     the grid for the numbers.\n\n\
-    The self-sim. px bar judges the whole tile's radius.";
+    The box under this heading is the bar that judges the whole tile's radius.";
 
 const STATUS_TIP: &str = "What the last evaluation or fit said about the row. At the \
     cluster stage, the refinement's verdict on the member. At the track stage, localized, a \
@@ -365,9 +379,10 @@ pub(super) fn heading_pin_hover(pinned: usize, rows: usize, busy: Option<&str>) 
 
 /// The *Keep* switch of one row, filling `rect`. The whole of `rect` takes
 /// the click, so the target is the cell and not the switch's own few points.
-/// Returns the click's response.
+/// It takes a drag too, which does nothing, so a drag begun on a switch does
+/// not scroll the table. Returns the click's response.
 fn keep_switch(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, kept: bool) -> egui::Response {
-    let response = ui.interact(rect, id, egui::Sense::click());
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), kept, "Keep")
     });
@@ -445,9 +460,10 @@ fn draw_verdict(
 
 /// The pin beside a row's *Keep* switch, filling `rect`: a pushpin drawn solid
 /// when the verdict was set by hand and as a faint outline when the thresholds
-/// set it. The whole of `rect` takes the click. Returns the click's response.
+/// set it. The whole of `rect` takes the click, and a drag, as the switch
+/// does. Returns the click's response.
 fn pin_toggle(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, pinned: bool) -> egui::Response {
-    let response = ui.interact(rect, id, egui::Sense::click());
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), pinned, "Pin")
     });
@@ -640,8 +656,10 @@ fn heading_pin(
     busy: Option<&str>,
 ) -> bool {
     let enabled = rows > 0 && busy.is_none();
+    // The drag as well, as a row's pin takes it, so a drag begun on the pin
+    // does not scroll the table.
     let sense = if enabled {
-        egui::Sense::click()
+        egui::Sense::click_and_drag()
     } else {
         egui::Sense::hover()
     };
@@ -664,7 +682,10 @@ fn heading_pin(
 }
 
 impl TrackBody {
-    /// Draw the observation table and record what it drew.
+    /// Draw the observation table and record what it drew, with the threshold
+    /// row under its headings: the boxes carry `bars_hover`, and how they moved
+    /// is returned for the caller to apply.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn show_table(
         &mut self,
         ui: &mut egui::Ui,
@@ -672,8 +693,9 @@ impl TrackBody {
         id: ReconId,
         state: &AppState,
         track: &EditableTrack,
+        bars_hover: BoxHover<'_>,
         response: &mut TrackBodyResponse,
-    ) {
+    ) -> BoxesMoved {
         let cols = ColumnLayout::new();
         let stage = track.stage_kind();
         let mode = self.mode().unwrap_or(BodyMode::Viewed);
@@ -691,17 +713,73 @@ impl TrackBody {
         };
         self.rows.clear();
 
-        // Above the scroll area, not inside it: at the bottom of a long track
-        // a header that had scrolled away leaves six columns of numbers with
-        // nothing saying which is which. Alignment survives the move because
-        // every column is left-anchored at the table's left edge, and a scroll
-        // area moves its right edge, never that one.
+        // The headings and the threshold row are above the scroll area, not
+        // inside it: at the bottom of a long track a header that had scrolled
+        // away leaves six columns of numbers with nothing saying which is
+        // which. Their space is taken now and they are drawn after the rows,
+        // at the horizontal offset the rows scrolled to on this frame, so a
+        // sideways scroll moves them with the columns under them. Alignment
+        // holds because every column is left-anchored at the table's left
+        // edge, and both are placed from that edge.
+        let header_band = reserve_band(ui, header_height(ui));
+        let bars_band = reserve_band(ui, threshold_row_height(ui));
+        let (header_rect, bars_rect) = (header_band.rect, bars_band.rect);
+        let width = cols.width(mode);
+
+        // Both ways: the table is wider than a narrow dock cell, and the
+        // controls above it fit the cell's width rather than the table's. A
+        // trackpad, a wheel (with Shift for sideways) and the scroll bars move
+        // it, and so does a drag with the left or the middle button begun
+        // anywhere on it but a control. egui drags the rows only on a touch
+        // screen unless asked to always; the switches and pins take their own
+        // drags, which is how a drag begun on one leaves the table where it
+        // is. The headings and the threshold row are outside the scroll area,
+        // so their drags are added here.
+        let mut left = ui.available_rect_before_wrap().left();
+        let pan = band_drag(&header_band) + band_drag(&bars_band);
+        let output = egui::ScrollArea::both()
+            .id_salt("track_view_rows")
+            .auto_shrink([false, false])
+            .scroll_source(egui::scroll_area::ScrollSource::ALL)
+            .scroll_offset(self.scroll_offset - pan)
+            .show(ui, |ui| {
+                // The left edge the rows are drawn from on this frame. The
+                // scroll area applies this frame's wheel or drag to the offset
+                // it reports after drawing, so that offset is a frame ahead of
+                // the rows, and the headings are placed from this edge.
+                left = ui.max_rect().left();
+                for observation in 0..track.observations.len() {
+                    self.draw_row(
+                        ui,
+                        recon,
+                        id,
+                        state,
+                        track,
+                        observation,
+                        stage,
+                        mode,
+                        hovered,
+                        selected,
+                        &cols,
+                        response,
+                    );
+                }
+            });
+        self.scroll_offset = output.state.offset;
+        let table = |band: egui::Rect| {
+            egui::Rect::from_min_size(
+                egui::pos2(left, band.top()),
+                egui::vec2(width.max(band.width()), band.height()),
+            )
+        };
+
         let pinned: Vec<usize> = (0..track.observations.len())
             .filter(|&i| track.observations[i].pinned)
             .collect();
         let rows = track.observations.len();
         if draw_header(
             ui,
+            table(header_rect),
             &cols,
             mode,
             pinned.len(),
@@ -714,30 +792,16 @@ impl TrackBody {
                 response.unpin_verdicts = Some(pinned);
             }
         }
-
-        let mut scroll_area = egui::ScrollArea::vertical().auto_shrink([false, false]);
-        if let Some(offset) = self.scroll_offset_y {
-            scroll_area = scroll_area.vertical_scroll_offset(offset);
-        }
-        let output = scroll_area.show(ui, |ui| {
-            for observation in 0..track.observations.len() {
-                self.draw_row(
-                    ui,
-                    recon,
-                    id,
-                    state,
-                    track,
-                    observation,
-                    stage,
-                    mode,
-                    hovered,
-                    selected,
-                    &cols,
-                    response,
-                );
-            }
-        });
-        self.scroll_offset_y = Some(output.state.offset.y);
+        // Under the headings, so each bar stays beside the heading of the
+        // readings it judges.
+        draw_threshold_row(
+            ui,
+            table(bars_rect),
+            bars_rect,
+            &cols,
+            &mut self.thresholds,
+            bars_hover,
+        )
     }
 
     /// The row's own menu, in Edited mode: what a search runs *from* is one
@@ -999,9 +1063,11 @@ impl TrackBody {
             .map(|im| im.name.clone())
             .unwrap_or_else(|| format!("#{}", row.image));
 
+        // As wide as the table, or the panel when it is wider, so the scroll
+        // area knows how far there is to scroll sideways.
         let available = ui.available_rect_before_wrap();
-        let rect =
-            egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
+        let width = available.width().max(cols.width(mode));
+        let rect = egui::Rect::from_min_size(available.min, egui::vec2(width, ROW_HEIGHT));
         let row_response = ui.allocate_rect(rect, egui::Sense::click());
 
         // The verdict cell's tint first, then the selection and the hover
@@ -1481,28 +1547,58 @@ pub(super) fn accepted_walk(row: &sfmtool_core::bench::Observation) -> Option<St
     ))
 }
 
-/// The header row, at the same offsets the rows draw at, drawn once above the
-/// scroll area so it stays put while the rows move under it.
+/// Take a band `height` tall across the whole width `ui` offers, for something
+/// drawn into it later in the frame. The band senses a drag, which scrolls
+/// the table; a control drawn into it later is on top and takes the pointer
+/// over itself.
+fn reserve_band(ui: &mut egui::Ui, height: f32) -> egui::Response {
+    let available = ui.available_rect_before_wrap();
+    let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), height));
+    ui.allocate_rect(rect, egui::Sense::drag())
+}
+
+/// How far a drag of `band` with the left or the middle button moved the
+/// pointer on this frame: the buttons the rows' scroll area drags by.
+fn band_drag(band: &egui::Response) -> egui::Vec2 {
+    if band.dragged_by(egui::PointerButton::Primary) || band.dragged_by(egui::PointerButton::Middle)
+    {
+        band.drag_delta()
+    } else {
+        egui::Vec2::ZERO
+    }
+}
+
+/// The headings' height: body-sized, as the cells under them are, with room
+/// around them.
+fn header_height(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body) + 8.0
+}
+
+/// The threshold row's height: two lines of boxes, for the ZNCC column's
+/// whole over mid.
+fn threshold_row_height(ui: &egui::Ui) -> f32 {
+    2.0 * ui.spacing().interact_size.y + ui.spacing().item_spacing.y + 4.0
+}
+
+/// The header row, painted in `rect`, whose left edge is the table's, at the
+/// same offsets the rows draw at: above the scroll area, so it stays put while
+/// the rows move up and down under it, and moved sideways with them. In the
+/// weak colour, so the headings still read as headings.
 ///
-/// In Edited mode the *Keep* heading carries a pin over the rows' pin column, which unpins
-/// every pinned verdict of the track, or pins every verdict as it stands when
-/// none is pinned; `pinned` is how many are pinned, `rows` how many
-/// observations the track has and `busy` the node's busy refusal. Returns
+/// In Edited mode the *Keep* heading carries a pin over the rows' pin column,
+/// which unpins every pinned verdict of the track, or pins every verdict as it
+/// stands when none is pinned; `pinned` is how many are pinned, `rows` how
+/// many observations the track has and `busy` the node's busy refusal. Returns
 /// whether that pin was clicked.
 fn draw_header(
     ui: &mut egui::Ui,
+    rect: egui::Rect,
     cols: &ColumnLayout,
     mode: BodyMode,
     pinned: usize,
     rows: usize,
     busy: Option<&str>,
 ) -> bool {
-    let available = ui.available_rect_before_wrap();
-    // Body-sized, as the cells under them are, and in the weak colour, so
-    // they still read as headings.
-    let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
-    let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), height));
-    ui.allocate_rect(rect, egui::Sense::hover());
     let font = egui::TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().weak_text_color();
     let headers = cols.headers(mode);
@@ -1536,4 +1632,97 @@ fn draw_header(
         egui::pos2(rect.min.x + cols.keep + KEEP_WIDTH, rect.max.y),
     );
     heading_pin(ui, pin_rect, pinned, rows, busy)
+}
+
+/// The threshold row under the headings: each bar's box in the column whose
+/// readings it judges, followed by the unit and the name those readings print
+/// with, so `[70]% whole` stands over `93% whole`. The two ZNCC bars stack as
+/// the ZNCC cell stacks its two readings. The columns no bar judges are empty,
+/// so the word *Thresholds* takes the left of the row. Drawn the same in both
+/// modes, and greyed when `hover` is a refusal.
+fn draw_threshold_row(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    band: egui::Rect,
+    cols: &ColumnLayout,
+    bars: &mut Thresholds,
+    hover: BoxHover<'_>,
+) -> BoxesMoved {
+    let line = ui.spacing().interact_size.y;
+    let gap = ui.spacing().item_spacing.y;
+    // A box scrolled out of the band it stands in is clipped to it, as a row
+    // is to the scroll area.
+    let clip = ui.clip_rect().intersect(band);
+    ui.painter().text(
+        egui::pos2(rect.min.x + cols.crop, rect.min.y + 0.5 * line),
+        egui::Align2::LEFT_CENTER,
+        "Thresholds",
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().weak_text_color(),
+    );
+    // Each box with the column it sits in, the line of that column's cell it
+    // stands beside, the text after it and that text's hover. The ZNCC bars
+    // read in percent, as the ZNCC cell does; the track stores them on the 0
+    // to 1 scale. Listed left to right and top to bottom, which is the order
+    // Tab moves through them.
+    let boxes = [
+        (
+            cols.zncc,
+            0,
+            percent(egui::DragValue::new(&mut bars.min_zncc)),
+            MIN_ZNCC_LABEL,
+            MIN_ZNCC_TIP,
+        ),
+        // The bar on the middle reading; 0 turns it off.
+        (
+            cols.zncc,
+            1,
+            percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
+            MIN_ZNCC_MIDDLE_LABEL,
+            MIN_ZNCC_MIDDLE_TIP,
+        ),
+        // In patch-grid px, the unit of the self-similarity column; at the
+        // largest radius read it turns nothing out.
+        (
+            cols.self_similarity,
+            0,
+            egui::DragValue::new(&mut bars.max_zncc_self_similarity_radius)
+                .range(0.0..=max_self_similarity_radius())
+                .speed(0.02)
+                .max_decimals(1),
+            MAX_SELF_SIMILARITY_LABEL,
+            MAX_SELF_SIMILARITY_TIP,
+        ),
+        // In patch-grid px, and also the radius the evaluation looks for each
+        // peak within.
+        (
+            cols.shift,
+            0,
+            egui::DragValue::new(&mut bars.max_shift_px)
+                .range(0.0..=24.0)
+                .speed(0.05)
+                .max_decimals(1),
+            MAX_SHIFT_LABEL,
+            MAX_SHIFT_TIP,
+        ),
+    ];
+    let mut moved = BoxesMoved::default();
+    for (x, line_index, value, label, tip) in boxes {
+        let min = egui::pos2(
+            rect.min.x + x,
+            rect.min.y + line_index as f32 * (line + gap),
+        );
+        let cell = egui::Rect::from_min_max(min, egui::pos2(rect.max.x, min.y + line));
+        let mut cell_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(cell)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        cell_ui.set_clip_rect(clip);
+        moved.merge(bar_box(&mut cell_ui, value, hover));
+        cell_ui
+            .add_enabled(hover.enabled(), egui::Label::new(label))
+            .on_hover_text(tip);
+    }
+    moved
 }

@@ -303,8 +303,11 @@ pub(super) fn bars_phrase(bars: &Thresholds) -> String {
             bars.max_zncc_self_similarity_radius,
         ));
     }
-    if bars.min_relative_zncc != defaults.min_relative_zncc {
-        named.push(percent("min relative ZNCC", bars.min_relative_zncc));
+    if bars.geometry_search_min_relative_zncc != defaults.geometry_search_min_relative_zncc {
+        named.push(percent(
+            "geometry search min relative ZNCC",
+            bars.geometry_search_min_relative_zncc,
+        ));
     }
     named.join(", ")
 }

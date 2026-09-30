@@ -12,10 +12,10 @@ use sfmtool_core::bench::{BarCheck, Thresholds, Verdict};
 use super::super::table::{proposal_tint, ColumnLayout};
 use super::super::{
     crop_caption, BodyMode, TrackBody, TrackBodyResponse, EVALUATED_LABEL, EVALUATING_LABEL,
-    MAX_SELF_SIMILARITY_LABEL, MAX_SHIFT_LABEL, MIN_RELATIVE_ZNCC_LABEL, MIN_ZNCC_LABEL,
+    GEOMETRY_SEARCH_LABEL, MAX_SELF_SIMILARITY_LABEL, MAX_SHIFT_LABEL, MIN_ZNCC_LABEL,
     MIN_ZNCC_MIDDLE_LABEL,
 };
-use super::{drag_frames, input, run_frame, run_frame_with, state, versions, POINT};
+use super::{box_point, drag_frames, input, run_frame, run_frame_with, state, versions, POINT};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::track_view::EDIT_LABEL;
@@ -64,7 +64,7 @@ const BOXES: [(&str, f32); 5] = [
     (MIN_ZNCC_MIDDLE_LABEL, 400.0),
     (MAX_SHIFT_LABEL, -400.0),
     (MAX_SELF_SIMILARITY_LABEL, -400.0),
-    (MIN_RELATIVE_ZNCC_LABEL, 400.0),
+    (GEOMETRY_SEARCH_LABEL, 400.0),
 ];
 
 /// Drag the box labelled `label` `by` points, applying each frame's
@@ -85,11 +85,7 @@ fn drag_box(
         .find(|t| t.text == label)
         .unwrap_or_else(|| panic!("the {label:?} box is not drawn"))
         .rect;
-    let spacing = egui::Spacing::default();
-    let start = egui::pos2(
-        named.right() + spacing.item_spacing.x + 0.5 * spacing.interact_size.x,
-        named.center().y,
-    );
+    let start = box_point(label, named);
     let mut responses = Vec::new();
     for events in drag_frames(start, start + egui::vec2(by, 0.0)) {
         let response = run_frame_with(panel, ctx, state, events);

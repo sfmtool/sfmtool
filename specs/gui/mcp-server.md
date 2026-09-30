@@ -633,7 +633,7 @@ one at the cursor, and this block reports it.
     "thresholds": { "min_zncc": 0.8, "min_zncc_middle": 0.7,
                     "max_shift_px": 6.0,
                     "max_zncc_self_similarity_radius": 2.5,
-                    "min_relative_zncc": 0.7 },
+                    "geometry_search_min_relative_zncc": 0.7 },
     "observations": [ { "observation": 0, "camera_image": 3,
                         "camera_image_name": "images/IMG_0042.jpg",
                         "provenance": { "kind": "origin" },
@@ -3489,7 +3489,7 @@ node, drops the ones that do not face it or hold it behind them, and scores each
 survivor's rendered patch against a reference fused from the named `observation`
 and the track's `in` sightings -- the per-point form of the view expansion `sfm
 embed-patches` runs ([../core/bench/editable-track.md](../core/bench/editable-track.md)
-§ "Searching by geometry"). The bar is the track's own `min_relative_zncc`, so
+§ "Searching by geometry"). The bar is the track's own `geometry_search_min_relative_zncc`, so
 `apply_bench_track_thresholds` moves what the next search admits. It needs the
 **track stage** and a fitted surfel, and is refused at the cluster stage, which
 carries no geometry to project; it reads no index, so it answers on a node that

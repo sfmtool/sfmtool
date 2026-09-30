@@ -474,7 +474,10 @@ impl PyEditableTrack {
             "max_zncc_self_similarity_radius",
             t.max_zncc_self_similarity_radius,
         )?;
-        d.set_item("min_relative_zncc", t.min_relative_zncc)?;
+        d.set_item(
+            "geometry_search_min_relative_zncc",
+            t.geometry_search_min_relative_zncc,
+        )?;
         Ok(d)
     }
 
@@ -1245,7 +1248,7 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
 #[pyfunction]
 #[pyo3(signature = (
     track, *, min_zncc = None, max_shift_px = None, max_zncc_self_similarity_radius = None,
-    min_relative_zncc = None, min_zncc_middle = None
+    geometry_search_min_relative_zncc = None, min_zncc_middle = None
 ))]
 fn apply_thresholds(
     py: Python<'_>,
@@ -1253,7 +1256,7 @@ fn apply_thresholds(
     min_zncc: Option<f64>,
     max_shift_px: Option<f64>,
     max_zncc_self_similarity_radius: Option<f64>,
-    min_relative_zncc: Option<f64>,
+    geometry_search_min_relative_zncc: Option<f64>,
     min_zncc_middle: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let mut seeded = (*track.inner).clone();
@@ -1265,7 +1268,10 @@ fn apply_thresholds(
             &mut t.max_zncc_self_similarity_radius,
             max_zncc_self_similarity_radius,
         ),
-        (&mut t.min_relative_zncc, min_relative_zncc),
+        (
+            &mut t.geometry_search_min_relative_zncc,
+            geometry_search_min_relative_zncc,
+        ),
         (&mut t.min_zncc_middle, min_zncc_middle),
     ] {
         if let Some(value) = value {
@@ -2010,7 +2016,8 @@ fn search_report_dict<'py>(py: Python<'py>, report: &SearchReport) -> PyResult<B
 /// runs. An admitted image arrives at the patch centre's projection, seeded
 /// with the projected frame as its shape, and ``out`` and unpinned: the next
 /// :func:`evaluate` or :func:`fit` judges it. The admission bar is the track's
-/// own ``min_relative_zncc`` threshold, as it is in the viewer. The keywords are
+/// own ``geometry_search_min_relative_zncc`` threshold, as it is in the viewer.
+/// The keywords are
 /// the view selector's rendering and trust tunables, each defaulting to the
 /// selector's own.
 ///

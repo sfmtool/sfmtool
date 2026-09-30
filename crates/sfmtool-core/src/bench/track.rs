@@ -637,8 +637,8 @@ pub struct Origin {
 
 /// The bars the threshold painting judges an observation against.
 ///
-/// [`Self::min_relative_zncc`]'s default is read from view selection's own
-/// parameter type rather than written out again, so the bench and the batch
+/// [`Self::geometry_search_min_relative_zncc`]'s default is read from view
+/// selection's own parameter type rather than written out again, so the bench and the batch
 /// pass start from the same bar and moving it is the person choosing to
 /// differ. The other four are the bench's own. [`BENCH_MAX_SHIFT_PX`]: on the bench the bar is also how far a
 /// fit may move a sighting, and the cluster refinement's 3 px turned away walks
@@ -698,8 +698,10 @@ pub struct Thresholds {
     /// clears the bar.
     pub max_zncc_self_similarity_radius: f64,
     /// The fraction of the track's own self-agreement a candidate's ZNCC has to
-    /// reach, which view selection scores a sweep candidate by.
-    pub min_relative_zncc: f64,
+    /// reach for a geometry search ([`search_geometry`](super::search_geometry))
+    /// to admit it. It judges no observation of the track: the evaluation, the
+    /// painting and [`apply_thresholds`](super::apply_thresholds) do not read it.
+    pub geometry_search_min_relative_zncc: f64,
 }
 
 /// The bench's default [`Thresholds::max_shift_px`], in patch-grid px.
@@ -753,7 +755,7 @@ impl Default for Thresholds {
             min_zncc_middle: BENCH_MIN_ZNCC_MIDDLE,
             max_shift_px: BENCH_MAX_SHIFT_PX,
             max_zncc_self_similarity_radius: BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
-            min_relative_zncc: ViewSelectParams::default().min_relative_zncc,
+            geometry_search_min_relative_zncc: ViewSelectParams::default().min_relative_zncc,
         }
     }
 }

@@ -151,7 +151,7 @@ pub struct Thresholds {
     pub min_zncc_middle: f64,                // 0 turns it off
     pub max_shift_px: f64,
     pub max_zncc_self_similarity_radius: f64, // patch-grid px; 3 or more turns nothing out
-    pub min_relative_zncc: f64,
+    pub geometry_search_min_relative_zncc: f64, // judges no row: the bar a geometry search admits by
 }
 // The bench's own default bars: the shift bar the localizer's search radius,
 // in patch-grid px, the ZNCC bars below the cluster refinement's 0.85, and
@@ -1761,7 +1761,7 @@ the finite patch or direction patch (`w = 0`) into every supplied camera,
 requires the existing front-facing, cheirality and image-support gates, and
 admits a view only when its rendered patch clears the relative-ZNCC bar against
 a trustworthy reference appearance. The bar is the editable track's own
-`thresholds.min_relative_zncc`; changing the panel box therefore changes the
+`thresholds.geometry_search_min_relative_zncc`; changing the panel box therefore changes the
 next geometry search by the same rule it changes a batch view selection.
 
 **The row names the appearance being searched from.** Its observation is first
@@ -2169,7 +2169,7 @@ nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 
 ## Parameters
 
-`min_relative_zncc` defaults to view selection's own bar, read from its
+`geometry_search_min_relative_zncc` defaults to view selection's own bar, read from its
 parameter type rather than written out again, so the bench and the batch pass
 start from the same bar and moving it is the person choosing to differ. The
 other four are the bench's own. `max_shift_px` is
@@ -2193,7 +2193,7 @@ earlier default carries that default until someone moves it.
 | `min_zncc_middle` | `0.7` | The `zncc_middle` an observation has to reach, at either stage. `BENCH_MIN_ZNCC_MIDDLE`; `0` turns the bar off, and a row with no middle reading clears it (§ "The middle ZNCC"). |
 | `max_shift_px` | `6.0` | How far the correlation peak may sit from where the observation sits, in patch-grid px: the drift from its seed at the cluster stage (the refined position's offset in the seed's keypoint frame, `resolution` grid px across `2 · radius` units), `seed_shift_px` at the track stage; and at the track stage the radius the reading looks for each peak within and how far a fit may move a sighting from where it sat. `BENCH_MAX_SHIFT_PX`, the localizer's own search radius; `ClusterRefineParams::default`'s 3 source-image px stays the batch pass's bar. The other track-stage distance, `projection_offset_px`, is deliberately **not** judged: it is a verdict on the point, and painting sightings by it would turn out the observations that would move a mis-triangulated point back. |
 | `max_zncc_self_similarity_radius` | `2.5` | The largest ZNCC self-similarity radius an observation's own tile may have, in patch-grid px: `zncc_self_similarity_radius` of the cluster measurement at the cluster stage and of the track measurement at the track stage. `BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS`. The radius reads at most `3`, meaning "3 or more", so a bar of `3` or more turns nothing out; a row with no reading clears it and a `NaN` fails it (§ "The ZNCC self-similarity radius"). |
-| `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
+| `geometry_search_min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a candidate has to reach for a geometry search to admit it. It judges no observation, so the evaluation, the painting and `apply_thresholds` do not read it. From `ViewSelectParams::default`. |
 
 The reading's two memory bounds are not thresholds either: nothing about them is
 a verdict on a sighting, and what they decide is what may be asked of the
@@ -2367,7 +2367,7 @@ or `"own_image"`.
 reconstruction and `images` the way `evaluate` does, plus the view selector's
 `resolution`, `min_valid_fraction`, `min_track_views`, `robust_iters` and
 `min_self_agreement` as keywords, each defaulting to the selector's own; the
-admission bar stays the track's `min_relative_zncc`. Its report is a dict
+admission bar stays the track's `geometry_search_min_relative_zncc`. Its report is a dict
 carrying `observation`, `observation_count`, `image`, `reference_views`,
 `self_agreement`, `added`, `already_in_track`, `sentence` and `matches`, one
 dict per admitted image with its `image`, `zncc`, `pixel` and `found`.

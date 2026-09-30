@@ -645,10 +645,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         ),
                     ),
                     (
-                        "min_relative_zncc",
+                        "geometry_search_min_relative_zncc",
                         threshold_schema(
                             "The fraction of the track's own self-agreement a view's ZNCC has \
-                             to reach for a geometry search to add it.",
+                             to reach for search_bench_track_geometry to add it. It judges no \
+                             observation, so moving it changes no verdict. The bench's default \
+                             is 0.7, view selection's own.",
                         ),
                     ),
                 ],
@@ -837,9 +839,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           it does not face or that hold it behind them are dropped, and each \
                           survivor's rendered patch is scored against a reference fused from \
                           the named observation and the track's in observations. A view is \
-                          admitted when that score clears the track's own min_relative_zncc \
-                          bar, so apply_bench_track_thresholds moves what the next search \
-                          admits. An added observation arrives at the patch's own projection, \
+                          admitted when that score clears the track's own \
+                          geometry_search_min_relative_zncc bar, so \
+                          apply_bench_track_thresholds moves what the next search admits. An added observation arrives at the patch's own projection, \
                           with the projected patch shape and sweep provenance and no \
                           measurement — the evaluation that follows scores it and turns it in \
                           when it clears the thresholds. An \

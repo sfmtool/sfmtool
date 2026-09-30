@@ -529,7 +529,7 @@ fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
 /// Evaluation is live, so there is no *Evaluate* button: the toolbar offers
 /// *Fit*, which moves the track, and says where the evaluation of the track as
 /// it stands is. There is no search radius control: the evaluation looks
-/// within the *shift px* bar.
+/// within the shift bar.
 #[test]
 fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
     let (mut state, _, _, mut panel, ctx) = on_the_bench();
@@ -541,7 +541,7 @@ fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
     for label in ["Fit", super::MAX_SHIFT_LABEL, super::EVALUATING_LABEL] {
         assert!(
             texts.iter().any(|t| t == label),
-            "{label} is not in the toolbar: {texts:?}"
+            "{label} is not drawn: {texts:?}"
         );
     }
     assert!(
@@ -850,7 +850,7 @@ fn the_boxes_follow_the_focused_item_s_own_thresholds() {
 
     let bars = Thresholds {
         min_zncc: 0.94,
-        min_relative_zncc: 0.62,
+        geometry_search_min_relative_zncc: 0.62,
         ..Thresholds::default()
     };
     state
@@ -906,12 +906,23 @@ fn drag_frames(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     ]
 }
 
-/// Drag the *max shift px* box `by` points to the right (left when negative),
+/// Where to press to drag the box whose label is `label`, painted at `named`.
+/// The geometry search box comes one gap to the right of its label; a box of
+/// the threshold row comes one gap to the left of the unit written after it.
+pub(super) fn box_point(label: &str, named: egui::Rect) -> egui::Pos2 {
+    let spacing = egui::Spacing::default();
+    let to_centre = spacing.item_spacing.x + 0.5 * spacing.interact_size.x;
+    let x = if label == super::GEOMETRY_SEARCH_LABEL {
+        named.right() + to_centre
+    } else {
+        named.left() - to_centre
+    };
+    egui::pos2(x, named.center().y)
+}
+
+/// Drag the shift box `by` points to the right (left when negative),
 /// applying each frame's response the way the dock does, and hand back every
 /// frame's response.
-///
-/// The box is found from its label: the label comes first and the box one
-/// gap to its right.
 fn drag_max_shift(
     panel: &mut TrackBody,
     ctx: &egui::Context,
@@ -928,11 +939,7 @@ fn drag_max_shift(
         .find(|t| t.text == super::MAX_SHIFT_LABEL)
         .expect("the max shift box is drawn")
         .rect;
-    let spacing = egui::Spacing::default();
-    let start = egui::pos2(
-        named.right() + spacing.item_spacing.x + 0.5 * spacing.interact_size.x,
-        named.center().y,
-    );
+    let start = box_point(super::MAX_SHIFT_LABEL, named);
     let mut responses = Vec::new();
     for events in drag_frames(start, start + egui::vec2(by, 0.0)) {
         let response = run_frame_with(panel, ctx, state, events);
@@ -1002,6 +1009,53 @@ fn there_is_no_apply_thresholds_button() {
     assert!(
         texts.iter().any(|t| t == super::MAX_SHIFT_LABEL),
         "{texts:?}"
+    );
+}
+
+/// Each box of the threshold row stands in the column of the readings it
+/// judges, under that column's heading and before the next one: the two ZNCC
+/// bars stacked under *ZNCC*, whole over mid as the cell prints them, the
+/// self-similarity bar under *Self-similarity* and the shift bar under
+/// *Shift*. The geometry search bar judges no column and stays above the
+/// table.
+#[test]
+fn each_threshold_box_stands_under_the_heading_of_what_it_judges() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let texts = crate::test_support::painted_text_rects(&ctx, input(Vec::new()), |ui| {
+        panel.show(ui, &state);
+    });
+    let rect = |text: &str| {
+        texts
+            .iter()
+            .find(|t| t.text == text)
+            .unwrap_or_else(|| panic!("{text:?} is not drawn"))
+            .rect
+    };
+    let heading = |text: &str| rect(text).left();
+    for (label, under, before) in [
+        (super::MIN_ZNCC_LABEL, "ZNCC", "Proj. err"),
+        (super::MIN_ZNCC_MIDDLE_LABEL, "ZNCC", "Proj. err"),
+        (super::MAX_SELF_SIMILARITY_LABEL, "Self-similarity", "Shift"),
+        (super::MAX_SHIFT_LABEL, "Shift", "Status"),
+    ] {
+        let press = box_point(label, rect(label));
+        assert!(
+            heading(under) <= press.x && rect(label).right() <= heading(before),
+            "{label:?} is not in the {under:?} column"
+        );
+        assert!(
+            rect(label).top() > rect(under).bottom(),
+            "{label:?} is not under its heading"
+        );
+    }
+    let (whole, mid) = (
+        rect(super::MIN_ZNCC_LABEL),
+        rect(super::MIN_ZNCC_MIDDLE_LABEL),
+    );
+    assert!(mid.top() >= whole.bottom(), "mid is not under whole");
+    assert!(
+        rect(super::GEOMETRY_SEARCH_LABEL).bottom() < rect("ZNCC").top(),
+        "the geometry search bar is not above the table"
     );
 }
 
@@ -1963,7 +2017,218 @@ fn the_self_similarity_heading_says_what_it_shows() {
         .any(|&(_, heading, _)| heading == "Self-similarity"));
     let tip = super::table::SELF_SIMILARITY_TIP;
     assert!(tip.contains("middle") && tip.contains("3+"), "{tip}");
-    assert!(tip.contains(super::MAX_SELF_SIMILARITY_LABEL), "{tip}");
+    assert!(tip.contains("box under this heading"), "{tip}");
+}
+
+// ---- Scrolling the table ------------------------------------------------------
+
+/// A panel narrower than the table, so the table has somewhere to scroll
+/// sideways.
+const NARROW: egui::Vec2 = egui::vec2(600.0, 900.0);
+
+/// Where, over the rows, the pointer is put to scroll or drag them: in the
+/// *Name* column of the second row, clear of every control.
+const OVER_THE_ROWS: egui::Pos2 = egui::pos2(260.0, 300.0);
+
+/// What the tests watch move: the ZNCC heading, the whole-ZNCC box's unit,
+/// the first row's ZNCC cell and the geometry search box's label, which is
+/// above the table and must not move.
+struct Watched {
+    heading: f32,
+    bar: f32,
+    cell: f32,
+    above: f32,
+}
+
+/// One frame of the narrow panel with `events`, and where it drew what
+/// [`Watched`] names.
+fn narrow_frame(
+    panel: &mut TrackBody,
+    ctx: &egui::Context,
+    state: &AppState,
+    events: Vec<egui::Event>,
+) -> Watched {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), NARROW)),
+        events,
+        ..Default::default()
+    };
+    let texts = crate::test_support::painted_text_rects(ctx, input, |ui| {
+        panel.show(ui, state);
+    });
+    let left = |found: Option<&crate::test_support::PaintedText>, what: &str| {
+        found
+            .unwrap_or_else(|| panic!("{what} is not drawn, or scrolled out of sight"))
+            .rect
+            .left()
+    };
+    Watched {
+        heading: left(texts.iter().find(|t| t.text == "ZNCC"), "the ZNCC heading"),
+        bar: left(
+            texts.iter().find(|t| t.text == super::MIN_ZNCC_LABEL),
+            "the whole-ZNCC box",
+        ),
+        cell: left(
+            texts
+                .iter()
+                .find(|t| t.text.contains("% whole") && t.text.ends_with("% mid")),
+            "a row's ZNCC cell",
+        ),
+        above: left(
+            texts
+                .iter()
+                .find(|t| t.text == super::GEOMETRY_SEARCH_LABEL),
+            "the geometry search box",
+        ),
+    }
+}
+
+/// The table moved left by the same distance, headings, threshold row and
+/// rows together, and the controls above it stayed where they were. Returns
+/// the distance.
+fn moved_together(before: &Watched, after: &Watched, what: &str) -> f32 {
+    let by = before.heading - after.heading;
+    assert!(by > 20.0, "{what} did not scroll the table: {by}");
+    assert!(
+        (before.bar - after.bar - by).abs() < 0.5,
+        "{what}: the threshold row did not move with the headings"
+    );
+    assert!(
+        (before.cell - after.cell - by).abs() < 0.5,
+        "{what}: the rows did not move with the headings"
+    );
+    assert_eq!(before.above, after.above, "{what} moved the controls above");
+    by
+}
+
+/// A table wider than the panel scrolls sideways under a trackpad or a wheel,
+/// the headings and the threshold row with the rows, and the controls above
+/// it stay put. Run for both wheel units: a Windows precision touchpad
+/// reaches the panel as a `Point` wheel, a mouse as a `Line` one.
+#[test]
+fn a_sideways_wheel_scrolls_the_table_and_its_headings_together() {
+    for (unit, amount) in [
+        (egui::MouseWheelUnit::Point, -240.0),
+        (egui::MouseWheelUnit::Line, -3.0),
+    ] {
+        let (state, _, _, mut panel, ctx) = measured_on_the_bench();
+        narrow_frame(&mut panel, &ctx, &state, Vec::new());
+        let before = narrow_frame(&mut panel, &ctx, &state, Vec::new());
+        narrow_frame(
+            &mut panel,
+            &ctx,
+            &state,
+            vec![
+                egui::Event::PointerMoved(OVER_THE_ROWS),
+                egui::Event::MouseWheel {
+                    unit,
+                    delta: egui::vec2(amount, 0.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        // egui smooths a wheel over several frames.
+        for _ in 0..6 {
+            narrow_frame(&mut panel, &ctx, &state, Vec::new());
+        }
+        let after = narrow_frame(&mut panel, &ctx, &state, Vec::new());
+        moved_together(&before, &after, &format!("a {unit:?} wheel"));
+    }
+}
+
+/// The pointer events of a drag with `button` from `from` to `to`, one list
+/// per frame, as [`drag_frames`] does for the primary button.
+fn button_drag_frames(
+    button: egui::PointerButton,
+    from: egui::Pos2,
+    to: egui::Pos2,
+) -> Vec<Vec<egui::Event>> {
+    let press = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let mid = from + (to - from) * 0.5;
+    vec![
+        vec![egui::Event::PointerMoved(from)],
+        vec![press(from, true)],
+        vec![egui::Event::PointerMoved(mid)],
+        vec![egui::Event::PointerMoved(to)],
+        vec![press(to, false)],
+        vec![],
+    ]
+}
+
+/// Drag with `button` from `from`, 200 points to the left, in the narrow
+/// panel, and say where the watched things were before and after.
+fn drag_the_table(button: egui::PointerButton, from: egui::Pos2) -> (Watched, Watched) {
+    let (state, _, _, mut panel, ctx) = measured_on_the_bench();
+    narrow_frame(&mut panel, &ctx, &state, Vec::new());
+    let before = narrow_frame(&mut panel, &ctx, &state, Vec::new());
+    for events in button_drag_frames(button, from, from - egui::vec2(200.0, 0.0)) {
+        narrow_frame(&mut panel, &ctx, &state, events);
+    }
+    let after = narrow_frame(&mut panel, &ctx, &state, Vec::new());
+    (before, after)
+}
+
+/// A middle-button drag moves the table with the pointer, over the rows and
+/// over the headings alike.
+#[test]
+fn a_middle_drag_moves_the_table_with_the_pointer() {
+    let (before, after) = drag_the_table(egui::PointerButton::Middle, OVER_THE_ROWS);
+    let by = moved_together(&before, &after, "a middle drag over the rows");
+    // At least as far as the pointer: a drag on the rows coasts on after
+    // the button is let go.
+    assert!(by >= 199.0, "the table moved {by}, less than the pointer");
+
+    let on_the_headings = egui::pos2(OVER_THE_ROWS.x, heading_y());
+    let (before, after) = drag_the_table(egui::PointerButton::Middle, on_the_headings);
+    moved_together(&before, &after, "a middle drag over the headings");
+}
+
+/// A left-button drag begun on the rows, or on the headings, clear of a
+/// control, moves the table as the middle button's does.
+#[test]
+fn a_left_drag_off_the_controls_moves_the_table() {
+    let (before, after) = drag_the_table(egui::PointerButton::Primary, OVER_THE_ROWS);
+    moved_together(&before, &after, "a left drag over the rows");
+
+    let on_the_headings = egui::pos2(OVER_THE_ROWS.x, heading_y());
+    let (before, after) = drag_the_table(egui::PointerButton::Primary, on_the_headings);
+    moved_together(&before, &after, "a left drag over the headings");
+}
+
+/// A left-button drag begun on a *Keep* switch is the switch's, and leaves
+/// the table where it is.
+#[test]
+fn a_left_drag_begun_on_a_switch_does_not_move_the_table() {
+    let keep = super::table::ColumnLayout::new().keep_x();
+    let on_a_switch = egui::pos2(keep + 16.0, OVER_THE_ROWS.y);
+    let (before, after) = drag_the_table(egui::PointerButton::Primary, on_a_switch);
+    assert_eq!(before.heading, after.heading, "the switch's drag scrolled");
+    assert_eq!(before.cell, after.cell, "the switch's drag scrolled");
+}
+
+/// The height the headings are drawn at in the narrow panel.
+fn heading_y() -> f32 {
+    let (state, _, _, mut panel, ctx) = measured_on_the_bench();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), NARROW)),
+        ..Default::default()
+    };
+    let texts = crate::test_support::painted_text_rects(&ctx, input, |ui| {
+        panel.show(ui, &state);
+    });
+    texts
+        .iter()
+        .find(|t| t.text == "Name")
+        .expect("the Name heading is drawn")
+        .rect
+        .center()
+        .y
 }
 
 // ---- The self-similarity surface plot ----------------------------------------

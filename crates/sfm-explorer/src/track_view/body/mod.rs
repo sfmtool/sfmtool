@@ -317,8 +317,10 @@ pub struct TrackBody {
     /// the last session would turn the next one's first drag into an edit of
     /// one sighting nobody asked for.
     lock: bool,
-    /// Tracked vertical scroll offset.
-    scroll_offset_y: Option<f32>,
+    /// Where the table's rows are scrolled to, both ways; the headings and the
+    /// threshold row follow its sideways part. Kept to add a drag of the
+    /// headings to.
+    scroll_offset: egui::Vec2,
 }
 
 impl Default for TrackBody {
@@ -350,7 +352,7 @@ impl TrackBody {
             build_refusal: None,
             evaluation: Evaluation::Evaluating,
             lock: true,
-            scroll_offset_y: None,
+            scroll_offset: egui::Vec2::ZERO,
         }
     }
 
@@ -521,19 +523,29 @@ impl TrackBody {
         // line, the toolbar and the boxes beside it, so the table's separator
         // runs straight under the patch.
         let patch = self.ensure_track_patch(ui.ctx(), label, track);
+        // Greyed while the node is busy, with the busy sentence: a release
+        // there would be refused, and a box that snapped back after a drag
+        // would say less than one that could not be dragged.
+        let busy = state.busy_refusal(id);
+        let hover = match &busy {
+            Some(why) => BoxHover::Refused(why),
+            None => BoxHover::Tip(EDITED_BARS_TIP),
+        };
+        let mut moved = BoxesMoved::default();
         ui.horizontal_top(|ui| {
             show_track_patch(ui, patch, track.stage_kind(), BodyMode::Edited);
             ui.vertical(|ui| {
                 show_headline(ui, track);
                 self.show_toolbar(ui, state, node, label, track, response);
-                // A release applies what the drag left the boxes at. Painted
-                // by this frame's value from the next frame on, which is the
-                // frame the dock has applied it by.
-                response.apply_thresholds = self.show_thresholds(ui, state.busy_refusal(id), track);
+                moved = geometry_search_box(ui, &mut self.thresholds, hover);
             });
         });
         ui.separator();
-        self.show_table(ui, node.recon(), id, state, track, response);
+        moved.merge(self.show_table(ui, node.recon(), id, state, track, hover, response));
+        // A release applies what the drag left the boxes at. Painted by this
+        // frame's value from the next frame on, which is the frame the dock
+        // has applied it by.
+        response.apply_thresholds = self.bars_to_apply(moved, track);
     }
 
     /// Viewed mode: the viewed track, read-only, with the point's own summary
@@ -588,11 +600,19 @@ impl TrackBody {
             ui.vertical(|ui| {
                 ui.weak(bench_line(on_bench.as_deref()));
                 ui.horizontal_wrapped(|ui| show_evaluation(ui, &self.evaluation));
-                response.viewed_thresholds = self.show_viewed_thresholds(ui, state);
+                geometry_search_box(ui, &mut self.thresholds, BoxHover::Tip(VIEWED_BARS_TIP));
             });
         });
         ui.separator();
-        self.show_table(ui, node.recon(), id, state, track, response);
+        let hover = BoxHover::Tip(VIEWED_BARS_TIP);
+        self.show_table(ui, node.recon(), id, state, track, hover, response);
+        // The boxes in Viewed mode hold the session's read-only bars, and are
+        // never greyed: a drag or a typed value recolours the readings and the
+        // *Verdict* column and changes nothing else. Any frame a box moved
+        // them hands the new bars to the dock, for
+        // `AppState::set_viewed_thresholds`.
+        response.viewed_thresholds =
+            (self.thresholds != state.viewed_thresholds).then(|| self.thresholds.clone());
     }
 
     /// The mode the body last drew in, or `None` when it drew no track.
@@ -731,44 +751,15 @@ impl TrackBody {
         }
     }
 
-    /// The threshold boxes, which apply to the focused item: a drag paints
-    /// the table live, and its release (or a typed value's commit) hands back
-    /// the bars to apply as one version. `None` on every other frame, and on a
-    /// release that left the bars where the track has them.
-    ///
-    /// Greyed while the node is busy, with the busy sentence: a release there
-    /// would be refused, and a box that snapped back after a drag would say
-    /// less than one that could not be dragged.
-    fn show_thresholds(
-        &mut self,
-        ui: &mut egui::Ui,
-        busy: Option<String>,
-        track: &EditableTrack,
-    ) -> Option<Thresholds> {
-        let hover = match &busy {
-            Some(why) => BoxHover::Refused(why),
-            None => BoxHover::Tip(
-                "Applies to the track when released: one version, which Undo reverses",
-            ),
-        };
-        let moved = threshold_boxes(ui, &mut self.thresholds, hover);
+    /// The bars to apply after the boxes moved as `moved` on this frame, in
+    /// Edited mode: a drag paints the table live, and its release (or a typed
+    /// value's commit) hands back the bars to apply as one version. `None` on
+    /// every other frame, and on a release that left the bars where the track
+    /// has them.
+    fn bars_to_apply(&mut self, moved: BoxesMoved, track: &EditableTrack) -> Option<Thresholds> {
         self.sliding = moved.sliding;
         (moved.released && !moved.sliding && self.thresholds != track.thresholds)
             .then(|| self.thresholds.clone())
-    }
-
-    /// The threshold boxes in Viewed mode: drawn and editable, and holding the
-    /// session's read-only bars. A drag or a typed value recolours the
-    /// readings and the *Verdict* column and changes nothing else, so they are
-    /// never greyed. Returns the new bars on any frame a box moved them, which
-    /// the dock hands to `AppState::set_viewed_thresholds`.
-    fn show_viewed_thresholds(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &AppState,
-    ) -> Option<Thresholds> {
-        threshold_boxes(ui, &mut self.thresholds, BoxHover::Tip(VIEWED_BARS_TIP));
-        (self.thresholds != state.viewed_thresholds).then(|| self.thresholds.clone())
     }
 
     /// Put the boxes where the focused item's own bars are, unless a box
@@ -1285,15 +1276,31 @@ fn red_to_green(t: f64) -> egui::Color32 {
     egui::Color32::from_rgb((220.0 * red) as u8, (200.0 * green) as u8, 40)
 }
 
-/// The minimum-ZNCC box's label, in one constant so the tests aim at the
-/// label drawn.
-pub(crate) const MIN_ZNCC_LABEL: &str = "min ZNCC (%)";
+/// The text after the minimum-ZNCC box in the threshold row: the unit and the
+/// name the ZNCC cell's first line prints with. In one constant so the tests
+/// aim at the text drawn.
+pub(crate) const MIN_ZNCC_LABEL: &str = "% whole";
 
-/// The minimum-middle-ZNCC box's label.
-pub(crate) const MIN_ZNCC_MIDDLE_LABEL: &str = "min middle ZNCC (%)";
+/// The minimum-ZNCC box's hover text.
+const MIN_ZNCC_TIP: &str = "The lowest whole-patch ZNCC a sighting may have. A row whose \
+    whole ZNCC is under it is painted out.";
 
-/// The minimum-relative-ZNCC box's label.
-pub(crate) const MIN_RELATIVE_ZNCC_LABEL: &str = "min relative ZNCC (%)";
+/// The text after the minimum-middle-ZNCC box, under the one above.
+pub(crate) const MIN_ZNCC_MIDDLE_LABEL: &str = "% mid";
+
+/// The minimum-middle-ZNCC box's hover text.
+const MIN_ZNCC_MIDDLE_TIP: &str = "The lowest middle ZNCC a sighting may have, read over the \
+    centred square half the patch's width. A row whose middle ZNCC is under it is painted out. \
+    0 turns the bar off.";
+
+/// The geometry search box's label, above the table: its bar judges no
+/// column, so it does not sit in the threshold row.
+pub(crate) const GEOMETRY_SEARCH_LABEL: &str = "geometry search min relative ZNCC (%)";
+
+/// The geometry search box's hover text.
+const GEOMETRY_SEARCH_TIP: &str = "The bar Find matches by geometry admits a photograph by: its \
+    ZNCC to the track's reference appearance, as a percent of the track's own agreement with \
+    that reference. It judges no row, so moving it changes no verdict.";
 
 /// A box over a `0 ..= 1` bar that shows and takes the value in percent, in
 /// whole steps: `70` for a stored `0.7`, half a percent per point dragged. A
@@ -1316,104 +1323,99 @@ fn parse_percent(text: &str) -> Option<f64> {
 
 /// What the boxes' value fields say when hovered: the mode's own hint, or the
 /// sentence they are greyed with.
-enum BoxHover<'a> {
+#[derive(Clone, Copy)]
+pub(super) enum BoxHover<'a> {
     /// Enabled, with this hint.
     Tip(&'a str),
     /// Greyed, with this refusal.
     Refused(&'a str),
 }
 
-/// How the boxes moved on one frame.
-struct BoxesMoved {
-    /// A box is being dragged.
-    sliding: bool,
-    /// A drag ended, or a typed value or an arrow key changed a box.
-    released: bool,
+impl BoxHover<'_> {
+    /// Whether the boxes take input.
+    pub(super) fn enabled(self) -> bool {
+        matches!(self, Self::Tip(_))
+    }
 }
 
-/// The five threshold boxes over `bars`, in one wrapped row after the word
-/// *Thresholds*: drawn the same in both modes, and greyed when `hover` is a
-/// refusal.
-fn threshold_boxes(ui: &mut egui::Ui, bars: &mut Thresholds, hover: BoxHover<'_>) -> BoxesMoved {
-    let enabled = matches!(hover, BoxHover::Tip(_));
-    let mut moved = BoxesMoved {
-        sliding: false,
-        released: false,
-    };
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Thresholds");
-        // Each bar is a label and a box that is dragged left and right to
-        // change it, or clicked to type into: a slider's rail beside the box
-        // would say nothing the box does not. The ZNCC bars read in percent,
-        // as the table's ZNCC column does; the track stores them on the 0 to 1
-        // scale.
-        let boxes = [
-            (
-                MIN_ZNCC_LABEL,
-                percent(egui::DragValue::new(&mut bars.min_zncc)),
-            ),
-            // The bar on the middle reading; 0 turns it off.
-            (
-                MIN_ZNCC_MIDDLE_LABEL,
-                percent(egui::DragValue::new(&mut bars.min_zncc_middle)),
-            ),
-            // In patch-grid px, and also the radius the evaluation looks for
-            // each peak within.
-            (
-                MAX_SHIFT_LABEL,
-                egui::DragValue::new(&mut bars.max_shift_px)
-                    .range(0.0..=24.0)
-                    .speed(0.05)
-                    .max_decimals(1),
-            ),
-            // In patch-grid px, the unit of the self-similarity column; at the
-            // largest radius read it turns nothing out.
-            (
-                MAX_SELF_SIMILARITY_LABEL,
-                egui::DragValue::new(&mut bars.max_zncc_self_similarity_radius)
-                    .range(0.0..=max_self_similarity_radius())
-                    .speed(0.02)
-                    .max_decimals(1),
-            ),
-            // The fifth bar of `Thresholds`, which view selection scores a
-            // candidate by as a fraction of the track's own self-agreement.
-            (
-                MIN_RELATIVE_ZNCC_LABEL,
-                percent(egui::DragValue::new(&mut bars.min_relative_zncc)),
-            ),
-        ];
-        for (label, value) in boxes {
-            let named = ui.add_enabled(enabled, egui::Label::new(label));
-            if label == MAX_SHIFT_LABEL {
-                named.on_hover_text(MAX_SHIFT_TIP);
-            } else if label == MAX_SELF_SIMILARITY_LABEL {
-                named.on_hover_text(MAX_SELF_SIMILARITY_TIP);
-            }
-            // A typed value lands when the field is left, not per keystroke,
-            // so typing "90" is one change and not two.
-            let r = ui.add_enabled(enabled, value.update_while_editing(false));
-            let r = match hover {
-                BoxHover::Refused(why) => r.on_disabled_hover_text(why),
-                BoxHover::Tip(tip) => r.on_hover_text(tip),
-            };
-            moved.sliding |= r.dragged();
-            // A drag ends in its release; a typed value or an arrow key
-            // changes the value with no drag at all.
-            moved.released |= r.drag_stopped() || (r.changed() && !r.dragged());
-        }
-    });
-    moved
+/// How the boxes moved on one frame.
+#[derive(Default)]
+pub(super) struct BoxesMoved {
+    /// A box is being dragged.
+    pub(super) sliding: bool,
+    /// A drag ended, or a typed value or an arrow key changed a box.
+    pub(super) released: bool,
 }
+
+impl BoxesMoved {
+    /// Fold in how another box moved on the same frame.
+    pub(super) fn merge(&mut self, other: BoxesMoved) {
+        self.sliding |= other.sliding;
+        self.released |= other.released;
+    }
+}
+
+/// One threshold box over `value`, greyed when `hover` is a refusal.
+///
+/// Each bar is a box that is dragged left and right to change it, or clicked
+/// to type into: a slider's rail beside the box would say nothing the box
+/// does not.
+pub(super) fn bar_box(
+    ui: &mut egui::Ui,
+    value: egui::DragValue<'_>,
+    hover: BoxHover<'_>,
+) -> BoxesMoved {
+    // A typed value lands when the field is left, not per keystroke, so
+    // typing "90" is one change and not two.
+    let r = ui.add_enabled(hover.enabled(), value.update_while_editing(false));
+    let r = match hover {
+        BoxHover::Refused(why) => r.on_disabled_hover_text(why),
+        BoxHover::Tip(tip) => r.on_hover_text(tip),
+    };
+    BoxesMoved {
+        sliding: r.dragged(),
+        // A drag ends in its release; a typed value or an arrow key changes
+        // the value with no drag at all.
+        released: r.drag_stopped() || (r.changed() && !r.dragged()),
+    }
+}
+
+/// The geometry search's bar, above the table, after its label. It judges
+/// no column, so it has no place in the threshold row under the headings;
+/// it is still one of the track's bars, and applies with them.
+fn geometry_search_box(
+    ui: &mut egui::Ui,
+    bars: &mut Thresholds,
+    hover: BoxHover<'_>,
+) -> BoxesMoved {
+    ui.horizontal(|ui| {
+        ui.add_enabled(hover.enabled(), egui::Label::new(GEOMETRY_SEARCH_LABEL))
+            .on_hover_text(GEOMETRY_SEARCH_TIP);
+        bar_box(
+            ui,
+            percent(egui::DragValue::new(
+                &mut bars.geometry_search_min_relative_zncc,
+            )),
+            hover,
+        )
+    })
+    .inner
+}
+
+/// The hover text of a box in Edited mode.
+const EDITED_BARS_TIP: &str = "Applies to the track when released: one version, which Undo \
+    reverses";
 
 /// The hover text of a box in Viewed mode.
 const VIEWED_BARS_TIP: &str = "Judges the readings and the Verdict column by this bar, and \
     changes nothing on the point. The bars are kept for the session, and a point put on the \
     bench from here takes them.";
 
-/// The shift box's label: the bar the painting judges a shift by, the radius
-/// the evaluation looks for each peak within, and the bound on how far a fit
-/// may move a sighting.
-pub(crate) const MAX_SHIFT_LABEL: &str = "shift px";
+/// The text after the shift box in the threshold row, the unit the Shift
+/// cell prints in. The box is the bar the painting judges a shift by, the
+/// radius the evaluation looks for each peak within, and the bound on how far
+/// a fit may move a sighting.
+pub(crate) const MAX_SHIFT_LABEL: &str = "px";
 
 /// The shift box's hover text.
 const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-grid px: how \
@@ -1421,9 +1423,10 @@ const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-gri
     peak within this distance, a row whose peak is further is painted out, and a fit moves no \
     sighting further than this.";
 
-/// The self-similarity box's label: the largest ZNCC self-similarity radius
-/// an observation's tile may have.
-pub(crate) const MAX_SELF_SIMILARITY_LABEL: &str = "self-sim. px";
+/// The text after the self-similarity box in the threshold row, the unit and
+/// the name of the self-similarity cell's first line. The box is the largest
+/// ZNCC self-similarity radius an observation's whole tile may have.
+pub(crate) const MAX_SELF_SIMILARITY_LABEL: &str = "px whole";
 
 /// The self-similarity box's hover text.
 const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a sighting's \
@@ -1441,7 +1444,8 @@ pub(crate) const ACCEPT_WALK_LABEL: &str = "Accept walk";
 pub(crate) const LOCK_LABEL: &str = "Lock";
 
 /// Why *Lock* is greyed at the cluster stage.
-pub(crate) const LOCK_AT_CLUSTER: &str = "A cluster has no shared patch: every sighting is                                           already moved on its own, locked or not.";
+pub(crate) const LOCK_AT_CLUSTER: &str = "A cluster has no shared patch: every sighting is \
+    already moved on its own, locked or not.";
 
 /// The observation row's context-menu entry, in one constant, as the Image
 /// Detail menu's entries are: the label is quoted in a refusal and read back by

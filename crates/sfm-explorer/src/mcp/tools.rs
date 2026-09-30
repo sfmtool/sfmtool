@@ -522,7 +522,8 @@ pub(crate) fn parse(
                 max_shift_px: args.optional_f64("max_shift_px")?,
                 max_zncc_self_similarity_radius: args
                     .optional_f64("max_zncc_self_similarity_radius")?,
-                min_relative_zncc: args.optional_f64("min_relative_zncc")?,
+                geometry_search_min_relative_zncc: args
+                    .optional_f64("geometry_search_min_relative_zncc")?,
             },
         },
         "split_bench_track" => Command::SplitBenchTrack {

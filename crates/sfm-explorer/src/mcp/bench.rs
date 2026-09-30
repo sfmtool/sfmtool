@@ -1494,7 +1494,7 @@ pub(super) fn thresholds(bars: &Thresholds) -> Value {
         "min_zncc_middle": bars.min_zncc_middle,
         "max_shift_px": bars.max_shift_px,
         "max_zncc_self_similarity_radius": bars.max_zncc_self_similarity_radius,
-        "min_relative_zncc": bars.min_relative_zncc,
+        "geometry_search_min_relative_zncc": bars.geometry_search_min_relative_zncc,
     })
 }
 
