@@ -181,7 +181,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
-| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated photometrically or by a finite difference over fitted pieces, keeping its centre, then read it back, on a worker thread |
+| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated photometrically, from a row of fitted pieces along each axis, or from the plane through a grid of fitted pieces, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |

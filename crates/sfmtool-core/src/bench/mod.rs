@@ -88,7 +88,7 @@ pub use nearby::{
 };
 pub use normal::{
     finite_difference_normal, fit_normal, normal_preconditions, FiniteDifferenceOptions,
-    FitNormalOptions, NormalError, NormalEstimate, NormalReport,
+    FitNormalOptions, NormalError, NormalEstimate, NormalReport, PieceLayout,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,

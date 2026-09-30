@@ -524,7 +524,11 @@ fn real_task(operation: Operation) -> RealTask {
         }
         // The two steps that read photographs, over the bench fixture: a point
         // on the bench and a textured photograph cached for every image.
-        "Fit track" | "Set track stage" | "Fit normal" | "Finite difference normal" => {
+        "Fit track"
+        | "Set track stage"
+        | "Fit normal"
+        | "Finite difference normal"
+        | "Grid plane normal" => {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
@@ -535,6 +539,9 @@ fn real_task(operation: Operation) -> RealTask {
                     &label,
                     NormalStep::FiniteDifference(Default::default()),
                 ),
+                "Grid plane normal" => {
+                    state.bench_normal_job(id, &label, NormalStep::GridPlane(Default::default()))
+                }
                 _ => state.bench_stage_job(id, &label, StageKind::Cluster),
             }
             .expect("the fixture's track is readable");

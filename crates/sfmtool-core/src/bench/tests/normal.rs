@@ -105,11 +105,53 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
         assert_eq!(
             report.estimate,
             NormalEstimate::FiniteDifference {
+                pieces,
                 u: pieces,
                 v: pieces,
                 both_axes: true,
             }
         );
+        assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+    }
+}
+
+#[test]
+fn a_grid_of_pieces_turns_a_tilted_patch_back_toward_the_plane() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, 20.0);
+    let before = degrees(placement_of(&track).normal(), truth());
+
+    for (pieces, overlap) in [(2, 0.0), (3, 0.5)] {
+        let options = FiniteDifferenceOptions {
+            layout: PieceLayout::Grid,
+            pieces,
+            overlap,
+            ..Default::default()
+        };
+        let (turned, report) =
+            finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
+                .expect("the pieces fit");
+        let after = degrees(placement_of(&turned).normal(), truth());
+        assert!(
+            after < before / 2.0,
+            "{pieces}x{pieces}, {overlap}: {before:.1} -> {after:.1}: {report}"
+        );
+        let NormalEstimate::GridPlane {
+            pieces: cut,
+            fitted,
+            both_axes,
+            off_plane,
+        } = report.estimate
+        else {
+            panic!("a grid estimate: {report}");
+        };
+        assert_eq!((cut, fitted, both_axes), (pieces, pieces * pieces, true));
+        // The scene is a plane, so the centres lie close to one.
+        assert!(off_plane < 0.1, "{off_plane}");
+        assert!(report
+            .to_string()
+            .starts_with(&format!("{pieces}x{pieces} pieces")));
         assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
     }
 }

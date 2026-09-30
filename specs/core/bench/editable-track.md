@@ -566,7 +566,7 @@ pub fn finite_difference_normal(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
-    options: &FiniteDifferenceOptions, // pieces (2..=8), overlap (0..=0.9), the fit
+    options: &FiniteDifferenceOptions, // layout, pieces (2..=8), overlap (0..=0.9), the fit
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
 
@@ -2066,8 +2066,8 @@ where the kernel's own default is three, so the step runs on any track a fit
 runs on. A search that scores no normal is refused as `NotScored`.
 
 **`finite_difference_normal` reads the normal from where smaller pieces fit.**
-Along each of the patch's two in-plane axes it cuts `pieces` square pieces that
-together span the patch's side, neighbours overlapping by `overlap` of a
+Along each of the patch's two in-plane axes it places `pieces` square pieces
+that together span the patch's side, neighbours overlapping by `overlap` of a
 piece's side: with side `s = 2h / (n - (n - 1) overlap)` for half-length `h` and
 `n` pieces, the pieces start `s (1 - overlap)` apart, so two pieces with no
 overlap are the halves of the patch at `±h/2`. Each piece is the track resized
@@ -2081,6 +2081,19 @@ are within about ten degrees of each other, that one line fixes only the turn
 about its perpendicular, and the normal is the patch's with its component along
 the line removed; `NormalEstimate::FiniteDifference` says so with `both_axes:
 false`. With no line at all the step is refused as `TooFewPieces`.
+
+That is `PieceLayout::Cross`, a row of pieces through the centre on each axis,
+`2 pieces` fits in all. `PieceLayout::Grid` places the same offsets on both
+axes at once, `pieces × pieces` pieces tiling the whole patch, fits every one,
+and takes the normal of the least-squares plane through their fitted centres:
+the direction the centres spread in least. `NormalEstimate::GridPlane` reports
+how many fitted and the rms distance of the centres from that plane, in the
+patch's half-lengths, which says how flat the surface under the patch is.
+Where the centres' middle spread is under about ten degrees' worth of their
+largest, they lie along a line, and the one-line rule above applies. With
+fewer than two fitted centres the step is refused as `TooFewGridPieces`. The
+grid uses the whole patch and reads every centre together; the cross costs
+`2n` fits rather than `n²`.
 
 The two estimates differ in what they can be fooled by. The photometric one
 weighs every texel of the patch at once, so a tilt that suits the texture it

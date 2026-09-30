@@ -1407,25 +1407,30 @@ impl Args<'_> {
         use crate::bench::{NormalStep, SplitSettings};
         let step = match self.optional_string("method")?.as_deref() {
             Some("photometric") => NormalStep::Photometric,
-            Some("finite_difference") => {
+            Some(method @ ("finite_difference" | "grid_plane")) => {
                 let defaults = SplitSettings::default();
-                NormalStep::FiniteDifference(SplitSettings {
+                let split = SplitSettings {
                     pieces: self.optional_usize("pieces")?.unwrap_or(defaults.pieces),
                     overlap_percent: self
                         .optional_f64("overlap_percent")?
                         .unwrap_or(defaults.overlap_percent),
-                })
+                };
+                if method == "grid_plane" {
+                    NormalStep::GridPlane(split)
+                } else {
+                    NormalStep::FiniteDifference(split)
+                }
             }
             Some(other) => {
                 return Err(self.error(format!(
-                    "does not know the method {other:?} — the methods are photometric and \
-                     finite_difference."
+                    "does not know the method {other:?} — the methods are photometric, \
+                     finite_difference and grid_plane."
                 )))
             }
             None => {
-                return Err(
-                    self.error("needs method — photometric or finite_difference.".to_string())
-                )
+                return Err(self.error(
+                    "needs method — photometric, finite_difference or grid_plane.".to_string(),
+                ))
             }
         };
         if matches!(step, NormalStep::Photometric)
@@ -1433,7 +1438,9 @@ impl Args<'_> {
                 || self.optional_f64("overlap_percent")?.is_some())
         {
             return Err(self.error(
-                "takes pieces and overlap_percent only with method finite_difference.".to_string(),
+                "takes pieces and overlap_percent only with method finite_difference or \
+                 grid_plane."
+                    .to_string(),
             ));
         }
         Ok(step)

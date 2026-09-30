@@ -75,8 +75,12 @@ impl Default for FitNormalOptions {
 /// How [`finite_difference_normal`] cuts the patch into pieces.
 #[derive(Debug, Clone)]
 pub struct FiniteDifferenceOptions {
+    /// How the pieces are laid out on the patch.
+    pub layout: PieceLayout,
     /// How many pieces the patch is cut into along each of its two in-plane
-    /// axes, from [`MIN_PIECES`] to [`MAX_PIECES`].
+    /// axes, from [`MIN_PIECES`] to [`MAX_PIECES`]: `pieces` in a row along
+    /// each axis for [`PieceLayout::Cross`], `pieces × pieces` for
+    /// [`PieceLayout::Grid`].
     pub pieces: usize,
     /// How much two neighbouring pieces overlap, as a fraction of a piece's
     /// side, from 0 to [`MAX_OVERLAP`].
@@ -88,11 +92,24 @@ pub struct FiniteDifferenceOptions {
 impl Default for FiniteDifferenceOptions {
     fn default() -> Self {
         Self {
+            layout: PieceLayout::Cross,
             pieces: 2,
             overlap: 0.0,
             fit: FitOptions::default(),
         }
     }
+}
+
+/// Where [`finite_difference_normal`] places its pieces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PieceLayout {
+    /// A row of pieces through the centre along each in-plane axis, each row
+    /// giving a line in the surface; the normal is the cross product of the
+    /// two lines.
+    Cross,
+    /// A grid of pieces tiling the whole patch; the normal is that of the
+    /// least-squares plane through every fitted centre.
+    Grid,
 }
 
 impl FiniteDifferenceOptions {
@@ -144,6 +161,14 @@ pub enum NormalError {
         /// How many along its `v` axis.
         v: usize,
     },
+    /// Fewer than two pieces of the grid fitted, so no line or plane through
+    /// their centres exists.
+    TooFewGridPieces {
+        /// How many pieces fitted.
+        fitted: usize,
+        /// How many the grid holds.
+        of: usize,
+    },
     /// The turn to the estimated normal was refused.
     Tilt(TrackEditError),
     /// The reading the step ends with failed.
@@ -170,8 +195,8 @@ impl std::fmt::Display for NormalError {
             }
             NormalError::BadPieces(n) => write!(
                 f,
-                "{n} pieces were asked for, and the patch is cut into {MIN_PIECES} to \
-                 {MAX_PIECES}"
+                "{n} pieces per axis were asked for, and the patch is cut into \
+                 {MIN_PIECES} to {MAX_PIECES} per axis"
             ),
             NormalError::BadOverlap(o) => write!(
                 f,
@@ -187,6 +212,10 @@ impl std::fmt::Display for NormalError {
                 f,
                 "{u} pieces fitted along u and {v} along v, and a line needs two along one \
                  axis"
+            ),
+            NormalError::TooFewGridPieces { fitted, of } => write!(
+                f,
+                "{fitted} of the grid's {of} pieces fitted, and a plane needs more"
             ),
             NormalError::Tilt(e) => write!(f, "{e}"),
             NormalError::Evaluate(e) => write!(f, "{e}"),
@@ -233,8 +262,10 @@ pub enum NormalEstimate {
         /// How many views the search scored.
         views: u32,
     },
-    /// [`finite_difference_normal`]'s pieces.
+    /// [`finite_difference_normal`]'s pieces, in a [`PieceLayout::Cross`].
     FiniteDifference {
+        /// How many pieces were cut along each axis.
+        pieces: usize,
         /// How many pieces fitted along the patch's `u` axis.
         u: usize,
         /// How many along its `v` axis.
@@ -243,6 +274,21 @@ pub enum NormalEstimate {
         /// when only one line was usable, which fixes the tilt about its
         /// perpendicular and leaves the tilt about the line as it was.
         both_axes: bool,
+    },
+    /// [`finite_difference_normal`]'s pieces, in a [`PieceLayout::Grid`].
+    GridPlane {
+        /// How many pieces were cut along each axis, `pieces × pieces` in all.
+        pieces: usize,
+        /// How many of them fitted.
+        fitted: usize,
+        /// Whether the fitted centres spread in two directions and so fixed
+        /// the whole normal. `false` when they lay along a line, which fixes
+        /// only the turn about its perpendicular.
+        both_axes: bool,
+        /// The rms distance of the fitted centres from their plane, in the
+        /// patch's half-lengths: how flat the surface under the patch is.
+        /// `NaN` when the centres fixed no plane.
+        off_plane: f64,
     },
 }
 
@@ -266,9 +312,34 @@ impl std::fmt::Display for NormalReport {
                 after,
                 views,
             } => write!(f, "ZNCC {before:.3} \u{23f5} {after:.3} over {views} views")?,
-            NormalEstimate::FiniteDifference { u, v, both_axes } => {
-                write!(f, "{u} pieces fitted along u, {v} along v")?;
+            NormalEstimate::FiniteDifference {
+                pieces,
+                u,
+                v,
+                both_axes,
+            } => {
+                write!(
+                    f,
+                    "{pieces} pieces along each axis, {u} fitted along u and {v} along v"
+                )?;
                 if !both_axes {
+                    write!(f, ", one axis fixed")?;
+                }
+            }
+            NormalEstimate::GridPlane {
+                pieces,
+                fitted,
+                both_axes,
+                off_plane,
+            } => {
+                write!(
+                    f,
+                    "{pieces}x{pieces} pieces, {fitted} of {} fitted",
+                    pieces * pieces
+                )?;
+                if both_axes {
+                    write!(f, ", rms {off_plane:.3} half-lengths off their plane")?;
+                } else {
                     write!(f, ", one axis fixed")?;
                 }
             }
@@ -453,18 +524,81 @@ pub fn finite_difference_normal(
     let frame = frame_of(track);
     let was = frame.normal();
     let (piece_half, offsets) = piece_layout(frame.half_extent[0], options.pieces, options.overlap);
+    let pieces = Pieces {
+        track,
+        edited,
+        images,
+        options,
+        progress,
+        was,
+        half: piece_half,
+        offsets: &offsets,
+    };
+    let (normal, estimate) = match options.layout {
+        PieceLayout::Cross => cross_normal(&pieces)?,
+        PieceLayout::Grid => grid_normal(&pieces, frame.half_extent[0])?,
+    };
+    // A line or a plane has no sign: keep the face the patch showed.
+    let normal = if normal.dot(&was) < 0.0 {
+        -normal
+    } else {
+        normal
+    };
+    turn_and_read(
+        track,
+        edited,
+        images,
+        normal,
+        estimate,
+        &options.fit,
+        progress,
+    )
+}
 
+/// What every piece of one [`finite_difference_normal`] shares.
+struct Pieces<'a, 'v> {
+    track: &'a EditableTrack,
+    edited: &'a EditedReconstruction,
+    images: &'a [ProjectedImage<'v>],
+    options: &'a FiniteDifferenceOptions,
+    progress: &'a Progress<'a>,
+    /// The normal the patch had.
+    was: Vector3<f64>,
+    /// A piece's half-length.
+    half: f64,
+    /// Each piece's offset from the centre along one axis.
+    offsets: &'a [f64],
+}
+
+impl Pieces<'_, '_> {
+    /// Fit the piece slid by `by` on the patch's own axes, and give back its
+    /// centre, or `None` where it did not fit.
+    fn fit(&self, by: Vector3<f64>) -> Result<Option<Point3<f64>>, NormalError> {
+        self.progress.check_cancel()?;
+        fit_piece(
+            self.track,
+            self.edited,
+            self.images,
+            self.half,
+            by,
+            self.options,
+            self.progress,
+        )
+    }
+}
+
+/// [`PieceLayout::Cross`]: a row of pieces along each axis, a line through
+/// each row's fitted centres, and the normal across the two lines.
+fn cross_normal(pieces: &Pieces<'_, '_>) -> Result<(Vector3<f64>, NormalEstimate), NormalError> {
+    let was = pieces.was;
     let mut lines: Vec<Vector3<f64>> = Vec::with_capacity(2);
     let mut fitted = [0usize; 2];
     for (axis, slot) in fitted.iter_mut().enumerate() {
-        let mut centres: Vec<Point3<f64>> = Vec::with_capacity(offsets.len());
-        for &offset in &offsets {
-            progress.check_cancel()?;
+        let mut centres: Vec<Point3<f64>> = Vec::with_capacity(pieces.offsets.len());
+        for &offset in pieces.offsets {
             let mut by = Vector3::zeros();
             by[axis] = offset;
-            if let Some(centre) =
-                fit_piece(track, edited, images, piece_half, by, options, progress)?
-            {
+            if let Some(centre) = pieces.fit(by)? {
                 centres.push(centre);
             }
         }
@@ -484,27 +618,74 @@ pub fn finite_difference_normal(
             })
         }
     };
-    // A line has no sign, so the cross product's is arbitrary: keep the face
-    // the patch showed.
-    let normal = if normal.dot(&was) < 0.0 {
-        -normal
-    } else {
-        normal
-    };
-    let estimate = NormalEstimate::FiniteDifference {
-        u: fitted[0],
-        v: fitted[1],
-        both_axes,
-    };
-    turn_and_read(
-        track,
-        edited,
-        images,
+    Ok((
         normal,
-        estimate,
-        &options.fit,
-        progress,
-    )
+        NormalEstimate::FiniteDifference {
+            pieces: pieces.options.pieces,
+            u: fitted[0],
+            v: fitted[1],
+            both_axes,
+        },
+    ))
+}
+
+/// [`PieceLayout::Grid`]: a grid of pieces tiling the patch, and the normal of
+/// the least-squares plane through their fitted centres. `half` is the whole
+/// patch's half-length, which the report's flatness is stated in.
+///
+/// The plane's normal is the direction the centres spread in least. Where the
+/// middle spread is under [`MIN_LINE_SINE`] of the largest, the centres lie
+/// along a line, which fixes only the turn about its perpendicular, as a
+/// single row of the cross does.
+fn grid_normal(
+    pieces: &Pieces<'_, '_>,
+    half: f64,
+) -> Result<(Vector3<f64>, NormalEstimate), NormalError> {
+    let offsets = pieces.offsets;
+    let mut centres: Vec<Point3<f64>> = Vec::with_capacity(offsets.len() * offsets.len());
+    for &along_v in offsets {
+        for &along_u in offsets {
+            if let Some(centre) = pieces.fit(Vector3::new(along_u, along_v, 0.0))? {
+                centres.push(centre);
+            }
+        }
+    }
+    let too_few = NormalError::TooFewGridPieces {
+        fitted: centres.len(),
+        of: offsets.len() * offsets.len(),
+    };
+    let Some(spread) = spread_of(&centres) else {
+        return Err(too_few);
+    };
+    let [least, middle, most] = spread.values;
+    if most <= 0.0 {
+        return Err(too_few);
+    }
+    // The spreads are variances, so the angle test reads their square roots.
+    let both_axes = (middle / most).max(0.0).sqrt() >= MIN_LINE_SINE;
+    let (normal, off_plane) = if both_axes {
+        let off = if half > 0.0 {
+            least.max(0.0).sqrt() / half
+        } else {
+            f64::NAN
+        };
+        (spread.directions[0], off)
+    } else {
+        let line = spread.directions[2];
+        (
+            perpendicular_part(pieces.was, line).unwrap_or(pieces.was),
+            f64::NAN,
+        )
+    };
+    Ok((
+        normal,
+        NormalEstimate::GridPlane {
+            pieces: pieces.options.pieces,
+            fitted: centres.len(),
+            both_axes,
+            off_plane,
+        },
+    ))
 }
 
 /// The square patch the track carries, which [`normal_preconditions`] has
@@ -563,29 +744,50 @@ fn fit_piece(
     }
 }
 
-/// The direction `points` spread in most, or `None` for fewer than two points
-/// or points that do not spread.
-fn principal_direction(points: &[Point3<f64>]) -> Option<Vector3<f64>> {
+/// How a set of points spreads about its mean: the variance along each
+/// principal direction, least first, with the unit directions in the same
+/// order.
+struct Spread {
+    values: [f64; 3],
+    directions: [Vector3<f64>; 3],
+}
+
+/// The spread of `points`, or `None` for fewer than two points or a result
+/// that is not finite.
+fn spread_of(points: &[Point3<f64>]) -> Option<Spread> {
     if points.len() < 2 {
         return None;
     }
+    let n = points.len() as f64;
     let mean = points
         .iter()
         .fold(Vector3::zeros(), |sum, p| sum + p.coords)
-        / points.len() as f64;
+        / n;
     let scatter = points.iter().fold(nalgebra::Matrix3::zeros(), |sum, p| {
         let d = p.coords - mean;
         sum + d * d.transpose()
-    });
+    }) / n;
     let eigen = SymmetricEigen::new(scatter);
-    let (largest, _) = eigen
-        .eigenvalues
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))?;
-    let direction = eigen.eigenvectors.column(largest).into_owned();
-    (eigen.eigenvalues[largest] > 0.0 && direction.iter().all(|c| c.is_finite()))
-        .then(|| direction.normalize())
+    let mut order = [0usize, 1, 2];
+    order.sort_by(|&a, &b| eigen.eigenvalues[a].total_cmp(&eigen.eigenvalues[b]));
+    let values = order.map(|k| eigen.eigenvalues[k]);
+    let directions = order.map(|k| eigen.eigenvectors.column(k).into_owned());
+    let finite = values.iter().all(|v| v.is_finite())
+        && directions
+            .iter()
+            .flat_map(|d| d.iter())
+            .all(|c| c.is_finite());
+    finite.then(|| Spread {
+        values,
+        directions: directions.map(|d| d.normalize()),
+    })
+}
+
+/// The direction `points` spread in most, or `None` for fewer than two points
+/// or points that do not spread.
+fn principal_direction(points: &[Point3<f64>]) -> Option<Vector3<f64>> {
+    let spread = spread_of(points)?;
+    (spread.values[2] > 0.0).then_some(spread.directions[2])
 }
 
 /// `normal` with its component along the unit `line` removed, normalized: the

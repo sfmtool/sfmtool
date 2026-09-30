@@ -1520,30 +1520,40 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
         "{pushed} versions, {logged:?}"
     );
 
-    state.action_log.clear();
-    let before = versions(&state, id);
-    let split = NormalStep::FiniteDifference(SplitSettings {
+    let settings = SplitSettings {
         pieces: 3,
         overlap_percent: 25.0,
-    });
-    state
-        .start_bench_normal(id, &label, split)
-        .expect("a framed finite track with three sightings");
-    state.finish_background_task();
-    let logged = rows(&state);
-    let expected = format!("Finite-difference normal of {label} (3 pieces, 25% overlap)");
-    assert_eq!(versions(&state, id), before + 1, "{logged:?}");
-    let node = state.node(id).expect("loaded");
-    assert_eq!(
-        node.history.versions().last().expect("a version").label,
-        expected
-    );
-    assert!(
-        logged
-            .iter()
-            .any(|(_, text)| text.starts_with(&expected) && text.contains("turned")),
-        "{logged:?}"
-    );
+    };
+    for (step, expected) in [
+        (
+            NormalStep::FiniteDifference(settings),
+            format!("Finite-difference normal of {label} (3 pieces along each axis, 25% overlap)"),
+        ),
+        (
+            NormalStep::GridPlane(settings),
+            format!("Grid-plane normal of {label} (3x3 pieces, 25% overlap)"),
+        ),
+    ] {
+        state.action_log.clear();
+        let before = versions(&state, id);
+        state
+            .start_bench_normal(id, &label, step)
+            .expect("a framed finite track with three sightings");
+        state.finish_background_task();
+        let logged = rows(&state);
+        assert_eq!(versions(&state, id), before + 1, "{logged:?}");
+        let node = state.node(id).expect("loaded");
+        assert_eq!(
+            node.history.versions().last().expect("a version").label,
+            expected
+        );
+        assert!(
+            logged
+                .iter()
+                .any(|(_, text)| text.starts_with(&expected) && text.contains("turned")),
+            "{logged:?}"
+        );
+    }
 
     let before = versions(&state, id);
     let refused = state.start_bench_normal(

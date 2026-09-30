@@ -196,6 +196,16 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One bench track's patch turned to the plane through a grid of its
+    /// fitted pieces (`sfmtool_core::bench::finite_difference_normal` with
+    /// `PieceLayout::Grid`). Cancellable for the reason
+    /// [`Operation::BENCH_FINITE_DIFFERENCE_NORMAL`] is.
+    pub(crate) const BENCH_GRID_PLANE_NORMAL: Operation = Operation {
+        name: "Grid plane normal",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
     /// One bench track searched from, in the node's SIFT index
     /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
     /// index").
@@ -302,7 +312,7 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 15] = [
+    pub(crate) const ALL: [Operation; 16] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -313,6 +323,7 @@ impl Operation {
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_FIT_NORMAL,
         Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
+        Operation::BENCH_GRID_PLANE_NORMAL,
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
         Operation::BUILD_INDEX_FILES,

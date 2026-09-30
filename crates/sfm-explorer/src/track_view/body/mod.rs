@@ -145,8 +145,9 @@ pub struct TrackBodyResponse {
     pub rename: Option<(String, String)>,
     /// *Fit*.
     pub fit: bool,
-    /// *Fit Normal* or *Finite Diff Normal*, carrying which, and for the
-    /// second the *pieces* and *overlap %* it was pressed at.
+    /// *Fit Normal*, *Finite Diff Normal* or *Grid Plane Normal*, carrying
+    /// which, and for the last two the *per axis* and *overlap* settings it
+    /// was pressed at.
     pub(crate) normal: Option<NormalStep>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
@@ -321,8 +322,8 @@ pub struct TrackBody {
     /// the last session would turn the next one's first drag into an edit of
     /// one sighting nobody asked for.
     lock: bool,
-    /// How *Finite Diff Normal* cuts the patch: the *pieces* and *overlap %*
-    /// boxes beside it. A tool setting for the reason [`TrackBody::lock`] is,
+    /// How *Finite Diff Normal* and *Grid Plane Normal* cut the patch: the
+    /// *per axis* and *overlap* boxes beside them. A tool setting for the reason [`TrackBody::lock`] is,
     /// kept for the session.
     split_settings: SplitSettings,
     /// Where the table's rows are scrolled to, both ways; the headings and the
@@ -664,7 +665,8 @@ impl TrackBody {
                 ui,
                 FIT_NORMAL_LABEL,
                 refusals.normal.clone(),
-                "Turn the patch to the normal at which its sightings agree best,                  keeping its centre",
+                "Turn the patch to the normal at which its sightings agree best, \
+                keeping its centre",
             ) {
                 response.normal = Some(NormalStep::Photometric);
             }
@@ -672,9 +674,21 @@ impl TrackBody {
                 ui,
                 FINITE_DIFF_NORMAL_LABEL,
                 refusals.normal.clone(),
-                "Cut the patch into smaller pieces along each of its axes, fit each                  piece, and turn the patch to the plane through where they land,                  keeping its centre",
+                "Cut the patch into smaller pieces along each of its axes, fit each \
+                piece, and turn the patch to the plane through where they land, \
+                keeping its centre",
             ) {
                 response.normal = Some(NormalStep::FiniteDifference(self.split_settings));
+            }
+            if entry(
+                ui,
+                GRID_PLANE_NORMAL_LABEL,
+                refusals.normal.clone(),
+                "Cut the whole patch into a grid of smaller pieces, fit each piece, \
+                 and turn the patch to the plane through where they land, keeping \
+                 its centre",
+            ) {
+                response.normal = Some(NormalStep::GridPlane(self.split_settings));
             }
             self.show_split_settings(ui, refusals.normal.is_some());
             if entry(
@@ -724,18 +738,22 @@ impl TrackBody {
         });
     }
 
-    /// The *pieces* and *overlap %* boxes that say how *Finite Diff Normal*
-    /// cuts the patch. Greyed with the button, since they say nothing while it
-    /// cannot run.
+    /// The *per axis* and *overlap* boxes that say how *Finite Diff Normal*
+    /// and *Grid Plane Normal* cut the patch. Greyed with the buttons, since
+    /// they say nothing while those cannot run.
     fn show_split_settings(&mut self, ui: &mut egui::Ui, greyed: bool) {
         use sfmtool_core::bench::normal::{MAX_OVERLAP, MAX_PIECES, MIN_PIECES};
         ui.add_enabled_ui(!greyed, |ui| {
             ui.add(
                 egui::DragValue::new(&mut self.split_settings.pieces)
                     .range(MIN_PIECES..=MAX_PIECES)
-                    .suffix(" pieces"),
+                    .suffix(" per axis"),
             )
-            .on_hover_text("How many pieces the patch is cut into along each of its two axes");
+            .on_hover_text(
+                "How many pieces the patch is cut into along each of its two axes: a row \
+                 of that many along each axis for Finite Diff Normal, a grid of that many \
+                 by that many for Grid Plane Normal",
+            );
             ui.add(
                 egui::DragValue::new(&mut self.split_settings.overlap_percent)
                     .range(0.0..=MAX_OVERLAP * 100.0)
@@ -1496,6 +1514,10 @@ pub(crate) const FIT_NORMAL_LABEL: &str = "Fit Normal";
 /// on.
 pub(crate) const FINITE_DIFF_NORMAL_LABEL: &str = "Finite Diff Normal";
 
+/// The toolbar entry that turns the patch to the plane through a grid of its
+/// fitted pieces.
+pub(crate) const GRID_PLANE_NORMAL_LABEL: &str = "Grid Plane Normal";
+
 /// The Edited-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.
 pub(crate) const LOCK_LABEL: &str = "Lock";
@@ -1936,7 +1958,7 @@ pub(super) struct PhotometricRefusals {
     pub(super) fit: Option<String>,
     /// The *Stage* toggle, for the stage it would move to.
     pub(super) stage: Option<String>,
-    /// *Fit Normal* and *Finite Diff Normal*, which share their refusals.
+    /// The three normal entries, which share their refusals.
     pub(super) normal: Option<String>,
 }
 

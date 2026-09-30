@@ -39,8 +39,8 @@ use std::sync::Arc;
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
     FiniteDifferenceOptions, FitNormalOptions, FitOptions, GeometrySearchOptions, ItemId,
-    NormalError, Observation, ObservationSeed, Provenance, SearchOptions, Stage, StageKind,
-    Thresholds, Verdict,
+    NormalError, Observation, ObservationSeed, PieceLayout, Provenance, SearchOptions, Stage,
+    StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
@@ -2155,9 +2155,12 @@ impl AppState {
 pub(crate) enum NormalStep {
     /// *Fit Normal*: the normal the photographs agree on most.
     Photometric,
-    /// *Finite Diff Normal*: the plane the patch's pieces fit on, cut as the
-    /// settings say.
+    /// *Finite Diff Normal*: a row of pieces along each axis, cut as the
+    /// settings say, and the normal across the two lines through them.
     FiniteDifference(SplitSettings),
+    /// *Grid Plane Normal*: a grid of pieces over the whole patch, cut as the
+    /// settings say, and the normal of the plane through them.
+    GridPlane(SplitSettings),
 }
 
 impl NormalStep {
@@ -2166,6 +2169,7 @@ impl NormalStep {
         match self {
             NormalStep::Photometric => Operation::BENCH_FIT_NORMAL,
             NormalStep::FiniteDifference(_) => Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
+            NormalStep::GridPlane(_) => Operation::BENCH_GRID_PLANE_NORMAL,
         }
     }
 
@@ -2174,6 +2178,7 @@ impl NormalStep {
         match self {
             NormalStep::Photometric => "fit the normal of",
             NormalStep::FiniteDifference(_) => "take the finite-difference normal of",
+            NormalStep::GridPlane(_) => "take the grid-plane normal of",
         }
     }
 
@@ -2182,8 +2187,12 @@ impl NormalStep {
         match self {
             NormalStep::Photometric => format!("Fitted the normal of {label}"),
             NormalStep::FiniteDifference(split) => format!(
-                "Finite-difference normal of {label} ({} pieces, {:.0}% overlap)",
+                "Finite-difference normal of {label} ({} pieces along each axis, {:.0}% overlap)",
                 split.pieces, split.overlap_percent
+            ),
+            NormalStep::GridPlane(split) => format!(
+                "Grid-plane normal of {label} ({}x{} pieces, {:.0}% overlap)",
+                split.pieces, split.pieces, split.overlap_percent
             ),
         }
     }
@@ -2192,13 +2201,13 @@ impl NormalStep {
     fn check(&self) -> Result<(), bench::NormalError> {
         match self {
             NormalStep::Photometric => Ok(()),
-            NormalStep::FiniteDifference(split) => split.check(),
+            NormalStep::FiniteDifference(split) | NormalStep::GridPlane(split) => split.check(),
         }
     }
 }
 
-/// How *Finite Diff Normal* cuts the patch: Track View's *pieces* and
-/// *overlap %* boxes.
+/// How *Finite Diff Normal* and *Grid Plane Normal* cut the patch: Track
+/// View's *per axis* and *overlap* boxes.
 ///
 /// A tool setting, like *Lock*: it says what the next press will do rather
 /// than anything about the track, so changing it is no step and pushes no
@@ -2222,8 +2231,9 @@ impl Default for SplitSettings {
 
 impl SplitSettings {
     /// The core options these settings stand for.
-    fn options(&self) -> FiniteDifferenceOptions {
+    fn options(&self, layout: PieceLayout) -> FiniteDifferenceOptions {
         FiniteDifferenceOptions {
+            layout,
             pieces: self.pieces,
             overlap: self.overlap_percent / 100.0,
             ..FiniteDifferenceOptions::default()
@@ -2233,7 +2243,7 @@ impl SplitSettings {
     /// Core's own judgement of the settings, asked without a photograph: the
     /// step refuses the same values with the same sentences.
     fn check(&self) -> Result<(), bench::NormalError> {
-        self.options().check()
+        self.options(PieceLayout::Cross).check()
     }
 }
 
@@ -2424,7 +2434,14 @@ impl AppState {
                     &track,
                     &edited,
                     &views,
-                    &split.options(),
+                    &split.options(PieceLayout::Cross),
+                    progress,
+                ),
+                NormalStep::GridPlane(split) => bench::finite_difference_normal(
+                    &track,
+                    &edited,
+                    &views,
+                    &split.options(PieceLayout::Grid),
                     progress,
                 ),
             };
