@@ -140,7 +140,11 @@ def test_use_stored_keypoints_default_true_on_sift_files_falls_back_to_projectio
     inline keypoints to anchor on) — bit-equal to passing
     ``use_stored_keypoints=False`` explicitly. No error: ``True`` is a
     request, not a requirement."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    # A load fills the inline column from the `.sift` files; drop it to get a
+    # sift-files recon with no keypoints of its own.
+    recon = SfmrReconstruction.load(seoul_bull_workspace).clone_with_changes(
+        keypoints_xy=None
+    )
     assert recon.feature_source == "sift_files"
 
     images = load_images(recon)

@@ -289,9 +289,11 @@ def test_keypoint_anchoring_is_on_by_default_and_moves_the_matrix(embedded_scene
 
 
 def test_keypoint_anchoring_is_a_no_op_without_inline_keypoints(scene):
-    """A ``sift_files`` reconstruction carries feature indexes, not keypoints, so
-    every member falls back to projection anchoring and the flag cannot bite."""
+    """A ``sift_files`` reconstruction without its inline keypoint column
+    carries feature indexes only, so every member falls back to projection
+    anchoring and the flag cannot bite."""
     recon, cloud, images = scene
+    recon = recon.clone_with_changes(keypoints_xy=None)
     assert recon.feature_source == "sift_files"
     sample = sample_point_ids(cloud, n=40)
     kw = dict(point_indexes=sample, resolution=12, return_matrix=True)

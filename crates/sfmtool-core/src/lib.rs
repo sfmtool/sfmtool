@@ -57,7 +57,7 @@ pub use reconstruction::{
     move_camera, EditError, EditedReconstruction, ImageTable, MoveCameraError, MoveCameraReport,
     ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord, PointSet, PointView,
     ReconstructionError, RecordObservation, ReprojectionSample, RowMap, SfmrImage,
-    SfmrReconstruction, TrackObservation,
+    SfmrReconstruction, SiftKeypointFill, TrackObservation,
 };
 /// The progress parameter is its own crate, so the file-format crates can
 /// report through the very type this one does without depending on this one.

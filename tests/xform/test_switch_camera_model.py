@@ -115,7 +115,9 @@ def test_switch_reads_sift_files_without_inline_keypoints(
 def test_switch_without_pixels_is_refused(seoul_bull_sfmr_only):
     """With neither inline keypoints nor its ``.sift`` files, there is nothing
     to compare the models on, and the switch says so."""
-    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only).clone_with_changes(
+        keypoints_xy=None
+    )
     with pytest.raises(ValueError, match="could not be read"):
         recon.switch_camera_model("RADIAL")
 

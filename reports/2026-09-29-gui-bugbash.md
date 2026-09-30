@@ -101,6 +101,12 @@ Repro on `pan` (8137 of 8734 points at infinity):
 
 ## 3. Find Nearby Tracks never finds existing points in a `sift_files` reconstruction (medium)
 
+> _Status (2026-09-29): Done — `SfmrReconstruction::load` (and the Python
+> `from_data`) now fill a `sift_files` value's inline `keypoints_xy` column
+> from its verified `.sift` files when the file lacks it, and every save writes
+> it, so `keypoint_xy` answers for these observations and the points source
+> finds them. Branch `sfmr-load-fills-sift-keypoints`._
+
 `nearby_points` (`crates/sfmtool-core/src/bench/nearby/points.rs`) finds
 candidates through `ObservationIndex`, which reads `view.keypoint_xy(k)`. A
 `sift_files` reconstruction stores no keypoint pixels in the `.sfmr`, so

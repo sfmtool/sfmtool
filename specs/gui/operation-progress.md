@@ -750,7 +750,7 @@ The operations:
 
 | Phase | Where | Seen at |
 |-------|-------|---------|
-| `open`, with `read`, `convert convention`, `derive`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `fuse_patch_cloud_bitmaps` | 143 ms for the read of a dino open |
+| `open`, with `read`, `convert convention`, `derive`, `keypoints`, then `thumbnails` and `patch bitmaps` when the file lacks them, under it; then `append nodes` on the GUI thread | `state::open::open_job` over `SfmrReconstruction::load`, `DisplayThumbnails::build` and `fuse_patch_cloud_bitmaps` | 143 ms for the read of a dino open |
 | `save`, with `materialise` over `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
@@ -786,7 +786,10 @@ open's task lands ([background-tasks.md](background-tasks.md) § "Opening a
 file"). `read` is one row over `read_sfmr`, which decompresses and
 hash-checks inside itself. `convert convention` is the upgrade a file below the
 canonical-convention version gets, and its guard is cancelled when the file is
-already canonical, so a current file records no row for it.
+already canonical, so a current file records no row for it. `keypoints` is the
+fill of a `sift_files` file's inline keypoint column from its `.sift` files
+(`SfmrReconstruction::fill_keypoints_from_sift`), and records no row for a file
+that already carries the column or is `embedded_patches`.
 
 `localize` and `refine` are the two calls a bench fit makes, not stages
 inside the kernels: each call registers one patch over a handful of views and

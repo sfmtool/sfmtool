@@ -193,7 +193,11 @@ def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
     projection."""
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    # A load fills the inline column from the `.sift` files; drop it to get a
+    # sift-files recon with no keypoints of its own.
+    recon = SfmrReconstruction.load(seoul_bull_workspace).clone_with_changes(
+        keypoints_xy=None
+    )
     assert recon.feature_source == "sift_files"
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0

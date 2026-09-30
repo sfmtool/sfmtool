@@ -1387,11 +1387,19 @@ fn opening_a_file_names_the_loads_stages_and_the_append() {
             ("open", 0, 1),
             ("read", 1, 1),
             ("derive", 1, 1),
+            ("keypoints", 1, 1),
             ("thumbnails", 1, 1),
             ("append nodes", 0, 1)
         ],
         "{:?}",
         entry.detail,
+    );
+    // The fixture is `sift_files` with no `.sift` beside it, so the load
+    // records why it left the inline keypoint column out.
+    let keypoints = phase_note(&entry.detail, "keypoints").expect("a keypoints note");
+    assert!(
+        keypoints.starts_with("not filled: ") && keypoints.ends_with("no such file"),
+        "{keypoints}"
     );
     assert_eq!(
         phase_note(&entry.detail, "read"),

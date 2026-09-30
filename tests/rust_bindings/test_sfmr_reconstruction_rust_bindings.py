@@ -409,7 +409,9 @@ class TestEmbeddedPatches:
     def test_sift_files_defaults(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         assert recon.feature_source == "sift_files"
-        assert recon.keypoints_xy is None
+        # Every writer stores the inline copy of the observation pixels.
+        n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
+        assert np.asarray(recon.keypoints_xy).shape == (n_obs, 2)
         assert recon.image_file_hashes is None
 
     def test_clone_to_embedded_round_trips(self, seoul_bull_sfmr_only, tmp_path):
@@ -655,6 +657,7 @@ class TestSiftFilesInlineKeypoints:
         workspace_dir = seoul_bull_sfmr_only.parent
 
         data = read_sfmr(seoul_bull_sfmr_only)
+        del data["keypoints_xy"]
         # This fixture copies the `.sfmr` alone, so nothing can resolve a
         # `.sift`: without the inline column `from_data` cannot recompute the
         # point errors at all.

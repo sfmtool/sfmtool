@@ -110,8 +110,9 @@ class _SolveStrips:
         track_feats = recon.track_feature_indexes
         feats = np.asarray(track_feats).tolist() if track_feats is not None else None
         # Per-observation 2D keypoint, keyed by (point, image), for per-observation
-        # reprojection error. `keypoints_xy` is embedded_patches-only (None on
-        # sift_files); when absent, reprojection error is unavailable.
+        # reprojection error. `keypoints_xy` is None only on a sift_files recon
+        # whose `.sift` files could not supply it; then reprojection error is
+        # unavailable.
         kxy = recon.keypoints_xy
         kxy = np.asarray(kxy, np.float64) if kxy is not None else None
         self.kpt_obs: dict[int, dict[int, tuple[float, float]]] = {}

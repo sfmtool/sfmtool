@@ -6,7 +6,7 @@
 //! [`SfmrReconstruction`] holds all data from a `.sfmr` file using nalgebra
 //! geometric types — the in-memory side of the format's I/O boundary, described
 //! in `specs/formats/sfmr-file-format.md`. This file owns the type definitions
-//! and their accessors; the rest of the type's surface lives in four children:
+//! and their accessors; the rest of the type's surface lives in five children:
 //!
 //! - [`conversion`] — the `.sfmr` boundary: the [`sfmtool_sfmr_format::SfmrData`] round
 //!   trip (the raw columnar I/O representation) plus the `load`/`save` wrappers.
@@ -15,6 +15,8 @@
 //! - [`affine_shape`] — an observation's keypoint affine shape, projected out of
 //!   the point's patch frame.
 //! - [`demo`] — a synthetic reconstruction with no files behind it.
+//! - [`sift_keypoints`] — a `sift_files` reconstruction's inline keypoint
+//!   column, filled from its `.sift` files.
 //!
 //! The type itself is two owned halves: an [`ImageTable`] of the cameras, the
 //! posed images and the per-image columns, and a [`PointSet`] of the points,
@@ -38,10 +40,12 @@ mod demo;
 mod image_table;
 mod point_set;
 mod recompute;
+mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
 pub use image_table::ImageTable;
 pub use point_set::{ObservationSource, PointSet};
+pub use sift_keypoints::SiftKeypointFill;
 
 // Re-exported at the old path: `analysis::infinity::discover` imports it as
 // `crate::reconstruction::data::observation_reprojection_error`.

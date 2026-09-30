@@ -1024,7 +1024,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     let (loaded, phases) = load_recording(&v4_path);
     assert_eq!(
         phase_names(&phases),
-        ["read", "convert convention", "derive"],
+        ["read", "convert convention", "derive", "keypoints"],
         "{phases:?}"
     );
     assert_eq!(
@@ -1419,9 +1419,17 @@ fn a_recorded_load_names_the_read_and_the_derive() {
     let path = saved_demo("load_phases", 32);
     let (recon, phases) = load_recording(&path);
 
-    // Two rows rather than three: the writer wrote a canonical file, so the
-    // convention upgrade did not run and its guard closed nothing.
-    assert_eq!(phase_names(&phases), ["read", "derive"], "{phases:?}");
+    // No `convert convention` row: the writer wrote a canonical file, so the
+    // convention upgrade did not run and its guard closed nothing. The demo is
+    // `sift_files` with no `.sift` files behind it, so `keypoints` runs and
+    // says why it left the column out.
+    assert_eq!(
+        phase_names(&phases),
+        ["read", "derive", "keypoints"],
+        "{phases:?}"
+    );
+    let keypoints = phase_note(&phases, "keypoints").expect("a keypoints note");
+    assert!(keypoints.starts_with("not filled: "), "{keypoints}");
     assert!(
         phases.iter().all(|(_, depth, _)| *depth == 0),
         "a load's stages sit at the top of whatever it was called inside: {phases:?}"

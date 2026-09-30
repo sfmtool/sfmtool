@@ -16,7 +16,8 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::{SfmrReconstruction, SiftKeypointFill};
 
 use crate::helpers::{extract_cameras_as_sfmr, extract_rig_frame_data, py_to_u128_bytes};
 
@@ -93,6 +94,10 @@ pub(crate) fn clone_with_changes(
     let mut new_sift_content_hashes: Option<Vec<[u8; 16]>> = None;
     let mut new_image_file_hashes: Option<Vec<[u8; 16]>> = None;
     let mut new_keypoints_xy: Option<ndarray::Array2<f32>> = None;
+    let mut keypoints_given = false;
+    // `keypoints_xy=None` on a `sift_files` value: the result carries no
+    // inline keypoint column, even when its tracks are replaced.
+    let mut drop_keypoints = false;
     let mut new_feature_source: Option<String> = None;
     // The constraint triple, collected here and applied once the point count is
     // settled. The outer `Option` is "was the kwarg passed", the inner one
@@ -447,6 +452,22 @@ pub(crate) fn clone_with_changes(
                     recon.point_set.observation_confidence = Some(s.to_vec());
                 }
             }
+            "keypoints_xy" if value.is_none() => {
+                // Drop the optional inline copy a `sift_files` value carries; an
+                // `embedded_patches` value's keypoints are its observations.
+                match &mut recon.point_set.observations {
+                    sfmtool_core::ObservationSource::SiftFiles { keypoints_xy, .. } => {
+                        *keypoints_xy = None;
+                        drop_keypoints = true;
+                    }
+                    sfmtool_core::ObservationSource::EmbeddedPatches { .. } => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "clone_with_changes(): an embedded_patches reconstruction \
+                             cannot drop keypoints_xy",
+                        ));
+                    }
+                }
+            }
             "keypoints_xy" => {
                 let arr = extract_array2!(value, "keypoints_xy", f32)?;
                 if arr.shape()[1] != 2 {
@@ -473,6 +494,7 @@ pub(crate) fn clone_with_changes(
                     )));
                 }
                 new_keypoints_xy = Some(arr.as_array().as_standard_layout().into_owned());
+                keypoints_given = true;
             }
             "image_file_hashes" => {
                 if !value.is_none() {
@@ -720,6 +742,15 @@ pub(crate) fn clone_with_changes(
     // Recompute derived fields
     recon.rebuild_derived_fields();
 
+    // A `sift_files` value whose tracks were replaced without a keypoint
+    // column of their own gets one rebuilt for the new tracks.
+    let replaced_tracks = kw.contains("track_image_indexes")?
+        || kw.contains("track_feature_indexes")?
+        || kw.contains("track_point_indexes")?;
+    if replaced_tracks && !keypoints_given && !drop_keypoints {
+        carry_sift_keypoints(inner, &mut recon);
+    }
+
     // The track arrays and the observation-source columns can be supplied in the
     // same call (and are applied in separate passes), so guard against leaving a
     // per-observation column out of step with the new track count — e.g.
@@ -735,6 +766,70 @@ pub(crate) fn clone_with_changes(
     })?;
 
     Ok(recon)
+}
+
+/// Rebuild the inline keypoint column of a `sift_files` `recon` whose tracks
+/// replaced those of `source`.
+///
+/// An observation is its image and feature, so each new row whose image name
+/// and feature index `source` also observes takes `source`'s pixel for it,
+/// which keeps a coordinate a producer refined past the detection. Rows
+/// `source` did not have are read from the `.sift` files
+/// ([`SfmrReconstruction::fill_keypoints_from_sift`]). When those files cannot
+/// supply them the column is dropped, as it is for a file that never had one.
+fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruction) {
+    use sfmtool_core::ObservationSource;
+
+    let ObservationSource::SiftFiles {
+        feature_indexes,
+        keypoints_xy,
+        ..
+    } = &mut recon.point_set.observations
+    else {
+        return;
+    };
+    *keypoints_xy = None;
+
+    let mut known = std::collections::HashMap::new();
+    if let (Some(old_xy), Some(old_features)) = (source.keypoints_xy(), source.feature_indexes()) {
+        for (row, (obs, &feature)) in source.point_set.tracks.iter().zip(old_features).enumerate() {
+            let name = source.image_table.images[obs.image_index as usize]
+                .name
+                .as_str();
+            known.insert((name, feature), [old_xy[[row, 0]], old_xy[[row, 1]]]);
+        }
+    }
+    let carried: Vec<Option<[f32; 2]>> = recon
+        .point_set
+        .tracks
+        .iter()
+        .zip(feature_indexes.iter())
+        .map(|(obs, &feature)| {
+            let name = recon.image_table.images[obs.image_index as usize]
+                .name
+                .as_str();
+            known.get(&(name, feature)).copied()
+        })
+        .collect();
+
+    if carried.iter().any(Option::is_none)
+        && recon.fill_keypoints_from_sift(&Progress::none()) != SiftKeypointFill::Filled
+    {
+        return;
+    }
+    let mut column = recon
+        .keypoints_xy()
+        .cloned()
+        .unwrap_or_else(|| ndarray::Array2::<f32>::zeros((carried.len(), 2)));
+    for (row, xy) in carried.iter().enumerate() {
+        if let Some([x, y]) = xy {
+            column[[row, 0]] = *x;
+            column[[row, 1]] = *y;
+        }
+    }
+    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
+        *keypoints_xy = Some(column);
+    }
 }
 
 /// Settle the per-point constraint triple once the point count is final.

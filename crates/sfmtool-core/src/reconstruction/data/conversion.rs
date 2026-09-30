@@ -26,7 +26,8 @@ use crate::progress_note;
 
 use super::{
     compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
-    PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction, TrackObservation,
+    PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction, SiftKeypointFill,
+    TrackObservation,
 };
 
 /// Unit quaternion from raw WXYZ components, keeping the caller's bits when
@@ -144,6 +145,20 @@ impl SfmrReconstruction {
             recon
         };
         recon.workspace_dir = workspace_dir;
+        // A `sift_files` file written before every writer stored the inline
+        // keypoint column gets it here, so every consumer reads observation
+        // pixels the same way. When a `.sift` is missing or is a different
+        // extraction the value loads without the column, as the file has it.
+        let mut fill = progress.phase("keypoints");
+        match recon.fill_keypoints_from_sift(&fill) {
+            SiftKeypointFill::Filled => drop(fill),
+            SiftKeypointFill::Unavailable { reason, .. } => {
+                progress_note!(fill, "not filled: {reason}");
+            }
+            SiftKeypointFill::AlreadyPresent
+            | SiftKeypointFill::NotSiftFiles
+            | SiftKeypointFill::Cancelled => fill.cancel(),
+        }
         Ok(recon)
     }
 

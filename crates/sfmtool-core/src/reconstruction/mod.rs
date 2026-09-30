@@ -42,5 +42,6 @@ pub use edited::{
 
 pub use data::{
     unit_quaternion_preserving, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
-    PointSet, ReconstructionError, SfmrImage, SfmrReconstruction, TrackObservation,
+    PointSet, ReconstructionError, SfmrImage, SfmrReconstruction, SiftKeypointFill,
+    TrackObservation,
 };

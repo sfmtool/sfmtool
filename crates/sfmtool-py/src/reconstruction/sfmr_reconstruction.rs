@@ -62,7 +62,9 @@ impl PySfmrReconstruction {
     /// The dict must contain metadata, cameras, image data, point data,
     /// and track data. Depth statistics and reprojection errors are
     /// recomputed from scratch (using camera models and `.sift` files),
-    /// so the values passed in for those fields are ignored.
+    /// so the values passed in for those fields are ignored. A ``sift_files``
+    /// dict without ``keypoints_xy`` gets the column from the ``.sift`` files
+    /// when every one it needs is present and matches ``sift_content_hashes``.
     ///
     /// Args:
     ///     workspace_dir: Resolved workspace directory path.
@@ -78,6 +80,10 @@ impl PySfmrReconstruction {
         let mut inner = SfmrReconstruction::from_sfmr_data(sfmr_data)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         inner.workspace_dir = workspace_dir;
+        // Every `sift_files` value carries its observations' pixels inline, as
+        // one read from a file does (`SfmrReconstruction::load`), when the
+        // `.sift` files can supply them.
+        inner.fill_keypoints_from_sift(&Progress::none());
         inner
             .recompute_depth_statistics()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -351,9 +357,11 @@ impl PySfmrReconstruction {
     /// Per-observation sub-pixel keypoints ``(K, 2)`` (image-space ``(u, v)``),
     /// parallel to the track arrays, or ``None`` when the reconstruction carries
     /// none inline. Always present when :attr:`feature_source` is
-    /// ``"embedded_patches"``; present under ``"sift_files"`` only when the file
-    /// carries the optional inline copy of its observation coordinates, which
-    /// consumers then read in preference to the ``.sift`` features.
+    /// ``"embedded_patches"``. Under ``"sift_files"`` it is the inline copy of
+    /// the observation coordinates, which consumers read in preference to the
+    /// ``.sift`` features: :meth:`load` and :meth:`from_data` build it from the
+    /// ``.sift`` files when the data lacks it, so it is ``None`` only when
+    /// those files are missing or do not match the reconstruction.
     #[getter]
     fn keypoints_xy<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f32>>> {
         self.inner
@@ -1202,6 +1210,14 @@ impl PySfmrReconstruction {
     /// When the track arrays are replaced, ``observation_counts`` is recomputed
     /// from the new tracks (which must stay grouped by point), so an
     /// ``observation_counts`` value passed in the same call is ignored.
+    ///
+    /// On a ``sift_files`` reconstruction, ``keypoints_xy=None`` drops the
+    /// inline keypoint column. When the track arrays are replaced and
+    /// ``keypoints_xy`` is not passed, the column is rebuilt for the new
+    /// tracks: an observation this reconstruction also has (the same image
+    /// name and feature index) keeps its pixel, and the rest are read from the
+    /// ``.sift`` files. If those files cannot supply them, the result carries
+    /// no column.
     #[pyo3(signature = (**kwargs))]
     fn clone_with_changes(
         &self,

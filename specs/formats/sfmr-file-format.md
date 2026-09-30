@@ -1583,8 +1583,14 @@ The inline 2D keypoint for each observation:
   refined position that no `.sift` file holds. The `.sift` files stay the
   referenced source of the feature itself (descriptor, scale, affine shape).
 - **Presence**: `has_keypoints_xy = true`. Always present in `embedded_patches`
-  files; optional in `sift_files` files, where the producer chooses whether to
-  copy the coordinates in.
+  files. Optional in `sift_files` files: a writer SHOULD store it whenever the
+  `.sift` files its observations reference can be read, and a file without it
+  is one written before that rule or without those files. A reader MAY build
+  the column for such a file from `sift[feature_indexes[j]]`, but only when
+  every `.sift` it reads matches the file's `sift_content_hashes` entry for
+  that image, since a `.sift` with another hash is a different extraction whose
+  feature indexes name other features. The column is one row per observation,
+  so a reader that cannot resolve every row leaves it absent.
 
 The writer rejects a `sift_files` file that also carries the `embedded_patches`
 image-identity column (`images/image_file_hashes`), and an `embedded_patches`
