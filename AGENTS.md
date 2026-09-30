@@ -165,10 +165,12 @@ empty-handed". Name the thing and say what it does.
   in `test-data`.
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
-  `audit-specs`, `suggest-next-steps`). See "Quality reports" below.
-- `skills/` — the four project skills (`audit-hygiene`, `audit-specs`,
-  `implement-random-idea`, `suggest-next-steps`), checked in here and symlinked
-  into `.claude/skills/`.
+  `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"
+  below.
+- `skills/` — the five project skills (`audit-hygiene`, `audit-specs`,
+  `gui-bug-bash`, `implement-random-idea`, `suggest-next-steps`), checked in
+  here and symlinked into `.claude/skills/`. `gui-bug-bash` carries scripts
+  that launch a viewer on a random port and call its MCP endpoint over HTTP.
 - `.github/workflows/` — `ci.yml` (Linux runs `scripts/coverage.sh` as two
   parallel jobs, `test-linux-rust` and `test-linux-python`, each uploading
   its own lcov to codecov;
@@ -215,7 +217,8 @@ pixi run sfm solve -g images     # global SfM
 ## Quality reports
 
 `reports/` holds dated read-only snapshots produced by the audit skills
-(`audit-hygiene`, `audit-specs`, `suggest-next-steps`). Treat them as a living
+(`audit-hygiene`, `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). Treat
+them as a living
 backlog and keep them honest as findings get addressed:
 
 - **Mark off findings in place.** Whenever you act on a recommendation from a
