@@ -544,6 +544,11 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
         },
+        "fit_bench_track_normal" => Command::FitBenchTrackNormal {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            track: args.optional_string("track")?,
+            step: args.normal_step()?,
+        },
         "set_bench_track_stage" => Command::SetBenchTrackStage {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
@@ -1393,6 +1398,45 @@ impl Args<'_> {
             ))),
             None => Err(self.error(format!("needs {key} — cluster or track."))),
         }
+    }
+
+    /// The normal step `method` names, with `pieces` and `overlap_percent` for
+    /// the finite difference. Their ranges are the step's to judge, so that a
+    /// refusal reads the same from the wire as from the toolbar.
+    fn normal_step(&self) -> Result<crate::bench::NormalStep, ToolError> {
+        use crate::bench::{NormalStep, SplitSettings};
+        let step = match self.optional_string("method")?.as_deref() {
+            Some("photometric") => NormalStep::Photometric,
+            Some("finite_difference") => {
+                let defaults = SplitSettings::default();
+                NormalStep::FiniteDifference(SplitSettings {
+                    pieces: self.optional_usize("pieces")?.unwrap_or(defaults.pieces),
+                    overlap_percent: self
+                        .optional_f64("overlap_percent")?
+                        .unwrap_or(defaults.overlap_percent),
+                })
+            }
+            Some(other) => {
+                return Err(self.error(format!(
+                    "does not know the method {other:?} — the methods are photometric and \
+                     finite_difference."
+                )))
+            }
+            None => {
+                return Err(
+                    self.error("needs method — photometric or finite_difference.".to_string())
+                )
+            }
+        };
+        if matches!(step, NormalStep::Photometric)
+            && (self.optional_usize("pieces")?.is_some()
+                || self.optional_f64("overlap_percent")?.is_some())
+        {
+            return Err(self.error(
+                "takes pieces and overlap_percent only with method finite_difference.".to_string(),
+            ));
+        }
+        Ok(step)
     }
 
     /// A rectangle of a target `[x, y, width, height]`, in whole physical

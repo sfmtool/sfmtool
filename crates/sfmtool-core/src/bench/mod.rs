@@ -45,6 +45,7 @@ pub mod evaluate;
 pub mod fit;
 pub mod geometry_search;
 pub mod nearby;
+pub mod normal;
 pub mod search;
 pub mod stage;
 pub mod steps;
@@ -84,6 +85,10 @@ pub use nearby::{
     NearbySourceError, NearbyTrack, NearbyTrackOptions, NearbyTrackSources, NearbyTracks,
     NearbyTracksError, NearbyTracksReport, PatchRead, PatchSamples, PointsOptions, RangeClass,
     RangeOptions, RayMeeting, RayPatch, Refit, SourceReport, StopRule, WideAmong, PATCH_GRID,
+};
+pub use normal::{
+    finite_difference_normal, fit_normal, normal_preconditions, FiniteDifferenceOptions,
+    FitNormalOptions, NormalError, NormalEstimate, NormalReport,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,

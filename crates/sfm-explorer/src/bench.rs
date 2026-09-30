@@ -38,8 +38,9 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FitOptions, GeometrySearchOptions, ItemId, Observation, ObservationSeed, Provenance,
-    SearchOptions, Stage, StageKind, Thresholds, Verdict,
+    FiniteDifferenceOptions, FitNormalOptions, FitOptions, GeometrySearchOptions, ItemId,
+    NormalError, Observation, ObservationSeed, Provenance, SearchOptions, Stage, StageKind,
+    Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
@@ -1756,6 +1757,48 @@ impl AppState {
         self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
     }
 
+    /// Estimate the normal of the track called `label` by `step` and turn its
+    /// patch to it, on a worker thread.
+    ///
+    /// The two normal steps of `specs/core/bench/editable-track.md` §
+    /// "Estimating the normal": [`NormalStep::Photometric`] is Track View's
+    /// *Fit Normal* and [`NormalStep::FiniteDifference`] its *Finite Diff
+    /// Normal*. Both move the patch's normal and leave its centre, and both
+    /// end, as a fit does, with the track read back and its bitmap fused.
+    ///
+    /// **What the track alone decides is decided here**, through
+    /// [`sfmtool_core::bench::normal_preconditions`], for the reason
+    /// [`Self::start_bench_fit`] gives, and so are the piece count and the
+    /// overlap, which need no photograph to judge.
+    pub(crate) fn start_bench_normal(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        step: NormalStep,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_normal(id, label, step);
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Bench, message.clone());
+        }
+        outcome
+    }
+
+    /// The normal step up to the moment the worker has it, so that everything
+    /// this can refuse is refused before a photograph is read.
+    fn begin_bench_normal(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        step: NormalStep,
+    ) -> Result<(), String> {
+        let (_, _, track) = self.bench_step_target(id, label)?;
+        bench::normal_preconditions(&track)
+            .and_then(|()| step.check())
+            .map_err(|e| format!("Cannot {} {label}: {e}", step.verb()))?;
+        let job = self.bench_normal_job(id, label, step)?;
+        self.start_background_task(step.operation(), id, job)
+    }
+
     /// Search the node's SIFT index from one observation of the track
     /// called `label`, on a worker thread.
     ///
@@ -2107,6 +2150,93 @@ impl AppState {
     }
 }
 
+/// Which of the two normal steps [`AppState::start_bench_normal`] runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum NormalStep {
+    /// *Fit Normal*: the normal the photographs agree on most.
+    Photometric,
+    /// *Finite Diff Normal*: the plane the patch's pieces fit on, cut as the
+    /// settings say.
+    FiniteDifference(SplitSettings),
+}
+
+impl NormalStep {
+    /// The background operation the step runs as.
+    fn operation(&self) -> Operation {
+        match self {
+            NormalStep::Photometric => Operation::BENCH_FIT_NORMAL,
+            NormalStep::FiniteDifference(_) => Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
+        }
+    }
+
+    /// The verb a refusal's sentence is built on: "Cannot {verb} {label}".
+    fn verb(&self) -> &'static str {
+        match self {
+            NormalStep::Photometric => "fit the normal of",
+            NormalStep::FiniteDifference(_) => "take the finite-difference normal of",
+        }
+    }
+
+    /// The history row the step's version is labelled with.
+    fn version_label(&self, label: &str) -> String {
+        match self {
+            NormalStep::Photometric => format!("Fitted the normal of {label}"),
+            NormalStep::FiniteDifference(split) => format!(
+                "Finite-difference normal of {label} ({} pieces, {:.0}% overlap)",
+                split.pieces, split.overlap_percent
+            ),
+        }
+    }
+
+    /// The half of the step's validation that is about its settings.
+    fn check(&self) -> Result<(), bench::NormalError> {
+        match self {
+            NormalStep::Photometric => Ok(()),
+            NormalStep::FiniteDifference(split) => split.check(),
+        }
+    }
+}
+
+/// How *Finite Diff Normal* cuts the patch: Track View's *pieces* and
+/// *overlap %* boxes.
+///
+/// A tool setting, like *Lock*: it says what the next press will do rather
+/// than anything about the track, so changing it is no step and pushes no
+/// version.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SplitSettings {
+    /// How many pieces along each of the patch's in-plane axes.
+    pub(crate) pieces: usize,
+    /// How much neighbouring pieces overlap, in percent of a piece's side.
+    pub(crate) overlap_percent: f64,
+}
+
+impl Default for SplitSettings {
+    fn default() -> Self {
+        Self {
+            pieces: bench::normal::MIN_PIECES,
+            overlap_percent: 0.0,
+        }
+    }
+}
+
+impl SplitSettings {
+    /// The core options these settings stand for.
+    fn options(&self) -> FiniteDifferenceOptions {
+        FiniteDifferenceOptions {
+            pieces: self.pieces,
+            overlap: self.overlap_percent / 100.0,
+            ..FiniteDifferenceOptions::default()
+        }
+    }
+
+    /// Core's own judgement of the settings, asked without a photograph: the
+    /// step refuses the same values with the same sentences.
+    fn check(&self) -> Result<(), bench::NormalError> {
+        self.options().check()
+    }
+}
+
 /// The evaluation of `track` as a function of the `Progress` it polls its
 /// cancellation through: what [`AppState::bench_evaluate_job`] hands the live
 /// evaluation for a bench track, and what the viewed track's evaluation runs
@@ -2250,6 +2380,64 @@ impl AppState {
                         version_label,
                         label,
                         track: Box::new(staged),
+                    }
+                }
+            }
+        }))
+    }
+
+    /// A normal step itself, as a function of the `Progress` it reports
+    /// through. Crate-visible for the reason [`AppState::bench_fit_job`] is.
+    pub(crate) fn bench_normal_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        step: NormalStep,
+    ) -> Result<Job, String> {
+        let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
+        let label = label.to_string();
+        Ok(Box::new(move |progress| {
+            let failed = |e: &dyn std::fmt::Display| {
+                Finished::Failed(format!("Cannot {} {label}: {e}", step.verb()))
+            };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
+            let decoded = match sources.decode(progress) {
+                Ok(decoded) => decoded,
+                Err(_) if progress.is_cancelled() => return Finished::Cancelled,
+                Err(e) => return failed(&e),
+            };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
+            let views = decoded.views();
+            let outcome = match &step {
+                NormalStep::Photometric => bench::fit_normal(
+                    &track,
+                    &edited,
+                    &views,
+                    &FitNormalOptions::default(),
+                    progress,
+                ),
+                NormalStep::FiniteDifference(split) => bench::finite_difference_normal(
+                    &track,
+                    &edited,
+                    &views,
+                    &split.options(),
+                    progress,
+                ),
+            };
+            match outcome {
+                Err(NormalError::Cancelled) => Finished::Cancelled,
+                Err(e) => failed(&e),
+                Ok((turned, report)) => {
+                    let version_label = step.version_label(&label);
+                    Finished::BenchTrack {
+                        text: format!("{version_label}: {report}"),
+                        version_label,
+                        label,
+                        track: Box::new(turned),
                     }
                 }
             }

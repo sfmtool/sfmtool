@@ -313,6 +313,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
+            "fit_bench_track_normal",
+            json!({ "reconstruction_label": "alpha", "method": "photometric" }),
+        ),
+        (
             "set_bench_track_stage",
             json!({ "reconstruction_label": "alpha", "stage": "track" }),
         ),
@@ -705,15 +709,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Sixteen reads, sixty-four writes, four input tools, the one that writes a
+    // Sixteen reads, sixty-five writes, four input tools, the one that writes a
     // file, and the one that hands back a picture.
-    assert_eq!(catalog.len(), 85, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 86, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        64
+        65
     );
     // One tool can overwrite a file by name, and four can press what a person
     // can press, File ▸ Save included; those five are the ones annotated

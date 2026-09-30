@@ -50,6 +50,7 @@ use sfmtool_core::{EditedReconstruction, Point3D, SfmrReconstruction};
 
 use crate::bench::live::Evaluation;
 use crate::bench::viewed::ViewedTrack;
+use crate::bench::{NormalStep, SplitSettings};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::track_view::EDIT_LABEL;
@@ -144,6 +145,9 @@ pub struct TrackBodyResponse {
     pub rename: Option<(String, String)>,
     /// *Fit*.
     pub fit: bool,
+    /// *Fit Normal* or *Finite Diff Normal*, carrying which, and for the
+    /// second the *pieces* and *overlap %* it was pressed at.
+    pub(crate) normal: Option<NormalStep>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// A threshold box was released, or a value typed into one was
@@ -317,6 +321,10 @@ pub struct TrackBody {
     /// the last session would turn the next one's first drag into an edit of
     /// one sighting nobody asked for.
     lock: bool,
+    /// How *Finite Diff Normal* cuts the patch: the *pieces* and *overlap %*
+    /// boxes beside it. A tool setting for the reason [`TrackBody::lock`] is,
+    /// kept for the session.
+    split_settings: SplitSettings,
     /// Where the table's rows are scrolled to, both ways; the headings and the
     /// threshold row follow its sideways part. Kept to add a drag of the
     /// headings to.
@@ -352,6 +360,7 @@ impl TrackBody {
             build_refusal: None,
             evaluation: Evaluation::Evaluating,
             lock: true,
+            split_settings: SplitSettings::default(),
             scroll_offset: egui::Vec2::ZERO,
         }
     }
@@ -653,6 +662,23 @@ impl TrackBody {
             }
             if entry(
                 ui,
+                FIT_NORMAL_LABEL,
+                refusals.normal.clone(),
+                "Turn the patch to the normal at which its sightings agree best,                  keeping its centre",
+            ) {
+                response.normal = Some(NormalStep::Photometric);
+            }
+            if entry(
+                ui,
+                FINITE_DIFF_NORMAL_LABEL,
+                refusals.normal.clone(),
+                "Cut the patch into smaller pieces along each of its axes, fit each                  piece, and turn the patch to the plane through where they land,                  keeping its centre",
+            ) {
+                response.normal = Some(NormalStep::FiniteDifference(self.split_settings));
+            }
+            self.show_split_settings(ui, refusals.normal.is_some());
+            if entry(
+                ui,
                 stage_label,
                 refusals.stage,
                 "Move the track between its two representations",
@@ -695,6 +721,29 @@ impl TrackBody {
         ui.horizontal_wrapped(|ui| {
             self.show_lock(ui, track);
             self.show_rename(ui, label, busy, response);
+        });
+    }
+
+    /// The *pieces* and *overlap %* boxes that say how *Finite Diff Normal*
+    /// cuts the patch. Greyed with the button, since they say nothing while it
+    /// cannot run.
+    fn show_split_settings(&mut self, ui: &mut egui::Ui, greyed: bool) {
+        use sfmtool_core::bench::normal::{MAX_OVERLAP, MAX_PIECES, MIN_PIECES};
+        ui.add_enabled_ui(!greyed, |ui| {
+            ui.add(
+                egui::DragValue::new(&mut self.split_settings.pieces)
+                    .range(MIN_PIECES..=MAX_PIECES)
+                    .suffix(" pieces"),
+            )
+            .on_hover_text("How many pieces the patch is cut into along each of its two axes");
+            ui.add(
+                egui::DragValue::new(&mut self.split_settings.overlap_percent)
+                    .range(0.0..=MAX_OVERLAP * 100.0)
+                    .speed(1.0)
+                    .max_decimals(0)
+                    .suffix("% overlap"),
+            )
+            .on_hover_text("How much neighbouring pieces overlap, as a share of a piece's side");
         });
     }
 
@@ -1439,6 +1488,14 @@ const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a
 /// walk would have taken it.
 pub(crate) const ACCEPT_WALK_LABEL: &str = "Accept walk";
 
+/// The toolbar entry that turns the patch to its photometric normal, in one
+/// constant so the tests aim at the label drawn.
+pub(crate) const FIT_NORMAL_LABEL: &str = "Fit Normal";
+
+/// The toolbar entry that turns the patch to the plane its fitted pieces lie
+/// on.
+pub(crate) const FINITE_DIFF_NORMAL_LABEL: &str = "Finite Diff Normal";
+
 /// The Edited-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.
 pub(crate) const LOCK_LABEL: &str = "Lock";
@@ -1879,6 +1936,8 @@ pub(super) struct PhotometricRefusals {
     pub(super) fit: Option<String>,
     /// The *Stage* toggle, for the stage it would move to.
     pub(super) stage: Option<String>,
+    /// *Fit Normal* and *Finite Diff Normal*, which share their refusals.
+    pub(super) normal: Option<String>,
 }
 
 /// The sentence each of the two photometric entries is greyed with.
@@ -1907,6 +1966,11 @@ pub(super) fn photometric_refusals(
         ),
         stage: refused(
             sfmtool_core::bench::set_stage_preconditions(track, next)
+                .err()
+                .map(|why| why.to_string()),
+        ),
+        normal: refused(
+            sfmtool_core::bench::normal_preconditions(track)
                 .err()
                 .map(|why| why.to_string()),
         ),

@@ -1488,6 +1488,83 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
     assert_eq!(rows(&state), vec![(Kind::Bench, refusal)]);
 }
 
+/// Each normal step runs on the worker and comes home under its own name.
+///
+/// The fixture's photographs are a pattern in screen space rather than views
+/// of one surface, so the photometric search may find no normal the views
+/// agree on; either way the task ran on the worker and the Action Log row
+/// names the step. The finite difference fits its pieces, which the pattern
+/// supports, and pushes one version labelled with the settings it was pressed
+/// at. Settings core would refuse are refused before a task starts. Whether the
+/// estimates are right is core's to test, over a scene with a surface in it.
+#[test]
+fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
+    use super::{NormalStep, SplitSettings};
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+
+    state.action_log.clear();
+    let before = versions(&state, id);
+    state
+        .start_bench_normal(id, &label, NormalStep::Photometric)
+        .expect("a framed finite track with three sightings");
+    assert!(state.background_task().is_some(), "it runs on the worker");
+    state.finish_background_task();
+    let logged = rows(&state);
+    let pushed = versions(&state, id) - before;
+    let named = format!("Fitted the normal of {label}");
+    let refused = format!("Cannot fit the normal of {label}: ");
+    assert!(
+        (pushed == 1 && logged.iter().any(|(_, text)| text.starts_with(&named)))
+            || (pushed == 0 && logged.iter().any(|(_, text)| text.starts_with(&refused))),
+        "{pushed} versions, {logged:?}"
+    );
+
+    state.action_log.clear();
+    let before = versions(&state, id);
+    let split = NormalStep::FiniteDifference(SplitSettings {
+        pieces: 3,
+        overlap_percent: 25.0,
+    });
+    state
+        .start_bench_normal(id, &label, split)
+        .expect("a framed finite track with three sightings");
+    state.finish_background_task();
+    let logged = rows(&state);
+    let expected = format!("Finite-difference normal of {label} (3 pieces, 25% overlap)");
+    assert_eq!(versions(&state, id), before + 1, "{logged:?}");
+    let node = state.node(id).expect("loaded");
+    assert_eq!(
+        node.history.versions().last().expect("a version").label,
+        expected
+    );
+    assert!(
+        logged
+            .iter()
+            .any(|(_, text)| text.starts_with(&expected) && text.contains("turned")),
+        "{logged:?}"
+    );
+
+    let before = versions(&state, id);
+    let refused = state.start_bench_normal(
+        id,
+        &label,
+        NormalStep::FiniteDifference(SplitSettings {
+            pieces: 1,
+            overlap_percent: 0.0,
+        }),
+    );
+    assert!(
+        refused.as_ref().is_err_and(|why| why.contains("1 pieces")),
+        "{refused:?}"
+    );
+    assert!(
+        state.background_task().is_none(),
+        "a refusal started a task"
+    );
+    assert_eq!(versions(&state, id), before);
+}
+
 /// A fit's **version label** carries the classification, not just the item.
 ///
 /// Finite or at infinity is the fit's real outcome on a distant track, and a

@@ -105,6 +105,13 @@ sightings.
   is the example). The normal is then the mean direction to the cameras, and
   no neighbour's normal is copied in.
 
+Two estimators can be tried by hand on one track in SfM Explorer: Track View's
+*Fit Normal* is a photometric estimate on the track's own patch, and *Finite
+Diff Normal* is the split patch, generalised to a chosen number of pieces
+along both axes with a chosen overlap
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
+"Estimating the normal"). Each is one step: estimate and tilt, with no refit.
+
 No estimator caps how far the normal may turn from the mean viewing
 direction. The side of a house seen at grazing angles has its true normal 62
 degrees from it, and the photographs favour that normal all the way there.

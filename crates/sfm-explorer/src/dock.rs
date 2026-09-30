@@ -384,6 +384,10 @@ impl TabContext<'_> {
         if let Some(stage) = response.set_stage {
             let _ = self.state.start_bench_stage(id, &label, stage);
         }
+        if let Some(step) = response.normal {
+            // A refusal is logged by the starter, as the fit's is.
+            let _ = self.state.start_bench_normal(id, &label, step);
+        }
         if let Some(observation) = response.search_descriptors {
             let _ = self
                 .state

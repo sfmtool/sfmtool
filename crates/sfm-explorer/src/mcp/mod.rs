@@ -516,6 +516,12 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
     },
+    /// Turn the track's patch to an estimated normal, on a worker.
+    FitBenchTrackNormal {
+        reconstruction_label: String,
+        track: Option<String>,
+        step: crate::bench::NormalStep,
+    },
     /// Move the track between its two representations, on a worker.
     SetBenchTrackStage {
         reconstruction_label: String,
@@ -1629,6 +1635,11 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             track,
         } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref()),
+        Command::FitBenchTrackNormal {
+            reconstruction_label,
+            track,
+            step,
+        } => bench::fit_bench_track_normal(state, &reconstruction_label, track.as_deref(), step),
         Command::SetBenchTrackStage {
             reconstruction_label,
             track,

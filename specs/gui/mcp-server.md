@@ -101,8 +101,8 @@ place.
 
 ## The tool surface
 
-Eighty-five tools. Sixteen read -- fifteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-four
+Eighty-six tools. Sixteen read -- fifteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-five
 write, four send input, and one writes a file. `get_widgets` and the four
 input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
 viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
@@ -181,6 +181,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
+| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated photometrically or by a finite difference over fitted pieces, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |
@@ -196,7 +197,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the fifteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-five writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2948,9 +2949,10 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Five operations run on a worker**: this one,
+**Six operations run on a worker**: this one,
 `convert_to_embedded_patches`, `retriangulate_all_points`, and the bench's
-`fit_bench_track` and `set_bench_track_stage`, which answer through the same
+`fit_bench_track`, `fit_bench_track_normal` and `set_bench_track_stage`, which
+answer through the same
 two-level reply. Every other edit is still synchronous on the GUI thread,
 and a reconstruction large enough to take more than the apply timeout will still
 time out the call while the work goes on and finishes. An agent that gets a
@@ -3074,7 +3076,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-two tools that read and work the **bench** beside a node
+Thirty-three tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -3349,7 +3351,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-two are the patch a track is**, and they are the
+**Eight of the thirty-three are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -3449,7 +3451,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-two are about the index files**, the node's SIFT index and
+**Four of the thirty-three are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -4503,7 +4505,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-five tools**, sixteen of them reads, four of the
+- **The catalog is eighty-six tools**, sixteen of them reads, four of the
   `Input` kind and one of the `Save` kind, those five carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

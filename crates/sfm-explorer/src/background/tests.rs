@@ -25,6 +25,7 @@ use sfmtool_core::progress::Progress;
 use sfmtool_core::{BundleAdjustOptions, SfmrReconstruction};
 
 use crate::action_log::{ActionLog, Actor, Entry};
+use crate::bench::NormalStep;
 use crate::progress::Detail;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
@@ -523,11 +524,17 @@ fn real_task(operation: Operation) -> RealTask {
         }
         // The two steps that read photographs, over the bench fixture: a point
         // on the bench and a textured photograph cached for every image.
-        "Fit track" | "Set track stage" => {
+        "Fit track" | "Set track stage" | "Fit normal" | "Finite difference normal" => {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
                 "Fit track" => state.bench_fit_job(id, &label),
+                "Fit normal" => state.bench_normal_job(id, &label, NormalStep::Photometric),
+                "Finite difference normal" => state.bench_normal_job(
+                    id,
+                    &label,
+                    NormalStep::FiniteDifference(Default::default()),
+                ),
                 _ => state.bench_stage_job(id, &label, StageKind::Cluster),
             }
             .expect("the fixture's track is readable");

@@ -48,8 +48,9 @@ that read no photograph in
 [bench/steps.rs](../../../crates/sfmtool-core/src/bench/steps.rs), the
 reading in
 [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the
-fit in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs), the
-finite-versus-bearing criterion the fit and the upgrade share in
+fit in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs), the two
+normal steps in [bench/normal.rs](../../../crates/sfmtool-core/src/bench/normal.rs),
+the finite-versus-bearing criterion the fit and the upgrade share in
 [bench/classify.rs](../../../crates/sfmtool-core/src/bench/classify.rs), the
 stage change in
 [bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), the
@@ -510,6 +511,8 @@ pub fn set_stage_preconditions(
     stage: StageKind,
 ) -> Result<(), StageError>;
 
+pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError>;
+
 // Read the track as it stands, and move nothing.
 pub fn evaluate(
     track: &EditableTrack,
@@ -546,6 +549,26 @@ pub fn set_stage(
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, StageReport), StageError>;
+
+// Turn the patch to the normal its sightings agree on best, keeping its centre,
+// then read it back and fuse.
+pub fn fit_normal(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FitNormalOptions,       // the photometric search, its grid, the reading
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, NormalReport), NormalError>;
+
+// Turn the patch to the plane its fitted pieces lie on, keeping its centre, then
+// read it back and fuse.
+pub fn finite_difference_normal(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &FiniteDifferenceOptions, // pieces (2..=8), overlap (0..=0.9), the fit
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, NormalReport), NormalError>;
 
 /// The localizer with every per-view gate off and the basis cap lifted, which
 /// is what both steps run.
@@ -2018,6 +2041,53 @@ back unmeasured at a moved point. A fit that refuses and reports instead is
 proposed in
 [`bench-inconsistent-fit-amendment.md`](../../drafts/bench-inconsistent-fit-amendment.md).
 
+### Estimating the normal
+
+A fit moves the patch along the sightings' rays and keeps the way it faces.
+Two steps do the opposite: each estimates which way the surface under the patch
+faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
+turning by hand"), and ends as a fit does, by reading the track back and fusing
+its bitmap over the turned square. The centre does not move, the turn is the
+least rotation, and it stops where `tilt_patch`'s cap stops it, which the
+`NormalReport`'s `tilt` says. Both take the track stage only, refuse a track at
+infinity (whose patch faces along its own bearing) and need two `in`
+observations; `normal_preconditions` is that half of their validation.
+
+**`fit_normal` reads the normal from the photographs' agreement.** It runs the
+photometric normal refinement
+([`../patch/patch-normal-refinement.md`](../patch/patch-normal-refinement.md))
+over the `in` sightings, each view's tile anchored at the sighting's own
+keypoint, and turns the patch to the normal it finds. The search is seeded
+from the patch's normal and from the mean viewing direction and covers
+`angular_range_deg` (25 degrees) around each, so a normal further away is
+reached by running the step again; the refinement is not idempotent by design,
+and a second run re-seeds from the first's answer. `min_views` is two here,
+where the kernel's own default is three, so the step runs on any track a fit
+runs on. A search that scores no normal is refused as `NotScored`.
+
+**`finite_difference_normal` reads the normal from where smaller pieces fit.**
+Along each of the patch's two in-plane axes it cuts `pieces` square pieces that
+together span the patch's side, neighbours overlapping by `overlap` of a
+piece's side: with side `s = 2h / (n - (n - 1) overlap)` for half-length `h` and
+`n` pieces, the pieces start `s (1 - overlap)` apart, so two pieces with no
+overlap are the halves of the patch at `±h/2`. Each piece is the track resized
+about its centre and slid along the plane, and is given a `fit`, which moves it
+along its sightings' rays to where the photographs place it. A piece whose fit
+fails or lands at infinity is left out. The fitted centres along one axis lie
+on the surface, so the direction they spread in most lies in it, and the cross
+product of the two axes' directions is the normal, signed to keep the face the
+patch showed. Where only one axis has two fitted pieces, or the two directions
+are within about ten degrees of each other, that one line fixes only the turn
+about its perpendicular, and the normal is the patch's with its component along
+the line removed; `NormalEstimate::FiniteDifference` says so with `both_axes:
+false`. With no line at all the step is refused as `TooFewPieces`.
+
+The two estimates differ in what they can be fooled by. The photometric one
+weighs every texel of the patch at once, so a tilt that suits the texture it
+sees can win over the surface's; the finite difference depends only on where
+each piece is placed along its rays, and so on depth, but a piece small enough
+to hold little texture fits poorly.
+
 ### Moving between the stages
 
 `set_stage` is one operation in both directions. Setting the stage a track is
@@ -2424,6 +2494,17 @@ same track, reporting the label the copy took, and leaving the original exactly 
 was; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.
+
+The normal steps have a slice of their own,
+[bench/tests/normal.rs](../../../crates/sfmtool-core/src/bench/tests/normal.rs),
+over the same plane seen by three views: a patch tilted 20 degrees off it is
+turned to less than half that by `fit_normal`, with the consensus ZNCC not
+falling, and by `finite_difference_normal` at two pieces with no overlap and at
+three with half, every piece fitting; both keep the centre and leave the track
+read and fused; and `normal_preconditions` and the piece and overlap bounds
+refuse what the track and the settings alone rule out. The piece layout, the
+line through the centres and the one-line fallback are unit-tested beside the
+code.
 
 The commit that writes nothing has a slice of its own: ten presses after the one
 that wrote the point leave the value, the indexes and the point count where the

@@ -171,6 +171,31 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One bench track's patch turned to the normal the photographs agree on
+    /// most (`sfmtool_core::bench::fit_normal`).
+    ///
+    /// Cancellable on either side of the decode, in front of the search and
+    /// of the turn, and inside the reading it ends with. The search itself is
+    /// one kernel call over a handful of views and runs to its end once
+    /// entered.
+    pub(crate) const BENCH_FIT_NORMAL: Operation = Operation {
+        name: "Fit normal",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
+    /// One bench track's patch turned to the plane its pieces fit on
+    /// (`sfmtool_core::bench::finite_difference_normal`).
+    ///
+    /// Cancellable for the reason [`Operation::BENCH_FIT`] is, since each
+    /// piece is a fit: the step polls the flag in front of every piece and
+    /// stops where the piece's fit stops, leaving the track as it was.
+    pub(crate) const BENCH_FINITE_DIFFERENCE_NORMAL: Operation = Operation {
+        name: "Finite difference normal",
+        cancellable: true,
+        kind: Kind::Bench,
+    };
+
     /// One bench track searched from, in the node's SIFT index
     /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
     /// index").
@@ -277,7 +302,7 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 13] = [
+    pub(crate) const ALL: [Operation; 15] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -286,6 +311,8 @@ impl Operation {
         Operation::ADD_IMAGE_TO_TRACKS,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
+        Operation::BENCH_FIT_NORMAL,
+        Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
         Operation::BUILD_INDEX_FILES,

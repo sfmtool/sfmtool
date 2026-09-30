@@ -99,6 +99,7 @@ impl Command {
             Command::SelectBenchObservations { .. } => "select_bench_observations",
             Command::CommitBenchTrack { .. } => "commit_bench_track",
             Command::FitBenchTrack { .. } => "fit_bench_track",
+            Command::FitBenchTrackNormal { .. } => "fit_bench_track_normal",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
             Command::SearchBenchTrackGeometry { .. } => "search_bench_track_geometry",
@@ -338,6 +339,7 @@ impl Command {
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }
             | Command::FitBenchTrack { .. }
+            | Command::FitBenchTrackNormal { .. }
             | Command::SetBenchTrackStage { .. }
             | Command::SearchBenchTrackDescriptors { .. }
             | Command::SearchBenchTrackGeometry { .. }

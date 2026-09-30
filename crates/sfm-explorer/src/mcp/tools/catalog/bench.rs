@@ -753,6 +753,45 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "fit_bench_track_normal",
+            description: "Estimate which way a track-stage bench track's patch faces and turn                           it there, keeping its centre; Track View's Fit Normal and Finite Diff                           Normal. method \"photometric\" searches for the normal at which the                           in sightings agree best, within about 25 degrees of the patch's                           normal and of the mean viewing direction, so a normal further away is                           reached by calling it again. method \"finite_difference\" cuts the                           patch into pieces square pieces along each of its two axes,                           neighbours overlapping by overlap_percent of a piece's side, fits                           each, and turns the patch to the plane through the lines their                           fitted centres lie on; where only one axis gives a line, the tilt                           about that line is left as it was. Either way the turn stops where                           any observation's camera would see the patch past the tilt cap, and                           the step ends by reading the track back and fusing its bitmap.                           Refused at the cluster stage, at infinity, and with fewer than two                           in observations. Runs on a worker thread and answers as                           fit_bench_track does.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("track", bench_track_schema()),
+                    (
+                        "pieces",
+                        json!({
+                            "type": "integer",
+                            "minimum": sfmtool_core::bench::normal::MIN_PIECES,
+                            "maximum": sfmtool_core::bench::normal::MAX_PIECES,
+                            "description": "finite_difference only: how many pieces along each                                             axis. Default 2.",
+                        }),
+                    ),
+                    (
+                        "overlap_percent",
+                        json!({
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": sfmtool_core::bench::normal::MAX_OVERLAP * 100.0,
+                            "description": "finite_difference only: how much neighbouring                                             pieces overlap, in percent of a piece's side.                                             Default 0.",
+                        }),
+                    ),
+                ],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "method",
+                        json!({
+                            "type": "string",
+                            "enum": ["photometric", "finite_difference"],
+                            "description": "How the normal is estimated.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "set_bench_track_stage",
             description: "Move a bench track between its two representations. \"track\" \
                           triangulates the in observations, fits a patch to them and localizes \

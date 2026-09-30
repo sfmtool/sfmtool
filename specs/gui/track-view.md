@@ -675,15 +675,17 @@ with the tiles.
 #### The toolbar
 
 In Edited mode, two rows. The first opens with where the focused item's evaluation stands, and
-then acts on the track: *Fit*, the *Stage* toggle (which names the stage it
-would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
+then acts on the track: *Fit*, *Fit Normal*, *Finite Diff Normal* with its
+*pieces* and *overlap* boxes, the *Stage* toggle (which names the stage it would
+move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
 second is the *Lock* box and *Rename*, which opens a field in place and commits
 on Enter. Each entry is enabled, or greyed with a hover text naming what is
 missing, and the refusal is the core step's own sentence asked of the very
 track the button would act on, so the button and the step cannot disagree.
-*Commit* asks the core commit; *Fit* and the *Stage* toggle ask
-`fit_preconditions` and `set_stage_preconditions`, the halves of those steps'
-validation that read no photograph. A track with no patch therefore greys both
+*Commit* asks the core commit; *Fit*, the two normal entries and the *Stage*
+toggle ask `fit_preconditions`, `normal_preconditions` and
+`set_stage_preconditions`, the halves of those steps' validation that read no
+photograph. A track with no patch therefore greys both
 with *"this track has no patch yet; fit it first"* rather than offering buttons
 whose only act would be to decode a dozen images and fail. The commit refusal is
 cached against the track's `Arc` and the node's version, since asking it builds
@@ -736,6 +738,24 @@ re-fuse, and read the result back, and it stays a button because it replaces
 what the person placed. *Fit* greys with `fit_preconditions`' sentence for a
 track stage with fewer than two `in` observations, while the evaluation still
 runs for it, because one sighting is something to report.
+
+**The two normal entries turn the patch and leave its centre.** *Fit* moves
+the patch along the sightings' rays and keeps the way it faces; *Fit Normal*
+and *Finite Diff Normal* do the opposite, each estimating a normal and turning
+the patch to it by the same least rotation the 3D viewer's arrowhead drag makes,
+then reading the track back and fusing its bitmap as a fit does
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
+"Estimating the normal"). *Fit Normal* takes the normal at which the `in`
+sightings' tiles agree best. *Finite Diff Normal* cuts the patch into smaller
+square pieces along each of its two axes, fits each one, and takes the plane
+through where they land. The two boxes after it say how it cuts: *pieces*, from
+2 to 8 along each axis (2 by default), and *overlap*, from 0% to 90% of a
+piece's side (0% by default). Two pieces with no overlap are the two halves of
+the patch. Both entries run on a worker like *Fit*, push one version, and grey
+with `normal_preconditions`' sentence at the cluster stage, at infinity, and
+with fewer than two `in` observations; the boxes grey with them. The boxes are
+tool settings, as *Lock* is: changing one is no step, and they keep their values
+for the session.
 
 ***Lock* says what Image Detail's handles do at the track stage.** Ticked, which
 is how the panel starts, dragging a sighting's dot there slides the patch and

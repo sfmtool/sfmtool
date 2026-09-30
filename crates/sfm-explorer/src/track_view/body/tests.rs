@@ -1848,15 +1848,19 @@ fn a_bearing_with_no_patch_still_reads_as_a_bearing() {
     assert!(!said.contains("Position ("), "{said}");
 }
 
-/// *Fit* and the *Stage* toggle are greyed by what the track is missing: both
-/// ask core's own half of their step's validation, so a button that cannot work
+/// *Fit*, the two normal entries and the *Stage* toggle are greyed by what the
+/// track is missing: each asks core's own half of their step's validation, so a button that cannot work
 /// is not offered and the sentence a person reads is the one the step would
 /// have refused with.
 #[test]
 fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     let track = frameless_bearing_track();
     let refusals = super::photometric_refusals(None, &track, StageKind::Cluster);
-    for (what, refusal) in [("Fit", &refusals.fit), ("Stage", &refusals.stage)] {
+    for (what, refusal) in [
+        ("Fit", &refusals.fit),
+        ("Stage", &refusals.stage),
+        ("Fit Normal", &refusals.normal),
+    ] {
         let why = refusal
             .as_deref()
             .unwrap_or_else(|| panic!("{what} should be greyed on a track with no patch"));
@@ -1876,11 +1880,13 @@ fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
     let refusals = super::photometric_refusals(None, whole, StageKind::Cluster);
     assert!(refusals.fit.is_none(), "{:?}", refusals.fit);
     assert!(refusals.stage.is_none(), "{:?}", refusals.stage);
+    assert!(refusals.normal.is_none(), "{:?}", refusals.normal);
 
     // Busy wins over everything, as it did before.
     let refusals = super::photometric_refusals(Some("Busy."), whole, StageKind::Cluster);
     assert_eq!(refusals.fit.as_deref(), Some("Busy."));
     assert_eq!(refusals.stage.as_deref(), Some("Busy."));
+    assert_eq!(refusals.normal.as_deref(), Some("Busy."));
 }
 
 /// The ZNCC grid's colours run red, yellow, green, from 50 to 100. A cell

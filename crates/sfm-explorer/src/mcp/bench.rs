@@ -1181,6 +1181,25 @@ pub(super) fn fit_bench_track(state: &mut AppState, label: &str, named: Option<&
     }
 }
 
+/// `fit_bench_track_normal`: the track's patch turned to a normal estimated by
+/// `step`, on a worker thread.
+pub(super) fn fit_bench_track_normal(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    step: crate::bench::NormalStep,
+) -> Outcome {
+    let (id, item) = match target(state, label, named) {
+        Ok(target) => target,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    let since = state.action_log.revision();
+    match state.start_bench_normal(id, &item, step) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(()) => started(state, id, since),
+    }
+}
+
 /// `set_bench_track_stage`: the track moved between its two representations, on
 /// a worker thread.
 ///
