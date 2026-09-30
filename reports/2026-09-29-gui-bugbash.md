@@ -105,7 +105,7 @@ Repro on `pan` (8137 of 8734 points at infinity):
 > `from_data`) now fill a `sift_files` value's inline `keypoints_xy` column
 > from its verified `.sift` files when the file lacks it, and every save writes
 > it, so `keypoint_xy` answers for these observations and the points source
-> finds them. Branch `sfmr-load-fills-sift-keypoints`._
+> finds them. PR #666._
 
 `nearby_points` (`crates/sfmtool-core/src/bench/nearby/points.rs`) finds
 candidates through `ObservationIndex`, which reads `view.keypoint_xy(k)`. A
