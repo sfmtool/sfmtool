@@ -1033,9 +1033,13 @@ fn each_threshold_box_stands_under_the_heading_of_what_it_judges() {
     };
     let heading = |text: &str| rect(text).left();
     for (label, under, before) in [
-        (super::MIN_ZNCC_LABEL, "ZNCC", "Proj. err"),
-        (super::MIN_ZNCC_MIDDLE_LABEL, "ZNCC", "Proj. err"),
-        (super::MAX_SELF_SIMILARITY_LABEL, "Self-similarity", "Shift"),
+        (super::MIN_ZNCC_LABEL, "ZNCC", "Self-similarity"),
+        (super::MIN_ZNCC_MIDDLE_LABEL, "ZNCC", "Self-similarity"),
+        (
+            super::MAX_SELF_SIMILARITY_LABEL,
+            "Self-similarity",
+            "Proj. err",
+        ),
         (super::MAX_SHIFT_LABEL, "Shift", "Status"),
     ] {
         let press = box_point(label, rect(label));
@@ -2033,12 +2037,14 @@ fn the_self_similarity_heading_says_what_it_shows() {
 const NARROW: egui::Vec2 = egui::vec2(600.0, 900.0);
 
 /// Where, over the rows, the pointer is put to scroll or drag them: in the
-/// *Name* column of the second row, clear of every control.
+/// *ZNCC* column of the second row, clear of every control.
 const OVER_THE_ROWS: egui::Pos2 = egui::pos2(260.0, 300.0);
 
-/// What the tests watch move: the ZNCC heading, the whole-ZNCC box's unit,
-/// the first row's ZNCC cell and the geometry search box's label, which is
-/// above the table and must not move.
+/// What the tests watch move: the self-similarity heading, the
+/// self-similarity box's unit, the first row's self-similarity cell and the
+/// geometry search box's label, which is above the table and must not move.
+/// The self-similarity column rather than the ZNCC one because it stays in
+/// sight after a drag of 200 points to the left.
 struct Watched {
     heading: f32,
     bar: f32,
@@ -2069,16 +2075,21 @@ fn narrow_frame(
             .left()
     };
     Watched {
-        heading: left(texts.iter().find(|t| t.text == "ZNCC"), "the ZNCC heading"),
+        heading: left(
+            texts.iter().find(|t| t.text == "Self-similarity"),
+            "the self-similarity heading",
+        ),
         bar: left(
-            texts.iter().find(|t| t.text == super::MIN_ZNCC_LABEL),
-            "the whole-ZNCC box",
+            texts
+                .iter()
+                .find(|t| t.text == super::MAX_SELF_SIMILARITY_LABEL),
+            "the self-similarity box",
         ),
         cell: left(
             texts
                 .iter()
-                .find(|t| t.text.contains("% whole") && t.text.ends_with("% mid")),
-            "a row's ZNCC cell",
+                .find(|t| t.text.contains("px whole") && t.text.ends_with("px mid")),
+            "a row's self-similarity cell",
         ),
         above: left(
             texts
@@ -2499,30 +2510,50 @@ fn the_pin_pins_a_verdict_and_unpins_a_pinned_one() {
 }
 
 /// The Name column elides a long name in its middle, and hovering it shows
-/// the name whole.
+/// the name whole. Hovering the image's index shows the same name.
 #[test]
 fn hovering_a_name_shows_it_whole() {
-    let (state, id, _, mut panel, ctx) = on_the_bench();
-    let node = state.node(id).expect("the node");
-    let name = node.recon().image_table.images[1].name.clone();
-    let y = row_y(&mut panel, &ctx, &state, 1);
-    let at = egui::pos2(190.0, y + 8.0);
-    let response = at_pointer(&mut panel, &ctx, &state, at, false);
-    assert_eq!(response.hovered_image, Some(1), "the row lost its hover");
-    // A tooltip shows after the pointer has rested, so a few more frames.
-    let mut texts = Vec::new();
-    for _ in 0..4 {
-        texts = painted(
-            &mut panel,
-            &ctx,
-            &state,
-            vec![egui::Event::PointerMoved(at)],
+    let cols = super::table::ColumnLayout::new();
+    for (column, x) in [
+        ("Name", cols.name_x(super::BodyMode::Edited)),
+        ("Img", cols.image_x()),
+    ] {
+        let (state, id, _, mut panel, ctx) = on_the_bench();
+        // A tooltip waits out `tooltip_delay` before it shows, which a
+        // headless frame has no wall clock to pass.
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let node = state.node(id).expect("the node");
+        let name = node.recon().image_table.images[1].name.clone();
+        let y = row_y(&mut panel, &ctx, &state, 1);
+        // The Name cell prints the name itself where it fits, so the hover
+        // is what adds one more copy of it.
+        let shown = painted(&mut panel, &ctx, &state, Vec::new())
+            .iter()
+            .filter(|t| **t == name)
+            .count();
+        let at = egui::pos2(x + 10.0, y + 8.0);
+        let response = at_pointer(&mut panel, &ctx, &state, at, false);
+        assert_eq!(response.hovered_image, Some(1), "the row lost its hover");
+        // A tooltip shows after the pointer has rested, so a few more frames.
+        let mut texts = Vec::new();
+        for _ in 0..12 {
+            texts = painted(
+                &mut panel,
+                &ctx,
+                &state,
+                vec![egui::Event::PointerMoved(at)],
+            );
+        }
+        let hovered = texts.iter().filter(|t| **t == name).count();
+        assert_eq!(
+            hovered,
+            shown + 1,
+            "hovering {column} did not show {name:?}: {texts:?}"
         );
     }
-    assert!(
-        texts.iter().any(|t| t == &name),
-        "{name:?} not in {texts:?}"
-    );
 }
 
 /// The hover view of one observation's tile on the focused item, beside the
@@ -2784,7 +2815,9 @@ fn hovering_a_tile_shows_it_in_context_and_keeps_the_row() {
     }
     let texts = painted(&mut panel, &ctx, &state, Vec::new());
     assert!(
-        texts.iter().any(|t| t.starts_with("The patch, boxed")),
+        texts
+            .iter()
+            .any(|t| t.starts_with("\u{2022} Box: the patch")),
         "no hover view caption in {texts:?}"
     );
     assert!(
@@ -3086,14 +3119,15 @@ fn a_row_that_clears_every_bar_but_loses_its_image_says_so() {
     );
 }
 
-/// The crop stands at the table's left edge under *Crop*, the patch tile
-/// after it under *Patch*, and the *Keep* column after that, none of them
-/// overlapping.
+/// The image's index stands at the table's left edge under *Img*, the crop
+/// after it under *Crop*, the patch tile after that under *Patch*, and the
+/// *Keep* column after them, none of them overlapping.
 #[test]
 fn the_crop_and_patch_columns_come_first_under_their_headings() {
     let cols = super::table::ColumnLayout::new();
     let size = super::table::TILE_SIZE;
-    assert_eq!(cols.crop_x(), 0.0);
+    assert_eq!(cols.image_x(), 0.0);
+    assert!(cols.crop_x() > cols.image_x(), "the crop overlaps Img");
     assert!(
         cols.tile_x() >= cols.crop_x() + size,
         "the patch overlaps the crop"
@@ -3103,10 +3137,11 @@ fn the_crop_and_patch_columns_come_first_under_their_headings() {
         "the Keep column overlaps the patch"
     );
     let headers = cols.headers(super::BodyMode::Edited);
-    let firsts: Vec<(f32, &str)> = headers[..3].iter().map(|&(x, h, _)| (x, h)).collect();
+    let firsts: Vec<(f32, &str)> = headers[..4].iter().map(|&(x, h, _)| (x, h)).collect();
     assert_eq!(
         firsts,
         vec![
+            (cols.image_x(), "Img"),
             (cols.crop_x(), "Crop"),
             (cols.tile_x(), "Patch"),
             (cols.keep_x(), "Keep"),
@@ -3598,7 +3633,7 @@ fn hovering_a_crop_shows_it_in_context_and_keeps_the_row() {
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("The patch's outline in this photograph")),
+            .any(|t| t.starts_with("\u{2022} Outline: the patch")),
         "no crop hover caption in {texts:?}"
     );
     let rendered: Vec<usize> = panel.crop_contexts.keys().copied().collect();

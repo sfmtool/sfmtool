@@ -2012,7 +2012,7 @@ fn entry(ui: &mut egui::Ui, text: &str, refusal: Option<String>, hint: &str) -> 
     }
 }
 
-/// The line the crop's hover view adds under its picture: the pixel the
+/// The two bullets the crop's hover view adds under its picture: the pixel the
 /// observation sits at, and its feature index, or `None` for an observation
 /// nothing has placed.
 ///
@@ -2030,7 +2030,7 @@ fn crop_caption(
 ) -> Option<String> {
     let pixel = crate::bench::observation_site(row)?.pixel;
     let feature = match row.provenance {
-        Provenance::Descriptor { feature } => format!("feature {feature} of its .sift file"),
+        Provenance::Descriptor { feature } => format!("Index: feature {feature} of its .sift file"),
         Provenance::Origin => {
             let found = origin.and_then(|point| {
                 let view = edited.point(point)?;
@@ -2041,25 +2041,21 @@ fn crop_caption(
                 Some((view.feature_indexes().map(|f| f[k]), k))
             });
             match found {
-                Some((Some(feature), _)) => format!("feature {feature} of its .sift file"),
-                Some((None, k)) => format!(
-                    "observation {k} of the point, whose keypoints the reconstruction stores \
-                     rather than as .sift features"
-                ),
-                None => "no feature index, since the point it was read from is not in this \
-                         version"
+                Some((Some(feature), _)) => format!("Index: feature {feature} of its .sift file"),
+                Some((None, k)) => format!("Index: observation {k} of the point"),
+                None => "No feature index: the point it was read from is not in this version"
                     .to_string(),
             }
         }
-        Provenance::Search { .. } => "no feature index: a descriptor search placed it".to_string(),
-        Provenance::Sweep => "no feature index: the view sweep placed it".to_string(),
-        Provenance::Pixel => "no feature index: it was placed by hand".to_string(),
+        Provenance::Search { .. } => "No feature index: a descriptor search placed it".to_string(),
+        Provenance::Sweep => "No feature index: the view sweep placed it".to_string(),
+        Provenance::Pixel => "No feature index: it was placed by hand".to_string(),
         Provenance::Point { point } => {
-            format!("no feature index: it was taken from point {point}")
+            format!("No feature index: it was taken from point {point}")
         }
     };
     Some(format!(
-        "The observation sits at pixel ({:.1}, {:.1}), {feature}.",
+        "\u{2022} At pixel ({:.1}, {:.1})\n\u{2022} {feature}",
         pixel[0], pixel[1]
     ))
 }

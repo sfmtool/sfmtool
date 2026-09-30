@@ -807,9 +807,9 @@ row directly under the column headings**, each in the column of the readings it
 judges and followed by the unit and name those readings print with:
 
 ```
-Crop  Patch  Keep  Img  Name       ZNCC          Proj. err  Self-similarity        Shift     Status
-Thresholds                         [70]% whole              [2.5] px whole         [6.0] px
-                                   [70]% mid
+Img  Crop  Patch  Keep  ZNCC          Self-similarity           Proj. err  Shift     Status  ...  Name
+Thresholds              [70]% whole         [2.5] px whole                   [6.0] px
+                        [70]% mid
 ```
 
 The row is drawn above the scroll area with the headings, so a bar stays beside
@@ -926,14 +926,21 @@ so a drag of either is added to its offset by the panel. The tests cover a
 sideways wheel in both units, a middle and a left drag over the rows and the
 headings, and a drag begun on a switch.
 
-The crop of the photograph around the patch's outline is the first
-column, at the table's left edge, under *Crop*; the rendered tile is the
-second, under *Patch*; and the verdict column follows them, *Keep* in Edited
-mode and *Verdict* in Viewed mode. The crop comes first because it
-is the photograph as it is, and the tile beside it is that patch warped square,
-so the eye reads from the raw pixels to the picture the numbers are read from.
+The image's index is the first column, at the table's left edge, under
+*Img*; the crop of the photograph around the patch's outline is the second,
+under *Crop*; the rendered tile is the third, under *Patch*; and the verdict
+column follows them, *Keep* in Edited mode and *Verdict* in Viewed mode. The
+crop comes before the tile because it is the photograph as it is, and the tile
+beside it is that patch warped square, so the eye reads from the raw pixels to
+the picture the numbers are read from. The two photometric columns come
+straight after the verdict, *ZNCC* and then *Self-similarity*, since they are
+the readings the verdict is most often decided by; the reprojection error, the
+shift, the status and, in Edited mode, the provenance follow them. The image's
+name is the last column, 220 points wide: hovering it or the *Img* cell shows
+the name whole, so the room in the middle of the table goes to the readings.
 The columns stand at the same offsets in both modes, and Viewed mode has no
-*From* column, since every row of a committed point came from the point.
+*From* column, since every row of a committed point came from the point;
+*Name* moves left into the room *From* leaves.
 The headings are drawn at the cells' own body size, in the weak text colour so
 they still read as headings. Each heading has hover text over the width of its
 column, running to where the next heading starts, saying what the column holds:
@@ -982,13 +989,14 @@ that is not there prints a bare `-`, with no unit.
 | Patch (the tile) | the `R x R` grid the refinement kernel samples where the observation sits, at its shape; hovering it shows it in context | the patch re-rendered from this observation, re-anchored where it sits, through `patch::patch_color_image`; hovering it shows it in context, with the projection |
 | Keep (Edited) | a switch, on for `in` and off for `out`, then a pushpin, solid on a verdict set by hand and a faint outline otherwise; each takes clicks over the whole height of the row; the cell is tinted by what the bars propose | same |
 | Verdict (Viewed) | absent: a cluster has no Viewed mode | `in` or `out`, the verdict the read-only bars give the row, in a cell tinted green or red by it; `-` untinted where nothing has measured the row |
-| Img, Name | the image's index, and its file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
+| Img | the image's index; hovering it shows the file name whole, as hovering *Name* does | the same |
 | ZNCC | against the reference template, over the middle ZNCC: `92% whole` over `61% mid`, then the ZNCC grid | leave-one-out against the consensus, at the correlation peak within the shift bar of the observation, over the middle ZNCC, then the ZNCC grid |
+| Self-similarity | the surface plot, then the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid | the same |
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
-| Self-similarity | the tile's ZNCC self-similarity radius over its middle square's: `0.4 px whole` over `3+ px mid`, `3+` for the largest, then the self-similarity grid and the surface plot | the same |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; just before Status, which says what a fit did with a shift past the bar |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the one the fit scored at the walked peak (left out where it scored none), `localized` where the evaluation scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
+| Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
 
 A cell with nothing measured behind it reads `-`, which says the difference
 between a number a round produced and a round that has not been run.
@@ -1039,7 +1047,8 @@ matching shifts line up along one direction, as on an edge. Hovering it shows
 its nine numbers as the cell prints them. The self-similarity bar judges
 `whole`; the middle and the grid are shown and judged by no bar.
 
-**Beside the grid is the core's surface plot**: the whole core's ZNCC against
+**The column opens with the core's surface plot**, before the two readings:
+the whole core's ZNCC against
 itself at every whole-pixel shift the radius searches, interpolated between
 the shifts (Catmull-Rom, repeating the edge value past the square's edge)
 and drawn over the whole square of shifts, with the contour at `1 - τ`, the
@@ -1173,10 +1182,11 @@ reads. Over the picture are drawn:
 The marks are egui shapes over the picture rather than pixels written into it,
 each a light stroke over a wider dark one so that it reads over bright and dark
 photographs alike, the ring in amber. They are clipped to the picture, so a
-projection outside it shows as the line leaving the edge towards it. A caption
-under the picture says what each mark is and how far the projection is, in the
-photograph's pixels, and that a cluster has no point to project. At the cluster
-stage there is no ring and no line.
+projection outside it shows as the line leaving the edge towards it. The
+tooltip opens with the photograph's full name, the text the *Name* column's
+hover shows, and under the picture short bullets say what each mark is and how
+far the projection is, in the photograph's pixels, or that a cluster has no
+point to project. At the cluster stage there is no ring and no line.
 
 The wider picture is rendered the first time the pointer rests on a tile and
 kept per row beside the tiles, dropped with them when a step moves the track,
@@ -1218,15 +1228,17 @@ outline are the tile's hover view's marks, drawn by the same code
 stage, the amber ring where the track's point projects, or before the track is
 triangulated its patch's centre, with a dashed line from the dot to the ring.
 The picture is the photograph itself, so each mark sits at its own pixel. The
-crop is not boxed: the outline already shows where it is. The caption says
-what the marks are and how far the projection is, in the sentence the tile's
-hover view uses (`tile::projection_sentence`), then gives the crop's size in
-photograph pixels and the patch's two axes, the one across the tile and the one up it, as
-lengths in the photograph's pixels. At the track stage each axis is measured
+crop is not boxed: the outline already shows where it is. As on the tile,
+the tooltip opens with the photograph's full name, and short bullets under the
+picture say what the outline and the view are, with the crop's size in
+photograph pixels, what the marks are and how far the projection is, in the
+bullet the tile's hover view uses (`tile::projection_bullet`), and the patch's
+two axes, the one across the tile and the one up it, as lengths in the
+photograph's pixels. At the track stage each axis is measured
 along its projection through the lens, from one edge's midpoint through the
 centre to the opposite edge's, so a bent axis is measured along its bend; at
-the cluster stage it is the shape's column times the template's width. A last
-line gives the pixel the observation sits at and its feature index
+the cluster stage it is the shape's column times the template's width. Two
+last bullets give the pixel the observation sits at and its feature index
 (`crop_caption`): the `.sift` feature a row put on by index names, or, for a
 row read from the point the track came from, that point's feature in the same
 image; on a reconstruction that stores its keypoints there is no `.sift` feature
@@ -1615,8 +1627,9 @@ The whole bench family is [`bench.md`](bench.md) § "The wire" and
   `in` row ruled against the bars proposed `out` with the failing bar in its
   hover text, and unpinning it turning it `out`; of two sightings in one image
   that clear every bar, the one that loses the image proposed `out` with the
-  image named in its hover text; the crop column at the table's left edge
-  under *Crop*, the tile after it under *Patch* and *Keep* after that; the
+  image named in its hover text; the *Img* column at the table's left edge,
+  the crop after it under *Crop*, the tile after that under *Patch* and *Keep*
+  after them; the
   headings as tall as the cells; the
   cells following the stage; every row's tile at both stages,
   and a fresh row's cut around its seed; a tile's hover view at both stages

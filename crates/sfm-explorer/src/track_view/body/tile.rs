@@ -395,15 +395,16 @@ pub(super) fn paint_marks(
     }
 }
 
-/// The words under a tile's hover view: what the picture is, and what each
+/// The bullets under a tile's hover view: what the picture is, and what each
 /// mark on it is.
 pub(super) fn context_caption(context: &TileContext) -> String {
     let side = context.image.size[0] as f32;
     let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(side, side));
     format!(
-        "The patch, boxed, in {CONTEXT_FACTOR} times its width of this photograph. The dot is \
-         where the observation sits.{}",
-        projection_sentence(
+        "\u{2022} Box: the patch, in {CONTEXT_FACTOR}x its width of the photograph\n\
+         \u{2022} Dot: where the observation sits\n\
+         {}",
+        projection_bullet(
             context.projection_of,
             context.projection.map(|at| !view.contains(at)),
             context.projection_px,
@@ -411,32 +412,32 @@ pub(super) fn context_caption(context: &TileContext) -> String {
     )
 }
 
-/// What a hover view's caption says about its ring, with a leading space:
-/// what was projected, and how far from the observation it landed.
+/// The bullet a hover view's caption gives its ring: what was projected, and
+/// how far from the observation it landed.
 ///
 /// `outside` is whether the ring lies outside the picture, `None` where there
 /// is no ring to draw; `projection_px` the distance in the photograph's
 /// pixels, `None` where nothing projected. Shared by the tile's hover view and
 /// the crop's, so the two say one thing about one mark.
-pub(super) fn projection_sentence(
+pub(super) fn projection_bullet(
     projection_of: Option<ProjectionOf>,
     outside: Option<bool>,
     projection_px: Option<f64>,
 ) -> String {
-    let (what, what_first) = match projection_of {
-        None => return " A cluster has no point to project.".to_string(),
-        Some(ProjectionOf::Point) => ("the track's point", "The track's point"),
-        Some(ProjectionOf::PatchCentre) => ("the patch's centre", "The patch's centre"),
+    let what = match projection_of {
+        None => return "\u{2022} No ring: a cluster has no point to project".to_string(),
+        Some(ProjectionOf::Point) => "the track's point",
+        Some(ProjectionOf::PatchCentre) => "the patch's centre",
     };
     match (outside, projection_px) {
         (Some(outside), Some(px)) => format!(
-            " The ring is where {what} projects, {px:.2} px away along the dashed line{}",
-            if outside { ", outside this view." } else { "." }
+            "\u{2022} Ring: where {what} projects, {px:.2} px away along the dashed line{}",
+            if outside { ", outside this view" } else { "" }
         ),
         (None, Some(px)) => format!(
-            " {what_first} projects {px:.2} px away, off the patch's plane as this view \
-             sees it.",
+            "\u{2022} No ring: {what} projects {px:.2} px away, off the patch's plane as this \
+             view sees it",
         ),
-        _ => format!(" {what_first} does not project into this photograph."),
+        _ => format!("\u{2022} No ring: {what} does not project into this photograph"),
     }
 }

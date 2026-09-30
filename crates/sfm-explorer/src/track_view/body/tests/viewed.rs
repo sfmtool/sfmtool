@@ -144,6 +144,9 @@ fn viewed_mode_draws_the_point_id_and_no_steps() {
     assert_eq!(clicked.select_image, Some(0), "the click was not the row's");
 }
 
+/// Viewed mode's headings are Edited mode's at the same offsets, with
+/// *Verdict* for *Keep* and no *From*; *Name*, the last column, moves left
+/// into the room *From* leaves.
 #[test]
 fn the_viewed_headings_are_edited_mode_s_with_verdict_for_keep() {
     let cols = ColumnLayout::new();
@@ -153,7 +156,11 @@ fn the_viewed_headings_are_edited_mode_s_with_verdict_for_keep() {
         .filter(|&(_, heading, _)| heading != "From")
         .map(|(x, heading, _)| {
             (
-                x,
+                if heading == "Name" {
+                    cols.name_x(BodyMode::Viewed)
+                } else {
+                    x
+                },
                 if heading == "Keep" {
                     "Verdict"
                 } else {
@@ -168,6 +175,7 @@ fn the_viewed_headings_are_edited_mode_s_with_verdict_for_keep() {
         .map(|(x, heading, _)| (x, heading))
         .collect();
     assert_eq!(viewed, edited);
+    assert_eq!(viewed.last().map(|&(_, h)| h), Some("Name"));
 
     let (state, _id, mut panel, ctx) = viewing();
     let texts = painted(&mut panel, &ctx, &state);
@@ -445,7 +453,7 @@ fn the_crop_caption_gives_the_pixel_and_the_feature_index() {
     );
     row.provenance = sfmtool_core::bench::Provenance::Pixel;
     let caption = crop_caption(edited, None, &row).expect("placed");
-    assert!(caption.contains("no feature index"), "{caption}");
+    assert!(caption.contains("No feature index"), "{caption}");
 }
 
 #[test]

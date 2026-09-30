@@ -4,11 +4,12 @@
 //! The observation table: the columns, one row per observation, and the
 //! verdict cell each row carries.
 //!
-//! The crop of the photograph around the patch's outline comes first, at the
-//! table's left edge, then the rendered patch tile, then the verdict cell,
-//! then the image and its name, the stage's own photometric numbers and the
-//! reprojection error, the kernel's status and, in Edited mode, where the
-//! observation came from.
+//! The image's index comes first, at the table's left edge, then the crop of
+//! the photograph around the patch's outline, the rendered patch tile and the
+//! verdict cell. After them come the stage's own photometric numbers, the ZNCC
+//! and then the self-similarity, whose column opens with its surface plot;
+//! then the reprojection error, the shift, the kernel's status, in Edited
+//! mode where the observation came from, and last the image's name.
 //!
 //! The verdict cell is the one column the two modes draw differently. In
 //! Edited mode it is *Keep*: a switch and a pin, the row's own verdict. In
@@ -58,6 +59,9 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 const KEEP_WIDTH: f32 = 64.0;
 /// Width of the *From* column: room for its longest cell, `feature 123456`.
 const FROM_WIDTH: f32 = 110.0;
+/// Width of the *Name* column, the last one. A name longer than this is
+/// elided in its middle, and hovering it or the *Img* cell shows it whole.
+const NAME_WIDTH: f32 = 220.0;
 /// Width of the part of the *Keep* cell the switch takes; the pin takes the
 /// rest.
 const SWITCH_CELL_WIDTH: f32 = 40.0;
@@ -124,74 +128,83 @@ pub(crate) struct RowSummary {
 
 /// Fixed column x-offsets, relative to the left edge of the table.
 pub(super) struct ColumnLayout {
-    keep: f32,
-    tile: f32,
-    crop: f32,
     image: f32,
-    name: f32,
+    crop: f32,
+    tile: f32,
+    keep: f32,
     zncc: f32,
     zncc_grid: f32,
-    shift: f32,
-    offset: f32,
+    self_similarity_plot: f32,
     self_similarity: f32,
     self_similarity_grid: f32,
-    self_similarity_plot: f32,
+    offset: f32,
+    shift: f32,
     status: f32,
     from: f32,
 }
 
 impl ColumnLayout {
     pub(super) fn new() -> Self {
-        let crop = 0.0;
+        let image = 0.0;
+        let crop = image + 34.0;
         let tile = crop + TILE_SIZE + 4.0;
         let keep = tile + TILE_SIZE + 8.0;
-        let image = keep + KEEP_WIDTH + 6.0;
-        let name = image + 34.0;
-        let zncc = name + 130.0;
+        let zncc = keep + KEEP_WIDTH + 6.0;
         // Room for `100% whole`, then the ZNCC grid.
         let zncc_grid = zncc + 80.0;
-        let offset = zncc_grid + GRID_SIDE + 10.0;
-        // Room for the error in px over the same residual in degrees,
-        // `12.65 px` over `0.08°`.
-        let self_similarity = offset + 66.0;
+        // The self-similarity column opens with the core's surface plot.
+        let self_similarity_plot = zncc_grid + GRID_SIDE + 10.0;
         // Room for `2.3 px whole`, then the self-similarity grid.
+        let self_similarity = self_similarity_plot + PLOT_SIDE + 8.0;
         let self_similarity_grid = self_similarity + 88.0;
-        // Then the core's surface plot.
-        let self_similarity_plot = self_similarity_grid + GRID_SIDE + 8.0;
-        // The shift sits beside the status, which says what a fit did with a
-        // shift past the bar. Room for `12.25 px`.
-        let shift = self_similarity_plot + PLOT_SIDE + 10.0;
+        let offset = self_similarity_grid + GRID_SIDE + 10.0;
+        // Room for the error in px over the same residual in degrees,
+        // `12.65 px` over `0.08°`. The shift sits beside the status, which
+        // says what a fit did with a shift past the bar.
+        let shift = offset + 66.0;
+        // Room for `12.25 px`.
         let status = shift + 62.0;
         // The status cell holds a sentence at the track stage -- the reason a
         // row was not read, or the walk a fit refused and what it scored -- so
         // it is given room for one and elided to it.
         let from = status + 270.0;
         Self {
-            keep,
-            tile,
-            crop,
             image,
-            name,
+            crop,
+            tile,
+            keep,
             zncc,
             zncc_grid,
-            shift,
-            offset,
+            self_similarity_plot,
             self_similarity,
             self_similarity_grid,
-            self_similarity_plot,
+            offset,
+            shift,
             status,
             from,
         }
     }
 
-    /// The table's width in `mode`: to the end of *From* in Edited mode, and of
-    /// *Status* in Viewed mode, which draws no *From*. What the table scrolls
-    /// sideways over when the panel is narrower.
+    /// The table's width in `mode`, to the end of *Name*. What the table
+    /// scrolls sideways over when the panel is narrower.
     pub(super) fn width(&self, mode: BodyMode) -> f32 {
+        self.name_x(mode) + NAME_WIDTH
+    }
+
+    /// The *Name* column's offset from the table's left edge in `mode`. It is
+    /// the last column, after *From* in Edited mode and after *Status* in
+    /// Viewed mode, which draws no *From*.
+    pub(super) fn name_x(&self, mode: BodyMode) -> f32 {
         match mode {
             BodyMode::Edited => self.from + FROM_WIDTH,
             BodyMode::Viewed => self.from,
         }
+    }
+
+    /// The *Img* column's offset from the table's left edge.
+    #[cfg(test)]
+    pub(super) fn image_x(&self) -> f32 {
+        self.image
     }
 
     /// The tile column's offset from the table's left edge.
@@ -222,24 +235,28 @@ impl ColumnLayout {
             BodyMode::Viewed => (self.keep, "Verdict", VERDICT_TIP),
         };
         let mut headers = vec![
-            (self.crop, "Crop", CROP_TIP),
-            (self.tile, "Patch", PATCH_TIP),
-            verdict,
             (
                 self.image,
                 "Img",
                 "The image's index in the reconstruction.",
             ),
-            (self.name, "Name", "The image's file name."),
+            (self.crop, "Crop", CROP_TIP),
+            (self.tile, "Patch", PATCH_TIP),
+            verdict,
             (self.zncc, "ZNCC", ZNCC_TIP),
+            (
+                self.self_similarity_plot,
+                "Self-similarity",
+                SELF_SIMILARITY_TIP,
+            ),
             (self.offset, "Proj. err", PROJECTION_ERROR_TIP),
-            (self.self_similarity, "Self-similarity", SELF_SIMILARITY_TIP),
             (self.shift, "Shift", SHIFT_TIP),
             (self.status, "Status", STATUS_TIP),
         ];
         if mode == BodyMode::Edited {
             headers.push((self.from, "From", FROM_TIP));
         }
+        headers.push((self.name_x(mode), "Name", "The image's file name."));
         headers
     }
 }
@@ -1180,6 +1197,7 @@ impl TrackBody {
                 egui::Sense::hover(),
             )
             .on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(&name).strong());
                 match self.ensure_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
                     None => {
@@ -1206,7 +1224,8 @@ impl TrackBody {
             }
             None => false,
         };
-        // The pixel and the feature index, under the hover view's own caption.
+        // The pixel and the feature index, the last bullets under the hover
+        // view's own.
         let crop_caption = if cropped {
             let origin = self.showing.as_ref().and_then(|showing| showing.origin);
             crate::scene::node_by_id(&state.scene, id)
@@ -1221,6 +1240,7 @@ impl TrackBody {
                 egui::Sense::hover(),
             )
             .on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(&name).strong());
                 match self.ensure_crop_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
                     None => {
@@ -1247,7 +1267,8 @@ impl TrackBody {
             );
         };
         text(cols.image, &format!("{}", row.image), text_color);
-        let shown = crate::elide::middle(&name, cols.zncc - cols.name - 8.0, |value| {
+        let name_x = cols.name_x(mode);
+        let shown = crate::elide::middle(&name, NAME_WIDTH - 8.0, |value| {
             ui.ctx().fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(value.to_owned(), font.clone(), weak)
@@ -1255,19 +1276,26 @@ impl TrackBody {
                     .width()
             })
         });
-        text(cols.name, &shown, weak);
+        text(name_x, &shown, weak);
         // The name is elided in its middle to fit the column, so hovering the
-        // column shows it whole.
-        let name_rect = egui::Rect::from_min_max(
-            egui::pos2(x0 + cols.name, rect.min.y),
-            egui::pos2(x0 + cols.zncc - 8.0, rect.max.y),
-        );
-        ui.interact(
-            name_rect,
-            ui.id().with(("track_view_name", observation)),
-            egui::Sense::hover(),
-        )
-        .on_hover_text(&name);
+        // column shows it whole. Hovering the image's index shows the same
+        // name, since the index is at the table's left edge and the name at
+        // its right.
+        for (which, from, to) in [
+            ("track_view_name", name_x, name_x + NAME_WIDTH - 8.0),
+            ("track_view_image", cols.image, cols.crop - 4.0),
+        ] {
+            let cell = egui::Rect::from_min_max(
+                egui::pos2(x0 + from, rect.min.y),
+                egui::pos2(x0 + to, rect.max.y),
+            );
+            ui.interact(
+                cell,
+                ui.id().with((which, observation)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(&name);
+        }
         // While an evaluation of new inputs is on its way the numbers are the
         // last evaluation's, and they are greyed so that they do not read as
         // the numbers of the track as it now stands.
@@ -1654,7 +1682,7 @@ fn draw_threshold_row(
     // is to the scroll area.
     let clip = ui.clip_rect().intersect(band);
     ui.painter().text(
-        egui::pos2(rect.min.x + cols.crop, rect.min.y + 0.5 * line),
+        egui::pos2(rect.min.x + cols.image, rect.min.y + 0.5 * line),
         egui::Align2::LEFT_CENTER,
         "Thresholds",
         egui::TextStyle::Body.resolve(ui.style()),

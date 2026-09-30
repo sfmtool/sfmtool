@@ -454,7 +454,7 @@ impl DrawnCrop {
     }
 }
 
-/// The words under a crop's hover view: what the picture is, what its marks
+/// The bullets under a crop's hover view: what the picture is, what its marks
 /// are, and the patch's two axes in the photograph's pixels.
 pub(super) fn context_caption(picture: &CropPicture) -> String {
     let [w, h] = picture.crop.size;
@@ -467,10 +467,12 @@ pub(super) fn context_caption(picture: &CropPicture) -> String {
         egui::vec2(picture.image.size[0] as f32, picture.image.size[1] as f32),
     );
     format!(
-        "The patch's outline in this photograph, in {CONTEXT_FACTOR} times the width and height \
-         of the row's crop, {w} x {h} px of the photograph. The dot is where the observation \
-         sits.{} The patch's axis across the tile is {} long here, and its axis up the tile {}.",
-        super::tile::projection_sentence(
+        "\u{2022} Outline: the patch as it lands in the photograph\n\
+         \u{2022} View: {CONTEXT_FACTOR}x the crop, which is {w} x {h} px of the photograph\n\
+         \u{2022} Dot: where the observation sits\n\
+         {}\n\
+         \u{2022} Axes: {} across the tile, {} up it",
+        super::tile::projection_bullet(
             picture.projection_of,
             picture.projection.map(|at| !view.contains(at)),
             picture.projection_px,
