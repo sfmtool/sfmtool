@@ -1285,6 +1285,96 @@ fn test_verify_rejects_member_feature_out_of_range() {
 }
 
 #[test]
+fn test_write_validation_member_geometry_nan() {
+    let mut data = make_cluster_test_data();
+    data.clusters
+        .as_mut()
+        .unwrap()
+        .member_positions
+        .as_mut()
+        .unwrap()[[2, 1]] = f32::NAN;
+    expect_write_error(
+        "matches_test_member_position_nan",
+        &data,
+        "member_positions[2] contains NaN",
+    );
+
+    let mut data = make_cluster_test_data();
+    data.clusters
+        .as_mut()
+        .unwrap()
+        .member_affine_shapes
+        .as_mut()
+        .unwrap()[[3, 1, 0]] = f32::NAN;
+    expect_write_error(
+        "matches_test_member_shape_nan",
+        &data,
+        "member_affine_shapes[3] contains NaN",
+    );
+}
+
+#[test]
+fn test_verify_rejects_member_geometry_nan() {
+    expect_verify_error(
+        "matches_test_verify_member_position_nan",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "clusters/member_positions.5.2.float32.zst",
+                |bytes| {
+                    set_f32(bytes, 5, f32::NAN); // member 2, y
+                },
+            )
+        },
+        "member_positions[2] contains NaN",
+    );
+    expect_verify_error(
+        "matches_test_verify_member_shape_nan",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "clusters/member_affine_shapes.5.2.2.float32.zst",
+                |bytes| {
+                    set_f32(bytes, 13, f32::NAN); // member 3, [0][1]
+                },
+            )
+        },
+        "member_affine_shapes[3] contains NaN",
+    );
+}
+
+#[test]
+fn test_verify_rejects_config_index_out_of_range() {
+    let data = make_test_data_with_tvg();
+    let pair_count = data
+        .two_view_geometries
+        .as_ref()
+        .unwrap()
+        .config_indexes
+        .len();
+    let config_types = data
+        .two_view_geometries
+        .as_ref()
+        .unwrap()
+        .config_types
+        .len();
+    expect_verify_error(
+        "matches_test_verify_config_index_oob",
+        &data,
+        |entries| {
+            mutate_entry(
+                entries,
+                &format!("two_view_geometries/config_indexes.{pair_count}.uint8.zst"),
+                |bytes| bytes[1] = config_types as u8,
+            )
+        },
+        &format!("config_indexes[1] = {config_types} >= config_types length {config_types}"),
+    );
+}
+
+#[test]
 fn test_verify_rejects_cluster_patches_without_clusters() {
     expect_verify_error(
         "matches_test_verify_cp_no_clusters",

@@ -1036,6 +1036,27 @@ fn validate_clusters_constraints(
         }
     }
 
+    if let Some(positions) = &clusters.member_positions {
+        if let Some(k) = positions
+            .outer_iter()
+            .position(|row| row.iter().any(|v| v.is_nan()))
+        {
+            return Err(MatchesError::InvalidFormat(format!(
+                "member_positions[{k}] contains NaN"
+            )));
+        }
+    }
+    if let Some(shapes) = &clusters.member_affine_shapes {
+        if let Some(k) = shapes
+            .outer_iter()
+            .position(|m| m.iter().any(|v| v.is_nan()))
+        {
+            return Err(MatchesError::InvalidFormat(format!(
+                "member_affine_shapes[{k}] contains NaN"
+            )));
+        }
+    }
+
     Ok(())
 }
 

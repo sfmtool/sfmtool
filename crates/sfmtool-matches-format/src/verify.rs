@@ -859,6 +859,20 @@ fn check_clusters_structure(
         }
     }
 
+    // Member geometry holds a real position and shape on every row.
+    if clusters_ok {
+        for (name, raw, per_member) in [
+            ("member_positions", &backbone.member_positions, 2),
+            ("member_affine_shapes", &backbone.member_affine_shapes, 4),
+        ] {
+            if let Some(raw) = raw {
+                if let Some(i) = raw_to_f32(raw).iter().position(|v| v.is_nan()) {
+                    errors.push(format!("{name}[{}] contains NaN", i / per_member));
+                }
+            }
+        }
+    }
+
     backbone.consistent = clusters_ok;
 }
 
@@ -1123,16 +1137,15 @@ fn verify_two_view_geometries_section<R: std::io::Read + Seek>(
     // Hash all TVG files in lexicographic order
 
     // two_view_geometries/config_indexes
-    tvg_hasher.update(&read_zst_entry(
+    let config_indexes_raw = read_zst_entry(
         archive,
         &entries::two_view_geometries_config_indexes(pair_count),
-    )?);
+    )?;
+    tvg_hasher.update(&config_indexes_raw);
 
     // two_view_geometries/config_types.json
-    tvg_hasher.update(&read_zst_entry(
-        archive,
-        entries::two_view_geometries_config_types(),
-    )?);
+    let config_types_raw = read_zst_entry(archive, entries::two_view_geometries_config_types())?;
+    tvg_hasher.update(&config_types_raw);
 
     // two_view_geometries/e_matrices
     tvg_hasher.update(&read_zst_entry(
@@ -1188,6 +1201,19 @@ fn verify_two_view_geometries_section<R: std::io::Read + Seek>(
         stored.two_view_geometries_xxh128.as_deref(),
         errors,
     );
+
+    // Every config index names an entry of config_types.
+    let config_types: Vec<serde_json::Value> = serde_json::from_slice(&config_types_raw)?;
+    if let Some((k, &idx)) = config_indexes_raw
+        .iter()
+        .enumerate()
+        .find(|&(_, &idx)| idx as usize >= config_types.len())
+    {
+        errors.push(format!(
+            "config_indexes[{k}] = {idx} >= config_types length {}",
+            config_types.len()
+        ));
+    }
 
     // Validate inlier_counts sum
     if !inlier_counts_raw.is_empty() {
