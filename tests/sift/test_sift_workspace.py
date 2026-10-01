@@ -73,6 +73,39 @@ def test_sift_cli_override_workspace(isolated_seoul_bull_image: Path):
     assert len(opencv_dirs) == 1
 
 
+def test_sift_draw_with_tool_override_in_workspace(
+    isolated_seoul_bull_image: Path, tmp_path: Path
+):
+    """--draw --tool reads the features --extract --tool wrote, not the workspace's."""
+    workspace_dir = isolated_seoul_bull_image.parent
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+    assert result.exit_code == 0
+
+    # Only the opencv features exist; the workspace's sfmtool ones were never
+    # extracted.
+    result = CliRunner().invoke(
+        main,
+        ["sift", "--extract", "--tool", "opencv", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code == 0, result.output
+
+    draw_dir = tmp_path / "drawn"
+    result = CliRunner().invoke(
+        main,
+        [
+            "sift",
+            "--draw",
+            str(draw_dir),
+            "--tool",
+            "opencv",
+            str(isolated_seoul_bull_image),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Error" not in result.output
+    assert (draw_dir / isolated_seoul_bull_image.name).exists()
+
+
 def test_sift_no_workspace_error(isolated_seoul_bull_image: Path):
     """Test error when no workspace found and --tool not specified."""
     result = CliRunner().invoke(

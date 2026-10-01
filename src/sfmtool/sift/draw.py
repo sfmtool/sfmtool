@@ -20,6 +20,8 @@ def draw_sift_features(
     feature_indices: "np.ndarray | None" = None,
     feature_tool: str | None = None,
     feature_options: dict | None = None,
+    *,
+    ignore_workspace: bool = False,
 ) -> None:
     """Draw SIFT features with affine shape ellipses on an image.
 
@@ -30,6 +32,9 @@ def draw_sift_features(
         feature_indices: Optional array of feature indices to draw.
         feature_tool: Feature extraction tool name
         feature_options: Optional dict with feature tool options.
+        ignore_workspace: Find the ``.sift`` file from ``feature_tool`` and
+            ``feature_options`` even inside a workspace, rather than from the
+            workspace's feature directory.
 
     Raises:
         FileNotFoundError: If image or SIFT file doesn't exist
@@ -54,6 +59,7 @@ def draw_sift_features(
         image_path,
         feature_tool=feature_tool,
         feature_options=feature_options,
+        ignore_workspace=ignore_workspace,
     )
     try:
         with SiftReader(sift_path) as reader:

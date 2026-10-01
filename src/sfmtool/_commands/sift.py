@@ -236,6 +236,7 @@ def sift(
                     feature_indices=feature_indices,
                     feature_tool=tool,
                     feature_options=feature_options,
+                    ignore_workspace=tool_from_cli,
                 )
             except FileNotFoundError as e:
                 click.echo(f"Error: {e}", err=True)

@@ -467,6 +467,8 @@ def get_sift_path_for_image(
     image_filename: str | Path,
     feature_tool: str | None = None,
     feature_options: dict | None = None,
+    *,
+    ignore_workspace: bool = False,
 ) -> Path:
     """Determine the .sift file path for a given image filename.
 
@@ -477,15 +479,19 @@ def get_sift_path_for_image(
     options that may have drifted from what was used at extraction time.
 
     For images outside a workspace (or in a workspace missing
-    ``feature_prefix_dir``), the path is recomputed from the supplied
-    ``feature_tool`` / ``feature_options``, defaulting to colmap with
-    default options.
+    ``feature_prefix_dir``), or when ``ignore_workspace`` is true, the path is
+    recomputed from the supplied ``feature_tool`` / ``feature_options``,
+    defaulting to colmap with default options. ``ignore_workspace`` is for a
+    caller whose tool overrides the workspace's, as ``sfm sift --tool`` does,
+    so it finds the files that extraction with the same tool wrote.
     """
     image_filename = Path(image_filename).resolve()
 
     from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-    workspace_dir = find_workspace_for_path(image_filename)
+    workspace_dir = (
+        None if ignore_workspace else find_workspace_for_path(image_filename)
+    )
     if workspace_dir is not None:
         workspace_config = load_workspace_config(workspace_dir)
         prefix = workspace_config.get("feature_prefix_dir")
