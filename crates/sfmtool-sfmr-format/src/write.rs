@@ -383,6 +383,17 @@ fn write_sfmr_into<S: EntrySink>(
         observation_count,
         num_buckets,
     )?;
+    // The reader and verifier reject a keypoint outside its image, so the
+    // writer does too rather than write a file it cannot read back.
+    if let Some(keypoints_xy) = &data.keypoints_xy {
+        validate_keypoints(
+            keypoints_xy,
+            data.image_indexes.as_standard_layout().as_slice().unwrap(),
+            data.camera_indexes.as_standard_layout().as_slice().unwrap(),
+            &data.cameras,
+        )
+        .map_err(SfmrError::InvalidFormat)?;
+    }
 
     let mut sink = open_sink()?;
     let mut section_digests = sfmtool_archive_io::SectionDigests::new();

@@ -407,6 +407,27 @@ fn test_sift_files_round_trip_without_inline_keypoints() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Write `data`, then copy it to `dst` with the `index`-th float of
+/// `tracks/keypoints_xy` set to `value` — a keypoint the writer refuses, so the
+/// reader's and verifier's own checks can be exercised.
+fn write_with_keypoint(
+    dir: &std::path::Path,
+    data: &mut SfmrData,
+    index: usize,
+    value: f32,
+    dst: &std::path::Path,
+) {
+    let src = dir.join("valid.sfmr");
+    write_sfmr(&src, data).unwrap();
+    rewrite_entries(&src, dst, |name, raw| {
+        name.starts_with("tracks/keypoints_xy.").then(|| {
+            let mut raw = raw.to_vec();
+            raw[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            raw
+        })
+    });
+}
+
 #[test]
 fn test_sift_files_inline_keypoints_validated_on_read_and_verify() {
     // The bounds check is the column's, not the mode's: an out-of-bounds inline
@@ -416,7 +437,15 @@ fn test_sift_files_inline_keypoints_validated_on_read_and_verify() {
     let mut oob = make_sift_files_data_with_keypoints();
     oob.keypoints_xy.as_mut().unwrap()[[2, 1]] = 5000.0;
     let path = dir.join("oob.sfmr");
-    write_sfmr(&path, &mut oob).unwrap(); // write does not bounds-check
+    let err = write_sfmr(&path, &mut oob).err().unwrap();
+    assert!(format!("{err}").contains("image bounds"), "{err}");
+    write_with_keypoint(
+        &dir,
+        &mut make_sift_files_data_with_keypoints(),
+        2 * 2 + 1,
+        5000.0,
+        &path,
+    );
     let err = read_sfmr(&path).err().unwrap();
     assert!(format!("{err}").contains("image bounds"), "{err}");
     let (valid, errors) = verify_sfmr(&path).unwrap();
@@ -527,7 +556,9 @@ fn test_embedded_keypoints_validated_on_read_and_verify() {
     let mut oob = make_embedded_test_data();
     oob.keypoints_xy.as_mut().unwrap()[[0, 0]] = 5000.0;
     let path = dir.join("oob.sfmr");
-    write_sfmr(&path, &mut oob).unwrap(); // write does not bounds-check
+    let err = write_sfmr(&path, &mut oob).err().unwrap();
+    assert!(format!("{err}").contains("image bounds"), "{err}");
+    write_with_keypoint(&dir, &mut make_embedded_test_data(), 0, 5000.0, &path);
     let err = read_sfmr(&path).err().unwrap();
     assert!(format!("{err}").contains("image bounds"), "{err}");
     let (valid, errors) = verify_sfmr(&path).unwrap();
@@ -540,7 +571,9 @@ fn test_embedded_keypoints_validated_on_read_and_verify() {
     let mut nan = make_embedded_test_data();
     nan.keypoints_xy.as_mut().unwrap()[[1, 1]] = f32::NAN;
     let path = dir.join("nan.sfmr");
-    write_sfmr(&path, &mut nan).unwrap();
+    let err = write_sfmr(&path, &mut nan).err().unwrap();
+    assert!(format!("{err}").contains("not finite"), "{err}");
+    write_with_keypoint(&dir, &mut make_embedded_test_data(), 3, f32::NAN, &path);
     let err = read_sfmr(&path).err().unwrap();
     assert!(format!("{err}").contains("not finite"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
