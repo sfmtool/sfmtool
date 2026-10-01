@@ -330,6 +330,20 @@ def test_bad_arguments_and_a_sourceless_file_are_value_errors(
             descriptors=np.zeros((len(inside), 128), dtype=np.uint8),
             image_index=0,
         )
+    # One descriptor or feature ID per position; a count that disagrees is a
+    # bad argument, not a damaged file.
+    with pytest.raises(ValueError):
+        lazy.constellation_query(
+            positions,
+            feature_ids=inside[:-1].astype(np.uint32).tolist(),
+            image_index=0,
+        )
+    with pytest.raises(ValueError):
+        lazy.constellation_query(
+            positions,
+            descriptors=np.zeros((len(inside) + 1, 128), dtype=np.uint8),
+            image_index=0,
+        )
 
     plain = tmp_path / "plain.kdf"
     write_kdf(duplicated_capture["forest"], str(plain), descriptor_block_bytes=4096)

@@ -417,7 +417,7 @@ where
     let descriptors: &[S] = match query.descriptors {
         ConstellationDescriptors::Vectors(vectors) => {
             if vectors.len() != n * dim {
-                return Err(KdfError::ShapeMismatch(format!(
+                return Err(KdfError::InvalidQuery(format!(
                     "{} descriptor values for {n} positions of dimension {dim}",
                     vectors.len()
                 )));
@@ -426,7 +426,7 @@ where
         }
         ConstellationDescriptors::FeatureIds(ids) => {
             if ids.len() != n {
-                return Err(KdfError::ShapeMismatch(format!(
+                return Err(KdfError::InvalidQuery(format!(
                     "{} feature IDs for {n} positions",
                     ids.len()
                 )));
