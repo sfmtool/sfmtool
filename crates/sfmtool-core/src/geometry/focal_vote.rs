@@ -254,6 +254,12 @@ const ROTATION_MIN_SHARED: usize = 25;
 const ROTATION_MIN_DISP_FRAC: f64 = 0.08;
 const ROTATION_MIN_INLIERS: usize = 12;
 
+/// The stride of the rotation scan over `n_img` images: the smallest step that
+/// visits at most [`ROTATION_MAX_IMAGES`] of them.
+fn rotation_scan_step(n_img: usize) -> usize {
+    n_img.div_ceil(ROTATION_MAX_IMAGES).max(1)
+}
+
 // The rotation self-calibration's focal grid, in units of the longer image
 // dimension. `pub(crate)` because the weak-vote escalation in
 // `super::estimate_intrinsics` asks whether a rotation consensus landed on the
@@ -1033,7 +1039,7 @@ fn focal_vote_impl(
     // two images that are each other's widest partner are reached twice, and
     // the inverse homography over the same correspondences is the same
     // measurement, not a second one — so the later occurrence is skipped.
-    let step = (n_img / ROTATION_MAX_IMAGES).max(1);
+    let step = rotation_scan_step(n_img);
     let rot_h_opts = HomographyOptions {
         max_error_px: 3.0,
         seed,

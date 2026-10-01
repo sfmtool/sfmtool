@@ -1103,3 +1103,22 @@ fn single_vote_is_not_a_consensus() {
     assert_eq!(res.family_disagreement, None);
     assert_eq!(res.pool_spread, 0.0);
 }
+
+#[test]
+fn rotation_scan_visits_at_most_the_cap() {
+    for n_img in 0..=1000 {
+        let step = rotation_scan_step(n_img);
+        let visited = (0..n_img).step_by(step).count();
+        assert!(
+            visited <= ROTATION_MAX_IMAGES,
+            "{n_img} images visit {visited}"
+        );
+        if n_img <= ROTATION_MAX_IMAGES {
+            assert_eq!(visited, n_img, "{n_img} images");
+        }
+    }
+    assert_eq!(rotation_scan_step(60), 1);
+    assert_eq!(rotation_scan_step(61), 2);
+    assert_eq!(rotation_scan_step(119), 2);
+    assert_eq!((0..119).step_by(rotation_scan_step(119)).count(), 60);
+}
