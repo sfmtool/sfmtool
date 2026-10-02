@@ -779,7 +779,7 @@ impl Viewer3D {
                     // Z with no selection = zoom to fit, on where the node is
                     // drawn rather than on its native coordinates.
                     let aspect = rect.width() as f64 / rect.height() as f64;
-                    let points = crate::scene::world_points(node);
+                    let points = crate::scene::FitPoints::of(node);
                     let framed = !points.is_empty() && aspect > 0.0 && !aspect.is_nan();
                     self.zoom_to_fit_points(&points, aspect, current_time);
                     if framed {

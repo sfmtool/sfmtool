@@ -303,7 +303,7 @@ fn reset_transform_is_a_version_and_is_undone() {
 /// every camera's centre in world space.
 fn picture(state: &AppState, id: ReconId) -> Vec<Point3<f64>> {
     let node = state.node(id).expect("loaded");
-    let mut at = crate::scene::world_points(node);
+    let mut at = crate::scene::FitPoints::of(node).positions;
     for camera in 0..node.recon().image_table.cameras.len() {
         at.extend(crate::scene::camera_world_centres(node, camera));
     }

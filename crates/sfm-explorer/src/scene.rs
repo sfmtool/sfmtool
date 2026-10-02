@@ -542,19 +542,63 @@ pub fn cam_from_world(image: &sfmtool_core::SfmrImage) -> sfmtool_core::geometry
     )
 }
 
-/// A node's 3D points in the **shared world space** — its own positions put
-/// through its transform.
+/// What zoom-to-fit frames, in the **shared world space**: the positions of
+/// finite points, and the bearings of points at infinity kept apart from them,
+/// since a bearing is a unit direction and framing it as a position would
+/// frame a place about one unit from the origin.
 ///
 /// The CPU counterpart of the per-recon `model` matrix, for the framing paths
-/// that work on point positions rather than on the GPU: `Z` zoom-to-fit, the
-/// Scene panel's per-node `Zoom to Fit`, and the viewport's first-show framing.
-pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
-    let edited = node.edited();
-    edited
-        .live_indexes()
-        .filter_map(|i| edited.point(i))
-        .map(|view| node.transform().apply_to_point(&view.point().position))
-        .collect()
+/// that work on point positions rather than on the GPU.
+///
+/// Read by every framing path: `Z`, the Scene panel's per-node `Zoom to Fit`,
+/// the viewport's first-show framing and the MCP `set_view {fit}`
+/// (`ViewportCamera::compute_fit` says what each half is used for).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FitPoints {
+    pub(crate) positions: Vec<nalgebra::Point3<f64>>,
+    pub(crate) bearings: Vec<nalgebra::Vector3<f64>>,
+}
+
+impl FitPoints {
+    /// The node's live points: finite positions through its whole transform,
+    /// and bearings through its rotation alone, as the renderer draws a
+    /// `w = 0` point.
+    pub(crate) fn of(node: &SceneNode) -> Self {
+        let edited = node.edited();
+        let transform = node.transform();
+        let rotation = transform.rotation.as_nalgebra();
+        let mut points = Self::default();
+        for view in edited.live_indexes().filter_map(|i| edited.point(i)) {
+            let stored = view.point();
+            if stored.is_at_infinity() {
+                points.bearings.push(rotation * stored.position.coords);
+            } else {
+                points
+                    .positions
+                    .push(transform.apply_to_point(&stored.position));
+            }
+        }
+        points
+    }
+
+    /// Positions alone, for a framing that has no bearings (camera centres).
+    pub(crate) fn positions(positions: Vec<nalgebra::Point3<f64>>) -> Self {
+        Self {
+            positions,
+            bearings: Vec::new(),
+        }
+    }
+
+    /// Add `other`'s points to these.
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.positions.extend(other.positions);
+        self.bearings.extend(other.bearings);
+    }
+
+    /// Whether there is nothing to frame.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.positions.is_empty() && self.bearings.is_empty()
+    }
 }
 
 /// Where a point is drawn in the shared world space, which for a point at
@@ -589,7 +633,7 @@ pub(crate) fn world_point(scene: &[SceneNode], point: PointRef) -> Option<WorldP
 }
 
 /// The centres of the node's images taken through camera `index`, in the
-/// **shared world space** — the camera-row counterpart of [`world_points`].
+/// **shared world space** — the camera-row counterpart of [`FitPoints::of`].
 ///
 /// What the Scene panel's double-click on a camera row frames. Empty when no
 /// image uses that camera, which `zoom_to_fit_points` treats as nothing to

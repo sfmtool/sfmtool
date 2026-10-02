@@ -1334,11 +1334,15 @@ Neither changes the field of view, so a `fov_short_axis_deg` beside either is
 refused.
 
 `fit` and `look_through` go through the same paths the keyboard and
-double-click use (`ViewportCamera::zoom_to_fit` over `scene::world_points`,
+double-click use (`ViewportCamera::compute_fit` over `scene::FitPoints`,
 `Viewer3D::jump_to_camera_view`), so the agent's framing is the framing a human
 gets. Fitting is over *world* points — the reconstruction's own positions put
 through its transform — so an aligned reconstruction is framed where it is
-drawn. A fit also leaves camera view, exactly as the Z key's fit does at
+drawn. Points at infinity add no position: a reconstruction with finite points
+is framed on those, and one with only points at infinity is looked at from the
+starting position along their direction
+([viewport-navigation.md](viewport-navigation.md) § "Points at Infinity"). A
+fit also leaves camera view, exactly as the Z key's fit does at
 the end of its animated transition: framing is a statement about the free
 camera, and a fit that left the render looking through a camera image would
 frame nothing the caller can see.

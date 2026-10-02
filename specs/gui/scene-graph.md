@@ -915,7 +915,7 @@ Where it applies:
   Two further CPU consumers the list above does not name explicitly but which
   need it for the same reason: the viewport's **first-show framing** and the
   `Z` **zoom-to-fit** key, both of which frame point positions rather than GPU
-  geometry (`scene::world_points`).
+  geometry (`scene::FitPoints`).
 - **The camera-view background image**: its mesh is ray directions in the
   node's own coordinates, so it reaches world space through the same `model`
   matrix, written into the BG uniform block from the viewed camera's node (see

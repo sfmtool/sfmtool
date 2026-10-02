@@ -4,7 +4,7 @@
 //! `set_view`: the tool an agent calls immediately before `screenshot`.
 //!
 //! Framing goes through the paths the keyboard and double-click use
-//! (`ViewportCamera::zoom_to_fit` over `scene::world_points`,
+//! (`ViewportCamera::compute_fit` over `scene::FitPoints`,
 //! `Viewer3D::jump_to_camera_view`), so the agent's framing is the framing a
 //! human gets from the same request.
 //!
@@ -301,7 +301,7 @@ enum Facing {
 
 /// Frame everything drawn, or one named reconstruction.
 ///
-/// Fits over `scene::world_points` — the node's points put *through its
+/// Fits over `scene::FitPoints` — the node's points put *through its
 /// transform* — so an aligned reconstruction is framed where it is drawn rather
 /// than where its own coordinates say it is.
 fn fit(state: &AppState, viewer: &mut Viewer3D, label: Option<&str>) -> Result<String, ToolError> {
@@ -315,24 +315,25 @@ fn fit(state: &AppState, viewer: &mut Viewer3D, label: Option<&str>) -> Result<S
         Some(label) => {
             let id = resolve_reconstruction(state, Some(label))?;
             let node = state.node(id).expect("just resolved");
-            (crate::scene::world_points(node), format!("Framed {label}"))
+            (crate::scene::FitPoints::of(node), format!("Framed {label}"))
         }
         None => {
-            let points: Vec<Point3<f64>> = state
+            let mut points = crate::scene::FitPoints::default();
+            for node in state
                 .scene
                 .iter()
                 .filter(|node| crate::scene::is_visible(node, state.solo))
-                .flat_map(crate::scene::world_points)
-                .collect();
+            {
+                points.extend(crate::scene::FitPoints::of(node));
+            }
             (points, "Framed the scene".to_string())
         }
     };
-    if points.is_empty() {
-        return Err(ToolError::new(
-            "Nothing is drawn — there are no points to frame.",
-        ));
-    }
-    viewer.camera.zoom_to_fit(&points, aspect);
+    let end = viewer
+        .camera
+        .compute_fit(&points, aspect, viewer.maintain_z_up)
+        .ok_or_else(|| ToolError::new("Nothing is drawn — there are no points to frame."))?;
+    viewer.camera.apply_fit(&end);
     Ok(what)
 }
 

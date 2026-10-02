@@ -148,7 +148,7 @@ the bench), from a node drawn under a similarity with a turn, a shift and a
 scale of `2`. The first three are the definition of the bake being correct, and
 none can be satisfied by an implementation with a column or a direction wrong.
 
-- **The picture does not move.** `scene::world_points` and
+- **The picture does not move.** The finite positions of `scene::FitPoints::of` and
   `scene::camera_world_centres` for every camera are the same before and after,
   to `1e-9` relative. A bake that forgot to reset the transform and one that
   reset it without transforming the value fail this in opposite directions.

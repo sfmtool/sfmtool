@@ -197,6 +197,8 @@ When a reconstruction is first loaded:
 - The center of the outlier-trimmed bounding box becomes the new target point
 - Camera distance is calculated to fit that bounding box in view
 - Camera orientation is preserved (default initial orientation on first load)
+- A reconstruction with only points at infinity is turned toward them instead
+  (see [Points at Infinity](#points-at-infinity))
 
 ## Orbit Behavior
 
@@ -455,6 +457,56 @@ keeps your orientation, rather than snapping to a fixed viewpoint.
 8. Set `target_distance` to the computed distance
 
 The 1.2× margin provides comfortable framing with some space around the points.
+
+### Points at Infinity
+
+A point at infinity (`w = 0`) stores a unit direction, not a position, so it
+**never contributes a position to the framing**. The framing paths (`Z`, the
+Scene panel's per-node *Zoom to Fit*, the first-show framing and the MCP
+`set_view {fit}`) all read a node through `scene::FitPoints::of`, which splits
+its live points into the finite positions and the bearings of the points at
+infinity, each put through the node's transform (a bearing through its rotation
+alone, as the renderer draws it). `ViewportCamera::compute_fit` then decides:
+
+- **There are finite points.** They are framed by the algorithm above, and the
+  bearings are ignored. A reconstruction that mixes the two is framed on the
+  part of it that has a place.
+- **There are only points at infinity**, which is a panorama: nothing has a
+  place to frame. The camera moves to the
+  [initial camera position](#initial-camera-position) and keeps its target
+  distance, and turns to look along the **framing bearing** of the points.
+- **There is nothing**, and nothing moves.
+
+The framing bearing is the mean direction of the bearings when they have a
+clear one, and the centre of their largest cluster when they do not
+([`viewer_3d/framing.rs`](../../crates/sfm-explorer/src/viewer_3d/framing.rs)):
+
+- The **mean resultant length** `R = |Σ bᵢ| / n` measures how concentrated the
+  unit bearings are: 1 when they all agree, near 0 when they are spread around
+  the sphere. When `R ≥ 0.5` the mean direction `Σ bᵢ / |Σ bᵢ|` is used. The
+  threshold is the value for directions spread evenly over a hemisphere
+  (directions spread evenly over a cap of half-angle θ have
+  `R = (1 + cos θ) / 2`), so the mean is used exactly when the bearings sit
+  within about half the sphere. Past that, the mean of a 360° pan or of two
+  opposite clusters is a short vector whose direction is decided by small
+  differences in where the points happen to fall, and can point at empty sky.
+- Otherwise the framing bearing is the direction whose **30° neighbourhood
+  holds the most bearings**. The candidates are the bearings themselves, at
+  most 512 of them taken at an even stride through the list, each counted
+  against every bearing; the first candidate with the largest count wins, and
+  the answer is the normalized mean of the bearings in its neighbourhood. A
+  60° cone is a little wider than the default 45° field of view, so the
+  cluster chosen is the one that fills most of the view. The choice depends
+  only on the bearings and their order, so the same reconstruction always
+  frames the same way.
+
+**Maintain Z-up.** The finite framing keeps the camera's orientation, so it
+does not change the roll. The panorama framing derives a new orientation from
+the bearing, so it sets `world_up` too: to +Z when
+[Maintain Z-up](#maintain-z-up) is on, so the view is level the moment it
+lands, and to the current `world_up` when it is off, as the finite framing
+keeps it. A bearing straight up or straight down has no level to keep, and
+takes the arbitrary roll `Camera::orientation_from_forward` gives it.
 
 ### View Through Selected Camera
 

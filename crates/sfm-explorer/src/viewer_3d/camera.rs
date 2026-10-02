@@ -291,18 +291,6 @@ impl ViewportCamera {
         Some((world_center - forward * camera_distance, camera_distance))
     }
 
-    /// Zoom to fit the bulk of the points in view, keeping the current camera orientation.
-    ///
-    /// Transforms points into camera space, computes the 20th–80th percentile
-    /// bounding box aligned to the view axes, then repositions the camera
-    /// to center and frame that box.
-    pub fn zoom_to_fit(&mut self, points: &[Point3<f64>], aspect: f64) {
-        if let Some((position, distance)) = self.compute_zoom_to_fit(points, aspect) {
-            self.camera.position = position;
-            self.camera.target_distance = distance;
-        }
-    }
-
     /// Update the near clip plane based on scene bounds and camera position.
     ///
     /// With reversed-Z infinite far projection there is no far plane to adjust.

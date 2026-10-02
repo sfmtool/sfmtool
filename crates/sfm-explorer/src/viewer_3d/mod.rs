@@ -11,6 +11,7 @@
 /// [`crate::scene_renderer`].
 pub(crate) mod bench_track;
 mod camera;
+mod framing;
 mod hud;
 mod input;
 /// Crate-visible so the overlay text builders can be asserted on directly —
@@ -746,8 +747,10 @@ impl Viewer3D {
         // Initialize view to frame all points on first show
         if !self.view_initialized && !reconstruction.point_set.points.is_empty() {
             let aspect = rect.width() as f64 / rect.height() as f64;
-            self.camera
-                .zoom_to_fit(&crate::scene::world_points(node), aspect);
+            let points = crate::scene::FitPoints::of(node);
+            if let Some(end) = self.camera.compute_fit(&points, aspect, self.maintain_z_up) {
+                self.camera.apply_fit(&end);
+            }
             self.view_initialized = true;
         }
 
@@ -1323,18 +1326,26 @@ impl Viewer3D {
     ///
     /// Shared by `Z` (which frames the selected reconstruction) and the Scene
     /// panel's per-node `Zoom to Fit`, so the two cannot drift apart.
-    pub fn zoom_to_fit_points(&mut self, points: &[Point3<f64>], aspect: f64, current_time: f64) {
+    ///
+    /// Points at infinity are framed by direction rather than by position
+    /// (`ViewportCamera::compute_fit`), and a panorama's turn is levelled when
+    /// Maintain Z-up is on.
+    pub(crate) fn zoom_to_fit_points(
+        &mut self,
+        points: &crate::scene::FitPoints,
+        aspect: f64,
+        current_time: f64,
+    ) {
         if points.is_empty() || aspect <= 0.0 || aspect.is_nan() {
             return;
         }
-        if let Some((end_position, end_distance)) = self.camera.compute_zoom_to_fit(points, aspect)
-        {
+        if let Some(end) = self.camera.compute_fit(points, aspect, self.maintain_z_up) {
             self.start_transition(
-                end_position,
-                self.camera.camera.orientation,
-                end_distance,
+                end.position,
+                end.orientation,
+                end.target_distance,
                 self.camera.fov,
-                self.camera.world_up,
+                end.world_up,
                 None,
                 false,
                 current_time,
