@@ -208,6 +208,11 @@ impl TabContext<'_> {
             let selected = self.state.selected_bench_observation(id, &label);
             Some((label, track, selected))
         });
+        let bench_refusal = self
+            .state
+            .selected_recon
+            .and_then(|id| self.state.bench_edit_refusal(id))
+            .is_some();
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -220,7 +225,8 @@ impl TabContext<'_> {
                     edited: node.edited(),
                     transform: node.transform(),
                     selected: *selected,
-                    busy: busy.is_some(),
+                    // A view-only bench offers no handle, as a busy node does.
+                    busy: bench_refusal,
                 }
             });
             self.viewer_3d.show(
@@ -665,6 +671,7 @@ impl TabContext<'_> {
             // `String`, the track its own `Arc`), because the panel is handed
             // `&mut` into the state further down the same call.
             let bench_busy = self.state.busy_refusal(id);
+            let bench_view_only = self.state.bench_view_only_refusal(id);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
             let create_track_refusal = selected_image
@@ -772,6 +779,7 @@ impl TabContext<'_> {
                 hovered_point,
                 crate::image_detail::BenchMenu {
                     busy: bench_busy.as_deref(),
+                    view_only: bench_view_only.as_deref(),
                     focused_track: bench_track.as_deref(),
                     lock: self.track_view.lock(),
                     create_track: create_track_refusal.as_deref(),

@@ -78,6 +78,13 @@ tracks in images at or after it.
 
 ## 2. Zoom-to-fit frames the unit directions of points at infinity (medium)
 
+> _Status (2026-10-02): Done — points at infinity no longer add positions to any
+> framing path (`scene::FitPoints`, `ViewportCamera::compute_fit`). Finite
+> points are framed as before; a node with only points at infinity is looked
+> at from the starting position along their mean direction, or along their
+> largest 30° cluster when the mean resultant length is under 0.5, level
+> when Maintain Z-up is on. PR #671._
+
 `scene::world_points` (`crates/sfm-explorer/src/scene.rs:551`) returns
 `view.point().position` for every live point. For a point at infinity that
 field is a unit direction, so fitting treats it as a position about 1 unit from
@@ -134,6 +141,13 @@ strongest source.
 
 ## 4. A point benched from a `sift_files` reconstruction is a dead end (medium)
 
+> _Status (2026-10-02): Done — a `sift_files` node's bench is view-only. A point
+> still goes on the bench (with its keypoint pixels since PR #666), and every
+> editing step, wire tool and panel control is refused or greyed up front with
+> one sentence that names Convert to Embedded Patches. The core refusals for a
+> track with no patch frame now name the conversion instead of the refused
+> cluster stage. PR #671._
+
 On the unconverted `dino`, `create_bench_track {point: 100}` succeeds and
 reports the item at the track stage, but it carries no patch frame:
 
@@ -154,6 +168,10 @@ from the `.sift` keypoints.
 
 ## 5. Bench items made before Convert to Embedded Patches stay frame-less (medium)
 
+> _Status (2026-10-02): Done — after the conversion, putting the point on the bench
+> again rebuilds its frame-less item from the point's new patch frame, under
+> the same label, as one version. PR #671._
+
 Continuing from 4: after `convert_to_embedded_patches` succeeds ("18991 points
 framed"), the item `pt3d_0bdf4852_100` still reports the no-patch-frame
 refusal. `create_bench_track {point: 100}` does not rebuild it. It answers
@@ -164,6 +182,11 @@ item, with ZNCCs, pixels and a placement. The conversion should rebuild or mark
 the bench items it made obsolete.
 
 ## 6. The MCP schema marks mutually exclusive arguments as required (medium)
+
+> _Status (2026-10-02): Done — both tools now require only `reconstruction_label`;
+> the form arguments are optional and the parser enforces exactly one form,
+> also refusing an edge argument of the other form. A catalog-wide test checks
+> every representative call against its schema's required list. PR #671._
 
 `tools/list` advertises:
 

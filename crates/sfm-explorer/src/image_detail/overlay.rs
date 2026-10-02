@@ -59,6 +59,12 @@ pub struct BenchMenu<'a> {
     /// Why no step on this node can run -- a background task is holding it --
     /// or `None` when one can.
     pub busy: Option<&'a str>,
+    /// Why nothing on this node's bench can be edited -- it is a `sift_files`
+    /// reconstruction, whose bench is view-only -- or `None` when it can
+    /// (`AppState::bench_view_only_refusal`). Greys the entries that edit the
+    /// bench and takes the bench layer's handles away; Edit on Bench, which
+    /// only shows a point, is not affected.
+    pub view_only: Option<&'a str>,
     /// The focused item, or `None` when no item on this node's bench is
     /// focused. A gesture that names no item means the focused one.
     pub focused_track: Option<&'a EditableTrack>,
@@ -82,6 +88,7 @@ impl Default for BenchMenu<'_> {
     fn default() -> Self {
         Self {
             busy: None,
+            view_only: None,
             focused_track: None,
             lock: true,
             create_track: None,
@@ -148,12 +155,10 @@ pub(crate) const NO_FEATURE: &str = "There is no feature here, so there is no po
 /// greyed.
 ///
 /// A pixel on a photograph of the node is the whole input, and the menu is only
-/// ever drawn over one, so the only thing that stops it is the node being busy.
-/// There is no `None` arm and no `sift_files` arm: a cluster is a seed in one
-/// image's pixels, which is defined whatever the node's observations are backed
-/// by.
+/// ever drawn over one, so what stops it is the node being busy or its bench
+/// being view-only (a `sift_files` node).
 pub(crate) fn start_cluster_entry(bench: BenchMenu<'_>) -> Result<(), String> {
-    match bench.busy {
+    match bench.busy.or(bench.view_only) {
         Some(why) => Err(why.to_string()),
         None => Ok(()),
     }
@@ -169,7 +174,7 @@ pub(crate) fn start_cluster_entry(bench: BenchMenu<'_>) -> Result<(), String> {
 /// one image, which is a verdict rather than this gesture
 /// (`sfmtool_core::bench::add_observation`).
 pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), String> {
-    if let Some(why) = bench.busy {
+    if let Some(why) = bench.busy.or(bench.view_only) {
         return Err(why.to_string());
     }
     if bench.focused_track.is_none() {

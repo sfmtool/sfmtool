@@ -1281,7 +1281,11 @@ column.
 
 A `sift_files` reconstruction is put on the bench like any other: inspecting a
 track is allowed everywhere, and it is the commit that refuses to write one
-back.
+back. Such a track has no patch frame, so the evaluation, the fit and a
+downgrade refuse it too, each naming the conversion to embedded patches as the
+way to get one. The viewer goes further and makes the whole bench of a
+`sift_files` node view-only ([`../../gui/bench.md`](../../gui/bench.md) § "A
+view-only bench").
 
 ### Starting a cluster
 

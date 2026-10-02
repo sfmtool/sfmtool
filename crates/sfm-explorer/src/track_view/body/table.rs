@@ -801,7 +801,7 @@ impl TrackBody {
             mode,
             pinned.len(),
             rows,
-            state.busy_refusal(id).as_deref(),
+            state.bench_edit_refusal(id).as_deref(),
         ) {
             if pinned.is_empty() {
                 response.pin_verdicts = Some((0..rows).collect());
@@ -872,6 +872,12 @@ impl TrackBody {
                 Vec::new()
             };
             (UNPIN_LABEL.to_string(), rows, NOT_PINNED)
+        };
+        // A view-only bench or a busy node greys the unpin whatever the rows.
+        let refusal = state.bench_edit_refusal(id);
+        let (unpin_rows, why_not) = match &refusal {
+            Some(why) => (Vec::new(), why.as_str()),
+            None => (unpin_rows, why_not),
         };
         crate::context_menu::on_secondary_click(row_response).show(|ui| {
             if unpin_entry(ui, &unpin_label, !unpin_rows.is_empty(), why_not) {
@@ -962,7 +968,7 @@ impl TrackBody {
                 .flatten();
             if let Some(walk) = walk {
                 let button = egui::Button::new(super::ACCEPT_WALK_LABEL);
-                let clicked = match state.busy_refusal(id) {
+                let clicked = match state.bench_edit_refusal(id) {
                     None => ui.add(button).on_hover_text(walk).clicked(),
                     Some(why) => {
                         ui.add_enabled(false, button).on_disabled_hover_text(why);
@@ -981,6 +987,9 @@ impl TrackBody {
     /// row so they take the clicks that land on them, each over the whole
     /// height of the row: a two-state decision is one switch, and a cell-sized
     /// target is easy to hit. Returns the switch's hover text.
+    ///
+    /// With a `refusal` (the node busy, or a view-only bench) both are drawn
+    /// as they stand, take no click, and carry the refusal as their hover.
     #[allow(clippy::too_many_arguments)]
     fn draw_keep(
         &self,
@@ -990,6 +999,7 @@ impl TrackBody {
         row: &sfmtool_core::bench::Observation,
         observation: usize,
         judged: Option<&Judgement>,
+        refusal: Option<&str>,
         response: &mut TrackBodyResponse,
     ) -> String {
         let x0 = rect.min.x;
@@ -1014,6 +1024,12 @@ impl TrackBody {
             ui.id().with(("track_view_pin", observation)),
             row.pinned,
         );
+        let hover = keep_hover(kept, row.pinned, judged, row.image);
+        if let Some(why) = refusal {
+            pin.on_hover_text(why);
+            keep.on_hover_text(why);
+            return hover;
+        }
         // Pinning the verdict a row already carries is `set_verdict` with that
         // verdict, and unpinning is `unpin_verdicts` of that row.
         if pin.clicked() {
@@ -1034,7 +1050,6 @@ impl TrackBody {
                 ui.close();
             }
         });
-        let hover = keep_hover(kept, row.pinned, judged, row.image);
         keep.on_hover_text(&hover);
         hover
     }
@@ -1154,7 +1169,16 @@ impl TrackBody {
 
         let (keep_hover, verdict_text) = if edited {
             (
-                self.draw_keep(ui, rect, cols, row, observation, judged.as_ref(), response),
+                self.draw_keep(
+                    ui,
+                    rect,
+                    cols,
+                    row,
+                    observation,
+                    judged.as_ref(),
+                    state.bench_edit_refusal(id).as_deref(),
+                    response,
+                ),
                 None,
             )
         } else {

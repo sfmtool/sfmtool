@@ -733,7 +733,8 @@ impl ImageDetail {
         let hovered_handle = self.update_bench_drag(
             ui,
             &interact_response,
-            bench.focused_track,
+            // A view-only bench draws its item and offers no handle on it.
+            bench.focused_track.filter(|_| bench.view_only.is_none()),
             bench.lock,
             chord,
             &edited.base.image_table,

@@ -560,6 +560,7 @@ fn starting_a_cluster_needs_only_a_pixel_and_a_node_that_is_not_busy() {
     assert_eq!(
         start_cluster_entry(BenchMenu {
             busy: Some(BUSY),
+            view_only: None,
             focused_track: None,
             lock: true,
             create_track: None,
@@ -585,6 +586,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
     assert_eq!(
         add_bench_observation_entry(BenchMenu {
             busy: None,
+            view_only: None,
             focused_track: Some(&track),
             lock: true,
             create_track: None,
@@ -594,6 +596,7 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
     assert_eq!(
         add_bench_observation_entry(BenchMenu {
             busy: Some(BUSY),
+            view_only: None,
             focused_track: Some(&track),
             lock: true,
             create_track: None,
@@ -602,14 +605,39 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
     );
 }
 
-/// The two bench entries are in the menu, and are in it on a `sift_files`
-/// node: a bench track is seeds in one image's pixels until it is committed, so
-/// what backs the node's own observations does not decide it.
+/// On a `sift_files` node the bench is view-only: both entries that edit it
+/// are greyed with that sentence, while Edit on Bench, which only shows a
+/// point, is not.
+#[test]
+fn a_view_only_bench_greys_the_entries_that_edit_it() {
+    let track = a_track();
+    const VIEW_ONLY: &str = "Bench editing needs embedded patches, and bull keeps its \
+                             patches in .sift files (sift_files), so its bench is view-only.";
+    let menu = BenchMenu {
+        busy: None,
+        view_only: Some(VIEW_ONLY),
+        focused_track: Some(&track),
+        lock: true,
+        create_track: None,
+    };
+    assert_eq!(start_cluster_entry(menu), Err(VIEW_ONLY.to_string()));
+    assert_eq!(
+        add_bench_observation_entry(menu),
+        Err(VIEW_ONLY.to_string())
+    );
+    assert_eq!(
+        edit_on_bench_entry(menu, Some(super::overlay::FeatureHit::Point(3))),
+        Ok(3)
+    );
+}
+
+/// The two bench entries are in the menu, greyed or not.
 #[test]
 fn the_context_menu_offers_the_two_bench_entries() {
     let track = a_track();
     let texts = context_menu_texts(BenchMenu {
         busy: None,
+        view_only: None,
         focused_track: Some(&track),
         lock: true,
         create_track: None,
@@ -970,6 +998,7 @@ fn edit_on_bench_needs_a_feature_with_a_point_behind_it() {
         edit_on_bench_entry(
             BenchMenu {
                 busy: Some(BUSY),
+                view_only: None,
                 focused_track: None,
                 lock: true,
                 create_track: None,
@@ -1361,6 +1390,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         0,
         BenchMenu {
             busy: None,
+            view_only: None,
             focused_track: Some(&track),
             lock: true,
             create_track: None,
@@ -1481,6 +1511,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
             0,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(&judged),
                 lock: true,
                 create_track: None,
@@ -1529,6 +1560,7 @@ fn the_bench_layer_draws_nothing_without_a_track_and_no_mark_outside_it() {
             unseen,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(&track),
                 lock: true,
                 create_track: None,
@@ -1622,6 +1654,7 @@ fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
     let photograph = pixels(640, 480);
     let bench = BenchMenu {
         busy: None,
+        view_only: None,
         focused_track: Some(&track),
         lock: true,
         create_track: None,
@@ -1683,6 +1716,7 @@ fn a_member_image_draws_its_outline_and_no_ghost_whatever_the_verdict() {
         }
         let bench = BenchMenu {
             busy: None,
+            view_only: None,
             focused_track: Some(&judged),
             lock: true,
             create_track: None,
@@ -1715,6 +1749,7 @@ fn the_cluster_stage_draws_no_ghost() {
     let track = (**bench.track(&report.label).expect("just put on")).clone();
     let menu = BenchMenu {
         busy: None,
+        view_only: None,
         focused_track: Some(&track),
         lock: true,
         create_track: None,
@@ -1739,6 +1774,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
     let (node, track, unseen) = ghost_fixture();
     let menu = |track| BenchMenu {
         busy: None,
+        view_only: None,
         focused_track: Some(track),
         lock: true,
         create_track: None,
@@ -1755,6 +1791,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
             unseen,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(&unplaced),
                 lock: true,
                 create_track: None,
@@ -1776,6 +1813,7 @@ fn no_ghost_is_drawn_without_a_placement_or_for_a_patch_it_cannot_see() {
             unseen,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(&turned),
                 lock: true,
                 create_track: None,
@@ -1865,6 +1903,7 @@ fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
         0,
         BenchMenu {
             busy: None,
+            view_only: None,
             focused_track: Some(&track),
             lock: true,
             create_track: None,
@@ -2187,6 +2226,7 @@ fn gesture(
                 None,
                 BenchMenu {
                     busy: None,
+                    view_only: None,
                     focused_track: Some(track),
                     lock,
                     create_track: None,
@@ -3312,6 +3352,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
             unseen,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(&track),
                 lock,
                 create_track: None,
@@ -3328,6 +3369,7 @@ fn the_locked_ghost_draws_a_centre_mark_at_the_ghost_opacity() {
     for lock in [true, false] {
         let menu = BenchMenu {
             busy: None,
+            view_only: None,
             focused_track: Some(&track),
             lock,
             create_track: None,
@@ -3487,6 +3529,7 @@ fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
     let track = on_bench(&state, id, &label);
     let menu = |lock| BenchMenu {
         busy: None,
+        view_only: None,
         focused_track: Some(&track),
         lock,
         create_track: None,
@@ -3578,6 +3621,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
             member,
             BenchMenu {
                 busy: None,
+                view_only: None,
                 focused_track: Some(track),
                 lock: true,
                 create_track: None,

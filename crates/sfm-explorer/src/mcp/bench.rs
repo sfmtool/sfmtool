@@ -215,6 +215,7 @@ pub(super) fn create_bench_cluster(
     named: Option<&str>,
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
+    view_only(state, id)?;
     let image = resolve_camera_image(state, id, selector)?;
     let mut made: Option<crate::bench::Seeded> = None;
     let reply = edit::edited(state, id, |state| {
@@ -581,7 +582,7 @@ pub(super) fn duplicate_bench_item(
     label: &str,
     named: Option<&str>,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let mut made = String::new();
     let reply = edit::edited(state, id, |state| {
         state.duplicate_bench_item(id, &item).map(|label| {
@@ -611,7 +612,7 @@ pub(super) fn add_bench_track_observation(
     selector: &CameraImageSel,
     seed: &Seed,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let image = resolve_camera_image(state, id, selector)?;
     let mut added: Option<crate::bench::Seeded> = None;
     let reply = edit::edited(state, id, |state| {
@@ -658,7 +659,7 @@ pub(super) fn translate_bench_patch(
     named: Option<&str>,
     to: &TranslateTarget,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     match to {
         TranslateTarget::By(by) => {
             let by = *by;
@@ -704,7 +705,7 @@ pub(super) fn sight_bench_observation(
     observation: usize,
     pixel: [f64; 2],
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let edit = PatchEdit::Sight { observation, pixel };
     let (reply, edited) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
@@ -733,7 +734,7 @@ pub(super) fn shape_bench_observation(
     observation: usize,
     shape: [[f64; 2]; 2],
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let edit = PatchEdit::Shape { observation, shape };
     let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
@@ -765,7 +766,7 @@ pub(super) fn resize_bench_patch(
     named: Option<&str>,
     to: &ResizeTarget,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Track, "resize_bench_shape")?;
     match to {
         ResizeTarget::HalfLength {
@@ -830,7 +831,7 @@ pub(super) fn resize_bench_shape(
     edge: Edge,
     pixel: [f64; 2],
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Cluster, "resize_bench_patch")?;
     let edit = PatchEdit::ResizeToPixel {
         viewpoint: Viewpoint::Observation(observation),
@@ -890,7 +891,7 @@ pub(super) fn tilt_bench_patch(
     named: Option<&str>,
     normal: [f64; 3],
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let edit = PatchEdit::Tilt { normal };
     let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
@@ -910,7 +911,7 @@ pub(super) fn spin_bench_patch(
     named: Option<&str>,
     degrees: f64,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Track, "spin_bench_shape")?;
     let edit = PatchEdit::Spin {
         angle_rad: degrees.to_radians(),
@@ -935,7 +936,7 @@ pub(super) fn spin_bench_shape(
     observation: usize,
     degrees: f64,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Cluster, "spin_bench_patch")?;
     let edit = PatchEdit::SpinShape {
         observation,
@@ -981,7 +982,7 @@ pub(super) fn set_bench_track_verdict(
     rows: VerdictRows,
     verdict: VerdictAction,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let observations = match &rows {
         VerdictRows::One(observation) => vec![*observation],
         VerdictRows::Listed(listed) => listed.clone(),
@@ -1049,7 +1050,7 @@ pub(super) fn apply_bench_track_thresholds(
     named: Option<&str>,
     change: &ThresholdChange,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let bars = {
         let bench = state
             .bench(id)
@@ -1075,7 +1076,7 @@ pub(super) fn split_bench_track(
     named: Option<&str>,
     observations: &[usize],
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let mut made = String::new();
     let reply = edit::edited(state, id, |state| {
         state
@@ -1135,7 +1136,7 @@ pub(super) fn commit_bench_track(
     label: &str,
     named: Option<&str>,
 ) -> JsonReply {
-    let (id, item) = target(state, label, named)?;
+    let (id, item) = edit_target(state, label, named)?;
     let mut committed = None;
     let reply = edit::edited(state, id, |state| {
         state.commit_bench_track(id, &item).map(|written| {
@@ -1170,7 +1171,7 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
 /// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
 /// back, on a worker thread.
 pub(super) fn fit_bench_track(state: &mut AppState, label: &str, named: Option<&str>) -> Outcome {
-    let (id, item) = match target(state, label, named) {
+    let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
@@ -1189,7 +1190,7 @@ pub(super) fn fit_bench_track_normal(
     named: Option<&str>,
     step: crate::bench::NormalStep,
 ) -> Outcome {
-    let (id, item) = match target(state, label, named) {
+    let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
@@ -1212,7 +1213,7 @@ pub(super) fn set_bench_track_stage(
     named: Option<&str>,
     stage: StageKind,
 ) -> Outcome {
-    let (id, item) = match target(state, label, named) {
+    let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
@@ -1233,7 +1234,7 @@ pub(super) fn search_bench_track_descriptors(
     radius_px: Option<f64>,
     min_inliers: Option<usize>,
 ) -> Outcome {
-    let (id, item) = match target(state, label, named) {
+    let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
@@ -1252,7 +1253,7 @@ pub(super) fn search_bench_track_geometry(
     named: Option<&str>,
     observation: usize,
 ) -> Outcome {
-    let (id, item) = match target(state, label, named) {
+    let (id, item) = match edit_target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
@@ -1421,6 +1422,30 @@ fn target(
         .map(str::to_string)
         .ok_or_else(|| no_focused_item(state, id))?;
     Ok((id, focused))
+}
+
+/// [`target`] for a tool that edits an item, refused first when the node's
+/// bench is view-only (`AppState::bench_view_only_refusal`).
+///
+/// Asked before anything else the tool reads, so a call on a `sift_files`
+/// node gets the one sentence that names the remedy, rather than a refusal
+/// about a missing patch frame or a no-effect answer.
+fn edit_target(
+    state: &AppState,
+    label: &str,
+    named: Option<&str>,
+) -> Result<(ReconId, String), ToolError> {
+    let id = resolve_reconstruction(state, Some(label))?;
+    view_only(state, id)?;
+    target(state, label, named)
+}
+
+/// The view-only refusal of `id`'s bench as a tool error.
+fn view_only(state: &AppState, id: ReconId) -> Result<(), ToolError> {
+    match state.bench_view_only_refusal(id) {
+        Some(why) => Err(ToolError::new(why)),
+        None => Ok(()),
+    }
 }
 
 /// The refusal a call that names no track gets when no item on the node's

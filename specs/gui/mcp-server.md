@@ -3101,6 +3101,14 @@ means. What this surface adds is the three things every tool family here adds.
 what a gesture in Track View's Edited mode means when it names no item. A label that
 names nothing on the bench is refused naming it.
 
+**A `sift_files` node's bench is view-only.** `create_bench_track` puts a
+point on it and every read works, but every tool that edits an item, and
+`create_bench_cluster`, is refused before it reads anything else, in the one
+sentence that names `convert_to_embedded_patches` as the remedy
+([bench.md](bench.md) § "A view-only bench"). After the conversion,
+`create_bench_track` on a point whose item has no patch frame rebuilds that
+item with the point's frame, under its own label, as one version.
+
 **There is one focused item for the viewer, and a bench can hold items with
 none of them focused.** `focus_bench_item` focuses one item, unfocusing
 whatever was focused on any node, and `unfocus_bench_item`, which takes no

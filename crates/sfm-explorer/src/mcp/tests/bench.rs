@@ -3543,3 +3543,173 @@ fn create_bench_track_carries_the_read_only_bars_for_the_viewed_point_only() {
     let item = made["item"].as_str().expect("an item");
     assert_eq!(state.bench_track(id, item).expect("on").thresholds, bars);
 }
+
+// ── A view-only bench ───────────────────────────────────────────────────
+
+/// A `sift_files` node's bench is view-only: a point goes on the bench, and
+/// every tool that would edit it is refused up front with the sentence that
+/// names Convert to Embedded Patches, pushing nothing. After the conversion,
+/// putting the same point on the bench again rebuilds the frame-less item
+/// with a patch frame under its own label, and the item takes edits.
+#[test]
+fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state.select_recon(id);
+    state.window = Some(FakeWindow::default().info());
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 0 }),
+    );
+    let item = made["item"].as_str().expect("an item").to_string();
+    let frameless = |state: &AppState| match &state.bench_track(id, &item).expect("on").stage {
+        sfmtool_core::bench::Stage::Track(payload) => payload.placement.is_none(),
+        sfmtool_core::bench::Stage::Cluster(_) => panic!("a point goes on at the track stage"),
+    };
+    assert!(frameless(&state));
+    let versions = version_count(&state);
+
+    let refusals = [
+        (
+            "fit_bench_track",
+            json!({ "reconstruction_label": "run_a" }),
+        ),
+        (
+            "fit_bench_track_normal",
+            json!({ "reconstruction_label": "run_a", "method": "photometric" }),
+        ),
+        (
+            "set_bench_track_stage",
+            json!({ "reconstruction_label": "run_a", "stage": "cluster" }),
+        ),
+        // The stage the track is at already: refused rather than "no effect".
+        (
+            "set_bench_track_stage",
+            json!({ "reconstruction_label": "run_a", "stage": "track" }),
+        ),
+        (
+            "set_bench_track_verdict",
+            json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
+        ),
+        (
+            "apply_bench_track_thresholds",
+            json!({ "reconstruction_label": "run_a", "min_zncc": 0.8 }),
+        ),
+        (
+            "translate_bench_patch",
+            json!({ "reconstruction_label": "run_a", "by": [0.1, 0.0, 0.0] }),
+        ),
+        (
+            "resize_bench_patch",
+            json!({ "reconstruction_label": "run_a", "half_length": 0.5 }),
+        ),
+        (
+            "sight_bench_observation",
+            json!({ "reconstruction_label": "run_a", "observation": 0, "pixel": [10.0, 10.0] }),
+        ),
+        (
+            "tilt_bench_patch",
+            json!({ "reconstruction_label": "run_a", "normal": [0.0, 0.0, 1.0] }),
+        ),
+        (
+            "spin_bench_patch",
+            json!({ "reconstruction_label": "run_a", "degrees": 10.0 }),
+        ),
+        (
+            "add_bench_track_observation",
+            json!({ "reconstruction_label": "run_a", "camera_image": 3, "pixel": [10.0, 10.0] }),
+        ),
+        (
+            "split_bench_track",
+            json!({ "reconstruction_label": "run_a", "observations": [1] }),
+        ),
+        (
+            "duplicate_bench_item",
+            json!({ "reconstruction_label": "run_a" }),
+        ),
+        (
+            "commit_bench_track",
+            json!({ "reconstruction_label": "run_a" }),
+        ),
+        (
+            "search_bench_track_geometry",
+            json!({ "reconstruction_label": "run_a", "observation": 0 }),
+        ),
+        (
+            "create_bench_cluster",
+            json!({
+                "reconstruction_label": "run_a",
+                "camera_image": 0,
+                "pixel": [10.0, 10.0],
+                "radius_px": 7.5,
+            }),
+        ),
+    ];
+    for (tool, arguments) in refusals {
+        let error = refused_call(&mut state, &mut viewer, tool, arguments.clone());
+        assert!(
+            error.0.starts_with("Bench editing needs embedded patches")
+                && error.0.contains("Convert to Embedded Patches")
+                && error.0.contains("convert_to_embedded_patches"),
+            "{tool} {arguments}: {error}"
+        );
+    }
+    assert_eq!(version_count(&state), versions, "a refusal pushes nothing");
+
+    // The panel's side asks the same question and gets the same sentence.
+    let why = state.bench_edit_refusal(id).expect("view-only");
+    assert!(
+        why.starts_with("Bench editing needs embedded patches"),
+        "{why}"
+    );
+    assert_eq!(
+        state.set_bench_verdict(id, &item, 0, sfmtool_core::bench::Verdict::Out),
+        Err(why.clone())
+    );
+
+    // The remedy the sentence names is one that runs.
+    assert!(state.convert_to_embedded_patches_refusal(id).is_none());
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+    assert!(state.bench_edit_refusal(id).is_none());
+    assert!(
+        frameless(&state),
+        "the conversion leaves the bench as it was"
+    );
+
+    // Putting the point on the bench again rebuilds the item, in one version.
+    let versions = version_count(&state);
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 0 }),
+    );
+    assert_eq!(again["item"], json!(item), "{again}");
+    assert_eq!(version_count(&state), versions + 1);
+    assert!(!frameless(&state), "the rebuilt item carries a patch frame");
+    // A second put of the point only focuses the rebuilt item.
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 0 }),
+    );
+    assert_eq!(version_count(&state), versions + 1);
+
+    // And it takes an edit.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
+    );
+    assert_eq!(version_count(&state), versions + 2);
+}

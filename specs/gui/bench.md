@@ -461,6 +461,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Step | Version label |
 |---|---|
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
+| Put a point on the bench again, once it has a patch frame its item lacks (§ "A view-only bench") | `Rebuilt pt3d_a1b2c3d4_1207 from point 1207, which now carries a patch frame` |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
@@ -525,6 +526,68 @@ would be two answers to one question. The test is the origin, followed to the
 cursor. That case pushes no version.
 
 ---
+
+## A view-only bench
+
+**The bench of a `sift_files` reconstruction is view-only.** Such a
+reconstruction keeps its patches in the `.sift` files rather than in the
+`.sfmr`, so a point put on its bench carries no patch frame, and a track built
+there could not be committed back. Its bench items can be viewed as fully as
+the data allows: a point goes on the bench, is focused, and shows its header,
+its keypoints (which the load fills from the `.sift` files) and whatever
+evaluation its frame allows. Every step that edits an item is refused up front.
+
+One question decides it, `AppState::bench_view_only_refusal`, and every editing
+step asks `AppState::bench_edit_refusal`, which is the busy refusal followed by
+it. The refusal is one sentence, `bench::view_only_sentence`:
+
+> Bench editing needs embedded patches, and dino keeps its patches in .sift
+> files (sift_files), so its bench is view-only. Convert it with Convert to
+> Embedded Patches (the reconstruction's menu in the Scene panel, or
+> convert_to_embedded_patches), then put the point on the bench again.
+
+It names the one remedy, which is never itself refused on a `sift_files` node
+that is not busy. The same sentence is given everywhere:
+
+- **The steps.** Starting a cluster, adding an observation, a verdict, a pin
+  or unpin, the thresholds, every patch edit, *Accept walk*, a duplicate, a
+  split, a commit, a fit, a normal step, a stage change (including one to the
+  stage the track is at, which is refused rather than answered as no effect),
+  and both searches. They ask it in `bench_step_target` and the step methods
+  that do not go through it, so the refusal comes before any other.
+- **The wire.** Every bench tool that edits an item asks it before it reads
+  anything else (`mcp/bench.rs`'s `edit_target`), and so does
+  `create_bench_cluster`.
+- **The panels.** Track View greys every toolbar button but *Discard* and
+  *Rename*, the threshold boxes, the *Keep* heading's pin, the row menus'
+  unpin, search and *Accept walk* entries, and takes no click on a row's
+  *Keep* switch or pin, each with the sentence as its hover. Image Detail greys
+  *Start cluster on the bench here* and *Add observation to bench track here*
+  with it (`BenchMenu::view_only`), and its bench layer draws the focused item
+  with no handle on it. The 3D viewer's bench figure offers no handle either.
+
+**Not refused**: putting a point on the bench (`create_bench_track`, *Edit on
+Bench*, a double-click), focusing and unfocusing, selecting rows, renaming,
+discarding and clearing the bench, none of which edits a track, and *Find
+Nearby Tracks* without a commit, whose items are built with a frame and viewed
+like any other. *Create Track Here* and a committing find are refused as before
+(§ "Create Track Here").
+
+**After Convert to Embedded Patches, putting the point on the bench again
+rebuilds its item.** The conversion leaves the bench as it was, so an item put
+on the bench before it still has no frame. A put of a point whose item is a
+track-stage track with no frame, on a node that is no longer view-only and
+whose point now has one, builds the track afresh from the point
+(`AppState::rebuilt_with_frame`) and replaces the item under its own label and
+`ItemId`, as one version (`Rebuilt … from point …, which now carries a patch
+frame`). Nothing is lost by the replacement, because a view-only bench took no
+edits: the old item holds only what the point held. Rebuilding on the re-bench
+was chosen over refreshing every item when the conversion lands because it is
+one step in one place (`put_point_on_bench`), it needs nothing from the
+background task that pushes the conversion's version, and the refusal sentence
+already tells the person to put the point on the bench again. Undoing the
+rebuild puts the frame-less item back; undoing the conversion makes the bench
+view-only again.
 
 ## The focused item
 
@@ -1650,6 +1713,15 @@ find that commits. The panel's side, in
 draws the entry third, directly below *Edit on Bench*, and greys it with
 *Create Track Here*'s sentences in the same place. The background tests cancel
 it over the near plane.
+
+The view-only bench is tested over the wire in
+[mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs), on a
+`sift_files` node with `.sift` files beside it: a point goes on the bench, every
+editing tool is refused with the view-only sentence and pushes nothing, the
+conversion runs, and putting the point on the bench again rebuilds the item
+with a frame in one version, after which it takes a verdict. Image Detail's
+greyed entries are tested in
+[image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs).
 
 The wire is tested in
 [mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs), over the same

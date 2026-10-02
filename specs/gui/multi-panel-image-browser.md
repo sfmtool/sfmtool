@@ -1105,6 +1105,13 @@ if it needs it. Every entry but `Edit on Bench` names
 a pixel, and this menu is the viewer's only way to name one, so this is where
 every gesture that needs one lives.
 
+On a `sift_files` node the bench is view-only ([`bench.md`](bench.md) § "A
+view-only bench"): `Start cluster on the bench here` and `Add observation to
+bench track here` are greyed with the sentence that names Convert to Embedded
+Patches, and the bench layer draws the focused item with no handle on it.
+`Edit on Bench` stays live, since putting a point on the bench is how it is
+viewed.
+
 `Create Track Here` acts at the pixel the menu was opened at, **not** at a
 feature near it, so it is offered anywhere on the photograph, whether or not a
 feature is under the pointer. Its shortcut is drawn beside it, as the menu bar

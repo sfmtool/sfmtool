@@ -533,10 +533,10 @@ impl TrackBody {
         // line, the toolbar and the boxes beside it, so the table's separator
         // runs straight under the patch.
         let patch = self.ensure_track_patch(ui.ctx(), label, track);
-        // Greyed while the node is busy, with the busy sentence: a release
-        // there would be refused, and a box that snapped back after a drag
-        // would say less than one that could not be dragged.
-        let busy = state.busy_refusal(id);
+        // Greyed while the node is busy or its bench is view-only, with that
+        // sentence: a release there would be refused, and a box that snapped
+        // back after a drag would say less than one that could not be dragged.
+        let busy = state.bench_edit_refusal(id);
         let hover = match &busy {
             Some(why) => BoxHover::Refused(why),
             None => BoxHover::Tip(EDITED_BARS_TIP),
@@ -642,7 +642,11 @@ impl TrackBody {
         response: &mut TrackBodyResponse,
     ) {
         let id = node.id;
-        let busy = state.busy_refusal(id);
+        // Every step here edits the track, and is greyed by the busy node or
+        // a view-only bench; Discard and Rename are not edits of the track and
+        // are greyed by the busy node alone.
+        let busy = state.bench_edit_refusal(id);
+        let housekeeping = state.busy_refusal(id);
         ui.horizontal_wrapped(|ui| {
             // The arrow is U+23F5, which egui's bundled fonts draw; they have no
             // glyph for U+2192, which draws as a box.
@@ -728,13 +732,18 @@ impl TrackBody {
             ) {
                 response.commit = true;
             }
-            if entry(ui, "Discard", busy.clone(), "Take this track off the bench") {
+            if entry(
+                ui,
+                "Discard",
+                housekeeping.clone(),
+                "Take this track off the bench",
+            ) {
                 response.discard = Some(label.to_string());
             }
         });
         ui.horizontal_wrapped(|ui| {
             self.show_lock(ui, track);
-            self.show_rename(ui, label, busy, response);
+            self.show_rename(ui, label, housekeeping, response);
         });
     }
 

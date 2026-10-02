@@ -50,7 +50,9 @@ impl std::fmt::Display for StageError {
             StageError::NoFrame => write!(
                 f,
                 "the track carries no patch frame, so there is nothing to project \
-                 into each observation's image"
+                 into each observation's image; a point put on the bench from a \
+                 sift_files reconstruction has none, so convert the reconstruction to \
+                 embedded patches and put the point on the bench again"
             ),
             StageError::NoPosition => write!(
                 f,
