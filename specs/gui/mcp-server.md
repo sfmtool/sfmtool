@@ -3377,6 +3377,15 @@ the patch as it stands seen in that image: Image Detail's ghost outline, and the
 only way to reach an image the track has no sighting in. Both at once is refused
 with a sentence naming the two, and the reply carries whichever was used.
 
+**The schema marks only `reconstruction_label` required on these two tools.**
+Every argument of either form is optional in the schema, because JSON Schema's
+`required` list cannot say "this group or that one", and listing both forms as
+required would make every call the server accepts invalid against the schema.
+The parser enforces the rule instead: a call that gives both forms, neither,
+or an edge argument of the other form (`edge` with `half_length`, or
+`moved_edge` with a pixel) is refused with a sentence that names the two
+spellings, which an agent can act on more readily than a `oneOf` mismatch.
+
 **The cluster stage's own two are tools of their own**, because there is no
 shared geometry there and what is turned or sized is one sighting's
 parallelogram: `resize_bench_shape` and `spin_bench_shape` take an

@@ -295,10 +295,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           cluster-stage track has no shared geometry -- use \
                           sight_bench_observation there.",
             kind: Write,
+            // The two forms exclude each other, so every argument that names
+            // where the patch goes is optional here, and the parser
+            // (`translate_target`) enforces exactly one form with a sentence
+            // that names both spellings.
             schema: object(
-                &[("track", bench_track_schema())],
                 &[
-                    ("reconstruction_label", edited_label_schema()),
+                    ("track", bench_track_schema()),
                     (
                         "by",
                         json!({
@@ -316,6 +319,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("camera_image", pixel_view_schema()),
                     ("pixel", pixel_schema()),
                 ],
+                &[("reconstruction_label", edited_label_schema())],
             ),
         },
         ToolSpec {
@@ -388,10 +392,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           A patch is square, so a resize is one scale and not two. Nothing \
                           is pinned. A cluster-stage track is refused: use resize_bench_shape.",
             kind: Write,
+            // Optional for the reason translate_bench_patch's are: the parser
+            // (`resize_target`) enforces exactly one form.
             schema: object(
-                &[("track", bench_track_schema())],
                 &[
-                    ("reconstruction_label", edited_label_schema()),
+                    ("track", bench_track_schema()),
                     (
                         "half_length",
                         json!({
@@ -409,6 +414,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("edge", edge_schema()),
                     ("pixel", pixel_schema()),
                 ],
+                &[("reconstruction_label", edited_label_schema())],
             ),
         },
         ToolSpec {

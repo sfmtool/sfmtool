@@ -1716,11 +1716,24 @@ fn resize_target(args: &Args<'_>) -> Result<super::ResizeTarget, ToolError> {
     let half_length = args.optional_f64("half_length")?;
     let viewpoint = pixel_viewpoint(args)?;
     let pixel = args.optional_numbers::<2>("pixel")?;
+    // Each form has an edge argument of its own, and neither is read by the
+    // other, so one given with the wrong form is refused rather than ignored.
+    let given = |key: &str| !matches!(args.map.get(key), None | Some(Value::Null));
     match (half_length, viewpoint, pixel) {
+        (Some(_), None, None) if given("edge") => Err(args.error(
+            "was given edge with half_length. edge names the edge a pixel moves; with \
+             half_length, name the edge that moves as moved_edge."
+                .to_string(),
+        )),
         (Some(half_length), None, None) => Ok(super::ResizeTarget::HalfLength {
             half_length,
             moved_edge: args.optional_edge("moved_edge")?,
         }),
+        (None, Some(_), Some(_)) if given("moved_edge") => Err(args.error(
+            "was given moved_edge with a pixel. moved_edge belongs to the half_length form; \
+             with a pixel, name the edge it moves as edge."
+                .to_string(),
+        )),
         (None, Some(viewpoint), Some(pixel)) => Ok(super::ResizeTarget::Pixel {
             viewpoint,
             edge: args.edge("edge")?,

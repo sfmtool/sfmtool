@@ -410,6 +410,119 @@ fn every_advertised_tool_parses_to_matching_command_metadata() {
     }
 }
 
+/// Every representative call carries every argument its schema marks
+/// required, so a client that validates against the schema can form at least
+/// that call. A tool whose alternative arguments are all listed as required
+/// fails here, since no single valid call can carry both alternatives.
+#[test]
+fn every_representative_call_satisfies_its_schema_s_required_list() {
+    let calls = representative_tool_calls();
+    for spec in tools::catalog() {
+        let arguments = calls
+            .iter()
+            .find_map(|(name, arguments)| (*name == spec.name).then_some(arguments))
+            .expect("every tool has a representative call");
+        let required = spec.schema["required"].as_array().cloned();
+        for required in required.iter().flatten() {
+            let required = required.as_str().expect("a property name");
+            assert!(
+                arguments.get(required).is_some(),
+                "{} marks {required:?} required, but its valid call {arguments} has none",
+                spec.name
+            );
+        }
+    }
+}
+
+/// `translate_bench_patch` and `resize_bench_patch` each take one of two
+/// forms. The schema requires only the reconstruction, each form parses on its
+/// own, and the parser refuses a call that gives both forms, neither, or an
+/// edge argument that belongs to the other form.
+#[test]
+fn the_bench_patch_forms_are_optional_in_the_schema_and_exclusive_in_the_parser() {
+    for tool in ["translate_bench_patch", "resize_bench_patch"] {
+        let spec = tools::catalog()
+            .iter()
+            .find(|spec| spec.name == tool)
+            .expect("advertised");
+        assert_eq!(
+            spec.schema["required"],
+            json!(["reconstruction_label"]),
+            "{tool}"
+        );
+    }
+
+    let parse = |tool: &str, arguments: Value| {
+        tools::parse(tool, Some(arguments.as_object().expect("an object")))
+    };
+    for (tool, arguments) in [
+        (
+            "translate_bench_patch",
+            json!({ "reconstruction_label": "a", "by": [0.1, 0.0, 0.0] }),
+        ),
+        (
+            "translate_bench_patch",
+            json!({ "reconstruction_label": "a", "camera_image": 2, "pixel": [1.0, 2.0] }),
+        ),
+        (
+            "resize_bench_patch",
+            json!({ "reconstruction_label": "a", "half_length": 0.5 }),
+        ),
+        (
+            "resize_bench_patch",
+            json!({ "reconstruction_label": "a", "half_length": 0.5, "moved_edge": "-v" }),
+        ),
+    ] {
+        parse(tool, arguments.clone())
+            .unwrap_or_else(|error| panic!("{tool} {arguments}: {error}"));
+    }
+
+    for (tool, arguments, expected) in [
+        (
+            "translate_bench_patch",
+            json!({
+                "reconstruction_label": "a", "by": [0.1, 0.0, 0.0],
+                "observation": 0, "pixel": [1.0, 2.0],
+            }),
+            "give one",
+        ),
+        (
+            "translate_bench_patch",
+            json!({ "reconstruction_label": "a" }),
+            "needs either by",
+        ),
+        (
+            "resize_bench_patch",
+            json!({ "reconstruction_label": "a" }),
+            "needs either half_length",
+        ),
+        (
+            "resize_bench_patch",
+            json!({
+                "reconstruction_label": "a", "half_length": 0.5,
+                "observation": 0, "edge": "+u", "pixel": [1.0, 2.0],
+            }),
+            "give one",
+        ),
+        (
+            "resize_bench_patch",
+            json!({ "reconstruction_label": "a", "half_length": 0.5, "edge": "+u" }),
+            "moved_edge",
+        ),
+        (
+            "resize_bench_patch",
+            json!({
+                "reconstruction_label": "a", "observation": 0, "edge": "+u",
+                "moved_edge": "+u", "pixel": [1.0, 2.0],
+            }),
+            "moved_edge belongs to the half_length form",
+        ),
+    ] {
+        let error = parse(tool, arguments.clone()).expect_err("refused");
+        assert!(error.0.contains(expected), "{tool} {arguments}: {error}");
+    }
+}
+
 /// A misspelled argument is refused by every advertised tool. Starting from
 /// the representative valid calls keeps this check independent of each
 /// branch's other validation rules.
