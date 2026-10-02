@@ -67,6 +67,9 @@ const NAME_WIDTH: f32 = 220.0;
 const SWITCH_CELL_WIDTH: f32 = 40.0;
 /// Size of the *Keep* switch.
 const SWITCH_SIZE: egui::Vec2 = egui::vec2(34.0, 18.0);
+/// The fill of an enabled *Keep* switch that is on. A greyed switch that is
+/// on is filled grey instead.
+pub(super) const KEEP_ON_FILL: egui::Color32 = egui::Color32::from_rgb(56, 150, 76);
 /// Side of one cell of a three-by-three grid a row draws: room for the slide
 /// line the self-similarity grid draws in a cell.
 const GRID_CELL: f32 = 10.0;
@@ -398,10 +401,27 @@ pub(super) fn heading_pin_hover(pinned: usize, rows: usize, busy: Option<&str>) 
 /// the click, so the target is the cell and not the switch's own few points.
 /// It takes a drag too, which does nothing, so a drag begun on a switch does
 /// not scroll the table. Returns the click's response.
-fn keep_switch(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, kept: bool) -> egui::Response {
+///
+/// When not `enabled` it still takes the click and the drag, and the caller
+/// does nothing with them, so a click on a refused switch is not a click on
+/// the row. It is drawn greyed: grey where an enabled switch is green, with
+/// the outline of a widget that takes no input, and the whole at the opacity
+/// egui draws a disabled widget at.
+fn keep_switch(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    kept: bool,
+    enabled: bool,
+) -> egui::Response {
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), kept, "Keep")
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            enabled && ui.is_enabled(),
+            kept,
+            "Keep",
+        )
     });
     if !ui.is_rect_visible(rect) {
         return response;
@@ -410,15 +430,21 @@ fn keep_switch(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, kept: bool) ->
         egui::pos2(rect.min.x + 2.0, rect.center().y - SWITCH_SIZE.y / 2.0),
         SWITCH_SIZE,
     );
-    let visuals = ui.style().interact_selectable(&response, kept);
+    let visuals = if enabled {
+        ui.style().interact_selectable(&response, kept)
+    } else {
+        ui.visuals().widgets.noninteractive
+    };
     let how_on = ui.ctx().animate_bool_responsive(id, kept);
     let radius = 0.5 * switch.height();
-    let track_fill = if kept {
-        egui::Color32::from_rgb(56, 150, 76)
+    let track_fill = if kept && enabled {
+        KEEP_ON_FILL
+    } else if kept {
+        ui.visuals().weak_text_color()
     } else {
         ui.visuals().widgets.inactive.bg_fill
     };
-    let painter = ui.painter();
+    let painter = switch_painter(ui, enabled);
     painter.rect(
         switch,
         radius,
@@ -479,22 +505,48 @@ fn draw_verdict(
 /// when the verdict was set by hand and as a faint outline when the thresholds
 /// set it. The whole of `rect` takes the click, and a drag, as the switch
 /// does. Returns the click's response.
-fn pin_toggle(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, pinned: bool) -> egui::Response {
+///
+/// When not `enabled` it still takes the click and the drag, as the switch
+/// does, does not brighten under the pointer, and is drawn at egui's disabled
+/// opacity.
+fn pin_toggle(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    pinned: bool,
+    enabled: bool,
+) -> egui::Response {
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), pinned, "Pin")
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            enabled && ui.is_enabled(),
+            pinned,
+            "Pin",
+        )
     });
     if !ui.is_rect_visible(rect) {
         return response;
     }
     let visuals = ui.visuals();
-    let color = match (pinned, response.hovered()) {
+    let color = match (pinned, enabled && response.hovered()) {
         (true, _) => visuals.strong_text_color(),
         (false, true) => visuals.text_color(),
         (false, false) => visuals.weak_text_color().gamma_multiply(0.6),
     };
-    paint_pushpin(ui.painter(), rect.center(), color, pinned);
+    paint_pushpin(&switch_painter(ui, enabled), rect.center(), color, pinned);
     response
+}
+
+/// The painter a row's switch and pin draw with: the `ui`'s own, faded to
+/// egui's disabled opacity when not `enabled`, so they look greyed as the
+/// widgets egui disables do.
+fn switch_painter(ui: &egui::Ui, enabled: bool) -> egui::Painter {
+    let mut painter = ui.painter().clone();
+    if !enabled {
+        painter.multiply_opacity(ui.visuals().disabled_alpha());
+    }
+    painter
 }
 
 /// A pushpin standing upright at `c`: a cap, a body narrower than the cap, a
@@ -989,7 +1041,8 @@ impl TrackBody {
     /// target is easy to hit. Returns the switch's hover text.
     ///
     /// With a `refusal` (the node busy, or a view-only bench) both are drawn
-    /// as they stand, take no click, and carry the refusal as their hover.
+    /// as they stand but greyed, do nothing with a click, and carry the
+    /// refusal as their hover.
     #[allow(clippy::too_many_arguments)]
     fn draw_keep(
         &self,
@@ -1012,17 +1065,20 @@ impl TrackBody {
             egui::pos2(x0 + cols.keep + KEEP_WIDTH, rect.max.y),
         );
         let kept = row.verdict == Verdict::In;
+        let enabled = refusal.is_none();
         let keep = keep_switch(
             ui,
             keep_rect,
             ui.id().with(("track_view_keep", observation)),
             kept,
+            enabled,
         );
         let pin = pin_toggle(
             ui,
             pin_rect,
             ui.id().with(("track_view_pin", observation)),
             row.pinned,
+            enabled,
         );
         let hover = keep_hover(kept, row.pinned, judged, row.image);
         if let Some(why) = refusal {

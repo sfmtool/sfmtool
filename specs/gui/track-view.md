@@ -1315,7 +1315,10 @@ a point arrives with every row pinned `in`, so its verdicts stand until they are
 unpinned. A click sets the other verdict by hand and pins it. The switch's
 part of the cell, the whole height of the row, takes the click, since a
 switch's own few points are a small target. There is no third state: a row
-nobody has ruled on is an unpinned `out`.
+nobody has ruled on is an unpinned `out`. While the node is busy or its bench
+is view-only, the switch and the pin are drawn greyed, at the opacity of a
+disabled widget and with a switch that is on filled grey rather than green, and
+a click on them does nothing.
 
 **The pin beside the switch says whether a hand set the verdict**, and is the
 control for it: a solid pushpin on a pinned verdict, which the thresholds leave
@@ -1429,7 +1432,7 @@ show without a frame are not decided here (§ "Non-goals").
 **Such an item is not edited here.** A `sift_files` reconstruction's bench is
 view-only ([`bench.md`](bench.md) § "A view-only bench"): every toolbar button
 but *Discard* and *Rename*, the threshold boxes, the *Keep* switches and pins
-and the row menus' editing entries are greyed or take no click, with the
+and the row menus' editing entries are greyed and take no click, with the
 sentence that names Convert to Embedded Patches as their hover. After the
 conversion, putting the point on the bench again (*Edit*, *Edit on Bench* or a
 double-click) rebuilds the item with the point's new patch frame, and from

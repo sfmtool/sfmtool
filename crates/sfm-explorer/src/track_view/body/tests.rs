@@ -3837,6 +3837,100 @@ fn a_long_image_name_is_cut_in_its_middle() {
     }
 }
 
+/// One frame's row switches and pins as AccessKit reports them: for each
+/// widget labelled `Keep` or `Pin`, its label and whether it is enabled. Also
+/// how many shapes the frame filled with the enabled switch's green.
+fn row_switches(
+    panel: &mut TrackBody,
+    ctx: &egui::Context,
+    state: &AppState,
+) -> (Vec<(String, bool)>, usize) {
+    fn greens(shape: &egui::Shape, count: &mut usize) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| greens(s, count)),
+            egui::Shape::Rect(rect) if rect.fill == super::table::KEEP_ON_FILL => *count += 1,
+            _ => {}
+        }
+    }
+    let mut output = ctx.run_ui(input(Vec::new()), |ui| {
+        panel.show(ui, state);
+    });
+    output.textures_delta.clear();
+    let update = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on");
+    let switches = update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let label = node.label()?;
+            (node.role() == egui::accesskit::Role::CheckBox && (label == "Keep" || label == "Pin"))
+                .then(|| (label.to_string(), !node.is_disabled()))
+        })
+        .collect();
+    let mut green = 0;
+    for clipped in &output.shapes {
+        greens(&clipped.shape, &mut green);
+    }
+    (switches, green)
+}
+
+/// On a view-only bench the *Keep* switch and pin of every row are drawn
+/// disabled, as every other edit control there is: AccessKit reports them
+/// disabled, and no switch is filled the enabled green. On an editable bench
+/// the same rows report them enabled, with the kept rows green.
+#[test]
+fn a_view_only_bench_draws_the_row_switches_disabled() {
+    // A `sift_files` node: its bench is view-only.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut sift, id) = crate::state::edits::tests::convertible_state(dir.path());
+    sift.select_recon(id);
+    sift.put_point_on_bench(PointRef::new(id, 0), None)
+        .expect("a live point");
+    assert!(sift.bench_view_only_refusal(id).is_some());
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    run_frame(&mut panel, &ctx, &sift);
+    let (switches, green) = row_switches(&mut panel, &ctx, &sift);
+    let rows = panel.rows().len();
+    assert!(rows > 0, "the table drew no rows");
+    assert_eq!(switches.len(), 2 * rows, "{switches:?}");
+    assert!(
+        switches.iter().all(|(_, enabled)| !enabled),
+        "a row control on a view-only bench is enabled: {switches:?}"
+    );
+    assert_eq!(green, 0, "a greyed switch was filled the enabled green");
+
+    // An `embedded_patches` node: its bench takes edits.
+    let (mut state, id) = state();
+    let label = state
+        .put_point_on_bench(PointRef::new(id, POINT as usize), None)
+        .expect("a live point");
+    assert!(state.bench_edit_refusal(id).is_none());
+    let mut panel = TrackBody::new();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    run_frame(&mut panel, &ctx, &state);
+    let (switches, green) = row_switches(&mut panel, &ctx, &state);
+    let rows = panel.rows().len();
+    assert_eq!(switches.len(), 2 * rows, "{switches:?}");
+    assert!(
+        switches.iter().all(|(_, enabled)| *enabled),
+        "a row control on an editable bench is disabled: {switches:?}"
+    );
+    let kept = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+        .count();
+    assert!(kept > 0, "the fixture keeps no row");
+    assert_eq!(green, kept, "each kept row's switch is green");
+}
+
 // ── Viewed mode ─────────────────────────────────────────────────────────────
 
 mod viewed;

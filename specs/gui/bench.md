@@ -560,8 +560,9 @@ that is not busy. The same sentence is given everywhere:
   `create_bench_cluster`.
 - **The panels.** Track View greys every toolbar button but *Discard* and
   *Rename*, the threshold boxes, the *Keep* heading's pin, the row menus'
-  unpin, search and *Accept walk* entries, and takes no click on a row's
-  *Keep* switch or pin, each with the sentence as its hover. Image Detail greys
+  unpin, search and *Accept walk* entries, and draws a row's *Keep* switch
+  and pin greyed, the switch grey rather than green when on, taking no click,
+  each with the sentence as its hover. Image Detail greys
   *Start cluster on the bench here* and *Add observation to bench track here*
   with it (`BenchMenu::view_only`), and its bench layer draws the focused item
   with no handle on it. The 3D viewer's bench figure offers no handle either.
