@@ -170,7 +170,10 @@ from the `.sift` keypoints.
 
 > _Status (2026-10-02): Done — after the conversion, putting the point on the bench
 > again rebuilds its frame-less item from the point's new patch frame, under
-> the same label, as one version. PR #671._
+> the same label, as one version. PR #671. The rebuild keeps edits the item took
+> between the conversion and the re-bench (verdicts, pins, thresholds,
+> sightings, added observations), and *Duplicate* is refused on the item until
+> then._
 
 Continuing from 4: after `convert_to_embedded_patches` succeeds ("18991 points
 framed"), the item `pt3d_0bdf4852_100` still reports the no-patch-frame

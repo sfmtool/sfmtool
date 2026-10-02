@@ -580,8 +580,16 @@ track-stage track with no frame, on a node that is no longer view-only and
 whose point now has one, builds the track afresh from the point
 (`AppState::rebuilt_with_frame`) and replaces the item under its own label and
 `ItemId`, as one version (`Rebuilt … from point …, which now carries a patch
-frame`). Nothing is lost by the replacement, because a view-only bench took no
-edits: the old item holds only what the point held. Rebuilding on the re-bench
+frame`). The bench is editable from the conversion on, so the item may have
+taken edits before the re-bench, and the rebuild keeps them (`with_frame_of`):
+the stage (frame, position, bitmap, colour) and the origin come from the fresh
+build, and the item keeps its thresholds, every verdict and pin, and every
+observation that was sighted elsewhere or added. An observation still at the
+point's keypoint takes the fresh build's measurement. An item nobody edited
+comes out exactly as a fresh put of the point would build it. Until the
+re-bench, *Duplicate* is refused on such an item
+(`AppState::duplicate_refusal`), because the copy drops the origin and could
+never be given the frame. Rebuilding on the re-bench
 was chosen over refreshing every item when the conversion lands because it is
 one step in one place (`put_point_on_bench`), it needs nothing from the
 background task that pushes the conversion's version, and the refusal sentence

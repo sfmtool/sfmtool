@@ -717,8 +717,8 @@ impl AppState {
     /// case pushes no version, and so is not refused while the node is busy.
     /// The one exception is an item put on the bench while the node was
     /// `sift_files`, which has no patch frame: once the point has one, the
-    /// item is rebuilt from it under its own label, as one version
-    /// ([`Self::rebuilt_with_frame`]).
+    /// item is rebuilt from it under its own label, keeping its edits, as one
+    /// version ([`Self::rebuilt_with_frame`]).
     ///
     /// Putting a point on the bench is allowed on a view-only bench
     /// ([`Self::bench_view_only_refusal`]): it is how the bench shows a point.
@@ -803,24 +803,23 @@ impl AppState {
             .then(|| view_only_sentence(&node.label))
     }
 
-    /// The fresh track a re-bench of `point` replaces the item `label` with,
-    /// or `None` when the item stays as it is.
+    /// The track a re-bench of `point` replaces the item `label` with, or
+    /// `None` when the item stays as it is.
     ///
     /// An item put on the bench while the node was `sift_files` has no patch
     /// frame. Once the node carries embedded patches, putting the same point on
     /// the bench again builds the track afresh from the point's frame, under
-    /// the item's own label. Nothing is lost by it: a view-only bench took no
-    /// edits, so the old item holds only what the point held.
+    /// the item's own label, and keeps what the item itself holds
+    /// ([`with_frame_of`]). The bench is editable from the conversion on, so the
+    /// item may have taken edits between the conversion and the re-bench, and
+    /// none of them is dropped.
     fn rebuilt_with_frame(&self, point: PointRef, label: &str) -> Option<EditableTrack> {
         if self.bench_view_only_refusal(point.recon).is_some() {
             return None;
         }
         let node = self.node(point.recon)?;
         let old = node.history.current_bench().track(label)?;
-        let Stage::Track(payload) = &old.stage else {
-            return None;
-        };
-        if payload.placement.is_some() {
+        if !lacks_frame(old) {
             return None;
         }
         let options = CreateTrackOptions {
@@ -829,13 +828,39 @@ impl AppState {
         };
         let (fresh, report) =
             bench::create_track(&Bench::new(), node.edited(), point.point, &options).ok()?;
-        let track = (**fresh.track(&report.label)?).clone();
-        matches!(&track.stage, Stage::Track(payload) if payload.placement.is_some())
-            .then_some(track)
+        let fresh = fresh.track(&report.label)?;
+        matches!(&fresh.stage, Stage::Track(payload) if payload.placement.is_some())
+            .then(|| with_frame_of(old, fresh))
     }
 
-    /// Replace the frame-less item `label` with `track`, built afresh from
-    /// `point`, as one bench version, and focus it.
+    /// Why the item `label` on `id`'s bench cannot be duplicated yet, or
+    /// `None`: it is waiting for the patch frame a re-bench of its point would
+    /// give it ([`Self::rebuilt_with_frame`]).
+    ///
+    /// A copy drops the origin, so a copy made now would keep no frame and
+    /// could never be given one. Cheap enough to grey Track View's *Duplicate*
+    /// with every frame: it reads the point's stored frame rather than building
+    /// a track.
+    pub(crate) fn duplicate_refusal(&self, id: ReconId, label: &str) -> Option<String> {
+        if self.bench_view_only_refusal(id).is_some() {
+            return None;
+        }
+        let node = self.node(id)?;
+        let track = node.history.current_bench().track(label)?;
+        if !lacks_frame(track) {
+            return None;
+        }
+        let point = self.resolved_origin(node, track)?;
+        node.edited().point(point)?.placement()?;
+        Some(format!(
+            "{label} has no patch frame yet, and a copy of it would never get one. Put point \
+             {point} on the bench again to give {label} the frame the point now carries, then \
+             duplicate it."
+        ))
+    }
+
+    /// Replace the frame-less item `label` with `track`, which carries the
+    /// frame of `point`, as one bench version, and focus it.
     fn reinstall_rebuilt(
         &mut self,
         point: PointRef,
@@ -1448,7 +1473,10 @@ impl AppState {
         id: ReconId,
         label: &str,
     ) -> Result<String, String> {
-        if let Some(why) = self.bench_edit_refusal(id) {
+        if let Some(why) = self
+            .bench_edit_refusal(id)
+            .or_else(|| self.duplicate_refusal(id, label))
+        {
             return Err(why);
         }
         let index = self.node_index(id)?;
@@ -2842,6 +2870,59 @@ fn install(bench: &Bench, label: &str, track: EditableTrack) -> Result<Bench, St
     bench
         .replace(label, BenchItem::Track(Arc::new(track)))
         .map_err(|e| format!("Cannot install that step: {e}"))
+}
+
+/// Whether `track` is a track-stage track with no patch frame, which is what
+/// a point put on the bench from a `sift_files` reconstruction is.
+fn lacks_frame(track: &EditableTrack) -> bool {
+    matches!(&track.stage, Stage::Track(payload) if payload.placement.is_none())
+}
+
+/// `old`, a track with no frame, given the frame of `fresh`, a track just
+/// built from the same point now that the point has one.
+///
+/// The stage (the frame, position, bitmap and colour) and the origin are
+/// `fresh`'s. Everything the person can have changed on `old` is kept: its
+/// thresholds, every observation's verdict and pin, and any observation that
+/// was sighted elsewhere or added. An observation still where the point puts
+/// it, in the same image at the same keypoint or at none the old item knew,
+/// takes `fresh`'s measurement,
+/// which may carry readings the old one could not. An item nobody edited
+/// comes out as `fresh` with the item's own verdicts and thresholds, which are
+/// the ones `fresh` was built with.
+fn with_frame_of(old: &EditableTrack, fresh: &EditableTrack) -> EditableTrack {
+    let keypoint = |o: &Observation| o.track.as_ref().and_then(|t| t.keypoint);
+    // A keypoint the old item never knew (a node loaded without its keypoint
+    // column) is not a sighting, so it does not hold the observation back.
+    let unmoved = |kept: &Observation, made: &Observation| {
+        keypoint(kept).is_none() || keypoint(kept) == keypoint(made)
+    };
+    let observations = old
+        .observations
+        .iter()
+        .enumerate()
+        .map(|(k, kept)| match fresh.observations.get(k) {
+            Some(made)
+                if made.image == kept.image
+                    && made.provenance == kept.provenance
+                    && unmoved(kept, made) =>
+            {
+                Observation {
+                    verdict: kept.verdict,
+                    pinned: kept.pinned,
+                    ..made.clone()
+                }
+            }
+            _ => kept.clone(),
+        })
+        .collect();
+    EditableTrack {
+        observations,
+        stage: fresh.stage.clone(),
+        origin: fresh.origin,
+        thresholds: old.thresholds.clone(),
+        repaint: old.repaint.clone(),
+    }
 }
 
 /// The points a commit created, named by the point edit's own content hash, or

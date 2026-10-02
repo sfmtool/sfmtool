@@ -713,10 +713,11 @@ impl TrackBody {
             ) {
                 response.split = Some(selected.to_vec());
             }
+            let duplicate_refusal = busy.clone().or_else(|| state.duplicate_refusal(id, label));
             if entry(
                 ui,
                 "Duplicate",
-                busy.clone(),
+                duplicate_refusal,
                 "Put a copy of this track on the bench and work on that: a patch \
                  already fitted to one piece of surface is most of the way to the \
                  piece beside it (Ctrl+D)",

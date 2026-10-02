@@ -3713,3 +3713,146 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     );
     assert_eq!(version_count(&state), versions + 2);
 }
+
+/// The bench is editable from the conversion on, so an item put on it before
+/// the conversion can take edits before its point is put on the bench again.
+/// The re-bench gives the item the point's frame and keeps those edits: the
+/// verdict, the thresholds and a sighting all survive it. A duplicate made
+/// before the re-bench would never get a frame, so it is refused until then.
+#[test]
+fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state.select_recon(id);
+    state.window = Some(FakeWindow::default().info());
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 0 }),
+    );
+    let item = made["item"].as_str().expect("an item").to_string();
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+    assert!(state.bench_edit_refusal(id).is_none());
+
+    // A copy now would drop the origin and never get a frame.
+    let versions = version_count(&state);
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "duplicate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(
+        error.0.contains("has no patch frame yet") && error.0.contains("Put point 0"),
+        "{error}"
+    );
+    assert_eq!(version_count(&state), versions, "a refusal pushes nothing");
+
+    // Edits the frame-less item takes before the re-bench.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "min_zncc": 0.8 }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "sight_bench_observation",
+        json!({ "reconstruction_label": "run_a", "observation": 1, "pixel": [12.0, 34.0] }),
+    );
+    let edited = (**state.bench_track(id, &item).expect("on")).clone();
+    let versions = version_count(&state);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 0 }),
+    );
+    assert_eq!(version_count(&state), versions + 1);
+    let rebuilt = (**state.bench_track(id, &item).expect("on")).clone();
+    let sfmtool_core::bench::Stage::Track(payload) = &rebuilt.stage else {
+        panic!("still a track");
+    };
+    assert!(
+        payload.placement.is_some(),
+        "the item has the point's frame"
+    );
+    assert_eq!(rebuilt.observations.len(), edited.observations.len());
+    assert_eq!(
+        rebuilt.observations[0].verdict,
+        sfmtool_core::bench::Verdict::Out
+    );
+    assert!(rebuilt.observations[0].pinned);
+    assert_eq!(rebuilt.thresholds, edited.thresholds);
+    assert_eq!(
+        rebuilt.observations[1], edited.observations[1],
+        "the sighted observation is kept as it was"
+    );
+
+    // With the frame in place, a copy keeps it.
+    call(
+        &mut state,
+        &mut viewer,
+        "duplicate_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": item }),
+    );
+}
+
+/// An item nobody edited comes out of the re-bench exactly as a fresh put of
+/// the converted point would build it, under its own label and origin.
+#[test]
+fn an_unedited_item_rebuilt_on_the_rebench_is_the_fresh_track() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state.select_recon(id);
+    state.window = Some(FakeWindow::default().info());
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    let item = made["item"].as_str().expect("an item").to_string();
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+    let serial = state.scene[0].history.current_version().serial.as_u64();
+    let (fresh, report) = sfmtool_core::bench::create_track(
+        &sfmtool_core::bench::Bench::new(),
+        state.scene[0].edited(),
+        3,
+        &sfmtool_core::bench::CreateTrackOptions {
+            version: serial,
+            label: Some(item.clone()),
+        },
+    )
+    .expect("the point goes on");
+    let fresh = (**fresh.track(&report.label).expect("on")).clone();
+
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    assert_eq!(**state.bench_track(id, &item).expect("on"), fresh);
+}
