@@ -1408,8 +1408,10 @@ the track was committed over. It also carries `selected_observations`, the rows 
 an agent reads the rows a person picked out, and picks out rows for a person to
 look at. The list is empty on a track that is not focused. **An observation is
 addressed by its position in
-that list**, which is stable for the life of the track, so an index an agent is holding after
-a verdict or a fit still names the same observation. The template's
+that list**, which no bench step renumbers, so an index an agent is holding after
+a verdict or a fit still names the same observation. `delete_camera_image` is
+the one call that renumbers it (§ "One history for the pair"), and its
+description says so. The template's
 samples and the consensus bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
 

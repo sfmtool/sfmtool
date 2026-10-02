@@ -656,7 +656,7 @@ impl ObservationSeed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddObservationReport {
     /// The index the new observation took, which is the end of the list and is
-    /// stable for the life of the track.
+    /// stable across every step on the track.
     pub observation: usize,
     /// The image it is in.
     pub image: u32,

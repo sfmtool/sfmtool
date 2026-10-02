@@ -908,8 +908,9 @@ impl AppState {
             },
             // A report lands on the item it measured, wherever the cursor has
             // gone in the meantime: measurements are keyed by observation index
-            // and observations are never renumbered, so a verdict set while the
-            // task ran is shown over the number the run produced. What the
+            // and no bench step renumbers observations (deleting an image, which
+            // does, is refused while the task holds the node), so a verdict set
+            // while the task ran is shown over the number the run produced. What the
             // report cannot survive is the item leaving the bench at the
             // cursor, and then it is dropped with the row that says so.
             Finished::BenchTrack {

@@ -165,7 +165,7 @@ pub enum Found {
     /// It became a candidate observation of the track.
     Added {
         /// The index the new observation took, which is the end of the list
-        /// and is stable for the life of the track.
+        /// and is stable across every step on the track.
         observation: usize,
     },
     /// The track already has an observation in that image, whatever its

@@ -2535,7 +2535,9 @@ drain writes its row only when the application recorded no failure of its own,
 so one refusal is one entry either way (§ "Threading").
 
 **A bulk edit renumbers.** `delete_camera_image` moves every image index at or
-past the deleted one; it, the resection, the adjustment and every cursor move
+past the deleted one, and with them the bench's observations, so an observation
+position read from `get_bench_track` before it may name another observation
+after it ([bench.md](bench.md) § "One history for the pair"); it, the resection, the adjustment and every cursor move
 renumber points. An agent holding an index it
 read before such a call is holding a statement about something else, and should
 re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which

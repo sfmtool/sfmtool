@@ -213,8 +213,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Delete one camera image, its observations, and any track left with \
                           none. A bulk edit: every image index at or after the deleted one moves \
                           down by one and the surviving points are renumbered, so indexes read \
-                          before the call no longer mean what they meant. Deleting the only image \
-                          is refused.",
+                          before the call no longer mean what they meant. The bench moves with \
+                          the image table in the same version: every bench observation in the \
+                          deleted image is dropped and those in later images move down by one, \
+                          so observation positions read from get_bench_track before the call may \
+                          name other observations after it, and an item whose observations were \
+                          all in the deleted image is discarded. Deleting the only image is \
+                          refused.",
             kind: Write,
             schema: object(
                 &[],

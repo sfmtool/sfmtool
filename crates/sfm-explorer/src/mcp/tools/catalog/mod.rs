@@ -194,8 +194,8 @@ fn observation_schema() -> Value {
         "minimum": 0,
         "description":
             "Which observation, by its position in get_bench_track's observations list. \
-             Observations are appended and never renumbered, so the position is stable for the \
-             life of the track.",
+             Observations are appended and no bench step renumbers them, so the position is \
+             stable across bench steps; delete_camera_image renumbers them.",
     })
 }
 

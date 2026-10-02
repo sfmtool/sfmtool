@@ -272,10 +272,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           refined cluster position, else the seed it was proposed at. So a \
                           observation a search has just added says where it is without being \
                           evaluated first. An observation is addressed by its position in the \
-                          list, which is \
-                          stable for the life of the track — observations are appended and never \
-                          renumbered, so an index read here still names the same observation \
-                          after a verdict or a fit. Both the cluster and the track block carry \
+                          list. Observations are appended and no bench step renumbers them, so \
+                          an index read here still names the same observation after a verdict \
+                          or a fit; delete_camera_image is the one call that renumbers them, \
+                          since it renumbers the images they are in. Both the cluster and the track block carry \
                           zncc_middle beside zncc: the same samples correlated over only the \
                           middle square of the patch, half its width (the middle 12 x 12 of a \
                           24 x 24 grid). A high zncc with a low zncc_middle is an agreement \

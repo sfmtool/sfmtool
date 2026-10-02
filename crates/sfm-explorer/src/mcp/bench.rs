@@ -123,9 +123,10 @@ pub(super) fn index_files(state: &AppState, id: ReconId) -> Value {
 /// reading of it.
 ///
 /// An observation is addressed by its position in `observations`, and that
-/// position is stable for the life of the track: observations are appended and
-/// never renumbered, so an index held across a verdict or an evaluation still
-/// names the same observation.
+/// position is stable across every bench step: observations are appended and
+/// no step renumbers them, so an index held across a verdict or an evaluation
+/// still names the same observation. Deleting an image is the one edit that
+/// renumbers them.
 pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     let bench = state

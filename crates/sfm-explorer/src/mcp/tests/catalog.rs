@@ -1058,3 +1058,47 @@ fn set_window_layout_advertises_the_document() {
         ["focus", "inner_size", "monitor", "outer_position", "state"]
     );
 }
+
+/// Every description text in `value`, at any depth of a schema.
+fn schema_descriptions(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                match (key.as_str(), inner) {
+                    ("description", Value::String(text)) => out.push(text.clone()),
+                    _ => schema_descriptions(inner, out),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| schema_descriptions(item, out)),
+        _ => {}
+    }
+}
+
+/// `delete_camera_image` renumbers the bench's observations with the image
+/// table, so no tool tells an agent that an observation's position is never
+/// renumbered, and the delete's own description says what it does to the
+/// bench. Bug bash of PR #672.
+#[test]
+fn no_description_promises_observations_are_never_renumbered() {
+    for spec in tools::catalog() {
+        let mut texts = vec![spec.description.to_string()];
+        schema_descriptions(&spec.schema, &mut texts);
+        for text in texts {
+            assert!(
+                !text.contains("never renumbered") && !text.contains("life of the track"),
+                "{} says observations are never renumbered: {text}",
+                spec.name
+            );
+        }
+    }
+    let delete = tools::catalog()
+        .iter()
+        .find(|spec| spec.name == "delete_camera_image")
+        .expect("delete_camera_image is in the catalog");
+    assert!(
+        delete.description.contains("bench"),
+        "delete_camera_image says nothing about the bench: {}",
+        delete.description
+    );
+}

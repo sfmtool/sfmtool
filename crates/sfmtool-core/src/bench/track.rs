@@ -415,9 +415,11 @@ pub struct TrackMeasurement {
 /// One observation of an editable track: an image, a place in it, what has been
 /// measured about it at each stage, and the verdict.
 ///
-/// Observations are appended and never renumbered, so an index into
-/// [`EditableTrack::observations`] is stable for the life of the track and an
-/// evaluation that finishes late still lands on the observation it measured.
+/// Observations are appended and no step on the track renumbers them, so an
+/// index into [`EditableTrack::observations`] is stable across every step and
+/// an evaluation that finishes late still lands on the observation it
+/// measured. Deleting an image from the reconstruction does renumber them
+/// ([`EditableTrack::delete_image`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observation {
     /// The image, as an index into the node's image table.
