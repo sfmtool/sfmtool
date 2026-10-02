@@ -48,6 +48,12 @@ schema detail.
 
 ## 1. Deleting a camera image leaves bench tracks pointing at the wrong photographs (high)
 
+> _Status (2026-10-02): Done — `delete_image` now renumbers the bench in the
+> same version through core's new `Bench::delete_image`: observations in the
+> deleted image are dropped, later ones move down by one, a track whose
+> observations were all in the deleted image is discarded, and the selected
+> observations follow; an undo restores both, PR #672._
+
 `delete_camera_image` renumbers every later image down by one, but the
 observations of tracks already on the bench keep their old image indexes. After
 the delete, each bench observation names a different photograph from the one

@@ -3856,3 +3856,178 @@ fn an_unedited_item_rebuilt_on_the_rebench_is_the_fresh_track() {
     );
     assert_eq!(**state.bench_track(id, &item).expect("on"), fresh);
 }
+
+// ── Deleting an image under the bench ───────────────────────────────────
+
+/// The image names a bench track's observations are in, in observation order.
+fn bench_observation_names(state: &mut AppState, viewer: &mut Viewer3D, item: &str) -> Vec<Value> {
+    let track = call(
+        state,
+        viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    track["observations"]
+        .as_array()
+        .expect("a track lists its observations")
+        .iter()
+        .map(|observation| observation["camera_image_name"].clone())
+        .collect()
+}
+
+/// Deleting an image renumbers every later one, and the bench moves with the
+/// image table: the observation in the deleted image goes, the one after it
+/// still names the photograph it was sighted in, and committing the track
+/// writes a point whose observations are those photographs at their own
+/// pixels. The selected observations follow the renumbering, and an undo
+/// brings the bench back as it was. Bug bash 2026-09-29, finding 1.
+#[test]
+fn deleting_an_image_moves_the_bench_observations_with_the_image_table() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = bench_observation_names(&mut state, &mut viewer, &item);
+    assert_eq!(before.len(), 3, "the bench point observes images 0, 1, 2");
+    call(
+        &mut state,
+        &mut viewer,
+        "select_bench_observations",
+        json!({ "reconstruction_label": "run_a", "track": item, "observations": [1, 2] }),
+    );
+
+    let deleted = call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
+    );
+
+    // The track keeps the observations in images 0 and 2, under the indexes
+    // those photographs hold now.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let images: Vec<Value> = track["observations"]
+        .as_array()
+        .expect("observations")
+        .iter()
+        .map(|observation| observation["camera_image"].clone())
+        .collect();
+    assert_eq!(images, vec![json!(0), json!(1)], "{track}");
+    assert_eq!(
+        bench_observation_names(&mut state, &mut viewer, &item),
+        vec![before[0].clone(), before[2].clone()],
+        "the bench observations name other photographs after the delete"
+    );
+    // Row 2 is row 1 now, and row 1 was in the deleted image.
+    assert_eq!(track["selected_observations"], json!([1]), "{track}");
+
+    // The commit writes those photographs at the pixels they were sighted at,
+    // so the point reprojects onto every one of them.
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": committed["point"]["id"] }),
+    );
+    let written = point["track"].as_array().expect("a track");
+    let names: Vec<Value> = written.iter().map(|o| o["name"].clone()).collect();
+    assert_eq!(names, vec![before[0].clone(), before[2].clone()], "{point}");
+    for observation in written {
+        let error = observation["reproj_error"]
+            .as_f64()
+            .expect("every observation projects");
+        assert!(
+            error < 0.01,
+            "a committed observation is off by {error} px: {point}"
+        );
+    }
+
+    // The delete's row says what it did to the bench.
+    let label = deleted["label"].as_str().expect("a label");
+    assert!(
+        label.ends_with("; dropped 1 bench observation in it"),
+        "{label}"
+    );
+
+    // Undoing the commit and the delete puts the bench back with the image.
+    for _ in 0..2 {
+        call(
+            &mut state,
+            &mut viewer,
+            "undo",
+            json!({ "reconstruction_label": "run_a" }),
+        );
+    }
+    assert_eq!(
+        bench_observation_names(&mut state, &mut viewer, &item),
+        before
+    );
+}
+
+/// A track whose observations were all in the deleted image is discarded with
+/// it, in the same version, and unfocused; the delete's row names it. An undo
+/// puts it back.
+#[test]
+fn deleting_the_only_image_a_bench_track_observes_discards_the_track() {
+    let (mut state, mut viewer) = benchable();
+    let id = state.scene[0].id;
+    let kept = on_the_bench(&mut state, &mut viewer);
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 1,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let gone = made["item"].as_str().expect("the new item").to_string();
+    assert_eq!(state.focused_item_label(id), Some(gone.as_str()));
+    let versions = version_count(&state);
+
+    let deleted = call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
+    );
+    assert_eq!(version_count(&state), versions + 1, "one version for both");
+    let label = deleted["label"].as_str().expect("a label");
+    assert!(
+        label.ends_with(&format!(
+            "; dropped 2 bench observations in it and discarded {gone}, which had no other \
+             observations"
+        )),
+        "{label}"
+    );
+    let bench = state.bench(id).expect("loaded");
+    assert!(
+        bench.track(&gone).is_none(),
+        "the cluster is still on the bench"
+    );
+    assert!(bench.track(&kept).is_some(), "the other track went too");
+    assert_eq!(
+        state.focused_item_label(id),
+        None,
+        "a discarded item stays focused"
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(state.bench(id).expect("loaded").track(&gone).is_some());
+}

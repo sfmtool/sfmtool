@@ -86,6 +86,24 @@ impl Bench {
     pub fn replace(&self, label: &str, item: BenchItem) -> Result<Bench, BenchError>;
     pub fn discard(&self, label: &str) -> Result<Bench, BenchError>;
     pub fn rename(&self, label: &str, to: &str) -> Result<Bench, BenchError>;
+
+    pub fn delete_image(&self, image: u32) -> (Bench, ImageDeletion);
+}
+
+/// What `Bench::delete_image` did.
+pub struct ImageDeletion {
+    /// Items still on the bench whose observations moved, with where each
+    /// observation went (`None` for one in the deleted image).
+    pub renumbered: Vec<(ItemId, Vec<Option<usize>>)>,
+    /// Observations that were in the deleted image, over every item.
+    pub dropped: usize,
+    /// Items discarded because every observation was in the deleted image.
+    pub discarded: Vec<String>,
+}
+
+impl ImageDeletion {
+    pub fn changed(&self) -> bool;
+    pub fn observation_map(&self, id: ItemId) -> Option<&[Option<usize>]>;
 }
 ```
 
@@ -181,6 +199,39 @@ eight hex digits of the base's own content hash and the point's index there for
 a point that is a row of that base, and `point_<index>` for a point an edit
 added, which is a row of no content at all.
 
+## Deleting an image
+
+An item names its reconstruction's images by index, and deleting an image from
+the reconstruction moves every later image down by one. So whatever deletes an
+image has to give the bench the same renumbering, or every observation past the
+deleted image would name the photograph after the one it was sighted in.
+`Bench::delete_image(image)` is the bench as it reads after the delete: each
+track goes through `EditableTrack::delete_image`
+([editable-track.md](editable-track.md) § "When an image is deleted"), which
+drops its observations in `image` and moves those in later images down by one.
+
+**A track left with no observations is discarded.** When every observation a
+track had was in the deleted image, nothing it was made of is left in the
+reconstruction, and a track with no observations cannot be evaluated, fitted or
+committed; keeping it would leave an item on the bench that names nothing and
+can only be discarded by hand. So it goes with the image, and the report names
+it. A caller that keeps benches as versions, as the viewer does, gets it back
+by undoing the delete, which brings back the image too. A track that had no
+observations before the delete, such as an empty cluster, observed nothing in
+the deleted image and is left alone.
+
+The alternative, refusing the delete while the bench holds an observation in
+the image or after it, was not taken: it would make a bench item a lock on the
+reconstruction, and a person deleting an image has usually decided that image
+is wrong, which is a decision about the tracks that sighted it too.
+
+Every item the delete does not reach (one whose observations are all in
+earlier images) is the same `Arc` in both benches, and every item keeps its
+`ItemId`. The report carries, per item it renumbered, where each observation
+went, so a caller holding observation indexes can follow them; how many
+observations were dropped; and the labels it discarded. `changed()` is false
+when no item observed the deleted image or any after it.
+
 ## Implementation notes
 
 **A rename that changes nothing is not a collision.** Renaming an item to the
@@ -226,6 +277,12 @@ its list (a put adds exactly one entry at the end, and a put followed by its
 discard, or a rename followed by its reverse, gives back an equal bench), and
 the sharing: a step on one item leaves every other item the same `Arc`, which is
 the property the viewer's per-version budget rests on.
+[bench/tests/delete_image.rs](../../../crates/sfmtool-core/src/bench/tests/delete_image.rs)
+covers `Bench::delete_image`: a track whose observations were all in the
+deleted image discarded and named in the report, an empty track and a track
+in earlier images kept as the same `Arc`, every kept item keeping its ID, the
+dropped count and the per-item observation map, and a delete no item reaches
+changing nothing.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same through the bindings, `bench.id` (an `int`, kept by a rename,
 `None` for an unknown label), a discard taking off only its item, and the

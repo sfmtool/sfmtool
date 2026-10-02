@@ -230,7 +230,10 @@ overlay is not empty, runs `SfmrReconstruction::subset_by_image_indices` over th
 remaining images with orphaned points dropped, and pushes the output as the next
 version's base with an empty overlay. The image table is renumbered, so every
 image index at or past the deleted one moves down by one, and the points the
-deleted image was the only witness of are gone.
+deleted image was the only witness of are gone. The bench beside the value is
+renumbered in the same version, because its observations name images by the
+same indexes: an observation in the deleted image is dropped, and an item left
+with none is discarded ([bench.md](bench.md) § "One history for the pair").
 
 An edit that cannot run changes nothing and returns the sentence saying why: no
 point selected, a point already deleted, an image already gone, or the node's
@@ -254,7 +257,9 @@ only where the version arrived at has no such photograph
 ([edit-history.md](edit-history.md), "What follows a map"). The node keeps
 its `ReconId` through all of it, which is what makes an edit different from
 closing and re-opening: the tint, the transform, the solo and the MCP addressing
-carry over untouched.
+carry over untouched. The bench is not a cache and is not dropped either: it is
+half of the version, and `delete_image` renumbers it with the table, as above;
+the focused item's selected observations follow that renumbering.
 
 ### What a point edit owes it
 

@@ -38,9 +38,9 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FiniteDifferenceOptions, FitNormalOptions, FitOptions, GeometrySearchOptions, ItemId,
-    NormalError, Observation, ObservationSeed, PieceLayout, Provenance, SearchOptions, Stage,
-    StageKind, Thresholds, Verdict,
+    FiniteDifferenceOptions, FitNormalOptions, FitOptions, GeometrySearchOptions, ImageDeletion,
+    ItemId, NormalError, Observation, ObservationSeed, PieceLayout, Provenance, SearchOptions,
+    Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
@@ -348,7 +348,8 @@ pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
 /// observation indexes, and another track's observations are not these. A
 /// change of focused item clears it, and so does a move of the cursor, since
 /// the version it lands on may hold a different list of observations for the
-/// same item.
+/// same item. Deleting an image carries it across the renumbering the delete
+/// makes ([`AppState::follow_bench_rows`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BenchRows {
     /// The node whose bench holds the track.
@@ -689,6 +690,28 @@ impl AppState {
             .as_ref()
             .is_some_and(|rows| rows.recon == id)
         {
+            self.bench_rows = None;
+        }
+    }
+
+    /// Carry the selected observations of `id`'s bench across the deletion of
+    /// an image: each selected row goes where `deletion` moved its observation,
+    /// and a row in the deleted image is deselected. A selection on an item the
+    /// deletion did not move is left as it is; one on an item it discarded goes
+    /// with the focus, when [`Self::settle_focused_item`] unfocuses that item.
+    pub(crate) fn follow_bench_rows(&mut self, id: ReconId, deletion: &ImageDeletion) {
+        let Some(rows) = self.bench_rows.as_mut().filter(|rows| rows.recon == id) else {
+            return;
+        };
+        let Some(map) = deletion.observation_map(rows.item) else {
+            return;
+        };
+        rows.observations = rows
+            .observations
+            .iter()
+            .filter_map(|&row| map.get(row).copied().flatten())
+            .collect();
+        if rows.observations.is_empty() {
             self.bench_rows = None;
         }
     }

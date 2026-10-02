@@ -449,6 +449,37 @@ The centre goes through the whole similarity, the axes are rotated and the
 half-extent is scaled; a track at infinity keeps the rotation alone; a
 cluster-stage item has no world geometry and keeps its `Arc`.
 
+**Deleting an image renumbers the bench's observations with the image table**,
+in the one version that deletes the image (`AppState::delete_image` pushes the
+pair through `push_pair`). Every observation of every item names its
+photograph by its index in the node's image table, and the delete moves each
+later image down by one; carried along unchanged, every observation past the
+deleted image would name the next photograph, a reading would score the wrong
+pixels as `current`, and a commit would write them into the reconstruction.
+So the bench goes through core's `Bench::delete_image`
+([`../core/bench/bench.md`](../core/bench/bench.md) § "Deleting an image"):
+
+- an observation in the deleted image is dropped, and one in a later image
+  moves down by one with its place, verdict, pin and measurements;
+- **an item whose observations were all in the deleted image is discarded**,
+  in the same version, since nothing it was made of is left; when it was the
+  focused item it is unfocused, as a discard of it would be. Undoing the delete
+  brings the item back with the image;
+- an item's origin is followed through the delete's own point map, like a
+  selection, so a track from a point the delete kept still replaces that point
+  when committed;
+- the selected observations of the focused item follow their observations to
+  their new indexes, and one in the deleted image is deselected
+  (§ "The selected observations").
+
+The changed items get a new `Arc` and the version a new document serial, so
+the live evaluation reads them again on the next frame. The delete's Action Log
+row says what it did to the bench when any bench observation was in the image:
+`Deleted image IMG_0007.jpg from run_a; dropped 3 bench observations in it and
+discarded IMG_0007@142,198, which had no other observations`. A delete that
+reaches no bench observation says nothing about the bench, and a delete no
+item observes an image at or after leaves the bench the same `Arc`.
+
 ---
 
 ## What a step writes
@@ -725,6 +756,11 @@ item, so a selection on any other track is refused. What clears it:
 A rename keeps the selection, since it keeps the item's ID and the observations
 are the same ones. Every other step on the focused item keeps it, because those
 steps append observations or change them in place and never renumber the list.
+**Deleting an image** does renumber it, and the selection follows: each
+selected row moves to the index its observation has after the delete
+(`AppState::follow_bench_rows`), a row in the deleted image is deselected, and
+a selection left with no rows is cleared. A delete that discards the focused
+item clears its selection with the focus.
 
 ---
 
@@ -978,10 +1014,11 @@ reference into the scene. The images it decodes are the ones the track's
 observations name; every other entry of the view slice is a one-pixel
 placeholder, which no kernel samples.
 
-**A report lands on the observations it measured.** Observations are appended
-and never renumbered and a measurement is keyed by observation index, so a
-report computed against the track as it stood when the task began still applies
-when it finishes. What it cannot survive is the item leaving the bench at the
+**A report lands on the observations it measured.** No bench step renumbers
+the observations and a measurement is keyed by observation index, so a report
+computed against the track as it stood when the task began still applies when
+it finishes. Deleting an image, the one edit that renumbers them, is refused
+while a task holds the node. What it cannot survive is the item leaving the bench at the
 cursor: then it is discarded with one Action Log row saying so, and no version.
 That row is a guard rather than an everyday outcome -- the node is locked for
 the duration of its own task, so nothing can take the item off in the meantime
@@ -1645,6 +1682,18 @@ search radius each make it `Evaluating`; a track-stage track with no frame is
 background task holds the node; the focused item is evaluated first when it is
 on a node after another in the scene; and a rename keeps an evaluated track
 current.
+
+Deleting an image under the bench is tested over the wire in
+[mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs): a track
+put on the bench from a point in images 0, 1 and 2, with rows 1 and 2
+selected, keeps after `delete_camera_image` of image 1 the observations in the
+photographs that were images 0 and 2, now at indexes 0 and 1, with row 1 alone
+selected; committing it writes a point whose observations are those two
+photographs, each reprojecting within a hundredth of a pixel; the delete's
+label names the dropped observation; and two undos bring back the track's
+three photographs. A cluster started in image 1 alone is discarded by the same
+delete, in its one version, unfocused and named in the label, and an undo puts
+it back.
 
 The unfocus is tested where its two callers are: [track_view/tests.rs](../../crates/sfm-explorer/src/track_view/tests.rs) clears the *Edit* box and finds no version
 and one `Selection` row with the item still on the bench, a focus bringing Edited mode back, and a

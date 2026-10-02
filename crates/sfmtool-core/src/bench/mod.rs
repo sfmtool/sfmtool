@@ -406,4 +406,75 @@ impl Bench {
         next.entries[at].label = to.to_string();
         Ok(next)
     }
+
+    /// The bench as it reads after image `image` is deleted from its
+    /// reconstruction, which moves every later image down by one.
+    ///
+    /// Each track is put through [`EditableTrack::delete_image`]: its
+    /// observations in `image` are dropped and those in later images are
+    /// renumbered, so every observation still names the photograph it was
+    /// sighted in. **A track left with no observation, because every one it
+    /// had was in `image`, is discarded**: nothing it was made of is left in
+    /// the reconstruction, and a track with no observations cannot be
+    /// evaluated, fitted or committed. A track that had no observations to
+    /// begin with is left alone, as is every track that observes no image at
+    /// or past `image`; those keep the same `Arc`.
+    ///
+    /// The report says what changed, so a caller can follow its own indexes
+    /// into the observation lists and say in a sentence what the delete did
+    /// to the bench.
+    pub fn delete_image(&self, image: u32) -> (Bench, ImageDeletion) {
+        let mut next = Bench::new();
+        let mut report = ImageDeletion::default();
+        for entry in &self.entries {
+            let BenchItem::Track(track) = &entry.item;
+            let Some((track, map)) = track.delete_image(image) else {
+                next.entries.push(entry.clone());
+                continue;
+            };
+            report.dropped += map.iter().filter(|m| m.is_none()).count();
+            if track.observations.is_empty() {
+                report.discarded.push(entry.label.clone());
+                continue;
+            }
+            report.renumbered.push((entry.id, map));
+            next.entries.push(BenchEntry {
+                id: entry.id,
+                label: entry.label.clone(),
+                item: BenchItem::Track(Arc::new(track)),
+            });
+        }
+        (next, report)
+    }
+}
+
+/// What [`Bench::delete_image`] did to a bench.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImageDeletion {
+    /// Each item still on the bench whose observations changed, with where
+    /// each of its observations went: entry `i` is the new index of
+    /// observation `i`, or `None` for one in the deleted image.
+    pub renumbered: Vec<(ItemId, Vec<Option<usize>>)>,
+    /// How many observations were in the deleted image, over the items kept
+    /// and the items discarded.
+    pub dropped: usize,
+    /// The labels of the items discarded because every observation they had
+    /// was in the deleted image, in bench order.
+    pub discarded: Vec<String>,
+}
+
+impl ImageDeletion {
+    /// Whether the delete changed anything on the bench.
+    pub fn changed(&self) -> bool {
+        !self.renumbered.is_empty() || !self.discarded.is_empty()
+    }
+
+    /// Where the delete moved the observations of item `id`: `None` when it
+    /// moved none of them, which is also the answer for an item it discarded.
+    pub fn observation_map(&self, id: ItemId) -> Option<&[Option<usize>]> {
+        self.renumbered
+            .iter()
+            .find(|(item, _)| *item == id)
+            .map(|(_, map)| map.as_slice())
+    }
 }

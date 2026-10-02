@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use sfmtool_core::bench::ImageDeletion;
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::{CameraIntrinsics, PhotographCache};
 use sfmtool_core::geometry::RigidTransform;
@@ -263,6 +264,32 @@ fn prune_covered_summary(report: &PruneCoveredReport) -> String {
             ", {} rows without a usable footprint",
             report.degenerate_rows
         ));
+    }
+    text
+}
+
+/// What deleting an image did to the bench, as a clause the delete's own
+/// sentence ends with: empty when no bench observation was in the image, since
+/// moving the later ones down by one is bookkeeping a reader need not be told.
+fn bench_deletion_text(deletion: &ImageDeletion) -> String {
+    if deletion.dropped == 0 {
+        return String::new();
+    }
+    let observations = if deletion.dropped == 1 {
+        "observation"
+    } else {
+        "observations"
+    };
+    let mut text = format!("; dropped {} bench {observations} in it", deletion.dropped);
+    match deletion.discarded.as_slice() {
+        [] => {}
+        [one] => text.push_str(&format!(
+            " and discarded {one}, which had no other observations"
+        )),
+        many => text.push_str(&format!(
+            " and discarded {}, which had no other observations",
+            many.join(", ")
+        )),
     }
     text
 }
@@ -891,6 +918,12 @@ impl AppState {
     /// surviving points are renumbered. The caller drops its panel-local caches
     /// for the node afterwards, exactly as it does when a node is closed.
     ///
+    /// The bench moves with the image table, in the same version
+    /// ([`sfmtool_core::bench::Bench::delete_image`]): bench observations in
+    /// the deleted image are dropped, those in later images move down by one,
+    /// and an item whose observations were all in the deleted image is
+    /// discarded. An undo brings back the bench as it was, with the image.
+    ///
     /// The entry carries the four stages a bulk edit has -- the overlay fold,
     /// the subset itself, the row map read off its two values, and the version
     /// push -- and is recorded with
@@ -963,8 +996,21 @@ impl AppState {
         steps.push(PointMap::Rows(subset_map));
         let map = PointMap::Chain(steps);
 
+        // The bench's observations name images by the same indexes, so they
+        // move down with the table: the observations in the deleted image are
+        // dropped, and a track left with none is discarded.
+        let (bench, deletion) = node.history.current_bench().delete_image(removed);
+        let bench = if deletion.changed() {
+            Arc::new(bench)
+        } else {
+            Arc::clone(node.history.current_bench())
+        };
+
         let label = node.label.clone();
-        let text = format!("Deleted image {name} from {label}");
+        let text = format!(
+            "Deleted image {name} from {label}{}",
+            bench_deletion_text(&deletion)
+        );
         // Read before the new base is installed, so the photograph on screen
         // can be found again in it. Deleting the selected image itself leaves
         // no such photograph, and the selection clears.
@@ -972,14 +1018,22 @@ impl AppState {
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");
-            node.history.push(
-                EditedReconstruction::new(Arc::new(subset)),
+            node.history.push_pair(
+                Some(EditedReconstruction::new(Arc::new(subset))),
+                bench,
+                None,
                 map,
                 text.clone(),
+                None,
             )
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(image.recon);
+        // The selected observations are indexes into the focused track's list,
+        // which the delete may have shortened, so they follow it; a focused
+        // track the delete discarded is unfocused.
+        self.follow_bench_rows(image.recon, &deletion);
+        self.settle_focused_item(image.recon);
         // Every image index at or past the deleted one moved, so a cached
         // texture named by one of them is now a statement about a different
         // image. The node keeps its identity; what it held about images does

@@ -74,6 +74,11 @@ impl EditableTrack {
     /// Whether the verdicts were set by the repaint of the evaluation that
     /// took the readings, and nothing has changed since.
     pub fn repainted(&self) -> bool;
+    /// The track after image `image` is deleted from its reconstruction:
+    /// observations in it dropped, those in later images moved down by one,
+    /// with where each observation went. `None` when it observes no image at
+    /// or past `image`.
+    pub fn delete_image(&self, image: u32) -> Option<(EditableTrack, Vec<Option<usize>>)>;
 }
 
 pub struct RepaintMark { /* the verdicts and pins the repaint left */ }
@@ -819,10 +824,13 @@ println!("{}", commit_report.label("bull"));
 ## Observations, provenance and verdicts
 
 An observation names one image of the reconstruction and one place in it.
-Observations are **appended and never renumbered**, so an index into the list is
-stable for the life of the track: an agent holding an index after a verdict
-still holds the same observation, and a measurement is keyed by the index of
-the observation it was taken of.
+Observations are **appended and never renumbered** by a step on the track, so an
+index into the list is stable for the life of the track: an agent holding an
+index after a verdict still holds the same observation, and a measurement is
+keyed by the index of the observation it was taken of. The one thing that
+renumbers them is deleting an image from the reconstruction, which is not a step
+on the track but a change to the image table its observations index into
+([When an image is deleted](#when-an-image-is-deleted)).
 
 **Provenance** is where the sighting came from, and it is shown rather than
 used, with exactly one exception: a commit deletes the points that `Point`
@@ -2254,6 +2262,38 @@ name the caller knows the reconstruction by: `Committed track: 5 observations in
 bull, replacing point 1207, absorbing 2 points`, or, for the commit that wrote
 nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 
+### When an image is deleted
+
+An observation names its photograph by its index in the reconstruction's image
+table, and deleting an image from the reconstruction moves every later image
+down by one. A track carried across that delete unchanged would name, in every
+observation past the deleted image, the photograph after the one it was sighted
+in, and a commit would write those pixels into the wrong images.
+`EditableTrack::delete_image(image)` is the track as it reads after the delete:
+
+- the observations in `image` are dropped, with everything measured about them;
+- an observation in a later image has its index lowered by one, and keeps its
+  place, verdict, pin and measurements, since the photograph and its pose are
+  the same ones;
+- a cluster's reference follows its observation. When the reference itself was
+  in `image`, it is pointed at the first observation left and the template is
+  dropped, as a split does, because the template is a cut around the old
+  reference;
+- the origin is left alone. It names a point by version and index, and the
+  caller follows it through the delete's own point map like any other.
+
+It returns where each observation went, entry `i` being the new index of
+observation `i` or `None` for one that was dropped, so a caller holding indexes
+into the list (the viewer's selected rows) can follow them. It returns `None`
+for a track that observes no image at or past the deleted one, which nothing
+about it changes. What happens to a track left with no observations is the
+bench's decision ([bench.md](bench.md) § "Deleting an image"), not the track's.
+
+The position and the patch a track-stage track carries are not refitted: the
+deleted image takes nothing away from where the point is, only one of the rays
+it was fitted to. The next evaluation reads the remaining observations against
+them, and a fit re-triangulates from what is left.
+
 ## Parameters
 
 `geometry_search_min_relative_zncc` defaults to view selection's own bar, read from its
@@ -2716,6 +2756,14 @@ unchanged; repeating the search leaves an `out`, pinned row untouched;
 an explicitly selected `out` row remains part of the reference basis; the
 cluster stage is refused; and the real call reports all three phases and stops
 on cancellation without returning a partial track.
+
+[bench/tests/delete_image.rs](../../../crates/sfmtool-core/src/bench/tests/delete_image.rs)
+covers `EditableTrack::delete_image`: observations in later images moving down
+by one at the same pixels while the one in the deleted image is dropped, the
+observation map that says so, a reference following its observation and keeping
+its template, a dropped reference re-seated on observation 0 with its template
+dropped, and a track that observes nothing at or past the image coming back as
+`None`.
 
 ## Non-goals
 
