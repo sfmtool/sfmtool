@@ -15,7 +15,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 ## Priority recommendations
 
 **Split the MCP tool catalog and tests along their existing modules**
-> _Status (2026-09-23): Done — catalog definitions and all 230 headless MCP tests are grouped by concern, with the central catalog fixtures preserved; commit `bb7130e0`._
+> _Status (2026-09-23): Done — catalog definitions and all 230 headless MCP tests are grouped by concern, with the central catalog fixtures preserved; commit `aee64b0` (#580)._
 
 - Location: `crates/sfm-explorer/src/mcp/tools.rs` (3,630 lines, catalog and schema helpers at 57–2417) and `crates/sfm-explorer/src/mcp/tests.rs` (10,373 lines, 230 `#[test]` cases).
 - Problem: The tool catalog now has 76 entries (15 read, 60 write, one save), up from 40 in September. The test file grew by 4,946 lines while covering transport, frame, layout, view, bench, screenshot, edits, and background behavior in one place. The production module tree already separates those concerns.
@@ -69,6 +69,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low. Risk: low.
 
 **Document the `Tab::wire_name` exceptions**
+> _Status (2026-10-03): Done — `IntrinsicsDetail` is no longer an exception (its title is now "Camera Intrinsics"), and the `wire_name` doc names the remaining `viewer_3d` exception and says the strings stay fixed, commit `989498e3`._
 - Location: `crates/sfm-explorer/src/layout.rs:203–214`.
 - Problem: Its doc says names derive from panel titles, but the `IntrinsicsDetail` arm uses `camera_intrinsics`; the older `Viewer3D` exception also remains. An agent deriving `panel_name` from that sentence gets a wrong wire value.
 - Proposed fix: State the exact exceptions in the doc and keep the layout strings stable.
@@ -82,6 +83,7 @@ Read-only whole-tree survey at `25410760`, using `skills/audit-hygiene/SKILL.md`
 - Effort: low. Risk: low.
 
 **Remove the runtime shadow of a const generic in bundle adjustment**
+> _Status (2026-10-03): Done — the runtime boolean is gone; the spline choice is a per-camera `opt_bspline` flag and the width comparison survives only as a `debug_assert!` (`bundle_adjust.rs:1691`), commit `a2a39e0` (#601)._
 - Location: `crates/sfmtool-core/src/geometry/bundle_adjust.rs` (2,254 lines), `solve_lm` around 1376.
 - Problem: `CAM_COLS == BSPLINE_CAM_COLS` still re-derives a compile-time choice as a runtime boolean inside the solver.
 - Proposed fix: Select the model-specific path through const-generic helpers or an explicit compile-time trait; preserve numerical fixtures for both modes.
@@ -227,6 +229,8 @@ These are measurements at `25410760` on 2026-09-23, not permanent verdicts.
 
 ## Top 3
 
+> _Status (2026-10-03): All three done, through the findings above: `aee64b0` (#580), `0e9b889` (#583), `a7eac00` (#586), `659bd5d` (#590) and `4e45e52` (#591)._
+
 1. Split the 10,373-line MCP test file and the 2,361-line catalog/schema section of `mcp/tools.rs` by their existing modules. Their growth since September is the strongest structural signal.
 2. Extract the remaining monolithic SFMR and matches format drivers, following the completed verifier and KDF writer pattern while preserving explicit digest order.
 3. Replace the 426-line xform argument branch ladder with a table over the already-shared parsers. Its two lower-level duplication findings are done, so the remaining boundary is now clear.
@@ -235,6 +239,6 @@ These are measurements at `25410760` on 2026-09-23, not permanent verdicts.
 
 These are proposals inherited through older snapshots, not hygiene findings.
 
-- **A — Camera bookmarks:** `specs/gui/viewport-navigation.md:707` still says viewpoint bookmarking is absent, and viewer source has no bookmark implementation. Re-evaluate storage alongside current versioned panel layout before a design draft.
+- **A — Camera bookmarks:** `specs/gui/viewport-navigation.md:842` still says viewpoint bookmarking is absent, and viewer source has no bookmark implementation. Re-evaluate storage alongside current versioned panel layout before a design draft.
 - **B — `sfm xform --crop`:** No 3D crop transform appears in `src/sfmtool/xform/`, the xform command, or its command spec. A bounding-volume crop remains unbuilt.
 - **C — Pose-aware per-tile source stacks:** `PerSphericalTileSourceStack` still exposes `build_rotation_only` at `crates/sfmtool-core/src/spherical/per_tile_source_stack.rs:271`. `WarpMap::build_with_pose_impl` exists at `camera/warp_map.rs:276`; the per-tile consumer remains to be designed.
