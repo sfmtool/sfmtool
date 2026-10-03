@@ -959,9 +959,9 @@ Present exactly when `images/metadata.json`'s `has_thumbnails` is `true`:
 - **Size**: Fixed 128×128 square, regardless of the source image aspect ratio. Source images are resized to fill the square (stretching if non-square). Consumers restore the correct aspect ratio at display time using the camera intrinsics width/height
 - **Resize method**: Area-averaging (OpenCV `INTER_AREA`), inherited from the
   `.sift` these are copied from — all four producers (the colmap, opencv and
-  sfmtool extractors, and `sfm undistort`) use it. (This line previously read
-  "Bilinear interpolation (triangle filter)", which no producer has ever used;
-  `specs/formats/sift-file-format.md` had it right.)
+  sfmtool extractors, and `sfm undistort`) use it. No producer uses bilinear
+  interpolation, so a reader that compares a row against its own resize must
+  use area averaging.
 - **Purpose**: In a file that carries the column, enables instant thumbnail display in viewers without requiring access to the workspace source images. A file that omits it has traded that convenience for size.
 - **Source**: In a file that carries the column, a producer that reads `.sift` files copies each image's `thumbnail_y_x_rgb.128.128.3.uint8.zst` during `.sfmr` creation, avoiding re-reading and re-downscaling the source images. A producer that builds the rows from the photographs decodes each one without applying its orientation tag and resizes it by the method above, which gives the same bytes the `.sift` holds.
 
@@ -1005,12 +1005,6 @@ equal it; that is enforced by a compile-time assertion in `sfmtool-core`, the
 first crate that sees both. The value is also exported to Python as
 `sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors are what produce the
 pixels.
-
-> An earlier revision of this section told readers to use the stored
-> `thumbnail_size` "rather than hardcoding the size". No implementation ever did,
-> including this one, and the entry-name encoding means a stored value that
-> disagreed with 128 could not have been honoured anyway. The guidance is
-> replaced above rather than left as an aspiration nothing implements.
 
 #### Depth Statistics
 
@@ -1247,8 +1241,7 @@ Per-point confidence in the stored normal.
 - Rows for `w = 0` points are `0` (their `normals_xyz` rows are zero).
 - **Optional** (version 5+): present only when `points3d/metadata.json`'s
   `has_normal_confidence` is `true`. An absent array means **no confidence
-  information** — not "all confident". Files written before this amendment
-  never carry it.
+  information** — not "all confident". Files of versions 1–4 never carry it.
 - **Writer responsibility**: the array passes through the writer untouched;
   a writer that synthesizes or replaces normals (e.g. the mean-viewing
   fill-in for rows the input left zero) and also supplies this array is
@@ -1536,7 +1529,8 @@ Tracks link 2D feature observations to 3D points. Each observation has three com
 - `has_observation_confidence`: (version 6+) whether the optional
   `observation_confidence` column below is present. Independent of the two flags
   above — it rates observations, which exist in either mode. A missing flag is
-  `false`, so every file written before this amendment reads as absent.
+  `false`, so a version 1–5 file reads as having no `observation_confidence`
+  column.
 
 #### `tracks/image_indexes.{M}.uint32.zst`
 
@@ -1901,54 +1895,6 @@ else:
     for error in errors:
         print(f"  - {error}")
 ```
-
-## Comparison with Directory Format
-
-### Directory Format
-```
-20251220T204131-00/
-├── metadata.json.zst
-├── cameras/
-│   └── metadata.json.zst
-├── images/
-│   ├── names.json.zst
-│   ├── camera_indexes.18.uint32.zst
-│   └── ...
-├── points3d/
-│   └── ...
-└── tracks/
-    └── ...
-```
-
-### .sfmr file Format
-```
-reconstruction.sfmr (single ZIP file)
-├── metadata.json.zst
-├── content_hash.json.zst
-├── cameras/
-│   └── metadata.json.zst
-├── rigs/                        (optional)
-│   ├── metadata.json.zst
-│   └── ...
-├── frames/                      (optional)
-│   ├── metadata.json.zst
-│   └── ...
-├── images/
-│   ├── names.json.zst
-│   ├── camera_indexes.18.uint32.zst
-│   └── ...
-├── points3d/
-│   └── ...
-└── tracks/
-    └── ...
-```
-
-### Key Differences
-
-1. **Single file vs directory**: .sfmr is portable, directory is not
-2. **Content hashing**: .sfmr adds `content_hash.json.zst` for integrity
-3. **Random access**: .sfmr uses ZIP STORE for efficient partial loading
-4. **File distribution**: Single .sfmr file is easier to share and archive
 
 ## Point ID: Portable 3D Point References
 
