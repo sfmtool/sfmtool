@@ -180,13 +180,19 @@ common-valid support at the level's center normal, evaluate the center and every
 in-disk candidate of an `init_steps × init_steps` lattice (at least 3 per axis —
 with 2 the only non-center samples are disk corners that clamp away, leaving a
 no-op search), recenter on the best, and shrink the cone to **one previous grid
-spacing**, `2·range/(steps − 1)`. Repeat `refine_levels` times. Renders per point
+spacing**, `2·range/(steps − 1)`. At exactly 3 steps that spacing equals the
+current half-extent, so the levels re-center without narrowing the cone. Repeat `refine_levels` times. Renders per point
 are ≈ `seeds · refine_levels · init_steps² · V`, far below one dense grid of the
 same precision — and the fronto-parallel cache
 ([fronto-parallel-patch-cache.md](fronto-parallel-patch-cache.md)) removes most
 of that render cost by scoring candidates against one base render per view. The
 search may rank with a cheaper objective than the reported one
-(`search_robust_iters`); the final pass never does.
+(`search_robust_iters`); the final pass never does. Because the final pass only
+re-scores the search's winners and does not search around them, a cheaper search
+objective also moves the normal it returns. On the dino dataset,
+`search_robust_iters` of 2, 1 and 0 ran 1.15×, 1.25× and 1.38× faster than the
+default and moved the median normal by about +0.5° to +2.4°, including on
+well-constrained points. That is why the default is `None`.
 
 **Capping the refinement basis.** `max_refine_views` (`0` = uncapped, the
 default) restricts a patch with more views than the cap to the `K` most
@@ -508,7 +514,9 @@ unnecessary. What remains open:
 
 4. **Render-path constant factors (large clouds).** The hot loop is `V` renders
    per candidate, so at millions of points the per-render constants dominate:
-   - **Fused f32 sampling.** Compute source coords and sample in one pass into a
+   - **Fused f32 sampling** (the uncached path: `cache=Off`, the final pass, the
+     confidence stencil and the cache's per-view base render). Compute source
+     coords and sample in one pass into a
      per-thread scratch buffer — no per-candidate `WarpMap` or `ImageU8`
      allocation — and keep the patch in f32: the `remap_*` u8 output otherwise
      quantizes before z-normalization and injects noise into `Φ`. (So
@@ -520,6 +528,14 @@ unnecessary. What remains open:
      and a coarser pyramid level (also better anti-aliased); reserve full `R`, all
      channels, and `remap_aniso` for the last level and the exact final pass. Keep
      the top-k coarse candidates, not top-1, against low-fidelity mis-ranking.
+   - **Per-level warp SVD.** On the uncached path, `compute_svd` runs once per
+     candidate per view to size the sampler's footprint. The Jacobian varies
+     little across one grid level's candidates, so computing it once at the
+     level center is consistent with the per-level frozen mask, for about 1.1×.
+   - **Subset-aware pyramid build.** The binding builds pyramids for every image
+     even when `point_indexes` selects patches seen by a few views. Building only
+     the referenced views makes a small call on a large dataset cheap; a
+     prebuilt `ImagePyramidSet` already avoids the cost across repeated calls.
    - **Locality.** Order patches by primary observing image so the V pyramids stay
      hot in cache across neighbouring points; pyramids are read-only, so per-point
      parallelism shares them freely.
@@ -606,9 +622,9 @@ cannot drift:
 
 `BilinearMip` is the sampler default rather than `Anisotropic` because the found
 normal barely moves (≲ 1° on pinhole views) at 1.6–3× the cost; `Anisotropic`
-stays an opt-in for an unbiased `Φ` and confidence. The
-`reports/2026-06-13-perf-patch-normal-refinement.md` measurements behind that —
-phase breakdown and per-knob perf-vs-benefit — are reproducible with
+stays an opt-in for an unbiased `Φ` and confidence. The measurements behind
+that (a 2026-06-13 performance report, retired and kept in git history) — phase
+breakdown and per-knob perf-vs-benefit — are reproducible with
 `scripts/bench_normal_refine.py` and the `patch_render` criterion bench;
 `SFMTOOL_PROFILE=1` turns on the hot-path phase timers (`normal_refine/prof.rs`),
 which `refine_patch_cloud_normals` reports per batch.

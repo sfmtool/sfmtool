@@ -16,7 +16,8 @@ specified in [patch-cloud.md](patch-cloud.md).
 Refinement (`coarse_to_fine` in `patch/normal_refine/search.rs`) scores each candidate
 normal by **re-rendering** the patch into every observing view —
 `WarpMap::from_patch(n') + remap_bilinear` off the source pyramid — and the
-per-candidate render is ~80% of CPU (`reports/2026-06-13-perf-patch-normal-refinement.md`).
+per-candidate render is ~80% of CPU (measured on the uncached path; run
+`scripts/bench_normal_refine.py` with `SFMTOOL_PROFILE=1` to reproduce).
 A coarse-to-fine search with `init_steps=7`, `refine_levels=3` evaluates on the
 order of 3 levels × ~37 candidates × `V` views renders per patch. The render is
 the cost; everything that removes redundant rendering compounds.
