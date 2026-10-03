@@ -125,9 +125,6 @@ per-member signal with caller-chosen thresholds instead of a baked-in gate.
 parallel like the other signal arrays; NaN where the member did not enter
 the fit (non-kept status, degenerate warp, unrefinable or < 2-member fit
 cluster). See [matches-file-format.md](../../formats/matches-file-format.md).
-Added to format **version 3 without a version bump** (no public release
-has shipped version 3 files; readers of pre-addition dev files must
-regenerate them).
 
 ## References
 
