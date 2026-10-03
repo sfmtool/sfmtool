@@ -1073,9 +1073,11 @@ no code examples. The code that reads, writes and verifies `.matches` files is:
 
 ### Writing a verified .matches file from an existing one
 
-Geometric verification does not modify the file it reads. It reads a matches-only
-file, verifies its pairs, and writes a new self-contained file at a separate path
-that holds the same images and candidate matches plus the
+Geometric verification does not modify the file it reads.
+[`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
+reads a clusters-bearing file, expands its clusters into image pairs, verifies
+those pairs, and writes a new pairwise file at a separate path. The new file holds
+the pairs that pass verification, their matches and the
 [two-view geometries section](#7-two-view-geometries-optional-section), with
 `has_two_view_geometries` set to `true` in its metadata and its own content hash.
 
