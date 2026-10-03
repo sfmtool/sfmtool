@@ -71,10 +71,11 @@ A missing match, or an index beyond the file's point count, is a clear error.
   `SfmrReconstruction.inspect_point`): it un-projects each member keypoint
   through its camera to rebuild the observation rays, then runs the same
   `triangulate_batch` / `depth_uncertainty_batch` /
-  `classify_rays_at_infinity` path the points-at-infinity discovery and the
-  bench use (see
+  `classify_rays_at_infinity` path the bench uses (see
   [`specs/core/reconstruction/batch-triangulation-api.md`](../../core/reconstruction/batch-triangulation-api.md)),
-  so the reported diagnostics match the production gate exactly. It requires
+  so the reported diagnostics match the bench's gate exactly. Discovery and
+  reclassification decide on the point-or-bearing test instead, which
+  `--verbose` reports. It requires
   a `sift_files` reconstruction (`embedded_patches` is rejected — the rays
   are re-derived from `.sift` keypoints).
 

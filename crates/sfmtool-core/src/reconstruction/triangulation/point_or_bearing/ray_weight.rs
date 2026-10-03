@@ -19,8 +19,11 @@ use crate::camera::CameraIntrinsics;
 /// How far, in pixels, the projection of a pixel's un-projected ray may land
 /// from the pixel before [`observed_ray`] calls the pixel outside the camera
 /// model's domain. Un-projection converges to far below this inside the
-/// domain; past a fold of the distortion it returns a ray that projects
-/// elsewhere.
+/// domain. Past it the un-projected ray does not project back to the pixel:
+/// beyond the start of a fisheye's wide-angle blend (90° of distorted radius,
+/// where un-projection deliberately moves toward the equidistant ray and
+/// projection does not follow), and beyond a fold of the distortion, where
+/// projection is not invertible.
 const ROUND_TRIP_TOLERANCE_PX: f64 = 1e-3;
 
 /// One observation as a world-frame ray and its noise weight.
@@ -43,9 +46,9 @@ pub struct ObservedRay {
 ///
 /// `None` when `sigma_px` is not finite and positive; when the pixel does not
 /// un-project to a ray the model projects back to within
-/// 1e-3 px of the pixel (it lies outside the model's
-/// domain, past a fold of its distortion); or when a difference probe around
-/// the ray leaves the domain.
+/// 1e-3 px of the pixel (it lies outside the model's domain: past a fisheye's
+/// wide-angle blend, or past a fold of the distortion); or when a difference
+/// probe around the ray leaves the domain.
 pub fn observed_ray(
     camera: &CameraIntrinsics,
     cam_from_world: &UnitQuaternion<f64>,

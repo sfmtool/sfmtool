@@ -508,7 +508,7 @@ fn test_subset_by_image_indices_keeps_embedded() {
 #[test]
 fn test_find_points_at_infinity_rejects_embedded() {
     let recon = demo_embedded(4);
-    let Err(err) = recon.find_points_at_infinity(1.0, 0.7, 0.8, 2, None, 1.0) else {
+    let Err(err) = recon.find_points_at_infinity(1.0, 0.7, 0.8, 2, None, None) else {
         panic!("find_points_at_infinity must reject embedded_patches");
     };
     let msg = err.to_string();

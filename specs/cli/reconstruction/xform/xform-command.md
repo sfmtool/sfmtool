@@ -255,26 +255,32 @@ the point count grows. See
 [find-points-at-infinity.md](find-points-at-infinity.md)
 for the design.
 
-#### `--find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<noise_floor_px>]]]`
+#### `--find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<sigma_px>]]]`
 
-Discovers points at infinity (and near-infinite distant points) by clustering
-keypoint world-space directions across all images within `eps_deg` on the unit
-sphere, confirming each cluster with mutual SIFT descriptor matching, and
-emitting each surviving track as a `w = 0` point or a finite distant point.
+Discovers points at infinity by clustering keypoint world-space directions
+across all images within `eps_deg` on the unit sphere, confirming each cluster
+with mutual SIFT descriptor matching, deciding each surviving track with the
+point-or-bearing likelihood-ratio test, and appending the tracks it calls
+bearings as `w = 0` points. A track whose rays ask for a depth is a finite
+point, not a point at infinity, and is left out.
 `desc_thresh` is the maximum L2 SIFT descriptor distance (default `200`) and
 `min_views` is the minimum number of distinct images a track must span
 (default `2`, must be `>= 2`); a tighter `eps_deg` demands more nearly parallel
 rays (more "infinite"), and a tighter `desc_thresh` rejects weak matches (raise
 it to recover more, lower it to suppress coincidental matches on feature-dense
-or self-similar scenes). `noise_floor_px` (default `1.0`) is the assumed
-keypoint-localisation noise the finite-vs-infinity classifier converts to
-per-ray angular noise. This reads the original `.sift` files from the
-reconstruction's workspace, so the SIFT artifacts must still be present.
+or self-similar scenes). `sigma_px` is the per-axis pixel noise the test
+weights each candidate's rays by; by default it is measured from the
+reconstruction's finite points, as `--classify-points-at-infinity` measures
+it, and a value given must be finite and positive. This reads the original
+`.sift` files from the reconstruction's workspace, so the SIFT artifacts must
+still be present. The operation prints the noise level, how many candidate
+tracks it found and appended, and how many it dropped and why (a finite
+verdict, a bearing behind a camera, too few usable rays).
 
 ```bash
 --find-points-at-infinity 0.1
 --find-points-at-infinity 0.1,200,2
---find-points-at-infinity 0.1,200,2,1.5
+--find-points-at-infinity 0.1,200,2,0.5
 ```
 
 #### `--classify-points-at-infinity [<sigma_px>]`

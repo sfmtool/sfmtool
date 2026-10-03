@@ -967,10 +967,10 @@ says, so the coordinate and the frame's centre are one thing in both.
 is not the bench's: `classify_track_rays`
 ([`classify.rs`](../../../crates/sfmtool-core/src/bench/classify.rs)) calls
 `classify_rays_at_infinity`, the inverse-depth z rule
-`find_points_at_infinity` admits discovered tracks on
 ([`../reconstruction/batch-triangulation-api.md`](../reconstruction/batch-triangulation-api.md)
-§ "Consumers"), with the same defaults. Reclassifying a whole reconstruction
-(`classify_points_at_infinity`) decides on the point-or-bearing test instead;
+§ "Consumers"), with its defaults. Reclassifying a whole reconstruction
+(`classify_points_at_infinity`) and discovering points at infinity
+(`find_points_at_infinity`) decide on the point-or-bearing test instead;
 the bench moves to it in a later step of
 [the amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md).
 `classify_track_rays` reads the rays and answers with the coordinate the track
@@ -984,9 +984,8 @@ takes, a flag, and the number that settled it:
   too;
 - a baseline that cannot place a point even at the capture's own scale
   (`resolvable_distance` short of the camera cloud's extent) is a **bearing**
-  (`baseline_too_short`). Discovery drops such a track, because leaving it
-  out is an option for a pass that only adds; a fit has to write something, and
-  what the numbers say is that the depth is not observable.
+  (`baseline_too_short`): a fit has to write something, and what the
+  numbers say is that the depth is not observable.
 
 The bearing a `w = 0` answer carries is the normalised mean of the rays, which
 is the robust direction those sightings agree on.

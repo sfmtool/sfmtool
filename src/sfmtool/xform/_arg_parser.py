@@ -505,14 +505,14 @@ def _parse_find_points_at_infinity(param: str, max_features: int | None):
     if not 1 <= len(parts) <= 4:
         raise click.UsageError(
             "--find-points-at-infinity expects "
-            "eps_deg[,desc_thresh[,min_views[,noise_floor_px]]], "
+            "eps_deg[,desc_thresh[,min_views[,sigma_px]]], "
             f"got: {param}"
         )
     try:
         eps_deg = float(parts[0])
         desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
         min_views = int(parts[2]) if len(parts) > 2 else 2
-        noise_floor_px = float(parts[3]) if len(parts) > 3 else 1.0
+        sigma_px = float(parts[3]) if len(parts) > 3 else None
     except ValueError as e:
         raise click.UsageError(
             f"Invalid --find-points-at-infinity parameter '{param}': {e}"
@@ -523,7 +523,7 @@ def _parse_find_points_at_infinity(param: str, max_features: int | None):
             desc_thresh,
             min_views,
             max_features=max_features,
-            noise_floor_px=noise_floor_px,
+            sigma_px=sigma_px,
         )
     except ValueError as e:
         raise click.UsageError(

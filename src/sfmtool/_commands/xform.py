@@ -275,7 +275,12 @@ from ..xform._arg_parser import (
 @click.option(
     "--find-points-at-infinity",
     multiple=True,
-    help="Discover points at infinity: eps_deg[,desc_thresh[,min_views[,noise_floor_px]]] (e.g. '0.1,200,2,1.0')",
+    help=(
+        "Discover points at infinity: eps_deg[,desc_thresh[,min_views[,sigma_px]]] "
+        "(e.g. '0.1,200,2'). Each candidate track is decided with the "
+        "point-or-bearing test; the optional sigma_px is the per-axis pixel "
+        "noise to weight the rays by, measured from the reconstruction by default."
+    ),
 )
 @click.option(
     "--classify-points-at-infinity",
@@ -336,7 +341,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Points at infinity:
-      --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]
+      --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views[,sigma_px]]]
       --classify-points-at-infinity [SIGMA_PX]  Store each point as the point-or-bearing test decides
       --max-features N                    Cap features per image for --find-points-at-infinity (largest first)
 

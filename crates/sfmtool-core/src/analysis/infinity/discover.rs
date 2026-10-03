@@ -17,19 +17,31 @@
 //! single nearest-neighbour query on the unit sphere replaces the per-pair
 //! epipolar search a finite point would need. Descriptor agreement then
 //! confirms co-directional keypoints are the same physical feature.
+//!
+//! [`find_infinity_tracks`] assembles the candidate tracks, and
+//! [`decide_candidate_tracks`] decides each one with the point-or-bearing test,
+//! as reclassification decides a stored point. Only the bearings are appended:
+//! a track whose rays ask for a depth is a finite point, not a point at
+//! infinity, and is left out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nalgebra::{Point3, Vector3};
 
-use super::convert::{
-    camera_extents, classify_rays_at_infinity, Classification, RayClassification,
-    DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
+use super::convert::camera_extents;
+use crate::analysis::point_or_bearing::{
+    observation_ray, ObservationRay, PointOrBearingError, RayBatch,
 };
+use crate::analysis::reprojection_noise::ReprojectionNoise;
 use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
 use crate::reconstruction::data::observation_reprojection_error;
+use crate::reconstruction::triangulation::{
+    bearing_score_batch, depth_uncertainty_batch, is_finite, triangulate_batch,
+    DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+};
 use crate::reconstruction::{
-    ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
+    ImageTable, ObservationSource, Point3D, ReconstructionError, SfmrReconstruction,
+    TrackObservation,
 };
 use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE};
 
@@ -47,40 +59,74 @@ pub struct InfinityParams {
     pub ratio: f64,
     /// A surviving track must span at least this many distinct images.
     pub min_views: usize,
-    /// SIFT keypoint localisation noise floor (pixels). A track whose parallax
-    /// signal falls below this floor is emitted as a `w = 0` point at infinity.
-    pub noise_floor_px: f64,
 }
 
-/// A discovered track: its member observations and the classification of its
-/// rays (finite / at infinity / indeterminate), with the diagnostics behind
-/// the call for debug review of dropped tracks.
-#[derive(Debug, Clone)]
+/// A candidate track: its member observations, one per distinct image.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfinityTrack {
-    /// Member observations as `(image_index, feature_index)` pairs, one per
-    /// distinct image.
+    /// Member observations as `(image_index, feature_index)` pairs, sorted,
+    /// one per distinct image.
     pub members: Vec<(u32, u32)>,
-    /// Classification plus observability diagnostics.
-    pub classification: RayClassification,
 }
 
-/// Discover infinite/distant-point tracks from un-projected keypoint
-/// directions. Pure and file-IO-free so it is unit-testable without `.sift`
-/// files.
+/// What [`decide_candidate_tracks`] made of one candidate track.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CandidateDecision {
+    /// A bearing verdict whose bearing is in front of every observing camera:
+    /// a point at infinity along this unit direction, the score's closed-form
+    /// bearing.
+    Bearing(Vector3<f64>),
+    /// A finite verdict: the rays ask for a depth.
+    Finite,
+    /// A bearing verdict whose bearing is behind an observing camera, so it
+    /// describes no sighting there.
+    BearingBehindCamera,
+    /// Fewer than two of the track's observations give a usable ray.
+    Unscored,
+}
+
+/// What [`SfmrReconstruction::find_points_at_infinity`] did.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InfinityDiscovery {
+    /// The noise level the candidates were scored at: the caller's, or the
+    /// measured one. `None` when none was given and none could be measured
+    /// (no observation of a finite point), in which case nothing was searched
+    /// and every count is 0.
+    pub sigma_px: Option<f64>,
+    /// The measurement behind `sigma_px` when the pass measured it; `None`
+    /// when the caller gave one.
+    pub noise: Option<ReprojectionNoise>,
+    /// Candidate tracks the clustering assembled, each spanning at least
+    /// `min_views` images.
+    pub candidates: usize,
+    /// Candidates appended as points at infinity.
+    pub bearings: usize,
+    /// Of the appended points at infinity, those whose observing cameras
+    /// have a baseline too short to tell a point at the capture's own scale
+    /// (the camera extents) from infinity: `resolvable_distance` under
+    /// `camera_extents` at the noise level.
+    pub short_baseline: usize,
+    /// Candidates dropped with a finite verdict: their rays ask for a depth.
+    pub finite: usize,
+    /// Bearing verdicts dropped because the bearing is behind an observing
+    /// camera.
+    pub bearing_behind_camera: usize,
+    /// Candidates dropped because fewer than `min_views` of their members
+    /// (and fewer than two) give a usable ray.
+    pub unscored: usize,
+}
+
+/// Assemble candidate tracks from un-projected keypoint directions. Pure and
+/// file-IO-free so it is unit-testable without `.sift` files.
 ///
-/// All keypoint-indexed slices (`dirs`, `descriptors`, `image_index`,
-/// `feature_index`) have the same length `T`. `camera_centers` and `focal_max`
-/// are indexed by image (length `N`).
-#[allow(clippy::too_many_arguments)]
+/// All slices have the same length `T`, one entry per keypoint. The result is
+/// sorted by its members, so it does not depend on hashing order.
 pub fn find_infinity_tracks(
     dirs: &[Vector3<f64>],
     descriptors: &[[u8; 128]],
     image_index: &[u32],
     feature_index: &[u32],
-    camera_centers: &[Point3<f64>],
-    focal_max: &[f64],
     params: &InfinityParams,
-    finite_horizon: f64,
 ) -> Vec<InfinityTrack> {
     let t = dirs.len();
     assert_eq!(descriptors.len(), t, "descriptors length must equal dirs");
@@ -112,7 +158,7 @@ pub fn find_infinity_tracks(
     //    best_dist < ratio^2 * second_best_dist).
     //
     // Directed edges are recorded in a HashSet for O(1) mutual lookup.
-    let mut directed: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    let mut directed: HashSet<(u32, u32)> = HashSet::new();
     // Per-image best/second-best scratch, keyed by neighbour image index.
     let mut best_per_image: HashMap<u32, (i64, u32)> = HashMap::new();
     let mut second_per_image: HashMap<u32, i64> = HashMap::new();
@@ -205,8 +251,7 @@ pub fn find_infinity_tracks(
         //    feature, keep only the single best-supported one (smallest sum of
         //    descriptor distances to its mutual neighbours in the component).
         //    SPLIT rather than drop the whole component.
-        let in_component: std::collections::HashSet<u32> =
-            members.iter().map(|&m| m as u32).collect();
+        let in_component: HashSet<u32> = members.iter().map(|&m| m as u32).collect();
         let mut best_for_image: HashMap<u32, (i64, u32)> = HashMap::new();
         for &m in &members {
             let m_u = m as u32;
@@ -246,66 +291,134 @@ pub fn find_infinity_tracks(
         if chosen.len() < params.min_views {
             continue;
         }
-
-        // 8. Classify on the triangulation's observability diagnostics into
-        //    finite / at-infinity / indeterminate. See `classify_track`. The
-        //    caller drops indeterminate tracks; the diagnostics ride along for
-        //    debug review.
-        let member_dirs: Vec<Vector3<f64>> = best_for_image
-            .values()
-            .map(|&(_, m_u)| dirs[m_u as usize])
-            .collect();
-        let member_images: Vec<usize> = best_for_image
-            .values()
-            .map(|&(_, m_u)| image_index[m_u as usize] as usize)
-            .collect();
-
-        let classification = classify_track(
-            &member_dirs,
-            &member_images,
-            camera_centers,
-            focal_max,
-            params.noise_floor_px,
-            finite_horizon,
-        );
-
-        tracks.push(InfinityTrack {
-            members: chosen,
-            classification,
-        });
+        tracks.push(InfinityTrack { members: chosen });
     }
-
+    tracks.sort_unstable_by(|a, b| a.members.cmp(&b.members));
     tracks
 }
 
-/// Classify a track from its member directions into finite / at-infinity /
-/// indeterminate, decided on the triangulation's observability diagnostics —
-/// see [`classify_rays_at_infinity`]. Discovered tracks carry no reprojection
-/// error, so the per-ray angular noise is `noise_floor_px` divided by each
-/// observing camera's focal length.
-fn classify_track(
-    member_dirs: &[Vector3<f64>],
-    member_images: &[usize],
-    camera_centers: &[Point3<f64>],
-    focal_max: &[f64],
-    noise_floor_px: f64,
-    finite_horizon: f64,
-) -> RayClassification {
-    let member_centers: Vec<Point3<f64>> = member_images
+/// Decide each candidate track of `rays` with the point-or-bearing test, the
+/// one reclassification decides a stored point with.
+///
+/// Each track is scored with [`bearing_score_batch`], and [`is_finite`] at
+/// [`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`] gives the verdict. A bearing
+/// verdict is the score's closed-form bearing when that is in front of every
+/// observing camera. One decision per track of `rays`, in order.
+///
+/// # Example
+///
+/// ```
+/// use nalgebra::{Point3, Vector3};
+/// use sfmtool_core::analysis::infinity::{decide_candidate_tracks, CandidateDecision};
+/// use sfmtool_core::analysis::point_or_bearing::RayBatch;
+/// use sfmtool_core::reconstruction::triangulation::isotropic_ray_weights;
+///
+/// // Three cameras 1 unit apart see one direction: parallel rays.
+/// let dirs = vec![Vector3::z(); 3];
+/// let rays = RayBatch {
+///     weights: isotropic_ray_weights(&dirs, &[1e-3; 3]),
+///     dirs,
+///     centers: (0..3).map(|i| Point3::new(i as f64, 0.0, 0.0)).collect(),
+///     offsets: vec![0, 3],
+/// };
+/// let decisions = decide_candidate_tracks(&rays);
+/// assert!(matches!(decisions[0], CandidateDecision::Bearing(_)));
+/// ```
+pub fn decide_candidate_tracks(rays: &RayBatch) -> Vec<CandidateDecision> {
+    bearing_score_batch(&rays.dirs, &rays.centers, &rays.offsets, &rays.weights)
         .iter()
-        .map(|&img| camera_centers[img])
-        .collect();
-    let sigma_rad: Vec<f64> = member_images
-        .iter()
-        .map(|&img| noise_floor_px / focal_max[img])
-        .collect();
-    classify_rays_at_infinity(
-        member_dirs,
-        &member_centers,
-        &sigma_rad,
-        DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
-        finite_horizon,
-    )
+        .map(|score| match score {
+            None => CandidateDecision::Unscored,
+            Some(s) if is_finite(s, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD) => {
+                CandidateDecision::Finite
+            }
+            Some(s) if s.bearing_in_front_of_all_cameras => {
+                CandidateDecision::Bearing(s.bearing.normalize())
+            }
+            Some(_) => CandidateDecision::BearingBehindCamera,
+        })
+        .collect()
+}
+
+/// The rays of a set of candidate tracks, and the members they came from.
+struct CandidateRays {
+    /// One track per candidate, in order; empty for a candidate left with
+    /// fewer than `min_views` members that give a ray.
+    rays: RayBatch,
+    /// The image of each ray.
+    ray_images: Vec<usize>,
+    /// Each candidate's members that gave a ray (empty where its track is).
+    members: Vec<Vec<(u32, u32)>>,
+}
+
+/// Each candidate's rays, one per member keypoint whose pixel (from `pixels`)
+/// gives one at `sigma_px`. A member whose pixel gives no ray (outside the
+/// camera model's domain, as past the wide-angle blend of a fisheye's
+/// un-projection) is left out of the track, so what is appended is what was
+/// decided; a candidate left with fewer than `min_views` members gets no rays,
+/// and so no score.
+fn candidate_rays(
+    image_table: &ImageTable,
+    candidates: &[InfinityTrack],
+    pixels: &HashMap<(u32, u32), [f64; 2]>,
+    sigma_px: f64,
+    min_views: usize,
+) -> CandidateRays {
+    let mut out = CandidateRays {
+        rays: RayBatch {
+            offsets: vec![0],
+            ..RayBatch::default()
+        },
+        ray_images: Vec::new(),
+        members: Vec::with_capacity(candidates.len()),
+    };
+    for track in candidates {
+        let observed: Vec<((u32, u32), ObservationRay)> = track
+            .members
+            .iter()
+            .filter_map(|&(img, feat)| {
+                let pixel = pixels[&(img, feat)];
+                observation_ray(image_table, img as usize, pixel, sigma_px)
+                    .map(|r| ((img, feat), r))
+            })
+            .collect();
+        if observed.len() >= min_views {
+            for ((img, _), r) in &observed {
+                out.rays.dirs.push(r.dir);
+                out.rays.centers.push(r.center);
+                out.rays.weights.push(r.weight);
+                out.ray_images.push(*img as usize);
+            }
+            out.members
+                .push(observed.into_iter().map(|(m, _)| m).collect());
+        } else {
+            out.members.push(Vec::new());
+        }
+        out.rays.offsets.push(out.rays.dirs.len());
+    }
+    out
+}
+
+impl InfinityDiscovery {
+    /// Add one count per decision: every candidate lands in exactly one of
+    /// `bearings`, `finite`, `bearing_behind_camera` and `unscored`, and a
+    /// bearing flagged in the `short_baseline` argument also in the field of
+    /// the same name.
+    fn count_decisions(&mut self, decisions: &[CandidateDecision], short_baseline: &[bool]) {
+        for (decision, &short) in decisions.iter().zip(short_baseline) {
+            match decision {
+                CandidateDecision::Bearing(_) => {
+                    self.bearings += 1;
+                    if short {
+                        self.short_baseline += 1;
+                    }
+                }
+                CandidateDecision::Finite => self.finite += 1,
+                CandidateDecision::BearingBehindCamera => self.bearing_behind_camera += 1,
+                CandidateDecision::Unscored => self.unscored += 1,
+            }
+        }
+    }
 }
 
 /// Minimal union-find over `0..n` for connected-component assembly.
@@ -351,17 +464,35 @@ fn per_image_focal_max(recon: &SfmrReconstruction) -> Vec<f64> {
 }
 
 impl SfmrReconstruction {
-    /// Discover points at infinity (and near-infinite distant points) by
-    /// clustering world-space keypoint directions across all images, confirming
-    /// clusters with SIFT descriptors, and appending the surviving tracks as new
-    /// points and observations. Returns a new reconstruction.
+    /// Discover points at infinity by clustering world-space keypoint
+    /// directions across all images, confirming clusters with SIFT
+    /// descriptors, deciding each surviving track with the point-or-bearing
+    /// test, and appending the bearings as new points and observations.
+    /// Returns a new reconstruction and what was found.
     ///
     /// Loads each image's keypoints from its `.sift` file (capped to the largest
     /// `max_features`, or all when `None`), skipping any keypoint already
     /// assigned to an existing 3D point, un-projects the rest to world-space
-    /// directions, and runs [`find_infinity_tracks`]. Every surviving track
-    /// becomes a new point with a new track, built only from previously
-    /// untracked features so no feature observes two points.
+    /// directions, and runs [`find_infinity_tracks`]. Each candidate's rays are
+    /// weighted at the per-axis pixel noise `sigma_px` (the reconstruction's
+    /// [`reprojection_noise`](Self::reprojection_noise) when `None`) and
+    /// decided by [`decide_candidate_tracks`]. A bearing becomes a `w = 0`
+    /// point at the score's closed-form bearing, and the other candidates are
+    /// dropped and counted: a finite verdict is a finite point, which this
+    /// pass does not add. Every appended track is built only from previously
+    /// untracked features, so no feature observes two points.
+    ///
+    /// When `sigma_px` is `None` and the reconstruction has no observation of a
+    /// finite point to measure the noise from, nothing is searched: the result
+    /// is the reconstruction unchanged, with a summary whose `sigma_px` is
+    /// `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PointOrBearingError::InvalidNoiseLevel`] for a `sigma_px` that is not
+    /// finite and positive, and [`PointOrBearingError::Reconstruction`] for an
+    /// `embedded_patches` reconstruction (which has no `.sift` files to search)
+    /// or a `.sift` file that cannot be read.
     pub fn find_points_at_infinity(
         &self,
         eps_deg: f64,
@@ -369,8 +500,13 @@ impl SfmrReconstruction {
         ratio: f64,
         min_views: usize,
         max_features: Option<usize>,
-        noise_floor_px: f64,
-    ) -> Result<Self, ReconstructionError> {
+        sigma_px: Option<f64>,
+    ) -> Result<(Self, InfinityDiscovery), PointOrBearingError> {
+        if let Some(s) = sigma_px {
+            if !(s.is_finite() && s > 0.0) {
+                return Err(PointOrBearingError::InvalidNoiseLevel(s));
+            }
+        }
         // Discovery un-projects keypoints read from per-image `.sift` files and
         // appends new sift_files observations, so it only applies to a
         // sift_files reconstruction. Refuse embedded_patches up front rather
@@ -379,8 +515,24 @@ impl SfmrReconstruction {
             return Err(ReconstructionError::Unsupported(format!(
                 "find_points_at_infinity is not supported for {} reconstructions",
                 self.feature_source()
-            )));
+            ))
+            .into());
         }
+
+        let mut summary = InfinityDiscovery::default();
+        let sigma = match sigma_px {
+            Some(s) => s,
+            None => {
+                let noise = self.reprojection_noise()?;
+                let measured = noise.sigma_px;
+                summary.noise = Some(noise);
+                match measured {
+                    Some(s) => s,
+                    None => return Ok((self.clone(), summary)),
+                }
+            }
+        };
+        summary.sigma_px = Some(sigma);
 
         // Un-project every keypoint in every image to a world-space direction.
         let read_count = max_features.unwrap_or(usize::MAX);
@@ -389,8 +541,8 @@ impl SfmrReconstruction {
         let mut image_index: Vec<u32> = Vec::new();
         let mut feature_index: Vec<u32> = Vec::new();
         // Observed pixel position of each candidate keypoint, keyed by
-        // (image, feature). Retained so a discovered point's reprojection error
-        // can be measured inline against the features it was built from.
+        // (image, feature). Retained to build a candidate's rays for the test
+        // and to measure an appended point's reprojection error.
         let mut obs_xy: HashMap<(u32, u32), [f64; 2]> = HashMap::new();
 
         for (img_idx, image) in self.image_table.images.iter().enumerate() {
@@ -438,77 +590,78 @@ impl SfmrReconstruction {
             }
         }
 
+        let params = InfinityParams {
+            eps_deg,
+            desc_thresh,
+            ratio,
+            min_views,
+        };
+        let found =
+            find_infinity_tracks(&dirs, &descriptors, &image_index, &feature_index, &params);
+        summary.candidates = found.len();
+
+        let CandidateRays {
+            rays,
+            ray_images,
+            members: kept_members,
+        } = candidate_rays(&self.image_table, &found, &obs_xy, sigma, min_views);
+        let decisions = decide_candidate_tracks(&rays);
+
+        // How far each track's cameras can tell a point from infinity, at the
+        // same noise as an angle (σ_px over the focal length), against the
+        // camera extents: the count of appended bearings the cameras could not
+        // resolve at the capture's own scale.
         let camera_centers: Vec<Point3<f64>> = self
             .image_table
             .images
             .iter()
             .map(|im| im.camera_center())
             .collect();
+        let capture_scale = camera_extents(&camera_centers);
         let focal_max = per_image_focal_max(self);
+        let sigma_rad: Vec<f64> = ray_images.iter().map(|&i| sigma / focal_max[i]).collect();
+        let tris = triangulate_batch(&rays.dirs, &rays.centers, &rays.offsets);
+        let resolvable: Vec<f64> =
+            depth_uncertainty_batch(&tris, &rays.dirs, &rays.centers, &rays.offsets, &sigma_rad)
+                .iter()
+                .map(|du| du.resolvable_distance)
+                .collect();
 
-        // `finite_horizon` defaults to the camera extents — the scale of the
-        // region the capture explored. A track whose observing baseline can't
-        // resolve a point even at this distance is indeterminate and dropped.
-        // (Initial value; worth sweeping other multiples of the extents later.)
-        let finite_horizon = camera_extents(&camera_centers);
-
-        let params = InfinityParams {
-            eps_deg,
-            desc_thresh,
-            ratio,
-            min_views,
-            noise_floor_px,
+        // Mean reprojection error (pixels) of a discovered bearing against the
+        // features it was built from, via the shared single-observation helper.
+        // A point with no in-front observation scores 0.0.
+        let reprojection_error = |bearing: &Point3<f64>, members: &[(u32, u32)]| -> f32 {
+            let mut sum = 0.0f64;
+            let mut count = 0u32;
+            for &(img, feat) in members {
+                let Some(&observed) = obs_xy.get(&(img, feat)) else {
+                    continue;
+                };
+                let image = &self.image_table.images[img as usize];
+                let camera = &self.image_table.cameras[image.camera_index as usize];
+                if let Some(e) = observation_reprojection_error(
+                    &image.quaternion_wxyz,
+                    &image.translation_xyz,
+                    camera,
+                    bearing,
+                    true,
+                    observed,
+                ) {
+                    sum += e;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
         };
-        let found = find_infinity_tracks(
-            &dirs,
-            &descriptors,
-            &image_index,
-            &feature_index,
-            &camera_centers,
-            &focal_max,
-            &params,
-            finite_horizon,
-        );
 
-        // Mean reprojection error (pixels) of a discovered point against the
-        // features it was built from, via the shared single-observation helper
-        // (handles the w = 0 vs finite projection). A point with no in-front
-        // observation scores 0.0.
-        let reprojection_error =
-            |position: &Point3<f64>, at_infinity: bool, members: &[(u32, u32)]| -> f32 {
-                let mut sum = 0.0f64;
-                let mut count = 0u32;
-                for &(img, feat) in members {
-                    let Some(&observed) = obs_xy.get(&(img, feat)) else {
-                        continue;
-                    };
-                    let image = &self.image_table.images[img as usize];
-                    let camera = &self.image_table.cameras[image.camera_index as usize];
-                    if let Some(e) = observation_reprojection_error(
-                        &image.quaternion_wxyz,
-                        &image.translation_xyz,
-                        camera,
-                        position,
-                        at_infinity,
-                        observed,
-                    ) {
-                        sum += e;
-                        count += 1;
-                    }
-                }
-                if count > 0 {
-                    (sum / count as f64) as f32
-                } else {
-                    0.0
-                }
-            };
-
-        // Append finite and at-infinity tracks; drop indeterminate ones (the
-        // baseline couldn't adjudicate them) with a debug line for review. Every
-        // member is a previously untracked feature, so no appended observation
-        // collides with an existing point's observation.
+        // Append the bearings; drop the rest.
+        // Every member is a previously untracked feature, so no appended
+        // observation collides with an existing point's observation.
         let mut recon = self.clone_for_edit();
-        let old_point_count = recon.point_set.points.len();
         // A `sift_files` reconstruction may carry an inline copy of its
         // observation coordinates; the appended observations extend it in
         // lockstep with `feature_indexes`. Their pixels are the ones unprojected
@@ -516,48 +669,23 @@ impl SfmrReconstruction {
         // when there is no inline column to extend.
         let mut appended_keypoints: Option<Vec<[f32; 2]>> =
             recon.keypoints_xy().map(|_| Vec::new());
-        let (mut n_finite, mut n_infinity, mut n_dropped) = (0usize, 0usize, 0usize);
-        for track in found {
-            let rc = &track.classification;
-            let (position, w) = match rc.class {
-                Classification::Finite(p) => {
-                    n_finite += 1;
-                    (p, 1.0)
-                }
-                Classification::Infinity(dir) => {
-                    n_infinity += 1;
-                    (dir, 0.0)
-                }
-                Classification::Indeterminate => {
-                    n_dropped += 1;
-                    let images: Vec<u32> = track.members.iter().map(|(i, _)| *i).collect();
-                    eprintln!(
-                        "[find-infinity] DROP indeterminate: views={} cond={:.1} \
-                         resolvable={:.2} < finite_horizon={:.2} z={:.2} \
-                         bearing=[{:.3}, {:.3}, {:.3}] images={:?}",
-                        rc.num_views,
-                        rc.condition_number,
-                        rc.resolvable_distance,
-                        finite_horizon,
-                        rc.inverse_depth_z,
-                        rc.bearing.x,
-                        rc.bearing.y,
-                        rc.bearing.z,
-                        images,
-                    );
-                    continue;
-                }
+        let short_baseline: Vec<bool> = resolvable.iter().map(|&d| d < capture_scale).collect();
+        summary.count_decisions(&decisions, &short_baseline);
+        for (members, decision) in kept_members.iter().zip(&decisions) {
+            let CandidateDecision::Bearing(dir) = *decision else {
+                continue;
             };
-            let error = reprojection_error(&position, w == 0.0, &track.members);
+            let position = Point3::from(dir);
+            let error = reprojection_error(&position, members);
             let new_point_id = recon.point_set.points.len() as u32;
             recon.point_set.points.push(Point3D {
                 position,
-                w,
+                w: 0.0,
                 color: [200, 200, 200],
                 error,
                 normal: Vector3::zeros(),
             });
-            for (img, _feat) in &track.members {
+            for (img, _feat) in members {
                 recon.point_set.tracks.push(TrackObservation {
                     image_index: *img,
                     point_index: new_point_id,
@@ -569,14 +697,14 @@ impl SfmrReconstruction {
                 feature_indexes, ..
             } = &mut recon.point_set.observations
             {
-                for (_img, feat) in &track.members {
+                for (_img, feat) in members {
                     feature_indexes.push(*feat);
                 }
             }
             // Every member is one of the candidate keypoints unprojected above,
             // so its pixel is in `obs_xy`.
             if let Some(rows) = appended_keypoints.as_mut() {
-                for (img, feat) in &track.members {
+                for (img, feat) in members {
                     let xy = obs_xy[&(*img, *feat)];
                     rows.push([xy[0] as f32, xy[1] as f32]);
                 }
@@ -584,7 +712,7 @@ impl SfmrReconstruction {
             // A newly discovered observation was never measured, so it gets the
             // "no data-derived support" code rather than inheriting anything.
             if let Some(confidence) = recon.point_set.observation_confidence.as_mut() {
-                confidence.extend(std::iter::repeat_n(0u8, track.members.len()));
+                confidence.extend(std::iter::repeat_n(0u8, members.len()));
             }
             // Nothing outside the solve owns a track this pass discovered, so
             // its constraint row is free -- the row the reconstruction would
@@ -599,13 +727,8 @@ impl SfmrReconstruction {
             recon
                 .point_set
                 .observation_counts
-                .push(track.members.len() as u32);
+                .push(members.len() as u32);
         }
-        eprintln!(
-            "[find-infinity] discovered {n_finite} new finite + {n_infinity} new \
-             at-infinity points, dropped {n_dropped} indeterminate \
-             (finite_horizon={finite_horizon:.2})"
-        );
 
         if let (
             Some(rows),
@@ -622,9 +745,8 @@ impl SfmrReconstruction {
             }
         }
 
-        debug_assert!(recon.point_set.points.len() >= old_point_count);
         recon.rebuild_derived_fields();
-        Ok(recon)
+        Ok((recon, summary))
     }
 }
 

@@ -243,3 +243,19 @@ def test_classify_points_at_infinity_takes_an_optional_noise_level():
 def test_classify_points_at_infinity_rejects_a_bad_noise_level(value):
     with pytest.raises(click.UsageError, match="--classify-points-at-infinity"):
         parse_transform_args([f"--classify-points-at-infinity={value}"])
+
+
+def test_find_points_at_infinity_takes_an_optional_noise_level():
+    """The fourth component is a sigma_px override; without it the noise is
+    measured."""
+    (measured,) = parse_transform_args(["--find-points-at-infinity", "0.1,200,2"])
+    assert measured.sigma_px is None
+    (given,) = parse_transform_args(["--find-points-at-infinity", "0.1,200,2,0.5"])
+    assert given.sigma_px == 0.5
+    assert "sigma_px=0.5px" in given.description()
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-1", "nan", "inf"])
+def test_find_points_at_infinity_rejects_a_bad_noise_level(value):
+    with pytest.raises(click.UsageError, match="--find-points-at-infinity"):
+        parse_transform_args([f"--find-points-at-infinity=0.1,200,2,{value}"])

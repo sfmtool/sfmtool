@@ -12,14 +12,15 @@
 //! representation one set of sightings has earned.
 //!
 //! The criterion is not the bench's own. It is
-//! [`classify_rays_at_infinity`], the inverse-depth z rule
-//! [`find_points_at_infinity`](crate::SfmrReconstruction::find_points_at_infinity)
-//! admits discovered tracks on, called here over one track's rays with the same
-//! defaults. (Reclassifying a whole reconstruction,
+//! [`classify_rays_at_infinity`], the inverse-depth z rule, called here over
+//! one track's rays with its defaults; the bench is the one consumer that
+//! still decides on it, and point inspection (`sfm inspect pt3d_*`) reports
+//! it. (Reclassifying a whole reconstruction,
 //! [`classify_points_at_infinity`](crate::SfmrReconstruction::classify_points_at_infinity),
-//! has moved to the point-or-bearing likelihood-ratio test; the bench and
-//! discovery move to it in a later step of
-//! `specs/drafts/point-or-bearing-likelihood-ratio.md`.) What the bench adds is
+//! and discovering points at infinity,
+//! [`find_points_at_infinity`](crate::SfmrReconstruction::find_points_at_infinity),
+//! have moved to the point-or-bearing likelihood-ratio test; the bench moves to
+//! it in a later step of `specs/drafts/point-or-bearing-likelihood-ratio.md`.) What the bench adds is
 //! the third answer's disposal: a fit has to write something, so a track whose
 //! baseline cannot resolve a scene-scale depth is written as the bearing it is.
 //!

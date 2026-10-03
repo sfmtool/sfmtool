@@ -1,14 +1,14 @@
 # Finding points at infinity in an existing solve
 
 The `sfm xform --find-points-at-infinity` operation discovers points at
-infinity — and near-infinite distant points — in a reconstruction that has
-already been solved. It un-projects every untracked keypoint to the world
-direction it would have if it were infinitely far away, clusters those
-directions on the unit sphere, confirms each cluster with SIFT descriptors,
-and appends the surviving tracks to the reconstruction as new points. It
-complements the companion `--classify-points-at-infinity` operation, which
-only *reclassifies* points the reconstruction already has and so finds nothing
-new.
+infinity in a reconstruction that has already been solved. It un-projects
+every untracked keypoint to the world direction it would have if it were
+infinitely far away, clusters those directions on the unit sphere, confirms
+each cluster with SIFT descriptors, decides each resulting track with the
+point-or-bearing likelihood-ratio test, and appends the tracks the test calls
+bearings to the reconstruction as new `w = 0` points. It complements the
+companion `--classify-points-at-infinity` operation, which decides the points
+the reconstruction already has with the same test and so finds nothing new.
 
 [v2 model]: ../../../formats/sfmr-file-format.md
 
@@ -86,17 +86,18 @@ is a
 finite point at distance `d`, viewed by two cameras separated by baseline `B`,
 has parallax `≈ B/d`. Clustering directions within `ε` therefore captures the
 points with parallax `≤ ε`, i.e. `d ≳ B/ε`. Tightening `ε` raises the distance
-cutoff toward true infinity; loosening it sweeps in the "finite but distant"
-points. They are the same search, and `ε` slides between them; the calibration
-below reports `B_max/ε` beside each `ε` to make the cutoff concrete.
+cutoff toward true infinity; loosening it sweeps in "finite but distant"
+candidates as well. They are the same search, and `ε` slides between them; the
+calibration below reports `B_max/ε` beside each `ε` to make the cutoff
+concrete.
 
-This also tells us what to *do* with a cluster once found. By construction its
-members agree in direction to within `ε`. If their parallax is below the
-keypoint-localisation noise floor, the depth is unrecoverable and the point is
-genuinely `w = 0`. If `ε` is loose enough that a track's parallax clears the
-floor, the cluster is triangulated and decided from the triangulation's
-observability diagnostics: `w = 0` when the depth is still unresolvable, a finite
-distant point otherwise (see Decisions).
+A cluster's members agree in direction to within `ε`, which does not by
+itself make them a point at infinity: whether a direction explains the rays as
+well as a point does is a question about the measurement noise, not about `ε`.
+Each cluster is therefore decided by the point-or-bearing test at the
+reconstruction's measured noise. A bearing verdict is appended as a `w = 0`
+point; a finite verdict, which a loose `ε` produces more of, is a distant
+finite point and is left out (see Decisions).
 
 ## Approach
 
@@ -105,15 +106,14 @@ index array mapping each entry back to `(image_index, feature_index)`. For each
 direction the operation queries neighbours within the chord radius corresponding
 to `ε`, keeps neighbour pairs that (a) come from *different* images and (b) pass
 a SIFT descriptor test, and assembles the surviving pairs into tracks. Each track
-takes its direction from the bearing mean `normalise(Σ rᵢ)` — the same rule
-`analysis/infinity/convert.rs` uses — and becomes a `w = 0` point with a new
-track.
+the point-or-bearing test calls a bearing becomes a `w = 0` point, at the
+test's closed-form bearing, with a new track.
 
 That needs one global structure, `O(N log N)` to build and near-linear to query,
 with no image-pair enumeration, and it naturally finds tracks spanning many
 images at once. It reuses `pixel_to_ray_batch`, `KdTree3d`, the descriptor L2 in
-`features/feature_match/descriptor.rs`, and the bearing mean from
-`analysis/infinity/convert.rs`.
+`features/feature_match/descriptor.rs`, and the point-or-bearing test of
+[batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md).
 
 Two guardrails turn the loose neighbour set into clean cross-image tracks: mutual
 descriptor agreement, and **at most one feature per image** per track, since a
@@ -141,28 +141,31 @@ unrelated keypoints into runaway mega-clusters — measured below.
 5. **Assemble tracks** from confirmed pairs with the **one-feature-per-image**
    constraint; drop tracks seen in fewer than `min_views` images (default 2,
    raise to 3 to suppress false positives).
-6. **Classify.** Triangulate each track and classify it with the shared
-   observability diagnostics (`classify_rays_at_infinity`, see
-   [batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)): the
-   inverse-depth z-score — computed against a per-ray angular noise of
-   `noise_floor_px / f_max`, since at classification time a discovered track has
-   no reprojection error yet — decides finite vs at infinity, and tracks whose
-   depth the diagnostics cannot pin down either way come back *indeterminate*
-   and are dropped.
-7. **Emit.** Each surviving track becomes a new point (direction
-   `normalise(Σ rᵢ)` for `w = 0`, the triangulated position for finite), plus
-   its observations, appended to the reconstruction via `clone_with_changes`.
+6. **Decide.** Each member keypoint's pixel becomes a ray and a 2×3 noise
+   weight through `observation_ray`, at the per-axis pixel noise `σ`: the
+   reconstruction's `reprojection_noise_px` (the RMS reprojection residual over
+   its finite points' observations, measured before anything is appended),
+   or the `sigma_px` the caller gives. A member whose pixel gives no ray
+   (outside the camera model's domain, as at a fisheye's rim) is left out of
+   the track, and a track left with fewer than `min_views` members is dropped
+   as unscored. `decide_candidate_tracks` scores each track with
+   `bearing_score_batch` and reads the verdict with `is_finite` at
+   `DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`, as reclassification does (see
+   [batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)
+   § "Consumers"). A bearing verdict whose bearing is in front of every
+   observing camera is kept; a finite verdict and a bearing behind a camera
+   are dropped.
+7. **Emit.** Each kept track becomes a new `w = 0` point at the score's
+   closed-form bearing, plus its observations, appended to the reconstruction.
    Each new point is assigned its mean reprojection error, measured inline
-   against the member keypoints it was built from: a `w = 0` point projects its
-   bearing through rotation + intrinsics only (translation is negligible at
-   infinity), a finite point projects `R·p + t`. The error is therefore
-   well-defined for both kinds, so downstream filters (e.g.
+   against the member keypoints it was built from: the bearing projects
+   through rotation + intrinsics only, so downstream filters (e.g.
    `--filter-by-reprojection-error`) score discovered points like any other.
    Because step 1 excluded already-tracked keypoints, no appended observation
    reuses a feature an existing point already owns — a 2D feature still observes
    exactly one 3D point, which COLMAP export and bundle adjustment require.
 
-Steps 3–6 run in `sfmtool-core` behind a PyO3 entry point rather than in Python.
+Steps 2–6 run in `sfmtool-core` behind a PyO3 entry point rather than in Python.
 The policy is expressible in vectorised NumPy — the calibration below was
 measured that way — but the per-image-pair mutual matching is easier to get right
 and to parallelise in Rust next to the existing descriptor matchers, and Rust
@@ -171,22 +174,75 @@ solves.
 
 ## CLI surface
 
-The clustering, matching and classification live in
+The clustering, matching and decision live in
 [discover.rs](../../../../crates/sfmtool-core/src/analysis/infinity/discover.rs),
 exposed as the PyO3 method `SfmrReconstruction.find_points_at_infinity` and
 driven by the thin Python transforms in
 [_find_points_at_infinity.py](../../../../src/sfmtool/xform/_find_points_at_infinity.py).
 
+```rust
+pub struct InfinityParams { pub eps_deg: f64, pub desc_thresh: f64, pub ratio: f64, pub min_views: usize }
+pub struct InfinityTrack { pub members: Vec<(u32, u32)> }   // (image, feature), one per image
+
+/// The candidate tracks, sorted by members. Pure: no .sift reads.
+pub fn find_infinity_tracks(dirs: &[Vector3<f64>], descriptors: &[[u8; 128]],
+    image_index: &[u32], feature_index: &[u32], params: &InfinityParams) -> Vec<InfinityTrack>;
+
+pub enum CandidateDecision { Bearing(Vector3<f64>), Finite, BearingBehindCamera, Unscored }
+/// One decision per track of `rays`, from bearing_score_batch and is_finite.
+pub fn decide_candidate_tracks(rays: &RayBatch) -> Vec<CandidateDecision>;
+
+pub struct InfinityDiscovery {
+    pub sigma_px: Option<f64>,            // the caller's, or measured; None: nothing searched
+    pub noise: Option<ReprojectionNoise>, // the measurement, when measured
+    pub candidates: usize,
+    pub bearings: usize,                  // appended
+    pub short_baseline: usize,            // of those, unresolvable at the camera extents
+    pub finite: usize,                    // dropped
+    pub bearing_behind_camera: usize,     // dropped
+    pub unscored: usize,                  // dropped
+}
+
+impl SfmrReconstruction {
+    pub fn find_points_at_infinity(&self, eps_deg: f64, desc_thresh: f64, ratio: f64,
+        min_views: usize, max_features: Option<usize>, sigma_px: Option<f64>)
+        -> Result<(Self, InfinityDiscovery), PointOrBearingError>;
+}
+```
+
+```rust
+let (found, summary) = recon.find_points_at_infinity(0.1, 200.0, 0.8, 2, None, None)?;
+println!("{} of {} candidates appended at {:?} px", summary.bearings,
+    summary.candidates, summary.sigma_px);
+```
+
+The clustering is a function of its own so it can be tested without `.sift`
+files, and the decision is one so that a caller holding rays from elsewhere
+reads the same verdicts. With no `sigma_px` and no observation of a finite
+point to measure one from, nothing is searched and the reconstruction comes
+back unchanged with `sigma_px: None`, as reclassification does. A `sigma_px`
+that is not finite and positive is `InvalidNoiseLevel`, and an
+`embedded_patches` reconstruction (no `.sift` files to search) or an
+unreadable `.sift` file is `Reconstruction`. The binding returns
+`(reconstruction, summary)`, the summary a dict of the same fields
+(`noise` as `reprojection_noise()`'s dict), and raises `ValueError` and
+`OSError` for the two errors.
+
 It is an ordered `sfm xform` operation, consistent with the existing
 filtering and optimisation ops:
 
 ```
-sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<noise_floor_px>]]]
+sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<sigma_px>]]]
 ```
 
 e.g. `--find-points-at-infinity 0.1,200,2` (defaults: `desc_thresh` 200,
-`min_views` 2, `noise_floor_px` 1.0 — the keypoint-localisation noise the
-classifier converts to per-ray angular noise). The Lowe ratio of the pairwise
+`min_views` 2, `sigma_px` measured from the reconstruction; a value given must
+be finite and positive). A fourth component written for older versions, which
+read it as a keypoint noise floor for the inverse-depth z rule, is read as `σ`:
+on the kerry_park solve, `0.5,300,2,1.0` weights the rays at 1 px instead of
+the measured 0.231 px and appends 3,067 bearings instead of 2,829. The operation prints the noise level and where it
+came from, the candidate and appended counts, the `short_baseline` count when it
+is not zero, and each kind of drop that occurred. The Lowe ratio of the pairwise
 confirm step is fixed at 0.8 by the Python transform and is not exposed on the
 command line; only the core function and its PyO3 method take it.
 `--max-features <N>` — the standard cap many commands carry, taking each image's
@@ -200,12 +256,15 @@ applies to this operation alone and is rejected when no
 The companion `--classify-points-at-infinity [<sigma_px>]` reclassifies
 the points the reconstruction already has with the point-or-bearing test (see
 [batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md)
-§ "Consumers"), and composes naturally before or after this one.
+§ "Consumers"), and composes before or after this one. Run after it at the
+measured noise, it changes none of the points discovery appended: bearings do
+not enter the noise measure, so the reconstruction measures the same `σ`
+after discovery as before, and a bearing's rays are built from the same pixels
+at the same `σ`, so the score and its verdict are the same.
 
 The operation is *additive*: it appends new points and tracks through the
-`Transform.apply(recon) -> recon` protocol. It emits both kinds of point on its
-own, per the classify step — a tight `ε` yields all `w = 0`, a looser `ε` lets
-some tracks triangulate into finite distant points.
+`Transform.apply(recon) -> recon` protocol, and every point it appends is
+`w = 0`.
 
 ## Calibration
 
@@ -283,19 +342,85 @@ What the numbers say:
   residual false positives.
 - **`ε` is a distance dial, as predicted.** `~min dist = B_max/ε`: ≈5500–10000
   world units at `ε = 0.1°` (effectively infinite) down to ~1100–2000 at
-  `ε = 0.5°` (merely "distant"). The "finite but distant" case is covered by
-  loosening this one parameter.
+  `ε = 0.5°` (merely "distant"). Loosening this one parameter brings in the
+  "finite but distant" candidates, and the point-or-bearing test decides which
+  of them are bearings.
+- **A loose `ε` costs bundle adjustment.** On the kerry_park solve, bundle
+  adjustment after discovery at `0.5,300,2` (2,829 bearings) ends without
+  converging. Its camera rotations differ by a median 0.21° from the input
+  poses and 0.231° from those of bundle adjustment with no discovery (which
+  itself moves them 0.06° from the input); its camera centres move by about
+  1 unit (6% of the camera extent); and it raises `σ` from 0.204 to 0.236 px.
+  After discovery at `0.1,200,2` the rotations differ by a median 0.059° from
+  the input poses and 0.017° from the no-discovery adjustment, which is
+  negligible. A loose `ε` finds more candidates, but follow it with bundle
+  adjustment only after checking that the poses hold.
 
 ## Decisions
 
-- **`w = 0` vs distant-finite.** Decide per track from the triangulation's
-  observability diagnostics (the inverse-depth z-score of
-  [batch-triangulation-api.md](../../../core/reconstruction/batch-triangulation-api.md), with
-  `noise_floor_px / f_max` as the per-ray angular noise): emit `w = 0` when the
-  depth is unresolvable, a finite distant point when it resolves, and drop the
-  *indeterminate* middle. No separate flag; ε governs how many tracks reach the
-  triangulation branch. (The original `α_max · f_max < noise` cut was replaced
-  by this classifier when the batch triangulation API landed.)
+- **Decide on the point-or-bearing test, at the measured noise.** The verdict
+  is the one reclassification reads, with the rays weighted at the
+  reconstruction's `reprojection_noise_px`, so discovery and reclassification
+  agree on every track they both see. (Before, discovery decided on the
+  inverse-depth z rule at a 1 px noise floor and dropped an *indeterminate*
+  middle; on a `sift_files` solve of seoul bull at `0.5,300,2`, 56 of the 505
+  points at infinity it appended had finite verdicts at the measured 0.36 px,
+  which a reclassification pass then promoted.)
+- **Append bearings only.** A finite verdict means the rays ask for a depth,
+  which is a finite point, and finite points are the solve's: discovery leaves
+  them out. Appending them was measured to disturb the noise level every later
+  decision reads. On a 48-image `sift_files` kerry_park solve at `0.5,300,2`,
+  appending the 239 finite verdicts (238 of which the point fit could place)
+  at their fitted points raised the measured
+  `σ` from 0.231 to 0.318 px (they were marginal: at 0.318 px, 106 of them and
+  3 points of the solve itself scored under the threshold), so a
+  reclassification pass after discovery would have demoted 109 points. With
+  bearings only, the measured `σ` is unchanged and reclassification changes
+  nothing. What the drop loses depends on the capture. On the seoul bull
+  solve at `0.5,300,2` the 60 finite candidates are sound: placed at their
+  fitted points, their RMS reprojection error is 0.484 px against the solve's
+  0.509, adding them leaves `σ` unchanged, and they are mostly 2-view tracks
+  at a distance of about 147 against a median scene distance of 5.2. On
+  kerry_park the 239 finite verdicts, of which 238 could be placed, are
+  marginal: 0.645 px against 0.327, with the effect on
+  `σ` above. Whether a quality gate could keep the consistent finite
+  candidates is an open question of the
+  [amendment draft](../../../drafts/point-or-bearing-likelihood-ratio.md).
+- **A track with a short baseline is appended as a bearing.** When the
+  observing cameras are too close together to tell a point at the capture's own
+  scale from infinity (`resolvable_distance` under the camera extents, at `σ`
+  over the focal length), the score finds no depth to ask for, `Λ ≈ 0`, and the verdict
+  is a bearing. Discovery appends it. The direction explains every sighting to
+  within the noise, which is all a bearing claims; reclassification stores such
+  a track as a bearing, so dropping it here would make the two passes disagree
+  about what one set of rays earns; and the reason the z rule dropped these
+  tracks was that `inverse_depth_z` divides by a solved depth that is noise
+  when the rays are near-parallel, so it could call a near short-baseline
+  track finite, which the score cannot do. Such a bearing describes the
+  sightings that exist; a later image from a camera further to the side would
+  show its depth, and reclassification would then promote it. The summary
+  counts these bearings as `short_baseline`. On the kerry_park solve at
+  `0.1,200,2`, the z rule dropped 174 tracks as indeterminate; the test appends 172 of them as bearings (the
+  other 2 have too few usable rays), and at the measured 0.231 px only 17 of
+  the 683 bearings appended are under the capture-scale gate (172 at 1 px: the
+  floor overstated the noise 4.3-fold). At `0.5,300,2`, 484 of 493 are
+  appended and 56 of 2,829 bearings are under the gate. The seoul bull solve
+  has none.
+- **A member without a ray is not appended.** The test reads only the members
+  whose pixel gives a ray, so those are the members the appended track holds.
+  On kerry_park the pixels that give none are keypoints more than about
+  203 px from the centre of the 480 px fisheye images. That is where the
+  un-projection's wide-angle blend starts for both solved `OPENCV_FISHEYE`
+  cameras (90° of distorted radius, 202.2 to 205.0 px depending on the camera
+  and the axis; `trustworthy_max_theta_deg` reports the incidence angle it
+  corresponds to), and the appended observations reach 204.2 px. Past it
+  `pixel_to_ray` deliberately moves toward the equidistant ray, which
+  `ray_to_pixel` does not map back (for camera 0 along x the round trip
+  misses by 0 px at 202 px, 0.02 px at 204, 2.5 px at 210 and 7 px at 220),
+  so `observed_ray` declines the pixel, as it should. The solved
+  lens model's own fold is farther out, at about 102° (231 px). At
+  `0.5,300,2` this drops 418 candidates outright and 104 of the 7,193
+  observations of the tracks appended.
 - **Mutual-match scope.** Per-image descriptor-best + ratio test + mutual edge,
   then transitive closure through mutual edges with a one-per-image constraint
   (0 dirty tracks and higher consistency, measured below). When closure
@@ -320,6 +445,8 @@ What the numbers say:
 | direction KD-tree, radius query | `KdTree3d` (PyO3) / `spatial.rs` `PointCloud3` |
 | descriptor L2 / best-match | `features/feature_match/descriptor.rs` |
 | all keypoints + descriptors per image | `get_sift_path_for_image` + `SiftReader` |
-| bearing-mean direction for a track | `analysis/infinity/convert.rs` (`normalise(Σ rᵢ)`) |
+| a candidate's rays and weights | `analysis/point_or_bearing.rs` (`observation_ray`) |
+| the verdict and the bearing | `bearing_score_batch`, `is_finite` |
+| the noise level | `SfmrReconstruction::reprojection_noise` |
 | emit new points/tracks | `SfmrReconstruction.clone_with_changes` |
 | reclassify existing points | `classify_points_at_infinity` |

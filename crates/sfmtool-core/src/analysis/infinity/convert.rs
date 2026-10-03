@@ -14,8 +14,8 @@
 //! every point at infinity at a finite depth for a consumer that cannot store
 //! `w = 0`; that depth is supplied, not measured, so the two are not inverses.
 //!
-//! [`classify_rays_at_infinity`] is the older inverse-depth z rule, which
-//! discovery and the bench still decide with.
+//! [`classify_rays_at_infinity`] is the older inverse-depth z rule, which the
+//! bench still decides with.
 
 use std::sync::Arc;
 

@@ -50,12 +50,13 @@ algorithms and parameter semantics.
 
 ## Depth Reliability (`--depth-reliability`)
 
-The report has two parts. The first is the inverse-depth z rule, which
-discovery (`--find-points-at-infinity`) and the bench still decide finite points
-against bearings with; the second is the likelihood-ratio test specified in
+The report has two parts. The first is the inverse-depth z rule, which the
+bench still decides finite points against bearings with; the second is the
+likelihood-ratio test specified in
 [core/reconstruction/batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
 § "Point or bearing", which reclassification (`sfm xform
---classify-points-at-infinity`) decides with and the others are to move to
+--classify-points-at-infinity`) and discovery (`--find-points-at-infinity`)
+decide with and the others are to move to
 (the [amendment draft](../../drafts/point-or-bearing-likelihood-ratio.md) says
 what moves when). Neither part changes the file. The second part's
 disagreements with the stored representation are what reclassification would

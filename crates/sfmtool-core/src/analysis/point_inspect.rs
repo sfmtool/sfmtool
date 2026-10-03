@@ -5,9 +5,9 @@
 //!
 //! Re-derives a 3D point's observation rays from the workspace `.sift` files
 //! (un-projecting each member keypoint), runs the same triangulation and
-//! classification the discovery/reclassify paths use, and reports the full set
-//! of diagnostics behind the finite / at-infinity / indeterminate call. Backs
-//! `sfm inspect pt3d_*`.
+//! inverse-depth z classification the bench decides with, and reports the full
+//! set of diagnostics behind the finite / at-infinity / indeterminate call.
+//! Backs `sfm inspect pt3d_*`.
 
 use nalgebra::{Point3, Vector3};
 

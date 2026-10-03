@@ -1293,17 +1293,18 @@ impl PySfmrReconstruction {
         }
     }
 
-    /// Discover points at infinity (and near-infinite distant points) and
-    /// append them as new points/tracks, returning a new reconstruction.
+    /// Discover points at infinity and append them as new points/tracks,
+    /// returning a new reconstruction and a summary.
     ///
-    /// Un-projects every keypoint in every image to a world-space direction,
-    /// clusters co-directional keypoints within ``eps_deg`` on the unit sphere,
-    /// confirms each cluster with mutual SIFT descriptor matching (Lowe ratio +
-    /// one feature per image), and emits each surviving track that spans at
-    /// least ``min_views`` images. A track whose parallax signal falls below
-    /// ``noise_floor_px`` becomes a ``w = 0`` point at infinity; otherwise it is
-    /// triangulated to a finite distant point. Candidate tracks that duplicate
-    /// an existing point are skipped.
+    /// Un-projects every untracked keypoint in every image to a world-space
+    /// direction, clusters co-directional keypoints within ``eps_deg`` on the
+    /// unit sphere, confirms each cluster with mutual SIFT descriptor matching
+    /// (Lowe ratio + one feature per image), and keeps each track that spans at
+    /// least ``min_views`` images. Each track is decided with the
+    /// point-or-bearing test at the per-axis pixel noise ``sigma_px`` (the
+    /// measured reprojection noise when None): a bearing verdict is appended as
+    /// a ``w = 0`` point at the closed-form bearing, and a track with a finite
+    /// verdict, a bearing behind a camera, or too few usable rays is dropped.
     ///
     /// Args:
     ///     eps_deg: Angular clustering radius in degrees. Tighter values demand
@@ -1313,29 +1314,69 @@ impl PySfmrReconstruction {
     ///     min_views: Minimum distinct images a track must span.
     ///     max_features: Per-image cap on the largest keypoints to read; reads
     ///         all when None.
-    ///     noise_floor_px: SIFT keypoint localisation noise floor in pixels.
-    #[pyo3(signature = (eps_deg, desc_thresh=200.0, ratio=0.8, min_views=2, max_features=None, noise_floor_px=1.0))]
+    ///     sigma_px: Per-axis pixel noise to weight the rays by; measured from
+    ///         the reconstruction's finite points when None.
+    ///
+    /// Returns:
+    ///     ``(reconstruction, summary)``. ``summary`` is a dict: ``sigma_px``
+    ///     (the noise level used, or None when none was given and none could
+    ///     be measured, in which case nothing is searched and the
+    ///     reconstruction is returned unchanged), ``noise``
+    ///     (``reprojection_noise()``'s dict when measured, else None), and the
+    ///     counts ``candidates``, ``bearings`` (appended), ``short_baseline``
+    ///     (appended bearings whose cameras have a baseline too short to
+    ///     resolve a point at the camera extents), ``finite``, ``bearing_behind_camera`` and
+    ///     ``unscored`` (dropped).
+    ///
+    /// Raises:
+    ///     ValueError: ``sigma_px`` is not finite and positive.
+    ///     IOError: The reconstruction is ``embedded_patches``, or a ``.sift``
+    ///         file could not be read.
+    #[pyo3(signature = (eps_deg, desc_thresh=200.0, ratio=0.8, min_views=2, max_features=None, sigma_px=None))]
+    #[allow(clippy::too_many_arguments)]
     fn find_points_at_infinity(
         &self,
+        py: Python<'_>,
         eps_deg: f64,
         desc_thresh: f64,
         ratio: f64,
         min_views: usize,
         max_features: Option<usize>,
-        noise_floor_px: f64,
-    ) -> PyResult<Self> {
-        let inner = self
-            .inner
-            .find_points_at_infinity(
-                eps_deg,
-                desc_thresh,
-                ratio,
-                min_views,
-                max_features,
-                noise_floor_px,
-            )
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        sigma_px: Option<f64>,
+    ) -> PyResult<(Self, Py<PyAny>)> {
+        use sfmtool_core::analysis::point_or_bearing::PointOrBearingError;
+
+        let recon = &self.inner;
+        let (inner, summary) = py
+            .detach(|| {
+                recon.find_points_at_infinity(
+                    eps_deg,
+                    desc_thresh,
+                    ratio,
+                    min_views,
+                    max_features,
+                    sigma_px,
+                )
+            })
+            .map_err(|e| match e {
+                PointOrBearingError::Reconstruction(_) => {
+                    pyo3::exceptions::PyIOError::new_err(e.to_string())
+                }
+                _ => PyValueError::new_err(e.to_string()),
+            })?;
+        let dict = PyDict::new(py);
+        dict.set_item("sigma_px", summary.sigma_px)?;
+        match &summary.noise {
+            Some(noise) => dict.set_item("noise", noise_to_py(py, noise)?)?,
+            None => dict.set_item("noise", py.None())?,
+        }
+        dict.set_item("candidates", summary.candidates)?;
+        dict.set_item("bearings", summary.bearings)?;
+        dict.set_item("finite", summary.finite)?;
+        dict.set_item("short_baseline", summary.short_baseline)?;
+        dict.set_item("bearing_behind_camera", summary.bearing_behind_camera)?;
+        dict.set_item("unscored", summary.unscored)?;
+        Ok((Self { inner }, dict.into_any().unbind()))
     }
 
     /// Source metadata as a Python dict.
