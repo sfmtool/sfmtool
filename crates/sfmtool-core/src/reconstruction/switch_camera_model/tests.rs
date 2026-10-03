@@ -248,11 +248,28 @@ fn a_perspective_target_for_a_camera_observed_past_90_is_refused() {
     let err = switch_camera_model(&recon, &[0], &target("SFMTOOL_PINHOLE"), &options)
         .err()
         .expect("refused");
+    // The refusal names the point whose ray is wide, the one the fixture put
+    // 95° off the first image's axis, and says the angle is the ray's rather
+    // than a keypoint's.
+    let sentence = err.to_string();
+    assert!(
+        sentence.contains(&format!(
+            "the ray to point {POINTS} is 95.00° off the camera's axis"
+        )),
+        "{sentence}"
+    );
     match err {
         SwitchCameraModelError::Refit {
             camera: 0,
-            error: RefitError::ObservationsPast90 { max_theta_deg },
-        } => assert!((max_theta_deg - WIDE_DEG).abs() < 1e-6),
+            error:
+                RefitError::ObservationsPast90 {
+                    max_theta_deg,
+                    point,
+                },
+        } => {
+            assert!((max_theta_deg - WIDE_DEG).abs() < 1e-6);
+            assert_eq!(point, POINTS as u32);
+        }
         other => panic!("unexpected {other}"),
     }
 }

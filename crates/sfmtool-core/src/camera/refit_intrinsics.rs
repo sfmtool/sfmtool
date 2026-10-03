@@ -419,10 +419,16 @@ pub enum RefitError {
         /// The fit's largest angle, in degrees.
         theta_fit_deg: f64,
     },
-    /// A perspective target for a camera observed at 90° or more.
+    /// A perspective target for a camera one of whose points lies 90° or more
+    /// off its axis.
     ObservationsPast90 {
-        /// The largest observed incidence angle, in degrees.
+        /// The largest angle between the camera's axis and the ray to one of
+        /// its points, in degrees, measured from the point's position and the
+        /// camera's pose rather than through the lens.
         max_theta_deg: f64,
+        /// The point that ray goes to, as an index into the reconstruction's
+        /// points.
+        point: u32,
     },
     /// The source model has no pixel for a ray inside the fit's domain.
     SourceCannotProject {
@@ -495,10 +501,14 @@ impl fmt::Display for RefitError {
                 "a perspective model has no pixel for a ray at 90° or more, and the fit reaches \
                  {theta_fit_deg:.2}°"
             ),
-            RefitError::ObservationsPast90 { max_theta_deg } => write!(
+            RefitError::ObservationsPast90 {
+                max_theta_deg,
+                point,
+            } => write!(
                 f,
-                "a perspective model has no pixel for a ray at 90° or more, and the camera is \
-                 observed at {max_theta_deg:.2}°"
+                "a perspective model has no pixel for a ray at 90° or more, and the ray to point \
+                 {point} is {max_theta_deg:.2}° off the camera's axis, measured from the point's \
+                 position rather than through the lens"
             ),
             RefitError::SourceCannotProject { theta_deg } => write!(
                 f,

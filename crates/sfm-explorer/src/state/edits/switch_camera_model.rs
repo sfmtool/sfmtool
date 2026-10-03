@@ -15,9 +15,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sfmtool_core::camera::refit_intrinsics::{
-    spline_domain_deg, MonotoneConstraint, RefitOptions, RefitTarget,
+    spline_domain_deg, MonotoneConstraint, RefitError, RefitOptions, RefitTarget,
 };
-use sfmtool_core::reconstruction::switch_camera_model::{switch_camera_model, CameraSwitch};
+use sfmtool_core::reconstruction::switch_camera_model::{
+    switch_camera_model, CameraSwitch, SwitchCameraModelError,
+};
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::{version_step_text, Kind};
@@ -72,6 +74,33 @@ pub(crate) fn monotone_clause(constraint: &MonotoneConstraint) -> String {
 /// refit of its spline rather than a change of model.
 fn is_spline_refit(camera: &sfmtool_core::CameraIntrinsics, target: &str) -> bool {
     camera.model.radial_spline().is_some() && camera.model_name().eq_ignore_ascii_case(target)
+}
+
+/// `error` with any point it names given the index the version on screen
+/// calls that point by.
+///
+/// The switch runs on the materialised value when the version carries an
+/// overlay, and materialising renumbers the points past a deleted one, so a
+/// refusal naming point 5121 of the materialised value would send the person
+/// to a different point. `map` is the materialisation's, `None` when the switch
+/// ran on the version's own base.
+fn in_version_numbering(
+    mut error: SwitchCameraModelError,
+    map: Option<&RowMap>,
+) -> SwitchCameraModelError {
+    if let (
+        Some(map),
+        SwitchCameraModelError::Refit {
+            error: RefitError::ObservationsPast90 { point, .. },
+            ..
+        },
+    ) = (map, &mut error)
+    {
+        if let Some(edited) = map.inverse(*point) {
+            *point = edited;
+        }
+    }
+    error
 }
 
 /// The version label for one switch: what changed about the camera, in one
@@ -220,7 +249,7 @@ impl AppState {
             } else {
                 let _phase = collector.phase("materialise");
                 let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
+                (Some(value), Some(map))
             };
         let source: &SfmrReconstruction = match materialised.as_ref() {
             Some(value) => value,
@@ -230,8 +259,9 @@ impl AppState {
         let (switched, report) = {
             let _phase = collector.phase("switch camera model");
             switch_camera_model(source, &[c], &target, &options)
-                .map_err(|e| refuse(e.to_string()))?
+                .map_err(|e| refuse(in_version_numbering(e, mat_map.as_ref()).to_string()))?
         };
+        let mat_map = mat_map.map(PointMap::Rows);
         let entry = report
             .cameras
             .into_iter()
@@ -266,5 +296,32 @@ impl AppState {
             serial,
         );
         Ok((message, entry))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal naming a point of the materialised value names it by the
+    /// index the version on screen gives it: with point 2 deleted, the
+    /// materialised value's point 5 is the version's point 6.
+    #[test]
+    fn a_refusal_names_the_point_by_the_versions_index() {
+        let refusal = || SwitchCameraModelError::Refit {
+            camera: 1,
+            error: RefitError::ObservationsPast90 {
+                max_theta_deg: 144.91,
+                point: 5,
+            },
+        };
+        let map = RowMap::by_removal(10, &[2]);
+        let named = in_version_numbering(refusal(), Some(&map)).to_string();
+        assert!(named.contains("the ray to point 6 is 144.91°"), "{named}");
+        let unmapped = in_version_numbering(refusal(), None).to_string();
+        assert!(
+            unmapped.contains("the ray to point 5 is 144.91°"),
+            "{unmapped}"
+        );
     }
 }

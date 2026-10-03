@@ -35,8 +35,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           in the 3D viewport and on a feature's menu in Image Detail, and what \
                           double-clicking either of them does. Putting on a point a track \
                           already came from focuses that track rather than putting a second \
-                          one on, and that track keeps the label it has whatever label says; \
-                          that pushes no version and replies changed: false. When the point \
+                          one on; that pushes no version and replies changed: false, with a \
+                          report saying so. A label other than the one that track has is \
+                          refused, naming the label it has (rename_bench_item renames it). \
+                          When the point \
                           is the viewed point (the selected point, with no item focused on \
                           its node) and Track View's read-only bars differ from the \
                           defaults, the new track takes those bars, and the version label \

@@ -141,9 +141,18 @@ A spline camera switched to its own spline model is refitted as described in
 3. otherwise, for a camera with no observations, its far image corner.
 
 A caller's value is used as given, and the fit refuses one past the trusted
-bound. A perspective target is refused for a camera observed at 90° or more
-(`ObservationsPast90`), whatever `θ_fit` is, because those observations would
-have no pixel under it.
+bound. A perspective target is refused for a camera one of whose points lies
+90° or more off its axis (`ObservationsPast90`), whatever `θ_fit` is, because
+those observations would have no pixel under it. The angle is the one rule 2
+reads: between the camera's axis and the ray to the point's triangulated
+position, from the pose alone, not through the lens to the keypoint. A badly
+placed point can therefore reach far past any keypoint the camera detected, so
+the refusal names the point and says which angle it is: *"camera 1: a
+perspective model has no pixel for a ray at 90° or more, and the ray to point
+5121 is 144.91° off the camera's axis, measured from the point's position
+rather than through the lens"*. The point is an index into the value the
+switch was given; the viewer, which switches a materialised value when the
+version carries an overlay, names it by the version's own index instead.
 
 ### A spline refitted as itself
 

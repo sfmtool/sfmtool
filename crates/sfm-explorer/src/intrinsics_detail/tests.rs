@@ -215,6 +215,41 @@ fn a_beta_model_marks_the_header() {
     assert!(says(&painted, "(beta)"));
 }
 
+/// The spline's coefficient count prints as an integer and its angular domain
+/// end in degrees, as every other angle in the panel does, in the table and in
+/// its copied text alike; the column keeps its width.
+#[test]
+fn the_spline_count_is_an_integer_and_its_domain_end_is_in_degrees() {
+    let mut node = pinhole_node();
+    node.recon_mut().image_table.cameras[0] = CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: 129.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 150f64.to_radians(),
+            bspline: vec![0.0; 8],
+        },
+        width: 480,
+        height: 480,
+    };
+    let painted = show(&node, Some(0), None);
+    let count = format!("{:>14}", 8);
+    let domain = format!("{:>13}°", "150.000000");
+    assert!(painted.contains(&count), "{painted:?}");
+    assert!(painted.contains(&domain), "{painted:?}");
+    assert!(!says(&painted, "8.000000"), "{painted:?}");
+    assert!(!says(&painted, "2.617994"), "{painted:?}");
+    assert_eq!(domain.chars().count(), 14);
+
+    let text = super::header::parameters_text(&node.recon().image_table.cameras[0]);
+    assert!(text
+        .lines()
+        .any(|l| l.ends_with(&count) && l.starts_with("bspline_coeff_count")));
+    assert!(text
+        .lines()
+        .any(|l| l.ends_with(&domain) && l.starts_with("bspline_theta_max")));
+}
+
 #[test]
 fn the_parameter_table_is_in_declaration_order() {
     // Asserted against `parameter_names()` rather than hard-coded, so a model

@@ -1175,7 +1175,10 @@ dock out of the state while a tab body draws, and a raise applied there would
 land on the placeholder. The panel keeps each request instead
 (`ImageDetail::take_point_gesture`, `ImageDetail::take_cluster_start`), as the
 viewport keeps its menu's, and `app.rs` drains them once the dock is back,
-the cluster through `AppState::start_cluster_here`.
+the cluster through `AppState::start_cluster_here`. Neither raise covers Image
+Detail: when Track View is a tab in Image Detail's own node, it stays behind
+it, and the bench layer shows the focused item in the image the gesture was
+made in ([panel-layout.md](panel-layout.md) § "A raise from a gesture").
 
 **Rendering** (`image_detail/`):
 - `base_scale = min(panel_w / tex_w, panel_h / tex_h)` fits the image to panel

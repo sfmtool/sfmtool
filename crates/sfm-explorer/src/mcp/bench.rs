@@ -235,7 +235,13 @@ pub(super) fn create_bench_cluster(
 ///
 /// Putting on a point a track already came from focuses that track rather
 /// than putting a second one on, which is the step's own rule; the reply names
-/// the item either way, and that track keeps its label whatever `named` says.
+/// the item either way. A `named` other than that track's label is refused by
+/// the step, naming the label the track has.
+///
+/// The focus pushes no version and writes only a `Selection` row, which an
+/// edit reply skips, so that reply carries a `report` of its own saying what
+/// this call did; without one, the only sentence in it would be the `label`
+/// of the version the node stands at, which an earlier step wrote.
 pub(super) fn create_bench_track(
     state: &mut AppState,
     label: &str,
@@ -245,11 +251,22 @@ pub(super) fn create_bench_track(
     let id = resolve_reconstruction(state, Some(label))?;
     let point = resolve_point_in(state, id, query)?;
     let mut made = String::new();
-    let reply = edit::edited(state, id, |state| {
+    let mut reply = edit::edited(state, id, |state| {
         state.put_point_on_bench(point, named).map(|label| {
             made = label;
         })
     })?;
+    if reply["changed"] == json!(false) {
+        insert(
+            &mut reply,
+            "report",
+            json!(format!(
+                "Put point {} on the bench: no effect, it is on the bench already as {made}, \
+                 now the focused item",
+                point.point
+            )),
+        );
+    }
     Ok(with_item(reply, &made))
 }
 

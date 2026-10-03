@@ -137,7 +137,12 @@ observations with an error under both models.
 A refusal is one **failed** entry, `Switch camera model of <node> refused:
 camera 0: <reason>`, carrying the core function's sentence: a camera the table
 does not have, a count on a model without a spline, a domain end the model
-cannot have. Nothing is pushed.
+cannot have. Nothing is pushed. A perspective target refused because a point
+lies 90° or more off the camera's axis names that point, by the index the
+version on screen gives it, and says the angle is the ray to the point's
+position rather than a keypoint read through the lens, since that angle can
+differ widely from the outermost keypoint the Camera Intrinsics panel reports
+([core](../../core/reconstruction/switch-camera-model.md)).
 
 ---
 

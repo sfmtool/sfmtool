@@ -18,6 +18,7 @@ use nalgebra::{Point3, Vector3};
 
 use crate::patch::cloud::OrientedPatch;
 use crate::progress::Progress;
+use crate::readable::Readable;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::fit::FitOptions;
@@ -389,7 +390,7 @@ impl std::fmt::Display for CreateClusterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CreateClusterError::BadPixel(p) => {
-                write!(f, "({}, {}) is not a pixel", p[0], p[1])
+                write!(f, "({}, {}) is not a pixel", Readable(p[0]), Readable(p[1]))
             }
             CreateClusterError::DegenerateShape(_) => write!(
                 f,
@@ -592,24 +593,22 @@ impl std::fmt::Display for TrackEditError {
                 f,
                 "image {image} already has observation {observation} in; turn it out first"
             ),
-            TrackEditError::BadPixel(p) => write!(f, "({}, {}) is not a pixel", p[0], p[1]),
-            TrackEditError::BadPlace(p) => {
-                write!(f, "({}, {}, {}) is not a place", p[0], p[1], p[2])
+            TrackEditError::BadPixel(p) => {
+                write!(f, "({}, {}) is not a pixel", Readable(p[0]), Readable(p[1]))
             }
+            TrackEditError::BadPlace(p) => write!(f, "{} is not a place", triple(p)),
             TrackEditError::WrongStage { wanted, is } => {
                 write!(f, "that is a {wanted}-stage step and this track is a {is}")
             }
             TrackEditError::NoFrame => {
                 write!(f, "this track has no patch yet; fit it first")
             }
-            TrackEditError::BadSize(size) => write!(f, "{size} is not a size"),
-            TrackEditError::BadAngle(angle) => write!(f, "{angle} is not an angle"),
+            TrackEditError::BadSize(size) => write!(f, "{} is not a size", Readable(*size)),
+            TrackEditError::BadAngle(angle) => write!(f, "{} is not an angle", Readable(*angle)),
             TrackEditError::BadDisplacement(by) => {
-                write!(f, "({}, {}, {}) is not a displacement", by[0], by[1], by[2])
+                write!(f, "{} is not a displacement", triple(by))
             }
-            TrackEditError::BadNormal(n) => {
-                write!(f, "({}, {}, {}) is not a direction", n[0], n[1], n[2])
-            }
+            TrackEditError::BadNormal(n) => write!(f, "{} is not a direction", triple(n)),
             TrackEditError::AtInfinity => write!(
                 f,
                 "this track is at infinity and its normal is fixed by its bearing"
@@ -617,7 +616,10 @@ impl std::fmt::Display for TrackEditError {
             TrackEditError::BadShape(shape) => write!(
                 f,
                 "the shape [[{}, {}], [{}, {}]] spans no area",
-                shape[0][0], shape[0][1], shape[1][0], shape[1][1]
+                Readable(shape[0][0]),
+                Readable(shape[0][1]),
+                Readable(shape[1][0]),
+                Readable(shape[1][1])
             ),
             TrackEditError::NoPlace { observation } => {
                 write!(f, "nothing says where observation {observation} sits")
@@ -633,6 +635,17 @@ impl std::fmt::Display for TrackEditError {
 }
 
 impl std::error::Error for TrackEditError {}
+
+/// Three numbers a caller handed in, as a refusal echoes them: `(x, y, z)`,
+/// each through [`Readable`] so an extreme one stays a few characters wide.
+fn triple(v: &[f64; 3]) -> String {
+    format!(
+        "({}, {}, {})",
+        Readable(v[0]),
+        Readable(v[1]),
+        Readable(v[2])
+    )
+}
 
 /// Where a new observation goes, and what put it there.
 #[derive(Debug, Clone, PartialEq)]

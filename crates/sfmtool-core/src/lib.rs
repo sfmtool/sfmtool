@@ -36,6 +36,7 @@ pub mod features;
 pub mod geometry;
 pub mod numeric;
 pub mod patch;
+pub mod readable;
 pub mod reconstruction;
 pub mod spatial;
 pub mod spherical;

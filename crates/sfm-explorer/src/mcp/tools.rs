@@ -224,7 +224,10 @@ pub(crate) fn parse(
                 return Err(inner.error("needs a rotation_wxyz with some length to normalise."));
             }
             if !(scale.is_finite() && scale > 0.0) {
-                return Err(inner.error(format!("needs a positive, finite scale, not {scale}.")));
+                return Err(inner.error(format!(
+                    "needs a positive, finite scale, not {}.",
+                    sfmtool_core::readable::Readable(scale)
+                )));
             }
             Command::SetReconstructionTransform {
                 reconstruction_label: args.required_string("reconstruction_label")?,

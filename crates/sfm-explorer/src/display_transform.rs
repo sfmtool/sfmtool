@@ -24,6 +24,7 @@ use std::time::Instant;
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 use sfmtool_core::bench::{Bench, BenchItem, EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
+use sfmtool_core::readable::Readable;
 use sfmtool_core::{EditedReconstruction, RotQuaternion, Se3Transform};
 
 use crate::action_log::{version_step_text, Kind};
@@ -283,16 +284,74 @@ fn bake_track(track: &EditableTrack, transform: &Se3Transform) -> Option<Editabl
 /// How far `transform` moves things, in the vocabulary the camera move's row
 /// already uses: the turn in degrees, the translation's length in scene units,
 /// and the scale only when it is not `1`.
+///
+/// The numbers go through [`Readable`], so an extreme translation or scale
+/// prints in exponent notation rather than as hundreds of digits.
 fn magnitude_text(transform: &Se3Transform) -> String {
     let mut text = format!(
         "{:.1} deg, {:.3} scene units",
         transform.rotation.angle().to_degrees(),
-        transform.translation.norm()
+        Readable(transform.translation.norm())
     );
     if transform.scale != 1.0 {
-        text.push_str(&format!(", x{:.3}", transform.scale));
+        text.push_str(&format!(", x{:.3}", Readable(transform.scale)));
     }
     text
+}
+
+/// Why `transform` cannot be `node`'s display transform, or `None` when it can.
+///
+/// Refused when it carries the node's bounds -- the box around its finite
+/// points, its camera centres and its own origin -- to a place whose squared
+/// distance from the world's origin is not a finite number. Framing, picking
+/// and the scene's bounds all square distances, so a node put there would be
+/// left out of a fit without a word, and the version label would read `inf
+/// scene units`. The check is on the box's eight corners, which bound every
+/// point inside it under a rotation, a uniform scale and a translation. Points
+/// at infinity take only the rotation and cannot overflow.
+fn out_of_range_refusal(
+    node: &crate::scene::SceneNode,
+    transform: &Se3Transform,
+) -> Option<String> {
+    let edited = node.edited();
+    let finite_points = edited
+        .live_indexes()
+        .filter_map(|i| edited.point(i))
+        .filter_map(|view| {
+            let stored = view.point();
+            (!stored.is_at_infinity()).then_some(stored.position)
+        });
+    let centres = node
+        .recon()
+        .image_table
+        .images
+        .iter()
+        .map(|image| image.camera_center());
+    let mut low = Point3::origin();
+    let mut high = Point3::origin();
+    for place in finite_points.chain(centres) {
+        low = low.inf(&place);
+        high = high.sup(&place);
+    }
+    for corner in 0..8 {
+        let pick = |axis: usize| {
+            if corner & (1 << axis) == 0 {
+                low[axis]
+            } else {
+                high[axis]
+            }
+        };
+        let moved = transform.apply_to_point(&Point3::new(pick(0), pick(1), pick(2)));
+        if !moved.coords.norm_squared().is_finite() {
+            return Some(format!(
+                "Cannot set the transform of {}: it moves the reconstruction out to {} scene \
+                 units, too far for its distances to be measured.",
+                node.label,
+                Readable(moved.coords.amax())
+            ));
+        }
+    }
+    None
 }
 
 /// Whether `transform` is the identity, compared exactly, which is the rule
@@ -426,6 +485,9 @@ impl AppState {
             .iter_mut()
             .find(|n| n.id == id)
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
+        if let Some(why) = out_of_range_refusal(node, &transform) {
+            return Err(why);
+        }
         let serial = node.history.push_transform(transform, text.clone());
         let parent = version_before(node, serial);
         self.action_log

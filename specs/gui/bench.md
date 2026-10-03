@@ -498,7 +498,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
 | Unpin one verdict | `Handed image_012.jpg back to the thresholds in pt3d_a1b2c3d4_1207: in` |
-| Unpin several, or all | `Handed 4 verdicts back to the thresholds in pt3d_a1b2c3d4_1207: 1 in, 2 out` |
+| Unpin several, or all | `Handed 4 verdicts back to the thresholds in pt3d_a1b2c3d4_1207: 1 turned in and 2 turned out, leaving 5 in, 3 out` (what moved, then the track's totals; `none moved` when the bars kept every verdict) |
 | Slide the patch | `Moved pt3d_a1b2c3d4_1207 by 0.123 units to (1.204, -0.318, 4.006)` |
 | Place one sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
 | Resize the patch | `Resized pt3d_a1b2c3d4_1207 to 7.4 px in IMG_0042.jpg` |

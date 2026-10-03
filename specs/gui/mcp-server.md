@@ -888,7 +888,18 @@ its own, in the way `set_solo` with `null` ends a solo. Given the identity it
 records the sentence the Scene panel's `Reset Transform` writes, so the log reads
 the same whoever asked, and on a node already at the identity it is refused as
 that entry is greyed. The rotation is normalised on arrival; a zero quaternion
-and a scale that is not positive and finite are refused at the parse.
+and a scale that is not positive and finite are refused at the parse. A
+transform that carries the node out to where its distances cannot be measured
+is refused too: when any corner of the box around the node's finite points,
+camera centres and own origin lands at a squared distance from the world's
+origin that is not a finite number, the call is refused with *"Cannot set the
+transform of run_b: it moves the reconstruction out to 1e308 scene units, too
+far for its distances to be measured."* Framing squares those distances, so
+such a node would otherwise drop out of a fit without a word. The refusal and
+the version label print an extreme number in exponent notation (`1.000e20
+scene units, x1.000e20`), through core's `sfmtool_core::readable::Readable`,
+which the bench's refusals that echo a caller's numbers use as well (*"(1e-300,
+0, 0) is not a direction"*).
 
 **The four patch actions are one tool with a `mode`.** They take the same
 arguments, return the same reply and refuse for the same reasons, and differ
@@ -3220,7 +3231,14 @@ misread. A label of nothing but whitespace, or one holding a control
 character such as a newline, a tab or a NUL, is refused in the call, by core's
 `check_label` (§ "Labels" again); `rename_bench_item` refuses the same labels.
 A `create_bench_track` on a point already on the bench focuses that
-track under the label it has, whatever `label` says, and pushes no version.
+track under the label it has and pushes no version. It answers `changed: false`
+with a `report` of its own, *"Put point 1207 on the bench: no effect, it is on
+the bench already as pt3d_a1b2c3d4_1207, now the focused item"*, because the
+focus writes only a `Selection` row, which the reply skips. A `label` other
+than the one that track has is refused, naming that label: *"Point 1207 is on
+the bench already as pt3d_a1b2c3d4_1207, so it cannot go on as nose; rename
+pt3d_a1b2c3d4_1207 to call it nose."* Dropping the requested name without a
+word would leave the caller holding a label that names nothing.
 
 **`create_bench_track` on the viewed point carries the read-only bars.** When the
 point named is the viewed point (the selected point, with no item focused on its

@@ -160,17 +160,7 @@ impl std::fmt::Display for GeometrySearchReport {
         if self.matches.is_empty() {
             return write!(f, "no new image passed the geometric and photometric gates");
         }
-        write!(
-            f,
-            "{} images matched, {} candidates added",
-            self.matches.len(),
-            self.added()
-        )?;
-        let held = self.already_in_track();
-        if held > 0 {
-            write!(f, ", {held} already in the track")?;
-        }
-        Ok(())
+        super::search::write_found(f, self.matches.len(), self.added(), self.already_in_track())
     }
 }
 

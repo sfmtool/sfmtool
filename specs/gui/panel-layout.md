@@ -147,6 +147,30 @@ the panel appears somewhere predictable, of a sensible size, in one click.
 The home table is checked by `layout::tests`, so the numbers here are the
 numbers in the code (§ "Parameters").
 
+### A raise from a gesture
+
+Some gestures made in one panel end by showing another: *Edit on Bench* in
+the 3D viewport or Image Detail (and the double-click on a point or a tracked
+feature that does the same), and Image Detail's *Start cluster on the bench
+here*, each show Track View. Those go through
+`AppState::show_panel_beside(tab, from)`, where `from` is the panel the
+gesture was made in, and that call never puts `tab` in front of `from`:
+
+- **`tab` is docked in `from`'s node, and `from` is in front:** nothing
+  moves and no row is written. `tab` stays behind `from`, because bringing it
+  forward would hide the panel the person is working in, in the middle of
+  the gesture. What the gesture did is still visible there: Image Detail's
+  bench layer and the 3D viewer's both draw the focused item.
+- **`tab` is not open and rule 2 puts it into `from`'s node:** it goes in
+  behind the tabs there, `from` stays in front, and the row reads
+  `Opened Track View panel`.
+- **Otherwise** it is rules 1–3 as above: a raise in another node, or an open
+  at the home position.
+
+`Go ▸ Go to Point`, a double-click on a Bench row in the Scene tree, and the
+MCP `show_panel` tool raise through `show_panel` itself: showing the panel is
+what each of them asks for.
+
 ### In the Action Log
 
 Every menu action records an entry of its own kind, `Kind::Layout`,
@@ -668,6 +692,9 @@ impl AppState {
     pub(crate) fn is_panel_open(&self, tab: Tab) -> bool;
     /// Rules 1–3 of § "Home positions". Records `Opened …` or `Raised …`.
     pub(crate) fn show_panel(&mut self, tab: Tab);
+    /// `show_panel` for a gesture made in `from`, never putting `tab` in
+    /// front of it (§ "A raise from a gesture").
+    pub(crate) fn show_panel_beside(&mut self, tab: Tab, from: Tab);
     /// Records `Closed …`; a no-op on a panel that is not open.
     pub(crate) fn hide_panel(&mut self, tab: Tab);
     /// Records `Reset layout`. The panels only.

@@ -86,7 +86,7 @@ pub enum RefitError {
     ThetaFitInvalid { theta_fit_deg: f64 },
     BeyondTrustedBound { theta_fit_deg: f64, trusted_deg: f64 },
     PerspectivePast90 { theta_fit_deg: f64 },
-    ObservationsPast90 { max_theta_deg: f64 },
+    ObservationsPast90 { max_theta_deg: f64, point: u32 },
     SourceCannotProject { theta_deg: f64 },
     SplineDomainInvalid { spline_domain_deg: f64 },
     NotMonotone,

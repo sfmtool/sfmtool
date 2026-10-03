@@ -495,6 +495,88 @@ fn hiding_then_showing_leaves_the_other_panels_where_they_were() {
     assert_eq!(strip(after), strip(before));
 }
 
+/// The default grid with `tab` moved into Image Detail's node, behind it,
+/// and Image Detail brought to the front there: an arrangement a person makes
+/// by dragging a tab.
+fn docked_behind_image_detail(tab: Tab) -> AppState {
+    let mut state = state();
+    state.hide_panel(tab);
+    let at = state
+        .dock
+        .find_tab(&Tab::ImageDetail)
+        .expect("Image Detail is in the default grid");
+    state
+        .dock
+        .leaf_mut(at.node_path())
+        .expect("a tab sits in a leaf")
+        .append_tab(tab);
+    let at = state
+        .dock
+        .find_tab(&Tab::ImageDetail)
+        .expect("still docked");
+    let _ = state.dock.set_active_tab(at);
+    assert!(state.panel_is_in_front(Tab::ImageDetail));
+    state
+}
+
+/// A raise from a gesture leaves a panel sharing the gesture's node behind
+/// it: bringing Track View forward there would hide the image the
+/// double-click was made in. Nothing moves and no row is written.
+#[test]
+fn a_raise_from_a_gesture_does_not_cover_the_panel_it_came_from() {
+    let mut state = docked_behind_image_detail(Tab::TrackView);
+    let before = state.layout();
+    let rows = layout_entries(&state).len();
+    state.show_panel_beside(Tab::TrackView, Tab::ImageDetail);
+    assert_eq!(state.layout(), before, "the raise moved something");
+    assert!(state.panel_is_in_front(Tab::ImageDetail));
+    assert!(!state.panel_is_in_front(Tab::TrackView));
+    assert_eq!(
+        layout_entries(&state).len(),
+        rows,
+        "the non-raise wrote a row"
+    );
+
+    // From a panel in another node, it is a raise as before.
+    state.show_panel_beside(Tab::TrackView, Tab::Viewer3D);
+    assert!(state.panel_is_in_front(Tab::TrackView));
+}
+
+/// A closed panel whose group-mate shares the gesture's node goes in there by
+/// rule 2, and behind the gesture's panel rather than in front of it.
+#[test]
+fn a_panel_opened_into_the_gestures_node_goes_in_behind_it() {
+    let mut state = docked_behind_image_detail(Tab::IntrinsicsDetail);
+    state.hide_panel(Tab::TrackView);
+    state.show_panel_beside(Tab::TrackView, Tab::ImageDetail);
+    let leaf = main_leaves(&state.layout())
+        .into_iter()
+        .find(|(tabs, _)| tabs.contains(&Tab::TrackView))
+        .expect("Track View was not opened");
+    assert!(leaf.0.contains(&Tab::ImageDetail), "{leaf:?}");
+    assert_eq!(leaf.1, Tab::ImageDetail, "Image Detail was covered");
+    assert_eq!(
+        layout_entries(&state).last(),
+        Some(&(false, "Opened Track View panel".into()))
+    );
+}
+
+/// In the default grid Track View has a node of its own, so a gesture from
+/// Image Detail raises it as `show_panel` does.
+#[test]
+fn a_raise_from_a_gesture_in_another_node_is_an_ordinary_raise() {
+    let mut state = state();
+    state.show_panel(Tab::ImageDetail);
+    state.show_panel(Tab::IntrinsicsDetail);
+    state.show_panel_beside(Tab::TrackView, Tab::ImageDetail);
+    assert!(state.panel_is_in_front(Tab::TrackView));
+    assert!(state.panel_is_in_front(Tab::ImageDetail));
+    assert_eq!(
+        layout_entries(&state).last(),
+        Some(&(false, "Raised Track View panel".into()))
+    );
+}
+
 #[test]
 fn hiding_a_closed_panel_does_nothing_and_says_nothing() {
     let mut state = state();

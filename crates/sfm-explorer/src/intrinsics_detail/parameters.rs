@@ -7,7 +7,10 @@
 //! which is the order `sfm inspect` prints and which a `BTreeMap` cannot offer:
 //! lexicographic order separates related terms and puts `bspline_c10` before
 //! `bspline_c2`. The whole point of the table is that it can be diffed against
-//! the CLI, so the order and the six decimals are both load-bearing.
+//! the CLI, so the order and the six decimals are both load-bearing. The
+//! spline models' coefficient count and angular domain end are the exception:
+//! a count prints as an integer and an angle in degrees
+//! ([`format::parameter`]).
 
 use sfmtool_core::camera::CameraIntrinsics;
 
@@ -24,7 +27,7 @@ pub(super) fn show_parameters(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
         .show(ui, |ui| {
             for (name, value) in camera.parameters() {
                 ui.monospace(name.as_ref());
-                ui.monospace(format::value(value));
+                ui.monospace(format::parameter(name.as_ref(), value));
                 ui.end_row();
             }
         });

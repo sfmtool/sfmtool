@@ -280,8 +280,8 @@ split, a track whose origin was deleted) is focused with no point selected.
 | Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | Viewed mode, on the new selection |
 | Either | Click a chip in the recent items strip | That item is focused, with no version, and its node and its origin are selected (or the point selection cleared) | Edited mode, on that item |
 | Either | Double-click a Bench row in the Scene tree | The same as a chip, and the panel is raised | Edited mode, on that item |
-| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised | Edited mode |
-| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised | Edited mode, on the cluster |
+| Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised, unless it shares a node with the panel the gesture was made in ([panel-layout.md](panel-layout.md) § "A raise from a gesture") | Edited mode |
+| Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised, unless it shares a node with Image Detail | Edited mode, on the cluster |
 | Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edited mode, on the new item |
 | Editing | *Duplicate*, *Split off N rows* | The new item is put on the bench and focused; it has no origin, so the point selection is cleared | Edited mode, on the new item |
 | Editing | *Discard* | The item leaves the bench (a version) and is unfocused, and the selection is left as a cleared box leaves it, from the origin as it resolved before the discard | Viewed mode, on the origin, or the empty state |
@@ -394,6 +394,10 @@ tick.
 **Start cluster on the bench here raises Track View.** It turns Edited mode on,
 which makes it the same kind of gesture as *Edit on Bench*, and that one raises
 because a track staged into a panel nobody can see is a gesture with no answer.
+Neither raise covers the panel the gesture was made in: when Track View is a
+tab in that panel's node, it stays behind it, and the bench layer there shows
+the focused item ([panel-layout.md](panel-layout.md) § "A raise from a
+gesture").
 
 ---
 
@@ -636,7 +640,10 @@ point learns that a changed copy of it is waiting.
 **Under the Edited header is the stage's own headline**: at the cluster stage
 the reference observation and whether a template has been cut, and at the track
 stage the coordinate with the last triangulation's condition number, or the
-sentence saying nothing has triangulated it yet.
+sentence saying nothing has triangulated it yet. A track at infinity shows its
+bearing without the condition number: that number measures the finite
+triangulation, whose failure is what put the track on a bearing, so beside the
+bearing it would read as a fit that failed its bar.
 
 **The word in front of the coordinate says which coordinate it is.** A track at
 infinity carries a unit direction where a finite one carries a place
@@ -1564,7 +1571,8 @@ does not, its handles being the patch's own.
   one with focus_bench_item, or put one on with create_bench_track or
   create_bench_cluster."*
 - `create_bench_track` on a point already on the bench focuses that item,
-  which is the Edit box's own rule, and pushes no version.
+  which is the Edit box's own rule, and pushes no version; a `label` other
+  than the one the item has is refused, naming it.
 
 The whole bench family is [`bench.md`](bench.md) § "The wire" and
 [`mcp-server.md`](mcp-server.md).

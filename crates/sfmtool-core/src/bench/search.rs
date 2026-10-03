@@ -250,18 +250,35 @@ impl std::fmt::Display for SearchReport {
                 self.constellation
             );
         }
-        write!(
-            f,
-            "{} images matched, {} candidates added",
-            self.matches.len(),
-            self.added()
-        )?;
-        let held = self.already_in_track();
-        if held > 0 {
-            write!(f, ", {held} already in the track")?;
-        }
-        Ok(())
+        write_found(f, self.matches.len(), self.added(), self.already_in_track())
     }
+}
+
+/// The counts a search's sentence ends with: `2 images matched, 1 candidate
+/// added`, then `, 1 already in the track` when any matched image was one the
+/// track already held. Each noun takes the singular for one. Shared by
+/// [`SearchReport`] and the geometry search's report, which say the same thing
+/// about a different way of finding images.
+pub(super) fn write_found(
+    f: &mut std::fmt::Formatter<'_>,
+    matched: usize,
+    added: usize,
+    held: usize,
+) -> std::fmt::Result {
+    write!(
+        f,
+        "{matched} {} matched, {added} {} added",
+        if matched == 1 { "image" } else { "images" },
+        if added == 1 {
+            "candidate"
+        } else {
+            "candidates"
+        }
+    )?;
+    if held > 0 {
+        write!(f, ", {held} already in the track")?;
+    }
+    Ok(())
 }
 
 /// Find the images that hold the patch around one observation, and add each as

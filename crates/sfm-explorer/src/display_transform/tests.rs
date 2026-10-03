@@ -297,6 +297,60 @@ fn reset_transform_is_a_version_and_is_undone() {
     assert!(state.reset_node_transform(id).is_err());
 }
 
+/// A transform that carries the node out to where its squared distances
+/// overflow is refused, naming the reach in exponent notation, and pushes no
+/// version. A large one that stays measurable is a version whose label prints
+/// its numbers in exponent notation rather than as hundreds of digits.
+#[test]
+fn a_transform_out_of_measurable_range_is_refused() {
+    let (mut state, id, _) = framed();
+    let versions = state.node(id).expect("loaded").history.versions().len();
+    for transform in [
+        Se3Transform::new(
+            RotQuaternion::identity(),
+            Vector3::new(1e308, 0.0, 0.0),
+            1.0,
+        ),
+        Se3Transform::new(RotQuaternion::identity(), Vector3::zeros(), 1e300),
+    ] {
+        let why = state
+            .set_node_transform(id, transform)
+            .expect_err("an overflowing transform was accepted");
+        assert!(
+            why.contains("too far for its distances to be measured"),
+            "{why}"
+        );
+        assert!(why.contains("e30"), "{why}");
+        assert!(why.len() < 200, "{why}");
+    }
+    assert_eq!(
+        state.node(id).expect("loaded").history.versions().len(),
+        versions,
+        "a refusal pushed a version"
+    );
+
+    state
+        .set_node_transform(
+            id,
+            Se3Transform::new(
+                RotQuaternion::identity(),
+                Vector3::new(1e20, 0.0, 0.0),
+                1e20,
+            ),
+        )
+        .expect("far, and still measurable");
+    let label = &state
+        .node(id)
+        .expect("loaded")
+        .history
+        .current_version()
+        .label;
+    assert!(
+        label.ends_with("0.0 deg, 1.000e20 scene units, x1.000e20"),
+        "{label}"
+    );
+}
+
 // ── The bake ──────────────────────────────────────────────────────────────
 
 /// Everything the picture is made of that a bake could move: the points and

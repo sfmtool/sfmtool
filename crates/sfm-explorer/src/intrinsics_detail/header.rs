@@ -125,7 +125,7 @@ pub(super) fn parameters_text(camera: &CameraIntrinsics) -> String {
     parameters
         .iter()
         .map(|(name, value)| {
-            let padded = format::value(*value);
+            let padded = format::parameter(name, *value);
             format!("{name:<width$}{padded}")
         })
         .collect::<Vec<_>>()

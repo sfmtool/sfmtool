@@ -712,7 +712,7 @@ impl TrackBody {
             let split_refusal = busy.clone().or_else(|| split_refusal(selected, track));
             if entry(
                 ui,
-                &format!("Split off {} rows", selected.len()),
+                &split_entry_text(selected.len()),
                 split_refusal,
                 "Move the selected rows onto a second track beside this one",
             ) {
@@ -1879,16 +1879,16 @@ fn show_headline(ui: &mut egui::Ui, track: &EditableTrack) {
             // The track's own flag and not its patch's `w`: a point put on the
             // bench from a node that stores no patch frames has no patch to read
             // a `w` off, and a bearing it came from is still a bearing.
-            ui.weak(match payload.position {
-                Some(_) => format!(
-                    "{}{}",
-                    position_text(payload),
-                    match payload.condition_number {
-                        Some(condition) => format!(", condition {condition:.1}"),
-                        None => String::new(),
-                    }
-                ),
-                None => position_text(payload),
+            //
+            // The condition number is left off a track at infinity. It measures
+            // the finite triangulation, whose failure is what put the track on
+            // a bearing, so beside a bearing it reads as a fit that failed its
+            // bar rather than as anything about the bearing itself.
+            ui.weak(match payload.condition_number {
+                Some(condition) if payload.position.is_some() && !payload.at_infinity => {
+                    format!("{}, condition {condition:.1}", position_text(payload))
+                }
+                _ => position_text(payload),
             });
         }
     }
@@ -1965,6 +1965,15 @@ fn show_track_patch(
             });
         }
     }
+}
+
+/// The *Split off* entry's text for `count` selected rows: `Split off 1 row`,
+/// `Split off 3 rows`.
+fn split_entry_text(count: usize) -> String {
+    format!(
+        "Split off {count} {}",
+        if count == 1 { "row" } else { "rows" }
+    )
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.

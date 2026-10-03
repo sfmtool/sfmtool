@@ -1054,6 +1054,37 @@ impl AppState {
         self.record_opened(tab);
     }
 
+    /// Show `tab` as [`Self::show_panel`] does for a gesture made in `from`,
+    /// without covering `from`.
+    ///
+    /// `specs/gui/panel-layout.md` § "A raise from a gesture": when `tab` is
+    /// docked in the same node as `from` and `from` is in front, raising `tab`
+    /// would put it in front of the panel the person is working in, in the
+    /// middle of the gesture, so `tab` stays where it is, behind it, and no
+    /// row is written. When `tab` is not open and rule 2 puts it into `from`'s
+    /// node, it goes in behind `from`, which stays in front; the row still
+    /// reads `Opened …`. Otherwise this is [`Self::show_panel`].
+    pub(crate) fn show_panel_beside(&mut self, tab: Tab, from: Tab) {
+        if !self.panel_is_in_front(from) {
+            self.show_panel(tab);
+            return;
+        }
+        let shares_node = |state: &Self| {
+            let at = state.dock.find_tab(&tab);
+            let source = state.dock.find_tab(&from);
+            matches!((at, source), (Some(at), Some(source)) if at.node_path() == source.node_path())
+        };
+        if shares_node(self) {
+            return;
+        }
+        self.show_panel(tab);
+        if shares_node(self) {
+            if let Some(path) = self.dock.find_tab(&from) {
+                let _ = self.dock.set_active_tab(path);
+            }
+        }
+    }
+
     /// Whether `tab` is the front tab of the group it is docked in.
     ///
     /// Not the same question as [`AppState::is_panel_open`]: a panel docked

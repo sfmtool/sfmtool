@@ -1422,7 +1422,7 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
     assert_eq!(rows[0].0, Kind::Bench);
     assert!(
         rows[0].1.starts_with(&format!(
-            "{label}: Searched from observation 0 of 3: 2 images matched, 1 candidates added, \
+            "{label}: Searched from observation 0 of 3: 2 images matched, 1 candidate added, \
              1 already in the track"
         )),
         "{}",

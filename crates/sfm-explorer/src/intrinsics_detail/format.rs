@@ -30,6 +30,29 @@ pub(super) fn value(v: f64) -> String {
     )
 }
 
+/// One stored camera parameter, in the [`VALUE_WIDTH`] column the table and
+/// its copied text share.
+///
+/// Most are [`value`]. Two are not quantities in the same units as the rest:
+/// `bspline_coeff_count` is a count, so it prints as an integer, and
+/// `bspline_theta_max` is an angle the file stores in radians, so it prints in
+/// degrees with a `°`, the unit every other angle in the panel is shown in.
+/// Both stay [`VALUE_WIDTH`] wide, so the column stays a column.
+pub(super) fn parameter(name: &str, v: f64) -> String {
+    match name {
+        "bspline_coeff_count" if v.fract() == 0.0 && v.abs() < 1e15 => {
+            format!("{:>width$}", v as i64, width = VALUE_WIDTH)
+        }
+        "bspline_theta_max" => format!(
+            "{:>width$.decimals$}°",
+            v.to_degrees(),
+            width = VALUE_WIDTH - 1,
+            decimals = DECIMALS
+        ),
+        _ => value(v),
+    }
+}
+
 /// A row of numbers as one monospaced string, two spaces between columns.
 pub(super) fn row(values: impl IntoIterator<Item = f64>) -> String {
     values.into_iter().map(value).collect::<Vec<_>>().join("  ")

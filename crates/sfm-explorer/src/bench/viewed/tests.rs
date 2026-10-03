@@ -306,7 +306,10 @@ fn moved_bars_carry_onto_the_bench_through_edit_on_bench() {
     view(&mut state, id, other);
     state.set_viewed_thresholds(strict_bars());
 
-    state.apply_point_gesture(PointGesture::EditOnBench(PointRef::new(id, POINT as usize)));
+    state.apply_point_gesture(
+        PointGesture::EditOnBench(PointRef::new(id, POINT as usize)),
+        crate::dock::Tab::Viewer3D,
+    );
     let label = state.focused_item_label(id).expect("focused").to_string();
     assert_eq!(
         state.bench_track(id, &label).expect("on").thresholds,

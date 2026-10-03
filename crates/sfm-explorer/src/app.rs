@@ -1006,7 +1006,7 @@ impl App {
                 // Applied inside a tab body the raise would land on the
                 // placeholder dock and be overwritten by the line above.
                 if let Some(request) = viewer_3d.point_menu.take() {
-                    app_state.apply_point_gesture(request);
+                    app_state.apply_point_gesture(request, dock::Tab::Viewer3D);
                 }
                 // The patch menu's reframe records its own outcome, refusals
                 // included.
@@ -1014,7 +1014,7 @@ impl App {
                     let _ = app_state.reframe_on_patch(id, mode);
                 }
                 if let Some(request) = image_detail.take_point_gesture() {
-                    app_state.apply_point_gesture(request);
+                    app_state.apply_point_gesture(request, dock::Tab::ImageDetail);
                 }
                 // A double-click on a tracked feature also moves the 3D
                 // viewport's target onto the point, turning to it first when
@@ -1240,7 +1240,10 @@ fn apply_point_click(
     is_double: bool,
 ) {
     if is_double {
-        state.apply_point_gesture(crate::state::edits::PointGesture::EditOnBench(point));
+        state.apply_point_gesture(
+            crate::state::edits::PointGesture::EditOnBench(point),
+            crate::dock::Tab::Viewer3D,
+        );
     } else {
         state.select_point(point);
     }

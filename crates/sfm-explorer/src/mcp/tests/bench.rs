@@ -2019,15 +2019,52 @@ fn a_create_names_its_item_and_a_taken_label_takes_a_suffix() {
     );
     assert_eq!(track["item"], json!("nose (3)"), "{track}");
 
-    // The point is on the bench already, so the call focuses that track
-    // under the label it has.
-    let again = call(
+    // The point is on the bench already: a call naming another label is
+    // refused naming the label the track has, rather than dropping "horn".
+    let versions = version_count(&state);
+    let renamed = refused_call(
         &mut state,
         &mut viewer,
         "create_bench_track",
         json!({ "reconstruction_label": "run_a", "point": BENCH_POINT, "label": "horn" }),
     );
-    assert_eq!(again["item"], json!("nose (3)"), "{again}");
+    assert!(
+        renamed.0.contains(&format!(
+            "Point {BENCH_POINT} is on the bench already as nose (3)"
+        )),
+        "{renamed}"
+    );
+    assert!(
+        renamed.0.contains("rename nose (3) to call it horn"),
+        "{renamed}"
+    );
+    assert_eq!(
+        version_count(&state),
+        versions,
+        "the refusal pushed a version"
+    );
+
+    // Without a label, or with the label it has, the call focuses that track,
+    // and the reply's report says so rather than leaving only the label of
+    // the version an earlier step pushed.
+    for named in [json!(null), json!("nose (3)")] {
+        let again = call(
+            &mut state,
+            &mut viewer,
+            "create_bench_track",
+            json!({ "reconstruction_label": "run_a", "point": BENCH_POINT, "label": named }),
+        );
+        assert_eq!(again["item"], json!("nose (3)"), "{again}");
+        assert_eq!(again["changed"], json!(false), "{again}");
+        assert_eq!(
+            again["report"],
+            json!(format!(
+                "Put point {BENCH_POINT} on the bench: no effect, it is on the bench already as \
+                 nose (3), now the focused item"
+            )),
+            "{again}"
+        );
+    }
 
     let bench = call(
         &mut state,
@@ -3304,6 +3341,32 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
     );
     assert_eq!(all["changed"], json!(true), "{all}");
     assert_eq!(version_count(&state), before + 2);
+    // The sentence says what moved and then gives the track's totals, so the
+    // two numbers at its end are the verdicts the track holds now rather than
+    // the changes.
+    let track = state.scene[0]
+        .history
+        .current_bench()
+        .track(&item)
+        .expect("the item is on the bench")
+        .clone();
+    let total_in = track
+        .observations
+        .iter()
+        .filter(|o| o.verdict == sfmtool_core::bench::Verdict::In)
+        .count();
+    let report = all["label"].as_str().expect("a sentence");
+    assert!(
+        report.ends_with(&format!(
+            ", leaving {total_in} in, {} out",
+            track.observations.len() - total_in
+        )),
+        "{all}"
+    );
+    assert!(
+        report.contains("turned") || report.contains("none moved"),
+        "{all}"
+    );
     assert!(rows(&mut state, &mut viewer).iter().all(|&p| !p));
 
     // Nothing is pinned now, so another unpin of all is no version.

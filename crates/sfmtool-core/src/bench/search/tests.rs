@@ -375,7 +375,7 @@ fn the_planted_images_are_found_and_seeded_at_the_warped_pixel_and_shape() {
     let sentence = report.to_string();
     assert_eq!(
         sentence,
-        "Searched from observation 0 of 2: 2 images matched, 1 candidates added, \
+        "Searched from observation 0 of 2: 2 images matched, 1 candidate added, \
          1 already in the track"
     );
 }
@@ -468,4 +468,24 @@ fn a_radius_that_holds_no_keypoint_is_refused_naming_the_radius() {
         }
     );
     assert!(error.to_string().contains("within 0 px of the observation"));
+}
+
+/// The counts a search's sentence ends with take the singular for one, in
+/// both searches' reports.
+#[test]
+fn a_search_counts_one_image_and_one_candidate_in_the_singular() {
+    struct Counts(usize, usize, usize);
+    impl std::fmt::Display for Counts {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write_found(f, self.0, self.1, self.2)
+        }
+    }
+    assert_eq!(
+        Counts(1, 1, 0).to_string(),
+        "1 image matched, 1 candidate added"
+    );
+    assert_eq!(
+        Counts(3, 0, 2).to_string(),
+        "3 images matched, 0 candidates added, 2 already in the track"
+    );
 }

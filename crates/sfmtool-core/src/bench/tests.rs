@@ -4876,6 +4876,12 @@ fn a_tilt_refuses_a_normal_that_is_not_one_a_bearing_and_a_cluster() {
             "{normal:?} was taken for a direction",
         );
     }
+    // The refusal echoes the numbers in exponent notation where `{}` would
+    // spell out three hundred zeros.
+    let Err(error) = tilt_patch(&track, &edited, Vector3::new(1e-300, 0.0, 0.0)) else {
+        panic!("a normal of length 1e-300 was taken for a direction");
+    };
+    assert_eq!(error.to_string(), "(1e-300, 0, 0) is not a direction");
     assert!(matches!(
         tilt_patch(
             &as_bearing(&track, &edited),

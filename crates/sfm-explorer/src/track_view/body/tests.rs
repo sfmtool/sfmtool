@@ -1585,6 +1585,32 @@ fn the_header_marks_a_track_at_infinity() {
     );
 }
 
+/// The *Split off* entry counts its rows in the singular for one.
+#[test]
+fn the_split_entry_counts_one_row_in_the_singular() {
+    assert_eq!(super::split_entry_text(1), "Split off 1 row");
+    assert_eq!(super::split_entry_text(3), "Split off 3 rows");
+}
+
+/// The headline gives a finite track's condition number and leaves it off a
+/// track at infinity, where it measures the finite triangulation that failed
+/// rather than the bearing, and so reads as a failed fit.
+#[test]
+fn the_headline_leaves_the_condition_number_off_a_bearing() {
+    use sfmtool_core::bench::Stage;
+
+    let bearing = header_text(&bearing_track());
+    assert!(bearing.contains("at infinity"), "{bearing}");
+    assert!(!bearing.contains("condition"), "{bearing}");
+
+    let mut place = position_track();
+    if let Stage::Track(payload) = &mut place.stage {
+        payload.condition_number = Some(42.0);
+    }
+    let place = header_text(&place);
+    assert!(place.contains("condition 42.0"), "{place}");
+}
+
 /// The track's own patch sits left of the toolbar, under the header, and the
 /// controls start to its right. Before a fit fuses the observations the
 /// demo's track, from a reconstruction that stores no bitmaps, has none and

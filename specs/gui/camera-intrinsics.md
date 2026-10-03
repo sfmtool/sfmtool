@@ -915,7 +915,14 @@ same order `sfm inspect` prints:
 
 Six decimals, right-aligned, monospaced, matching the CLI. The spline models'
 `bspline_c{i}` rows are listed after the named parameters in index order (which
-is why `parameter_names()` exists), preceded by their domain end.
+is why `parameter_names()` exists), preceded by their domain end. Two of the
+spline rows are not quantities in the units of the rest and print differently,
+in the same column width: `bspline_coeff_count` is a count and prints as an
+integer (`8`, not `8.000000`), and `bspline_theta_max` is an angle the file
+stores in radians and prints in degrees, as every other angle in the panel is
+shown (`150.000000°`, not `2.617994`). `bspline_rho_max`, a tangent, prints as
+stored. `Parameters (text)` copies the table as it reads, these two rows
+included; `Parameters (JSON)` copies the stored values at full precision.
 
 ### 3. Derived
 

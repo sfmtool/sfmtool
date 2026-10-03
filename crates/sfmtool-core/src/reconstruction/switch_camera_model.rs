@@ -176,9 +176,10 @@ pub struct SwitchCameraModelReport {
 /// monotone. The entry's `refit` then reports `ThetaFitSource::SplineDomain`,
 /// the distance from the old curve and where the monotonicity constraint
 /// bound. With a `theta_fit_deg` given, the camera is fitted like any other
-/// source, over that angle. A perspective target is refused for a camera observed at
-/// 90° or more. The first camera refused refuses the whole switch, and nothing
-/// changes.
+/// source, over that angle. A perspective target is refused for a camera one
+/// of whose points lies 90° or more off its axis, naming the point
+/// ([`RefitError::ObservationsPast90`]). The first camera refused refuses the
+/// whole switch, and nothing changes.
 ///
 /// Poses, points, keypoints, patches and tracks are carried over unchanged. The
 /// stored error of every point observed in an image that uses a switched
@@ -264,17 +265,32 @@ pub fn switch_camera_model(
     let mut refits: Vec<CameraIntrinsicsRefit> = Vec::with_capacity(chosen.len());
     for &c in &chosen {
         let source = &table.cameras[c];
-        let max_theta_deg = switched_rows
+        // The widest ray, and the row it belongs to, so a refusal can name the
+        // point: the angle is measured to the point's triangulated position,
+        // not through the lens to its keypoint, and a badly placed point can
+        // reach far past any keypoint the camera detected.
+        let widest = switched_rows
             .iter()
             .zip(&theta)
             .filter(|(&row, t)| camera_of_row(row) as usize == c && t.is_finite())
-            .map(|(_, &t)| t)
-            .fold(f64::NAN, f64::max);
-        if target.is_perspective() && max_theta_deg >= 90.0 {
-            return Err(SwitchCameraModelError::Refit {
-                camera: c,
-                error: RefitError::ObservationsPast90 { max_theta_deg },
-            });
+            .fold(
+                None,
+                |widest: Option<(usize, f64)>, (&row, &t)| match widest {
+                    Some((_, best)) if best >= t => widest,
+                    _ => Some((row, t)),
+                },
+            );
+        let max_theta_deg = widest.map_or(f64::NAN, |(_, t)| t);
+        if let Some((row, max_theta_deg)) = widest.filter(|_| target.is_perspective()) {
+            if max_theta_deg >= 90.0 {
+                return Err(SwitchCameraModelError::Refit {
+                    camera: c,
+                    error: RefitError::ObservationsPast90 {
+                        max_theta_deg,
+                        point: tracks[row].point_index,
+                    },
+                });
+            }
         }
         let (theta_fit_deg, theta_fit_source) = match options.theta_fit_deg {
             Some(theta) => (theta, ThetaFitSource::Given),

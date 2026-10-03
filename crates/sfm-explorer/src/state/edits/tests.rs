@@ -2305,7 +2305,7 @@ fn deleting_an_image_keeps_the_decoded_photographs() {
 fn a_menu_that_only_opened_selects_the_point_and_edits_nothing() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.apply_point_gesture(PointGesture::Opened(point));
+    state.apply_point_gesture(PointGesture::Opened(point), crate::dock::Tab::Viewer3D);
     assert_eq!(state.selected_point, Some(point));
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
@@ -2314,7 +2314,10 @@ fn a_menu_that_only_opened_selects_the_point_and_edits_nothing() {
 fn choosing_retriangulate_selects_the_point_and_pushes_its_version() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.apply_point_gesture(PointGesture::Retriangulate(point));
+    state.apply_point_gesture(
+        PointGesture::Retriangulate(point),
+        crate::dock::Tab::Viewer3D,
+    );
     assert_eq!(state.scene[0].history.versions().len(), 2);
     assert_eq!(
         state.scene[0].history.current_version().label,
@@ -2335,7 +2338,7 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
     state.hide_panel(crate::dock::Tab::TrackView);
     assert!(!state.is_panel_open(crate::dock::Tab::TrackView));
 
-    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    state.apply_point_gesture(PointGesture::EditOnBench(point), crate::dock::Tab::Viewer3D);
 
     assert_eq!(state.selected_point, Some(point));
     // The same staging ticking Track View's Edit box does, and then the
@@ -2343,6 +2346,35 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "the point is not on the bench");
     assert!(state.is_panel_open(crate::dock::Tab::TrackView));
+}
+
+/// Edit on Bench from Image Detail, with Track View docked behind it in the
+/// same node, stages the track and leaves Image Detail in front: raising
+/// Track View there would hide the image the double-click was made in.
+#[test]
+fn edit_on_bench_from_image_detail_does_not_cover_it_with_track_view() {
+    use crate::dock::Tab;
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    state.hide_panel(Tab::TrackView);
+    let at = state.dock.find_tab(&Tab::ImageDetail).expect("docked");
+    state
+        .dock
+        .leaf_mut(at.node_path())
+        .expect("a leaf")
+        .append_tab(Tab::TrackView);
+    let at = state.dock.find_tab(&Tab::ImageDetail).expect("docked");
+    let _ = state.dock.set_active_tab(at);
+
+    state.apply_point_gesture(PointGesture::EditOnBench(point), Tab::ImageDetail);
+
+    assert_eq!(state.scene[0].history.current_bench().entries().len(), 1);
+    assert!(state.focused_item_label(id).is_some(), "nothing is focused");
+    assert!(
+        state.panel_is_in_front(Tab::ImageDetail),
+        "Image Detail was covered"
+    );
+    assert!(!state.panel_is_in_front(Tab::TrackView));
 }
 
 /// A second Edit on Bench on the same point -- a double-click after a menu, or
@@ -2356,14 +2388,14 @@ fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
 fn a_second_edit_on_bench_on_one_point_focuses_the_item_already_there() {
     let (mut state, id) = nudged_point_state(11);
     let point = PointRef::new(id, 11);
-    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    state.apply_point_gesture(PointGesture::EditOnBench(point), crate::dock::Tab::Viewer3D);
     let label = state
         .focused_item_label(id)
         .expect("a track is focused")
         .to_string();
 
     state.hide_panel(crate::dock::Tab::TrackView);
-    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    state.apply_point_gesture(PointGesture::EditOnBench(point), crate::dock::Tab::Viewer3D);
 
     let bench = state.scene[0].history.current_bench();
     assert_eq!(bench.entries().len(), 1, "a second item joined the bench");
@@ -2390,7 +2422,7 @@ fn a_gesture_applied_while_the_dock_is_swapped_out_loses_the_raise() {
     state.hide_panel(crate::dock::Tab::TrackView);
 
     let dock = std::mem::replace(&mut state.dock, egui_dock::DockState::new(Vec::new()));
-    state.apply_point_gesture(PointGesture::EditOnBench(point));
+    state.apply_point_gesture(PointGesture::EditOnBench(point), crate::dock::Tab::Viewer3D);
     let placeholder = std::mem::replace(&mut state.dock, dock);
 
     assert!(

@@ -36,6 +36,7 @@ use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress::Cancelled;
 use sfmtool_core::progress_note;
+use sfmtool_core::readable::Readable;
 use sfmtool_core::reconstruction::prune_covered::{
     prune_covered_observations, PruneCoveredError, PruneCoveredOptions, PruneCoveredReport,
 };
@@ -592,7 +593,13 @@ impl AppState {
     /// The selection moves first in every case, so a menu that merely *opened*
     /// on a point leaves the rest of the viewer looking at that point whether
     /// or not an entry is chosen afterwards.
-    pub(crate) fn apply_point_gesture(&mut self, request: PointGesture) {
+    ///
+    /// `from` is the panel the gesture was made in. *Edit on Bench* shows
+    /// Track View beside it rather than over it
+    /// ([`AppState::show_panel_beside`]): a double-click on a feature in Image
+    /// Detail that brought a Track View tab sharing its node to the front
+    /// would hide the image the person was working in.
+    pub(crate) fn apply_point_gesture(&mut self, request: PointGesture, from: crate::dock::Tab) {
         let point = match request {
             PointGesture::Opened(point)
             | PointGesture::EditOnBench(point)
@@ -607,7 +614,7 @@ impl AppState {
                 // this one is reached from the viewport, and a track staged
                 // into a panel nobody can see is a gesture with no answer.
                 match self.put_point_on_bench(point, None) {
-                    Ok(_) => self.show_panel(crate::dock::Tab::TrackView),
+                    Ok(_) => self.show_panel_beside(crate::dock::Tab::TrackView, from),
                     Err(why) => self.action_log.fail(Kind::Bench, why),
                 }
             }
@@ -1317,8 +1324,8 @@ impl AppState {
             "Moved camera {basename} ({label}): {:.2} deg, {}",
             report.rotation_deg,
             match report.translation_scene {
-                Some(scene) => format!("{scene:.3} scene units"),
-                None => format!("{:.4}", report.translation),
+                Some(scene) => format!("{:.3} scene units", Readable(scene)),
+                None => format!("{:.4}", Readable(report.translation)),
             }
         );
         if report.retriangulated > 0 {
