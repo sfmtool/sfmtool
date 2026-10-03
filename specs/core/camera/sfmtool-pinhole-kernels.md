@@ -177,7 +177,8 @@ Enforcement sites:
 ## The zero-spline short-circuit
 
 `bspline_is_inactive` (fewer than `MIN_BSPLINE_COEFFS = 2` coefficients, every
-coefficient exactly `0.0`, or a `ρ_max` that is not positive and finite) short-circuits every map to the `SIMPLE_PINHOLE` arithmetic:
+coefficient exactly `0.0`, or a `ρ_max` that is not positive and finite)
+short-circuits every map to the `SIMPLE_PINHOLE` arithmetic:
 
 | entry point | short-circuits to |
 |-------------|-------------------|
