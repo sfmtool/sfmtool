@@ -813,6 +813,7 @@ and the opening paragraphs listed in check 4.
   - Change and phase residue at :10, :48, :58 (Before/After table), :84, :464, :478, :882, :1032, :1037, :1231 (§ Testing as a to-build list) and :1461-1463.
   - `intrinsics_detail/derived.rs:18` says "will default to" about a default that has shipped.
 - **`specs/core/camera/sfmtool-pinhole-kernels.md`:**
+  > _Status (2026-10-03): Done — the zero-spline section now lists the `MIN_BSPLINE_COEFFS` case; the Inverse section states the `PINHOLE_AXIS_EPS` short-circuit, says the fisheye falls back to `equidistant_to_ray` (spec and the `undistort_sfmtool_pinhole` doc comment), and links to `sfmtool-fisheye-kernels.md` § "Inverse" for the tail and Newton solver instead of repeating them, branch `finding-bash-16-pinhole-kernels-spec`._
   - :178 defines `bspline_is_inactive` without the `len() < MIN_BSPLINE_COEFFS` case (`bspline.rs:47-48`).
   - The Inverse section (:70-99) omits the `r_d < PINHOLE_AXIS_EPS` short-circuit (`sfmtool_pinhole.rs:72`), which makes :74 "`r_d ≤ 0` is `ρ = 0`" unreachable.
   - :80-82 and `sfmtool_pinhole.rs:60` say the identity fallback is "the policy `sfmtool_fisheye_to_ray` applies"; the fisheye falls back to `equidistant_to_ray` (`sfmtool_fisheye.rs:195-197`).

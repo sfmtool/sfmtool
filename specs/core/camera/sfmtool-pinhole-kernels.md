@@ -72,30 +72,31 @@ ray by normalizing `(x, y, 1)`, so the model shares the family's
 its `r_d = d + δ(d)` is coordinate-agnostic, so it inverts `θ` for the fisheye
 and `ρ` here, unchanged.
 
-- `r_d ≤ 0` is `ρ = 0`.
-- A spline folded so far that `ρ_max + δ(ρ_max) ≤ 0` has no invertible radius
-  at all: no positive `r_d` is reachable, and `recover_radial_bspline` reports
-  it by returning `converged = false`. The kernel answers that report with the
-  **identity** `ρ = r_d`, the base pinhole's inverse, so the distorted point
-  passes through unchanged. Taking the reported radius instead would scale
-  every pixel in the image onto the optical axis. It is the policy
-  `sfmtool_fisheye_to_ray` applies to the same report, and it is unreachable
-  through a solve, which cannot persist a spline that folded
+The solver itself — the closed-form inverse on the linear tail past
+`r_end = ρ_max + δ(ρ_max)`, the bracket-safeguarded Newton inside
+`[0, ρ_max]`, and the cases it reports as non-convergence — is specified in
+[sfmtool-fisheye-kernels.md](sfmtool-fisheye-kernels.md) § "Inverse", read
+with `ρ` and `ρ_max` in place of `θ` and `θ_max`. What this kernel adds around
+it:
+
+- A distorted point within `1e-15` of the axis (`PINHOLE_AXIS_EPS`) is
+  returned unchanged before the solver runs, the same guard the forward map
+  applies at `ρ < 1e-15`. `recover_radial_bspline`'s own `r_d ≤ 0 → ρ = 0`
+  case is therefore never reached from this kernel.
+- Where `recover_radial_bspline` returns `converged = false` (a spline folded
+  so far that `ρ_max + δ(ρ_max) ≤ 0`, or a radius past `r_end` under a
+  non-positive end slope), the kernel answers with the **identity** `ρ = r_d`,
+  the base pinhole's inverse, so the distorted point passes through
+  unchanged. Taking the reported radius instead would scale every pixel in the
+  image onto the optical axis. `sfmtool_fisheye_to_ray` answers the same
+  report with its own base model's inverse, `equidistant_to_ray` (`θ = r_d`).
+  Both cases need a spline that violates the monotonicity invariant, so they
+  are unreachable through a solve, which cannot persist a spline that folded
   ([Monotonicity enforcement](#monotonicity-enforcement)).
-- On the **linear tail** (`r_d ≥ r_end = ρ_max + δ(ρ_max)`) the map is affine
-  with the spline's end slope, so the inverse is closed form:
-  `ρ = ρ_max + (r_d − r_end)/(1 + δ'(ρ_max))`, no iteration. The tail carries
-  the periphery of every real image: `ρ` grows without bound toward `θ = 90°`,
-  so a calibrated `ρ_max` is crossed well inside the frame — which is why the
-  tail follows the fitted trend rather than flattening back to the base
-  pinhole's slope.
-- Inside the spline's domain, a **bracket-safeguarded Newton** solves
-  `g(ρ) = ρ + δ(ρ) − r_d` over `[0, ρ_max]`, where `g(0) = −r_d < 0` and
-  `g(ρ_max) > 0`. The start is the identity guess `min(r_d, ρ_max)`; each
-  iterate updates the bracket by the sign of `g`, and a Newton step landing
-  outside the bracket (or non-finite, or on a non-positive `g'`) is replaced by
-  a bisection. The bounds are inclusive: an underflowed step that reproduces
-  `ρ` is convergence, not a reason to bisect away from the root.
+- The linear tail carries the periphery of every real image: `ρ` grows without
+  bound toward `θ = 90°`, so a calibrated `ρ_max` is crossed well inside the
+  frame. That is why the tail follows the fitted end slope rather than
+  returning to the base pinhole's slope.
 
 `CameraModel::undistort` carries an **explicit arm** for this model rather than
 falling through to the generic fixed-point iteration. That iteration
@@ -175,8 +176,8 @@ Enforcement sites:
 
 ## The zero-spline short-circuit
 
-`bspline_is_inactive` (identity coefficients, or a `ρ_max` that is not positive
-and finite) short-circuits every map to the `SIMPLE_PINHOLE` arithmetic:
+`bspline_is_inactive` (fewer than `MIN_BSPLINE_COEFFS = 2` coefficients, every
+coefficient exactly `0.0`, or a `ρ_max` that is not positive and finite) short-circuits every map to the `SIMPLE_PINHOLE` arithmetic:
 
 | entry point | short-circuits to |
 |-------------|-------------------|

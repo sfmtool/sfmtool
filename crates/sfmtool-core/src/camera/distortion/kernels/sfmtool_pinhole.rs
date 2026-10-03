@@ -57,8 +57,8 @@ pub(in crate::camera::distortion) fn distort_sfmtool_pinhole(
 /// no invertible radius at all, and [`recover_radial_bspline`] reports that
 /// as `converged = false`; this returns the identity `ρ = r_d` there, the
 /// base pinhole's inverse, rather than scaling every distorted point onto the
-/// optical axis. That is the policy [`sfmtool_fisheye_to_ray`](super::sfmtool_fisheye_to_ray) applies to the
-/// same report.
+/// optical axis. [`sfmtool_fisheye_to_ray`](super::sfmtool_fisheye_to_ray) answers the same report
+/// with its own base model's inverse, `equidistant_to_ray` (`θ = r_d`).
 pub(in crate::camera::distortion) fn undistort_sfmtool_pinhole(
     x_d: f64,
     y_d: f64,
