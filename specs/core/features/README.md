@@ -10,7 +10,7 @@ from `src/sfmtool/feature_match/`.
 | [randomized-kdtree-forest.md](randomized-kdtree-forest.md) | Approximate nearest-neighbour index replacing the exhaustive descriptor scan. |
 | [lazy-kdforest-query.md](lazy-kdforest-query.md) | Persistent, bounded-cache queries over chunked `.kdf` forests. |
 | [kdf-constellation-query.md](kdf-constellation-query.md) | Which other images contain the patch around a pixel, by affine consensus over a descriptor index. |
-| [track-cluster-matching.md](track-cluster-matching.md) | Cluster-centric alternative to pair-centric matching: build track clusters directly, verify afterwards. |
+| [track-cluster-matching.md](track-cluster-matching.md) | Matching a whole image set at once: every image's SIFT descriptors clustered into candidate tracks, each descriptor's radius set from its own background floor. Verification is a separate step. |
 | [cluster-covisibility.md](cluster-covisibility.md) | How many clusters each image pair shares, and the grouping queries consumers build on that. |
 | [covisibility-selection.md](covisibility-selection.md) | Three primitives over that structure: appearance displacement, redundancy thinning, and reach. |
 | [optical-flow.md](optical-flow.md) | Pure-Rust DIS dense optical flow on the CPU, used for flow-based matching, motion analysis of image sequences and `sfm flow`. |

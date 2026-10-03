@@ -1,43 +1,165 @@
 # Track-Cluster Matching
 
-## The Idea
+Track-cluster matching finds correspondences across a whole image set at once.
+It puts every image's SIFT descriptors into one nearest-neighbour index and
+groups each descriptor with the descriptors from other images that lie within
+0.8× its distance to its 10th-nearest neighbour, forming clusters of at most one
+feature per image that are candidate tracks.
 
-Traditional SfM feature matching is pair-centric. It enumerates image pairs,
-matches SIFT descriptors within each pair, geometrically verifies each pair, and
-only then stitches the pairwise matches into tracks.
-
-Each track forms a cluster in descriptor space: its observations are the same
-surface point seen from different images, so their descriptors are mutually
-close. What if we start from that clustering property directly, instead of
-building tracks up from pairwise correspondence? A descriptor index of all the
-features across all images gives us a way to achieve this. We can search for
-candidate clusters in the index directly.
+Conventional SfM matching works one image pair at a time: it enumerates pairs,
+matches descriptors within each pair, verifies each pair geometrically, and only
+then joins the pairwise matches into tracks. This matcher starts from the
+property a track already has. The observations of one surface point are the same
+point seen from different images, so their descriptors are close to each other
+in descriptor space, and a search over all descriptors at once can find them
+together. The image pairs to verify are then the pairs that share a cluster, so
+pair selection needs no separate step.
 
 ## Approach
 
 Querying the index for a descriptor's nearest neighbours returns the other
 members of its cluster, interleaved with unrelated background. The problem is
-approximating where each descriptor's cluster ends — which neighbours are genuine
-co-observations and which are background. We call this process **track-cluster
-matching**.
+deciding where each descriptor's cluster ends: which neighbours are genuine
+co-observations and which are background.
 
-We use a nearest-neighbour query to determine this for each descriptor. Its
-sorted neighbour distances rise gently across its true co-observations, then jump
-up to the level of unrelated features — its *background floor*. We take a fixed
-fraction of that floor as the descriptor's cluster membership radius and keep
-its cross-image neighbours within that radius as candidate co-observations. A
-descriptor with tight co-observations keeps them; an isolated descriptor, whose
-nearest neighbour already sits at the background level, keeps nothing.
+The matcher decides this per descriptor from one nearest-neighbour query. A
+descriptor's sorted neighbour distances rise gently across its true
+co-observations, then jump up to the level of unrelated features, its
+*background floor*. A fixed fraction of that floor is the descriptor's cluster
+membership radius, and its cross-image neighbours within that radius are its
+candidate co-observations. A descriptor with tight co-observations keeps them;
+an isolated descriptor, whose nearest neighbour already sits at the background
+level, keeps nothing.
 
 ![Neighbour-distance profiles for example descriptors (seattle_backyard): the
 co-observations (green) sit at the near ranks below the cluster membership radius α·B
 (dashed), while unrelated background (grey) plateaus above it; the background
 scale B is the d-th-nearest distance (dotted).](images/floor-profile.png)
 
-We materialize these candidate track clusters as the matcher's primary output, so
-later consumers can work with the clusters themselves. For the current consumer we
-convert them into feature matches between image pairs, feeding geometric
-verification and the rest of the SfM pipeline.
+The clusters are the matcher's output, so consumers can work with candidate
+tracks directly. A derived view expands them into matches between image pairs
+for the pairwise pipeline: geometric verification and COLMAP's mappers.
+
+## Interface
+
+The matcher lives in
+[`features/cluster_match/mod.rs`](../../../crates/sfmtool-core/src/features/cluster_match/mod.rs),
+declared in [`features/mod.rs`](../../../crates/sfmtool-core/src/features/mod.rs).
+The same module directory holds
+[`covisibility.rs`](../../../crates/sfmtool-core/src/features/cluster_match/covisibility.rs)
+and [`covisibility/`](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/),
+which count the clusters each image pair shares; they are specified in
+[cluster-covisibility.md](cluster-covisibility.md) and
+[covisibility-selection.md](covisibility-selection.md), not here. The bindings
+are in [`matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs),
+registered on `sfmtool._sfmtool.matching` and re-exported at the top level of
+the `sfmtool` package. The Python matcher layer is
+[`_cluster_matching.py`](../../../src/sfmtool/feature_match/_cluster_matching.py),
+and the orchestration for `sfm match --cluster` is in
+[`_run.py`](../../../src/sfmtool/feature_match/_run.py).
+
+### Rust
+
+| Item | What it is |
+| ---- | ---------- |
+| `BackgroundFloorParams { d, alpha, min_size, forest }` | Matcher parameters; `Default` is the production configuration (table below). The query width is not a parameter: it is always `d + 1`. |
+| `background_floor_clusters(descriptors, image_starts, params)` | Builds a forest over an in-memory `(N, 128)` `u8` corpus, runs the k-NN self-join, and clusters the result. |
+| `background_floor_clusters_lazy(forest, image_starts, params, progress)` | The same clustering over a `LazyKdForestU8` that stays on disk (a `.kdf` file). Reports the join's answered-query count to `progress` and stops on cancel with `LazyClusterError::Kdf(KdfError::Cancelled)`; the clustering after the join is not interrupted. |
+| `background_floor_clusters_from_neighbors(n, image_starts, params, neighbors)` | The clustering stage alone, over a `NeighborTable` computed elsewhere. Both functions above end by calling it. |
+| `NeighborTable { indexes, distances_sq, width }` | Row-major `N × width` k-NN table, nearest first, **squared** L2 distances, `u32::MAX` / `f32::INFINITY` padding unfilled slots. `width` must equal `d + 1`. |
+| `Clusters { cluster_starts, member_images, member_features }` | The output, in CSR form: cluster `c` owns members `cluster_starts[c] .. cluster_starts[c + 1]`. |
+| `clusters_to_pair_matches(clusters, descriptors, image_starts)` | The derived pairwise view, `PairMatches`: image pairs `[i, j]` with `i < j` sorted ascending, per-pair match counts, feature-index pairs grouped by image pair, and per-match L2 descriptor distances. `descriptors` and `image_starts` must be the ones the clusters came from. |
+| `ClusterMatchError` | Five variants: `EmptyCorpus`; `CorpusSmallerThanFloor` (`N ≤ d`, so the floor rank does not exist); `BadOffsets` (`image_starts` does not start at 0, is not non-decreasing, or does not end at `N`); and, from `_from_neighbors` only, `BadNeighborTable` (wrong width or length) and `BadNeighborIndex` (an index that is neither a row nor `u32::MAX`). |
+| `LazyClusterError` | `Cluster(ClusterMatchError)` or `Kdf(KdfError)` for a read failure or a cancel. |
+
+`image_starts` has length `n_images + 1`: image `i` owns corpus rows
+`image_starts[i] .. image_starts[i + 1]`, and row `r` of image `i` is feature
+`r - image_starts[i]`, the row index in that image's `.sift` file. The errors
+are a hand-written enum with `Display` and `std::error::Error`.
+
+The clustering is split from the search because it never reads a descriptor,
+only neighbour indexes and distances. That lets one clustering run over a table
+from the in-memory forest, from a `.kdf` file, or from any other search, and it
+lets a corpus too large to hold in memory be clustered once its neighbours are
+known. The `.kdf` path holds only the file's bounded cache and the
+`N × (d + 1)` table. It returns the same clusters as the in-memory matcher over
+the forest the file was written from, at the same per-query budget, because
+the file stores that forest's topology and leaf order. A `.kdf` stores no
+search budget, so the caller always supplies `params.forest.max_leaf_checks`.
+
+```rust
+use sfmtool_core::features::cluster_match::{
+    background_floor_clusters, clusters_to_pair_matches, BackgroundFloorParams,
+};
+
+// corpus: Array2<u8> of shape (N, 128); image_starts: Vec<u32> of length n_images + 1.
+let clusters = background_floor_clusters(corpus.view(), &image_starts, &BackgroundFloorParams::default())?;
+let pairs = clusters_to_pair_matches(&clusters, corpus.view(), &image_starts);
+```
+
+### Contract the signatures do not show
+
+- **Distances are Euclidean L2, not squared.** The forest and `NeighborTable`
+  carry squared L2; the matcher takes the square root before computing the
+  floor and the radius test, and `PairMatches` reports L2. The defaults
+  `alpha = 0.8`, `d = 10` were tuned in L2.
+- **Rank cap.** With `alpha < 1` and a positive floor, every kept neighbour is
+  strictly nearer than the floor `B_i`, so membership only reaches the columns
+  before `d`. With `alpha ≥ 1` the floor neighbour itself can pass, so the
+  candidate buffer is sized at the full query width `d + 1`.
+- **Missing neighbours.** A padded slot is skipped. A row whose floor slot is
+  padded (the search found fewer than `d + 1` neighbours) has an infinite floor,
+  so the radius test passes every neighbour the search did find.
+- **Deterministic order.** Seeds are visited by candidate count, descending,
+  with the smaller row index first on a tie. Within a cluster, one feature per
+  image is kept: the one nearest the seed, and on equal distance the smaller
+  row index. Members are stored sorted by image index. For a fixed forest seed
+  the output arrays are the same on every run.
+- **Hard partition.** No feature is in two clusters, no cluster holds two
+  features of one image, and every cluster spans at least `min_size` images.
+  So the pair expansion is already one-to-one within each image pair.
+- **Input checks in the pair expansion.** `clusters_to_pair_matches` in Rust
+  trusts its input and panics on an out-of-range member. The binding checks the
+  CSR arrays and every member's image and feature index first, and raises
+  `ValueError`.
+
+### Python
+
+`sfmtool._sfmtool.matching` binds three functions, each returning numpy arrays:
+
+| Function | Returns |
+| -------- | ------- |
+| `background_floor_clusters(descriptors, image_starts, d=10, alpha=0.8, min_size=2, preset=None, num_trees=None, leaf_size=None, max_leaf_checks=None, seed=None)` | `(cluster_starts, member_images, member_features)`, all `uint32`. The forest arguments mean what they mean for `KdForest`; the preset defaults to `"accurate"`. |
+| `background_floor_clusters_kdf(path, image_starts, d=10, alpha=0.8, min_size=2, max_leaf_checks=128, cache_bytes=None, max_chunk_bytes=None, query_workers=None)` | The same tuple, from a `.kdf` file through `background_floor_clusters_lazy`. `image_starts` must follow the feature-ID order the file was written in. |
+| `clusters_to_pair_matches(cluster_starts, member_images, member_features, descriptors, image_starts)` | `(image_index_pairs (P, 2), match_counts (P,), match_feature_indexes (M, 2), match_descriptor_distances (M,) float32)`. |
+
+The bindings require `uint8` descriptors of width 128 and `uint32` offsets
+(`TypeError` for a wrong dtype), reject `d = 0`, and map `ClusterMatchError` to
+`ValueError`; the `.kdf` binding raises `OSError` for a malformed or damaged
+file. They release the GIL around the core call.
+
+`cluster_match(image_paths, sift_paths, *, d, alpha, min_size, preset,
+max_feature_count)` in `_cluster_matching.py` reads each image's descriptors
+(the first `max_feature_count` rows when it is set) through a thread pool,
+concatenates them in the order given, and returns a `ClusterSet` and a
+`PairArrays`, named tuples of the arrays above.
+
+### Defaults
+
+These are the only definitions of the defaults; the CLI flags and bindings use
+the same values.
+
+| Parameter | Default | Set by | Meaning |
+| --------- | ------- | ------ | ------- |
+| `d` | 10 | `--cluster-d` | background rank: the floor is `B_i = dist[i, d]`; the query width is `d + 1` |
+| `alpha` | 0.8 | `--cluster-alpha` | keep cross-image neighbours within `alpha · B_i` |
+| `min_size` | 2 | no flag | keep a cluster only if it spans at least this many images |
+| forest | `accurate` preset: 8 trees, leaf size 16, 512 leaf checks | `--cluster-preset` | index build and per-query search budget |
+| `max_leaf_checks` on the `.kdf` path | 128 | `background_floor_clusters_kdf` argument | per-query search budget when the forest is read from a file |
+
+`d` was re-tuned from 28 to 10 by the sweep in [Choosing `d`](#choosing-d);
+changing a default needs the membership-rule bench and the end-to-end
+reconstructions below run again.
 
 ## Empirical Observations
 
@@ -45,27 +167,28 @@ verification and the rest of the SfM pipeline.
 
 For each descriptor, let `d1` be the distance to its nearest *other* descriptor.
 Across the corpus `d1` is **bimodal**: a near mode of descriptors that have a
-likely match — a feature seen in more than one image, whose other observations
-sit close in descriptor space — and a far mode of *isolated* descriptors seen in
+likely match (a feature seen in more than one image, whose other observations
+sit close in descriptor space) and a far mode of *isolated* descriptors seen in
 only one place, with no near neighbour.
 
 ![Histogram of d1 for seattle_backyard: a near "has a near neighbour" mode and a
 far "isolated" mode, with the antimode valley between them](images/d1-histogram-seattle.png)
 
-The valley between the modes can be used as a global threshold to determine
-clusters. It varies by dataset, so must be derived from the data; we found a
-per-descriptor approach works better.
+The valley between the modes can serve as a global threshold for clusters. It
+varies by dataset, so it must be derived from the data, and a per-descriptor
+radius works better (below).
 
 ### The floor separates co-observations from background
 
-A descriptor's true co-observations sit close in descriptor space, while unrelated
-features pile up in a far "background" shell; the floor exploits the gap between
-them. Plotting, per in-track descriptor, the distances to its co-observations
-against the distances to its background neighbours, the floor `α·B` falls in the
-valley between the two on seoul_bull, seattle_backyard, and kerry_park — capturing
-most co-observations while excluding the shell. The exception is dino_dog_toy,
-whose repetitive structure leaves the distributions overlapping — there no radius
-is clean, and the interleaved background is left to geometric verification.
+A descriptor's true co-observations sit close in descriptor space, while
+unrelated features are concentrated in a far "background" shell; the floor uses
+the gap between them. Plotting, per in-track descriptor, the distances to its
+co-observations against the distances to its background neighbours, the floor
+`α·B` falls in the valley between the two on seoul_bull, seattle_backyard, and
+kerry_park, capturing most co-observations while excluding the shell. The
+exception is dino_dog_toy, whose repetitive structure leaves the distributions
+overlapping: there no radius is clean, and the interleaved background is left to
+geometric verification.
 
 ![Co-observation (green) vs background (red) descriptor-distance distributions per
 reconstruction; the dashed line is the median floor α·B](images/floor-coobs-vs-background.png)
@@ -73,24 +196,25 @@ reconstruction; the dashed line is the median floor α·B](images/floor-coobs-vs
 The background scale `B` (the d-th-nearest distance) marks that shell, so `α` sets
 how far below it the cut sits. Sweeping `α` shows why `α = 0.8`: co-observation
 recall climbs steadily, but the background admitted stays near zero until
-`α ≈ 1.0`, where the radius reaches the shell and background floods in. `α = 0.8`
-sits just below that cliff — recovering ~0.70–0.85 of each track's co-observations
-while admitting little background, leaving the rest to geometric verification.
+`α ≈ 1.0`, where the radius reaches the shell and the count of admitted
+background neighbours rises sharply. `α = 0.8` sits just below that point,
+recovering about 0.70–0.85 of each track's co-observations while admitting
+little background, and leaves the rest to geometric verification.
 
 ![Co-observation recall (green, left axis) and background neighbours admitted
 (red, right axis) as the floor scale α is swept, with α = 0.8 marked](images/floor-alpha-sweep.png)
 
-### Iterating on cluster membership rules
+### Choosing a membership rule
 
-The membership rule — which neighbours to keep — is the heart of the method, so we
-searched it carefully. For each descriptor in a reference reconstruction we save
-its 48 nearest neighbours, each labelled as a real co-observation (a neighbour
-from the same 3-D point, necessarily in another image) or not. A candidate rule —
-"given a descriptor's neighbours, which ones are co-observations?" — can then be
-scored against those labels in an instant, with no index to build or
-reconstruction to run, so we tried a wide range of rules.
+The membership rule, which neighbours to keep, decides what the matcher
+produces, so a wide range of rules was compared. For each descriptor in a
+reference reconstruction, its 48 nearest neighbours are saved, each labelled as
+a real co-observation (a neighbour from the same 3-D point, necessarily in
+another image) or not. A candidate rule ("given a descriptor's neighbours, which
+ones are co-observations?") can then be scored against those labels at once,
+with no index to build or reconstruction to run.
 
-They fell into a few families:
+The rules tried fell into a few families:
 
 - **Cut at a gap.** Sort a descriptor's neighbour distances and cut where they
   jump up, by various definitions of "jump."
@@ -102,20 +226,23 @@ They fell into a few families:
   the top of that neighbour's own list.
 - **Combinations.** Pair a generous radius with one of the stricter tests above.
 
-The background-level radius — the floor — was the clear winner on every dataset.
+The background-level radius, the floor, scored best on every dataset.
 Mutual-agreement tests only hurt, dropping real co-observations. And no single
-shared cut-off, even the best one we could find for a dataset, did as well as
-letting each descriptor set its own radius from its background. Tuning first
-settled on keeping neighbours within 0.8× the 28th-nearest distance; the
-production default was later lowered to the 10th-nearest (`d = 10`, `alpha = 0.8`
-— see the parameter defaults below).
+shared cut-off, even the best one found for a dataset, did as well as letting
+each descriptor set its own radius from its background. This tuning settled on
+keeping neighbours within 0.8× the 28th-nearest distance; the default rank was
+later lowered to 10 (see [Choosing `d`](#choosing-d)).
 
 ### End-to-end reconstruction vs the baseline
 
 Fed into **incremental** SfM, the cluster matches reconstruct every image and
 place the cameras where the baseline does, with a denser point cloud. They go
 through COLMAP's geometric verification and the incremental mapper (both seeded),
-and the result is compared to the workspace's baseline with `sfm compare`:
+and the result is compared to the workspace's baseline with `sfm compare`. These
+runs, and the global-mapper runs in the next section, used `d = 28`, the rank the
+membership-rule tuning settled on; at the default `d = 10` the point counts
+differ as [Choosing `d`](#choosing-d) reports. The Rust matcher at `d = 28`
+gave the same registrations and point counts within 2% of this table.
 
 | Dataset          | reg   | points (base → cluster) | reproj (base → cluster) | `sfm compare` |
 | ---------------- | ----- | ----------------------- | ----------------------- | ------------- |
@@ -124,19 +251,19 @@ and the result is compared to the workspace's baseline with `sfm compare`:
 | kerry_park       | 48/48 | 1,128 → 3,193           | 0.31 → 0.78 px          | VERY SIMILAR  |
 | dino_dog_toy     | 85/85 | 5,312 → 29,571          | 1.20 → 1.13 px          | VERY SIMILAR  |
 
-`sfm compare` rates all four VERY SIMILAR — which here means the shared cameras'
-centres agree (mean position error < 0.1) after a similarity alignment; it does not
-look at the point cloud. The cloud is in fact 1.4–9.5× denser than the baseline, at
-reprojection error comparable to the baseline's (sub-pixel to ~1 px). COLMAP's
-geometric verification filters the cluster correspondences and the incremental
-mapper builds the reconstruction from what survives.
+`sfm compare` rates all four VERY SIMILAR, which here means the shared cameras'
+centres agree (mean position error < 0.1) after a similarity alignment; it does
+not look at the point cloud. The cloud is 1.4–9.5× denser than the baseline, at
+reprojection error comparable to the baseline's (sub-pixel to about 1 px).
+COLMAP's geometric verification filters the cluster correspondences and the
+incremental mapper builds the reconstruction from what survives.
 
 ### Incremental reconstructs more reliably than global
 
-Those same matches do not reconstruct as dependably under the *global* mapper.
-Run through it instead, every image registers and this run's verdicts pass, but
-the point counts are erratic — kerry_park keeps less than a third of the points
-the incremental mapper recovers from the identical matches:
+Those same matches do not reconstruct as dependably under the *global* mapper
+(`d = 28`, as above). Run through it instead, every image registers and this
+run's verdicts pass, but the point counts are erratic: kerry_park keeps less than
+a third of the points the incremental mapper recovers from the identical matches.
 
 | Dataset          | reg   | points | `sfm compare`           |
 | ---------------- | ----- | ------ | ----------------------- |
@@ -145,49 +272,51 @@ the incremental mapper recovers from the identical matches:
 | kerry_park       | 48/48 |   926  | VERY SIMILAR            |
 | dino_dog_toy     | 85/85 | 23,446 | VERY SIMILAR            |
 
-The deeper problem is run-to-run instability: across repeated end-to-end runs with
-slightly different match sets, the incremental mapper has passed all four every
-time, while the global mapper's verdicts have ranged from two to four of four —
-which datasets pass shifts with the match set and seed, and we don't yet
-understand why. Incremental works better on our small set of test datasets.
+Across repeated end-to-end runs with slightly different match sets, the
+incremental mapper has passed all four every time, while the global mapper's
+verdicts have ranged from two to four of four. Which datasets pass shifts with
+the match set and seed, for reasons not understood. Incremental works better on
+these test datasets.
 
 ## Algorithm
 
 ### Overview
 
-1. **Index & k-NN query** — concatenate every image's descriptors into one corpus,
-   build a nearest-neighbour index, and query it once for the **`d + 1` nearest**
-   (self + the `d` nearest others, `d = 10`) of *every* descriptor. The resulting
-   `(N, d+1)` table of neighbour ids and aligned distances is the single substrate
-   everything below reads from, and the index is not touched again.
-2. **Per-point threshold** — for each descriptor, read a cluster membership radius
-   off its own neighbour profile (the background floor, §2) and keep the
+1. **Index and k-NN query.** Concatenate every image's descriptors into one
+   corpus, build a nearest-neighbour index, and query it once for the
+   **`d + 1` nearest** (self and the `d` nearest others, `d = 10`) of *every*
+   descriptor. The resulting `(N, d + 1)` table of neighbour ids and aligned
+   distances is the only input to the steps below, and the index is not touched
+   again.
+2. **Per-point threshold.** For each descriptor, read a cluster membership
+   radius off its own neighbour profile (the background floor, §2) and keep the
    cross-image neighbours within it.
-3. **Materialize clusters** — walk descriptors densest-first; each unclaimed
+3. **Materialize clusters.** Walk descriptors densest-first; each unclaimed
    descriptor seeds a cluster from its within-radius cross-image neighbours, one
-   feature per image, and claims them (§3). The clusters are the matcher's primary
+   feature per image, and claims them (§3). The clusters are the matcher's
    output.
-4. **Convert to matches** — expand each cluster into its cross-image feature
-   pairs, bucketed by image pair (§4); this is a derived view for the pairwise
+4. **Convert to matches.** Expand each cluster into its cross-image feature
+   pairs, bucketed by image pair (§4). This derived view feeds the pairwise
    pipeline.
-5. **Verify & write** — run geometric verification on the pairs
-   (`pycolmap.verify_matches`) and write `.matches` carrying the surviving
-   two-view geometry, like every other matcher.
+
+Geometric verification is not part of the matcher. `sfm match --derive-pairs`
+runs it on the derived pairs (see [Pipeline](#pipeline)).
 
 ### 1. Index and the shared k-NN query
 
 The corpus is all descriptors `(ΣKᵢ, 128)` (uint8 SIFT). The index is the in-tree
-randomized kd-tree forest (`sfmtool.KdForest`,
-`crates/sfmtool-core/src/features/kdforest/`, spec `randomized-kdtree-forest.md`). Each row
-carries its `(image_index, feature_index)` so a hit maps back to a feature.
+randomized kd-tree forest
+([randomized-kdtree-forest.md](randomized-kdtree-forest.md)). Each row carries
+its `(image_index, feature_index)` through `image_starts`, so a hit maps back to
+a feature.
 
-One query drives everything. For every descriptor we fetch its `d + 1 = 11`
-nearest, yielding an `(N, 11)` array of neighbour ids and an aligned distance
-array, sorted ascending — column 0 is the descriptor itself at distance 0,
-columns 1…10 are its 10 nearest others. The query width is exactly what the
+One query drives everything. For every descriptor the matcher fetches its
+`d + 1 = 11` nearest, yielding an `(N, 11)` array of neighbour ids and an aligned
+distance array, sorted ascending: column 0 is the descriptor itself at distance
+0, columns 1…10 are its 10 nearest others. The query width is exactly what the
 membership rule (§2) needs: the last column is the background rank `d`, and the
 candidate members are the columns before it; nothing else queries the index.
-Since members necessarily lie nearer than rank `d`, this also caps a descriptor's
+With `α < 1`, members lie nearer than rank `d`, so this also caps a descriptor's
 match degree below `d`.
 
 ### 2. Per-point threshold: the background floor
@@ -200,8 +329,9 @@ ascending (Euclidean L2), the **background floor** is its `d`-th-nearest distanc
 B_i = dist[i, d]          (d = 10)
 ```
 
-— far enough out to land among unrelated background, past the descriptor's few
-genuine co-observations. Keep neighbour `j` of `i` as a member iff
+which is far enough out to land among unrelated background, past the
+descriptor's few genuine co-observations. Keep neighbour `j` of `i` as a member
+iff
 
 ```
 dist(i, j) ≤ α · B_i    and    image(j) ≠ image(i)    and    j ≠ i      (α = 0.8)
@@ -209,48 +339,42 @@ dist(i, j) ≤ α · B_i    and    image(j) ≠ image(i)    and    j ≠ i      
 
 A descriptor with tight co-observations has small early distances and a large
 `B_i`, so it keeps them; an isolated descriptor's near distances already sit at
-the background scale, so `α · B_i` admits nothing — the isolated-point prefilter
-falls out for free. Since `α < 1`, every member is nearer than `B_i`, so cluster
-membership only ever reaches ranks below `d`. `d` and `α` are fixed defaults.
+the background scale, so `α · B_i` admits nothing. Removing isolated
+descriptors therefore needs no separate step. Since `α < 1`, every member is
+nearer than `B_i`, so cluster membership only ever reaches ranks below `d`.
 
 #### Why a generous radius
 
 `α < 1` puts the cut *below* the background floor `B_i`, deliberately on the
-generous side of the co-observations. The bias is intentional: collecting a few too
-many neighbours is cheap — geometric verification rejects the misfits — while
-collecting too few loses real observations. The reconstruction is
-robust to it, staying close to the baseline across a wide band of radii above the
-data boundary; the only failures come from radii that are *too tight* and drop
-whole images.
+generous side of the co-observations. Collecting a few too many neighbours is
+cheap, because geometric verification rejects the misfits, while collecting too
+few loses real observations. The reconstruction stays close to the baseline
+across a wide band of radii above the data boundary; the only failures come from
+radii that are *too tight* and drop whole images.
 
 ### 3. Materialize clusters
 
 Clusters are built by density-ordered seeding over the k-NN table. Order
 descriptors by how many within-radius cross-image neighbours they have, densest
-first, and walk that order with a `claimed` bitset: each unclaimed descriptor `s`
-seeds a cluster from `s` plus its within-radius (`α · B_s`), cross-image,
-still-unclaimed neighbours, resolved to **one feature per image** (nearest `s`).
-If the cluster spans at least two images, record it and mark its members claimed;
-otherwise drop `s`. The result is a hard partition: each feature belongs to at
-most one cluster, each cluster holds at most one feature per image, and a cluster
-is a candidate track. Because membership is proximity to the seed rather than
-transitive linkage, a chain A–B–C cannot merge two distinct points; the density
-ordering forms the best-defined clusters first.
-
-These clusters are the matcher's primary output, kept so later consumers can work
-with candidate tracks directly; the pairwise matches below are a view derived
-from them.
+first, and walk that order with a `claimed` flag per descriptor: each unclaimed
+descriptor `s` seeds a cluster from `s` plus its within-radius (`α · B_s`),
+cross-image, still-unclaimed neighbours, resolved to **one feature per image**
+(nearest `s`). If the cluster spans at least `min_size` images, record it and
+mark its members claimed; otherwise mark only `s` claimed and drop it. The
+result is a hard partition: each feature belongs to at most one cluster, each
+cluster holds at most one feature per image, and a cluster is a candidate track.
+Because membership is proximity to the seed rather than transitive linkage, a
+chain A–B–C cannot merge two distinct points; the density ordering forms the
+best-defined clusters first.
 
 ### 4. Convert clusters to per-image-pair matches
 
 Each cluster of `m` members expands into its `C(m, 2)` cross-image feature pairs,
 bucketed by image pair. Because clusters hold one feature per image and the
-partition is hard, the resulting matches are already one-to-one per image pair —
-no reconciliation pass is needed. Only image pairs that share a cluster appear,
-so pair selection falls out of the clustering. The matcher then runs geometric
-verification on those pairs and writes the same `.matches` artefact the existing
-matchers produce, two-view geometry included; the verifier rejects the pairs that
-are not tracks.
+partition is hard, the resulting matches are already one-to-one per image pair,
+with no reconciliation pass. Only image pairs that share a cluster appear, so
+the clustering also selects the pairs. Geometric verification of those pairs
+rejects the ones that are not tracks.
 
 ### Alternatives considered
 
@@ -258,121 +382,40 @@ are not tracks.
   in place of the per-point floor, read from the same k-NN table two ways: the
   **per-point cliff** (for each descriptor, the largest jump between consecutive
   sorted neighbour distances separates its likely co-observations from background;
-  `T` is a percentile — by default the median — of the just-past-the-cliff
-  distance over all descriptors), or the **`d1` bimodal antimode** (`d1` is bimodal
-  over the corpus — see Empirical — and the valley between the modes is a
-  label-free split, located with Otsu or a 2-component mixture on `log d1`,
-  optionally scaled by `t_scale ≈ 1.0–1.25`). The fallback, not the primary path:
-  one radius never fits every cluster, and on labelled neighbourhoods the
-  per-point floor matches or beats even the best-possible global `T`. An optional
-  mean-shift step (re-query at the cluster mean to recentre it) helped the
-  global-`T` clusters slightly but does not change reconstruction outcomes.
+  `T` is a percentile, by default the median, of the just-past-the-cliff
+  distance over all descriptors), or the **`d1` bimodal antimode** (the valley
+  between the modes of `d1`, see above, located with Otsu's method or a
+  two-component mixture on `log d1`, optionally scaled by 1.0–1.25). One radius
+  never fits every cluster, and on labelled neighbourhoods the per-point floor
+  matches or beats even the best-possible global `T`. Recentring each cluster by
+  re-querying at its mean (mean shift) improved the global-`T` clusters slightly
+  and did not change reconstruction outcomes. A global `T` also does not exclude
+  isolated descriptors by itself; they would have to be dropped up front, for
+  example when `d1 > T` or `d1/d5 > 0.85` (about 40–75% of descriptors, all
+  background the solve discarded).
 - **Per-descriptor edges, no materialized clusters.** Keep each descriptor's
   within-radius cross-image neighbours directly as match edges and reconcile them
   to one match per feature per image pair (two passes: keep the smallest-distance
-  edge per low-side feature, then per high-side feature). Produces essentially the
-  same matches and reconstructions, slightly more cheaply — but leaves no cluster
-  artefact for later consumers, which is why materializing clusters is the chosen
-  design.
+  edge per low-side feature, then per high-side feature). This produces
+  essentially the same matches and reconstructions, slightly more cheaply, but
+  leaves no clusters for later consumers, which is why the matcher materializes
+  clusters.
 - **Transitive merge.** The connected components of a within-radius graph chain
-  distinct points into mega-clusters through repeated structure; not recommended.
-  Seeded clusters avoid it by construction.
-
-### Isolated-point prefilter (optional)
-
-The per-point floor already excludes isolated descriptors for free (their nearest
-neighbour sits at the background scale, so `α · B_i` admits nothing). Under the
-global-threshold alternative it does not, so a descriptor can be dropped up front
-if `d1 > T_base` or `d1/d5 > 0.85` (~40–75% of descriptors, all background the
-solve discarded), shrinking the problem; it only ever removes would-be singletons.
-
-## Cost Analysis
-
-- **Index build.** The randomized kd-tree forest is cheap to build
-  (`O(n log n)` median splits) — far cheaper than a navigable-graph index, whose
-  build only amortises over many queries or a persistent index.
-- **Query / match.** `ΣKᵢ` queries × `k` neighbours. Exact brute force is
-  `O(n²·D)` — fine at test scale (seconds–minutes), prohibitive at realistic
-  scale. The forest makes each query sub-linear at a fixed search budget
-  (`L_max` leaf visits, not `log n` — the index is approximate; see its spec),
-  preserving the downstream match signal close to exact at a tunable precision
-  budget.
-- **Verification.** Per-image-pair geometric verification, only over pairs that
-  have candidate edges (implicit pair selection), which is `≪ N²` on scenes with
-  limited covisibility.
-
-At the current (tiny) dataset scale, exact matching would also do and is the
-oracle the matcher validates against; the forest is what carries the approach to
-realistic corpus sizes. See `specs/core/features/randomized-kdtree-forest.md` for the
-index design.
-
-### Where the time actually goes
-
-Measured on DinoLedge — 1196 images × 8192 features = 9.7M descriptors, 1.7M
-clusters, 317K candidate pairs, on an i9-14900HX — `sfm match --cluster` takes
-about 118 s end to end. `SFMTOOL_CLUSTER_TIMING=1` prints the stage split.
-
-Three things carry that number, and each is a constraint on how the matcher may
-be changed:
-
-- **Orchestration is the larger half, and most of it is I/O.** The COLMAP
-  database the matcher opens exists only for geometric verification, so it stores
-  keypoints and matches but **not** descriptors — the descriptor rows dominated
-  the write. `.sift` descriptor reads go through a thread pool, and the descriptor
-  distances that accompany the verified matches are recomputed as a per-pair
-  vectorized gather plus a batched norm rather than a per-match Python loop. That
-  gather is exact, not approximate: squared u8 sums stay below 2²⁴, so f32
-  accumulation is order-independent.
-- **Forest build** reuses per-tree scratch — partition class tags plus reorder
-  buffer, median values, variance sums — instead of allocating three `Vec`s per
-  node. Same arithmetic, same RNG consumption, bit-identical trees.
-- **The k-NN query** processes the self-join batch in the forest's
-  descriptor-space `locality_order` (tree 0's leaf layout), so consecutive queries
-  touch heavily overlapping, cache-resident corpus rows; results are scattered
-  back to query order, which is safe because per-query results are
-  order-independent. It remains memory-latency-bound on those gathers (~31 s).
-
-The largest single remaining phase is pycolmap verification (~50 s); a native
-two-view-geometry verifier would also remove the matches round-trip through
-sqlite.
-
-Every deterministic output of the matcher — clusters, pairs, match feature
-indexes, descriptor distances — is stable across runs. The pycolmap
-two-view-geometry inlier sets vary by about 0.001% between *identical* runs,
-which is inherent multithreaded-RANSAC nondeterminism, verified by back-to-back
-runs of one build.
-
-## Parameters
-
-Primary path (the per-point background floor, §2):
-
-| Parameter     | Default   | Effect                                                 |
-| ------------- | --------- | ------------------------------------------------------ |
-| `d`           | 10        | background rank: the `d`-th-nearest distance is the background floor `B_i = dist[i, d]`; the query width is `d + 1` |
-| `bg_alpha` (α) | 0.8      | keep cross-image neighbours within `α · B_i`; `<1` = generous cut inside the floor |
-| `min_size`    | 2         | record a cluster only if it spans at least this many images |
-
-Global-threshold alternative (§"Alternatives considered"):
-
-| Parameter     | Default   | Effect                                                 |
-| ------------- | --------- | ------------------------------------------------------ |
-| `threshold`   | `cliff`   | global radius estimator: `cliff` / `otsu` / `gmm` / fixed float |
-| `cliff_pct`   | 50        | percentile of the per-point just-past-the-cliff distance for `cliff` |
-| `t_scale`     | 1.0       | multiply `T_base`; higher = larger clusters; ~1.25 with otsu/gmm |
-| `refine`      | 0         | mean-shift centroid steps (re-query at cluster mean); 1 usually suffices |
-| `prefilter`   | off       | drop isolated points up front (falls out for free under the floor) |
+  distinct points into very large clusters through repeated structure. Seeded
+  clusters avoid this by construction.
 
 ### Choosing `d`
 
 The default background rank is `d = 10`. The Python prototype the empirical
-sections above are drawn from tuned `d = 28`; sweeping the production matcher at
-`d ∈ {6, 7, 8, 9, 10, 14, 20, 28}` across all four datasets (match + seeded
-incremental solve per point) showed the wide floor was paying for itself in
-solve time, not quality. Findings:
+sections above are drawn from used `d = 28`; sweeping the Rust matcher at
+`d ∈ {6, 7, 8, 9, 10, 14, 20, 28}` across all four datasets (match plus seeded
+incremental solve per point) showed the wide floor cost solve time without
+improving quality. Findings:
 
 - Registration is full (17/17, 26/26, 48/48, 85/85) at every `d ≥ 8`;
-  kerry_park drops to 46/48 at `d ∈ {6, 7}`, locating the cliff just below 8.
-- Smaller `d` is faster end to end — mostly in the *solve*, which scales with
+  kerry_park drops to 46/48 at `d ∈ {6, 7}`, so the registration loss starts
+  just below 8.
+- Smaller `d` is faster end to end, mostly in the *solve*, which scales with
   the candidate matches a wider floor admits (kerry 55 s at `d = 8` vs 108 s at
   28; dino 99 s vs 147 s total).
 - Mean reprojection error *improves* monotonically as `d` shrinks on every
@@ -381,14 +424,115 @@ solve time, not quality. Findings:
 - Total points dip on the small scenes (seoul −20%, kerry −15% at `d = 10` vs
   28) but the lost points are mostly 2-view: the fraction of points with ≥ 3
   observations is far higher at small `d` (92–97% vs 77–84%), and dino's point
-  count actually rises (32,181 vs 29,657).
+  count rises (32,181 vs 29,657).
 
-`d = 10` was chosen as the default: measured directly on all four datasets,
-two ranks of margin above the kerry_park registration cliff, ~1.5–2.4×
-end-to-end speedup vs 28, better reprojection everywhere. The original `d = 28`
-remains a reasonable choice for unusually high-covisibility collections
+`d = 10` is the default because it was measured directly on all four datasets,
+sits two ranks above the rank where kerry_park loses images, runs about
+1.5–2.4× faster end to end than 28, and has lower reprojection error everywhere.
+`d = 28` remains a reasonable choice for unusually high-covisibility collections
 (features co-observed in tens of images), where a small rank could read the
 floor inside the track itself; pass `--cluster-d` to raise it.
+
+## Pipeline
+
+**`sfm match --cluster`** ([match-command.md](../../cli/image-feature/match-command.md))
+runs the matcher and writes one file. `_run_matching` sorts the images by
+workspace-relative name, so the corpus order is the order every `.matches`
+reader uses; `_materialize_clusters` calls `cluster_match` and prints the
+cluster, candidate-match and image-pair counts (the pair expansion is computed
+for that report and not written); and `_write_clusters_matches` writes a
+`.matches` file holding the clusters backbone and no pairs or two-view
+geometries. The backbone carries each member's position and affine shape copied
+from its `.sift` row, and the metadata records `matching_method: "cluster"` with
+`matching_options` `{"mode": "background-floor", "d", "alpha", "min_size",
+"preset"}`, plus `max_feature_count` when `--max-features` is given. The
+command opens no COLMAP database and runs no verification, so the same corpus
+and options give the same clusters backbone bit for bit on every run. It honours `--range`,
+`--max-features` and `-o`; the default path is under the workspace's `matches/`
+directory with a `-clusters` suffix. `min_size` has no flag and is 2.
+`--camera-model` with `--cluster` is a `UsageError`, because the clustering uses
+no intrinsics.
+
+Consumers of that file:
+
+- `sfm match --derive-pairs` expands the clusters into pairs, verifies them with
+  `pycolmap.verify_matches` in a temporary COLMAP database, and writes the
+  pairwise + two-view-geometry `.matches` file under `tvg-matches/`.
+- `sfm solve` takes that derived file. It refuses a clusters-bearing file, since
+  COLMAP's mappers read their correspondence graph from two-view geometries.
+- `sfm to-colmap-db` reads a clusters file directly, deriving the pairs at read
+  time (`pairs_from_matches` in
+  [`_pairs.py`](../../../src/sfmtool/feature_match/_pairs.py)).
+- `sfm cluster-patches` and `sfm estimate-intrinsics` read the clusters.
+
+```bash
+sfm match --cluster images -o matches/cluster-clusters.matches
+sfm match --derive-pairs matches/cluster-clusters.matches -o tvg-matches/cluster.matches
+sfm solve -i tvg-matches/cluster.matches
+```
+
+**In-solve matching.** `_setup_for_sfm(matching_mode="cluster")` in
+[`db_setup.py`](../../../src/sfmtool/colmap/db_setup.py) calls
+`_run_cluster_matching`, which clusters with the default parameters, writes the
+derived pairs into the solve's own COLMAP database, drops same-frame pairs of a
+multi-sensor rig (back-to-back sensors with no shared view), and verifies the
+rest with `pycolmap.verify_matches`. The Python functions `run_global_sfm` and
+`run_incremental_sfm` accept `matching_mode="cluster"`, and the kerry_park
+`.camrig` test fixture uses it; no CLI command selects this mode.
+
+**SfM Explorer.** The viewer's index-files build runs
+`background_floor_clusters_lazy` over a reconstruction's SIFT index `.kdf`, with
+`d = 10`, `alpha = 0.8`, `min_size = 2` and 128 leaf checks
+([index-files.md](../../gui/index-files.md)).
+
+## Implementation Notes
+
+- **Parallelism.** The radius pass is parallel over rows (rayon). Seeding is
+  one sequential pass, because the claim order defines the result; it does at
+  most `d + 1` work per row. The pair expansion runs in parallel per cluster,
+  followed by a parallel sort on `(img_lo, img_hi, feat_lo, feat_hi)`.
+- **Memory.** Candidates are held in flat `N × (d + 1)` arrays of indexes and
+  distances, with no per-edge heap structures.
+- **Query order.** The in-memory self-join runs its queries in the forest's
+  `locality_order` (tree 0's leaf layout) through
+  `search_batch_with_distances_ordered`, so consecutive queries read
+  overlapping, cache-resident corpus rows. Results are written back to query
+  order, which is safe because each query's result does not depend on the
+  order. The query is still bound by memory latency on those reads.
+- **Forest build** reuses per-tree scratch buffers (partition tags and reorder
+  buffer, median values, variance sums) rather than allocating per node, with
+  the same arithmetic and random-number consumption, so the trees are
+  bit-identical.
+- **Timing.** Setting `SFMTOOL_CLUSTER_TIMING` prints `CLUSTER_TIMING` lines to
+  stderr with per-stage wall-clock times: forest build and query, the radius
+  pass and seeding, and the pair expansion.
+
+On DinoLedge (1196 images × 8192 features = 9.7M descriptors, 1.7M clusters,
+317K candidate pairs, on an i9-14900HX) the k-NN query took about 31 s.
+Geometric verification of the derived pairs runs in `--derive-pairs` through
+pycolmap, whose two-view-geometry inlier sets vary by about 0.001% between
+identical runs because of its multithreaded RANSAC.
+
+Tests: [`cluster_match/tests.rs`](../../../crates/sfmtool-core/src/features/cluster_match/tests.rs)
+(planted clusters, partition invariants, pair expansion, validation errors,
+determinism, external neighbour tables),
+[`test_cluster_match_rust_bindings.py`](../../../tests/rust_bindings/test_cluster_match_rust_bindings.py),
+[`test_cluster_matching.py`](../../../tests/matching/test_cluster_matching.py).
+
+## Cost
+
+- **Index build.** The randomized kd-tree forest is cheap to build
+  (`O(n log n)` median splits), far cheaper than a navigable-graph index, whose
+  build cost is only repaid over many queries or a persistent index.
+- **Query.** `ΣKᵢ` queries × `d + 1` neighbours. Exact brute force is
+  `O(n²·D)`: seconds to minutes on the test datasets, prohibitive at realistic
+  scale. The forest makes each query sub-linear at a fixed search budget (leaf
+  visits, not `log n`; the index is approximate, see its spec), keeping the
+  downstream match signal close to exact at a tunable budget. Exact search is
+  the reference the forest's recall is measured against.
+- **Verification.** Per-image-pair geometric verification, only over pairs that
+  share a cluster, which is far fewer than `N²` on scenes with limited
+  covisibility.
 
 ## Limitations
 
@@ -396,573 +540,52 @@ floor inside the track itself; pass `--cluster-d` to raise it.
   in-track descriptors a background neighbour is nearer than a true
   co-observation, so no radius clusters them cleanly; this remainder concentrates
   in high-multiplicity, repetitive structure and is left to geometric
-  verification. The exact fraction is reference-relative — much of the apparent
-  non-separability is the lean reference mislabelling real co-observations as
-  background — so it is smaller than a single solve suggests.
+  verification. The exact fraction is relative to the reference reconstruction:
+  much of the apparent non-separability is the reference labelling real
+  co-observations as background, so it is smaller than a single solve suggests.
 - **Some members are unreachable by distance.** Wide-baseline observations sit
-  beyond any reasonable radius — they have no near co-member (dino recall@5 ≈ 0.46
-  even with exact search) — so they never join, and the recovered tracks are
-  correspondingly fragmented (a track spans ~1.6–2.7 clusters, ~85% of members
-  recovered). Conventional NN+ratio misses the scattered members too, but it is a
-  ceiling worth measuring.
-- **Repeated structure → false merges**, held off because membership is
-  proximity to a fixed seed (no transitive chaining) and by the geometric
-  verifier, but not by descriptor distance alone.
+  beyond any reasonable radius; they have no near co-member (dino recall@5 ≈ 0.46
+  even with exact search), so they never join, and the recovered tracks are
+  fragmented (a track spans about 1.6–2.7 clusters, about 85% of members
+  recovered). Conventional nearest-neighbour matching with a ratio test misses
+  the scattered members too.
+- **Repeated structure causes false merges.** Membership by proximity to a
+  fixed seed (no transitive chaining) and the geometric verifier limit them;
+  descriptor distance alone does not.
 - **The hard partition is greedy and order-dependent.** A feature claimed by one
-  cluster cannot join a better one later; seeding densest-first mitigates this by
-  forming the best-defined clusters before the leftovers.
+  cluster cannot join a better one later; seeding densest-first reduces this by
+  forming the best-defined clusters before the rest.
 - **Global SfM is less reliable than incremental on these datasets** (its `sfm
   compare` verdicts range from two to four of four across runs, and which pass
-  varies with the match set and seed — above), for reasons we don't yet
-  understand.
-- **Exact NN does not scale**; in production use the forest, which trades a few
-  points of recall (absorbed downstream by geometric verification + track
-  redundancy).
+  varies with the match set and seed, as above), for reasons not understood.
+- **Exact nearest-neighbour search does not scale**; the forest trades a few
+  points of recall, which geometric verification and track redundancy absorb.
 - **There is no `sfm solve --cluster` shortcut.** The matcher is reached through
-  `sfm match --cluster`, which writes a clusters `.matches` file;
-  `sfm match --derive-pairs` verifies that into the pairwise + two-view-geometry
-  file `sfm solve` then takes like any other match set.
+  `sfm match --cluster` followed by `sfm match --derive-pairs`.
 
 ## Relationship to Existing Pipeline
 
-Conceptually this matcher replaces the per-pair Lowe ratio test with a per-point,
+This matcher replaces the per-pair Lowe ratio test with a per-point,
 data-derived distance radius. Its `.matches` output stores the clusters, and the
-pairwise view every existing consumer wants is derived from them at read time,
-so `sfm to-colmap-db` reads it directly; `sfm match --derive-pairs` verifies
-that expansion into the pairwise + two-view-geometry file COLMAP's mapper
-needs.
+pairwise view every pairwise consumer wants is derived from them.
 
 ### Vocabulary trees
 
 COLMAP's `vocab_tree_matcher` also clusters SIFT descriptors, so it is the
-natural reference point. A vocabulary tree (Nistér & Stewénius 2006) clusters a
+closest existing method. A vocabulary tree (Nistér & Stewénius 2006) clusters a
 large *training* corpus of descriptors **offline** into a hierarchical k-means
 tree whose centroids are coarse "visual words"; each image becomes a bag of those
 words, and bag-of-words similarity **retrieves candidate image pairs**, which are
 then matched and verified normally. That offline k-means is itself centroid
-iteration accelerated by a randomized kd-forest (Philbin et al. 2007) — the same
-index this matcher uses.
+iteration accelerated by a randomized kd-forest (Philbin et al. 2007), the same
+kind of index this matcher uses.
 
-This method reuses the "cluster descriptors" idea at a different granularity and
-stage. Rather than a coarse, reusable vocabulary built offline on a separate
-corpus, it clusters the reconstruction's **own** descriptors online into tight,
-**track-scale** groups, and those clusters *are* the candidate correspondences —
+This method clusters descriptors at a different granularity and stage. Rather
+than a coarse, reusable vocabulary built offline on a separate corpus, it
+clusters the reconstruction's **own** descriptors online into tight,
+**track-scale** groups, and those clusters *are* the candidate correspondences,
 not a retrieval index. A visual word is a large cell of descriptor space shared
-by many unrelated features across the world; a cluster here aims to be the
-observations of a single 3-D point. And the implicit pair selection it gets for
-free (only image pairs that share a cluster are verified) does the same job the
-vocabulary tree does for COLMAP — avoiding `O(N²)` pair enumeration — but folded
-into the matching step instead of a separate retrieval stage.
-
-## Production Implementation
-
-The **background-floor** matcher spans three layers: a Rust matcher in
-[`features/cluster_match/`](../../../crates/sfmtool-core/src/features/cluster_match/mod.rs),
-its PyO3 binding in
-[`matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs)
-(bound under `sfmtool._sfmtool.matching`), and the Python matcher layer in
-[`_cluster_matching.py`](../../../src/sfmtool/feature_match/_cluster_matching.py),
-orchestrated by `_materialize_clusters` in
-[`_run.py`](../../../src/sfmtool/feature_match/_run.py) — which `sfm match
---cluster` follows with a cluster-file write, and the in-solve matching mode
-(`_run_cluster_matching`) with a database write plus verification — and reached
-from the CLI as `sfm match --cluster` (see
-[match-command.md](../../cli/image-feature/match-command.md)). The algorithm and
-its justification are above; this section is the API and data flow, centred on
-[§2 Per-point threshold: the background floor](#2-per-point-threshold-the-background-floor).
-
-It reproduces the prototype's end-to-end results. Run through `sfm match
---cluster` plus a seeded incremental `sfm solve -i` on all four datasets (cluster
-corpus at each dataset's full extraction budget), every image registers, `sfm
-compare` against the baseline rates all four VERY SIMILAR, and the point clouds
-land where the table above predicts — seoul_bull 17/17 at 1,550 points,
-seattle_backyard 26/26 at 4,980, kerry_park 48/48 at 3,153, dino_dog_toy 85/85 at
-29,644.
-
-### What the matcher does (one paragraph)
-
-Given the SIFT descriptors of every image in a set, concatenate them into one
-corpus, build a randomized kd-tree forest over it, and query each descriptor's
-`k` nearest neighbours. For each descriptor, set a *per-point* radius from its own
-background floor — `alpha ×` its `d`-th-nearest distance. Materialize clusters by
-density-ordered seeding under those radii (one feature per image, hard partition)
-— the clusters are the primary output, returned to the caller for downstream
-consumers. A second function converts clusters to per-image-pair matches (each
-cluster's `C(m,2)` cross-image pairs, already one-to-one per pair); the CLI then
-runs geometric verification and writes a `.matches` file with the surviving
-two-view geometry, for the existing `sfm solve` / `sfm to-colmap-db` consumers.
-
-### Distance space (read this first)
-
-All distances in this matcher are **Euclidean L2** (square-rooted), not squared.
-This matters because the tuned defaults `alpha = 0.8`, `d = 10` were fit in L2
-space (via Python `KdForest.query`, which returns L2).
-
-The core `KdForest::search_batch_with_distances` returns **squared** L2
-(`dist_sq`). **The matcher must take the square root of those distances before
-computing the background floor and the radius test.** Distances written to
-`match_descriptor_distances` are likewise L2, matching every other matcher's
-`.matches` output.
-
-### Layer 1 — Rust core (`sfmtool-core`)
-
-#### Location
-
-[`crates/sfmtool-core/src/features/cluster_match/`](../../../crates/sfmtool-core/src/features/cluster_match/mod.rs),
-declared as `pub mod cluster_match;` in `crates/sfmtool-core/src/lib.rs`.
-
-#### Public types
-
-```rust
-use ndarray::{Array1, Array2, ArrayView2};
-use crate::features::kdforest::KdForestParams;
-
-/// Tuning for the background-floor matcher. `Default` is the production config.
-/// The k-NN query width is derived, not configured: `d + 1` (self + the `d`
-/// nearest others), exactly enough that the background rank is the last column.
-#[derive(Clone, Debug)]
-pub struct BackgroundFloorParams {
-    /// Background rank: the `d`-th-nearest distance is the background floor
-    /// `B_i = dist[i, d]`. Default 10.
-    pub d: usize,
-    /// Radius multiplier: keep neighbours within `alpha * B_i`. Default 0.8.
-    pub alpha: f32,
-    /// Record a cluster only if it spans at least this many images. Default 2.
-    pub min_size: usize,
-    /// Index build + per-query search budget. Default `KdForestParams::accurate()`.
-    pub forest: KdForestParams,
-}
-
-impl Default for BackgroundFloorParams {
-    fn default() -> Self {
-        Self {
-            d: 10,
-            alpha: 0.8,
-            min_size: 2,
-            forest: KdForestParams::accurate(),
-        }
-    }
-}
-
-/// Materialized track clusters — the matcher's primary output. CSR layout:
-/// cluster `c` owns members `cluster_starts[c] .. cluster_starts[c+1]`. Within a
-/// cluster, members are sorted by image index, and a cluster holds at most one
-/// feature per image (so member count == image span). Clusters are disjoint (a
-/// hard partition of the participating features).
-pub struct Clusters {
-    /// `(C + 1,)` CSR offsets into the member arrays.
-    pub cluster_starts: Array1<u32>,
-    /// `(M,)` member image index, aligned with `member_features`.
-    pub member_images: Array1<u32>,
-    /// `(M,)` member feature index (row in that image's `.sift` file).
-    pub member_features: Array1<u32>,
-}
-
-/// Cross-image matches, in the parallel-array form the `.matches` writer wants.
-pub struct PairMatches {
-    /// `(P, 2)` image-index pairs, each `[i, j]` with `i < j`, sorted ascending
-    /// by `(i, j)`.
-    pub image_index_pairs: Array2<u32>,
-    /// `(P,)` number of matches in each pair; `sum == M`. Aligned to
-    /// `image_index_pairs`.
-    pub match_counts: Array1<u32>,
-    /// `(M, 2)` feature-index pairs `[feat_i, feat_j]`, grouped by pair in the
-    /// same order as `image_index_pairs`. `feat_i` indexes image `i`'s `.sift`
-    /// rows, `feat_j` indexes image `j`'s.
-    pub match_feature_indexes: Array2<u32>,
-    /// `(M,)` Euclidean L2 descriptor distance per match, aligned to
-    /// `match_feature_indexes`.
-    pub match_descriptor_distances: Array1<f32>,
-}
-
-#[derive(Debug, thiserror::Error)]  // or a hand-rolled enum, matching crate style
-pub enum ClusterMatchError {
-    #[error("descriptor corpus is empty")]
-    EmptyCorpus,
-    #[error("corpus has {n} descriptors; need more than d ({d}) for the floor")]
-    CorpusSmallerThanFloor { n: usize, d: usize },
-    #[error("image_starts must be non-decreasing, start at 0, and end at N ({n})")]
-    BadOffsets { n: usize },
-}
-```
-
-> Use whichever error idiom the crate already uses — check neighbouring modules
-> (e.g. `reconstruction`, `camera_intrinsics`) and match it; `thiserror` above is
-> illustrative.
-
-#### Public functions
-
-```rust
-/// Background-floor track-cluster matcher: materialize the clusters.
-///
-/// `descriptors` is the `(N, D)` corpus of every image's SIFT descriptors,
-/// concatenated image by image (uint8, D = 128). `image_starts` is a CSR-style
-/// offset array of length `n_images + 1`: image `i` owns rows
-/// `image_starts[i] .. image_starts[i+1]`, and row `r` of that image has
-/// feature index `r - image_starts[i]`. Returns the materialized clusters —
-/// the primary artefact.
-pub fn background_floor_clusters(
-    descriptors: ArrayView2<'_, u8>,
-    image_starts: &[u32],
-    params: &BackgroundFloorParams,
-) -> Result<Clusters, ClusterMatchError>;
-
-/// Derived view: expand clusters into one-to-one-per-image-pair cross-image
-/// matches (each cluster's C(m,2) pairs, bucketed by image pair). `descriptors`
-/// and `image_starts` must be the same arrays the clusters were built from;
-/// they supply the L2 match distances.
-pub fn clusters_to_pair_matches(
-    clusters: &Clusters,
-    descriptors: ArrayView2<'_, u8>,
-    image_starts: &[u32],
-) -> PairMatches;
-```
-
-#### Algorithm (exact)
-
-Let `N = descriptors.nrows()`, `D = descriptors.ncols()` (128),
-`n_images = image_starts.len() - 1`.
-
-1. **Validate.** `N > params.d` (the floor rank must exist in the corpus);
-   `image_starts[0] == 0`, non-decreasing, `image_starts[n_images] == N`. Else
-   return the matching `ClusterMatchError`. Let `k = params.d + 1` — the query
-   width, derived, not configured.
-
-2. **Row → (image, feature) maps.** From `image_starts`, build `image_of[r]`
-   (`u32`, the owning image) and `feature_of[r]` (`u32`, `r - image_starts[image]`)
-   for every row `r`. (A binary search over `image_starts`, or a single linear
-   fill, both fine.)
-
-3. **Build the forest.** `KdForest::build` over the flat `descriptors` slice
-   (row-major `N*D` `u8`), `dim = D`, with `params.forest`. The corpus must be
-   contiguous; if `descriptors` is not standard layout, copy to a `Vec<u8>` first.
-
-4. **Query.** `let (idx, dist_sq) = forest.search_batch_with_distances(corpus, N,
-   k, params.forest.max_leaf_checks, None);` — flat `N*k` arrays, each row
-   sorted ascending with column 0 = self at distance 0. Unfound slots are
-   `u32::MAX` / `f32::INFINITY` (ruled out for the floor column by the `N > d`
-   validation, modulo forest misses; treat an infinite floor as "keep nothing").
-
-5. **L2 distances.** Materialise `dist[r*k + c] = dist_sq[...].sqrt()`.
-
-6. **Per-point floor & radius.** For each row `i`, the background floor is its
-   `d`-th-nearest distance, `B_i = dist[i, d]`. The row is already sorted ascending,
-   so this is a direct index — no scan. `radius_i = alpha * B_i`.
-
-7. **Candidate neighbours.** For each row `i`, its candidates are the neighbour
-   columns `c` in `0..k` with `j = idx[i, c]` satisfying `j != u32::MAX`,
-   `j != i`, `image_of[i] != image_of[j]`, and `dist[i, c] <= radius_i`. (Self at
-   column 0 is dropped by `j != i`.) Record each row's candidate count for the
-   density ordering.
-
-8. **Materialize clusters (density-ordered claim).** Sort rows by candidate
-   count, descending, with row index as the tie-break (a fixed, deterministic
-   order). Walk that order with a `claimed: Vec<bool>`:
-   - Skip `s` if already claimed.
-   - Gather `s` plus its still-unclaimed candidates; resolve to **one feature per
-     image**, keeping the nearest to `s` per image (`s` itself wins its own
-     image at distance 0).
-   - If the members span ≥ `params.min_size` images, append the cluster (members
-     sorted by image index) and mark all members claimed; otherwise mark only `s`
-     claimed and drop it.
-
-   This loop is inherently sequential (claims are global state); it is cheap —
-   one pass over `N` rows with ≤ `k` work each. Emit `Clusters` in CSR form as
-   the function result.
-
-9. **Convert to pairs (`clusters_to_pair_matches`).** For each cluster, emit all
-   `C(m, 2)` member pairs `(img_lo, img_hi, feat_lo, feat_hi, dval)` — members
-   are sorted by image so `img_lo < img_hi` directly — with `dval` the L2
-   distance between the two members' descriptors (uint8 rows → f32, sqrt of the
-   squared distance). Because clusters hold one feature per image and are
-   disjoint, the pairs are already one-to-one per image pair; no reconciliation
-   pass is needed.
-
-10. **Assemble.** Sort the emitted pairs by `(img_lo, img_hi)`. Produce:
-    `image_index_pairs` = the distinct sorted pairs; `match_counts` = per-pair
-    edge counts; `match_feature_indexes` = `[feat_lo, feat_hi]` rows grouped by
-    pair in that order; `match_descriptor_distances` = the aligned `dval` values.
-
-#### Parallelism
-
-Steps 6–7 are embarrassingly parallel over rows — use `rayon` (`par_iter` /
-`par_chunks`) as elsewhere in the crate. Step 4's `search_batch_with_distances`
-is already internally parallel. Step 8 is sequential by design (the claim order
-defines the result); it is a single cheap pass. Step 9 parallelises per cluster,
-and step 10 can use a parallel sort (`rayon`'s `par_sort_unstable_by`). Keep
-memory bounded: candidates are `≤ N*d`; for dino (`N ≈ 600k`, `d = 10`) that
-is ~6M before clustering — fine as flat `Vec`s of primitives, but do not build
-per-edge structs with heap fields.
-
-#### Determinism
-
-Given a fixed `params.forest.seed`, the matcher is deterministic: the density
-order's tie-break is the row index, per-image resolution prefers the smaller
-distance then the smaller row index, and the conversion order is fixed by the
-cluster order. Output arrays are byte-stable across runs and platforms.
-
-#### Tests (`crates/sfmtool-core/src/features/cluster_match/tests.rs`)
-
-- **Synthetic clusters.** Build a tiny corpus: a few "points" each with one
-  descriptor in 3–4 images (tight intra-cluster distance) plus scattered
-  background. Assert the matcher recovers each planted point as one cluster and
-  that no cluster mixes two planted points.
-- **Cluster invariants.** Assert clusters are disjoint (no feature in two
-  clusters), each holds at most one feature per image, members are sorted by
-  image, and every cluster spans ≥ `min_size` images.
-- **Conversion.** Assert `clusters_to_pair_matches` emits exactly `Σ C(mᵢ, 2)`
-  pairs, that within every image pair no `feat_lo` and no `feat_hi` repeats, and
-  that a returned distance equals the true L2 between the two descriptors (not
-  squared).
-- **Validation.** A corpus with `N <= d` descriptors and malformed
-  `image_starts` return the right `ClusterMatchError`.
-- **Determinism.** Two runs with the same seed produce byte-identical arrays.
-
-Run `pixi run cargo test -p sfmtool-core cluster_match` and
-`pixi run cargo clippy --workspace` / `pixi run cargo fmt`.
-
-### Layer 2 — PyO3 binding (`sfmtool-py`)
-
-#### Location
-
-[`crates/sfmtool-py/src/matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs),
-registered via the file's own `pub fn register`, chained into
-`matching::register`, which `crates/sfmtool-py/src/lib.rs`'s `#[pymodule]`
-installs as the `_sfmtool.matching` submodule (`__name__ ==
-"sfmtool.matching"`) through `helpers::install_submodule`.
-
-#### Functions
-
-Mirror the `KdForest` binding conventions (`py_kdforest.rs`): validate the uint8
-dtype, make the corpus contiguous, release the GIL around the heavy call, and
-return numpy arrays via `PyArray1::from_vec(...).reshape(...).into_any().unbind()`.
-
-```rust
-/// Background-floor track-cluster matcher: materialize the clusters.
-///
-/// Args:
-///     descriptors: (N, 128) uint8 corpus, every image's SIFT descriptors
-///         concatenated image by image.
-///     image_starts: (n_images + 1,) uint32 CSR offsets; image i owns rows
-///         image_starts[i]:image_starts[i+1].
-///     d, alpha, min_size: background-floor parameters (defaults 10, 0.8, 2);
-///         the query width is derived as d + 1.
-///     preset / num_trees / leaf_size / max_leaf_checks / seed: forest config,
-///         same meaning as KdForest.
-///
-/// Returns (CSR clusters — the primary artefact):
-///     (cluster_starts (C+1,) uint32, member_images (M,) uint32,
-///      member_features (M,) uint32)
-#[pyfunction]
-#[pyo3(signature = (descriptors, image_starts, d=10, alpha=0.8, min_size=2,
-                    preset=None, num_trees=None, leaf_size=None,
-                    max_leaf_checks=None, seed=None))]
-pub fn background_floor_clusters<'py>(...) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>)>;
-
-/// Derived view: expand clusters into per-image-pair matches.
-///
-/// Args:
-///     cluster_starts / member_images / member_features: the arrays returned by
-///         background_floor_clusters.
-///     descriptors, image_starts: the same corpus the clusters were built from
-///         (supplies the L2 match distances).
-///
-/// Returns:
-///     (image_index_pairs (P,2) uint32, match_counts (P,) uint32,
-///      match_feature_indexes (M,2) uint32, match_descriptor_distances (M,) float32)
-#[pyfunction]
-pub fn clusters_to_pair_matches<'py>(...) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>, Py<PyAny>)>;
-```
-
-Build `KdForestParams` from `preset` + overrides exactly as `PyKdForest::new`
-does (reuse that resolution logic — consider lifting it into a shared helper).
-Map `ClusterMatchError` to `PyValueError::new_err(...)`. Validate
-`descriptors.ndim == 2`, `ncols == 128`, dtype `uint8`, and
-`image_starts.len() == n_images + 1` with a clear message.
-
-#### Python package surface
-
-Both functions live in `sfmtool._sfmtool.matching` and are imported from there.
-Unlike `KdForest`, which `src/sfmtool/__init__.py` re-exports as
-`sfmtool.KdForest`, they are not lifted to the package top level.
-
-#### Tests
-
-[`tests/rust_bindings/test_cluster_match_rust_bindings.py`](../../../tests/rust_bindings/test_cluster_match_rust_bindings.py)
-covers the binding surface:
-
-- A tiny hand-built corpus (numpy) with a couple of planted cross-image points;
-  assert the cluster arrays have the documented shapes/dtypes and CSR validity
-  (`cluster_starts[0] == 0`, non-decreasing, ends at `len(member_images)`), that
-  planted points come back as clusters, and that feeding the clusters through
-  `clusters_to_pair_matches` yields sorted pairs with `i < j`,
-  `match_counts.sum() == len(match_feature_indexes)`, and the planted matches.
-- Dtype/shape errors raise `ValueError`/`TypeError`.
-
-### Layer 3 — Python matcher layer + CLI
-
-#### Matcher module
-
-New `src/sfmtool/feature_match/_cluster_matching.py`, mirroring
-`_flow_matching.py`:
-
-```python
-def cluster_match(
-    image_paths: list[Path],
-    sift_paths: list[Path],
-    *,
-    d: int = 10,
-    alpha: float = 0.8,
-    min_size: int = 2,
-    preset: str = "accurate",
-    max_feature_count: int | None = None,
-) -> tuple[ClusterSet, PairArrays]:
-    """Run the background-floor matcher over every image's SIFT descriptors.
-
-    Loads each image's descriptors (capped at max_feature_count to match the
-    feature indices used downstream), concatenates them into one (N, 128) uint8
-    corpus with a CSR image_starts array, and calls
-    sfmtool.background_floor_clusters followed by
-    sfmtool.clusters_to_pair_matches. Returns both: the clusters
-    (cluster_starts, member_images, member_features — the primary artefact) and
-    the four parallel pair arrays (image_index_pairs, match_counts,
-    match_feature_indexes, match_descriptor_distances) for the .matches writer.
-    """
-```
-
-(`ClusterSet` / `PairArrays` here are just named tuples of the numpy arrays —
-use whatever lightweight container fits the module's style.)
-
-Load descriptors with `SiftReader(sift_path).read_descriptors(count=...)` (see
-`src/sfmtool/sift/file.py`). Build `image_starts` as the cumulative feature
-counts. Feature indices in the result are `.sift` row indices (capped to the
-first `max_feature_count` when set), consistent with how `to-colmap-db` loads
-keypoints.
-
-#### Verifying and writing the `.matches` file
-
-Run geometric verification and embed the two-view geometry, exactly as the
-existing matchers do — `_run_matching` builds a temporary COLMAP DB, matches
-(which verifies), then `read_colmap_db_matches(db, include_tvg=True)` →
-`write_matches`. The cluster matcher reuses the **same back half**, seeding the DB
-with the cluster pairs instead of running a pycolmap matcher:
-
-1. Populate a temporary COLMAP DB with the images' features
-   (`_populate_db_features`, as `_run_matching` does).
-2. Write the cluster pair arrays into the DB (`_write_matches_to_db` from
-   `_colmap_db.py`, or `pycolmap.Database.write_matches` per pair).
-3. `pycolmap.verify_matches(str(db_path), str(pairs_path), options=tvg_options)`
-   — populates the two-view geometries. It verifies the pairs named in
-   `pairs_path`, one `name_i name_j` per line, so that file is written out
-   first. This is the call the rest of the tree uses (`_run.py:504`,
-   `_derive_pairs.py:84`) in preference to
-   `pycolmap.geometric_verification(db_path)`, which verifies every pair the
-   database holds.
-4. `matches_data = read_colmap_db_matches(str(db_path), include_tvg=True)` —
-   reads the surviving matches **and** their TVG back, so
-   `has_two_view_geometries = True`.
-5. `_compute_descriptor_distances(matches_data, sift_paths, max_feature_count)`,
-   fill metadata, then `write_matches(out, matches_data)`.
-
-Set `matching_method = "cluster"`, `matching_tool = "sfmtool"`,
-`matching_tool_version` = the package version, and record the parameters in
-`matching_options` (`{"mode": "background-floor", "d": d, "alpha": alpha,
-"min_size": min_size, "preset": preset}`). The resulting `.matches` carries
-two-view geometry, like every other matcher's output.
-
-The CLI consumes only the pair output today; the clusters are returned to the
-orchestrator so a future cluster artefact (a persisted cluster file, cluster
-visualisation, track seeding) can be added without touching the matcher.
-Persisting clusters to disk is **out of scope** here.
-
-> Factor the verify-and-write back half so the cluster path and the existing
-> paths share it rather than duplicating the DB / TVG plumbing.
-
-Add an orchestrator in `_run.py`, e.g. `_run_cluster_matching(image_paths,
-output_path, *, d, alpha, min_size, preset, max_feature_count,
-workspace_dir)`, that resolves `.sift` paths via `image_files_to_sift_files`,
-calls `cluster_match`, runs the verify-and-write back half above, and returns the
-output path. Because the matches now carry two-view geometry, the default output
-goes under `workspace/tvg-matches/` (the same place the existing verified matchers
-write), not `matches/`.
-
-#### CLI: extend `sfm match`
-
-Add a fourth matching **method** to `src/sfmtool/_commands/match.py`, mutually
-exclusive with `--exhaustive` / `--sequential` / `--flow`:
-
-```
---cluster                 use the background-floor track-cluster matcher
---cluster-alpha FLOAT     background-floor radius multiplier (default 0.8)
---cluster-d INT           background rank: d-th-nearest distance sets the floor (default 10)
---cluster-preset CHOICE   forest preset: accurate|balanced|fast (default accurate)
-```
-
-`--cluster` dispatches to `_run_cluster_matching` over the resolved image set and
-honours `--max-features`, `--output`, and `--range` (range restricts the image
-set the corpus is built from). Update the method-selection / mutual-exclusion
-validation and the help text. Keep it in the **Image Feature** category (already
-where `match` is registered in `cli.py`).
-
-**Camera model / camera_config.** The clustering itself uses no intrinsics or
-poses, but the geometric-verification step that turns clustered pairs into
-two-view geometries does. `--camera-model` therefore stays available with
-`--cluster`: it is written into the COLMAP database (exactly as for the other
-matchers) and used to estimate each pair's two-view geometry. The existing
-`_check_camera_model_conflict` (`src/sfmtool/camera/setup.py`) still applies
-across all methods, so `--camera-model` is rejected when a `camera_config.json`
-resolves for an image.
-
-#### CLI spec
-
-Add a short `## Cluster matching` section to `specs/cli/image-feature/match-command.md`
-describing `--cluster` and its options, and link back to this section.
-
-#### Downstream (no new code)
-
-The emitted `.matches` flows through the existing consumers unchanged:
-
-```bash
-pixi run sfm match --cluster images -o matches/cluster-clusters.matches
-pixi run sfm to-colmap-db matches/cluster-clusters.matches colmap.db
-pixi run sfm match --derive-pairs matches/cluster-clusters.matches \
-    -o tvg-matches/cluster.matches
-pixi run sfm solve -i tvg-matches/cluster.matches                       # incremental SfM
-```
-
-`sfm to-colmap-db` derives the pairs from the cluster file at read time.
-`sfm solve` needs the two-view geometries the mapper reads its correspondence
-graph from, which is what `sfm match --derive-pairs` produces;
-`_setup_for_sfm_from_matches` / `_write_matches_to_db` then write the embedded
-TVG straight into the COLMAP DB. There is no `sfm solve --cluster` shortcut
-(match then map in one call); the `match → .matches → derive-pairs → solve`
-path is the pipeline.
-
-#### Tests
-
-- **Unit**: `tests/matching/test_cluster_matching.py` — small synthetic descriptor sets
-  through `cluster_match`, asserting cluster invariants (disjoint, one feature
-  per image, spans ≥ `min_size` images) and one-to-one-per-pair on the converted
-  matches.
-- **Integration**: using the `isolated_seoul_bull_17_images` fixture (see
-  `tests/conftest.py`), run `sfm match --cluster` and assert a clusters
-  `.matches` file is produced with `cluster_count` / `cluster_member_count` > 0
-  and no two-view geometries, and that a second run reproduces the backbone bit
-  for bit; feed it to `to-colmap-db` and to `sfm match --derive-pairs`, whose
-  output carries two-view geometries.
-- `pixi run fmt && pixi run check` for the Python changes.
-
-### Production defaults (single source of truth)
-
-| Parameter | Default      | Layer(s)            | Meaning                                            |
-| --------- | ------------ | ------------------- | -------------------------------------------------- |
-| `d`       | 10           | core/py/cli         | background rank: `B_i = dist[i, d]`; query width is `d + 1` (derived) |
-| `alpha`   | 0.8          | core/py/cli         | keep neighbours within `alpha · B_i`               |
-| `min_size`| 2            | core/py/cli         | record a cluster only if it spans ≥ this many images |
-| `preset`  | `accurate`   | core/py/cli         | forest build + search budget                       |
-| distance  | Euclidean L2 | all                 | sqrt of the forest's squared distances             |
-| TVG       | embedded     | py/cli              | matcher runs geometric verification; `.matches` carries two-view geometry |
-
-These are the tuned values from the empirical sections above, with `d` re-tuned
-by the production sweep in [Choosing `d`](#choosing-d); do not change them
-without re-running the membership-rule bench and the end-to-end reconstructions.
+by many unrelated features; a cluster here aims to be the observations of a
+single 3-D point. Selecting only the image pairs that share a cluster does the
+same job the vocabulary tree does for COLMAP, avoiding `O(N²)` pair enumeration,
+but inside the matching step instead of a separate retrieval stage.

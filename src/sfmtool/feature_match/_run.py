@@ -550,10 +550,12 @@ def _run_cluster_matching(
 
     Materializes track clusters, expands them into per-image-pair matches,
     writes those to the database, and runs geometric verification via
-    pycolmap. This is the in-solve matching mode (`sfm solve` from images with
-    `matching_mode="cluster"`), which needs the matches and two-view
-    geometries in the solve's own database; `sfm match --cluster` writes the
-    clusters to a `.matches` file instead and never opens a database.
+    pycolmap. This is the in-solve matching mode (`_setup_for_sfm` with
+    `matching_mode="cluster"`, reached through `run_global_sfm` and
+    `run_incremental_sfm`; no CLI command selects it), which needs the
+    matches and two-view geometries in the solve's own database;
+    `sfm match --cluster` writes the clusters to a `.matches` file instead and
+    never opens a database.
 
     ``exclude_index_pairs`` is a set of normalized ``(i, j)`` image-index pairs
     (indices into ``image_paths``) to drop from the output — used for
