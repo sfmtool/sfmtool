@@ -95,7 +95,8 @@ impl PyAffineFactorization {
     ///
     /// Returns:
     ///     A pair of ``MetricHypothesis`` objects, or ``None`` when no image
-    ///     is used or the constraint system is degenerate.
+    ///     is used, the constraint system is degenerate, or ``Q`` has no
+    ///     positive eigenvalue.
     fn metric_upgrade(&self) -> Option<(PyMetricHypothesis, PyMetricHypothesis)> {
         let [a, b] = core_metric_upgrade(&self.inner)?;
         Some((
@@ -164,7 +165,8 @@ impl PyMetricHypothesis {
 ///     num_images: Number of images the indexes refer to.
 ///     num_clusters: Number of clusters the indexes refer to.
 ///     rounds: Fixed alternation round count (default 25); trimming runs
-///         from round ``rounds // 2`` onward.
+///         from round ``rounds // 2`` onward. ``0`` returns the
+///         initialization.
 ///     trim_fraction: Per-trim fraction (default 0.05): each trimming round
 ///         keeps the observations with residual norm strictly below the
 ///         ``1 - trim_fraction`` quantile (numpy-default linear
