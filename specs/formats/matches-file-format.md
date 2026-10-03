@@ -1057,85 +1057,27 @@ reported, not a crash.
 
 ## Usage Examples
 
-### Writing a .matches file after sequential matching
+This spec defines the bytes on disk, not a programming interface, so it carries
+no code examples. The code that reads, writes and verifies `.matches` files is:
 
-```python
-from sfmtool.matches_file import write_matches
+- Rust: `read_matches`, `read_matches_metadata`, `write_matches` and
+  `verify_matches` in
+  [`sfmtool-matches-format`](../../crates/sfmtool-matches-format/src/lib.rs).
+- Python: the same four functions in `sfmtool._sfmtool.io`, which take and
+  return a dict of NumPy arrays and metadata
+  ([bindings](../../crates/sfmtool-py/src/io/matches.rs)), and
+  `sfmtool._sfmtool.io.MatchesFile`, which opens a file for the cluster
+  queries ([bindings](../../crates/sfmtool-py/src/io/matches_file.rs)).
 
-write_matches(
-    output_path="matches/20260329-00-sequential_1-83.matches",
-    images={
-        "names": image_names,
-        "feature_tool_hashes": feature_tool_hashes,
-        "sift_content_hashes": sift_content_hashes,
-        "feature_counts": feature_counts,
-        "image_dims": image_dims,                  # (N, 2) uint32 (width, height)
-    },
-    pairs={
-        "image_index_pairs": image_index_pairs,   # (P, 2) uint32
-        "match_counts": match_counts,              # (P,) uint32
-        "match_feature_indexes": match_indexes,    # (M, 2) uint32
-        "match_descriptor_distances": distances,   # (M,) float32
-    },
-    metadata={
-        "matching_method": "sequential",
-        "matching_tool": "colmap",
-        "matching_tool_version": "4.02",
-        "matching_options": {
-            "overlap": 10,
-            "quadratic_overlap": True,
-            "max_feature_count": 8192,
-        },
-        "workspace": {...},
-    },
-)
-```
-
-### Reading matches and populating a COLMAP database
-
-```python
-from sfmtool.matches_file import MatchesReader
-
-with MatchesReader("matches.matches") as reader:
-    metadata = reader.metadata
-    image_names = reader.read_image_names()
-    pairs = reader.read_image_index_pairs()
-    counts = reader.read_match_counts()
-
-    # Load matches for specific pairs
-    for k, (idx_i, idx_j) in enumerate(pairs):
-        matches = reader.read_matches_for_pair(k)  # (count, 2) uint32
-        db.write_matches(img_id_i, img_id_j, matches)
-
-    # Or load all matches at once
-    all_matches = reader.read_all_match_feature_indexes()  # (M, 2) uint32
-```
+`verify_matches` returns `(is_valid, error_messages)`.
 
 ### Writing a verified .matches file from an existing one
 
-A common workflow: read a matches-only file, run geometric verification, and write a
-new self-contained file that includes both matches and TVGs. The original file is not
-modified — the new file is written to a separate path with its own content hash.
-
-```python
-from sfmtool.matches_file import MatchesReader, write_matches
-
-# Read the matches-only file
-with MatchesReader("matches/20260329-00-sequential_1-83.matches") as reader:
-    data = reader.read_all()
-
-# Run geometric verification (e.g., via pycolmap)
-tvgs = run_geometric_verification(data)
-
-# Write a NEW file with both matches and TVGs
-write_matches(
-    output_path="tvg-matches/20260329-01-sequential-verified.matches",
-    images=data["images"],
-    pairs=data["pairs"],
-    two_view_geometries=tvgs,
-    metadata={**data["metadata"], "has_two_view_geometries": True},
-)
-```
+Geometric verification does not modify the file it reads. It reads a matches-only
+file, verifies its pairs, and writes a new self-contained file at a separate path
+that holds the same images and candidate matches plus the
+[two-view geometries section](#7-two-view-geometries-optional-section), with
+`has_two_view_geometries` set to `true` in its metadata and its own content hash.
 
 ## As part of a Pipeline
 

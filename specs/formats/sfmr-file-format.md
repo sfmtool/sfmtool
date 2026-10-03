@@ -1817,90 +1817,19 @@ The hashes are the ones described under [Content Hash](#2-content-hash-content_h
 
 ## Usage Examples
 
-### Reading a .sfmr file
+This spec defines the bytes on disk, not a programming interface, so it carries
+no code examples. The code that reads, writes and verifies `.sfmr` files is:
 
-```python
-from sfmtool import SfmrFileReader
+- Rust: `read_sfmr`, `read_sfmr_metadata`, `write_sfmr` and `verify_sfmr` in
+  [`sfmtool-sfmr-format`](../../crates/sfmtool-sfmr-format/src/lib.rs).
+- Python: the same four functions in `sfmtool._sfmtool.io`, which take and
+  return a dict of NumPy arrays and metadata
+  ([bindings](../../crates/sfmtool-py/src/io/sfmr.rs)), and
+  `sfmtool._sfmtool.reconstruction.SfmrReconstruction`, whose `load` and `save`
+  most of the Python package uses
+  ([bindings](../../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs)).
 
-with SfmrFileReader("reconstruction.sfmr") as sfm:
-    # Read metadata
-    metadata = sfm.metadata
-    print(f"Reconstruction with {metadata['image_count']} images")
-
-    # Load cameras
-    cameras = sfm.read_cameras()
-
-    # Load images
-    image_names = sfm.read_image_names()
-    camera_indexes, quaternions, translations = sfm.read_image_data()
-
-    # Load 3D points (positions are homogeneous: (N, 4) [x, y, z, w])
-    positions_xyzw, colors_rgb, reprojection_errors = sfm.read_points3d()
-
-    # Load tracks
-    image_indexes, feature_indexes, point_indexes, obs_counts = sfm.read_tracks()
-```
-
-### Writing a .sfmr file
-
-```python
-from sfmtool import write_sfm
-
-write_sfm(
-    output_path="reconstruction.sfmr",
-    cameras=cameras,
-    images={
-        "names": image_names,
-        "camera_indexes": camera_indexes,
-        "quaternions_wxyz": quaternions,
-        "translations_xyz": translations,
-        "feature_tool_hashes": feature_hashes,
-        "sift_content_hashes": content_hashes,
-    },
-    points3d={
-        "positions_xyzw": positions_xyzw,
-        "colors_rgb": colors_rgb,
-        "reprojection_errors": reprojection_errors,
-    },
-    tracks={
-        "image_indexes": image_indexes,
-        "feature_indexes": feature_indexes,
-        "point_indexes": point_indexes,
-        "observation_counts": observation_counts,
-    },
-    metadata={
-        "operation": "sfm_solve",
-        "tool": "colmap",
-        "tool_version": "3.10",
-        "tool_options": {...},
-        "workspace": {
-            "absolute_path": "/path/to/workspace",
-            "relative_path": "../workspace",
-            "contents": {
-                "feature_tool": "colmap",
-                "feature_type": "sift",
-                "feature_options": {...},
-                "feature_prefix_dir": "features/sift-colmap-d1245b460906df27ee4730273e0aba41"
-            }
-        },
-        # ... other metadata
-    }
-)
-```
-
-### Verifying integrity
-
-```python
-from sfmtool import verify_sfm
-
-is_valid, errors = verify_sfm("reconstruction.sfmr")
-if is_valid:
-    print("✓ File integrity verified")
-else:
-    print("✗ Verification failed:")
-    for error in errors:
-        print(f"  - {error}")
-```
+`verify_sfmr` returns `(is_valid, error_messages)`.
 
 ## Comparison with Directory Format
 
