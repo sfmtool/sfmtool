@@ -20,7 +20,7 @@ use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONST
 
 use super::points::{
     triangulate_points_through_cameras, FewObservations, ObservationSet, PointCensus,
-    PointDistance, PointRules, TriangulatedPoints,
+    PointDistance, PointRules, PointVerdict, TriangulatedPoints,
 };
 use crate::numeric::median_in_place;
 use crate::progress::{Cancelled, Progress};
@@ -169,26 +169,196 @@ impl From<EditError> for RetriangulateError {
     }
 }
 
-/// What one retriangulation did.
+/// What one retriangulation did, point by point.
+///
+/// [`Self::points`] is the record, and every count the report gives is read
+/// off it, so a count cannot disagree with the statuses it summarises. The
+/// census is the array solve's own, over the points that were read, and it
+/// agrees with the statuses as well: its `seen` is [`Self::read`], its `few`
+/// is [`Self::kept`], each of its other buckets is
+/// [`Self::with_verdict`] of that bucket's verdict, and its `pruned_obs` is the
+/// sum of the statuses' `pruned`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetriangulateReport {
-    /// Points the operation solved.
-    pub read: usize,
-    /// Observations behind them.
+    /// One status per point the call was asked about, held points included, in
+    /// ascending order of [`RetriangulatedPoint::index`]. Under
+    /// [`RetriangulateWhich::All`] that is every live point of the value; under
+    /// [`RetriangulateWhich::These`] it is each index named, once.
+    pub points: Vec<RetriangulatedPoint>,
+    /// Observations behind the points that were read.
     pub observations: usize,
-    /// Points it never read, because the value holds them at the coordinate
-    /// they have.
-    pub held: usize,
-    /// Points whose stored geometry the answer replaced.
-    pub moved: usize,
-    /// Of those, the ones that changed representation: a position that became a
-    /// direction, or a direction that became a position.
-    pub crossed: usize,
-    /// Points the operation had nothing to say about, which keep the geometry
-    /// they had: fewer than two of their observations state a usable ray.
-    pub kept: usize,
     /// How many points each rule decided, and what the finite ones look like.
     pub census: PointCensus,
+}
+
+/// What one retriangulation did to one point, and where to find it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetriangulatedPoint {
+    /// The point's index in the value the call was given.
+    pub index: u32,
+    /// The point's index in the value the call returned, which is where the
+    /// returned [`PointMap`] forwards [`Self::index`] to. A point
+    /// [`RetriangulateWhich::These`] rewrote takes a new index; a point it did
+    /// not rewrite keeps the one it had, and under [`RetriangulateWhich::All`]
+    /// this is the point's row in the new base.
+    pub new_index: u32,
+    /// What happened to it.
+    pub outcome: RetriangulateOutcome,
+}
+
+/// What a retriangulation did to one point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RetriangulateOutcome {
+    /// The value holds the point at the coordinate it has, so the solve never
+    /// read it and its geometry is unchanged.
+    Held,
+    /// Fewer than two of its observations state a usable ray, which is the
+    /// solve's [`PointVerdict::Few`]. The operation has nothing to say about
+    /// the point, so it keeps the geometry it had.
+    Kept,
+    /// The solve answered, and the answer is what the point now holds.
+    Solved {
+        /// The rule that decided it, never [`PointVerdict::Few`]. Under
+        /// [`PointVerdict::Finite`], [`PointVerdict::FinitePruned`] and
+        /// [`PointVerdict::Ranged`] at a finite distance the answer is a
+        /// position; under [`PointVerdict::Marked`], [`PointVerdict::Thin`],
+        /// [`PointVerdict::Behind`], [`PointVerdict::OverBar`] and
+        /// [`PointVerdict::Ranged`] at an infinite distance it is a direction.
+        verdict: PointVerdict,
+        /// Observations the cheirality prune left out of the solve because they
+        /// see the point behind them. Nonzero only under
+        /// [`PointVerdict::FinitePruned`]. They stay on the point's track: the
+        /// prune leaves them out of this solve, and deleting them is a separate
+        /// edit.
+        pruned: u32,
+        /// How the answer differs from the geometry the point had.
+        change: GeometryChange,
+    },
+}
+
+/// How a solved point's answer differs from the geometry it had.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GeometryChange {
+    /// The answer is the stored geometry, bit for bit, so nothing was written.
+    Unchanged,
+    /// A position that stayed a position, or a direction that stayed a
+    /// direction, moved.
+    Moved {
+        /// How far a position travelled, in the value's own units; `None` for a
+        /// direction, whose change is a turn and not a distance.
+        shift: Option<f64>,
+    },
+    /// A position became a direction, or a direction became a position.
+    Crossed,
+}
+
+impl RetriangulateOutcome {
+    /// The verdict the solve reached, or `None` for a point it never read.
+    /// [`Self::Kept`] is [`PointVerdict::Few`].
+    pub fn verdict(&self) -> Option<PointVerdict> {
+        match self {
+            RetriangulateOutcome::Held => None,
+            RetriangulateOutcome::Kept => Some(PointVerdict::Few),
+            RetriangulateOutcome::Solved { verdict, .. } => Some(*verdict),
+        }
+    }
+
+    /// Whether the point's stored geometry changed.
+    pub fn moved(&self) -> bool {
+        matches!(
+            self,
+            RetriangulateOutcome::Solved {
+                change: GeometryChange::Moved { .. } | GeometryChange::Crossed,
+                ..
+            }
+        )
+    }
+}
+
+/// The outcome in the words a reader is shown, as the tail of a sentence about
+/// one point: "Retriangulated point 42 in run_a: `finite, unchanged`".
+///
+/// The verdict's own [`PointVerdict::label`], then how many observations the
+/// prune left out where it left any out, then `unchanged` where the answer is
+/// the geometry the point already had. Held here so the viewer's Action Log and
+/// the wire say the same words about the same point.
+impl std::fmt::Display for RetriangulateOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RetriangulateOutcome::Held => write!(f, "held at its coordinate, so not read"),
+            RetriangulateOutcome::Kept => f.write_str(PointVerdict::Few.label()),
+            RetriangulateOutcome::Solved {
+                verdict,
+                pruned,
+                change,
+            } => {
+                f.write_str(verdict.label())?;
+                match pruned {
+                    0 => {}
+                    1 => f.write_str(" (1 observation that sees it behind was left out)")?,
+                    n => write!(f, " ({n} observations that see it behind were left out)")?,
+                }
+                if *change == GeometryChange::Unchanged {
+                    f.write_str(", unchanged")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl RetriangulateReport {
+    /// The status of the point `index` names in the value the call was given,
+    /// or `None` where the call was not asked about it.
+    pub fn point(&self, index: u32) -> Option<&RetriangulatedPoint> {
+        self.points
+            .binary_search_by_key(&index, |p| p.index)
+            .ok()
+            .map(|k| &self.points[k])
+    }
+
+    /// Points the solve read: every status but [`RetriangulateOutcome::Held`].
+    pub fn read(&self) -> usize {
+        self.count(|o| !matches!(o, RetriangulateOutcome::Held))
+    }
+
+    /// Points the solve never read, because the value holds them at the
+    /// coordinate they have.
+    pub fn held(&self) -> usize {
+        self.count(|o| matches!(o, RetriangulateOutcome::Held))
+    }
+
+    /// Points whose stored geometry the answer replaced.
+    pub fn moved(&self) -> usize {
+        self.count(RetriangulateOutcome::moved)
+    }
+
+    /// Of those, the ones that changed representation: a position that became a
+    /// direction, or a direction that became a position.
+    pub fn crossed(&self) -> usize {
+        self.count(|o| {
+            matches!(
+                o,
+                RetriangulateOutcome::Solved {
+                    change: GeometryChange::Crossed,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Points the operation had nothing to say about, which keep the geometry
+    /// they had: fewer than two of their observations state a usable ray.
+    pub fn kept(&self) -> usize {
+        self.count(|o| matches!(o, RetriangulateOutcome::Kept))
+    }
+
+    /// Points the solve gave `verdict`. [`PointVerdict::Few`] counts the
+    /// [`Self::kept`] points.
+    pub fn with_verdict(&self, verdict: PointVerdict) -> usize {
+        self.count(|o| o.verdict() == Some(verdict))
+    }
+
     /// Median distance a moved finite point travelled, in the value's own
     /// units; `NaN` where no finite point moved.
     ///
@@ -196,7 +366,29 @@ pub struct RetriangulateReport {
     /// crossing has no distance: the value before and the value after are a
     /// place and a direction, and what subtracting one from the other produces
     /// is not a distance in the scene.
-    pub median_shift: f64,
+    pub fn median_shift(&self) -> f64 {
+        let mut shifts: Vec<f64> = self
+            .points
+            .iter()
+            .filter_map(|p| match p.outcome {
+                RetriangulateOutcome::Solved {
+                    change: GeometryChange::Moved { shift },
+                    ..
+                } => shift,
+                _ => None,
+            })
+            .collect();
+        if shifts.is_empty() {
+            f64::NAN
+        } else {
+            median_in_place(&mut shifts)
+        }
+    }
+
+    /// How many statuses `keep` accepts.
+    fn count(&self, keep: impl Fn(&RetriangulateOutcome) -> bool) -> usize {
+        self.points.iter().filter(|p| keep(&p.outcome)).count()
+    }
 }
 
 /// Re-solve the points `which` names from their own observations, at `edited`'s
@@ -221,11 +413,19 @@ pub struct RetriangulateReport {
 ///
 /// **A point the operation cannot speak for keeps the geometry it has.** That
 /// is a point fewer than two of whose observations state a usable ray, which
-/// comes back absent; it is counted in [`RetriangulateReport::kept`] rather
-/// than written as a `NaN`. Every other verdict is written: a point the floor
-/// calls thin, or cheirality refuses, or the bar turns down, becomes the
+/// comes back absent; its status is [`RetriangulateOutcome::Kept`] rather than
+/// a `NaN` written into the value. Every other verdict is written: a point the
+/// floor calls thin, or cheirality refuses, or the bar turns down, becomes the
 /// direction its rays agree on, and the patch frame of a point that moved is
 /// rescaled so the patch keeps the angular size it had.
+///
+/// **The report says what happened to every point asked about.**
+/// [`RetriangulateReport::points`] holds one [`RetriangulatedPoint`] per point,
+/// held ones included, carrying its index in `edited`, its index in the value
+/// returned, and its [`RetriangulateOutcome`]: held and not read, kept for too
+/// few observations, or solved under a named verdict, with the observations the
+/// cheirality prune left out and how the geometry changed. The report's counts
+/// are read off those statuses.
 ///
 /// `progress` names the three stages (gathering the arrays, the solve, writing
 /// the answer back) and is how the call is asked to stop. A cancel is read
@@ -249,7 +449,12 @@ pub struct RetriangulateReport {
 ///     &RetriangulateOptions::default(),
 ///     &Progress::none(),
 /// )?;
-/// println!("{} of {} points moved", report.moved, report.read);
+/// println!("{} of {} points moved", report.moved(), report.read());
+/// for point in &report.points {
+///     if !point.outcome.moved() {
+///         println!("point {} (now {}): {}", point.index, point.new_index, point.outcome);
+///     }
+/// }
 /// # let _ = (next, map);
 /// # Ok(())
 /// # }
@@ -321,24 +526,50 @@ pub fn retriangulate_points(
     };
     progress.check_cancel()?;
 
-    let (next, map, report) = {
+    let (next, map, mut points) = {
         let _phase = p_write.phase("write back");
         match which {
             RetriangulateWhich::All => write_whole_value(&work, &gathered, &estimates),
             RetriangulateWhich::These(_) => write_overlay(edited, &gathered, &estimates)?,
         }
     };
+    // A held point is not rewritten by either write, so it keeps the index it
+    // has in `work`: the same row of the new base under `All`, the same index
+    // of the overlay under `These`.
+    points.extend(gathered.held.iter().map(|&index| RetriangulatedPoint {
+        index,
+        new_index: index,
+        outcome: RetriangulateOutcome::Held,
+    }));
     let map = match folded {
-        Some(materialised) => PointMap::Chain(vec![materialised, map]),
+        Some(materialised) => {
+            // Every status was written in `work`'s indexing, which is the
+            // materialisation's; the caller holds `edited`'s, so each is read
+            // back through the fold. Every row of a materialisation has a
+            // source, and the fold need not keep the order, so the statuses are
+            // sorted after.
+            for point in &mut points {
+                point.index = materialised
+                    .inverse(point.index)
+                    .expect("every materialised row has a source");
+            }
+            PointMap::Chain(vec![materialised, map])
+        }
         None => map,
+    };
+    points.sort_unstable_by_key(|p| p.index);
+    let report = RetriangulateReport {
+        points,
+        observations: gathered.obs_point.len(),
+        census: estimates.census,
     };
     progress_info!(
         progress,
         "{} of {} points moved, {} kept, {} held",
-        report.moved,
-        report.read,
-        report.kept,
-        report.held
+        report.moved(),
+        report.read(),
+        report.kept(),
+        report.held()
     );
     Ok((next, map, report))
 }
@@ -348,8 +579,9 @@ pub fn retriangulate_points(
 struct Gathered {
     /// The live indexes the solve is over, ascending, one per track slot.
     targets: Vec<u32>,
-    /// Points not in `targets` because the value holds their coordinate.
-    held: usize,
+    /// The live indexes not in `targets` because the value holds their
+    /// coordinate, ascending.
+    held: Vec<u32>,
     /// Per image, the camera-table index of the camera it was taken through.
     image_camera: Vec<u32>,
     uv: Vec<f64>,
@@ -423,7 +655,7 @@ fn gather(
             these
         }
     };
-    let mut held = 0usize;
+    let mut held = Vec::new();
     let mut targets = Vec::with_capacity(candidates.len());
     for index in candidates {
         let view = work.point(index).expect("a live index");
@@ -431,7 +663,7 @@ fn gather(
             .constraint()
             .is_some_and(|(k, _, _)| k == POINT_CONSTRAINT_HELD)
         {
-            held += 1;
+            held.push(index);
             continue;
         }
         targets.push(index);
@@ -505,42 +737,70 @@ fn ranged_entry(
     }
 }
 
-/// What one point's answer is, read against the geometry it had.
+/// One point's answer, read against the geometry it came in with: its outcome,
+/// and the geometry to write where that changed.
 struct Decision {
-    /// Where the answer puts it, and whether that is a position.
-    position: Point3<f64>,
-    w: f64,
-    /// Whether the stored geometry changed at all.
-    moved: bool,
-    /// Whether the representation changed with it.
-    crossed: bool,
-    /// How far a finite point that stayed finite travelled; `None` otherwise.
-    shift: Option<f64>,
+    outcome: RetriangulateOutcome,
+    /// Where the answer puts the point, and its `w`; `None` where nothing is to
+    /// be written.
+    write: Option<(Point3<f64>, f64)>,
 }
 
-/// Read one point's estimate against the geometry it came in with, or `None`
-/// where the operation had nothing to say about it.
-fn decide_point(before: &Point3D, xyzw: [f64; 4]) -> Option<Decision> {
+/// Read the estimate of track slot `slot` against `before`, the geometry the
+/// point came in with.
+fn decide_point(
+    before: &Point3D,
+    estimates: &TriangulatedPoints,
+    pruned: &[u32],
+    slot: usize,
+) -> Decision {
+    let xyzw = estimates.xyzw[slot];
+    let verdict = estimates.verdicts[slot];
+    // The rules hand `Few` back as an absent estimate, and it is the only
+    // verdict that comes back absent: every other one is a solve over two or
+    // more finite rays, or their mean. The test is on the estimate itself, so
+    // no `NaN` is ever written whatever verdict it came under.
     if !xyzw.iter().all(|c| c.is_finite()) {
-        return None;
+        debug_assert_eq!(verdict, PointVerdict::Few);
+        return Decision {
+            outcome: RetriangulateOutcome::Kept,
+            write: None,
+        };
     }
     let position = Point3::new(xyzw[0], xyzw[1], xyzw[2]);
     let w = xyzw[3];
     let was_at_infinity = before.is_at_infinity();
     let now_at_infinity = w == 0.0;
-    let crossed = was_at_infinity != now_at_infinity;
-    let shift =
-        (!crossed && !now_at_infinity).then(|| (position.coords - before.position.coords).norm());
-    Some(Decision {
-        moved: crossed || position != before.position,
-        crossed,
-        shift,
-        position,
-        w,
-    })
+    let change = if was_at_infinity != now_at_infinity {
+        GeometryChange::Crossed
+    } else if position == before.position {
+        GeometryChange::Unchanged
+    } else {
+        GeometryChange::Moved {
+            shift: (!now_at_infinity).then(|| (position.coords - before.position.coords).norm()),
+        }
+    };
+    Decision {
+        outcome: RetriangulateOutcome::Solved {
+            verdict,
+            pruned: pruned[slot],
+            change,
+        },
+        write: (change != GeometryChange::Unchanged).then_some((position, w)),
+    }
 }
 
-/// The answers written into a fresh base, for a retriangulation of every point.
+/// Per track slot, how many of its observations the cheirality prune left out.
+fn pruned_per_slot(gathered: &Gathered, estimates: &TriangulatedPoints) -> Vec<u32> {
+    let mut counts = vec![0u32; gathered.targets.len()];
+    for (&slot, &dropped) in gathered.obs_point.iter().zip(&estimates.pruned) {
+        counts[slot as usize] += u32::from(dropped);
+    }
+    counts
+}
+
+/// The answers written into a fresh base, for a retriangulation of every point,
+/// with one status per target in `work`'s indexing.
 ///
 /// `work` holds no overlay here -- it is either the caller's value with an empty
 /// one or the materialisation of the value that had one -- so the targets are
@@ -549,84 +809,76 @@ fn write_whole_value(
     work: &EditedReconstruction,
     gathered: &Gathered,
     estimates: &TriangulatedPoints,
-) -> (EditedReconstruction, PointMap, RetriangulateReport) {
+) -> (EditedReconstruction, PointMap, Vec<RetriangulatedPoint>) {
     let mut out = work.base.clone_for_edit();
-    let mut report = empty_report(gathered, estimates);
-    let mut shifts: Vec<f64> = Vec::new();
+    let pruned = pruned_per_slot(gathered, estimates);
+    let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     for (slot, &index) in gathered.targets.iter().enumerate() {
         let p = index as usize;
-        let Some(decision) = decide_point(&out.point_set.points[p], estimates.xyzw[slot]) else {
-            report.kept += 1;
+        let decision = decide_point(&out.point_set.points[p], estimates, &pruned, slot);
+        // Every point keeps the row it had: this edit deletes none and creates
+        // none, it moves them.
+        points.push(RetriangulatedPoint {
+            index,
+            new_index: index,
+            outcome: decision.outcome,
+        });
+        let Some((position, w)) = decision.write else {
             continue;
         };
-        if !decision.moved {
-            continue;
-        }
         let before = &out.point_set.points[p];
-        let was_at_infinity = before.is_at_infinity();
-        let before_scale = (!was_at_infinity).then(|| {
+        let before_scale = (!before.is_at_infinity()).then(|| {
             work.base
                 .image_table
                 .placement_scale(&before.position.clone())
         });
-        let after = (decision.w != 0.0).then_some(&decision.position);
+        let after = (w != 0.0).then_some(&position);
         rescale_patch_frame(&mut out, p, before_scale, after);
         let point = &mut out.point_set.points[p];
-        point.position = decision.position;
-        point.w = decision.w;
-        report.moved += 1;
-        report.crossed += usize::from(decision.crossed);
-        shifts.extend(decision.shift);
+        point.position = position;
+        point.w = w;
     }
     out.rebuild_derived_fields();
-    // The middle of what the finite points travelled; see the field's own doc
-    // for the population it is over.
-    report.median_shift = if shifts.is_empty() {
-        f64::NAN
-    } else {
-        median_in_place(&mut shifts)
-    };
-    // Every point keeps the index it had: this edit deletes none and creates
-    // none, it moves them.
     (
         EditedReconstruction::new(Arc::new(out)),
         PointMap::Removed(Vec::new()),
-        report,
+        points,
     )
 }
 
 /// The answers written as an overlay edit, for a retriangulation of a handful of
-/// points.
+/// points, with one status per target.
 ///
 /// Delete-and-re-add, which is what a modified point is here, so each rewritten
-/// point takes a new index and the map says where it went.
+/// point takes a new index, and both the map and its status say where it went.
 fn write_overlay(
     edited: &EditedReconstruction,
     gathered: &Gathered,
     estimates: &TriangulatedPoints,
-) -> Result<(EditedReconstruction, PointMap, RetriangulateReport), RetriangulateError> {
+) -> Result<(EditedReconstruction, PointMap, Vec<RetriangulatedPoint>), RetriangulateError> {
     let mut next = edited.clone();
-    let mut report = empty_report(gathered, estimates);
-    let mut shifts: Vec<f64> = Vec::new();
+    let pruned = pruned_per_slot(gathered, estimates);
+    let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     let mut moves = Vec::new();
     for (slot, &index) in gathered.targets.iter().enumerate() {
         let view = next.point(index).expect("a live index");
         let mut record = view.to_record();
-        let Some(decision) = decide_point(&record.point, estimates.xyzw[slot]) else {
-            report.kept += 1;
+        let decision = decide_point(&record.point, estimates, &pruned, slot);
+        let Some((position, w)) = decision.write else {
+            points.push(RetriangulatedPoint {
+                index,
+                new_index: index,
+                outcome: decision.outcome,
+            });
             continue;
         };
-        if !decision.moved {
-            continue;
-        }
-        let was_at_infinity = record.point.is_at_infinity();
-        let before_scale = (!was_at_infinity).then(|| {
+        let before_scale = (!record.point.is_at_infinity()).then(|| {
             edited
                 .base
                 .image_table
                 .placement_scale(&record.point.position)
         });
-        let after = (decision.w != 0.0).then_some(&decision.position);
+        let after = (w != 0.0).then_some(&position);
         if let Some(factor) = patch_frame_factor(&edited.base.image_table, before_scale, after) {
             for half in [&mut record.patch_u_halfvec, &mut record.patch_v_halfvec] {
                 if let Some(v) = half.as_mut() {
@@ -636,37 +888,17 @@ fn write_overlay(
                 }
             }
         }
-        record.point.position = decision.position;
-        record.point.w = decision.w;
+        record.point.position = position;
+        record.point.w = w;
         let to = next.replace_point(index, record)?;
         moves.push((index, to));
-        report.moved += 1;
-        report.crossed += usize::from(decision.crossed);
-        shifts.extend(decision.shift);
+        points.push(RetriangulatedPoint {
+            index,
+            new_index: to,
+            outcome: decision.outcome,
+        });
     }
-    // The middle of what the finite points travelled; see the field's own doc
-    // for the population it is over.
-    report.median_shift = if shifts.is_empty() {
-        f64::NAN
-    } else {
-        median_in_place(&mut shifts)
-    };
-    Ok((next, PointMap::Replaced(moves), report))
-}
-
-/// The report every write-back starts from: what the solve was over, before any
-/// point has been read back.
-fn empty_report(gathered: &Gathered, estimates: &TriangulatedPoints) -> RetriangulateReport {
-    RetriangulateReport {
-        read: gathered.targets.len(),
-        observations: gathered.obs_point.len(),
-        held: gathered.held,
-        moved: 0,
-        crossed: 0,
-        kept: 0,
-        census: estimates.census,
-        median_shift: f64::NAN,
-    }
+    Ok((next, PointMap::Replaced(moves), points))
 }
 
 #[cfg(test)]

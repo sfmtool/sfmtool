@@ -1847,11 +1847,19 @@ fn the_point_entry_names_the_version_and_the_verdict() {
         "Retriangulated point 11 in run_a"
     );
     let text = newest(&state).text.clone();
+    // What happened to the point, then the index the rewrite gave it, read off
+    // the operation's status for that point.
+    let now = state.scene[0]
+        .edited()
+        .live_index_of_base(11)
+        .expect("the point survived");
+    assert_ne!(now, 11);
     assert!(
-        text.starts_with("Retriangulated point 11 in run_a: "),
+        text.starts_with(&format!(
+            "Retriangulated point 11 in run_a: finite, now point {now} ("
+        )),
         "{text}"
     );
-    assert!(text.contains("finite"), "{text}");
     // The two stages a point edit has, and the core operation's three
     // underneath the first of them.
     let rows = phase_rows(&newest(&state).detail);
@@ -1864,6 +1872,38 @@ fn the_point_entry_names_the_version_and_the_verdict() {
         "{rows:?}"
     );
     assert_timed_from_the_work(&mut state.action_log);
+}
+
+#[test]
+fn a_point_entry_that_moved_nothing_says_so_and_names_no_new_index() {
+    // The fixture's own point stands where its pixels put it, so the solve
+    // answers with the geometry it has: nothing is rewritten and the index
+    // stays.
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    let first = state
+        .retriangulate_point(PointRef::new(id, 11))
+        .map(|()| newest(&state).text.clone())
+        .expect("the fixture retriangulates");
+    // A first pass may still move the point by the rounding of its f32
+    // pixels, so the second pass is the one asked about.
+    let index = state.scene[0]
+        .edited()
+        .live_index_of_base(11)
+        .expect("the point survived");
+    state
+        .retriangulate_point(PointRef::new(id, index as usize))
+        .expect("the fixture retriangulates");
+    let text = newest(&state).text.clone();
+    assert!(
+        text.starts_with(&format!(
+            "Retriangulated point {index} in run_a: finite, unchanged ("
+        )),
+        "{first} / {text}"
+    );
 }
 
 #[test]
@@ -1922,6 +1962,55 @@ fn retriangulating_every_point_pushes_one_version_with_a_new_base() {
         entry.text
     );
     assert!(entry.text.contains("points moved"), "{}", entry.text);
+}
+
+#[test]
+fn the_whole_value_entry_counts_what_happened_to_each_point() {
+    use sfmtool_core::reconstruction::triangulation::{
+        GeometryChange, PointCensus, PointVerdict, RetriangulateOutcome, RetriangulateReport,
+        RetriangulatedPoint,
+    };
+    let solved = |verdict, pruned, change| RetriangulateOutcome::Solved {
+        verdict,
+        pruned,
+        change,
+    };
+    let outcomes = [
+        solved(
+            PointVerdict::Finite,
+            0,
+            GeometryChange::Moved { shift: Some(0.5) },
+        ),
+        solved(PointVerdict::Finite, 0, GeometryChange::Unchanged),
+        solved(
+            PointVerdict::FinitePruned,
+            2,
+            GeometryChange::Moved { shift: Some(1.5) },
+        ),
+        solved(PointVerdict::Behind, 0, GeometryChange::Crossed),
+        solved(PointVerdict::Thin, 0, GeometryChange::Crossed),
+        RetriangulateOutcome::Kept,
+        RetriangulateOutcome::Held,
+    ];
+    let report = RetriangulateReport {
+        points: outcomes
+            .iter()
+            .enumerate()
+            .map(|(k, &outcome)| RetriangulatedPoint {
+                index: k as u32,
+                new_index: k as u32,
+                outcome,
+            })
+            .collect(),
+        observations: 18,
+        census: PointCensus::default(),
+    };
+    assert_eq!(
+        super::retriangulate_summary(&report),
+        "4 of 6 points moved, 2 crossed to or from infinity, 1 too thin to place, \
+         1 behind a camera that sees them, 1 placed on the observations that agree, \
+         1 left where they were for too few observations, 1 held, median shift 1.0000"
+    );
 }
 
 #[test]

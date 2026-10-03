@@ -235,10 +235,10 @@ one.
 The array forms know nothing about a reconstruction. `retriangulate_points`
 does: it takes an [`EditedReconstruction`](edited-reconstruction.md), says which
 of its points to re-solve, and hands back the value that holds the answers, the
-map from its indexes to that value's, and a report. It gathers the pixels, the
-poses, the camera each image was taken through and the constraint columns the
-observation form takes, runs the camera-table form once, and writes each point's
-answer back. Each observation is read through its own image's camera, so a value
+map from its indexes to that value's, and a report that says what happened to
+each point. It gathers the pixels, the poses, the camera each image was taken
+through and the constraint columns the observation form takes, runs the
+camera-table form once, and writes each point's answer back. Each observation is read through its own image's camera, so a value
 whose images are taken through several cameras -- a rig with one camera per
 sensor -- is solved in one call, and a track seen through two of them is
 solved from rays cast through both. It is pure, and it moves no camera and no
@@ -259,7 +259,7 @@ edit takes, which is not a coincidence. `All` rewrites the whole point list,
 which is a new base: the overlay is folded in first and the map is the
 materialisation's. `These(&[index])` is a delete-and-re-add of each named
 point's whole record, which is an overlay edit over the same base: each point
-takes a new index and the map is a `PointMap::Replaced`. So a caller states
+whose geometry changes takes a new index and the map is a `PointMap::Replaced`. So a caller states
 which points it means and gets the edit that fits. `These` costs a rebuild of
 the addition set's derived indexes per point, so it is for a handful.
 
@@ -281,12 +281,85 @@ the rule says nothing about it and it is solved free.
 
 **A point the operation cannot speak for keeps the geometry it has.** That is a
 point fewer than two of whose observations state a usable ray, which comes back
-absent: it is counted in the report's `kept` rather than written as a `NaN`,
-because saying nothing is not the same as saying a point is nowhere. Every other
+absent: its status says it was kept rather than a `NaN` being written, because
+saying nothing is not the same as saying a point is nowhere. Every other
 verdict is written. A point the floor calls thin, or cheirality refuses, or the
 bar turns down becomes the direction its rays agree on, and the patch frame of a
 point that moved is rescaled so the patch keeps the angular size it had, by the
 same ratio the adjustment and the camera move resize theirs by.
+
+### The report
+
+The report holds one status per point the call was asked about, held points
+included, in ascending order of the point's index in the value given. Under
+`All` that is every live point; under `These` it is each index named, once.
+
+```rust
+pub struct RetriangulateReport {
+    pub points: Vec<RetriangulatedPoint>,
+    pub observations: usize,
+    pub census: PointCensus,
+}
+
+pub struct RetriangulatedPoint {
+    pub index: u32,      // in the value the call was given
+    pub new_index: u32,  // in the value it returned
+    pub outcome: RetriangulateOutcome,
+}
+
+pub enum RetriangulateOutcome {
+    Held,
+    Kept,
+    Solved { verdict: PointVerdict, pruned: u32, change: GeometryChange },
+}
+
+pub enum GeometryChange {
+    Unchanged,
+    Moved { shift: Option<f64> },
+    Crossed,
+}
+```
+
+A status is shaped by what the operation decides about a point, which happens
+in three places. The gather decides whether the point is read at all: a held
+point is not, and its outcome is `Held`. The array solve decides the verdict: a
+point it answers with `few` comes back absent and is `Kept`, and every other
+verdict is `Solved` under that verdict, so `Solved` never carries `few`. The
+write decides what the answer does to the stored geometry: `Unchanged` where it
+is the stored geometry bit for bit, which writes nothing; `Moved` where a
+position stays a position or a direction stays a direction, with the distance a
+position travelled (a direction's change is a turn and carries none); and
+`Crossed` where a position becomes a direction or a direction a position. The
+verdict says what the answer is: `finite`, `finite_pruned` and `ranged` at a
+finite distance are positions, and `marked`, `thin`, `behind`, `over_bar` and
+`ranged` at an infinite distance are directions. `pruned` is how many of the
+point's observations the cheirality prune left out of its solve, nonzero only
+under `finite_pruned`; the observations stay on the track, since leaving them
+out of a solve is not deleting them.
+
+`index` and `new_index` name the point in the two values, and the returned map
+forwards the one to the other. A point `These` rewrites takes a new index, as
+every delete-and-re-add does; a point it does not rewrite -- held, kept or
+unchanged -- keeps its index. Under `All` the statuses are written in the
+materialisation's indexing and read back through the fold, so `index` is the
+caller's and `new_index` the point's row in the new base, and the two differ
+wherever the overlay deleted a point before it or put a rewritten point back in
+its base row.
+
+Every count is read off the statuses, as a method of the report: `read` (every
+status but `Held`), `held`, `moved` (a `Solved` whose change is `Moved` or
+`Crossed`), `crossed`, `kept`, `with_verdict`, and `median_shift`, the median of
+the distances `Moved` positions travelled, `NaN` where none did. A crossing has
+no distance, since subtracting a direction from a place is not a distance in the
+scene. The census is the array solve's own over the points read, and it agrees
+with the statuses: its `seen` is `read`, its `few` is `kept`, each other bucket
+is `with_verdict` of its verdict, and its `pruned_obs` is the sum of `pruned`.
+`point(index)` finds one point's status by binary search. An outcome displays
+as the tail of a sentence about its point -- the verdict's label, then how many
+observations the prune left out, then `unchanged` -- so every reader that shows
+one point's status shows the same words.
+
+### Refusals and cancellation
 
 The preconditions are read before anything is gathered, and each is its own
 refusal: the observations have to carry a pixel (a `sift_files` value without
@@ -406,6 +479,21 @@ The in-front flag comes back beside the verdicts, which is what makes
   `All` is folded in first. An unposed value and an index naming no live point
   are each their own refusal, and a `Progress` already cancelled stops the call
   before it writes.
+- **Statuses.** Every status kind is reached: `Held`, `Kept`, and `Solved` under
+  `finite`, `finite_pruned`, `marked`, `ranged`, `thin`, `behind` and
+  `over_bar`, with each of `Unchanged`, `Moved` with and without a distance, and
+  `Crossed`. The `finite_pruned` and `behind` cases add a fourth image beyond
+  the points, looking away from them, whose one sighting of a point lies on the
+  backward extension of a ray through its truth: with the prune on that
+  sighting is left out and counted, with it off the point becomes a direction.
+  In every case the statuses are one per index and ascending, every count
+  equals the number of statuses of its kind, and the census agrees with them.
+  The map forwards each status's `index` to its `new_index`, and a point whose
+  geometry did not change stands at `new_index` with the geometry it had. Over
+  an overlay in which a point was already rewritten, `These` gives the two
+  points it rewrites new indexes and leaves the settled one at its own; `All`
+  over an overlay that also deletes a point and holds another reports each
+  status in the caller's indexing and names the row the fold put it in.
 - **Several cameras.** Over the same arc with images alternating between a
   pinhole and an equidistant fisheye of a different focal and principal point,
   tracks seen through one camera only, and a track seen through both, land on

@@ -214,6 +214,11 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the shared median of every residual that projected, the population the reported before and after lines are measured over",
     ),
     (
+        "sfmtool-core/src/reconstruction/triangulation/retriangulate.rs",
+        "median_shift",
+        "delegates: the shared median of the distances the per-point statuses say a finite point travelled",
+    ),
+    (
         "sfmtool-core/src/geometry/focal_vote.rs",
         "log_median",
         "delegates: the shared median of the logs, exponentiated",

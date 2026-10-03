@@ -97,7 +97,9 @@ back. **Which points** it was asked for also decides the shape of the edit:
   the node goes on drawing and every other index still means what it meant. The
   point itself takes a **new index**, and the version's map is a
   `PointMap::Replaced` that carries the selection, a copied point id and every
-  panel's prepared state onto it.
+  panel's prepared state onto it. A point whose answer is the geometry it
+  already has is not rewritten and keeps its index; the version is still
+  pushed, and its entry says `unchanged`.
 - **Every point** is a bulk edit. The overlay is folded in, the whole point list
   is rewritten, and the next version's base is a new value with an empty
   overlay. It deletes no point and creates none, so no index moves and no panel
@@ -148,21 +150,39 @@ microsecond of arithmetic whatever the reconstruction's size.
 | | One point | Every point |
 |---|---|---|
 | Version label | `Retriangulated point 1207 in seoul_bull` | `Retriangulated seoul_bull` |
-| Entry | that label, then `: finite`, then the serials | that label, then the counts, then the serials |
+| Entry | that label, then `: finite, now point 5310`, then the serials | that label, then the counts, then the serials |
 
-The point entry's tail is the **verdict** the operation reached, in the words
-`PointVerdict::label` holds once for the window, the Action Log and the wire:
-`finite`, `finite, on the observations that agree`, `at infinity`, `at its held
-distance`, `too thin to place, so at infinity`, `behind a camera that sees it,
-so at infinity`, `past the reprojection bar, so at infinity`, `too few
-observations to place, so left where it was`. That tail is the answer the
+The point entry's tail is the core operation's **status** for that point
+(`RetriangulateReport::point`), in the words its outcome displays, which are
+held once in `sfmtool-core` for the Action Log and the wire. First the verdict,
+in the words `PointVerdict::label` holds: `finite`, `finite, on the observations
+that agree`, `at infinity`, `at its held distance`, `too thin to place, so at
+infinity`, `behind a camera that sees it, so at infinity`, `past the
+reprojection bar, so at infinity`, `too few observations to place, so left where
+it was`. A point solved on the observations that agree then says how many it
+left out -- `(1 observation that sees it behind was left out)` -- and a point
+whose answer is the geometry it already had says `unchanged`. Last, where the
+point was rewritten, the index it took: `now point 5310`. A point that was not
+rewritten keeps its index and the tail names none. That tail is the answer the
 gesture was asked for: a point that did not move because one photograph is all
-that sees it says so, rather than reporting silent success.
+that sees it says so, rather than reporting silent success, and an agent reading
+the entry learns where to find the point next.
 
 The whole-value entry's tail is what the run did, in the same shape every other
-bulk edit reports: how many of how many points moved, how many crossed to or
-from infinity, how many were too thinly seen to place, how many were held, and
-the median distance a point that stayed finite travelled.
+bulk edit reports, each count read off the per-point statuses: how many of how
+many points moved, how many crossed to or from infinity, how many each rule
+turned into a direction (`too thin to place`, `behind a camera that sees them`,
+`past the reprojection bar`), how many were placed on the observations that
+agree, how many were left where they were for too few observations, how many
+were held, and the median distance a point that stayed finite travelled. A count
+of zero is left out:
+
+```text
+Retriangulated seoul_bull: 4 of 6 points moved, 2 crossed to or from infinity,
+1 too thin to place, 1 behind a camera that sees them, 1 placed on the
+observations that agree, 1 left where they were for too few observations,
+1 held, median shift 1.0000 (v3 → v4)
+```
 
 A refusal pushes no version and writes one failed entry, in the state's own
 words, which are the words the greyed menu entry carries.
@@ -180,8 +200,13 @@ what is tested here is the wrapping.
   toward the place its own pixels state, and the point beside it has not moved.
 - **It takes a new index the selection follows.** The selected point is live
   afterwards and is not the index it was.
-- **The entry names the version and the verdict**, carries the two stages a
-  point edit has, and is timed from the work rather than from the row.
+- **The entry names the version, the verdict and the new index**, carries the
+  two stages a point edit has, and is timed from the work rather than from the
+  row.
+- **A point the answer leaves as it was says so**: retriangulating a settled
+  point again reads `finite, unchanged` and names no new index.
+- **The whole-value entry counts each kind of status**: over a report holding
+  one point of each kind, the sentence names every count and leaves out none.
 - **Undo puts the point back**, byte for byte.
 - **The bulk edit pushes one version with a new base**, the same point count,
   the label `Retriangulated <node>`, a point pulled back toward its truth, a
@@ -203,7 +228,7 @@ what is tested here is the wrapping.
 - **The Scene tree entry** is live on a node with inline keypoints, drawn and
   dead without them, and drawn and dead while an operation runs on the node.
 - **The wire**: `retriangulate_point` pushes a version whose report names the
-  verdict, and `retriangulate_all_points` defers to the worker and comes back
+  verdict and either the new index or that the point was unchanged, and `retriangulate_all_points` defers to the worker and comes back
   with the version.
 
 ---
@@ -217,8 +242,8 @@ what is tested here is the wrapping.
   stands. Deciding which sightings a track should have is the bench's work
   ([../track-view.md](../track-view.md)), and the point menu's other entry is
   how a reviewer gets there from the same gesture.
-- **Deleting a point the observations cannot place.** A point too thinly seen
-  keeps what it had and is counted, because a retriangulation asked for by hand
+- **Deleting a point the observations cannot place.** A point too few
+  observations place keeps what it had and is counted, because a retriangulation asked for by hand
   should not quietly cost a reviewer their structure. Deleting is its own
   gesture.
 - **A per-point choice of rules.** The options exist on the core function, and

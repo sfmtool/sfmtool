@@ -118,13 +118,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "retriangulate_point",
             description: "Re-solve one 3D point from its own observations, at the poses and the \
                           lenses the reconstruction already holds. Moves no camera and no other \
-                          point. A point edit, so every other index stays good; the point itself \
-                          is deleted and re-added, so it takes a new index, which the reply's \
-                          report names along with the verdict its observations supported - \
-                          finite, at infinity, behind a camera that sees it, too thin to place. \
-                          A point the reconstruction holds at a fixed coordinate is refused, and \
-                          a point fewer than two of whose observations state a usable ray keeps \
-                          the geometry it had. Undo puts it back.",
+                          point. A point edit, so every other index stays good; a point whose \
+                          geometry changes is deleted and re-added, so it takes a new index, \
+                          which the reply's report names ('now point N') along with what its \
+                          observations supported - finite, at infinity, behind a camera that \
+                          sees it, too thin to place - or 'unchanged' where the answer is the \
+                          geometry it had. A point the reconstruction holds at a fixed \
+                          coordinate is refused, and a point fewer than two of whose \
+                          observations state a usable ray keeps the geometry it had. Undo puts \
+                          it back.",
             kind: Write,
             schema: object(
                 &[],
@@ -143,8 +145,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           but it deletes no point and creates none, so every index still means \
                           what it meant. Points the reconstruction holds at a fixed coordinate \
                           are left alone, a ranged point keeps its distance and only its \
-                          direction is re-read, and a point too thinly seen to place keeps the \
-                          geometry it had. One version, and it runs on a worker thread, so a \
+                          direction is re-read, and a point fewer than two of whose observations \
+                          state a usable ray keeps the geometry it had. The report counts the \
+                          points moved, crossed to or from infinity, refused by each rule, \
+                          kept and held. One version, and it runs on a worker thread, so a \
                           retriangulation still going after 200 ms replies with running: true \
                           and an operation_id instead of the version; cancel_background_task \
                           stops it. Needs a pixel per observation and at least one posed image.",

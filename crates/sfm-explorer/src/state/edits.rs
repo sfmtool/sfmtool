@@ -41,8 +41,8 @@ use sfmtool_core::reconstruction::prune_covered::{
     prune_covered_observations, PruneCoveredError, PruneCoveredOptions, PruneCoveredReport,
 };
 use sfmtool_core::reconstruction::triangulation::{
-    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
-    RetriangulateWhich,
+    retriangulate_points, PointVerdict, RetriangulateError, RetriangulateOptions,
+    RetriangulateReport, RetriangulateWhich,
 };
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
@@ -297,18 +297,41 @@ fn bench_deletion_text(deletion: &ImageDeletion) -> String {
 /// sentence is that label plus the numbers, which is the shape every other edit
 /// here reports in.
 fn retriangulate_summary(report: &RetriangulateReport) -> String {
-    let mut text = format!("{} of {} points moved", report.moved, report.read);
-    if report.crossed > 0 {
-        text.push_str(&format!(", {} crossed to or from infinity", report.crossed));
+    let mut text = format!("{} of {} points moved", report.moved(), report.read());
+    let crossed = report.crossed();
+    if crossed > 0 {
+        text.push_str(&format!(", {crossed} crossed to or from infinity"));
     }
-    if report.kept > 0 {
-        text.push_str(&format!(", {} too thinly seen to place", report.kept));
+    // The rules that turned a point into a direction, each named where it
+    // took any, so a reader can tell a thin capture from a geometry the
+    // cameras disagree with.
+    for (verdict, words) in [
+        (PointVerdict::Thin, "too thin to place"),
+        (PointVerdict::Behind, "behind a camera that sees them"),
+        (PointVerdict::OverBar, "past the reprojection bar"),
+    ] {
+        let n = report.with_verdict(verdict);
+        if n > 0 {
+            text.push_str(&format!(", {n} {words}"));
+        }
     }
-    if report.held > 0 {
-        text.push_str(&format!(", {} held", report.held));
+    let pruned = report.with_verdict(PointVerdict::FinitePruned);
+    if pruned > 0 {
+        text.push_str(&format!(", {pruned} placed on the observations that agree"));
     }
-    if report.median_shift.is_finite() {
-        text.push_str(&format!(", median shift {:.4}", report.median_shift));
+    let kept = report.kept();
+    if kept > 0 {
+        text.push_str(&format!(
+            ", {kept} left where they were for too few observations"
+        ));
+    }
+    let held = report.held();
+    if held > 0 {
+        text.push_str(&format!(", {held} held"));
+    }
+    let median_shift = report.median_shift();
+    if median_shift.is_finite() {
+        text.push_str(&format!(", median shift {median_shift:.4}"));
     }
     text
 }
@@ -633,8 +656,12 @@ impl AppState {
     ///
     /// Nothing else moves: no camera, no lens, and no other point. What this
     /// point's observations support at this geometry is the whole of what it
-    /// decides, and the verdict the core operation reached is in the sentence
-    /// the Action Log keeps.
+    /// decides. The sentence the Action Log keeps carries the core operation's
+    /// status for this point: its outcome in the words
+    /// [`RetriangulateOutcome`](sfmtool_core::reconstruction::RetriangulateOutcome)
+    /// displays, and the new index where the point was rewritten. A point whose
+    /// answer is the geometry it has is not rewritten, says `unchanged`, and
+    /// keeps its index.
     ///
     /// See `specs/gui/edits/retriangulate-point.md`.
     pub(crate) fn retriangulate_point(&mut self, point: PointRef) -> Result<(), String> {
@@ -681,12 +708,18 @@ impl AppState {
             .map_err(|e| refuse(e.to_string()))?
         };
 
-        // One point read, so the census names one verdict, and that verdict is
-        // what a reader wants to be told about this gesture.
-        let verdict = report
-            .census
-            .sole_verdict()
-            .map_or_else(String::new, |verdict| format!(": {}", verdict.label()));
+        // What happened to this one point is what a reader wants to be told
+        // about this gesture, and where it went is what an agent needs to find
+        // it again: a rewritten point takes a new index.
+        let outcome = report
+            .point(point.point)
+            .map_or_else(String::new, |status| {
+                let mut tail = format!(": {}", status.outcome);
+                if status.new_index != status.index {
+                    tail.push_str(&format!(", now point {}", status.new_index));
+                }
+                tail
+            });
         let text = format!("Retriangulated point {} in {label}", point.point);
         let node = &mut self.scene[index];
         let serial = {
@@ -696,7 +729,7 @@ impl AppState {
         let parent = version_before(node, serial);
         self.follow_selection_forward(point.recon);
         Ok(version_step_text(
-            &format!("{text}{verdict}"),
+            &format!("{text}{outcome}"),
             parent,
             serial,
         ))

@@ -48,8 +48,8 @@ pub use points::{
     TriangulatedPoints, FALLBACK_DIRECTION,
 };
 pub use retriangulate::{
-    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
-    RetriangulateWhich,
+    retriangulate_points, GeometryChange, RetriangulateError, RetriangulateOptions,
+    RetriangulateOutcome, RetriangulateReport, RetriangulateWhich, RetriangulatedPoint,
 };
 
 use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};

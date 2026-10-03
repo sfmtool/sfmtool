@@ -24,8 +24,8 @@ use crate::reconstruction::data::{
 };
 use crate::reconstruction::edited::{EditedReconstruction, PointMap};
 use crate::reconstruction::triangulation::{
-    retriangulate_points, PointVerdict, RetriangulateError, RetriangulateOptions,
-    RetriangulateWhich,
+    retriangulate_points, GeometryChange, PointVerdict, RetriangulateError, RetriangulateOptions,
+    RetriangulateOutcome, RetriangulateReport, RetriangulateWhich,
 };
 
 use sfmtool_sfmr_format::{POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
@@ -206,6 +206,88 @@ fn constrain(recon: &mut SfmrReconstruction, p: usize, kind: u8, distance: f64, 
     columns.constraint_reference_images[p] = reference;
 }
 
+/// Check that a report's statuses, its counts and its census tell one story:
+/// the statuses are one per index and ascending, every count is the number of
+/// statuses of its kind, and the census's buckets are the statuses' verdicts.
+fn assert_statuses_agree(report: &RetriangulateReport) {
+    assert!(
+        report.points.windows(2).all(|w| w[0].index < w[1].index),
+        "the statuses are not one per index, ascending"
+    );
+    let c = &report.census;
+    assert_eq!(report.read() + report.held(), report.points.len());
+    assert_eq!(c.seen, report.read());
+    assert_eq!(c.few, report.kept());
+    for (count, verdict) in [
+        (c.finite, PointVerdict::Finite),
+        (c.finite_pruned, PointVerdict::FinitePruned),
+        (c.marked, PointVerdict::Marked),
+        (c.ranged, PointVerdict::Ranged),
+        (c.thin, PointVerdict::Thin),
+        (c.behind, PointVerdict::Behind),
+        (c.over_bar, PointVerdict::OverBar),
+        (c.few, PointVerdict::Few),
+    ] {
+        assert_eq!(count, report.with_verdict(verdict), "{verdict:?}");
+    }
+    let mut pruned = 0usize;
+    for point in &report.points {
+        if let RetriangulateOutcome::Solved {
+            verdict,
+            pruned: dropped,
+            ..
+        } = point.outcome
+        {
+            assert_ne!(verdict, PointVerdict::Few, "a kept point reads as solved");
+            assert!(
+                dropped == 0 || verdict == PointVerdict::FinitePruned,
+                "{dropped} observations pruned under {verdict:?}"
+            );
+            pruned += dropped as usize;
+        }
+    }
+    assert_eq!(c.pruned_obs, pruned);
+    let moved = report.points.iter().filter(|p| p.outcome.moved()).count();
+    assert_eq!(report.moved(), moved);
+    assert!(report.crossed() <= report.moved());
+}
+
+/// Check that each status names its point in both values: the map forwards
+/// its `index` to its `new_index`, a live point stands there, and a point whose
+/// geometry did not change stands there with the geometry it had.
+fn assert_statuses_follow_the_map(
+    report: &RetriangulateReport,
+    map: &PointMap,
+    before: &EditedReconstruction,
+    after: &EditedReconstruction,
+) {
+    for status in &report.points {
+        assert_eq!(
+            map.forward(status.index),
+            Some(status.new_index),
+            "{status:?}"
+        );
+        assert_eq!(map.inverse(status.new_index), Some(status.index));
+        let was = before.point(status.index).expect("a live index");
+        let now = after.point(status.new_index).expect("a live index");
+        let was = (was.point().position, was.point().w);
+        let now = (now.point().position, now.point().w);
+        if status.outcome.moved() {
+            assert_ne!(now, was, "{status:?}");
+        } else {
+            assert_eq!(now, was, "{status:?}");
+        }
+    }
+}
+
+/// The outcome of the one point a report holds at `index`.
+fn outcome_of(report: &RetriangulateReport, index: u32) -> RetriangulateOutcome {
+    report
+        .point(index)
+        .expect("the point was asked about")
+        .outcome
+}
+
 #[test]
 fn every_point_lands_back_on_the_truth_its_pixels_state() {
     let truth = truth();
@@ -221,12 +303,12 @@ fn every_point_lands_back_on_the_truth_its_pixels_state() {
     )
     .expect("the fixture retriangulates");
 
-    assert_eq!(report.read, POINTS);
+    assert_eq!(report.read(), POINTS);
     assert_eq!(report.observations, POINTS * IMAGES);
-    assert_eq!(report.moved, POINTS);
-    assert_eq!(report.crossed, 0);
-    assert_eq!(report.kept, 0);
-    assert_eq!(report.held, 0);
+    assert_eq!(report.moved(), POINTS);
+    assert_eq!(report.crossed(), 0);
+    assert_eq!(report.kept(), 0);
+    assert_eq!(report.held(), 0);
     assert_eq!(report.census.finite, POINTS);
     for p in 0..POINTS {
         assert!(
@@ -240,7 +322,30 @@ fn every_point_lands_back_on_the_truth_its_pixels_state() {
     for p in 0..POINTS as u32 {
         assert_eq!(map.forward(p), Some(p));
     }
-    assert!(report.median_shift > 0.0, "{}", report.median_shift);
+    assert!(report.median_shift() > 0.0, "{}", report.median_shift());
+
+    // One status per point, each a finite position that moved, by as far as
+    // the nudge put it off the truth.
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+    assert_eq!(report.points.len(), POINTS);
+    for (p, status) in report.points.iter().enumerate() {
+        assert_eq!((status.index, status.new_index), (p as u32, p as u32));
+        let RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Finite,
+            pruned: 0,
+            change: GeometryChange::Moved { shift: Some(shift) },
+        } = status.outcome
+        else {
+            panic!("point {p}: {:?}", status.outcome);
+        };
+        assert!((shift - before[p]).abs() < TRUTH_TOLERANCE, "point {p}");
+    }
+    assert_eq!(
+        outcome_of(&report, 0).to_string(),
+        "finite",
+        "a moved finite point reads as its verdict alone"
+    );
 }
 
 #[test]
@@ -272,10 +377,39 @@ fn a_held_point_is_never_read_and_never_moves() {
     )
     .expect("the fixture retriangulates");
 
-    assert_eq!(report.held, 1);
-    assert_eq!(report.read, POINTS - 1);
-    assert_eq!(report.moved, POINTS - 1);
+    assert_eq!(report.held(), 1);
+    assert_eq!(report.read(), POINTS - 1);
+    assert_eq!(report.moved(), POINTS - 1);
     assert_eq!(next.base.point_set.points[2].position, held_at);
+
+    // The held point has a status like every other, and it says it was not
+    // read.
+    assert_eq!(report.points.len(), POINTS);
+    assert_eq!(outcome_of(&report, 2), RetriangulateOutcome::Held);
+    assert_eq!(report.point(2).expect("asked about").new_index, 2);
+    assert_statuses_agree(&report);
+}
+
+#[test]
+fn a_held_point_among_others_named_has_its_own_status() {
+    let mut recon = nudged();
+    constrain(&mut recon, 2, POINT_CONSTRAINT_HELD, f64::NAN, u32::MAX);
+    let start = edited(recon);
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[4, 2, 4]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("point 4 is solved");
+    // Each index named once, ascending, the held one included.
+    let indexes: Vec<u32> = report.points.iter().map(|p| p.index).collect();
+    assert_eq!(indexes, [2, 4]);
+    assert_eq!(outcome_of(&report, 2), RetriangulateOutcome::Held);
+    assert!(outcome_of(&report, 4).moved());
+    assert_eq!(report.point(0), None, "point 0 was not asked about");
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
 }
 
 #[test]
@@ -317,6 +451,16 @@ fn a_ranged_point_keeps_the_distance_the_value_states() {
     assert!((got - range).abs() < 1e-9 * range, "{got} is not {range}");
     // And the free points beside it are unaffected.
     assert!(error(&next.base, &truth, 0) < TRUTH_TOLERANCE);
+
+    assert!(matches!(
+        outcome_of(&report, 3),
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Ranged,
+            pruned: 0,
+            change: GeometryChange::Moved { shift: Some(_) },
+        }
+    ));
+    assert_statuses_agree(&report);
 }
 
 #[test]
@@ -391,8 +535,8 @@ fn one_point_is_an_overlay_edit_over_the_very_same_base() {
     )
     .expect("the fixture retriangulates");
 
-    assert_eq!(report.read, 1);
-    assert_eq!(report.moved, 1);
+    assert_eq!(report.read(), 1);
+    assert_eq!(report.moved(), 1);
     assert_eq!(report.observations, IMAGES);
     assert!(
         Arc::ptr_eq(&next.base, &start.base),
@@ -416,6 +560,13 @@ fn one_point_is_an_overlay_edit_over_the_very_same_base() {
         next.point(0).expect("still live").point().position,
         start.base.point_set.points[0].position
     );
+
+    // The one status names both indexes, and no other point has one.
+    assert_eq!(report.points.len(), 1);
+    let status = report.point(1).expect("point 1 was asked about");
+    assert_eq!(status.new_index, to);
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
 }
 
 #[test]
@@ -440,11 +591,27 @@ fn a_point_that_does_not_move_takes_no_new_index() {
         &Progress::none(),
     )
     .expect("the fixture retriangulates");
-    assert_eq!(report.read, 1);
-    assert_eq!(report.moved, 0);
+    assert_eq!(report.read(), 1);
+    assert_eq!(report.moved(), 0);
     assert_eq!(map.forward(settled), Some(settled));
     assert_eq!(twice.point_count(), POINTS);
     assert_eq!(twice.added.points.len(), once.added.points.len());
+
+    // Solved, and the answer is the geometry it had, so it keeps its index.
+    let status = report.point(settled).expect("asked about");
+    assert_eq!(status.new_index, settled);
+    assert_eq!(
+        status.outcome,
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Finite,
+            pruned: 0,
+            change: GeometryChange::Unchanged,
+        }
+    );
+    assert_eq!(status.outcome.to_string(), "finite, unchanged");
+    assert!(report.median_shift().is_nan());
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &once, &twice);
 }
 
 #[test]
@@ -482,10 +649,17 @@ fn a_point_too_few_observations_place_keeps_where_it_stood() {
     )
     .expect("the fixture retriangulates");
 
-    assert_eq!(report.kept, 1);
+    assert_eq!(report.kept(), 1);
     assert_eq!(report.census.few, 1);
     assert_eq!(next.base.point_set.points[4].position, stood_at);
     assert_eq!(next.base.point_set.points[4].w, 1.0);
+
+    let kept = report.point(4).expect("asked about");
+    assert_eq!(kept.outcome, RetriangulateOutcome::Kept);
+    assert_eq!(kept.outcome.verdict(), Some(PointVerdict::Few));
+    assert_eq!(kept.new_index, 4);
+    assert_eq!(kept.outcome.to_string(), PointVerdict::Few.label());
+    assert_statuses_agree(&report);
 }
 
 #[test]
@@ -504,8 +678,8 @@ fn a_floor_wide_enough_turns_every_point_into_a_direction() {
     .expect("the fixture retriangulates");
 
     assert_eq!(report.census.thin, POINTS);
-    assert_eq!(report.crossed, POINTS);
-    assert_eq!(report.moved, POINTS);
+    assert_eq!(report.crossed(), POINTS);
+    assert_eq!(report.moved(), POINTS);
     assert!(next
         .base
         .point_set
@@ -514,7 +688,19 @@ fn a_floor_wide_enough_turns_every_point_into_a_direction() {
         .all(|p| p.is_at_infinity()));
     assert_eq!(next.base.point_set.infinity_point_count, POINTS);
     // A crossing has no distance in the scene, so none is reported.
-    assert!(report.median_shift.is_nan());
+    assert!(report.median_shift().is_nan());
+
+    for status in &report.points {
+        assert_eq!(
+            status.outcome,
+            RetriangulateOutcome::Solved {
+                verdict: PointVerdict::Thin,
+                pruned: 0,
+                change: GeometryChange::Crossed,
+            }
+        );
+    }
+    assert_statuses_agree(&report);
 }
 
 #[test]
@@ -532,8 +718,20 @@ fn a_direction_is_read_as_one_and_stays_one() {
     )
     .expect("the fixture retriangulates");
     assert_eq!(report.census.marked, 1);
-    assert_eq!(report.crossed, 0);
+    assert_eq!(report.crossed(), 0);
     assert!(next.base.point_set.points[0].is_at_infinity());
+
+    // The direction turned to the one its rays agree on, which is a move with
+    // no distance.
+    assert_eq!(
+        outcome_of(&report, 0),
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Marked,
+            pruned: 0,
+            change: GeometryChange::Moved { shift: None },
+        }
+    );
+    assert_statuses_agree(&report);
 }
 
 #[test]
@@ -617,10 +815,10 @@ fn each_track_is_solved_through_the_cameras_that_saw_it() {
         retriangulate_points(&start, RetriangulateWhich::All, &options, &Progress::none())
             .expect("a value taken through two cameras retriangulates");
 
-    assert_eq!(report.read, POINTS);
+    assert_eq!(report.read(), POINTS);
     assert_eq!(report.observations, 2 + 2 + 2 + 2 + 4);
     assert_eq!(report.census.finite, POINTS, "{:?}", report.census);
-    assert_eq!(report.moved, POINTS);
+    assert_eq!(report.moved(), POINTS);
     for p in 0..POINTS {
         assert!(
             error(&next.base, &truth, p) < TRUTH_TOLERANCE,
@@ -794,12 +992,22 @@ fn an_overlay_edit_is_folded_in_before_every_point_is_re_solved() {
         &Progress::none(),
     )
     .expect("the fixture retriangulates");
-    assert_eq!(report.read, POINTS - 1);
+    assert_eq!(report.read(), POINTS - 1);
     assert_eq!(next.base.point_count(), POINTS - 1);
     assert!(next.deleted_points.is_empty());
     // The deleted index resolves to nothing, and the rest shift down.
     assert_eq!(map.forward(0), None);
     assert_eq!(map.forward(1), Some(0));
+
+    // The statuses are in the caller's indexing and name the new base's rows.
+    let pairs: Vec<(u32, u32)> = report
+        .points
+        .iter()
+        .map(|p| (p.index, p.new_index))
+        .collect();
+    assert_eq!(pairs, [(1, 0), (2, 1), (3, 2), (4, 3)]);
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
 }
 
 #[test]
@@ -838,7 +1046,7 @@ fn a_free_constraint_column_leaves_every_point_free() {
         &Progress::none(),
     )
     .expect("the fixture retriangulates");
-    assert_eq!(report.held, 0);
+    assert_eq!(report.held(), 0);
     assert_eq!(report.census.ranged, 0);
     assert_eq!(report.census.finite, POINTS);
 }
@@ -865,4 +1073,253 @@ fn the_stages_are_named_for_a_reader_watching() {
         ["gather observations", "retriangulate", "write back"],
         "{seen:?}"
     );
+}
+
+// ── Per-point statuses ──────────────────────────────────────────────────
+
+/// Four images: three on the arc that see every point, and a fourth that
+/// stands beyond the points looking away from them and sees point `p` alone.
+/// Its pixel states the ray whose backward extension passes through `p`'s
+/// truth, so every line of `p`'s track meets there and the truth lies behind
+/// the fourth camera. Returns the truth and that truth nudged.
+fn backward_sighting(p: usize) -> (SfmrReconstruction, SfmrReconstruction) {
+    let mut truth = scene(vec![pinhole()], &[0; 4], |q, i| i < 3 || q == p);
+    let centre = Vector3::new(0.0, 0.0, -8.0);
+    let rotation = UnitQuaternion::face_towards(&(-centre), &Vector3::y()).inverse();
+    truth.image_table.images[3].quaternion_wxyz = rotation;
+    truth.image_table.images[3].translation_xyz = -(rotation * centre);
+    let along = (centre - truth.point_set.points[p].position.coords).normalize();
+    let local = rotation * along;
+    let (u, v) = pinhole()
+        .ray_to_pixel([local.x, local.y, local.z])
+        .expect("the ray is in front of the fourth camera");
+    let row = truth
+        .point_set
+        .tracks
+        .iter()
+        .position(|o| o.point_index == p as u32 && o.image_index == 3)
+        .expect("the fourth image sees the point");
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut truth.point_set.observations
+    else {
+        panic!("the fixture is embedded_patches");
+    };
+    keypoints_xy[[row, 0]] = u as f32;
+    keypoints_xy[[row, 1]] = v as f32;
+    let nudged = nudge(truth.clone());
+    (truth, nudged)
+}
+
+#[test]
+fn a_point_solved_on_the_observations_that_agree_names_how_many_were_left_out() {
+    let (truth, recon) = backward_sighting(2);
+    let start = edited(recon);
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    assert!(
+        matches!(
+            outcome_of(&report, 2),
+            RetriangulateOutcome::Solved {
+                verdict: PointVerdict::FinitePruned,
+                pruned: 1,
+                change: GeometryChange::Moved { shift: Some(_) },
+            }
+        ),
+        "{:?}",
+        outcome_of(&report, 2)
+    );
+    assert!(error(&next.base, &truth, 2) < TRUTH_TOLERANCE);
+    assert_eq!(report.census.pruned_obs, 1);
+    assert_eq!(
+        outcome_of(&report, 2).to_string(),
+        "finite, on the observations that agree \
+         (1 observation that sees it behind was left out)"
+    );
+    // The rest were not touched by the prune.
+    for p in [0, 1, 3, 4] {
+        assert!(matches!(
+            outcome_of(&report, p),
+            RetriangulateOutcome::Solved {
+                verdict: PointVerdict::Finite,
+                pruned: 0,
+                ..
+            }
+        ));
+    }
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn a_point_behind_a_camera_that_sees_it_becomes_a_direction_and_says_why() {
+    let (_, recon) = backward_sighting(2);
+    let start = edited(recon);
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::All,
+        &RetriangulateOptions {
+            prune_behind: false,
+            ..RetriangulateOptions::default()
+        },
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    assert_eq!(
+        outcome_of(&report, 2),
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Behind,
+            pruned: 0,
+            change: GeometryChange::Crossed,
+        }
+    );
+    assert!(next.base.point_set.points[2].is_at_infinity());
+    assert_eq!(report.crossed(), 1);
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn a_point_past_the_reprojection_bar_becomes_a_direction_and_says_why() {
+    let mut recon = nudged();
+    // One of point 3's pixels moved well off the truth, so no place reprojects
+    // within half a pixel of all three.
+    let row = recon
+        .point_set
+        .tracks
+        .iter()
+        .position(|o| o.point_index == 3)
+        .expect("point 3 is seen");
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
+        panic!("the fixture is embedded_patches");
+    };
+    keypoints_xy[[row, 0]] += 8.0;
+    let start = edited(recon);
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::All,
+        &RetriangulateOptions {
+            bar_px: Some(0.5),
+            ..RetriangulateOptions::default()
+        },
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    assert_eq!(
+        outcome_of(&report, 3),
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::OverBar,
+            pruned: 0,
+            change: GeometryChange::Crossed,
+        }
+    );
+    assert_eq!(report.with_verdict(PointVerdict::Finite), POINTS - 1);
+    assert!(next.base.point_set.points[3].is_at_infinity());
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn statuses_name_each_point_through_an_overlay_that_reassigns_indexes() {
+    let truth = truth();
+    let start = edited(nudged());
+    // An overlay in which point 1 has been rewritten already, so it lives at
+    // an index past the base and stands on its truth.
+    let (layered, first, _) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[1]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let one = first.forward(1).expect("the point survived");
+    assert!(one >= POINTS as u32, "{one}");
+
+    // Points 0 and 3 are still nudged, so they move and take new indexes;
+    // point `one` is already settled, so it keeps the index it has.
+    let (next, map, report) = retriangulate_points(
+        &layered,
+        RetriangulateWhich::These(&[one, 3, 0]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let indexes: Vec<u32> = report.points.iter().map(|p| p.index).collect();
+    assert_eq!(indexes, [0, 3, one]);
+    for (index, truth_index) in [(0, 0), (3, 3), (one, 1)] {
+        let status = report.point(index).expect("asked about");
+        let landed = next.point(status.new_index).expect("live").point().position;
+        assert!(
+            (landed - truth.point_set.points[truth_index].position).norm() < TRUTH_TOLERANCE,
+            "point {index} at {} landed at {landed:?}",
+            status.new_index
+        );
+    }
+    for index in [0, 3] {
+        let status = report.point(index).expect("asked about");
+        assert_ne!(
+            status.new_index, index,
+            "a rewritten point takes a new index"
+        );
+        assert!(status.outcome.moved());
+    }
+    let settled = report.point(one).expect("asked about");
+    assert_eq!(settled.new_index, one);
+    assert!(!settled.outcome.moved());
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &layered, &next);
+}
+
+#[test]
+fn statuses_of_every_point_are_read_back_through_the_fold() {
+    let truth = truth();
+    let mut recon = nudged();
+    constrain(&mut recon, 3, POINT_CONSTRAINT_HELD, f64::NAN, u32::MAX);
+    let start = edited(recon);
+    // Point 1 rewritten into the overlay, and point 2 deleted from it: the
+    // fold puts the rewrite back in its base row and closes up the deletion,
+    // so the caller's indexes and the new base's rows differ.
+    let (mut layered, first, _) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[1]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let one = first.forward(1).expect("the point survived");
+    layered.delete_point(2).expect("point 2 is live");
+
+    let (next, map, report) = retriangulate_points(
+        &layered,
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let pairs: Vec<(u32, u32)> = report
+        .points
+        .iter()
+        .map(|p| (p.index, p.new_index))
+        .collect();
+    assert_eq!(pairs, [(0, 0), (3, 2), (4, 3), (one, 1)]);
+    assert_eq!(outcome_of(&report, 3), RetriangulateOutcome::Held);
+    assert_eq!(report.held(), 1);
+    assert_eq!(report.read(), 3);
+    for (index, truth_index) in [(0, 0), (4, 4), (one, 1)] {
+        let status = report.point(index).expect("asked about");
+        let landed = next.point(status.new_index).expect("live").point().position;
+        assert!(
+            (landed - truth.point_set.points[truth_index].position).norm() < TRUTH_TOLERANCE,
+            "point {index} landed at {landed:?}"
+        );
+    }
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &layered, &next);
 }

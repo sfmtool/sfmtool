@@ -124,6 +124,14 @@ fn retriangulate_point_pushes_a_version_that_names_its_verdict() {
         report.contains("finite") || report.contains("infinity") || report.contains("left where"),
         "the report names no verdict: {report}"
     );
+    // And where to find the point next: a rewritten point names its new
+    // index, and one the answer left as it was says so.
+    assert!(
+        report.contains(", now point ")
+            || report.contains(", unchanged")
+            || report.contains("left where it was"),
+        "the report names neither a new index nor an unchanged point: {report}"
+    );
     let last = rows(&state).pop().expect("one entry per edit");
     assert_eq!(last, (Actor::Mcp, false, report.to_string()));
 }

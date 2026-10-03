@@ -3042,19 +3042,33 @@ reconstruction already holds, and no camera and no lens moves
 
 `retriangulate_point` is a **point edit** and finishes inside the call: one
 track's rays are a microsecond of arithmetic whatever the reconstruction's size.
-It is delete-and-re-add, so the point takes a new index while every other index
-stays good, and the `report` the reply carries is the edit's own Action Log
-sentence, which names the verdict the observations supported -- `finite`, `at
-infinity`, `behind a camera that sees it`, `too thin to place`. That verdict is
-the answer an agent came for: a call that moved nothing because the track is
-seen from one place says so, rather than reporting silent success.
+It is delete-and-re-add, so a point whose geometry changes takes a new index
+while every other index stays good, and the `report` the reply carries is the
+edit's own Action Log sentence. That sentence is the core operation's status for
+the point: the verdict the observations supported -- `finite`, `at infinity`,
+`behind a camera that sees it`, `too thin to place` -- then how many
+observations the cheirality prune left out where it left any out, then
+`unchanged` where the answer is the geometry the point had, and last `now point
+N` where the point was rewritten and took index `N`:
+
+```text
+Retriangulated point 1207 in seoul_bull: finite, now point 5310 (v3 → v4)
+```
+
+That status is the answer an agent came for: a call that moved nothing because
+the track is seen from one place says so, rather than reporting silent success,
+and the new index is the one the next call about the point has to name.
 
 `retriangulate_all_points` is a **bulk edit** that runs on a worker thread and
 answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
 points"`. It deletes no point and creates none, so every index still means what
 it meant and no cache is dropped for it until the version lands. It polls the
 cancel flag between its stages, so `cancel_background_task` stops it and a
-cancelled retriangulation pushes no version.
+cancelled retriangulation pushes no version. Its `report` counts the per-point
+statuses: points moved, crossed to or from infinity, turned into directions by
+each rule, placed on the observations that agree, kept for too few
+observations, and held ([edits/retriangulate-point.md](edits/retriangulate-point.md)
+§ "The version").
 
 Both refuse in `AppState`'s own words, which are the words the greyed
 `Retriangulate All Points` entry in the Scene tree carries: a reconstruction

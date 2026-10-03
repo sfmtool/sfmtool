@@ -32,8 +32,8 @@ pub use prune_covered::{
 };
 
 pub use triangulation::retriangulate::{
-    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
-    RetriangulateWhich,
+    retriangulate_points, GeometryChange, RetriangulateError, RetriangulateOptions,
+    RetriangulateOutcome, RetriangulateReport, RetriangulateWhich, RetriangulatedPoint,
 };
 
 pub use edited::{
