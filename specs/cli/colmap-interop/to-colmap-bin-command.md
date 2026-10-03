@@ -71,7 +71,7 @@ reconstruction's feature source:
 
 COLMAP stores every 3D point as a finite `(x, y, z)`. Points at infinity
 (`w = 0`) in the input are placed at a finite depth before writing, far enough
-that their parallax is below one pixel in every camera that observes them, and
+that their parallax is at most one pixel in every camera that observes them, and
 the command prints how many points it moved. A reconstruction without points at
 infinity is written unchanged.
 
