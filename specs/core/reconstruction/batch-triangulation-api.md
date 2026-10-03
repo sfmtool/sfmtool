@@ -258,6 +258,314 @@ perpendicular spread of the observing cameras about the mean viewing direction.
 `classify_points_at_infinity` / `find_points_at_infinity` (and the GUI
 diagnostics) — defaulting to the reconstruction's camera extents.
 
+## Point or bearing
+
+The z test above asks whether the solved depth is far from zero relative to
+its linearised uncertainty. A second family in the same module asks the
+question a stored track's representation depends on more directly: does giving
+the track a depth explain its rays better than a direction alone does, by more
+than the noise could explain? It fits both models to the track's rays and
+compares their costs, which is a likelihood-ratio test between two nested
+models. No classifier reads it yet; moving the four finite-or-bearing rules onto
+it is the amendment draft
+[point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md),
+which also carries the measurements that motivate it.
+
+### Interface
+
+The functions live in
+[point_or_bearing.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing.rs),
+the ray and weight constructions in
+[point_or_bearing/ray_weight.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing/ray_weight.rs),
+and all are re-exported from `sfmtool_core::reconstruction::triangulation`. They
+take the CSR ray layout of `triangulate_batch`, plus one 2×3 noise weight per
+ray.
+
+```rust
+/// The bearing that best explains one track's rays, and how strongly the rays
+/// ask for a depth.
+pub struct BearingScore {
+    /// Eigenvector of the smallest eigenvalue of M = Σ AᵢᵀAᵢ,
+    /// Aᵢ = Wᵢ (I − dᵢdᵢᵀ), signed to point along the weighted mean ray.
+    pub bearing: Vector3<f64>,
+    /// The bearing's cost in noise units (that eigenvalue). Λ ≤ bearing_cost.
+    pub bearing_cost: f64,
+    /// The score statistic gᵀH⁻¹g of the point model at (bearing, ρ = 0);
+    /// 0 when the Gauss-Newton step in ρ is not positive, or ρ has no leverage.
+    pub depth_score: f64,
+    /// bearing_cost less the cost at the weighted linear midpoint, when that
+    /// lies in front of every camera, else 0. A lower bound on Λ.
+    pub midpoint_bound: f64,
+    /// dᵢ · bearing > 0 for every ray.
+    pub bearing_in_front_of_all_cameras: bool,
+    pub num_views: usize,
+}
+
+/// Both fits of one track and the exact statistic that compares them.
+pub struct PointBearingFit {
+    pub bearing: Vector3<f64>,
+    pub bearing_cost: f64,
+    /// The point model: anchor + direction / inverse_depth, inverse_depth ≥ 0.
+    pub anchor: Point3<f64>,
+    pub direction: Vector3<f64>,
+    pub inverse_depth: f64,
+    /// That point, or None when inverse_depth = 0 (the point is the bearing).
+    pub point: Option<Point3<f64>>,
+    pub point_cost: f64,
+    /// bearing_cost − point_cost ≥ 0: Λ under the fit's loss, at the optimum
+    /// the fit reaches (it can fall slightly short of the best in-front point).
+    /// Meaningless when in_front_of_all_cameras is false.
+    pub depth_likelihood_ratio: f64,
+    pub in_front_of_all_cameras: bool,
+    pub num_views: usize,
+}
+
+pub struct PointBearingFitOptions {
+    /// None: plain least squares. Some(c): soft-L1 per residual component at
+    /// scale c noise units, the loss bundle adjustment uses.
+    pub soft_l1_scale: Option<f64>,
+    /// Levenberg-Marquardt iterations per fit.
+    pub max_iterations: usize,
+}
+// Default: soft_l1_scale Some(DEFAULT_SOFT_L1_SCALE),
+// max_iterations DEFAULT_POINT_FIT_MAX_ITERATIONS.
+
+pub const DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD: f64 = 25.0;
+pub const DEFAULT_SOFT_L1_SCALE: f64 = 3.0;
+pub const DEFAULT_POINT_FIT_MAX_ITERATIONS: usize = 20;
+
+pub fn bearing_score(dirs: &[Vector3<f64>], centers: &[Point3<f64>],
+    weights: &[Matrix2x3<f64>]) -> Option<BearingScore>;
+pub fn bearing_score_batch(dirs: &[Vector3<f64>], centers: &[Point3<f64>],
+    offsets: &[usize], weights: &[Matrix2x3<f64>]) -> Vec<Option<BearingScore>>;
+
+pub fn fit_point_and_bearing(dirs: &[Vector3<f64>], centers: &[Point3<f64>],
+    weights: &[Matrix2x3<f64>], start: Option<Point3<f64>>,
+    anchor: Option<Point3<f64>>, options: &PointBearingFitOptions)
+    -> Option<PointBearingFit>;
+pub fn fit_point_and_bearing_batch(dirs: &[Vector3<f64>], centers: &[Point3<f64>],
+    offsets: &[usize], weights: &[Matrix2x3<f64>], starts: Option<&[Point3<f64>]>,
+    anchors: Option<&[Point3<f64>]>, options: &PointBearingFitOptions)
+    -> Vec<Option<PointBearingFit>>;
+
+/// Finite when bearing_cost ≥ threshold and depth_score or midpoint_bound
+/// reaches the threshold; otherwise a bearing.
+pub fn is_finite(score: &BearingScore, threshold: f64) -> bool;
+
+/// One observation as a world-frame ray and its weight (1/σ_px)·J·R, J the
+/// projection's derivative at the camera-frame ray, R the world-to-camera
+/// rotation.
+pub struct ObservedRay { pub dir: Vector3<f64>, pub weight: Matrix2x3<f64> }
+pub fn observed_ray(camera: &CameraIntrinsics, cam_from_world: &UnitQuaternion<f64>,
+    pixel: [f64; 2], sigma_px: f64) -> Option<ObservedRay>;
+
+/// The weight of isotropic angular noise σ (radians): (1/σ)·Bᵀ, B any
+/// orthonormal basis perpendicular to the ray.
+pub fn isotropic_ray_weight(dir: &Vector3<f64>, sigma_rad: f64) -> Matrix2x3<f64>;
+pub fn isotropic_ray_weights(dirs: &[Vector3<f64>], sigma_rad: &[f64]) -> Vec<Matrix2x3<f64>>;
+```
+
+```rust
+use sfmtool_core::reconstruction::triangulation::{
+    bearing_score_batch, is_finite, observed_ray, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+};
+
+// One observation per entry of the CSR layout; sigma_px measured from the
+// reconstruction's finite points.
+for (cam, image, pixel) in observations {
+    let ray = observed_ray(cam, &image.quaternion_wxyz, pixel, sigma_px)?;
+    dirs.push(ray.dir);
+    weights.push(ray.weight);
+    centers.push(image.camera_center());
+}
+let finite: Vec<bool> = bearing_score_batch(&dirs, &centers, &offsets, &weights)
+    .iter()
+    .map(|s| s.as_ref().is_some_and(|s| is_finite(s, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD)))
+    .collect();
+```
+
+**Why it is shaped this way.**
+
+- **Deciding is separate from placing.** `bearing_score` is one pass over the
+  rays, a 3×3 eigensolve and a 3×3 solve, with no iteration, and it is all a
+  verdict needs. `fit_point_and_bearing` runs the iterative point fit, for the
+  tracks that come out finite and need a position, and for reports that want
+  the exact `Λ`. Its `start` takes the position a caller already holds, so
+  placing is a few warm-started iterations.
+- **Rays in, angles out, weighted per ray.** The residual of ray `i` is
+  `Wᵢ (I − dᵢdᵢᵀ) m`: the component of the model's unit direction `m` from that
+  camera perpendicular to the ray, which is the sine of the angle between them,
+  through the ray's weight. That keeps the functions independent of the camera
+  model, as `triangulate_batch` is, and the sine (rather than the tangent) is
+  what makes the bearing fit an eigenproblem.
+- **The weight is a 2×3 world-frame matrix, not a scalar.** A fisheye's pixels
+  per radian differ radially and tangentially, by up to 2.1 to 1 on the Kerry
+  Park ground truth. One scalar angular noise per ray moved the statistic by
+  up to 28% there when it was σ_px times the geometric mean `√(s₁s₂)` of the
+  two stretches, and by up to −52% when it was σ_px over the focal length
+  (point 154: 0.64 against 1.33). The weight `(1/σ_px)·J·R` maps a world-frame change of
+  direction straight to pixels over the noise, so the residual is, to first
+  order, the pixel residual over σ_px. A weight is a 2×3 matrix in world
+  coordinates, so there is no basis convention for a caller to share, and any
+  2×2 rotation of it describes the same noise. `observed_ray` is the one
+  construction from an observation, so every caller (the bindings, the
+  reports, the classifiers, the bench) weights alike; it uses the analytic
+  projection derivative where the model has one
+  ([../camera/projection-jacobian.md](../camera/projection-jacobian.md)) and a
+  central difference otherwise, through the camera's own
+  `CameraIntrinsics::pixel_jacobian`. It returns `None` for a `sigma_px` that
+  is not finite and positive, for a pixel whose un-projected ray does not
+  project back to within 1e-3 px of it (a pixel past a fold of the
+  distortion), and where a difference probe leaves the model's domain.
+  `isotropic_ray_weight` covers a caller with only a scalar angular noise.
+- **σ is an input.** The noise level is the one policy choice in the test, and
+  the threshold is a separate argument of `is_finite`, for the reason
+  `depth_uncertainty_batch` is kept out of `triangulate_batch`.
+- **`Option` per track.** A ray is usable when its direction is finite and
+  non-zero, its centre finite and its weight finite, non-zero and with a
+  squared norm that does not overflow. With fewer
+  than two usable rays neither model means anything, and the track is `None`.
+- **`point` is an `Option`.** At `inverse_depth = 0` the best point is the
+  bearing itself and has no finite position, so the fit reports the anchor,
+  direction and inverse depth, and the point only when it is finite.
+- **The anchor is an option.** The fitted point and `Λ` do not depend on the
+  anchor, but the parametrisation does, and bundle adjustment's inverse-depth
+  points keep theirs fixed across rounds.
+- **Batches are parallel and exact.** The batch forms run the single-track
+  function per track on rayon, so each entry is bit-identical to the
+  single-track call.
+
+### Theory
+
+The point model is an anchor `a` (by default the centroid of the observing
+camera centres), a unit direction `u` and an inverse depth `ρ ≥ 0`, with the
+point at `a + u / ρ`. The direction from camera `i` to the point is
+proportional to `u + ρ (a − cᵢ)`, which is smooth through `ρ = 0`, where it is
+`u` from every camera: the bearing model. The bearing is the point model with
+`ρ` held at its boundary, so `point_cost ≤ bearing_cost` and
+`Λ = bearing_cost − point_cost ≥ 0`. For a track truly at infinity with
+Gaussian noise of the stated weight, `P(Λ > t) = ½ P(χ²₁ > t)`: half the time
+the unconstrained optimum is behind the bearing, and the constrained one sits
+at `ρ = 0` with `Λ = 0`. `t = 25` is roughly a 1 in 3.5 million chance of
+calling a true bearing finite.
+
+- **The bearing is closed form.** The bearing's cost is `uᵀ M u` with
+  `M = Σ AᵢᵀAᵢ`, `Aᵢ = Wᵢ (I − dᵢdᵢᵀ)`, so the best bearing is the eigenvector
+  of `M`'s smallest eigenvalue and the cost is that eigenvalue. `bearing_cost`
+  is summed from the rays' residuals `‖Aᵢ u‖²` at that eigenvector, which is
+  the same number without the eigensolve's round-off relative to `λ_max`.
+- **The score is one more pass.** At `(bearing, ρ = 0)` each ray contributes a
+  residual and a 2×3 Jacobian with respect to two tangent directions of `u` and
+  `ρ`. With `v = u + ρ (a − cᵢ)` and `m = v / ‖v‖`,
+  `∂m/∂v = (I − m mᵀ) / ‖v‖`. `depth_score = gᵀH⁻¹g` is the cost reduction a
+  Gauss-Newton step predicts, evaluated through the Schur complement of `ρ` so
+  that a step towards `ρ < 0` (the rays converge behind the cameras) or a `ρ`
+  with no leverage (all cameras at one centre) gives 0. It is the score form of
+  the test, linearised at `ρ = 0`, where the inverse-depth model is close to
+  linear, so it tracks `Λ` closely wherever the rays are close to parallel,
+  which is where the verdict is in question. It does not depend on the anchor.
+- **The midpoint bound decides wide-angle tracks.** When the rays spread over a
+  wide angle (cameras on an arc around an object, from roughly 100° up to a
+  full ring), the best bearing is no description of them at all, its sign
+  comes from a weighted mean ray near zero, and the score at `ρ = 0` can be 0
+  while `Λ` is in the hundreds of thousands. Any point `X` gives
+  `Λ ≥ bearing_cost − cost(X)`, so the cost at the weighted linear midpoint
+  `(Σ AᵢᵀAᵢ)⁻¹ Σ AᵢᵀAᵢ cᵢ` (the point minimising `Σ ‖Aᵢ (X − cᵢ)‖²`), when it
+  lies in front of every camera, gives a rigorous lower bound on `Λ`. On the
+  Kerry Park ground truth it is what calls 12 of the 375 finite points finite.
+  For near-parallel rays the midpoint is a poor point and the bound is small,
+  and the score decides.
+- **Exact exits both ways.** `Λ ≤ bearing_cost`, so `bearing_cost < threshold`
+  is a bearing whatever the point fit would find, and
+  `midpoint_bound ≥ threshold` is a finite point. `is_finite` is finite when
+  `bearing_cost` reaches the threshold and either the score or the bound does.
+
+### Fitting
+
+`fit_point_and_bearing` runs Levenberg-Marquardt over `(u, ρ)`, `u` moving in
+its tangent plane and `ρ` clamped at 0. At the bound, a step that would take
+`ρ` negative is replaced by a step in `u` alone. It accepts only steps that
+lower the cost, so a fit costs no more than its start, and from a start in
+front of every camera only steps that keep it in front.
+
+The sine residual cannot tell an angle from its opposite, so `(u, ρ ≥ 0)` also
+represents points behind every camera, and a fit can slide to a cheap point
+behind one: with a camera 0.02 from the point and three at 5, a fit from the
+midpoint did, leaving the bearing at `ρ = 0` as the only result in front. The
+in-front rule on steps prevents that. The fit runs from `start` when one is
+given, and when there is none, or that fit ends above the bearing's cost or
+behind a camera, it also runs from the bearing at `ρ = 0` and from the
+weighted linear midpoint (when that lies in front of every camera). When the
+warm fit is kept, the midpoint is still refined if it costs less than that
+fit. When one camera is very close to the point and the others spread wide,
+neither the bearing nor the midpoint need be in front of every camera, and
+then no start so far leads in front; the fit runs once more from the cheapest
+point in front of every camera found along the rays themselves (on each ray,
+the distance that best fits the other rays, and a ladder of distances from
+10⁻⁶ to 10³ camera spreads). Without that start, 485 of 187,737 finite
+verdicts in a sweep of such geometries came back with a point behind a camera;
+with it, none does. Of the results that cost no more than the bearing, which
+is always one of them, the fit keeps the cheapest in front of every camera,
+or the cheapest when none is.
+
+The midpoint's refinement is an in-front result costing no more than the
+midpoint, so with plain least squares `Λ ≥ midpoint_bound` at any
+`max_iterations` (none of 7 million adversarial fits fell below it), up to
+round-off: the fit evaluates the midpoint's cost through `u + ρ (a − cᵢ)`, and
+with an anchor 10⁶ from the cameras and no iterations that differs from the
+direct cost by up to 4 parts per million. The one exception is a midpoint
+exactly at the anchor, the one point the parametrisation cannot represent,
+which the fit skips. `in_front_of_all_cameras` checks
+`(u + ρ (a − cᵢ)) · dᵢ > 0` per ray, and `Λ` means nothing when it is false.
+
+A finite verdict from `is_finite` and a fit that comes back without a usable
+point can disagree when the score alone decided: the score is a linear
+prediction at `ρ = 0`, and the fit is what places the point. A point is not
+usable when there is none (`inverse_depth = 0`), when it is not in front of
+every camera (`in_front_of_all_cameras` false), or when it lies closer to a
+camera centre than a minimum depth the consumer sets. The last case comes
+from the start along the rays: in near-camera geometry the in-front point the
+fit finds can sit almost on the near camera's centre (532 of 729 fallback
+starts in an adversarial sweep ended closer to a camera centre than a
+thousandth of the near camera's distance from the point). That is the sine
+cost's genuine minimum in front of
+every camera, but a point at almost zero depth from a camera is not one to
+store. None of the sweeps above gives a finite verdict without a point or with
+one behind a camera, but a consumer that needs a position has a rule for all
+three cases: it re-fits from the position it already holds when that lies in
+front of every camera, and keeps the result if it is usable; otherwise it
+treats the track as a bearing.
+
+`depth_likelihood_ratio` is `Λ` at the optimum the fit reaches, which can fall
+slightly short of the best point in front of every camera (232 of 30,000
+adversarial fits, at worst by 0.08%, none changing the verdict). Decisions
+come from the score and the bound, which do not depend on the fit.
+
+The bearing has the same blind spot: rays along `u` and `−u` fit the bearing
+`u` at no cost. `bearing_in_front_of_all_cameras` on `BearingScore` says
+whether `dᵢ · bearing > 0` for every ray. A classifier does not store a bearing
+that is behind a camera on the strength of a bearing verdict; it treats the
+track as it treats a finite point behind a camera, pruning the sightings the
+bearing is behind or dropping the track. The flag is often false on finite
+tracks whose rays spread over a wide angle (63 of the Kerry Park ground
+truth's 387 tracks), where the bearing describes nothing and the verdict is
+finite.
+
+Weights so large that the bearing's cost overflows make the track `None`
+rather than give it an infinite cost.
+
+With `soft_l1_scale` set, the bearing is first refined under the robust loss
+from the closed-form one, held in front of every camera when the closed-form
+bearing is (so it can stop short of a robust minimum on the far side of a
+camera; no case of it has been measured), both costs are robust, and the
+normal equations use
+the second-order (Triggs) scaling bundle adjustment uses. The robust `Λ` is
+smaller than the plain one wherever a residual is past the loss's scale (on the
+Kerry Park ground truth, finite point 10 has `Λ` 2,745.9 plain and 661.8
+robust, from bearing costs 2,753.0 and 668.8 and point costs 7.18 and 7.00;
+point 50 has 85,424 and 5,892), so a report that sets `Λ` beside `depth_score` fits with
+`soft_l1_scale: None`.
+
 ## Python bindings
 
 Batch-first and numpy-friendly, matching the existing `read_*` dict-of-arrays
@@ -361,9 +669,9 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   reprojection error into σ as `classify_points_at_infinity` does today
   (`noise = max(reproj_error, floor)`). Discovered points carry their mean
   reprojection error against the appended track, so the same fold is
-  available to them. A replacement for the z test that fits both a point and
-  a bearing and compares their costs against a measured noise level is
-  proposed in
+  available to them. Deciding on the likelihood ratio of "Point or bearing"
+  instead, with σ measured from the reconstruction's finite points and no
+  floor, is proposed in
   [point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
 - Weighted vs unweighted midpoint as the default (unweighted matches current
   behavior; inverse-depth² is closer to reprojection error).

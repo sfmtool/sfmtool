@@ -21,6 +21,12 @@
 //!
 //! See `specs/core/reconstruction/batch-triangulation-api.md` for the design.
 //!
+//! [`point_or_bearing`] sits beside the two batch functions and takes the same
+//! ray layout: it fits a bearing and a point to each track and says whether
+//! the rays ask for a depth, by a likelihood-ratio test against a per-ray
+//! noise level. See `specs/core/reconstruction/batch-triangulation-api.md`
+//! § "Point or bearing".
+//!
 //! Two layers sit on top of this one, each in its own submodule and each
 //! re-exported here so a caller's path stays short:
 //!
@@ -39,9 +45,16 @@
 //!
 //! See `specs/core/reconstruction/triangulation-rules.md` for both.
 
+pub mod point_or_bearing;
 pub mod points;
 pub mod retriangulate;
 
+pub use point_or_bearing::{
+    bearing_score, bearing_score_batch, fit_point_and_bearing, fit_point_and_bearing_batch,
+    is_finite, isotropic_ray_weight, isotropic_ray_weights, observed_ray, BearingScore,
+    ObservedRay, PointBearingFit, PointBearingFitOptions, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
+    DEFAULT_POINT_FIT_MAX_ITERATIONS, DEFAULT_SOFT_L1_SCALE,
+};
 pub use points::{
     triangulate_points_from_observations, triangulate_points_from_rays, FewObservations,
     ObservationSet, PointCensus, PointDistance, PointRules, PointVerdict, RaySet,
