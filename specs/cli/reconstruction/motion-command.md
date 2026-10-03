@@ -345,7 +345,8 @@ For each flagged discontinuity, also report:
   `compute_observation_reprojection_errors`), one value per endpoint of each core edge.
 - Number of shared 3D points between the core edge's two frames (from covisibility).
   That count is the whole connectivity answer the report carries: `0` says the two
-  images share no surviving track, and no graph distance is computed.
+  images share no surviving track or that their viewing directions differ by more
+  than 90°, and no graph distance is computed.
 
 High reprojection error and low covisibility strengthen the case that a pose
 discontinuity is an SfM error.
