@@ -18,8 +18,8 @@ reconstruction where you're inspecting a park bench, `length_scale` should
 reflect the bench, not the city.
 
 It is used throughout the viewer to scale things that should adapt to the
-scene: target indicator size, extent of the target light echoes, frustum stub depth, fog
-falloff distances, and fly-mode movement speed.
+scene: target indicator size, extent of the target light echoes, frustum stub depth,
+and fly-mode movement speed.
 
 Currently, `length_scale` is auto-computed from the point cloud as a multiple
 of the trimmed median nearest-neighbor distance (same value as auto point
@@ -273,13 +273,18 @@ the scene"):
 | In front of geometry | Cyan | 100% | Fully visible, unoccluded |
 | Behind geometry | Warm orange | Fades with depth | Color shift signals occlusion |
 
-The opacity when occluded follows a fog-like falloff:
+The opacity when occluded falls linearly from 20% to a 5% floor
+(`shaders/target_indicator.wgsl`):
 ```
-opacity = base_opacity * exp(-depth_behind / fog_distance)
+t = clamp(depth_behind / fog_distance, 0, 1)
+opacity = mix(0.2, 0.05, t)
 ```
-where `fog_distance = target_fog_multiplier × length_scale` (default multiplier:
-10.0). The indicator never becomes fully invisible — a minimum floor ensures
-it can always be found.
+where `depth_behind` is the reversed-Z NDC depth difference between the scene
+and the indicator fragment, and
+`fog_distance = 0.1 × target_fog_multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`
+(0.1 at the default multiplier of 10.0, `scene_renderer/uniforms.rs`). It does
+not scale with `length_scale`. The 5% floor keeps the indicator from becoming
+fully invisible, so it can always be found.
 
 ### Glow Effect
 

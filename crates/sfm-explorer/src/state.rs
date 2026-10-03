@@ -571,7 +571,8 @@ pub struct AppState {
     /// Target indicator size multiplier (radius = multiplier * length_scale).
     pub target_size_multiplier: f32,
 
-    /// Target indicator fog multiplier (fog_distance = multiplier * length_scale).
+    /// Target indicator fog multiplier. The fog distance is the reversed-Z NDC
+    /// depth difference `0.1 * multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`.
     pub target_fog_multiplier: f32,
 
     /// World-space length scale. Represents characteristic scene size.

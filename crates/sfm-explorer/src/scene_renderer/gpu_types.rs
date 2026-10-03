@@ -297,7 +297,8 @@ pub const DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 =
 /// Default target indicator size multiplier (radius = multiplier * length_scale).
 pub const DEFAULT_TARGET_SIZE_MULTIPLIER: f32 = 0.3;
 
-/// Default target indicator fog multiplier (fog_distance = multiplier * length_scale).
+/// Default target indicator fog multiplier. The fog distance is the reversed-Z
+/// NDC depth difference `0.1 * multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`.
 pub const DEFAULT_TARGET_FOG_MULTIPLIER: f32 = 10.0;
 
 /// Default frustum stub depth as a fraction of `length_scale`.
