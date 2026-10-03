@@ -55,10 +55,10 @@ no step decides on; the second is the likelihood-ratio test specified in
 [core/reconstruction/batch-triangulation-api.md](../../core/reconstruction/batch-triangulation-api.md)
 § "Point or bearing", which reclassification (`sfm xform
 --classify-points-at-infinity`), discovery (`--find-points-at-infinity`) and
-the bench decide with, as does bundle adjustment's crossing between a point and
-a direction
+the bench decide with, as does bundle adjustment's storage decision for the free
+points it solves in inverse depth
 ([core/geometry/bundle-adjustment.md](../../core/geometry/bundle-adjustment.md)
-§ "Free points: crossing between representations"). Neither part changes the
+§ "Free points: inverse depth and the storage decision"). Neither part changes the
 file. The second part's
 disagreements with the stored representation are what reclassification would
 change, and it says so. The printer is

@@ -20,7 +20,9 @@
 
 use std::borrow::Cow;
 
-use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{
+    DMatrix, DVector, Matrix2, Matrix3, Point3, SMatrix, UnitQuaternion, Vector2, Vector3,
+};
 use rayon::prelude::*;
 
 use crate::analysis::reprojection_noise::{
@@ -35,8 +37,12 @@ use crate::camera::{CameraModel, PixelJacobian};
 use crate::progress::Progress;
 use crate::progress_info;
 use crate::reconstruction::triangulation::points::{
-    tangent_basis, triangulate_points_through_cameras, FewObservations, LikelihoodRule,
-    ObservationSet, PointDistance, PointRules,
+    tangent_basis, triangulate_points_through_cameras, FewObservations, ObservationSet,
+    PointDistance, PointRules,
+};
+use crate::reconstruction::triangulation::{
+    bearing_score, fit_point_and_bearing, is_finite, observed_ray, PointBearingFitOptions,
+    DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
 use crate::CameraIntrinsics;
 
@@ -81,8 +87,8 @@ pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PointConstraint {
     /// The solve owns the point: its position moves, and under
-    /// [`FreePointPolicy::cross`] its representation is re-decided from its
-    /// rays between rounds.
+    /// [`FreePointPolicy::cross`] it is solved in inverse depth and its
+    /// representation is decided from its rays at the end of the solve.
     #[default]
     Free,
     /// The caller owns the point's distance from a reference and the solve owns
@@ -324,38 +330,45 @@ impl std::error::Error for PointConstraintsError {}
 /// kernel the parity requirement is stated against.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FreePointPolicy {
-    /// Re-decide every free point's representation at each inter-round
-    /// re-estimation, from its own rays at the current geometry, on the
-    /// point-or-bearing test at the noise level the last round's residuals
-    /// measure: a track whose rays ask for a depth is finite, one whose rays do
-    /// not is a direction, and so is one that solves behind a camera that
-    /// observes it. See "Free points: crossing between representations" in
+    /// Solve every free point in inverse depth about a fixed anchor, so that it
+    /// can move between near and infinity within a round, and decide at the end
+    /// of the solve whether it is stored as a position or as a direction, on the
+    /// point-or-bearing test at the noise level the final round's residuals
+    /// measure. See "Free points: inverse depth and the storage decision" in
     /// `specs/core/geometry/bundle-adjustment.md`.
     pub cross: bool,
 }
 
-/// One inter-round re-estimation under [`FreePointPolicy::cross`]: the noise
-/// level it decided at and what it changed.
+/// The end-of-solve storage decision under [`FreePointPolicy::cross`]: the
+/// noise level the free points were decided at and what the decision changed
+/// against the caller's input representation.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RoundCrossing {
-    /// The schedule round the re-estimation opened (1 for the first, since
-    /// round 0 has none).
-    pub round: usize,
-    /// The noise level the free points were decided at: the RMS per-axis
-    /// residual, in pixels, over the previous round's kept observations of
-    /// finite points at the state that round settled on, outliers gated out as
+pub struct FreePointDecision {
+    /// The noise level the free points are decided at: the RMS per-axis
+    /// residual, in pixels, over the final round's kept observations of finite
+    /// points at the state the solve ended at, outliers gated out as
     /// [`crate::analysis::reprojection_noise::OUTLIER_GATE`] does, and never
-    /// under the cameras' keypoint resolution. `None` where that round kept no
-    /// observation of a finite point, in which case nothing crossed.
+    /// under the cameras' keypoint resolution. `None` where the final round
+    /// kept no observation of a finite point.
     pub sigma_px: Option<f64>,
     /// How many observations `sigma_px` is measured over.
     pub observation_count: usize,
     /// How many were left out as outliers.
     pub outlier_count: usize,
-    /// Free points that were directions and came out of the re-estimation
-    /// finite.
+    /// Whether the test was read. It is unless there is no level to read it at
+    /// or the solve was cancelled, and each free point is then stored as the
+    /// solve left it: a position where its inverse depth is positive and a
+    /// direction where it is zero.
+    pub decided: bool,
+    /// Whether the final round met its convergence test rather than stopping on
+    /// its iteration budget. The decision is read either way; a round that
+    /// stopped short measures a level that still carries pose error, which errs
+    /// toward a direction, and this says so.
+    pub converged: bool,
+    /// Free points the caller handed in as directions that are stored finite.
     pub to_finite: usize,
-    /// Free points that were finite and came out of it directions.
+    /// Free points the caller handed in as positions that are stored as
+    /// directions.
     pub to_direction: usize,
 }
 
@@ -481,13 +494,13 @@ pub struct BundleAdjustment {
     /// The representation each point ended with, one entry per point: `true`
     /// where the returned row is a world-frame direction and `false` where it
     /// is a position. A free point's entry is the caller's input mask unless
-    /// [`FreePointPolicy::cross`] let the re-estimation re-decide it, a held
-    /// point's is its input value, and a ranged point's is whether its distance
-    /// is infinite.
+    /// [`FreePointPolicy::cross`] solved it in inverse depth, a held point's is
+    /// its input value, and a ranged point's is whether its distance is
+    /// infinite.
     pub point_at_infinity: Vec<bool>,
-    /// One entry per inter-round re-estimation under
-    /// [`FreePointPolicy::cross`], in round order; empty with the crossing off.
-    pub crossings: Vec<RoundCrossing>,
+    /// The end-of-solve storage decision under [`FreePointPolicy::cross`];
+    /// `None` with the crossing off, and when the solve exited degenerate.
+    pub free_point_decision: Option<FreePointDecision>,
 }
 
 /// Soft-L1 robust cost of a squared-residual-over-scale² argument:
@@ -757,9 +770,10 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 ///
 /// `constraints` optionally states a constraint per point (free, ranged or
 /// held) and what the ranged ones are held at; an absent one is every point
-/// free. `free_points` says whether a free point's representation is re-decided
-/// from its rays between rounds, on the point-or-bearing test at the noise level
-/// the previous round's residuals measure. See "Point constraints" in
+/// free. `free_points` says whether a free point is solved in inverse depth and
+/// its representation decided at the end of the solve, on the point-or-bearing
+/// test at the noise level the final round's residuals measure. See "Point
+/// constraints" in
 /// `specs/core/geometry/bundle-adjustment.md`. Absent constraints and a default
 /// [`FreePointPolicy`] reproduce the kernel without them bit for bit.
 ///
@@ -1110,14 +1124,19 @@ fn residual_norms_depths(
 /// image, so a track seen by two cameras back-projects each observation
 /// through its own lens.
 ///
-/// `cross_sigma_px` is the crossing policy for free points: `None` keeps every
-/// free point's representation as it came in (the mask is honoured for the
-/// whole solve), and `Some(σ)` re-decides it from the rays at this geometry --
-/// marks off, the likelihood rule at `σ`, cheirality on -- and writes the
-/// verdict back into `is_dir` for the next linearization. A ranged point is
-/// carried by the distance rule at whatever origin its reference resolves to
-/// now, and a held point is not re-estimated at all. Returns how many free
-/// points became finite and how many became directions.
+/// `free_from_rays` is the inverse-depth policy for free points. Off, every
+/// free point keeps its representation as it came in (the mask is honoured for
+/// the whole solve). On, a free point still re-estimates in the representation
+/// the last round's solve left it in -- a position by its midpoint, a direction
+/// (a point the solve took to `ρ = 0`) by its mean ray -- but with cheirality
+/// on, so a position whose midpoint lands behind a camera that observes it
+/// starts the next round as its mean ray, at `ρ = 0`. Neither is a decision
+/// about how the point is stored: the next round solves it in inverse depth
+/// from there, where it can move to or away from infinity, and the storage
+/// decision is taken at the end of the solve. An absent estimate (`NaN`)
+/// leaves the representation it had. A ranged point is carried by the
+/// distance rule at whatever origin its reference resolves to now, and a held
+/// point is not re-estimated at all.
 #[allow(clippy::too_many_arguments)]
 fn retriangulate_round(
     cams: &[CameraIntrinsics],
@@ -1130,9 +1149,8 @@ fn retriangulate_round(
     obs_img: &[u32],
     obs_pt: &[u32],
     cons: &Constraints,
-    cross_sigma_px: Option<f64>,
-) -> (usize, usize) {
-    let crossing = cross_sigma_px.is_some();
+    free_from_rays: bool,
+) {
     let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
     for q in quats {
         quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
@@ -1141,17 +1159,6 @@ fn retriangulate_round(
     for t in trans {
         translations.extend_from_slice(&[t.x, t.y, t.z]);
     }
-    // A crossing free point is solved from its rays, so it carries no mark; the
-    // marks of the points the crossing does not touch are what they were.
-    let marks: Vec<bool> = (0..points.len())
-        .map(|p| {
-            if crossing && cons.constraint[p] == PointConstraint::Free {
-                false
-            } else {
-                is_dir[p]
-            }
-        })
-        .collect();
     // A ranged point's origin is a function of the poses, read here at the
     // round's own geometry.
     let distances: Option<Vec<PointDistance>> = cons.any_ranged.then(|| {
@@ -1183,46 +1190,33 @@ fn retriangulate_round(
             translations: &translations,
             n_tracks: points.len(),
         },
-        Some(&marks),
+        Some(&*is_dir),
         PointRules {
             distance: distances.as_deref(),
-            likelihood: cross_sigma_px.map(LikelihoodRule::at),
-            cheirality: crossing,
+            cheirality: free_from_rays,
             few: FewObservations::Absent,
             ..Default::default()
         },
     );
-    let (mut to_finite, mut to_direction) = (0, 0);
     for (p, (row, e)) in points.iter_mut().zip(&est.xyzw).enumerate() {
         // A held point owns its coordinate; the estimate for it is discarded.
         if cons.held(p) {
             continue;
         }
         *row = [e[0], e[1], e[2]];
-        // The crossing verdict, where the estimate says anything: an absent
-        // track (`NaN`) leaves the representation it had, so a track that
-        // momentarily loses its observations does not also change representation.
-        if crossing && cons.constraint[p] == PointConstraint::Free && e[3].is_finite() {
-            let dir = e[3] == 0.0;
-            match (is_dir[p], dir) {
-                (true, false) => to_finite += 1,
-                (false, true) => to_direction += 1,
-                _ => {}
-            }
-            is_dir[p] = dir;
+        if free_from_rays && cons.constraint[p] == PointConstraint::Free && e[3].is_finite() {
+            is_dir[p] = e[3] == 0.0;
         }
     }
-    (to_finite, to_direction)
 }
 
-/// The noise level a crossing round decides its free points at: the gated RMS
-/// per-axis residual over `kept` observations of finite points at the state
-/// the arrays hold, the estimator of
-/// [`crate::analysis::reprojection_noise`] (each camera's residuals gated at
-/// [`OUTLIER_GATE`] robust spreads, no degrees-of-freedom correction), never
-/// under the cameras' keypoint resolution.
+/// The noise level the storage decision reads: the gated RMS per-axis residual
+/// over `kept` observations of finite points at the state the arrays hold, the
+/// estimator of [`crate::analysis::reprojection_noise`] (each camera's
+/// residuals gated at [`OUTLIER_GATE`] robust spreads, no degrees-of-freedom
+/// correction), never under the cameras' keypoint resolution.
 ///
-/// `kept` is the previous round's solve set and the state the one that solve
+/// `kept` is the final round's solve set and the state the one that solve
 /// settled on, so the level measures the residuals the adjustment has just
 /// minimised rather than its schedule's loss scale. A direction's residuals
 /// are left out, as the stored measure leaves out points at infinity: they are
@@ -1275,7 +1269,9 @@ fn round_noise(
 /// through its reference and distance; `cp_dir` flags direction points; `s2s`
 /// is the per-kept-observation squared loss scale (uniform except where a
 /// protected observation widens it). `cams` are the cameras at the candidate
-/// state and `obs_cam` the camera of each kept observation.
+/// state and `obs_cam` the camera of each kept observation. A point with an
+/// anchor in `inverse` is the direction `points[c]` and the inverse depth
+/// `inv_depth[c]` about that anchor (see [`inverse_depth_ray`]).
 #[allow(clippy::too_many_arguments)]
 fn robust_cost(
     cams: &[CameraIntrinsics],
@@ -1284,6 +1280,8 @@ fn robust_cost(
     trans: &[Vector3<f64>],
     points: &[Vector3<f64>],
     cp_dir: &[bool],
+    inverse: &[Option<Vector3<f64>>],
+    inv_depth: &[f64],
     uv: &[[f64; 2]],
     kept: &[usize],
     obs_ci: &[usize],
@@ -1294,18 +1292,24 @@ fn robust_cost(
         .enumerate()
         .map(|(kk, &k)| {
             let s2 = s2s[kk];
-            let p = points[obs_cp[kk]];
+            let cp = obs_cp[kk];
+            let p = points[cp];
             // A non-finite point (possible only for protected observations,
             // which the trim never excludes) is penalized like an
             // out-of-domain projection.
             if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
                 return s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2);
             }
-            let rot = quats[obs_ci[kk]] * p;
-            let c = if cp_dir[obs_cp[kk]] {
-                rot
+            let ci = obs_ci[kk];
+            let c = if let Some(a) = inverse.get(cp).copied().flatten() {
+                inverse_depth_ray(&quats[ci], &trans[ci], &p, inv_depth[cp], &a).1
             } else {
-                rot + trans[obs_ci[kk]]
+                let rot = quats[ci] * p;
+                if cp_dir[cp] {
+                    rot
+                } else {
+                    rot + trans[ci]
+                }
             };
             match cams[obs_cam[kk]].ray_to_pixel([c.x, c.y, c.z]) {
                 Some((u, v)) => {
@@ -1317,6 +1321,29 @@ fn robust_cost(
             }
         })
         .sum()
+}
+
+/// The camera-frame ray of a point held in inverse depth `ρ` about the anchor
+/// `a` with unit direction `u`, seen from the image at `(q, t)`: returned as
+/// `R·(u + ρ·a)`, the part the rotation block differentiates, and
+/// `p̃ = R·(u + ρ·a) + ρ·t`.
+///
+/// `p̃` is `ρ·(R·X + t)` for the point `X = a + u/ρ`, a positive multiple of the
+/// camera-frame point, so it projects to the same pixel and sits on the same
+/// side of the camera; at `ρ = 0` it is `R·u`, the direction's own ray. Every
+/// projection the solve makes is homogeneous of degree zero in the ray, so it
+/// reads `p̃` directly and never forms the point, which is what keeps a far
+/// point well conditioned.
+#[inline]
+fn inverse_depth_ray(
+    q: &UnitQuaternion<f64>,
+    t: &Vector3<f64>,
+    u: &Vector3<f64>,
+    inv_depth: f64,
+    anchor: &Vector3<f64>,
+) -> (Vector3<f64>, Vector3<f64>) {
+    let rot = q * (u + anchor * inv_depth);
+    (rot, rot + t * inv_depth)
 }
 
 /// Everything one linearization of the solve reads that does not vary from
@@ -1344,6 +1371,13 @@ struct LinState<'a> {
     cp_dir: &'a [bool],
     cp_held: &'a [bool],
     cp_origin: &'a [Option<DistanceOrigin>],
+    /// The anchor of each point solved in inverse depth, whose `xp` entry is
+    /// then its unit direction from the anchor; empty, or `None` per point,
+    /// where no point is.
+    cp_inverse: &'a [Option<Vector3<f64>>],
+    /// The inverse depth of each point solved in inverse depth, parallel to
+    /// `cp_inverse`.
+    inv_depth: &'a [f64],
     /// Every supplied observation's pixel, indexed by the caller's own index.
     uv: &'a [[f64; 2]],
     /// Width of the reduced system's lens head: every camera's block.
@@ -1397,8 +1431,14 @@ fn observation_blocks<const CAM_COLS: usize>(
     let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, lens.cam);
     let f = lens.f;
     let dir = st.cp_dir[cp];
-    let rot_pt = q[ci] * xp[cp];
-    let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
+    let inverse = st.cp_inverse.get(cp).copied().flatten();
+    let (rot_pt, p_cam) = match inverse {
+        Some(a) => inverse_depth_ray(&q[ci], &t[ci], &xp[cp], st.inv_depth[cp], &a),
+        None => {
+            let rot_pt = q[ci] * xp[cp];
+            (rot_pt, if dir { rot_pt } else { rot_pt + t[ci] })
+        }
+    };
     let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
     let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
     let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
@@ -1460,8 +1500,9 @@ fn observation_blocks<const CAM_COLS: usize>(
                 cam_j[(1, 2 + j)] = col[1];
             }
         }
-        // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite) or
-        // −[R·d]ₓ (direction) — same composition either way.
+        // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite), −[R·d]ₓ
+        // (direction) or −[R·(u + ρ·a)]ₓ (inverse depth) — same composition
+        // every way.
         let nskew = Matrix3::new(
             0.0, rot_pt.z, -rot_pt.y, //
             -rot_pt.z, 0.0, rot_pt.x, //
@@ -1471,7 +1512,21 @@ fn observation_blocks<const CAM_COLS: usize>(
             .fixed_view_mut::<2, 3>(0, pose_c)
             .copy_from(&(jp * nskew));
         let r_mat: Matrix3<f64> = q[ci].to_rotation_matrix().into_inner();
-        if dir {
+        if let Some(a) = inverse {
+            // A free point in inverse depth, p̃ = R·(u + ρ·a) + ρ·t.
+            // Translation block: ρ·J, which vanishes at ρ = 0 as a
+            // direction's does. Point block: the two tangent columns of `u`,
+            // J·R·B(u), and the inverse depth's, J·(R·a + t), the anchor seen
+            // from this camera.
+            let rho = st.inv_depth[cp];
+            cam_j
+                .fixed_view_mut::<2, 3>(0, pose_c + 3)
+                .copy_from(&(jp * rho));
+            let (b1, b2) = st.bases[cp];
+            pt_j.set_column(0, &(jp * (r_mat * b1)));
+            pt_j.set_column(1, &(jp * (r_mat * b2)));
+            pt_j.set_column(2, &(jp * (r_mat * a + t[ci])));
+        } else if dir {
             // Translation block: zero (a direction observes no
             // translation). Point block: 2-DOF tangent-plane
             // parameters, ∂p_cam/∂δ = R·B(d) (columns b1, b2;
@@ -1678,6 +1733,23 @@ impl<'a> Lens<'a> {
 /// point takes no point block, no Schur block and no update, so it comes back
 /// exactly as it went in.
 ///
+/// `anchors`, under [`FreePointPolicy::cross`], holds one anchor per point,
+/// and every free point in the solve with a finite anchor is solved in inverse
+/// depth about it: a unit direction `u` in its tangent plane and `ρ ≥ 0`, three
+/// slots like a finite point's, with the point at `a + u/ρ`. A step that would
+/// take `ρ` below zero stops it at zero, and a point already at zero whose
+/// gradient asks for a negative `ρ` has its `ρ` slot pinned for that
+/// iteration, so it steps in `u` alone. The point is handed in and back in the
+/// arrays' own representation: a position where `ρ > 0` and the direction `u`
+/// where `ρ = 0`, which is what `is_dir` is updated to say. An image's
+/// translation is pinned for an iteration in which none of its kept
+/// observations carries a translation column, which an inverse-depth point at
+/// `ρ = 0` does not.
+///
+/// Returns whether the solve met its convergence test (two tiny accepted steps
+/// in a row, or no damping finding a downhill step) rather than stopping on
+/// `max_iters` or a cancellation.
+///
 /// The reduced system opens with one lens block per camera,
 /// `[f_j, k1_j, (c_j,0..c_j,N_j−1) | …]`, then the poses. `lenses` carries each
 /// camera's state in and its solved state out. A camera none of whose images
@@ -1704,18 +1776,19 @@ fn solve_lm<const CAM_COLS: usize>(
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
-    is_dir: &[bool],
+    is_dir: &mut [bool],
     uv: &[[f64; 2]],
     obs_img: &[u32],
     obs_pt: &[u32],
     kept: &[usize],
     cons: &Constraints,
+    anchors: Option<&[Vector3<f64>]>,
     loss_scale: f64,
     max_iters: usize,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     progress: &Progress<'_>,
-) {
+) -> bool {
     // The spline instantiation is selected by width; the staged loop requests
     // it exactly when some camera releases a well-formed spline.
     debug_assert!(
@@ -1768,7 +1841,41 @@ fn solve_lm<const CAM_COLS: usize>(
     for &j in &obs_cam {
         live[j] = true;
     }
-    let cp_dir: Vec<bool> = pt_ids.iter().map(|&p| is_dir[p]).collect();
+    // Free points solved in inverse depth: the anchor of each, `None` for every
+    // other point. A free point whose position sits exactly on its anchor has
+    // no direction from it, and stays a position for the round.
+    let cp_inverse: Vec<Option<Vector3<f64>>> = match anchors {
+        None => Vec::new(),
+        Some(anchors) => pt_ids
+            .iter()
+            .map(|&p| {
+                if cons.constraint[p] != PointConstraint::Free {
+                    return None;
+                }
+                let a = anchors[p];
+                if !(a.x.is_finite() && a.y.is_finite() && a.z.is_finite()) {
+                    return None;
+                }
+                let x = Vector3::new(points[p][0], points[p][1], points[p][2]);
+                let usable = if is_dir[p] {
+                    x.norm() > 0.0
+                } else {
+                    let n = (x - a).norm();
+                    n > 0.0 && n.is_finite()
+                };
+                usable.then_some(a)
+            })
+            .collect(),
+    };
+    let has_inverse = cp_inverse.iter().any(Option::is_some);
+    let is_inverse = |c: usize| has_inverse && cp_inverse[c].is_some();
+    // A point in inverse depth is never a direction here: its `ρ` says whether
+    // it is at infinity.
+    let cp_dir: Vec<bool> = pt_ids
+        .iter()
+        .enumerate()
+        .map(|(c, &p)| is_dir[p] && !is_inverse(c))
+        .collect();
     // A held point owns no parameters: no point block, no Schur block, no
     // update.
     let cp_held: Vec<bool> = pt_ids.iter().map(|&p| cons.held(p)).collect();
@@ -1781,17 +1888,27 @@ fn solve_lm<const CAM_COLS: usize>(
         .map(|c| cp_dir[c] || cp_distance[c].is_some())
         .collect();
 
-    // Translation observability: an image whose kept observations are all
-    // directions gets its translation pinned for this round (a direction
-    // observation's translation Jacobian is identically zero, so the block
-    // would otherwise be pure zero curvature in the reduced system).
-    let mut img_has_finite = vec![false; n_im];
-    for (kk, &ci) in obs_ci.iter().enumerate() {
-        if !cp_dir[obs_cp[kk]] {
-            img_has_finite[ci] = true;
+    // Translation observability: an image none of whose kept observations
+    // carries a translation column gets its translation pinned (a direction's
+    // translation Jacobian is identically zero, and so is that of a point in
+    // inverse depth at `ρ = 0`, so the block would otherwise be pure zero
+    // curvature in the reduced system). Without points in inverse depth this
+    // is the same every iteration, and pinned for the whole round.
+    let translation_support = |inv_depth: &[f64]| {
+        let mut support = vec![false; n_im];
+        for (kk, &ci) in obs_ci.iter().enumerate() {
+            let cp = obs_cp[kk];
+            let carries = if is_inverse(cp) {
+                inv_depth[cp] > 0.0
+            } else {
+                !cp_dir[cp]
+            };
+            if carries {
+                support[ci] = true;
+            }
         }
-    }
-    let any_frozen = img_has_finite.iter().any(|&h| !h);
+        support
+    };
 
     // Per-point observation lists (compact indices into `kept`).
     let mut pt_obs: Vec<Vec<usize>> = vec![Vec::new(); n_pt];
@@ -1864,6 +1981,27 @@ fn solve_lm<const CAM_COLS: usize>(
             x[c] = (x[c] - origin_of(o, &q, &t)).normalize();
         }
     }
+    // A point in inverse depth holds its unit direction from the anchor in `x`
+    // and its inverse depth here: a position `X` is `u = (X − a)/‖X − a‖`,
+    // `ρ = 1/‖X − a‖`, and a direction `d` is `u = d`, `ρ = 0`.
+    let mut inv_depth: Vec<f64> = if has_inverse {
+        vec![0.0; n_pt]
+    } else {
+        Vec::new()
+    };
+    if has_inverse {
+        for (c, a) in cp_inverse.iter().enumerate() {
+            let Some(a) = a else { continue };
+            if is_dir[pt_ids[c]] {
+                x[c] = x[c].normalize();
+            } else {
+                let w = x[c] - a;
+                let n = w.norm();
+                x[c] = w / n;
+                inv_depth[c] = 1.0 / n;
+            }
+        }
+    }
     // Reduced camera system: every camera's lens block, then 6 per image. A
     // block's two scalar slots are always present (pinned when unreleased) to
     // keep the indexing uniform, its coefficient slots only under its own
@@ -1897,7 +2035,8 @@ fn solve_lm<const CAM_COLS: usize>(
     let cost_at = |cams: &[CameraIntrinsics],
                    q: &[UnitQuaternion<f64>],
                    t: &[Vector3<f64>],
-                   x: &[Vector3<f64>]| {
+                   x: &[Vector3<f64>],
+                   inv_depth: &[f64]| {
         let owned;
         let xp: &[Vector3<f64>] = if has_ranged {
             owned = positions(x, q, t);
@@ -1906,13 +2045,26 @@ fn solve_lm<const CAM_COLS: usize>(
             x
         };
         robust_cost(
-            cams, &obs_cam, q, t, xp, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
+            cams,
+            &obs_cam,
+            q,
+            t,
+            xp,
+            &cp_dir,
+            &cp_inverse,
+            inv_depth,
+            uv,
+            kept,
+            &obs_ci,
+            &obs_cp,
+            &s2s,
         )
     };
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
+    let mut converged = false;
     let mut cams: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
-    let mut prev_cost = cost_at(&cams, &q, &t, &x);
+    let mut prev_cost = cost_at(&cams, &q, &t, &x, &inv_depth);
 
     let analytic: Vec<bool> = cams
         .iter()
@@ -1933,8 +2085,9 @@ fn solve_lm<const CAM_COLS: usize>(
         let bases: Vec<(Vector3<f64>, Vector3<f64>)> = x
             .iter()
             .zip(&cp_tangent)
-            .map(|(xd, &dir)| {
-                if dir {
+            .enumerate()
+            .map(|(c, (xd, &dir))| {
+                if dir || is_inverse(c) {
                     tangent_basis(xd)
                 } else {
                     (Vector3::zeros(), Vector3::zeros())
@@ -1980,6 +2133,8 @@ fn solve_lm<const CAM_COLS: usize>(
                 cp_dir: &cp_dir,
                 cp_held: &cp_held,
                 cp_origin: &cp_origin,
+                cp_inverse: &cp_inverse,
+                inv_depth: &inv_depth,
                 uv,
                 n_shared,
             };
@@ -2042,6 +2197,31 @@ fn solve_lm<const CAM_COLS: usize>(
                 );
             }
         }
+        // A point in inverse depth at the bound `ρ = 0` whose gradient asks for
+        // a negative `ρ` keeps it at zero this iteration: its `ρ` column is
+        // dropped, so it is eliminated as a direction is, over its two tangent
+        // slots, and the camera step is not solved as though it could move
+        // through infinity.
+        let mut cp_bound = vec![false; if has_inverse { n_pt } else { 0 }];
+        if has_inverse {
+            for (c, bound) in cp_bound.iter_mut().enumerate() {
+                if !(is_inverse(c) && inv_depth[c] == 0.0 && g_p[c][2] >= 0.0) {
+                    continue;
+                }
+                *bound = true;
+                for r in 0..3 {
+                    v_pp[c][(r, 2)] = 0.0;
+                    v_pp[c][(2, r)] = 0.0;
+                }
+                g_p[c][2] = 0.0;
+                for &a in &pt_obs[c] {
+                    w_cp[a].column_mut(2).fill(0.0);
+                }
+            }
+        }
+        // Which images carry a translation column this iteration.
+        let img_has_finite = translation_support(&inv_depth);
+        let any_frozen = img_has_finite.iter().any(|&h| !h);
 
         drop(equations);
 
@@ -2059,6 +2239,13 @@ fn solve_lm<const CAM_COLS: usize>(
             // third diagonal is pinned to 1 so the uniform 3×3 inversion
             // stays regular while contributing an exactly-zero update.
             let mut v_inv: Vec<Matrix3<f64>> = Vec::with_capacity(n_pt);
+            // The damped tangent blocks of the points in inverse depth, for the
+            // step in `u` alone that replaces one taking `ρ` through zero.
+            let mut v_tangent: Vec<Matrix2<f64>> = if has_inverse {
+                Vec::with_capacity(n_pt)
+            } else {
+                Vec::new()
+            };
             let mut singular = false;
             for (p, v) in v_pp.iter().enumerate() {
                 // A held point has no point block at all; the identity keeps
@@ -2066,14 +2253,20 @@ fn solve_lm<const CAM_COLS: usize>(
                 // make every contribution exactly zero.
                 if cp_held[p] {
                     v_inv.push(Matrix3::identity());
+                    if has_inverse {
+                        v_tangent.push(Matrix2::identity());
+                    }
                     continue;
                 }
                 let mut vd = *v;
                 for dd in 0..3 {
                     vd[(dd, dd)] += lambda * v[(dd, dd)].max(1e-12);
                 }
-                if cp_tangent[p] {
+                if cp_tangent[p] || (has_inverse && cp_bound[p]) {
                     vd[(2, 2)] = 1.0;
+                }
+                if has_inverse {
+                    v_tangent.push(vd.fixed_view::<2, 2>(0, 0).into_owned());
                 }
                 match vd.try_inverse() {
                     Some(inv) => v_inv.push(inv),
@@ -2263,6 +2456,7 @@ fn solve_lm<const CAM_COLS: usize>(
                 // would still flip the sign of a `−0.0` component).
             }
             let mut x_cand = x.clone();
+            let mut inv_depth_cand = inv_depth.clone();
             for (p, obs) in pt_obs.iter().enumerate() {
                 // A held point does not move.
                 if cp_held[p] {
@@ -2284,8 +2478,27 @@ fn solve_lm<const CAM_COLS: usize>(
                         }
                     }
                 }
-                let dxp = v_inv[p] * (g_p[p] + wt_dc);
-                if cp_tangent[p] {
+                let rhs = g_p[p] + wt_dc;
+                let mut dxp = v_inv[p] * rhs;
+                if is_inverse(p) {
+                    // u ← normalize(u + B(u)·δ), ρ ← ρ + δρ, with ρ held at
+                    // its bound: a step past zero from above stops at zero, and
+                    // one past zero from zero itself is replaced by the step in
+                    // `u` alone, as the point fit of the test does.
+                    let mut rho = inv_depth[p] - dxp[2];
+                    if rho < 0.0 {
+                        if inv_depth[p] == 0.0 {
+                            if let Some(inv) = v_tangent[p].try_inverse() {
+                                let du = inv * Vector2::new(rhs[0], rhs[1]);
+                                dxp = Vector3::new(du[0], du[1], 0.0);
+                            }
+                        }
+                        rho = 0.0;
+                    }
+                    let (b1, b2) = bases[p];
+                    x_cand[p] = (x[p] - (b1 * dxp[0] + b2 * dxp[1])).normalize();
+                    inv_depth_cand[p] = rho;
+                } else if cp_tangent[p] {
                     // d ← normalize(d + B(d)·δ), the 2-DOF tangent update.
                     let (b1, b2) = bases[p];
                     x_cand[p] = (x[p] - (b1 * dxp[0] + b2 * dxp[1])).normalize();
@@ -2303,7 +2516,7 @@ fn solve_lm<const CAM_COLS: usize>(
                     lenses[j].at(f_cand[j], k1_cand[j], bs)
                 })
                 .collect();
-            let new_cost = cost_at(&cams_cand, &q_cand, &t_cand, &x_cand);
+            let new_cost = cost_at(&cams_cand, &q_cand, &t_cand, &x_cand, &inv_depth_cand);
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
                 fs = f_cand;
@@ -2316,6 +2529,7 @@ fn solve_lm<const CAM_COLS: usize>(
                 q = q_cand;
                 t = t_cand;
                 x = x_cand;
+                inv_depth = inv_depth_cand;
                 cams = cams_cand;
                 prev_cost = new_cost;
                 lambda = (lambda * 0.5).max(1e-12);
@@ -2341,13 +2555,16 @@ fn solve_lm<const CAM_COLS: usize>(
         }
         drop(ladder);
         if !improved || lambda.is_infinite() {
+            converged = true;
             break;
         }
     }
 
     // Scatter the compact state back. A ranged point comes back as the
     // position its distance and its reference put it at, re-read at the poses
-    // the round settled on; a held point is not written at all.
+    // the round settled on; a held point is not written at all. A point in
+    // inverse depth comes back as a position where `ρ > 0` and as its direction
+    // where `ρ = 0` (or where `a + u/ρ` overflows).
     let owned_final;
     let xf: &[Vector3<f64>] = if has_ranged {
         owned_final = positions(&x, &q, &t);
@@ -2363,12 +2580,150 @@ fn solve_lm<const CAM_COLS: usize>(
         if cp_held[c] {
             continue;
         }
+        if is_inverse(c) {
+            let a = cp_inverse[c].expect("an anchor");
+            let rho = inv_depth[c];
+            debug_assert!(rho >= 0.0, "an inverse depth below its bound: {rho}");
+            let x = a + xf[c] / rho;
+            if rho > 0.0 && x.iter().all(|v| v.is_finite()) {
+                points[p] = [x.x, x.y, x.z];
+                is_dir[p] = false;
+            } else {
+                points[p] = [xf[c].x, xf[c].y, xf[c].z];
+                is_dir[p] = true;
+            }
+            continue;
+        }
         points[p] = [xf[c].x, xf[c].y, xf[c].z];
     }
     for (j, lens) in lenses.iter_mut().enumerate() {
         lens.f = fs[j];
         lens.k1 = k1s[j];
         lens.bspline = std::mem::take(&mut bsplines[j]);
+    }
+    converged
+}
+
+/// The anchor of every free point solved in inverse depth: the centroid of the
+/// camera centres of the images observing it, one term per observation, at the
+/// poses given. `NaN` for a point that is not free or has no observation.
+///
+/// It is the default anchor of the test's own point fit
+/// ([`fit_point_and_bearing`]), so the solve and the fit read `ρ` about the same
+/// place.
+fn free_point_anchors(
+    quats: &[UnitQuaternion<f64>],
+    trans: &[Vector3<f64>],
+    obs_img: &[u32],
+    obs_pt: &[u32],
+    cons: &Constraints,
+    n_pt: usize,
+) -> Vec<Vector3<f64>> {
+    let centres: Vec<Vector3<f64>> = quats
+        .iter()
+        .zip(trans)
+        .map(|(q, t)| camera_centre(q, t))
+        .collect();
+    let mut sum = vec![Vector3::zeros(); n_pt];
+    let mut count = vec![0usize; n_pt];
+    for (&i, &p) in obs_img.iter().zip(obs_pt) {
+        let p = p as usize;
+        sum[p] += centres[i as usize];
+        count[p] += 1;
+    }
+    (0..n_pt)
+        .map(|p| {
+            if cons.constraint[p] == PointConstraint::Free && count[p] > 0 {
+                sum[p] / count[p] as f64
+            } else {
+                Vector3::repeat(f64::NAN)
+            }
+        })
+        .collect()
+}
+
+/// The storage decision: each free point with an estimate, scored at the poses
+/// and cameras the solve ended at and at the noise level `sigma_px`, over every
+/// observation of its track, is stored as a position where [`is_finite`] says
+/// its rays ask for a depth and as a direction where they do not.
+///
+/// - A finite verdict on a point the solve left at a position keeps that
+///   position, and on one it left at `ρ = 0` places it at the test's own point
+///   fit ([`fit_point_and_bearing`]), where that point lies in front of every
+///   observing camera; otherwise the direction stands.
+/// - A bearing verdict stores the bearing the test fits, where that bearing
+///   lies in front of every observing camera, whether the solve left the point
+///   at a position or at `ρ = 0`, so the stored bearing does not depend on
+///   which side of the bound the solve's own fit happened to end. A bearing
+///   behind a camera describes no sighting there, and what the solve left
+///   stands.
+#[allow(clippy::too_many_arguments)]
+fn decide_free_points(
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    quats: &[UnitQuaternion<f64>],
+    trans: &[Vector3<f64>],
+    points: &mut [[f64; 3]],
+    is_dir: &mut [bool],
+    uv: &[[f64; 2]],
+    obs_img: &[u32],
+    obs_pt: &[u32],
+    cons: &Constraints,
+    sigma_px: f64,
+) {
+    let n_pt = points.len();
+    let mut track: Vec<Vec<usize>> = vec![Vec::new(); n_pt];
+    for (k, &p) in obs_pt.iter().enumerate() {
+        track[p as usize].push(k);
+    }
+    let centres: Vec<Point3<f64>> = quats
+        .iter()
+        .zip(trans)
+        .map(|(q, t)| Point3::from(camera_centre(q, t)))
+        .collect();
+    let fit_options = PointBearingFitOptions::default();
+    let decided: Vec<Option<([f64; 3], bool)>> = (0..n_pt)
+        .into_par_iter()
+        .map(|p| {
+            if cons.constraint[p] != PointConstraint::Free {
+                return None;
+            }
+            let row = points[p];
+            if !row.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            let (mut dirs, mut cs, mut weights) = (Vec::new(), Vec::new(), Vec::new());
+            for &k in &track[p] {
+                let i = obs_img[k] as usize;
+                let cam = &cams[image_camera[i] as usize];
+                if let Some(r) = observed_ray(cam, &quats[i], uv[k], sigma_px) {
+                    dirs.push(r.dir);
+                    cs.push(centres[i]);
+                    weights.push(r.weight);
+                }
+            }
+            let score = bearing_score(&dirs, &cs, &weights)?;
+            let finite = is_finite(&score, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD);
+            match (finite, is_dir[p]) {
+                (true, true) => {
+                    let fit =
+                        fit_point_and_bearing(&dirs, &cs, &weights, None, None, &fit_options)?;
+                    let x = fit.point.filter(|_| fit.in_front_of_all_cameras)?;
+                    Some(([x.x, x.y, x.z], false))
+                }
+                (false, _) if score.bearing_in_front_of_all_cameras => {
+                    let b = score.bearing;
+                    Some(([b.x, b.y, b.z], true))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    for (p, d) in decided.into_iter().enumerate() {
+        if let Some((row, dir)) = d {
+            points[p] = row;
+            is_dir[p] = dir;
+        }
     }
 }
 
@@ -2457,10 +2812,17 @@ fn bundle_adjust_staged(
                 .join("/")
         );
     }
-    // What each crossing re-estimation measured and changed, and the solve set
-    // of the round before it, whose residuals the next one measures.
-    let mut crossings: Vec<RoundCrossing> = Vec::new();
+    // The caller's representation, which the storage decision reports its
+    // changes against.
+    let input_is_dir: Vec<bool> = if free_points.cross {
+        is_dir.to_vec()
+    } else {
+        Vec::new()
+    };
+    // The solve set of the last round, whose residuals the storage decision
+    // measures, and whether that round met its convergence test.
     let mut prev_kept: Vec<usize> = Vec::new();
+    let mut last_converged = false;
     let rounds = progress.split_evenly(schedule.len());
     for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
         // Between rounds the poses and the points hold what the last round
@@ -2471,27 +2833,7 @@ fn bundle_adjust_staged(
         let round = p_round.phase("round");
         let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
         if rnd > 0 {
-            // The noise level a crossing free point is decided at is measured,
-            // not scheduled: the residuals of the observations the last round
-            // solved on, at the state it settled on. A rough round measures a
-            // large level and so asks more of a track before calling it finite;
-            // a converged one measures the capture's own noise.
-            let noise = free_points.cross.then(|| {
-                round_noise(
-                    &cams_now,
-                    image_camera,
-                    quats,
-                    trans,
-                    points,
-                    is_dir,
-                    uv,
-                    obs_img,
-                    obs_pt,
-                    &prev_kept,
-                )
-            });
-            let sigma = noise.as_ref().and_then(|n| n.sigma_px);
-            let (to_finite, to_direction) = retriangulate_round(
+            retriangulate_round(
                 &cams_now,
                 image_camera,
                 quats,
@@ -2502,25 +2844,15 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 cons,
-                sigma,
+                free_points.cross,
             );
-            if let Some(n) = noise {
-                if let Some(s) = sigma {
-                    progress_info!(
-                        round,
-                        "noise {s:.3} px; {to_finite} to finite, {to_direction} to directions"
-                    );
-                }
-                crossings.push(RoundCrossing {
-                    round: rnd,
-                    sigma_px: sigma,
-                    observation_count: n.observation_count,
-                    outlier_count: n.outlier_count,
-                    to_finite,
-                    to_direction,
-                });
-            }
         }
+        // Under the crossing every free point is solved in inverse depth about
+        // the centroid of its observing cameras at the poses the round starts
+        // from, fixed for the round.
+        let anchors: Option<Vec<Vector3<f64>>> = free_points
+            .cross
+            .then(|| free_point_anchors(quats, trans, obs_img, obs_pt, cons, points.len()));
         let (norms, depths) = residual_norms_depths(
             &cams_now,
             image_camera,
@@ -2571,10 +2903,11 @@ fn bundle_adjust_staged(
                 cameras: lenses.iter().map(Lens::camera).collect(),
                 residual_norms: vec![f64::INFINITY; n_obs],
                 point_at_infinity: is_dir.to_vec(),
-                crossings,
+                free_point_decision: None,
             };
         }
-        if spline_cols {
+        let anchors_now = anchors.as_deref();
+        last_converged = if spline_cols {
             solve_lm::<BSPLINE_CAM_COLS>(
                 &mut lenses,
                 image_camera,
@@ -2587,12 +2920,13 @@ fn bundle_adjust_staged(
                 obs_pt,
                 &kept,
                 cons,
+                anchors_now,
                 stage.loss_scale,
                 max_iters,
                 protected,
                 protected_loss_scale,
                 &round,
-            );
+            )
         } else {
             solve_lm::<BASE_CAM_COLS>(
                 &mut lenses,
@@ -2606,19 +2940,82 @@ fn bundle_adjust_staged(
                 obs_pt,
                 &kept,
                 cons,
+                anchors_now,
                 stage.loss_scale,
                 max_iters,
                 protected,
                 protected_loss_scale,
                 &round,
-            );
-        }
+            )
+        };
         prev_kept = kept;
         drop(round);
         progress.count(rnd as u64 + 1, Some(schedule.len() as u64), "round");
     }
 
     let cams_final: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
+    // The storage decision: every free point is scored at the state the solve
+    // ended at and the noise level its final round measures, and stored as the
+    // test says. A final round that stopped on its iteration budget is decided
+    // too, at the level it measures, and the decision says it did not converge.
+    let free_point_decision = free_points.cross.then(|| {
+        let noise = round_noise(
+            &cams_final,
+            image_camera,
+            quats,
+            trans,
+            points,
+            is_dir,
+            uv,
+            obs_img,
+            obs_pt,
+            &prev_kept,
+        );
+        // A cancelled solve hands back the state it reached, and is not
+        // decided on.
+        let sigma = noise.sigma_px.filter(|_| !progress.is_cancelled());
+        if let Some(s) = sigma {
+            decide_free_points(
+                &cams_final,
+                image_camera,
+                quats,
+                trans,
+                points,
+                is_dir,
+                uv,
+                obs_img,
+                obs_pt,
+                cons,
+                s,
+            );
+        }
+        let (mut to_finite, mut to_direction) = (0, 0);
+        for p in 0..points.len() {
+            if cons.constraint[p] != PointConstraint::Free {
+                continue;
+            }
+            match (input_is_dir[p], is_dir[p]) {
+                (true, false) => to_finite += 1,
+                (false, true) => to_direction += 1,
+                _ => {}
+            }
+        }
+        if let Some(s) = sigma {
+            progress_info!(
+                progress,
+                "noise {s:.3} px; {to_finite} to finite, {to_direction} to directions"
+            );
+        }
+        FreePointDecision {
+            sigma_px: noise.sigma_px,
+            decided: sigma.is_some(),
+            observation_count: noise.observation_count,
+            outlier_count: noise.outlier_count,
+            converged: last_converged,
+            to_finite,
+            to_direction,
+        }
+    });
     let (norms, _depths) = residual_norms_depths(
         &cams_final,
         image_camera,
@@ -2644,7 +3041,7 @@ fn bundle_adjust_staged(
         cameras: cams_final,
         residual_norms,
         point_at_infinity: is_dir.to_vec(),
-        crossings,
+        free_point_decision,
     }
 }
 

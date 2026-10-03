@@ -72,9 +72,12 @@ nothing else.
 | **prune** | on / off | how the cheirality failure is read: per observation rather than per track. See below. Off, one observation behind the point decides the whole track. |
 | **bar** | a pixel bound | a solved point that survives the rules above is reprojected through the camera at the same geometry; when the median finite residual over its observations exceeds the bound the track is OVER THE BAR and becomes a bearing. Requires the observation form. Off, no reprojection is read. |
 
-Bundle adjustment's crossing reads the `likelihood` rule; the `floor` stays for
-callers that want a pure geometric cut, such as demotion in a stored
-reconstruction and the admission of new tracks.
+The `likelihood` rule is what reconstruction-level retriangulation reads when a
+caller states a noise level; the `floor` stays for callers that want a pure
+geometric cut, such as demotion in a stored reconstruction and the admission of
+new tracks. Bundle adjustment reads neither: under its crossing it solves free
+points in inverse depth and decides their representation by the test itself at
+the end of the solve.
 
 Bearings are unit vectors with the point flagged as a direction. The
 fallback for a track with no usable ray at all, and for a mean ray whose norm
@@ -189,8 +192,8 @@ whose surviving rays ask for no depth is refused like one inside the floor.
 
 The rule takes the noise level as given and does not measure it, because what
 it should be measured over depends on the caller: a stored reconstruction's
-own residuals (`SfmrReconstruction::reprojection_noise_px`), or the residuals
-a bundle adjustment's last round settled on.
+own residuals (`SfmrReconstruction::reprojection_noise_px`), or whatever level
+the caller has measured for the geometry it hands over.
 
 ## A cheirality failure read per observation
 
@@ -270,13 +273,16 @@ one.
   one observation is NaN in either family. The adjustment's trim, not this
   operation, decides what a behind point means.
 
-  With the adjustment's free points crossing representations, the same call
-  reads `marks` off for those tracks and turns on the `likelihood` rule at the
-  noise level the previous round's residuals measure, and `cheirality`, so
-  every free track's representation is re-decided from its own rays; the
-  adjustment carries a ranged point through the `distance` rule at the origin
-  its reference resolves to at the round's poses, and holds a held point's
-  estimate back. See "Free points: crossing between representations" in
+  With the adjustment's free points solved in inverse depth, the same call
+  turns `cheirality` on, so a free track re-estimates in the representation the
+  last round's solve left it in -- the midpoint, or the mean ray for a point
+  the solve took to infinity -- and one whose midpoint lands behind an
+  observing camera starts the next round as its mean ray. That is a starting
+  value: the next round's solve moves the point's inverse depth from there, and
+  its representation is decided at the end of the solve. The adjustment carries
+  a ranged point through the `distance` rule at the origin its reference
+  resolves to at the round's poses, and holds a held point's estimate back. See
+  "Free points: inverse depth and the storage decision" in
   [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 
   The adjustment holds no copy of the arithmetic: its round is this call. The

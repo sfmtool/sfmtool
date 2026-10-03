@@ -1127,7 +1127,7 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
         npt.assert_array_equal(out["points"], ref["points"])
         npt.assert_array_equal(out["residual_norms"], ref["residual_norms"])
         npt.assert_array_equal(out["point_at_infinity"], ref["point_at_infinity"])
-        assert out["crossings"] == []
+        assert out["free_point_decision"] is None
 
 
 def test_point_at_infinity_is_reported_and_echoes_the_input_mask():
@@ -1221,28 +1221,30 @@ def test_infinite_distance_is_reported_as_a_direction():
 
 def test_crossing_promotes_a_direction_whose_rays_carry_parallax():
     # A near point handed in marked as a direction: with the crossing off the
-    # mark stands for the whole solve, and with it on the re-estimation reads
-    # the parallax its own rays carry and makes it finite.
+    # mark stands for the whole solve, and with it on the solve carries the
+    # point in inverse depth and the storage decision reads the parallax its
+    # own rays carry and stores it finite.
     s = _scene(n_img=8, n_pt=40)
     mask = np.zeros(len(s["points"]), dtype=bool)
     mask[7] = True
 
     kept = _run(s, point_at_infinity=mask)
     assert kept["point_at_infinity"][7]
+    assert kept["free_point_decision"] is None
 
     crossed = _run(s, point_at_infinity=mask, free_points_cross=True)
     assert not crossed["point_at_infinity"][7]
     npt.assert_allclose(crossed["points"][7], s["points"][7], atol=1e-3)
-    # One crossing round per re-estimation, each with the noise level it read
-    # from the previous round's residuals of finite points.
-    rounds = crossed["crossings"]
-    assert [c["round"] for c in rounds] == [1, 2]
-    assert sum(c["to_finite"] for c in rounds) == 1
-    assert sum(c["to_direction"] for c in rounds) == 0
-    for c in rounds:
-        assert c["sigma_px"] is not None and c["sigma_px"] > 0.0
-        assert c["observation_count"] > 0
-        assert c["outlier_count"] == 0
+    # One storage decision at the end of the solve, at the noise level the
+    # final round's residuals of finite points measure.
+    decision = crossed["free_point_decision"]
+    assert decision["decided"]
+    assert decision["converged"]
+    assert decision["to_finite"] == 1
+    assert decision["to_direction"] == 0
+    assert decision["sigma_px"] is not None and decision["sigma_px"] > 0.0
+    assert decision["observation_count"] > 0
+    assert decision["outlier_count"] == 0
 
 
 def test_held_and_ranged_on_one_point_is_rejected():

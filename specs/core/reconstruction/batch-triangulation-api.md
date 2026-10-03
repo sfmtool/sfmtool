@@ -233,11 +233,9 @@ models. A stored reconstruction supplies the noise level from its own residuals
 ("The measured noise level") and runs the test over its points with one method
 ("Over a reconstruction"), and both are bound to Python. Reclassifying a
 reconstruction's points and discovering new points at infinity decide on it,
-so does the track bench and bundle adjustment's crossing between a point and a
-direction, and the `analyze` and `inspect` reports print it (see "Consumers").
-Solving bundle adjustment's free points in inverse depth, so that the test
-becomes a storage decision at the end of the solve, is the amendment draft
-[point-or-bearing-likelihood-ratio.md](../../drafts/point-or-bearing-likelihood-ratio.md).
+so does the track bench and bundle adjustment's storage decision for the free
+points it solves in inverse depth, and the `analyze` and `inspect` reports print
+it (see "Consumers").
 
 ### Interface
 
@@ -742,11 +740,11 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   and 5% on `tk117` (over different random draws). The verdicts degrade the way
   a larger `σ` makes them: more tracks get bearing verdicts. The measure is
   for a reconstruction that has been bundle-adjusted; on a rough one it
-  overstates the noise. Bundle adjustment reads the same estimator on each
+  overstates the noise. Bundle adjustment reads the same estimator on its final
   round's kept observations, which the round's trim has already capped at its
   `trim_px`, so a gross outlier the gate passes there adds a bounded amount
   ([bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
-  crossing between representations").
+  inverse depth and the storage decision").
 
 On the Kerry Park ground truth `tk117` it is 0.2156 px over 3,510
 observations with none left out; on the in-repo seoul bull ground truth,
@@ -1156,23 +1154,25 @@ grows (`base_ba`: 886 at 0.20 px, 820 at 0.54, 397 at 2.0) and no step refuses
 or fails.
 
 **Bundle adjustment.** With `FreePointPolicy::cross`, the staged bundle
-adjustment re-decides every free point's representation at each inter-round
-re-estimation through the retriangulation operation's `likelihood` rule
-([triangulation-rules.md](triangulation-rules.md) § "The likelihood rule"):
-`observed_ray` through each observing image's camera as the round holds it,
-`bearing_score` and `is_finite` at `DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`,
-a no-depth verdict stored as the score's bearing, and a finite one left to the
-midpoint solve and the next round's solve to place. Its noise level is not a
-stored reconstruction's: it is this section's estimator read each round over
-the observations of finite points the previous round solved on, at the state
-that round settled on, so it follows the adjustment from a rough start to
-convergence. The interface, the choices and the measurements against the
-angular floor the rule replaced are in
+adjustment solves every free point in inverse depth about the centroid of its
+observing cameras, `(u, ρ)` with `ρ ≥ 0` as in the point fit above, so a point
+moves between near and infinity within a round, and decides once, at the end of
+the solve, how it is stored: `observed_ray` through each observing image's
+camera as the solve ended, `bearing_score` and `is_finite` at
+`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD`, a bearing verdict stored as the
+score's bearing, a finite one at the position the solve placed (or at
+`fit_point_and_bearing`'s point where the solve left it at `ρ = 0`). Its noise
+level is not a stored reconstruction's: it is this section's estimator read
+over the observations of finite points the final round solved on, at the state
+the solve ended at. The interface, the choices, and the measurements against the
+rejected alternative of re-deciding a point between rounds while it is carried
+as a position or a direction, are in
 [bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
-crossing between representations". On `tk117` the crossing makes points 298,
-294 and 295 finite, as reclassification does, and on each of the four inputs
-measured there the test at a clean start's result's own measured noise, which
-is what `sfm analyze --depth-reliability` lists, disagrees with no point.
+inverse depth and the storage decision". On the four inputs measured there, a
+converged solve's stored representation agrees with the test at the level the
+decision read on every point, and with the test at the result's own measured
+noise, which is what `sfm analyze --depth-reliability` lists, on all but 0 to
+5 points.
 
 **Reports.** Per-point depth reliability appears in `sfm inspect --verbose` and in
 `sfm analyze --depth-reliability`, both through the PyO3 surface below. Each
@@ -1205,8 +1205,9 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   `inverse_depth_z` or the condition number. Reclassification, discovery and
   the bench share the test, the measured noise level and the consumer rule
   that places a finite verdict, so one set of sightings earns one
-  representation whichever step reads it; bundle adjustment's crossing reads
-  the same test and the same estimator of the noise, over its own rounds. `inverse_depth_z` is the Wald form
+  representation whichever step reads it; bundle adjustment's storage
+  decision reads the same test and the same estimator of the noise, over its
+  final round. `inverse_depth_z` is the Wald form
   of the same question, linearised at the fitted depth, which is the worst
   place for a far point; it stays as a diagnostic, beside the condition number
   (which grows with K).
