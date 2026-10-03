@@ -871,7 +871,7 @@ and the opening paragraphs listed in check 4.
   - Discuss: § Extraction-orchestration pipelining (:398-510) is Python CLI content and could move to `sift-command.md`.
 - **`specs/core/features/track-cluster-matching.md`** (two items not covered above): :474-480 present the `d = 28` prototype counts as what the production run reproduces, while the tables at :119-124 and :137-144 do not say they were measured at `d = 28`; § Location (:509-512) does not mention `covisibility.rs` and `covisibility/`.
 - **`specs/cli/image-feature/match-command.md`:** `_run_matching` records `matcher_options["min_size"]` (`feature_match/_run.py:42, 95`), but no flag sets it and the Options table does not mention it. Document it as fixed at 2, or expose it.
-  > _Status (2026-10-03): Done — `match-command.md` § Options now says `--cluster`'s minimum cluster size is fixed at 2, has no flag, and is recorded as `min_size` in the matcher options, branch `finding-bash-20-match-command-min-size`._
+  > _Status (2026-10-03): **Done** — `match-command.md` § Options now says `--cluster`'s minimum cluster size is fixed at 2, has no flag, and is recorded as `min_size` in the matcher options, branch `finding-bash-20-match-command-min-size`._
 - **`specs/cli/colmap-interop/from-colmap-bin-command.md`:** does not mention the `UsageError` for a non-`.sfmr` output (`from_colmap_bin.py:84-85`).
 - **`specs/gui/panel-layout.md`:** :435-438 omit that a non-numeric `sfm_explorer_layout` value produces `Not a layout file` (`layout.rs:620-621`).
 - **`specs/core/patch/cluster-patches.md`:** :228 "## Consumers (future work, out of scope here)" is a future-work list in a standing spec. Move it to a draft.
@@ -901,7 +901,7 @@ Fix one spec per PR.
 - `sfmtool-core/src/features/feature_match/` (descriptor distance, best match, ratio test, `geometric_filter.rs`). Write `specs/core/features/descriptor-matching.md` and link it from `match-command.md`.
 - `sfmr-file-format.md` § "Conversions happen at the I/O boundary" (:104) does not name `sfmtool-core/src/geometry/convention/`. Put it in the Implementations section that priority 3 asks for.
 - Smaller: `viewport-navigation.md` names `ViewportCamera` (:469) without linking `camera/viewport/`; `solve-command.md` does not name `_global_sfm.py` or `_incremental_sfm.py`; `match-command.md` does not state the geometric filter's model and thresholds (`feature_match/_geometric_filter.py`).
-  > _Status (2026-10-03): Done for `match-command.md` — `sfm match` does not use `_geometric_filter.py` (only `sfm densify` does); the new § Geometric Verification says it verifies with COLMAP's default `TwoViewGeometryOptions` and names the affine-shape filter's thresholds as belonging to `densify`, branch `finding-bash-20-match-command-min-size`. The `viewport-navigation.md` and `solve-command.md` items are still open._
+  > _Status (2026-10-03): **Done** for `match-command.md` — `sfm match` does not use `_geometric_filter.py` (only `sfm densify` does); the new § Geometric Verification says every verifying mode, `--derive-pairs` included, uses COLMAP's default `TwoViewGeometryOptions` and names the affine-shape filter's thresholds as belonging to `densify`, branch `finding-bash-20-match-command-min-size`. The `viewport-navigation.md` and `solve-command.md` items are still open._
 
 ### Specs the 2026-09-05 audit read
 
