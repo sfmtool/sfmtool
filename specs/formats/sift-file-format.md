@@ -54,9 +54,9 @@ split the whole-file hash into a stable `feature_set_xxh128` plus a
 
 For an image file `/path/to/myimage.jpg`, a `.sift` file of extracted features goes
 in `/path/to/features/{feature_type}-{feature_cache_hash}/myimage.jpg.sift`. The
-`features/{feature_type}-{feature_cache_hash}` part is the workspace's `feature_prefix_dir`,
-and `{feature_cache_hash}` is a hash of the workspace's extraction configuration; see
-[Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). It is a
+`features/{feature_type}-{feature_cache_hash}` part is the workspace's `feature_prefix_dir`
+when the image is in a workspace, and `{feature_cache_hash}` is a hash of the extraction
+configuration; see [Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). It is a
 different value from the `feature_tool_xxh128` field stored inside the file (see
 [Feature tool hash computation](#feature-tool-hash-computation)).
 The value of `{feature_type}` encodes the tool and relevant options:
@@ -222,9 +222,11 @@ formatting, whitespace) produce different values.
 `content_hash.json`, so a consumer can confirm which feature configuration it was built from.
 
 The hash in the workspace's `feature_prefix_dir` directory name is a separate value. It is
-computed once at workspace initialization from `feature_tool`, the workspace `feature_type`
-(for example `sift-colmap`) and `feature_options` minus options that do not affect the output,
-and is not recomputed from any `.sift` file; see
+computed from `feature_tool`, the configured `feature_type` (for example `sift-colmap`) and
+`feature_options` minus options that do not affect the output. A workspace computes it once at
+initialization and stores it in `feature_prefix_dir`; for an image outside a workspace it is
+computed from the extraction options at extraction time. It is never computed from a `.sift`
+file; see
 [Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). The two hashes
 do not in general agree, and a reader must not compare one with the other.
 
