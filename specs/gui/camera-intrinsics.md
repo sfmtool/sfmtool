@@ -1,15 +1,15 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-The viewer can show you where a camera *is* and what it *saw*, but nothing in it
-tells you what the camera *is*: which intrinsic model, what focal length, how far
-the principal point sits from the image centre, how much the lens bends, how many
-degrees off-axis a given pixel looks. That information exists — `sfm inspect`
-prints it as a table — but it is unreachable from the one place where you are
-already looking at the image it describes.
+The SfM Explorer shows where a camera *is* and what it *saw*, and this spec
+describes how it shows what the camera *is*: which intrinsic model, what focal
+length, how far the principal point sits from the image centre, how much the
+lens bends, how many degrees off-axis a given pixel looks. `sfm inspect` prints
+the same information as a table; the viewer shows it beside the image it
+describes.
 
-This spec adds it in three coupled pieces:
+It does so in three coupled pieces:
 
-1. a **Camera Intrinsics** group in the Scene Graph, beside a renamed
+1. a **Camera Intrinsics** group in the Scene Graph, beside the
    **Camera Images** group, with a two-way selection coupling between them;
 2. an **Intrinsics** overlay layer in the Image Detail panel — independently
    toggled, composing with whichever feature or heatmap mode is active — drawing the
@@ -30,36 +30,33 @@ declaration each camera model has).
 
 ## Motivation
 
-Three concrete failures this closes:
+Three questions it answers:
 
 - **"Why is this reconstruction warped?"** A bad focal-length prior or a
   runaway `k1` is visible in the numbers long before it is visible in the point
-  cloud. Today you must quit the viewer and run `sfm inspect`.
+  cloud. Without the panel you would have to leave the viewer and run
+  `sfm inspect`.
 - **"Is this fisheye actually 180°?"** The intrinsics say `f` in pixels per
   radian; what a user wants is *degrees at the image corner*, and the two are
   separated by a model-dependent projection they should not have to do in their
   head.
 - **"Which images share this camera?"** In a rig dataset (`kerry_park`: 24
-  frames × 2 fisheyes) the answer is structural and currently invisible — the
-  tree shows 48 image rows and no hint that they resolve to two intrinsics.
+  frames × 2 fisheyes) the answer is structural, but 48 image rows alone do not
+  show that they resolve to two intrinsics; the Camera Intrinsics group does.
 
 ---
 
-## Terminology: the rename is a bug fix
+## Terminology
 
 `.sfmr` uses COLMAP's vocabulary, where a **camera** is an intrinsics record and
-an **image** is a posed view that references one. The Scene Graph's group row
-says `Cameras (243)` and counts `node.recon.images.len()` — it has been
-labelling images as cameras since it was written, and the reconstruction row's
-compact count says `243 cams` for the same quantity.
+an **image** is a posed view that references one. The Scene Graph follows it,
+and gives each its own group and count:
 
-So the rename is not cosmetic:
-
-| Before | After | Counts |
-|--------|-------|--------|
-| `Cameras (243)` group | `Camera Images (243)` | `recon.images.len()` |
-| — | `Camera Intrinsics (2)` group | `recon.cameras.len()` |
-| `1.2M pts · 243 cams` | `1.2M pts · 243 imgs · 2 cams` | points / images / cameras |
+| Row | Label | Counts |
+|-----|-------|--------|
+| Group of posed views | `Camera Images (243)` | `recon.images.len()` |
+| Group of intrinsics records | `Camera Intrinsics (2)` | `recon.cameras.len()` |
+| Reconstruction row | `1.2M pts · 243 imgs · 2 cams` | points / images / cameras |
 
 Three counts make this the longest row in a panel that defaults to 18% of the
 window, so it elides rather than truncating or wrapping: when the row cannot fit
@@ -68,20 +65,20 @@ down), then the image count, leaving the point count — which has no other home
 in the tree — last to go. The elision is on available width, not on a character
 budget, so a widened panel restores the counts.
 
-Two other sites keep the old word and should **not** be swept up in the rename,
-because in both of them "camera" already means something else and is correct:
+Two other sites use the word "camera" for something other than an intrinsics
+record:
 
-- `AlignSource::Cameras` in the node context menu's `Align to ▸` submenu means
-  *align using camera poses* (as against `Points`). It becomes
-  **`Camera Poses`** — one word added, ambiguity removed, and it stays distinct
-  from both new group names.
+- The node context menu's `Align to ▸` submenu offers **`Camera Poses`**
+  (`AlignSource::Cameras`), meaning *align using camera poses* (as against
+  `Points`). The label names the poses so it stays distinct from both group
+  names.
 - Camera **view** mode (`Z`), the viewport HUD's camera section, and
-  `camera-views.md` throughout: all about the posed view. Unchanged.
+  `camera-views.md` throughout are all about the posed view, and say "camera"
+  in that sense.
 
-The `SceneNode::show_cameras` field drives frustum and image-quad visibility, so
-under the new vocabulary it is `show_camera_images`. It is referenced in
-`scene-graph.md`, `camera-views.md` and `viewport-hud.md`; the rename
-lands in code and those three docs together, or not at all.
+`SceneNode::show_camera_images` drives frustum and image-quad visibility. It is
+named for the images it shows, and `scene-graph.md`, `camera-views.md` and
+`viewport-hud.md` use the same name.
 
 ---
 
@@ -89,7 +86,7 @@ lands in code and those three docs together, or not at all.
 
 ### `CameraRef` and the selection field
 
-A new ref type in `scene.rs`, alongside `ImageRef` and `PointRef` and shaped
+A ref type in `scene.rs`, alongside `ImageRef` and `PointRef` and shaped
 exactly like them — a `ReconId` plus a local index, with `index()` and
 `index_in()`:
 
@@ -102,7 +99,7 @@ pub struct CameraRef {
 }
 ```
 
-and one new field in `AppState`:
+and one field in `AppState`:
 
 ```rust
 /// The selected camera intrinsics, or `None`.
@@ -420,7 +417,7 @@ the sections that use them:
 
 ## Scene Graph: the Camera Intrinsics group
 
-The node body gains a group above the images group, so its two rows read:
+The node body has a group above the images group, so its two rows read:
 
 ```
 ▾ 👁 S 🖱 ▪ kerry_park                      412K pts · 48 imgs · 2 cams
@@ -461,8 +458,8 @@ The node body gains a group above the images group, so its two rows read:
 - **Double-click**: zoom the 3D viewport to fit every image using this camera —
   the same `zoom_to_fit_points` call `zoom_to_node` makes, over that subset of
   the node's **camera centres** rather than over the node's points. (The two
-  frame different things, which the first draft of this line elided: a node's
-  zoom-to-fit frames its point cloud, and a camera has no points of its own.)
+  frame different things: a node's zoom-to-fit frames its point cloud, and a
+  camera has no points of its own.)
   For a rig this frames one sensor's whole trajectory
   in a single gesture, which nothing else in the viewer does. It is the tree's
   third double-click target, and consistent with the other two: a double-click
@@ -474,9 +471,8 @@ The node body gains a group above the images group, so its two rows read:
   visible in the tree for free.
 - Rows are laid out plainly, not virtualized: the count is bounded by the number
   of distinct intrinsics, which is small even in the pathological case, and the
-  list is capped at `LIST_MAX_HEIGHT` — the same cap the images list uses,
-  renamed from `CAMERA_LIST_HEIGHT` in this phase because it is now the height
-  of two different lists and was never a list of cameras.
+  list is capped at `LIST_MAX_HEIGHT` — the same cap the images list uses, and
+  named for neither list because it is the height of both.
 - **No hover channel.** Cross-panel hover is a two-field protocol
   (`hovered_image` / `hovered_point`) with an ownership rule per panel
   ([cross-panel-hover.md](cross-panel-hover.md)); a third field would
@@ -484,8 +480,8 @@ The node body gains a group above the images group, so its two rows read:
   selection that is one click away — that does not justify it. Hovering a camera
   row shows a tooltip with the full parameter list and nothing else.
 
-**Response plumbing.** `SceneGraphResponse` gains two fields, applied by
-`dock.rs` in the existing coarsest-first order (`select_recon`, then
+**Response plumbing.** `SceneGraphResponse` carries two fields for this,
+applied by `dock.rs` in its coarsest-first order (`select_recon`, then
 `select_camera`, then `select_image` / `select_point`) so that a camera click
 and the recon selection it implies land in the right order:
 
@@ -575,8 +571,8 @@ by a disabled `No distortion` line, so the control never sits there inviting a
 click that does nothing.
 
 `I` toggles the layer while the pointer is over the Image Detail panel. It is a
-control users will flip constantly once it composes — that is the whole point of
-making it a layer — and `I` is free there (the panel binds only `Z`).
+control users flip often, because it composes with the feature modes — that is
+the reason it is a layer — and `I` is free there (the panel binds only `Z`).
 
 ### Compositing with the feature layers
 
@@ -617,7 +613,7 @@ it — which is the natural way to ask whether a suspicious observation is a
 rim-distortion artefact.
 
 The intrinsics readout is suppressed entirely when the layer is off, so the
-feature tooltip is byte-for-byte what it is today.
+feature tooltip is byte-for-byte what the panel draws without the layer.
 
 ### What is drawn
 
@@ -825,7 +821,11 @@ The line is omitted entirely for a model with no distortion, and past
 `trustworthy_max_theta_deg` it reads `distortion  not modelled past 84.5°` with
 **no figure** — beside "off-axis 137.2°" a number there would be read as a
 measurement, and it is a fold in a polynomial. Same call as the arrows and the
-legend, from the same flag.
+legend, from the same flag. Inside the bound, a pixel whose ray the model
+refuses outright (`displacement_at` returns `None`, as it does past a fold)
+reads `distortion  outside the model's domain`, again with no figure. The three
+states are implemented in `displacement_line` in
+[`image_detail/intrinsics/hover.rs`](../../crates/sfm-explorer/src/image_detail/intrinsics/hover.rs).
 
 Azimuth is measured in the frame `radial_profile` sweeps: `0°` is `+X` (right),
 `90°` is `+Y` (up). It is omitted within 0.05° of the optical axis, where "which
@@ -879,7 +879,7 @@ The reconstruction name is included because several nodes can be loaded at once
 and `CameraRef` carries a `ReconId`; without it the panel would be ambiguous
 exactly when it matters. A beta model appends `(beta)` with the registry's note
 as tooltip — and here that really is a tooltip on the `(beta)` itself, unlike
-the tree's `β`. The constraint phase 3 hit is that egui hangs a tooltip off a
+the tree's `β`. The constraint is that egui hangs a tooltip off a
 whole *widget*, so a sub-span of one label has nowhere to put one; a tree row is
 a single button, but this header is a run of separate labels, so `(beta)` is a
 widget in its own right.
@@ -1026,16 +1026,15 @@ the camera whether or not it is distorted, and an empty panel would be a worse
 answer than a straight line. The residual plot collapses to its zero line (with
 a symmetric range, so the zero line lands in the middle rather than on a
 border), and a banner across it reads `No distortion — this model is exactly
-{a pinhole | an equidistant fisheye | its own reference map}`, which is the
-"says undistorted" the request asks for, stated in terms that say *what* it is
-rather than only what it is not. The third branch is `EQUIRECTANGULAR`, which
-the first draft of this line left out: it is its own reference and is neither
-of the other two.
+{a pinhole | an equidistant fisheye | its own reference map}`, which says the
+camera is undistorted in terms that say *what* it is rather than only what it
+is not. The third branch is `EQUIRECTANGULAR`, which
+is its own reference and is neither of the other two.
 
 **The key is words, not glyphs.** `solid: model · dashed: ideal r = f·θ` rather
 than a `──`/`╌╌`/`▨` sample key: egui's default font has no box-drawing or
-geometric-shape coverage, and the first draft rendered `▸` as tofu in the real
-viewer.
+geometric-shape coverage, so a glyph such as `▸` renders as a missing-glyph
+box.
 
 ### 5. Extrinsics
 
@@ -1214,7 +1213,7 @@ bucketed by zoom (powers of two) rather than recomputed continuously, so a pinch
 gesture does not rebuild them 60 times a second. Caches are dropped by
 `forget_recon` alongside the panels' textures.
 
-Because the layer is independent of `OverlayMode`, its cost is now *additive* to
+Because the layer is independent of `OverlayMode`, its cost is *additive* to
 a feature mode's rather than replacing it — the worst case is 5000 heatmap
 circles plus the intrinsics layer in one frame. That is fine, and it is fine for
 a structural reason worth stating: the layer's draw cost depends only on grid
@@ -1230,11 +1229,23 @@ are keyed by `CameraRef` and hold at most a handful of entries — a plain
 
 ## Testing
 
-Following the crate's existing split — pure maths in `sfmtool-core`, headless
-egui frames for panels, real windows only for what genuinely needs one:
+The tests follow the crate's split — pure maths in `sfmtool-core`, headless
+egui frames for panels, real windows only for what needs one. They live in:
 
-**`sfmtool-core`, `camera::report` unit tests** (no GUI, runs everywhere) —
-implemented in `camera/report/tests.rs`:
+- [`sfmtool-core/src/camera/report/tests.rs`](../../crates/sfmtool-core/src/camera/report/tests.rs)
+  — the `camera::report` maths;
+- [`scene_graph/tests.rs`](../../crates/sfm-explorer/src/scene_graph/tests.rs)
+  — the two groups, the row counts, the selection coupling and the sibling set;
+- [`scene_renderer/upload/tests.rs`](../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
+  — `frustum_colors`;
+- [`intrinsics_detail/tests.rs`](../../crates/sfm-explorer/src/intrinsics_detail/tests.rs)
+  and
+  [`intrinsics_detail/projection_plot/tests.rs`](../../crates/sfm-explorer/src/intrinsics_detail/projection_plot/tests.rs)
+  — the Camera Intrinsics panel and its projection plot;
+- [`image_detail/intrinsics/tests.rs`](../../crates/sfm-explorer/src/image_detail/intrinsics/tests.rs)
+  — the overlay layer, its popup, the hover readout and the composed tooltip.
+
+**`sfmtool-core`, `camera::report` unit tests** (no GUI, runs everywhere):
 - `field_of_view` on a known pinhole matches the closed form
   `2·atan(w / 2fx)`; on `EquidistantFisheye` with `f = w/π` gives 180°
   edge-to-edge; at `f = w/2π` gives 183.35° rather than the folded 176.65°,
@@ -1268,14 +1279,13 @@ implemented in `camera/report/tests.rs`:
   `atan(r/f)` on a pinhole; every `DistortionSample::theta_deg` equals it at
   that sample's grid node.
 
-No model is exempt from either property. `THIN_PRISM_FISHEYE` and
-`RAD_TAN_THIN_PRISM_FISHEYE` were, for a while: `CameraModel::distort_ray`
-handed the equidistant `(θ·dx, θ·dy)` to a kernel whose input is the
-*perspective* `(tan θ·dx, …)` and which converted again, so the forward map
-came out off by an `atan` and zero coefficients displaced a grid node by 135 px
-on a 640×480 fixture. Fixed by giving each kernel a theta-space core that both
-entry points call with what they actually hold; the exclusions and the
-regression test that pinned them are gone.
+No model is exempt from either property, `THIN_PRISM_FISHEYE` and
+`RAD_TAN_THIN_PRISM_FISHEYE` included. Each of their kernels has a theta-space
+core that both entry points call with the coordinates they hold: the
+perspective entry point converts `(tan θ·dx, …)` into that space first, and the
+ray entry point behind `CameraModel::distort_ray` forms the equidistant
+`(θ·dx, θ·dy)` straight from the ray direction, so the forward map converts
+once and zero coefficients leave every grid node where the ideal map puts it.
 
 Two caveats remain, both named in the tests rather than left implicit:
 
@@ -1292,7 +1302,8 @@ Two caveats remain, both named in the tests rather than left implicit:
 **`sfm-explorer` lib tests** (headless, `Context::run_ui`, the
 `track_view/body/tests.rs` pattern):
 - The selection coupling, one test per row of the truth table, driven through
-  `AppState::select_image` / `select_camera` with no UI at all.
+  `AppState::select_image` / `select_camera` with no UI at all (in
+  `scene_graph/tests.rs`).
 - `scene_graph/tests.rs`: the group renders with the right label and count; a
   click on a camera row emits `select_camera` and a double-click emits
   `zoom_to_camera`; the group is expanded by default at 2 cameras and collapsed
@@ -1357,8 +1368,8 @@ Two caveats remain, both named in the tests rather than left implicit:
   distortion row for a pinhole fixture, and its footer names the domain its
   maximum was taken over for a bounded model and not for an unbounded one.
 - The composed tooltip, all four ways: the feature line alone with the layer
-  off — which must be byte for byte the tooltip the panel produces today, the
-  regression a composed tooltip most plausibly breaks — the readout below it
+  off — which must be byte for byte the tooltip the panel draws with no
+  readout, the regression a composed tooltip most plausibly breaks — the readout below it
   with the layer on, the readout alone off a feature, and nothing at all with
   neither.
 - What the layer *decides*, without a frame, since no painted string shows any
@@ -1407,7 +1418,7 @@ name.
 - **A per-camera image list** inside the intrinsics group. The sibling highlight
   in the browser answers "which images" better than a nested list would, and
   nesting a virtualized list inside a group inside a node is a layout the tree
-  does not currently do.
+  does not do.
 - **Wiring the Python `_CAMERA_PARAM_NAMES` table to `parameter_names()`.**
   Right to do, unrelated to this feature's UI, and it touches the PyO3 surface —
   a separate change. Until it happens the two are **not** in sync: the Python
@@ -1427,13 +1438,13 @@ existing toolbar. Settled the other way: the questions worth asking are the
 joint ones — whether keypoints crowd the distorted rim, whether the
 reprojection-error heatmap is hot where the distortion field is largest — and an
 exclusive mode turns each of those into flipping back and forth from memory. The
-cost is the compositing the layer now has to specify (z-order, a colour that
+cost is the compositing the layer has to specify (z-order, a colour that
 survives an arbitrary colormap underneath, one composed tooltip), which
 § "Compositing with the feature layers" and § "Hover: one tooltip, composed"
 carry. `OverlayMode` is left untouched.
 
 **Three counts on the reconstruction row** (2026-08-23).
-`1.2M pts · 243 imgs · 2 cams` rather than today's two. The objection was width
+`1.2M pts · 243 imgs · 2 cams` rather than two. The objection was width
 — it is the longest row in a panel that defaults to 18% of the window — and the
 answer is that the camera count is the first thing dropped when the row cannot
 fit it, not that it goes unsaid. See § "Terminology" for the elision order.
@@ -1455,10 +1466,3 @@ a third double-click target in one tree (node → zoom to node, image → camera
 view); accepted anyway, because the three targets are consistent rather than
 arbitrary: double-clicking a row frames what that row denotes, and a camera row
 denotes a set of images.
-
----
-
-## Open questions
-
-None outstanding. Resolved questions move to § "Decisions" above with the
-reasoning that settled them.

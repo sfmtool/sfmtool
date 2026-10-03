@@ -15,7 +15,7 @@ use sfmtool_core::camera::report::{self, DistortionExtent, FieldOfView};
 use sfmtool_core::camera::CameraIntrinsics;
 
 /// Arrows across the image width in the grid the maximum displacement is taken
-/// over — the same density the Image Detail overlay layer will default to,
+/// over — the same density the Image Detail overlay layer defaults to,
 /// so the panel's number and the overlay's legend describe one field. Both go
 /// through [`report::distortion_extent`], so "one field" is a shared
 /// definition rather than a promise.

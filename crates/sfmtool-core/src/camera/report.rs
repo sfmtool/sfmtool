@@ -126,10 +126,10 @@ pub struct RadialSample {
 /// The displacement of one pixel from where the ideal map would place it.
 ///
 /// [`Self::pixel`] and [`Self::reference`] are the projection of the **same**
-/// ray, so their difference is the lens's contribution and nothing else. An
-/// overlay draws the arrow from [`Self::reference`] to [`Self::pixel`] — "the
-/// lens moved this ray *here* from *there*", the direction a rectification
-/// would undo.
+/// ray, so their difference is the lens's contribution and nothing else. The
+/// Image Detail overlay draws the arrow with its tail at [`Self::pixel`],
+/// pointing toward [`Self::reference`]: "the content under this pixel belongs
+/// there", which is the move a rectification makes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DistortionSample {
     /// Where the model actually projects the ray.

@@ -838,6 +838,7 @@ and the opening paragraphs listed in check 4.
   - :4770 does not mention the schema's `"minimum": 16` on `max_dimension` (`tools/catalog/background.rs:68`).
   - :1054-1058 describe the prior state ("Before this pair existed…").
 - **`specs/gui/camera-intrinsics.md`:**
+  > _Status (2026-10-03): Done — `DistortionSample`'s doc comment in `report.rs` now puts the arrow's tail at `pixel`; the spec lists the hover line's `outside the model's domain` state; the change and phase residue (opening, Terminology's Before/After table, first-draft and phase asides, "today", the thin-prism history, § Open questions) is rewritten in the present tense; § Testing names the test files that hold each group of tests; `derived.rs` says "defaults to". Branch `finding-bash-15-camera-intrinsics-spec`._
   - Code doc wrong: `sfmtool-core/src/camera/report.rs:130-132` says the arrow runs from `reference` to `pixel`; the spec and `field.rs` draw it with the tail at `pixel`.
   - :824-828 list the hover `distortion` line's states without `outside the model's domain` (`hover.rs:89`).
   - Change and phase residue at :10, :48, :58 (Before/After table), :84, :464, :478, :882, :1032, :1037, :1231 (§ Testing as a to-build list) and :1461-1463.
