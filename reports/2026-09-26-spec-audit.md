@@ -619,16 +619,16 @@ most of the per-sentence findings.
   - :496, :530, :550 and :851 say member geometry is NaN-free. The writer and verifier do not check this.
     > _Status (2026-10-02): **Done** — the writer refuses NaN member geometry and the verifier reports it, with tests, commit `b19c676` (#670)._
   - :214-220 list `matching_method` values `vocab_tree`, `spatial`, `transitive` and `custom`. The writers emit `flow`, `cluster` and `merged`, none of which is listed.
-    > _Status (2026-10-03): **Done** — the field description now lists the values the writers emit (`exhaustive`, `sequential`, `flow`, `cluster`, `merged`), says derived files keep their source's value, and drops the four that nothing writes, branch `finding-bash-06-matches-method-values`._
+    > _Status (2026-10-03): **Done** — the field description now lists the values the writers emit (`exhaustive`, `sequential`, `flow`, `cluster`, `merged`), says derived files keep their source's value, and drops the four that nothing writes, PR #681._
   - :577-593 leave out `refine_options.max_keypoint_uncertainty`, which is the threshold behind status 6.
     > _Status (2026-10-03): **Superseded** — the member gate now uses the ZNCC self-similarity radius. The metadata paragraph (:590-597) lists `max_member_zncc_self_similarity_radius` and notes that older files carry `max_keypoint_uncertainty`, commits `086f8e1` (#651) and `c4a9db8` (#654)._
   - :727 says a verifier checks config indices. `verify.rs` does not bound-check them.
     > _Status (2026-10-02): **Done** — the verifier reports out-of-range config indices, with a test, commit `b19c676` (#670)._
   - :907-910 give the `source_selection` nesting condition wrongly. `cluster-selection.md:121` states it correctly.
-    > _Status (2026-10-03): **Done** — the paragraph now says the key is present whenever the source carries its own `cluster_selection` record, matching `select.rs` and `cluster-selection.md`, branch `finding-bash-06-matches-method-values`._
+    > _Status (2026-10-03): **Done** — the paragraph now says the key is present whenever the source carries its own `cluster_selection` record, matching `select.rs` and `cluster-selection.md`, PR #681._
   - :1056-1131 Usage Examples use APIs that do not exist.
   - :660 "Added… without a version bump" and :613 "identity affine" are stale.
-    > _Status (2026-10-03): **Done** — the version-3 history note on `member_consistency_residual` is removed (cluster files below version 6 are refused), and status `0 reference` now says its reference→member warp is the identity and its geometry is its detection, branch `finding-bash-06-matches-method-values`._
+    > _Status (2026-10-03): **Done** — the version-3 history note on `member_consistency_residual` is removed (cluster files below version 6 are refused), and status `0 reference` now says its reference→member warp is the identity and its geometry is its detection, PR #681._
 **Format independence:** No Implementations section. Findings, with replacements:
   - `ClusterMemberStatus` (:126), `clusters_to_pair_matches` (:417, :961), `u32::MAX` (:599) and the API list at :1010-1019 → Implementations.
   - :592 "the reader's `refine_radius` accessor" → "a consumer uses `patch_size / 2`".
