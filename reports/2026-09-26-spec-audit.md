@@ -797,6 +797,7 @@ and the opening paragraphs listed in check 4.
   - :461 does not say that `shared_points` passes through the 90° angle filter in `_image_pair_graph.py:46`, so a 0 can mean "filtered".
   - :62 omits that `--max-stride` is `IntRange(min=2)` (`motion.py:44`).
 - **`specs/core/patch/candidate-track-spawning.md`:**
+  > _Status (2026-10-03): Done — the change order is rewritten in the present tense as § API › "Seeding localization with `starting_keypoints`", which gives the per-view `Option<[f64; 2]>` seed shape and says how it differs from `refine_keypoints`'s; the `high_reproj` gate now says a projection failure makes the RMS infinite; `test_parent_at_infinity` in `tests/rust_bindings/test_spawn_candidate_tracks_rust_bindings.py` covers the parent-at-infinity `ValueError`, branch `finding-bash-13-candidate-track-spawning-spec`._
   - :128-140 is a change order ("predates the parameter", "As part of this change"). Write it in the present tense inside § API.
   - :134 says "same shape as `refine_keypoints`'s"; `localize_keypoints` takes `Vec<Option<[f64;2]>>`.
   - :72-73 do not say that a projection failure forces `sum_sq = INFINITY` (`spawn.rs:367`), so it reports `high_reproj`, not `bad_triangulation`.

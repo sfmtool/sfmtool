@@ -70,7 +70,11 @@ parallelism of its own):
      rather than an intersection), or a point that is not in front of every
      surviving camera.
    - `high_reproj` — RMS reprojection error of the triangulated position
-     against the refined keypoints exceeds `max_reproj_rms_px`.
+     against the refined keypoints exceeds `max_reproj_rms_px`. If the
+     position does not project into one of the surviving views at all
+     (behind that camera, or outside its model's domain), the RMS is
+     infinite, so the candidate is reported as `high_reproj` rather than
+     `bad_triangulation`.
 
 Survivors report status `spawned`. Results are deterministic: the
 underlying kernels are deterministic and candidates are independent.
@@ -126,20 +130,35 @@ raises `ValueError` for a parent index out of range, a parent at infinity, an
 `offsets_uv` / `view_sets` length or shape mismatch, and a view index out of
 range for the scene.
 
-## `localize_keypoints` gains `starting_keypoints`
+### Seeding localization with `starting_keypoints`
 
-The core localization kernel accepts per-view starting keypoints and
-documents that `None` seeds every view at the point's own projection; the
-Python binding predates the parameter and always passes `None`. As part of
-this change the binding exposes it — same shape as `refine_keypoints`'s
-existing parameter (per point, keypoints parallel to that point's view
-set), optional, default `None` preserving today's behaviour exactly. A point
-absent from the map keeps the projection seeding, which the core batch entry
-learns to express as an empty per-patch seed list — the convention its
-`view_scores` already uses for "this point is unscored". This
-lets a caller localize a point around its *stored observations* rather
-than around its possibly-wrong projection — the seed and the shift gate
-then both anchor on evidence the caller trusts.
+`spawn_candidate_tracks` itself seeds localization at each view's
+projection of `X_c`, and seeds sub-pixel refinement at the localized
+keypoints. The localization kernels also accept explicit per-view seeds,
+for callers that have better seeds than a projection. The single-point
+kernels take them as `Option<&[Option<[f64; 2]>]>`, parallel to the point's
+view set, where a `None` entry seeds that view at the point's own
+projection. The batch entry `localize_patch_cloud_keypoints` (in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs))
+takes one such list per patch, and an empty list seeds every view of that
+patch at its projection.
+
+The Python binding `PatchCloud.localize_keypoints` exposes these seeds as the
+optional `starting_keypoints` parameter: a dict `point_index -> [[x, y] |
+None, ...]` in source-image pixels, one entry per view of that point's view
+set, in order. A `None` entry seeds that view at the projection while the
+other views keep their explicit seeds. A point absent from the dict, and
+every point when the parameter is `None` (the default), is seeded at its
+projection in every view. This differs from `refine_keypoints`'s
+`starting_keypoints`, which accepts only `[x, y]` pairs. The binding raises
+`ValueError` for a seed list whose length differs from the point's view set,
+for a point that is not in the cloud, and for a point that `point_indexes`
+excludes.
+
+Seeding at a point's stored observations rather than at its projection lets
+a caller localize a point whose 3D position is wrong: both the search
+window and the `max_shift_px` gate are then centred on the observations the
+caller trusts.
 
 ## Testing
 
@@ -154,7 +173,7 @@ within tolerance, `n_views` full); a candidate pushed off every image
 per parent in one batch matching the same candidates spawned separately
 (batch independence); and CSR bookkeeping (offsets sum to observation
 count, view-index ordering). Binding tests exercise the dict surface, the
-dtype acceptance, `ValueError` on malformed inputs, and the new
+dtype acceptance, `ValueError` on malformed inputs, and the
 `starting_keypoints` parameter of `localize_keypoints` (explicit seeds at
 the true keypoints reproduce the default behaviour when the projection is
 already correct, and recover a point whose cloud position is displaced

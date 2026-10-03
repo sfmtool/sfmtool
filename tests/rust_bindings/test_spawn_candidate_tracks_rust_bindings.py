@@ -311,6 +311,27 @@ class TestSpawnValidation:
         with pytest.raises(ValueError, match="out of range for the cloud"):
             _spawn(scene, [[2.0, 0.0]], parents=np.array([7], np.uint32))
 
+    def test_parent_at_infinity(self, scene):
+        views, pyramids = scene
+        # Point 0 is finite on the plane; point 1 is a direction (w = 0).
+        cloud = PatchCloud.from_tracks(
+            views,
+            np.array([[0.0, 0.0, PLANE_Z, 1.0], [0.0, 0.0, 1.0, 0.0]]),
+            np.array([0, 0, 1, 1], np.uint32),
+            np.array([0, 1, 0, 1], np.uint32),
+            extent="fixed",
+            extent_value=HALF_EXTENT,
+        )
+        offsets = np.zeros((1, 2), np.float64)
+        # The finite parent of the same cloud is accepted.
+        spawn_candidate_tracks(
+            views, pyramids, cloud, np.array([0], np.uint32), offsets, [[0, 1]]
+        )
+        with pytest.raises(ValueError, match="point at infinity"):
+            spawn_candidate_tracks(
+                views, pyramids, cloud, np.array([1], np.uint32), offsets, [[0, 1]]
+            )
+
     def test_offsets_row_count_mismatch(self, scene):
         views, pyramids = scene
         with pytest.raises(ValueError, match="offsets_uv has 2 rows"):
