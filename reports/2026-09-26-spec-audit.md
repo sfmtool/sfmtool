@@ -811,7 +811,7 @@ and the opening paragraphs listed in check 4.
 ### Spec text that disagrees with the code (code is right unless noted)
 
 - **`specs/core/geometry/estimate-intrinsics.md`:**
-  > _Status (2026-10-03): Done — the spec keeps 42 captures / 6 fisheye (the counts commit `9148c336` records: "27 of 42 fleet entries" never escalate) and the `escalation_reasons` doc comment now points at the spec for the counts instead of restating 40/4; the grid-step count reads 2.58; `rotation_railed` gates on the majority family `vote.family`; the binding note says `columns=None` is `Fixed` with both columns; `sfm estimate-intrinsics --json` now emits `screening_vote` (test added) and `estimate-intrinsics-command.md` documents it, branch `finding-bash-11-estimate-intrinsics-spec`._
+  > _Status (2026-10-03): **Done** — the spec keeps 42 captures / 6 fisheye and states the 27 strong votes that never escalate, and the `escalation_reasons` doc comment points at the spec for the counts instead of restating 40/4; the grid-step count reads 2.58; `rotation_railed` gates on the majority family `vote.family`; the binding note says `columns=None` is `Fixed` with both columns; `sfm estimate-intrinsics --json` emits `screening_vote` (test added) and `estimate-intrinsics-command.md` documents it, PR #693._
   - :237-238 say "42 captures … 6 of them fisheye"; `estimate_intrinsics.rs:107-108` says 40 captures, 4 fisheye. Settle the count where it was measured, then cut the code doc to the four cut points plus a link.
   - :224 says the ratio 1.153 is "2.2 grid steps". At step 1.0566 it is 2.58.
   - :216 says "the consensus came from the rotation family". `escalation_reasons` gates on the majority family (`vote.family`).
