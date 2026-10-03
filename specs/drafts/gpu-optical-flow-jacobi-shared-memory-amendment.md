@@ -28,9 +28,9 @@ tests in `gpu/tests.rs` compare against `jacobi_pixel_scalar_to_row`.
 
 ## Expected benefit and how to measure it
 
-The benefit is expected to be moderate. The current shader is already 7–13x
-faster than the CPU path on 960×960 and larger levels (see the per-level tables in
-the standing spec), and GPU levels are 65 ms of the 164 ms fisheye 3840×3840
+The benefit is expected to be moderate. The GPU variational stage is already
+7.7–8.3x faster than the CPU path on 960×960 and larger levels (see the per-level
+variational table in the standing spec), and GPU levels are 65 ms of the 164 ms fisheye 3840×3840
 `high_quality` run, of which the Jacobi step is one part. Adopt the change only if
 it reduces the GPU-levels batch time on the fisheye and Dino Dog Toy
 `high_quality` runs by a measurable amount on more than one GPU.
