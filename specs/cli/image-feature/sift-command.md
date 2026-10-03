@@ -46,7 +46,8 @@ Exactly one of these is required:
 
 `--dsp / --no-dsp` is rejected without `--tool`, and with any `--tool` other
 than `colmap`. In workspace mode domain size pooling comes from the workspace
-configuration; change it with `sfm ws init --dsp`.
+configuration; change it by reinitializing the workspace with
+`sfm ws init --dsp --force`.
 
 The `sfmtool` tool is the toolkit's own SIFT (the Rust `sfmtool-core`
 implementation), calibrated to match COLMAP's keypoint density and descriptor
