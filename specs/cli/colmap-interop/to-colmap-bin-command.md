@@ -2,8 +2,9 @@
 
 ## Overview
 
-Exports a `.sfmr` reconstruction to COLMAP binary format for use with the COLMAP GUI or
-other COLMAP-compatible tools.
+`sfm to-colmap-bin` writes a reconstruction stored in a `.sfmr` file as COLMAP's
+five-file binary sparse model, so it opens in the COLMAP GUI or any tool that reads that
+format; `--range` exports a subset of images.
 
 ## Coordinate Convention
 
@@ -24,6 +25,9 @@ definitions.
 ```bash
 sfm to-colmap-bin <INPUT.sfmr> <OUTPUT_DIR> [OPTIONS]
 ```
+
+`INPUT.sfmr` must exist and have the `.sfmr` extension (compared
+case-insensitively); any other extension is a usage error.
 
 ### Options
 
@@ -49,6 +53,28 @@ output_dir/
   frames.bin     (always written; synthesized implicit values when no rig data)
 ```
 
+## Feature sources
+
+COLMAP's `images.bin` stores, per image, a list of 2D keypoints that the
+observations index into. How the export builds that list depends on the
+reconstruction's feature source:
+
+- **`sift_files`.** The keypoint positions are read from each image's `.sift`
+  file in the workspace, so those `.sift` files must exist. The observations
+  keep their feature indices into the `.sift` files.
+- **`embedded_patches`.** The keypoints are stored inline, one per observation,
+  and no `.sift` file is read. The export gives each image's observations dense
+  feature indices `0..n` that exist only in the written `images.bin`; they do
+  not correspond to any `.sift` file.
+
+## Points at infinity
+
+COLMAP stores every 3D point as a finite `(x, y, z)`. Points at infinity
+(`w = 0`) in the input are placed at a finite depth before writing, far enough
+that their parallax is below one pixel in every camera that observes them, and
+the command prints how many points it moved. A reconstruction without points at
+infinity is written unchanged.
+
 ## Range Semantics
 
 With `N` images in the input and `K` kept by `--range`:
@@ -56,7 +82,8 @@ With `N` images in the input and `K` kept by `--range`:
 1. **Images.** Keep the `K` in their original relative order. Image IDs in
    `images.bin` are 1-based and contiguous over the kept set.
 2. **Observations (tracks).** Keep every observation whose image is kept.
-   Feature indices within the kept images are preserved.
+   For a `sift_files` reconstruction, feature indices within the kept images
+   are preserved (see [Feature sources](#feature-sources)).
 3. **3D points — default.** Keep every point. A point whose entire track
    referenced removed images becomes a point with zero observations in
    `points3D.bin` (track length 0, which is a normal in-format value). The
@@ -104,8 +131,18 @@ index remapping, optional orphaned-point removal with contiguous point ID
 remapping, and rig/frame filtering (dropping frames with no remaining
 images and remapping frame indices).
 
-The CLI shim (`src/sfmtool/_commands/to_colmap_bin.py`) parses `--range`
-with `RangeExpr`, resolves file numbers to image indices via
-`number_from_filename`, calls `subset_by_image_indices`, and hands the
-result to `save_colmap_binary`. No changes to `colmap.io.save_colmap_binary`
-are required — it operates on whatever reconstruction it is handed.
+The CLI shim, [`to_colmap_bin.py`](../../../src/sfmtool/_commands/to_colmap_bin.py),
+loads the input and, when `--range` is given, calls `apply_range_filter` from
+[`_range_options.py`](../../../src/sfmtool/_commands/_range_options.py), which
+it shares with `sfm to-nerfstudio`. That helper parses `--range` with
+`RangeExpr`, resolves file numbers to image indices via `number_from_filename`,
+and calls `subset_by_image_indices`. The shim then hands the result to
+`save_colmap_binary` in [`colmap/io.py`](../../../src/sfmtool/colmap/io.py),
+which calls `materialize_infinity_for_export` before converting and writing.
+
+## Testing
+
+CLI and end-to-end tests are in
+[`tests/test_colmap_interop.py`](../../../tests/test_colmap_interop.py): the
+non-`.sfmr` input error, a full export, points at infinity, `--range` with and
+without `--filter-points`, and the range error cases.
