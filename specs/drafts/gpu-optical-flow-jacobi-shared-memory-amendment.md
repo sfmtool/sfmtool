@@ -23,8 +23,11 @@ The coefficient arrays (`coefficients`, `b2_buf`) are read once per pixel and st
 in global memory. The bindings do not change, so the eight-buffer limit described
 in the standing spec still holds.
 
-The result must stay bit-identical to the current shader, since the CPU/GPU parity
-tests in `gpu/tests.rs` compare against `jacobi_pixel_scalar_to_row`.
+The tile changes where the shader reads its inputs from, not the arithmetic or its
+order, so the output must be bit-identical to the current shader's. The CPU/GPU
+parity tests in `gpu/tests.rs` compare the GPU flow with the CPU flow within an
+RMSE tolerance, so they would not catch a small change on their own; the change
+needs a test that compares the two shaders' output exactly.
 
 ## Expected benefit and how to measure it
 
