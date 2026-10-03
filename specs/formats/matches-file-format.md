@@ -217,11 +217,11 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
   - `"sequential"`: Sequential matching with overlap (`sfm match -s`)
   - `"flow"`: Optical-flow matching (`sfm match --flow`)
   - `"cluster"`: Cluster matching, a cluster-backbone file (`sfm match --cluster`,
-    and the cluster-patches operation)
+    and the viewer's cluster-patches build)
   - `"merged"`: The union of several `.matches` files (`sfm match --merge`); the
     source files' methods are listed in `matching_options["source_methods"]`
-  - A file derived from another one (`sfm match --derive-pairs`, a cluster
-    selection) keeps its source's value
+  - A file derived from another one (`sfm match --derive-pairs`,
+    `sfm cluster-patches`, a cluster selection) keeps its source's value
 - `matching_tool`: Tool that produced the matches (e.g., `"colmap"`)
 - `matching_tool_version`: Version string of the tool
 - `matching_options`: Method-specific parameters. Contents depend on `matching_method` and
@@ -618,8 +618,8 @@ refinement measured and which members stand.
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `uint8`
 - Per-member status:
-  - `0 reference` — the cluster's reference member. It is refined against itself,
-    so its reference→member warp is the identity, its geometry is its detection,
+  - `0 reference` — the cluster's reference member. It is not refined: its
+    geometry is its detection, so its reference→member warp is the identity,
     its `member_zncc` is 1.0 and its `member_shift_px` is 0
   - `1 kept` — refined and vetted successfully
   - `2 rejected_low_zncc` — achieved ZNCC below the acceptance threshold
