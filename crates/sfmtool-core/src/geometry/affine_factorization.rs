@@ -34,7 +34,9 @@ pub const MAX_DENSE_ENTRIES: usize = 4_194_304;
 pub struct AffineFactorizationParams {
     /// Fixed number of alternation rounds (default 25). Rounds are numbered
     /// from 0; trimming runs from round `rounds / 2` (integer division)
-    /// onward.
+    /// onward. `0` is legal and returns the initialization: zero cameras and
+    /// translations, every observation kept, residuals equal to the
+    /// observations.
     pub rounds: usize,
     /// Per-trim fraction (default 0.05): each trimming round keeps the
     /// observations whose residual norm is strictly below the
@@ -411,8 +413,9 @@ fn nearest_rotation(m: &Matrix3<f64>) -> Matrix3<f64> {
 /// Metric upgrade of an affine factorization: solve for the symmetric
 /// `Q = A·Aᵀ` that makes each used camera's rows equal-norm and orthogonal,
 /// then decompose `M_i·A` into rotation × scale. Returns both reflection
-/// hypotheses (`A` and `A·diag(1, 1, −1)`), or `None` when no image is used
-/// or the constraint system is degenerate. See
+/// hypotheses (`A` and `A·diag(1, 1, −1)`), or `None` when no image is used,
+/// the constraint system is degenerate, or the largest eigenvalue of `Q` is
+/// not positive (smaller eigenvalues are clamped up to `1e-8·λ_max`). See
 /// `specs/core/geometry/affine-factorization.md` § Metric upgrade.
 pub fn metric_upgrade(factorization: &AffineFactorization) -> Option<[MetricHypothesis; 2]> {
     let num_images = factorization.cameras.len();

@@ -818,6 +818,7 @@ and the opening paragraphs listed in check 4.
   - :80-82 and `sfmtool_pinhole.rs:60` say the identity fallback is "the policy `sfmtool_fisheye_to_ray` applies"; the fisheye falls back to `equidistant_to_ray` (`sfmtool_fisheye.rs:195-197`).
   - :84-99 repeat `sfmtool-fisheye-kernels.md:73-85`. Link to it instead.
 - **`specs/core/geometry/affine-factorization.md`:**
+  > _Status (2026-10-03): Partially done — the spec and the `metric_upgrade` doc comment now say it also returns `None` when the largest eigenvalue of `Q` is not positive (smaller eigenvalues are clamped), and the spec and the `rounds` doc comment say `rounds == 0` is legal and what it returns, branch `finding-bash-17-affine-factorization-spec`. The keep-or-retire question for the module is still open._
   - :150-151 and `affine_factorization.rs:414-415` say `metric_upgrade` fails only on degenerate systems. It also returns `None` when `Q` is not positive-definite (`:466`).
   - :56 does not say that `rounds == 0` is legal (`:263`).
   - Discuss: the module has no caller outside its tests. Keep it or retire it.

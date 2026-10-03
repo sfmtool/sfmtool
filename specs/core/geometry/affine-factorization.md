@@ -53,7 +53,7 @@ beyond conditioning.
 1. **Initialization.** Build the dense 2N×C matrix with observed entries
    filled in and missing entries set to the row mean; subtract row means;
    take the top-3 right singular vectors as the initial `X` (C×3).
-2. **Rounds** (fixed count, default 25). Each round:
+2. **Rounds** (fixed count, default 25; `rounds == 0` is legal). Each round:
    a. **Camera sweep.** Per image, least-squares fit of `(M_i | t_i)`
       (2×4 unknowns as two rows) over that image's kept observations;
       images with fewer than 4 kept observations keep their previous
@@ -72,6 +72,11 @@ beyond conditioning.
 3. **Used images.** An image is *used* iff it has ≥ 4 kept observations
    after the final round.
 
+With `rounds == 0` no round runs: every camera and translation is zero,
+`points` is the SVD initialization, every observation is kept, each
+residual equals its observation, and an image is used iff it has ≥ 4
+observations.
+
 Each sub-fit is an exact linear least-squares solve; the solver must be
 deterministic. The whole algorithm is deterministic: fixed round count, no
 randomness, no iteration-order dependence in the results (per-image and
@@ -87,8 +92,11 @@ Operates on the factorization's cameras and used-image mask.
    rows), plus one normalization row setting the mean of
    `m1ᵀQm1 + m2ᵀQm2` to 2 (mean squared row norm 1, excluding the trivial
    `Q = 0`).
-2. Eigendecompose `Q`; clamp eigenvalues below `1e-8 × λ_max` up to that
-   floor; `A = V·√Λ`.
+2. Eigendecompose `Q`. If the largest eigenvalue `λ_max` is not positive
+   (or is NaN), there is no gauge and the upgrade returns `None`.
+   Otherwise clamp eigenvalues below `1e-8 × λ_max` up to that floor, so a
+   `Q` that is not positive-definite but has a positive `λ_max` still
+   yields a gauge; `A = V·√Λ`.
 3. The two reflection hypotheses are `A` and `A·diag(1, 1, −1)`.
 4. Per hypothesis and used image: with `m = M_i·A`, the scale is the mean
    of the two row norms; the rotation is the orthonormalization (SVD, with
@@ -147,8 +155,8 @@ pub struct MetricHypothesis {
     pub scales: Vec<f64>,               // per image; 0 where unused
 }
 
-/// Both reflection hypotheses; `None` when no image is used or the
-/// constraint system is degenerate.
+/// Both reflection hypotheses; `None` when no image is used, the
+/// constraint system is degenerate, or `Q` has no positive eigenvalue.
 pub fn metric_upgrade(
     factorization: &AffineFactorization,
 ) -> Option<[MetricHypothesis; 2]>;
