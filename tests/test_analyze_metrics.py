@@ -119,3 +119,74 @@ class TestPrintMetricsAnalysis:
         ]
         assert len(lines) == 5
         assert "Range filter: 1-5 (5 of 17 images)" in captured.out
+
+
+class TestEmbeddedPatchesMetrics:
+    """An ``embedded_patches`` file has no ``.sift`` feature indexes; its
+    observed pixels are the inline ``keypoints_xy`` column. The per-image
+    errors must still cover every observation and come out finite."""
+
+    @pytest.fixture
+    def embedded_recon(self, seoul_bull_ground_truth_sfmr):
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        assert recon.feature_source == "embedded_patches"
+        assert recon.track_feature_indexes is None
+        return recon
+
+    def test_one_error_per_observation(self, embedded_recon):
+        for img_idx in range(embedded_recon.image_count):
+            obs_data = np.asarray(
+                embedded_recon.compute_observation_reprojection_errors(img_idx)
+            )
+            rows = np.flatnonzero(embedded_recon.track_image_indexes == img_idx)
+            # Column 0 is the observation's row in the track arrays.
+            np.testing.assert_array_equal(obs_data[:, 0].astype(np.int64), rows)
+            assert np.isfinite(obs_data[:, 1]).all()
+
+    def test_errors_match_independent_reprojection(self, embedded_recon):
+        # Reproject each observation's point through its camera here, from the
+        # public arrays, and compare against the inline keypoint.
+        quats = np.asarray(embedded_recon.quaternions_wxyz)
+        trans = np.asarray(embedded_recon.translations)
+        xyzw = np.asarray(embedded_recon.positions_xyzw)
+        keypoints = np.asarray(embedded_recon.keypoints_xy, dtype=np.float64)
+        cameras = embedded_recon.cameras
+        camera_indexes = np.asarray(embedded_recon.camera_indexes)
+        image_of_obs = np.asarray(embedded_recon.track_image_indexes)
+        point_of_obs = np.asarray(embedded_recon.track_point_indexes)
+
+        for img_idx in range(embedded_recon.image_count):
+            rows = np.flatnonzero(image_of_obs == img_idx)
+            pts = xyzw[point_of_obs[rows]]
+            q = np.repeat(quats[img_idx : img_idx + 1], len(rows), axis=0)
+            w = q[:, :1]
+            u = q[:, 1:]
+            t = 2.0 * np.cross(u, pts[:, :3])
+            cam_pt = pts[:, :3] + w * t + np.cross(u, t)
+            # A point at infinity (w = 0) projects its bearing with no translation.
+            cam_pt = cam_pt + pts[:, 3:4] * trans[img_idx]
+            rays = cam_pt / np.linalg.norm(cam_pt, axis=1, keepdims=True)
+            camera = cameras[camera_indexes[img_idx]]
+            pred = np.asarray(camera.ray_to_pixel_batch(np.ascontiguousarray(rays)))
+            expected = np.linalg.norm(pred - keypoints[rows], axis=1)
+
+            got = np.asarray(
+                embedded_recon.compute_observation_reprojection_errors(img_idx)
+            )[:, 1]
+            np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+    def test_per_image_metrics_are_finite(self, embedded_recon):
+        per_image = _compute_per_image_metrics(embedded_recon)
+        assert len(per_image) == embedded_recon.image_count
+        for entry in per_image:
+            assert entry["observation_count"] > 0
+            assert len(entry["errors"]) == entry["observation_count"]
+            for key in ("mean_error", "median_error", "max_error"):
+                assert np.isfinite(entry[key]), (entry["image_name"], key)
+            assert entry["median_error"] <= entry["max_error"]
+
+    def test_print_shows_no_nan(self, seoul_bull_ground_truth_sfmr, capsys):
+        print_metrics_analysis(seoul_bull_ground_truth_sfmr)
+        out = capsys.readouterr().out
+        assert "17 images" in out
+        assert "nan" not in out.lower()

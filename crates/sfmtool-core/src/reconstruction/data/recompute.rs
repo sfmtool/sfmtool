@@ -35,13 +35,26 @@ impl SfmrReconstruction {
     /// `sift_files` reconstruction with the optional inline copy needs no
     /// `.sift` companion on disk.
     ///
-    /// Returns a vector of `(feature_index, reprojection_error_px)` pairs,
-    /// one per track observation for this image. Points behind the camera
-    /// produce `f32::NAN`.
+    /// Returns one `(id, reprojection_error_px)` pair per track observation
+    /// for this image. Points behind the camera produce `f32::NAN`. What `id`
+    /// names depends on the feature source:
+    ///
+    /// - `sift_files`: the observation's feature index in the image's `.sift`
+    ///   file, the key of `image_feature_to_point`. The pairs come in that
+    ///   map's order, which is unspecified.
+    /// - `embedded_patches`: the observation's row in `tracks`, which is also
+    ///   its row in `keypoints_xy`. This mode has no feature indexes, so its
+    ///   `image_feature_to_point` maps are empty and the observations are found
+    ///   by scanning `tracks` for this image instead. The pairs come in row
+    ///   order.
     pub fn compute_observation_reprojection_errors(
         &self,
         image_index: usize,
     ) -> Result<Vec<(u32, f32)>, ReconstructionError> {
+        if self.feature_indexes().is_none() {
+            return Ok(self.embedded_observation_reprojection_errors(image_index));
+        }
+
         let image = &self.image_table.images[image_index];
         let camera = &self.image_table.cameras[image.camera_index as usize];
 
@@ -109,6 +122,41 @@ impl SfmrReconstruction {
         }
 
         Ok(results)
+    }
+
+    /// The `embedded_patches` case of
+    /// [`Self::compute_observation_reprojection_errors`]: one
+    /// `(observation_row, error_px)` pair for each row of `tracks` that lands
+    /// in `image_index`, measured against that row's inline keypoint.
+    ///
+    /// This is a scan over every observation, O(M) per image, because the mode
+    /// keeps no per-image index of its observations.
+    fn embedded_observation_reprojection_errors(&self, image_index: usize) -> Vec<(u32, f32)> {
+        let Some(keypoints_xy) = self.keypoints_xy() else {
+            return Vec::new();
+        };
+        let image = &self.image_table.images[image_index];
+        let camera = &self.image_table.cameras[image.camera_index as usize];
+        self.point_set
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, obs)| obs.image_index as usize == image_index)
+            .map(|(row, obs)| {
+                let point = &self.point_set.points[obs.point_index as usize];
+                let error = observation_reprojection_error(
+                    &image.quaternion_wxyz,
+                    &image.translation_xyz,
+                    camera,
+                    &point.position,
+                    point.is_at_infinity(),
+                    [keypoints_xy[[row, 0]] as f64, keypoints_xy[[row, 1]] as f64],
+                )
+                // Point behind the camera: no defined reprojection.
+                .map_or(f32::NAN, |e| e as f32);
+                (row as u32, error)
+            })
+            .collect()
     }
 
     /// Mean reprojection error (px) per point from the reconstruction's inline

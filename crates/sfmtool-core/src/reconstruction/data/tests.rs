@@ -715,6 +715,59 @@ fn test_compute_observation_reprojection_errors_sift_files_prefers_inline() {
     }
 }
 
+#[test]
+fn test_compute_observation_reprojection_errors_embedded() {
+    // An embedded_patches reconstruction has no feature indexes, so its
+    // `image_feature_to_point` maps are empty. The errors must still come back
+    // one per observation of the image, each keyed by its row in `tracks`.
+    let recon = demo_embedded_projected(10);
+    assert!(recon.point_set.image_feature_to_point[0].is_empty());
+
+    for image_index in 0..recon.image_table.images.len() {
+        let rows: Vec<u32> = recon
+            .point_set
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, obs)| obs.image_index as usize == image_index)
+            .map(|(row, _)| row as u32)
+            .collect();
+        assert!(!rows.is_empty(), "image {image_index} observes points");
+
+        let results = recon
+            .compute_observation_reprojection_errors(image_index)
+            .expect("the inline column answers without any .sift");
+        let ids: Vec<u32> = results.iter().map(|&(id, _)| id).collect();
+        assert_eq!(ids, rows, "image {image_index}");
+        // The fixture's keypoints are the exact projections of their points.
+        for (row, error) in &results {
+            assert!(
+                error.is_finite() && *error < 1e-3,
+                "image {image_index} row {row}: error {error}"
+            );
+        }
+    }
+
+    // Moving one keypoint moves that observation's error by the same distance.
+    let mut moved = recon.clone();
+    let row = 0usize;
+    let image_index = moved.point_set.tracks[row].image_index as usize;
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut moved.point_set.observations
+    {
+        keypoints_xy[[row, 0]] += 3.0;
+        keypoints_xy[[row, 1]] += 4.0;
+    }
+    let results = moved
+        .compute_observation_reprojection_errors(image_index)
+        .unwrap();
+    let (_, error) = results
+        .iter()
+        .find(|&&(id, _)| id as usize == row)
+        .expect("row 0 is an observation of its image");
+    assert!((error - 5.0).abs() < 1e-3, "error {error}");
+}
+
 // ── .sfmr v4 → v5 convention upgrade on load (plan D1) ─────────────────────
 
 /// Convert a canonical `SfmrData` to the COLMAP convention in place — the

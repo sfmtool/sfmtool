@@ -49,8 +49,12 @@ algorithms and parameter semantics.
 ## Per-Image Quality Metrics (`--metrics`)
 
 Computes per-observation reprojection errors by projecting each observed 3D point through
-the camera model (including distortion) and comparing against the feature's pixel position
-from the `.sift` file.
+the camera model (including distortion) and comparing against the observation's pixel
+position. That position is the reconstruction's inline `keypoints_xy` row when the file
+carries the column (every `embedded_patches` file does, and a `sift_files` file may), and
+otherwise the feature's position in the image's `.sift` file. The computation is
+`SfmrReconstruction::compute_observation_reprojection_errors` in
+[`recompute.rs`](../../../crates/sfmtool-core/src/reconstruction/data/recompute.rs).
 
 ### Metrics per image
 

@@ -382,11 +382,12 @@ pub(super) fn get_camera_image(
 ///
 /// The source is `compute_observation_reprojection_errors`, which is what the
 /// Image Detail panel's error heatmap reads — so a figure the agent is told
-/// matches the colour the human is looking at. It reads the image's `.sift`
-/// file to do it, which is also why this can come back `null`: an
-/// `embedded_patches` reconstruction has no `.sift` companion, and a
-/// `sift_files` one whose workspace has moved cannot find it. A missing
-/// summary is not a failed call — the pose and the observation count are still
+/// matches the colour the human is looking at. It reads the observed pixels
+/// from the reconstruction's inline keypoints when it carries them (every
+/// `embedded_patches` one does), and otherwise from the image's `.sift` file,
+/// which is why this can come back `null`: a `sift_files` one with no inline
+/// copy whose workspace has moved cannot find it. A missing summary is not a
+/// failed call — the pose and the observation count are still
 /// the answer to the question that was asked.
 fn image_error_stats(state: &AppState, image: ImageRef) -> Value {
     let Some(node) = state.node(image.recon) else {

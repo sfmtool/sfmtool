@@ -702,9 +702,10 @@ them quote.
 
 Both can be absent, and say so rather than inventing a number.
 `get_camera_image`'s `reproj_error` is `null` when the errors cannot be
-computed — the source reads the image's `.sift` file, which an
-`embedded_patches` reconstruction does not have, and which a `sift_files` one
-whose workspace has moved cannot find. A track observation's `reproj_error` is
+computed. The source reads the observed pixels from the reconstruction's
+inline keypoints when it has them, which every `embedded_patches`
+reconstruction does, and otherwise from the image's `.sift` file, which a
+`sift_files` reconstruction whose workspace has moved cannot find. A track observation's `reproj_error` is
 `null` where that camera's model has no pixel for the point's ray, which the
 metric reports as `NaN` and JSON cannot carry. For a perspective model that is
 a point behind the camera; a fisheye observation more than 90° off the axis has

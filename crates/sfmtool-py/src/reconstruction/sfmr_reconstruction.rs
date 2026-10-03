@@ -758,13 +758,16 @@ impl PySfmrReconstruction {
 
     /// Compute per-observation reprojection errors for a single image.
     ///
-    /// Loads feature positions from the image's `.sift` file, projects each
-    /// observed 3D point through the camera, and returns the pixel distance
-    /// between projected and observed positions.
+    /// Projects each observed 3D point through the camera and returns the
+    /// pixel distance between projected and observed positions. The observed
+    /// positions come from the inline `keypoints_xy` column when the
+    /// reconstruction has one, and otherwise from the image's `.sift` file.
     ///
-    /// Returns a `(K, 2)` array where column 0 is the feature index and
-    /// column 1 is the reprojection error in pixels. Points behind the
-    /// camera produce NaN.
+    /// Returns a `(K, 2)` array with one row per observation of the image.
+    /// Column 1 is the reprojection error in pixels; points behind the camera
+    /// produce NaN. Column 0 is the observation's feature index for a
+    /// `sift_files` reconstruction, and its row in the track arrays for an
+    /// `embedded_patches` one, which has no feature indexes.
     fn compute_observation_reprojection_errors<'py>(
         &self,
         py: Python<'py>,
