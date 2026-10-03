@@ -26,7 +26,7 @@ are the Python binding's signature defaults (see
 rotation skeleton, passes its own `RESECT_MAX_ERROR_PX` /
 `RESECT_MIN_INLIERS`.
 
-The function returns `None` before any solve when `uv` and `points`
+The core function returns `None` before any solve when `uv` and `points`
 differ in length, or when there are fewer than `max(min_inliers, 1)`
 observations.
 
@@ -114,6 +114,10 @@ resect_translation(camera, rotation_wxyz, points, uv,
         "residual_norms": (n,)} | None
 ```
 
+The binding raises `ValueError` when `points` is not `(N, 3)`, `uv` is
+not `(N, 2)`, or the two differ in length, so the core's
+length-mismatch `None` never reaches Python.
+
 ## Testing requirements
 
 - Exact recovery on noiseless synthetic data, pinhole and fisheye.
@@ -124,9 +128,10 @@ resect_translation(camera, rotation_wxyz, points, uv,
   half-space gate would drop them) and still rejects the antipodal
   reflection along each ray. A perspective camera evaluates the same
   half-space expression it always did.
-- Failure path: fewer than `min_inliers` consistent observations, or
-  `uv` and `points` of different lengths, returns `None` (core and
-  binding).
+- Failure path: fewer than `min_inliers` consistent observations
+  returns `None` (core and binding). `uv` and `points` of different
+  lengths return `None` from the core and raise `ValueError` from the
+  binding.
 - Degenerate ray bundles (all rays near-parallel) still return the
   least-squares `t` — conditioning is the caller's concern, correctness
   of the normal equations is this kernel's.
