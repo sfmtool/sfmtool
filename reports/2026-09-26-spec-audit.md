@@ -48,6 +48,7 @@ were checked**. 14 were stale:
   - the Alt-menu "Investigate"
   - "temporary proxy"
   - the inertia non-goal
+  > _Status (2026-10-03): **Done** for viewport-navigation.md — the "(future)" sensitivity, the "Planned…" FOV text and both open questions now state what exists and point at Non-goals, the Alt-menu row describes the `SC_KEYMENU` suppression, "temporary proxy" is gone, and the inertia non-goal names the Windows touchpad exception, branch `finding-bash-04-viewport-navigation-drift`._
 - **cluster-census.md:** two claims about callers that are not in the tree.
 - **track-cluster-matching.md:** four items: persisting is out of scope, the CLI consumes pairs only, "add a section", "consider lifting".
 - **archive-container.md:** "No schema".
@@ -77,6 +78,7 @@ Five more mismatches came from reading the sampled specs rather than from the ta
 - **sift-command.md:36:** says `--dsp` defaults to "workspace". It is actually off, and it requires `--tool colmap`.
 - **viewport-navigation.md:761:** says the indicator size multiplier defaults to 3.0. The code has 0.3.
 - **viewport-navigation.md:766:** says the indicator opacity runs 50%→10%. The shader and the spec's own table say 20%→5%.
+  > _Status (2026-10-03): **Done** for the two viewport-navigation.md items — 0.3 and 20%→5%, branch `finding-bash-04-viewport-navigation-drift`._
 - **focal-vote.md:167:** says "at most 60" rotation images. The code allows up to 119.
 - **kdf-constellation-query.md:593:** says a length mismatch raises `ValueError`. The code raises `OSError`.
 > _Status (2026-10-02): the focal-vote and constellation items are **Done** in code, commit `b19c676` (#670); both specs already described the fixed behaviour. The `--dsp` and indicator items remain open._
@@ -495,6 +497,7 @@ most of the per-sentence findings.
 **Recommendation:** update spec.
 
 ### specs/gui/viewport-navigation.md
+> _Status (2026-10-03): **Partially done** — the fly and tilt paragraphs are back under Dolly / Fly and Tilt / Roll; Zoom to Fit gives the per-axis hfov/vfov distance with no clamp; indicator size 0.3 and opacity 20%→5%; the fog is described as a reversed-Z NDC difference with default 10.0; the `#camera-view-mode-override` anchor is now a heading, the "Step 9" citation links `camera-views.md#which-navigation-keeps-camera-view`, the initial distance is √29; the stale deferrals are fixed, branch `finding-bash-04-viewport-navigation-drift`. Not done: the third copies in `righting.rs`/`mod.rs` (Rust doc comments), the Shape items (opening, step lists, prose), and the same `fog_distance = target_fog_multiplier × length_scale` error in `point-cloud-rendering.md:280`._
 **Summary:** The new Maintain Z-up material (`righting.rs`, `right_toward_z_up`, the turn-offs on Q/E and MCP `set_view`) and turn-toward-target (`TURN_INTO_FRACTION` 0.5) match the code. The insertion split the Dolly/Fly section, and several older numbers no longer match.
 **Implementing code:** `sfm-explorer/src/viewer_3d/{mod.rs,righting.rs,camera.rs,input.rs,hud.rs}`, `mcp/view.rs:184-190`, `scene_renderer/gpu_types.rs`, `shaders/target_indicator.wgsl`, `platform/windows.rs`.
 **Inconsistencies:**
@@ -938,6 +941,7 @@ replaced by `gui/track-view.md`.)
 
    Delete these, or move them into drafts.
 5. **Viewport navigation:** the Maintain Z-up insertion (#614) split the fly and tilt paragraphs in `viewport-navigation.md` (:412-435). Fix that, together with the zoom-to-fit formula and the indicator size and opacity numbers, which disagree with the code.
+   > _Status (2026-10-03): **Done** — paragraphs moved back, zoom-to-fit formula, indicator size and opacity corrected, branch `finding-bash-04-viewport-navigation-drift`._
 
 The opening-paragraph replacements (check 4 and the per-spec sections) should
 land **one spec per PR**. Each one is a claim about the code, and a reviewer

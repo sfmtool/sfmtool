@@ -149,13 +149,16 @@ while a camera is in hand.
 | Target push/pull | Alt + pinch / Alt + Ctrl + two-finger drag | Move target forward/backward along view direction |
 | Pan | Alt + Shift + two-finger drag | Pan camera and target (same as Shift+drag, target visible) |
 
-> **Camera view mode override:** When in camera view mode, the default
-> (unmodified) drag/scroll/gesture performs **nodal pan** (free-look) instead of
-> orbit, and Alt+drag performs **orbit** instead of nodal pan. Additionally, all
-> zoom controls (scroll wheel, Ctrl+drag, right-drag, pinch) adjust the **FOV**
-> instead of dollying the camera. This makes free-look and FOV zoom the primary
-> gestures in camera view, while orbit deliberately exits it. See
-> [camera-views.md](camera-views.md) Step 9 for details.
+#### Camera View Mode Override
+
+When in camera view mode, the default (unmodified) drag/scroll/gesture performs
+**nodal pan** (free-look) instead of orbit, and Alt+drag performs **orbit**
+instead of nodal pan. Additionally, all zoom controls (scroll wheel, Ctrl+drag,
+right-drag, pinch) adjust the **FOV** instead of dollying the camera. This makes
+free-look and FOV zoom the primary gestures in camera view, while orbit
+deliberately exits it. See
+[camera-views.md](camera-views.md#which-navigation-keeps-camera-view) for
+details.
 
 ### Keyboard Shortcuts
 
@@ -188,7 +191,7 @@ view moves the pose.
 When no data is loaded or after Shift+Home reset:
 - Position: (0, -5, 2) - behind and above the origin, looking forward
 - Target: (0, 0, 0) - the origin
-- Target distance: 5.0 (approximately)
+- Target distance: √29 ≈ 5.39, the distance from that position to the origin
 
 ### Auto-Framing on Load
 
@@ -232,8 +235,9 @@ This feels like grabbing the camera and moving it around the scene.
 
 ### Sensitivity
 
-- Default orbit sensitivity: 0.01 radians per pixel of drag
-- Sensitivity should be configurable in settings (future)
+- Orbit sensitivity: 0.01 radians per pixel of drag
+- The sensitivity is a constant, with no setting for it (see
+  [Non-goals](#non-goals))
 
 ## Pan Behavior
 
@@ -281,29 +285,20 @@ moving the camera. This is distinct from the standard dolly zoom (which
 changes `target_distance`) — FOV zoom changes `fov` while the camera stays
 in place.
 
-**Implemented in camera view mode:** when viewing through a camera (see
-[camera-views.md](camera-views.md#viewing-through-a-camera)), the
-camera position is locked, so all zoom controls (scroll wheel, Ctrl+drag,
-right-drag, pinch) adjust the FOV instead of dollying (see
+FOV zoom is a gesture only in camera view mode. When viewing through a camera
+(see [camera-views.md](camera-views.md#viewing-through-a-camera)), the camera
+position is locked, so all zoom controls (scroll wheel, Ctrl+drag, right-drag,
+pinch) adjust the FOV instead of dollying (see
 [Camera View Mode Override](#camera-view-mode-override);
 `viewer_3d/input.rs`). The FOV starts from the best fit to the camera's
 intrinsics and the gesture adjusts it from there.
 
-**Planned for free navigation:** FOV is already adjustable from the viewport
-HUD's Camera section (10°–120°,
-[viewport-hud.md](viewport-hud.md)); a dedicated gesture binding would
-make it faster to adjust during normal (non-camera-view) navigation. Now that
-the slider is viewport-local rather than a menu round-trip, the case for a
-gesture is weaker than it was.
-
-**Open question**: What input binding should free-navigation FOV zoom use? It
-needs to be distinct from the existing dolly zoom (scroll wheel /
-Ctrl+two-finger drag), which is exactly what camera view mode repurposes.
-Most 3D applications treat FOV as a camera property rather than a viewport
-gesture (see survey below), so this is lower priority now that the menu slider
-exists.
-
-Precedent from other applications:
+In free navigation the FOV is set from the viewport HUD's Camera section
+(10°–120°, [viewport-hud.md](viewport-hud.md)), and no gesture changes it (see
+[Non-goals](#non-goals)). A gesture would need a binding distinct from the dolly
+zoom (scroll wheel / Ctrl+two-finger drag), which is the binding camera view
+mode repurposes. Other 3D applications also treat FOV as a camera property
+rather than a viewport gesture:
 - **Blender**: No default shortcut for viewport FOV. The viewport focal
   length is only adjustable via the N-panel sidebar (View tab → Focal
   Length). Blender uses Shift+Ctrl+MMB drag for dolly (moving the camera
@@ -349,6 +344,25 @@ and Alt shows the target, which is useful while flying.
 Any fly key press also exits camera view mode, so you can start flying
 immediately from a camera view.
 
+While any WASD/R/F/Q/E key is held, mouse drag and two-finger drag switch to
+nodal pan (same as Alt+drag — camera stays fixed, view direction changes,
+target slides to new look-at point). This matches video game conventions where
+mouse-look rotates your view while moving. Fly mode does not affect the target
+indicator or supernova visibility — if the target is visible (via Alt hold or
+Alt double-tap lock), it stays visible while flying.
+
+The navigation mode is locked when a fly-key-initiated drag starts and held
+until the drag ends. If you release the fly keys while still dragging, the
+drag completes as nodal pan — it does not switch to orbit mid-gesture. The
+next drag after that returns to normal orbit. This does not apply to Alt —
+pressing and releasing Alt mid-drag switches between orbit and nodal pan
+immediately, which is core to the fluid exploration workflow described in
+[Target Control](#target-control-alt-mode).
+
+This complements orbit navigation well: orbit to examine something from
+different angles, then fly to reposition to a completely different part
+of the scene.
+
 ### Tilt / Roll
 
 Q and E rotate the camera's `world_up` direction around the view axis. This
@@ -363,6 +377,11 @@ the camera. Shift+Home does a full view reset (position, orientation, and
 Q and E turn [Maintain Z-up](#maintain-z-up) off, since rolling the view by
 hand asks for a view that is not level. The Action Log records
 `Maintain Z-up off`.
+
+Tilt and roll have no mouse-drag binding (see [Non-goals](#non-goals)).
+The candidates considered are Ctrl+drag (or Ctrl+left-drag), since Ctrl is
+already the zoom modifier for trackpad and tilt is a less common operation,
+and middle-click drag without Shift. Which one feels right is not decided.
 
 ### Maintain Z-up
 
@@ -411,31 +430,6 @@ Two cases need a choice of how to turn:
 - **Looking straight along the new up.** Here there is no roll to level to, so
   the orientation is left as it is while `world_up` still turns.
 
-**Open question**: Should there also be a mouse-drag binding for tilt/roll?
-A natural candidate would be Ctrl+drag (or Ctrl+left-drag), since Ctrl is
-already the zoom modifier for trackpad and tilt is a less common operation.
-Another option is middle-click drag without Shift. Needs experimentation to
-see what feels right.
-
-While any WASD/R/F/Q/E key is held, mouse drag and two-finger drag switch to
-nodal pan (same as Alt+drag — camera stays fixed, view direction changes,
-target slides to new look-at point). This matches video game conventions where
-mouse-look rotates your view while moving. Fly mode does not affect the target
-indicator or supernova visibility — if the target is visible (via Alt hold or
-Alt double-tap lock), it stays visible while flying.
-
-The navigation mode is locked when a fly-key-initiated drag starts and held
-until the drag ends. If you release the fly keys while still dragging, the
-drag completes as nodal pan — it does not switch to orbit mid-gesture. The
-next drag after that returns to normal orbit. This does not apply to Alt —
-pressing and releasing Alt mid-drag switches between orbit and nodal pan
-immediately, which is core to the fluid exploration workflow described in
-[Target Control](#target-control-alt-mode).
-
-This complements orbit navigation well: orbit to examine something from
-different angles, then fly to reposition to a completely different part
-of the scene.
-
 ## Zoom to Fit Behavior
 
 The Zoom to Fit operation (Z key) adjusts the camera to show all content while
@@ -448,10 +442,12 @@ keeps your orientation, rather than snapping to a fixed viewpoint.
 2. Sort each axis independently and compute a **percentile bounding box**
    using the 20th–80th percentile range, which automatically ignores outliers
 3. Find the center of the percentile box in camera space (cx, cy, cz)
-4. Measure the view-plane extent: `view_size = max(sx, sy)` where sx/sy are
-   the right/up widths of the percentile box
-5. Calculate the required camera distance: `distance = (view_size * 1.2) / tan(fov/2)`
-   (clamped to a minimum of 1.0)
+4. Measure the view-plane extents `sx` and `sy`, the right and up widths of
+   the percentile box
+5. Calculate the required camera distance for each axis and take the larger:
+   `distance = max(sy * 1.2 / tan(vfov/2), sx * 1.2 / tan(hfov/2))`, where
+   `vfov` is the vertical FOV (see [FOV and Aspect Ratio](#fov-and-aspect-ratio))
+   and `tan(hfov/2) = tan(vfov/2) * aspect`. The distance has no lower clamp
 6. Convert the bounding box center back to world space
 7. Position the camera at `world_center - forward * distance`
 8. Set `target_distance` to the computed distance
@@ -609,8 +605,8 @@ useful when you want to keep the target visible while navigating normally.
   Cardinal tips (N/S/E/W) extend to 1.25× the ring radius; intercardinal
   tips extend to 0.8×. See [point-cloud-rendering.md](point-cloud-rendering.md#3d-shape-rotating-compass)
   for full geometry details.
-- **World-space size**: radius = tunable multiplier × `length_scale` (currently
-  using point size as a temporary proxy for `length_scale`)
+- **World-space size**: radius = tunable multiplier × `length_scale` (see
+  [point-cloud-rendering.md](point-cloud-rendering.md#length-scale))
 - Color: bright cyan or white with slight glow, distinct from point cloud colors
 - Rendered with depth testing against the scene (not overlaid), with depth-aware
   transparency:
@@ -619,11 +615,11 @@ useful when you want to keep the target visible while navigating normally.
   |-------------------|---------|-------------|
   | In front of all geometry | 100% | Fully visible, unoccluded |
   | Just behind occluding geometry | 20% | Immediate drop on occlusion |
-  | Further behind | 20% → 5% | Fog-like falloff based on world-space depth distance behind the occluder, scaled as a tunable multiplier on `length_scale` |
+  | Further behind | 20% → 5% | Fog-like falloff based on the depth-buffer distance behind the occluder, scaled by a tunable multiplier |
   | Deep behind geometry | 5% (floor) | Never fully invisible |
 
-- The fog falloff distance is a tunable multiplier on `length_scale`, allowing
-  experimentation with different falloff rates
+- The fog falloff distance is set by the HUD's "Target fog" multiplier
+  (default 10.0); see the implementation notes below
 
 **Supernova Lighting Effect**:
 - Create a spherical illumination effect centered at the target point that gives
@@ -783,7 +779,7 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
 | Target pushed behind camera (negative distance) | Clamp target distance to a minimum of 0.1 (same as zoom minimum). |
 | Target pulled very far away | Allow it — the user may want a very distant pivot for wide orbits. |
 | Alt+Drag near edge of viewport | Standard behavior, no special casing needed. |
-| OS intercepts Alt key (e.g., Alt activates menu bar on Windows) | May need to consume the Alt key event before it reaches the OS. Investigate `winit` key handling. This is a known issue in many 3D apps on Windows. |
+| OS intercepts Alt key (e.g., Alt activates menu bar on Windows) | On Windows the window's subclass procedure drops `WM_SYSCOMMAND` / `SC_KEYMENU`, so Alt does not activate the menu (`platform/windows.rs`). Alt+F4 and other system keys are unaffected. |
 
 ### Implementation Notes
 
@@ -809,15 +805,19 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
   above and [point-cloud-rendering.md](point-cloud-rendering.md#3d-shape-rotating-compass))
   in a separate mini-pass or as part of the existing line rendering
   (original MVP design was a wireframe octahedron, since superseded)
-- World-space size: radius = `target_indicator_size_multiplier` × `length_scale`
-  (default: 3.0, tunable)
-- Apply a slow rotation (e.g., 30°/sec around the world up axis) for visual life
+- World-space size: radius = `target_size_multiplier` × `length_scale`
+  (default `DEFAULT_TARGET_SIZE_MULTIPLIER` = 0.3, adjustable from the HUD's
+  "Target size" slider)
+- Apply a slow rotation (30°/sec around the world up axis) for visual life
 - Use additive blending for the glow effect
 - Depth-aware transparency: render with depth testing enabled, then compare
   fragment depth against the scene depth buffer. Opacity is 100% when unoccluded,
-  drops to 50% when just behind geometry, fades via fog falloff to a 10% floor.
-  Fog falloff distance = `target_indicator_fog_multiplier` × `length_scale`
-  (tunable, experiment to find a good default)
+  drops to 20% when just behind geometry, and fades to a 5% floor
+  (`shaders/target_indicator.wgsl`). The fade is measured as the reversed-Z NDC
+  depth difference between the scene and the indicator fragment, reaching the
+  floor at `0.1 × target_fog_multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`, which
+  is 0.1 at the default multiplier of 10.0 (`scene_renderer/uniforms.rs`). It
+  does not scale with `length_scale`.
 
 ## Non-goals
 
@@ -831,7 +831,7 @@ anything; each is listed with what it would cost or what it would need decided.
   thing zoom converges on.
 - **A tilt/roll mouse-drag binding.** Tilt and roll are keyboard-only (Q/E).
   Every plausible drag modifier is already taken by orbit, pan, nodal pan or
-  dolly — see [Tilt / Roll](#tilt--roll) for the unresolved binding question.
+  dolly — see [Tilt / Roll](#tilt--roll) for the candidates considered.
 - **A dedicated FOV-zoom gesture in free navigation.** FOV zoom exists in camera
   view mode, where every zoom control adjusts FOV; outside it, FOV is reached
   through the HUD slider. [FOV Zoom](#fov-zoom) surveys why other 3D
@@ -839,7 +839,11 @@ anything; each is listed with what it would cost or what it would need decided.
 - **Configurable sensitivity.** The orbit, pan and zoom sensitivities are
   constants; there is no settings surface for them.
 - **Inertial scrolling and saved camera positions.** Gestures stop when the
-  input stops, and no viewpoint bookmarking exists.
+  input stops, with one exception: a two-finger pan on a Windows Precision
+  Touchpad continues briefly after the fingers lift, because the
+  DirectManipulation viewport is configured with translation inertia (see
+  [Windows Precision Touchpad Support](#windows-precision-touchpad-support)).
+  No viewpoint bookmarking exists.
 
 ## Windows Precision Touchpad Support
 
