@@ -802,6 +802,7 @@ and the opening paragraphs listed in check 4.
   - :72-73 do not say that a projection failure forces `sum_sq = INFINITY` (`spawn.rs:367`), so it reports `high_reproj`, not `bad_triangulation`.
   - The parent-at-infinity `ValueError` (:125) has no test.
 - **`specs/gui/mcp-server.md`:**
+  > _Status (2026-10-03): Partially done — the spec now describes `cli.rs`'s refusal of unknown `-` options and bad `--mcp=` values, says the exact `set_view` form requires `position` and `target_distance`, records the schema's `"minimum": 16` on `max_dimension` (which the parser does not check), and drops the "Before this pair existed" prior-state text. The screenshot text block still states the size twice; the spec now says which size each one is, and the Rust change to drop one stays open. Branch `finding-bash-14-mcp-server-spec`._
   - :51-56 say `cli.rs` "treats everything else as a path". `cli.rs:97` refuses any `-`-prefixed argument, and `--mcp=<non-number>` is an error (`:92`).
   - :1294-1307 say each piece of an explicit `set_view` call "is preserved". With `orientation_wxyz`, `tools.rs:885-887` require `position` and `target_distance`.
   - The screenshot text block states the size twice: `server.rs:321` prefixes `{w}×{h} px.` to a caption that already ends `…, {w}×{h}` (`mcp/mod.rs:1926-1931`), and the two can disagree for a panel. Drop one and say which in the spec.

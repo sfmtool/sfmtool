@@ -51,8 +51,11 @@ sfm explorer --mcp 9000 scene.sfmr     # same, through the Python CLI
 
 `crates/sfm-explorer/src/cli.rs` recognizes `--mcp`, `--mcp=PORT`, `--mcp PORT`,
 `--no-default-layout` ([panel-layout.md](panel-layout.md) § "The default layout
-file"), `--demo` ([architecture.md](architecture.md) § "Testing"), `--help`, and
-treats everything else as a path. Hand-rolled rather than `clap`: three flags
+file"), `--demo` ([architecture.md](architecture.md) § "Testing") and `-h` /
+`--help`. Any other argument that starts with `-` (apart from a lone `-`) is
+refused as an unknown option, `--mcp=` followed by something that is not a port
+number from 0 to 65535 is refused, and every remaining argument is a path.
+Hand-rolled rather than `clap`: three flags
 and a list of paths is a dozen lines, and it keeps the binary's dependency tree
 as it was. The following-argument form has to look at
 what comes next, because `--mcp scene.sfmr` is the common invocation and means
@@ -1052,13 +1055,11 @@ dragging the size filter — folds into one line. The texts:
 | `intrinsics.distortion_scale` | `Distortion scale ×{n}` / `Distortion scale auto` |
 | `intrinsics.grid_cols` | `Grid density {n}` |
 
-**The human's changes to the same controls record the same texts**, as `User`.
-Before this pair existed the Image Detail toolbar, its gear popup and the `I`
-key wrote straight into the two settings structs and logged nothing, which was
-tolerable while only a human touched them and is not once an agent can: the
-Action Log's premise is that both actors see what the other did in one place,
-and a heatmap mode the agent switched on has to be as visible in the log as the
-grid the human switched off. The record is one function — the diff of the two
+**The human's changes to the same controls record the same texts**, as `User`:
+the Image Detail toolbar, its gear popup and the `I` key all record what they
+change. The Action Log's premise is that both actors see what the other did in
+one place, and a heatmap mode the agent switched on has to be as visible in the
+log as the grid the human switched off. The record is one function — the diff of the two
 settings structs before and after a change, one `Kind::Display` entry per field
 that differs, in the table's words — and **both actors call it**: the tool
 around its write, the dock around the panel's frame. One function is what
@@ -1292,8 +1293,10 @@ form restores a view verbatim, which is what `orientation_wxyz` and
 `target_distance` are reported for.
 
 The explicit camera is a position, an orientation and a target distance, and
-the explicit family also takes them **a piece at a time**: what a call does not
-carry is preserved. The orientation comes from `forward` (a view direction,
+the explicit family apart from the exact form also takes them **a piece at a
+time**: what a call does not carry is preserved. The exact form does not: `orientation_wxyz`
+requires `position` and `target_distance` in the same call, since it is the form
+that restores a reported view verbatim. The orientation comes from `forward` (a view direction,
 named for the derived field the view block reports, with the roll taken from
 `up` defaulting to the current `world_up`), from `position` and `target`
 together (the look-at form), from `orientation_wxyz` (the exact form), or it
@@ -1621,9 +1624,15 @@ the log.
 { "panel_name": "scene", "widgets": true }              // the picture and its widget listing
 ```
 
-Returns an MCP `ImageContent` block — base64 PNG, `mimeType: "image/png"` — plus
-a text block naming the pixel size and what was photographed: `The window,
-1920×1129.` or `The Image Detail panel, 640×480.` For the window and for the 3D
+Returns a text block and then an MCP `ImageContent` block — base64 PNG,
+`mimeType: "image/png"`. The text block opens with the size of the returned PNG
+and then names what was photographed at the target's own size: `1920×1129 px.
+The window, 1920×1129.` or `640×480 px. The Image Detail panel, 640×480.` The
+two sizes are different numbers. The first is the PNG after any `crop_px` and
+`max_dimension`, written by the server when it builds the reply. The second is
+the uncropped, unscaled target, built with the caption below; for a panel it is
+the panel's last laid-out size, which differs from the picture in the frame that
+opened the panel. For the window and for the 3D
 Viewer it keeps the frame description too (which reconstructions are drawn, the
 point and camera-image counts, and the camera image being looked through, if
 any), because those are the pictures the 3D view is in. That caption is built
@@ -4772,7 +4781,7 @@ Other candidates, in rough order of value:
 | `--mcp PORT` | `8787` (`cli::DEFAULT_MCP_PORT`) | The loopback port to bind. `0` takes an ephemeral one, printed at startup. |
 | `list_camera_images` `limit` | `50` (`read::DEFAULT_LIMIT`) | Rows per page. |
 | `list_camera_images` `limit` cap | `500` (`read::MAX_LIMIT`) | The most one call will return, whatever it asked for. |
-| `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. |
+| `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. The tool schema advertises `"minimum": 16`; the parser does not check it. |
 | `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
 | Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_task`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
