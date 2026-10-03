@@ -1815,10 +1815,9 @@ The hashes are the ones described under [Content Hash](#2-content-hash-content_h
 3. Compare with stored values in `content_hash.json.zst`
 4. If any hash mismatches, file is corrupted
 
-## Usage Examples
+## Implementations
 
-This spec defines the bytes on disk, not a programming interface, so it carries
-no code examples. The code that reads, writes and verifies `.sfmr` files is:
+The code that reads, writes and verifies `.sfmr` files is:
 
 - Rust: `read_sfmr`, `read_sfmr_metadata`, `write_sfmr` and `verify_sfmr` in
   [`sfmtool-sfmr-format`](../../crates/sfmtool-sfmr-format/src/lib.rs).

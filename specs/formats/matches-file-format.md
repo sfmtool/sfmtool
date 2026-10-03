@@ -674,7 +674,7 @@ a `.matches` file can contain only candidate matches. It requires the pairwise b
 (`image_pairs/`): its arrays are keyed per stored pair, so a cluster-bearing file cannot
 carry TVGs. To add geometric verification results,
 write a new `.matches` file that includes both the candidate matches and the TVGs (see
-"Writing a verified .matches file from an existing one" in Usage Examples). This section
+[Writing a verified .matches file](#writing-a-verified-matches-file)). This section
 parallels the `two_view_geometries` table in a COLMAP database.
 
 When present, every pair in `image_pairs/image_index_pairs` has a corresponding entry in the
@@ -1055,10 +1055,9 @@ findings are absent. Verification never trusts a declared count far enough to
 index past the end of an array: a truncated, over-long or hand-edited file is
 reported, not a crash.
 
-## Usage Examples
+## Implementations
 
-This spec defines the bytes on disk, not a programming interface, so it carries
-no code examples. The code that reads, writes and verifies `.matches` files is:
+The code that reads, writes and verifies `.matches` files is:
 
 - Rust: `read_matches`, `read_matches_metadata`, `write_matches` and
   `verify_matches` in
@@ -1070,16 +1069,6 @@ no code examples. The code that reads, writes and verifies `.matches` files is:
   queries ([bindings](../../crates/sfmtool-py/src/io/matches_file.rs)).
 
 `verify_matches` returns `(is_valid, error_messages)`.
-
-### Writing a verified .matches file from an existing one
-
-Geometric verification does not modify the file it reads.
-[`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
-reads a clusters-bearing file, expands its clusters into image pairs, verifies
-those pairs, and writes a new pairwise file at a separate path. The new file holds
-the pairs that pass verification, their matches and the
-[two-view geometries section](#7-two-view-geometries-optional-section), with
-`has_two_view_geometries` set to `true` in its metadata and its own content hash.
 
 ## As part of a Pipeline
 
@@ -1115,6 +1104,16 @@ modifying an existing file.
         ▼
    .sfmr file (reconstruction)
 ```
+
+### Writing a verified .matches file
+
+Geometric verification does not modify the file it reads.
+[`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
+reads a clusters-bearing file, expands its clusters into image pairs, verifies
+those pairs, and writes a new pairwise file at a separate path. The new file holds
+the pairs that pass verification, their matches and the
+[two-view geometries section](#7-two-view-geometries-optional-section), with
+`has_two_view_geometries` set to `true` in its metadata and its own content hash.
 
 ## Versioning and Migration
 
