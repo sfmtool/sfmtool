@@ -17,9 +17,8 @@ video) in three places:
   [flow-command.md](../../cli/image-processing/flow-command.md).
 
 The flow itself is computed in Rust, in `sfmtool-core`, by an implementation of DIS
-(Dense Inverse Search) with variational refinement. It is written in Rust rather than
-wrapped from OpenCV so that sfmtool controls the algorithm, runs it in parallel on the
-CPU with rayon, and can also run it as wgpu compute shaders on a GPU
+(Dense Inverse Search) with variational refinement. It runs in parallel on the CPU
+with rayon, and can also run as wgpu compute shaders on a GPU
 ([gpu-optical-flow.md](gpu-optical-flow.md)). Python reaches it through the
 `sfmtool._sfmtool.flow` bindings in `sfmtool-py`.
 
