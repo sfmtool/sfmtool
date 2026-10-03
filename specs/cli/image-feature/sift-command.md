@@ -20,9 +20,10 @@ sfm sift [PATHS...] --extract | --draw <DIR> [OPTIONS...]
 ```
 
 `PATHS` are image files or directories. When omitted, the current directory is
-used. Directories are expanded recursively, and only files ending in `.png`,
-`.jpg` or `.jpeg` (in any letter case) are read. The command errors if no image
-remains after expansion and `--range` filtering.
+used. Directories are expanded recursively, keeping only files ending in
+`.png`, `.jpg` or `.jpeg` (in any letter case); a file named directly is used
+whatever its extension. The command errors if no image remains after expansion
+and `--range` filtering.
 
 ## Action Modes
 
@@ -50,8 +51,9 @@ configuration; change it with `sfm ws init --dsp`.
 The `sfmtool` tool is the toolkit's own SIFT (the Rust `sfmtool-core`
 implementation), calibrated to match COLMAP's keypoint density and descriptor
 convention. It needs no external library and parallelizes internally, so it
-ignores `--num-threads`. The number of images it decodes and extracts at once
-is set by the `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable (see
+ignores `--num-threads`. It chooses how many images to decode and extract at
+once from the core count and available memory, and the
+`SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable overrides that number (see
 [Extraction-orchestration pipelining](../../core/features/sift.md#extraction-orchestration-pipelining)).
 
 ## Workspace and Tool Modes
