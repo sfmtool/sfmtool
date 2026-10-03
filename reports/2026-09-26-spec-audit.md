@@ -664,7 +664,7 @@ most of the per-sentence findings.
   - "version-2" appears at :494 and :654, in `types.rs:77,113` and in `lazy-kdforest-query.md`. The writer emits version 3.
     > _Status (2026-10-03): Done — :494 and :654 no longer call the current layout version 2; the doc comments in `types.rs`, `summary.rs` and `sfmtool-py/src/spatial/kdf.rs` no longer name a version, branch `finding-bash-03-kdf-format-version`._
   - The spec has no history of what versions 2 and 3 changed.
-    > _Status (2026-10-03): Done — § Version says version 2 replaced version 1's two layouts with the single corpus and version 3 changed only the integrity directory to one digest per section, branch `finding-bash-03-kdf-format-version`._
+    > _Status (2026-10-03): Done — § Version says version 2 replaced version 1's two layouts with the single corpus and added the SIFT geometry corpus, and version 3 changed only the integrity directory to one digest per section, branch `finding-bash-03-kdf-format-version`._
 **Format independence:**
   - :360-364 `KdfFile::verify_content` and `verify_kdf` → "the digest check runs first, then the structural checks", with the links moved to § Implementations (:466).
   - :686 names the reader option `max_metadata_bytes`, and :605 links a script.

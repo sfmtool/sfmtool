@@ -379,10 +379,11 @@ derived from the `.sift` files it was built over, so rebuilding it is always
 available and is always the fix.
 
 Version 2 replaced version 1's two layouts (a shared descriptor corpus, or
-descriptors copied into each tree) with the single shared corpus. Version 3
+descriptors copied into each tree) with the single shared corpus, and added the
+SIFT-mode geometry corpus (`features/geometry` and its block offsets). Version 3
 keeps that layout and changes only the integrity directory:
 `content_hash.json.zst` holds one digest per section instead of one per descriptor
-block, geometry block and tree chunk.
+block, geometry block, origin block and tree chunk.
 
 ## Where this format departs from the container conventions
 
