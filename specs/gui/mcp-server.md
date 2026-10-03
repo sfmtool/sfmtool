@@ -55,9 +55,9 @@ file"), `--demo` ([architecture.md](architecture.md) § "Testing") and `-h` /
 `--help`. Any other argument that starts with `-` (apart from a lone `-`) is
 refused as an unknown option, `--mcp=` followed by something that is not a port
 number from 0 to 65535 is refused, and every remaining argument is a path.
-Hand-rolled rather than `clap`: three flags and a list of paths is a dozen lines, and it keeps the binary's dependency tree
-as it was. The following-argument form has to look at
-what comes next, because `--mcp scene.sfmr` is the common invocation and means
+Hand-rolled rather than `clap`: four flags and a list of paths fit in one short
+function, and it keeps the binary's dependency tree as it was. The
+following-argument form has to look at what comes next, because `--mcp scene.sfmr` is the common invocation and means
 the default port and a file — so a next argument that is not a port is left
 alone rather than consumed.
 
@@ -1059,8 +1059,8 @@ the Image Detail toolbar, its gear popup and the `I` key all record what they
 change. The Action Log's premise is that both actors see what the other did in
 one place, and a heatmap mode the agent switched on has to be as visible in the
 log as the grid the human switched off. The record is one function — the diff of
-the two settings structs before and after a change, one `Kind::Display` entry per field
-that differs, in the table's words — and **both actors call it**: the tool
+the two settings structs before and after a change, one `Kind::Display` entry
+per field that differs, in the table's words — and **both actors call it**: the tool
 around its write, the dock around the panel's frame. One function is what
 guarantees the texts are identical; a second catalogue in the toolbar would
 drift.
@@ -1296,8 +1296,8 @@ the explicit family apart from the exact form also takes them **a piece at a
 time**: what a call does not carry is preserved. The exact form does not:
 `orientation_wxyz` requires `position` and `target_distance` in the same call,
 since it is the form that restores a reported view verbatim. The orientation
-comes from `forward` (a view direction, named for the derived field the view block reports, with the roll taken from
-`up` defaulting to the current `world_up`), from `position` and `target`
+comes from `forward` (a view direction, named for the derived field the view
+block reports, with the roll taken from `up` defaulting to the current `world_up`), from `position` and `target`
 together (the look-at form), from `orientation_wxyz` (the exact form), or it
 stands. The distance comes from `target_distance`, from the separation of
 `position` and `target` when both are given, or it stands. The view is then
@@ -1634,8 +1634,8 @@ unscaled target, built with the caption below; for a panel it is the panel's
 last laid-out size, which differs from the picture in the frame that opened the
 panel. For the window and for the 3D Viewer the caption keeps the frame
 description too (which reconstructions are drawn, the point and camera-image
-counts, and the camera image being looked through, if any), because those are the pictures the 3D view is in. That caption is built
-during the *apply* phase, while `AppState` is still borrowed, so the picture and
+counts, and the camera image being looked through, if any), because those are
+the pictures the 3D view is in. That caption is built during the *apply* phase, while `AppState` is still borrowed, so the picture and
 the description of it are of the same instant. **The caption leads with the
 dialogs and menus open in the frame** (§ "Dialogs and menus"): *"The Bundle
 Adjust dialog is open. The Scene panel, 412×655."*, so a dialog the human
