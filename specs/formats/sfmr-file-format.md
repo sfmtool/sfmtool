@@ -2018,18 +2018,17 @@ answer when it does not.
 
 ### Why `content_xxh128`
 
-The `content_xxh128` is the overall file integrity hash, computed from the
-section hashes that describe the reconstruction (metadata, cameras, rigs,
-frames, images, points3d, tracks). From version 10 it leaves out the `derived/`
+The `content_xxh128` is the reconstruction's identity hash, computed from the
+section hashes that describe the reconstruction (metadata, cameras, rigs and
+frames if present, images, points3d, tracks). From version 10 it leaves out the `derived/`
 section, as described under
 [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying).
 It identifies the reconstruction a file holds: from version 8 two saves of one
 unchanged value write the same `content_xxh128`.
 
-`.sfmr` files are written once — each SfM solve, filter, or transform produces
-a new reconstruction with its own content hash. A Point ID therefore identifies
-both the reconstruction and the point within it, and any file holding that
-reconstruction resolves it.
+Each SfM solve, filter, or transform produces a new reconstruction with its own
+content hash. A Point ID therefore identifies both the reconstruction and the
+point within it, and any file holding that reconstruction resolves it.
 
 ### Hash Prefix Length
 
